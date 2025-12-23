@@ -15,6 +15,7 @@ pub enum AccountType {
 }
 
 pub struct Account {
+    pub account_id: u64,
     pub name: String,
     pub balance: f64,
     pub account_type: AccountType,
@@ -44,23 +45,46 @@ impl RepeatInterval {
 }
 
 pub struct CashFlow {
-    pub description: String,
+    pub cash_flow_id: u64,
+    pub description: Option<String>,
     pub amount: f64,
-    pub start: jiff::civil::Date,
-    pub end: Option<jiff::civil::Date>, // None = continues indefinitely
+    pub start: Option<Event>, // None = starts immediately
+    pub end: Option<Event>,   // None = continues indefinitely
     pub repeats: RepeatInterval,
+    pub cash_flow_limits: Option<CashFlowLimits>,
     pub adjust_for_inflation: bool,
 }
 
 #[derive(Debug)]
 pub struct CashFlowEvent {
+    pub cash_flow_id: u64,
     pub amount: f64,
     pub date: jiff::civil::Date,
 }
 
+#[derive(Debug, Clone)]
+pub enum LimitPeriod {
+    /// Resets every calendar
+    Yearly,
+    /// Never resets
+    Lifetime,
+}
+
+pub struct CashFlowLimits {
+    pub cash_flow_id: u64,
+    pub limit: f64,
+    pub limit_period: LimitPeriod,
+}
+
+pub enum EventType {
+    Date(jiff::civil::Date),
+    AccountBalance(u64),
+}
+
 pub struct Event {
     pub description: String,
-    pub date: jiff::civil::Date,
+    pub date: Option<jiff::civil::Date>,
+    pub event_type: EventType,
 }
 
 pub enum InflationProfile {
@@ -150,18 +174,17 @@ pub struct SimulationResult {
     pub accounts: Vec<f64>,
 }
 
-pub fn n_day_return_rate(yearly_return_rate: f64, n_days: f64) -> f64 {
-    (1.0 + yearly_return_rate).powf(n_days / 365.0) - 1.0
+pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
+    (1.0 + yearly_rate).powf(n_days / 365.0) - 1.0
 }
 
 pub fn simulate(params: SimulationParameters, seed: u64) -> SimulationResult {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
+    let today = jiff::Zoned::now().date();
 
     let mut inflation = Vec::with_capacity(params.duration_years);
     let mut returns = Vec::with_capacity(params.duration_years);
     let mut accounts = Vec::with_capacity(params.accounts.len());
-
-    let today = jiff::Zoned::now().date();
 
     for _ in 0..params.duration_years {
         inflation.push(params.inflation_profile.sample(&mut rng));
