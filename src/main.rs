@@ -19,6 +19,7 @@ pub struct Account {
     pub name: String,
     pub balance: f64,
     pub account_type: AccountType,
+    pub return_profile: ReturnProfile,
     pub cash_flows: Vec<CashFlow>,
 }
 
@@ -158,20 +159,20 @@ impl ReturnProfile {
 pub struct SimulationParameters {
     pub duration_years: usize,
     pub inflation_profile: InflationProfile,
-    pub return_profile: ReturnProfile,
     pub events: Vec<Event>,
     pub accounts: Vec<Account>,
-}
-
-pub struct AccountResult {
-    pub name: String,
-    pub balance: Vec<f64>,
 }
 
 pub struct SimulationResult {
     pub inflation: Vec<f64>,
     pub returns: Vec<f64>,
-    pub accounts: Vec<f64>,
+    pub accounts: Vec<AccountResult>,
+}
+
+pub struct AccountResult {
+    pub account_id: u64,
+    pub returns: Vec<f64>,
+    pub account_value: Vec<f64>,
 }
 
 pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
