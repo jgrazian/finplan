@@ -1,6 +1,6 @@
 use crate::models::*;
 use jiff::ToSpan;
-use rand::SeedableRng;
+use rand::{RngCore, SeedableRng};
 use std::collections::HashMap;
 
 pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
@@ -302,6 +302,21 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
         yearly_inflation: state.inflation_rates,
         account_histories: state.histories,
     }
+}
+
+pub fn monte_carlo_simulate(
+    params: &SimulationParameters,
+    num_iterations: usize,
+) -> MonteCarloResult {
+    let mut rng = rand::rng();
+    let iterations = (0..num_iterations)
+        .map(|_| {
+            let seed = rng.next_u64();
+            simulate(params, seed)
+        })
+        .collect();
+
+    MonteCarloResult { iterations }
 }
 
 #[cfg(test)]
@@ -715,5 +730,43 @@ mod tests {
 
         let final_balance = history.values.last().unwrap().balance;
         assert_eq!(final_balance, 15000.0);
+    }
+
+    #[test]
+    fn test_monte_carlo_simulation() {
+        let params = SimulationParameters {
+            start_date: None,
+            duration_years: 30,
+            inflation_profile: InflationProfile::Fixed(0.02),
+            events: vec![],
+            accounts: vec![Account {
+                account_id: 1,
+                name: "Savings".to_string(),
+                initial_balance: 10_000.0,
+                account_type: AccountType::Taxable,
+                return_profile: ReturnProfile::Normal {
+                    mean: 0.07,
+                    std_dev: 0.15,
+                },
+                cash_flows: vec![],
+            }],
+        };
+
+        let result = monte_carlo_simulate(&params, 100);
+        assert_eq!(result.iterations.len(), 100);
+
+        // Check that results are different (due to random seed)
+        let first_final = result.iterations[0].account_histories[0]
+            .values
+            .last()
+            .unwrap()
+            .balance;
+        let second_final = result.iterations[1].account_histories[0]
+            .values
+            .last()
+            .unwrap()
+            .balance;
+
+        assert_ne!(first_final, second_final);
     }
 }

@@ -1,6 +1,7 @@
 use rand::{Rng, distr::Distribution};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InflationProfile {
     None,
     Fixed(f64),
@@ -30,12 +31,13 @@ impl InflationProfile {
                 rand_distr::LogNormal::new(*mean, *std_dev)
                     .unwrap()
                     .sample(rng)
+                    - 1.0
             }
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReturnProfile {
     None,
     Fixed(f64),
@@ -65,6 +67,7 @@ impl ReturnProfile {
                 rand_distr::LogNormal::new(*mean, *std_dev)
                     .unwrap()
                     .sample(rng)
+                    - 1.0
             }
         }
     }

@@ -1,7 +1,8 @@
 use crate::profiles::{InflationProfile, ReturnProfile};
 use jiff::ToSpan;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AccountType {
     Taxable,
     TaxDeferred, // 401k, Traditional IRA
@@ -9,7 +10,7 @@ pub enum AccountType {
     Liability,   // Mortgages, loans
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
     pub account_id: u64,
     pub name: String,
@@ -19,7 +20,7 @@ pub struct Account {
     pub cash_flows: Vec<CashFlow>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RepeatInterval {
     Never,
     Weekly,
@@ -42,7 +43,7 @@ impl RepeatInterval {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Timepoint {
     Immediate,
     /// A specific fixed date (ad-hoc)
@@ -52,7 +53,7 @@ pub enum Timepoint {
     Never,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CashFlow {
     pub cash_flow_id: u64,
     pub description: Option<String>,
@@ -64,14 +65,14 @@ pub struct CashFlow {
     pub adjust_for_inflation: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CashFlowEvent {
     pub cash_flow_id: u64,
     pub amount: f64,
     pub date: jiff::civil::Date,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LimitPeriod {
     /// Resets every calendar
     Yearly,
@@ -79,17 +80,19 @@ pub enum LimitPeriod {
     Lifetime,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CashFlowLimits {
     pub limit: f64,
     pub limit_period: LimitPeriod,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub name: String,
     pub trigger: EventTrigger,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventTrigger {
     Date(jiff::civil::Date),
     AccountBalance {
@@ -99,6 +102,7 @@ pub enum EventTrigger {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationParameters {
     pub start_date: Option<jiff::civil::Date>,
     pub duration_years: usize,
@@ -107,21 +111,26 @@ pub struct SimulationParameters {
     pub accounts: Vec<Account>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SimulationResult {
     pub yearly_inflation: Vec<f64>,
     pub account_histories: Vec<AccountHistory>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AccountHistory {
     pub account_id: u64,
     pub yearly_returns: Vec<f64>,
     pub values: Vec<AccountSnapshot>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountSnapshot {
     pub date: jiff::civil::Date,
     pub balance: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MonteCarloResult {
+    pub iterations: Vec<SimulationResult>,
 }
