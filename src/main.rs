@@ -20,7 +20,7 @@ pub enum AccountType {
 pub struct Account {
     pub account_id: u64,
     pub name: String,
-    pub inital_balance: f64,
+    pub initial_balance: f64,
     pub account_type: AccountType,
     pub return_profile: ReturnProfile,
     pub cash_flows: Vec<CashFlow>,
@@ -211,6 +211,8 @@ struct ActiveCashFlowState {
     account_index: usize,
     cash_flow_index: usize,
     next_date: Option<jiff::civil::Date>,
+    period_accumulated: f64,
+    last_period_key: i16,
 }
 
 pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
@@ -233,7 +235,7 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
                 .collect(),
             values: vec![AccountSnapshot {
                 date: start_date,
-                balance: a.inital_balance,
+                balance: a.initial_balance,
             }],
         })
         .collect();
@@ -269,6 +271,8 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
                     account_index: acc_idx,
                     cash_flow_index: cf_idx,
                     next_date: Some(d), // First occurrence
+                    period_accumulated: 0.0,
+                    last_period_key: start_date.year(),
                 });
             } else {
                 // It depends on an event that hasn't happened yet.
@@ -277,6 +281,8 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
                     account_index: acc_idx,
                     cash_flow_index: cf_idx,
                     next_date: None,
+                    period_accumulated: 0.0,
+                    last_period_key: start_date.year(),
                 });
             }
         }
@@ -436,6 +442,30 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
                         (1.0 + inflation_rates[year_idx]).powf(years_passed - (year_idx as f64));
                     amount *= inflation_multiplier;
                 }
+
+                if let Some(limits) = &cf.cash_flow_limits {
+                    let current_year = current_date.year();
+                    let period_key = match limits.limit_period {
+                        LimitPeriod::Yearly => current_year,
+                        LimitPeriod::Lifetime => 0,
+                    };
+
+                    if period_key != acf.last_period_key {
+                        acf.period_accumulated = 0.0;
+                        acf.last_period_key = period_key;
+                    }
+
+                    let magnitude = amount.abs();
+                    let remaining = limits.limit - acf.period_accumulated;
+                    let allowed_magnitude = magnitude.min(remaining.max(0.0));
+
+                    if allowed_magnitude < magnitude {
+                        amount = amount.signum() * allowed_magnitude;
+                    }
+
+                    acf.period_accumulated += allowed_magnitude;
+                }
+
                 // Update account balance
                 let last_balance = histories_acc
                     .values
@@ -477,7 +507,7 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                inital_balance: 10_000.0,
+                initial_balance: 10_000.0,
                 account_type: AccountType::Taxable,
                 return_profile: ReturnProfile::Fixed(0.05),
                 cash_flows: vec![CashFlow {
@@ -502,13 +532,13 @@ mod tests {
     fn test_cashflow_limits() {
         let params = SimulationParameters {
             start_date: None,
-            duration_years: 30,
+            duration_years: 10,
             inflation_profile: InflationProfile::None,
             events: vec![],
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                inital_balance: 10_000.0,
+                initial_balance: 10_000.0,
                 account_type: AccountType::Taxable,
                 return_profile: ReturnProfile::None,
                 cash_flows: vec![CashFlow {
@@ -529,7 +559,19 @@ mod tests {
 
         let result = simulate(&params, 42);
 
-        dbg!(&result);
+        // Initial: 10,000
+        // Contribution: 100/month -> 1200/year.
+        // Limit: 1000/year.
+        // Expected annual contribution: 1000.
+        // Duration: 10 years.
+        // Total added: 10 * 1000 = 10,000.
+        // Final Balance: 10,000 + 10,000 = 20,000.
+
+        let final_balance = result.account_histories[0].values.last().unwrap().balance;
+        assert_eq!(
+            final_balance, 20_000.0,
+            "Balance should be capped by yearly limits"
+        );
     }
 
     #[test]
@@ -543,7 +585,7 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                inital_balance: 10_000.0,
+                initial_balance: 10_000.0,
                 account_type: AccountType::Taxable,
                 return_profile: ReturnProfile::None,
                 cash_flows: vec![],
