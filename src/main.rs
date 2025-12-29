@@ -176,6 +176,7 @@ impl ReturnProfile {
 }
 
 pub struct SimulationParameters {
+    pub start_date: Option<jiff::civil::Date>,
     pub duration_years: usize,
     pub inflation_profile: InflationProfile,
     pub events: Vec<Event>,
@@ -214,7 +215,9 @@ struct ActiveCashFlowState {
 
 pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
-    let start_date = jiff::Zoned::now().date();
+    let start_date = params
+        .start_date
+        .unwrap_or_else(|| jiff::Zoned::now().date());
     let end_date = start_date.saturating_add((params.duration_years as i64).years());
 
     // 1. Initialize State
@@ -467,6 +470,7 @@ mod tests {
     #[test]
     fn test_simulation() {
         let params = SimulationParameters {
+            start_date: None,
             duration_years: 30,
             inflation_profile: InflationProfile::Fixed(0.02),
             events: vec![],
@@ -497,6 +501,7 @@ mod tests {
     #[test]
     fn test_cashflow_limits() {
         let params = SimulationParameters {
+            start_date: None,
             duration_years: 30,
             inflation_profile: InflationProfile::None,
             events: vec![],
@@ -525,5 +530,29 @@ mod tests {
         let result = simulate(&params, 42);
 
         dbg!(&result);
+    }
+
+    #[test]
+    fn test_simulation_start_date() {
+        let start_date = jiff::civil::date(2020, 1, 1);
+        let params = SimulationParameters {
+            start_date: Some(start_date),
+            duration_years: 1,
+            inflation_profile: InflationProfile::None,
+            events: vec![],
+            accounts: vec![Account {
+                account_id: 1,
+                name: "Savings".to_string(),
+                inital_balance: 10_000.0,
+                account_type: AccountType::Taxable,
+                return_profile: ReturnProfile::None,
+                cash_flows: vec![],
+            }],
+        };
+
+        let result = simulate(&params, 42);
+
+        // Check that the first snapshot date matches the start date
+        assert_eq!(result.account_histories[0].values[0].date, start_date);
     }
 }
