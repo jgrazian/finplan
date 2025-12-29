@@ -11,12 +11,18 @@ pub enum AccountType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Asset {
+    pub name: String,
+    pub value: f64,
+    pub return_profile: ReturnProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
     pub account_id: u64,
     pub name: String,
-    pub initial_balance: f64,
+    pub assets: Vec<Asset>,
     pub account_type: AccountType,
-    pub return_profile: ReturnProfile,
     pub cash_flows: Vec<CashFlow>,
 }
 
@@ -63,6 +69,7 @@ pub struct CashFlow {
     pub repeats: RepeatInterval,
     pub cash_flow_limits: Option<CashFlowLimits>,
     pub adjust_for_inflation: bool,
+    pub target_asset: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,8 +127,38 @@ pub struct SimulationResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountHistory {
     pub account_id: u64,
+    pub assets: Vec<AssetHistory>,
+    pub dates: Vec<jiff::civil::Date>,
+}
+
+impl AccountHistory {
+    pub fn values(&self) -> Vec<AccountSnapshot> {
+        self.dates
+            .iter()
+            .enumerate()
+            .map(|(i, date)| {
+                let balance = self.assets.iter().map(|a| a.values[i]).sum();
+                AccountSnapshot {
+                    date: *date,
+                    balance,
+                }
+            })
+            .collect()
+    }
+
+    pub fn current_balance(&self) -> f64 {
+        self.assets
+            .iter()
+            .map(|a| a.values.last().copied().unwrap_or(0.0))
+            .sum()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AssetHistory {
+    pub name: String,
     pub yearly_returns: Vec<f64>,
-    pub values: Vec<AccountSnapshot>,
+    pub values: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

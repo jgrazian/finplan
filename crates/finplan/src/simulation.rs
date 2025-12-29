@@ -38,15 +38,24 @@ impl SimulationState {
         let histories: Vec<AccountHistory> = params
             .accounts
             .iter()
-            .map(|a| AccountHistory {
-                account_id: a.account_id,
-                yearly_returns: (0..params.duration_years)
-                    .map(|_| a.return_profile.sample(&mut rng))
-                    .collect(),
-                values: vec![AccountSnapshot {
-                    date: start_date,
-                    balance: a.initial_balance,
-                }],
+            .map(|a| {
+                let asset_histories: Vec<AssetHistory> = a
+                    .assets
+                    .iter()
+                    .map(|asset| AssetHistory {
+                        name: asset.name.clone(),
+                        yearly_returns: (0..params.duration_years)
+                            .map(|_| asset.return_profile.sample(&mut rng))
+                            .collect(),
+                        values: vec![asset.value],
+                    })
+                    .collect();
+
+                AccountHistory {
+                    account_id: a.account_id,
+                    assets: asset_histories,
+                    dates: vec![start_date],
+                }
             })
             .collect();
 
@@ -160,11 +169,24 @@ impl SimulationState {
                     acf.period_accumulated += allowed_magnitude;
                 }
 
-                let last_balance = self.histories[acf.account_index]
-                    .values
-                    .last_mut()
-                    .expect("account must have at least 1 balance.");
-                last_balance.balance += amount;
+                let history = &mut self.histories[acf.account_index];
+
+                let target_asset_index = if let Some(name) = &cf.target_asset {
+                    history.assets.iter().position(|a| &a.name == name)
+                } else if !history.assets.is_empty() {
+                    Some(0)
+                } else {
+                    None
+                };
+
+                if let Some(idx) = target_asset_index {
+                    let asset = &mut history.assets[idx];
+                    let last_val = asset
+                        .values
+                        .last_mut()
+                        .expect("asset must have at least 1 value");
+                    *last_val += amount;
+                }
 
                 match &cf.repeats {
                     RepeatInterval::Never => acf.next_date = None,
@@ -197,9 +219,9 @@ impl SimulationState {
                 } => {
                     if let Some(acc) = self.histories.iter().find(|a| a.account_id == account_id) {
                         if above {
-                            acc.values.last().unwrap().balance >= threshold
+                            acc.current_balance() >= threshold
                         } else {
-                            acc.values.last().unwrap().balance <= threshold
+                            acc.current_balance() <= threshold
                         }
                     } else {
                         false
@@ -267,13 +289,14 @@ impl SimulationState {
             let year_idx = (years_passed.floor() as usize).min(params.duration_years - 1);
 
             for acc in &mut self.histories {
-                let rate = acc.yearly_returns[year_idx];
-                let start_balance = acc.values.last().unwrap().balance;
-                let new_balance = start_balance * (1.0 + n_day_rate(rate, days_passed as f64));
-                acc.values.push(AccountSnapshot {
-                    date: next_checkpoint,
-                    balance: new_balance,
-                });
+                for asset in &mut acc.assets {
+                    let rate = asset.yearly_returns[year_idx];
+                    let start_value = *asset.values.last().unwrap();
+                    let new_value = start_value * (1.0 + n_day_rate(rate, days_passed as f64));
+                    asset.values.push(new_value);
+                }
+
+                acc.dates.push(next_checkpoint);
             }
         }
         self.current_date = next_checkpoint;
@@ -334,9 +357,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                initial_balance: 10_000.0,
+                assets: vec![Asset {
+                    name: "Cash".to_string(),
+                    value: 10_000.0,
+                    return_profile: ReturnProfile::Fixed(0.05),
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::Fixed(0.05),
                 cash_flows: vec![CashFlow {
                     cash_flow_id: 1,
                     amount: 100.0,
@@ -346,6 +372,7 @@ mod tests {
                     repeats: RepeatInterval::Monthly,
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
+                    target_asset: None,
                 }],
             }],
         };
@@ -365,9 +392,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                initial_balance: 10_000.0,
+                assets: vec![Asset {
+                    name: "Cash".to_string(),
+                    value: 10_000.0,
+                    return_profile: ReturnProfile::None,
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::None,
                 cash_flows: vec![CashFlow {
                     cash_flow_id: 1,
                     amount: 100.0,
@@ -380,6 +410,7 @@ mod tests {
                         limit_period: LimitPeriod::Yearly,
                     }),
                     adjust_for_inflation: false,
+                    target_asset: None,
                 }],
             }],
         };
@@ -394,7 +425,7 @@ mod tests {
         // Total added: 10 * 1000 = 10,000.
         // Final Balance: 10,000 + 10,000 = 20,000.
 
-        let final_balance = result.account_histories[0].values.last().unwrap().balance;
+        let final_balance = result.account_histories[0].current_balance();
         assert_eq!(
             final_balance, 20_000.0,
             "Balance should be capped by yearly limits"
@@ -412,9 +443,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                initial_balance: 10_000.0,
+                assets: vec![Asset {
+                    name: "Cash".to_string(),
+                    value: 10_000.0,
+                    return_profile: ReturnProfile::None,
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::None,
                 cash_flows: vec![],
             }],
         };
@@ -422,7 +456,7 @@ mod tests {
         let result = simulate(&params, 42);
 
         // Check that the first snapshot date matches the start date
-        assert_eq!(result.account_histories[0].values[0].date, start_date);
+        assert_eq!(result.account_histories[0].dates[0], start_date);
     }
 
     #[test]
@@ -435,9 +469,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Checking".to_string(),
-                initial_balance: 0.0,
+                assets: vec![Asset {
+                    name: "Cash".to_string(),
+                    value: 0.0,
+                    return_profile: ReturnProfile::None,
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::None,
                 cash_flows: vec![CashFlow {
                     cash_flow_id: 1,
                     amount: 100.0,
@@ -447,6 +484,7 @@ mod tests {
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
                     adjust_for_inflation: true,
+                    target_asset: None,
                 }],
             }],
         };
@@ -458,7 +496,7 @@ mod tests {
         // Year 1: 100.0 * 1.10 = 110.0
         // Total: 210.0
 
-        let final_balance = history.values.last().unwrap().balance;
+        let final_balance = history.current_balance();
         // Floating point comparison
         assert!(
             (final_balance - 210.0).abs() < 1e-6,
@@ -477,9 +515,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                initial_balance: 0.0,
+                assets: vec![Asset {
+                    name: "Cash".to_string(),
+                    value: 0.0,
+                    return_profile: ReturnProfile::None,
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::None,
                 cash_flows: vec![CashFlow {
                     cash_flow_id: 1,
                     amount: 1000.0,
@@ -492,12 +533,13 @@ mod tests {
                         limit_period: LimitPeriod::Lifetime,
                     }),
                     adjust_for_inflation: false,
+                    target_asset: None,
                 }],
             }],
         };
 
         let result = simulate(&params, 42);
-        let final_balance = result.account_histories[0].values.last().unwrap().balance;
+        let final_balance = result.account_histories[0].current_balance();
         assert_eq!(final_balance, 2500.0);
     }
 
@@ -518,9 +560,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                initial_balance: 0.0,
+                assets: vec![Asset {
+                    name: "Cash".to_string(),
+                    value: 0.0,
+                    return_profile: ReturnProfile::None,
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::None,
                 cash_flows: vec![
                     // Base income: 2000/year
                     CashFlow {
@@ -532,6 +577,7 @@ mod tests {
                         repeats: RepeatInterval::Yearly,
                         cash_flow_limits: None,
                         adjust_for_inflation: false,
+                        target_asset: None,
                     },
                     // Bonus starts when RichEnough
                     CashFlow {
@@ -543,13 +589,14 @@ mod tests {
                         repeats: RepeatInterval::Never, // One time bonus
                         cash_flow_limits: None,
                         adjust_for_inflation: false,
+                        target_asset: None,
                     },
                 ],
             }],
         };
 
         let result = simulate(&params, 42);
-        let final_balance = result.account_histories[0].values.last().unwrap().balance;
+        let final_balance = result.account_histories[0].current_balance();
 
         // Year 0: +2000 -> Bal 2000
         // Year 1: +2000 -> Bal 4000
@@ -571,9 +618,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Invest".to_string(),
-                initial_balance: 0.0,
+                assets: vec![Asset {
+                    name: "Stock".to_string(),
+                    value: 0.0,
+                    return_profile: ReturnProfile::Fixed(0.10),
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::Fixed(0.10),
                 cash_flows: vec![CashFlow {
                     cash_flow_id: 1,
                     amount: 1000.0,
@@ -583,12 +633,13 @@ mod tests {
                     repeats: RepeatInterval::Never,
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
+                    target_asset: None,
                 }],
             }],
         };
 
         let result = simulate(&params, 42);
-        let final_balance = result.account_histories[0].values.last().unwrap().balance;
+        let final_balance = result.account_histories[0].current_balance();
 
         // 1000 invested immediately. 10% return. 1 year.
         // Should be 1100.
@@ -617,9 +668,12 @@ mod tests {
                 Account {
                     account_id: 1,
                     name: "Debt".to_string(),
-                    initial_balance: -2000.0,
+                    assets: vec![Asset {
+                        name: "Loan".to_string(),
+                        value: -2000.0,
+                        return_profile: ReturnProfile::None,
+                    }],
                     account_type: AccountType::Liability,
-                    return_profile: ReturnProfile::None,
                     cash_flows: vec![CashFlow {
                         cash_flow_id: 1,
                         amount: 1000.0,
@@ -629,14 +683,18 @@ mod tests {
                         repeats: RepeatInterval::Yearly,
                         cash_flow_limits: None,
                         adjust_for_inflation: false,
+                        target_asset: None,
                     }],
                 },
                 Account {
                     account_id: 2,
                     name: "Savings".to_string(),
-                    initial_balance: 0.0,
+                    assets: vec![Asset {
+                        name: "Cash".to_string(),
+                        value: 0.0,
+                        return_profile: ReturnProfile::None,
+                    }],
                     account_type: AccountType::Taxable,
-                    return_profile: ReturnProfile::None,
                     cash_flows: vec![CashFlow {
                         cash_flow_id: 2,
                         amount: 1000.0,
@@ -646,6 +704,7 @@ mod tests {
                         repeats: RepeatInterval::Yearly,
                         cash_flow_limits: None,
                         adjust_for_inflation: false,
+                        target_asset: None,
                     }],
                 },
             ],
@@ -672,8 +731,8 @@ mod tests {
         // Year 3: +1000 -> Bal 3000.
         // Year 4: +1000 -> Bal 4000.
 
-        let final_debt = debt_history.values.last().unwrap().balance;
-        let final_savings = savings_history.values.last().unwrap().balance;
+        let final_debt = debt_history.current_balance();
+        let final_savings = savings_history.current_balance();
 
         assert_eq!(final_debt, 0.0, "Debt should be paid off");
         assert_eq!(
@@ -696,9 +755,12 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "LimitedSavings".to_string(),
-                initial_balance: 0.0,
+                assets: vec![Asset {
+                    name: "Cash".to_string(),
+                    value: 0.0,
+                    return_profile: ReturnProfile::None,
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::None,
                 cash_flows: vec![CashFlow {
                     cash_flow_id: 1,
                     amount: 1000.0, // Monthly
@@ -711,6 +773,7 @@ mod tests {
                         limit_period: LimitPeriod::Yearly,
                     }),
                     adjust_for_inflation: false,
+                    target_asset: None,
                 }],
             }],
         };
@@ -728,7 +791,7 @@ mod tests {
         // Year 4 (2029): 5000.
         // Total: 15000.
 
-        let final_balance = history.values.last().unwrap().balance;
+        let final_balance = history.current_balance();
         assert_eq!(final_balance, 15000.0);
     }
 
@@ -742,12 +805,15 @@ mod tests {
             accounts: vec![Account {
                 account_id: 1,
                 name: "Savings".to_string(),
-                initial_balance: 10_000.0,
+                assets: vec![Asset {
+                    name: "Stock".to_string(),
+                    value: 10_000.0,
+                    return_profile: ReturnProfile::Normal {
+                        mean: 0.07,
+                        std_dev: 0.15,
+                    },
+                }],
                 account_type: AccountType::Taxable,
-                return_profile: ReturnProfile::Normal {
-                    mean: 0.07,
-                    std_dev: 0.15,
-                },
                 cash_flows: vec![],
             }],
         };
@@ -756,16 +822,8 @@ mod tests {
         assert_eq!(result.iterations.len(), 100);
 
         // Check that results are different (due to random seed)
-        let first_final = result.iterations[0].account_histories[0]
-            .values
-            .last()
-            .unwrap()
-            .balance;
-        let second_final = result.iterations[1].account_histories[0]
-            .values
-            .last()
-            .unwrap()
-            .balance;
+        let first_final = result.iterations[0].account_histories[0].current_balance();
+        let second_final = result.iterations[1].account_histories[0].current_balance();
 
         assert_ne!(first_final, second_final);
     }

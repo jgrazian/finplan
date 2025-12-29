@@ -52,7 +52,7 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
         let mut iteration_portfolio: HashMap<Date, f64> = HashMap::new();
 
         for history in sim_result.account_histories {
-            for snapshot in history.values {
+            for snapshot in history.values() {
                 // Account aggregation
                 account_values
                     .entry(history.account_id)
