@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
 
-use jiff::ToSpan;
+use jiff::{ToSpan, Unit};
 use rand::{SeedableRng, distr::Distribution};
 
 fn main() {
     println!("Hello, world!");
 }
 
+#[derive(Debug, Clone)]
 pub enum AccountType {
     Taxable,
     TaxDeferred, // 401k, Traditional IRA
@@ -14,15 +16,17 @@ pub enum AccountType {
     Liability,   // Mortgages, loans
 }
 
+#[derive(Debug, Clone)]
 pub struct Account {
     pub account_id: u64,
     pub name: String,
-    pub balance: f64,
+    pub inital_balance: f64,
     pub account_type: AccountType,
     pub return_profile: ReturnProfile,
     pub cash_flows: Vec<CashFlow>,
 }
 
+#[derive(Debug, Clone)]
 pub enum RepeatInterval {
     Never,
     Weekly,
@@ -45,12 +49,23 @@ impl RepeatInterval {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Timepoint {
+    Immediate,
+    /// A specific fixed date (ad-hoc)
+    Date(jiff::civil::Date),
+    /// Reference to a named event in SimulationParameters
+    Event(String),
+    Never,
+}
+
+#[derive(Debug, Clone)]
 pub struct CashFlow {
     pub cash_flow_id: u64,
     pub description: Option<String>,
     pub amount: f64,
-    pub start: Option<Event>, // None = starts immediately
-    pub end: Option<Event>,   // None = continues indefinitely
+    pub start: Timepoint,
+    pub end: Timepoint,
     pub repeats: RepeatInterval,
     pub cash_flow_limits: Option<CashFlowLimits>,
     pub adjust_for_inflation: bool,
@@ -71,21 +86,24 @@ pub enum LimitPeriod {
     Lifetime,
 }
 
+#[derive(Debug, Clone)]
 pub struct CashFlowLimits {
-    pub cash_flow_id: u64,
     pub limit: f64,
     pub limit_period: LimitPeriod,
 }
 
-pub enum EventType {
-    Date(jiff::civil::Date),
-    AccountBalance(u64),
+pub struct Event {
+    pub name: String,
+    pub trigger: EventTrigger,
 }
 
-pub struct Event {
-    pub description: String,
-    pub date: Option<jiff::civil::Date>,
-    pub event_type: EventType,
+pub enum EventTrigger {
+    Date(jiff::civil::Date),
+    AccountBalance {
+        account_id: u64,
+        threshold: f64,
+        above: bool, // true = trigger when balance > threshold, false = balance < threshold
+    },
 }
 
 pub enum InflationProfile {
@@ -122,6 +140,7 @@ impl InflationProfile {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum ReturnProfile {
     None,
     Fixed(f64),
@@ -163,101 +182,281 @@ pub struct SimulationParameters {
     pub accounts: Vec<Account>,
 }
 
+#[derive(Debug)]
 pub struct SimulationResult {
-    pub inflation: Vec<f64>,
-    pub returns: Vec<f64>,
-    pub accounts: Vec<AccountResult>,
+    pub yearly_inflation: Vec<f64>,
+    pub account_histories: Vec<AccountHistory>,
 }
 
-pub struct AccountResult {
+#[derive(Debug)]
+pub struct AccountHistory {
     pub account_id: u64,
-    pub returns: Vec<f64>,
-    pub account_value: Vec<f64>,
+    pub yearly_returns: Vec<f64>,
+    pub values: Vec<AccountSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountSnapshot {
+    pub date: jiff::civil::Date,
+    pub balance: f64,
 }
 
 pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
     (1.0 + yearly_rate).powf(n_days / 365.0) - 1.0
 }
 
-pub fn simulate(params: SimulationParameters, seed: u64) -> SimulationResult {
+/// Internal state for a running cash flow
+struct ActiveCashFlowState {
+    account_index: usize,
+    cash_flow_index: usize,
+    next_date: Option<jiff::civil::Date>,
+}
+
+pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
     let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
-    let today = jiff::Zoned::now().date();
+    let start_date = jiff::Zoned::now().date();
+    let end_date = start_date.saturating_add((params.duration_years as i64).years());
 
-    let mut inflation = Vec::with_capacity(params.duration_years);
-    let mut returns = Vec::with_capacity(params.duration_years);
-    let mut accounts = Vec::with_capacity(params.accounts.len());
+    // 1. Initialize State
+    let mut triggered_events: HashMap<String, jiff::civil::Date> = HashMap::new();
 
-    for _ in 0..params.duration_years {
-        inflation.push(params.inflation_profile.sample(&mut rng));
-        returns.push(params.return_profile.sample(&mut rng));
+    let mut histories: Vec<AccountHistory> = params
+        .accounts
+        .iter()
+        .map(|a| AccountHistory {
+            account_id: a.account_id,
+            yearly_returns: (0..params.duration_years)
+                .map(|_| a.return_profile.sample(&mut rng))
+                .collect(),
+            values: vec![AccountSnapshot {
+                date: start_date,
+                balance: a.inital_balance,
+            }],
+        })
+        .collect();
+
+    // Pre-calculate market conditions
+    let inflation_rates = (0..params.duration_years)
+        .map(|_| params.inflation_profile.sample(&mut rng))
+        .collect::<Vec<_>>();
+
+    // Initialize CashFlow States
+    // We need to track when each cashflow happens next.
+    let mut active_cash_flows: Vec<ActiveCashFlowState> = Vec::new();
+
+    // Helper to resolve start date
+    let resolve_start = |tp: &Timepoint,
+                         now: jiff::civil::Date,
+                         triggers: &HashMap<String, jiff::civil::Date>|
+     -> Option<jiff::civil::Date> {
+        match tp {
+            Timepoint::Immediate => Some(now),
+            Timepoint::Date(d) => Some(*d),
+            Timepoint::Event(name) => triggers.get(name).copied(),
+            Timepoint::Never => None,
+        }
+    };
+
+    // Initial population of active cash flows
+    for (acc_idx, acc) in params.accounts.iter().enumerate() {
+        for (cf_idx, cf) in acc.cash_flows.iter().enumerate() {
+            let start = resolve_start(&cf.start, start_date, &triggered_events);
+            if let Some(d) = start {
+                active_cash_flows.push(ActiveCashFlowState {
+                    account_index: acc_idx,
+                    cash_flow_index: cf_idx,
+                    next_date: Some(d), // First occurrence
+                });
+            } else {
+                // It depends on an event that hasn't happened yet.
+                // We track it, but next_date is None.
+                active_cash_flows.push(ActiveCashFlowState {
+                    account_index: acc_idx,
+                    cash_flow_index: cf_idx,
+                    next_date: None,
+                });
+            }
+        }
     }
 
-    for account in params.accounts {
-        let mut balance = account.balance;
+    let mut current_date = start_date;
 
-        let mut all_cash_flow_events = Vec::new();
+    // EVENT LOOP
+    while current_date < end_date {
+        // A. Find the next checkpoint date
+        // Candidates:
+        // 1. Next occurrence of any active cashflow
+        // 2. Any fixed date event that hasn't triggered yet
+        // 3. End of simulation
+        // 4. A "heartbeat" (e.g. 1 month) to check balance triggers
 
-        for cash_flow in account.cash_flows {
-            let cash_flow_amount = cash_flow.amount;
-            let cash_flow_start_date = cash_flow.start;
-            let cash_flow_end_date = cash_flow
-                .end
-                .unwrap_or_else(|| today.saturating_add((params.duration_years as i64).years()));
+        let mut next_checkpoint = end_date;
 
-            let cash_flow_events = cash_flow_start_date
-                .series(cash_flow.repeats.span())
-                .take_while(|&d| d <= cash_flow_end_date)
-                .map(|date| CashFlowEvent {
-                    amount: cash_flow_amount,
-                    date,
-                });
-            all_cash_flow_events.extend(cash_flow_events);
+        // 1. Check CashFlows
+        for acf in &active_cash_flows {
+            if let Some(d) = acf.next_date
+                && d > current_date
+                && d < next_checkpoint
+            {
+                next_checkpoint = d;
+            }
         }
-        // Sort cash flow events by date so we can apply them in order
-        all_cash_flow_events.sort_unstable_by(|a, b| a.date.cmp(&b.date));
-        let mut cash_flow_events_iter = all_cash_flow_events.iter().peekable();
 
-        let mut current_date = today;
-        for (year, return_rate) in today
-            .series(1.year())
-            .skip(1)
-            .take(params.duration_years)
-            .zip(returns.iter())
-        {
-            while let Some(event) = cash_flow_events_iter.peek() {
-                if event.date > year {
-                    break;
-                }
+        // 2. Check Fixed Date Events
+        for event in &params.events {
+            if !triggered_events.contains_key(&event.name)
+                && let EventTrigger::Date(d) = event.trigger
+                && d > current_date
+                && d < next_checkpoint
+            {
+                next_checkpoint = d;
+            }
+        }
 
-                if event.date == current_date {
-                    balance += &event.amount;
-                    cash_flow_events_iter.next();
-                    continue;
-                }
+        // 3. Heartbeat (ensure we don't skip too far and miss balance triggers)
+        let heartbeat = current_date.saturating_add(1.month());
+        if heartbeat < next_checkpoint {
+            next_checkpoint = heartbeat;
+        }
 
-                let last_date = current_date;
-                current_date = event.date;
-                let date_diff = (current_date - last_date).get_days();
-                let daily_return_rate = n_day_return_rate(*return_rate, date_diff as f64);
-                balance += &balance * daily_return_rate;
+        // B. Advance Time (Apply Interest)
+        let days_passed = (next_checkpoint - current_date).get_days();
+        if days_passed > 0 {
+            // Determine rate based on year index
+            let years_passed = (current_date - start_date).get_days() as f64 / 365.0;
+            let year_idx = (years_passed.floor() as usize).min(params.duration_years - 1);
 
-                balance += &event.amount;
-                cash_flow_events_iter.next();
+            for acc in &mut histories {
+                let rate = acc.yearly_returns[year_idx];
+                let start_balance = acc
+                    .values
+                    .last()
+                    .expect("account must have at least 1 balance.")
+                    .balance;
+                let new_balance = start_balance * (1.0 + n_day_rate(rate, days_passed as f64));
+                acc.values.push(AccountSnapshot {
+                    date: next_checkpoint,
+                    balance: new_balance,
+                });
+            }
+        }
+        current_date = next_checkpoint;
+
+        // C. Check Triggers (Balance & Date)
+        let mut new_triggers = Vec::new();
+        for event in &params.events {
+            if triggered_events.contains_key(&event.name) {
+                continue;
             }
 
-            let last_date = current_date;
-            current_date = year;
-            let date_diff = (current_date - last_date).get_days();
-            let daily_return_rate = n_day_return_rate(*return_rate, date_diff as f64);
-            balance += &balance * daily_return_rate;
+            let triggered = match event.trigger {
+                EventTrigger::Date(d) => current_date >= d,
+                EventTrigger::AccountBalance {
+                    account_id,
+                    threshold,
+                    above,
+                } => {
+                    if let Some(acc) = histories.iter().find(|a| a.account_id == account_id) {
+                        if above {
+                            acc.values.last().unwrap().balance >= threshold
+                        } else {
+                            acc.values.last().unwrap().balance <= threshold
+                        }
+                    } else {
+                        false
+                    }
+                }
+            };
+
+            if triggered {
+                new_triggers.push(event.name.clone());
+            }
         }
-        accounts.push(balance);
+
+        // Activate triggers
+        for name in new_triggers {
+            triggered_events.insert(name.clone(), current_date);
+
+            // Wake up cashflows waiting for this event
+            for acf in &mut active_cash_flows {
+                let cf = &params.accounts[acf.account_index].cash_flows[acf.cash_flow_index];
+
+                // If this cashflow starts on this event
+                if let Timepoint::Event(ref event_name) = cf.start
+                    && event_name == &name
+                {
+                    acf.next_date = Some(current_date);
+                }
+
+                // If this cashflow ends on this event
+                if let Timepoint::Event(ref event_name) = cf.end
+                    && event_name == &name
+                {
+                    // It ends now. We can effectively disable it by setting next_date to None
+                    // Or handle it in the application phase.
+                    // For now, let's just ensure we don't schedule it anymore.
+                    // (Logic below handles "end" checks)
+                }
+            }
+        }
+
+        // D. Apply CashFlows
+        for acf in &mut active_cash_flows {
+            // If we have a scheduled date and it is TODAY
+            let Some(date) = acf.next_date else {
+                continue;
+            };
+
+            if date > current_date {
+                continue;
+            }
+
+            let acc = &params.accounts[acf.account_index];
+            let cf = &acc.cash_flows[acf.cash_flow_index];
+            let histories_acc = &mut histories[acf.account_index];
+
+            // Check if we passed the end date
+            let end_date_opt = resolve_start(&cf.end, start_date, &triggered_events);
+            let has_ended = if let Some(end) = end_date_opt {
+                current_date >= end
+            } else {
+                false
+            };
+
+            if !has_ended {
+                // Apply Cash Flow
+                let mut amount = cf.amount;
+                if cf.adjust_for_inflation {
+                    let years_passed = (current_date - start_date).total(Unit::Year).unwrap();
+                    let year_idx = (years_passed.floor() as usize).min(params.duration_years - 1);
+                    let inflation_multiplier =
+                        (1.0 + inflation_rates[year_idx]).powf(years_passed - (year_idx as f64));
+                    amount *= inflation_multiplier;
+                }
+                // Update account balance
+                let last_balance = histories_acc
+                    .values
+                    .last_mut()
+                    .expect("account must have at least 1 balance.");
+                last_balance.balance += amount;
+
+                // Schedule next occurrence
+                match &cf.repeats {
+                    RepeatInterval::Never => acf.next_date = None,
+                    interval => {
+                        let next = date.saturating_add(interval.span());
+                        acf.next_date = Some(next);
+                    }
+                }
+            } else {
+                acf.next_date = None;
+            }
+        }
     }
 
     SimulationResult {
-        inflation,
-        returns,
-        accounts,
+        yearly_inflation: inflation_rates,
+        account_histories: histories,
     }
 }
 
@@ -270,24 +469,61 @@ mod tests {
         let params = SimulationParameters {
             duration_years: 30,
             inflation_profile: InflationProfile::Fixed(0.02),
-            return_profile: ReturnProfile::SP_500_HISTORICAL_NORMAL,
             events: vec![],
             accounts: vec![Account {
+                account_id: 1,
                 name: "Savings".to_string(),
-                balance: 10_000.0,
+                inital_balance: 10_000.0,
                 account_type: AccountType::Taxable,
+                return_profile: ReturnProfile::Fixed(0.05),
                 cash_flows: vec![CashFlow {
+                    cash_flow_id: 1,
                     amount: 100.0,
-                    description: "Monthly contribution".to_string(),
-                    start: jiff::Zoned::now().date(),
-                    end: None,
+                    description: Some("Monthly contribution".to_string()),
+                    start: Timepoint::Immediate,
+                    end: Timepoint::Never,
                     repeats: RepeatInterval::Monthly,
+                    cash_flow_limits: None,
+                    adjust_for_inflation: false,
                 }],
             }],
         };
 
-        let result = simulate(params);
+        let result = simulate(&params, 42);
 
-        dbg!(&result.accounts);
+        dbg!(&result);
+    }
+
+    #[test]
+    fn test_cashflow_limits() {
+        let params = SimulationParameters {
+            duration_years: 30,
+            inflation_profile: InflationProfile::None,
+            events: vec![],
+            accounts: vec![Account {
+                account_id: 1,
+                name: "Savings".to_string(),
+                inital_balance: 10_000.0,
+                account_type: AccountType::Taxable,
+                return_profile: ReturnProfile::None,
+                cash_flows: vec![CashFlow {
+                    cash_flow_id: 1,
+                    amount: 100.0,
+                    description: Some("Monthly contribution".to_string()),
+                    start: Timepoint::Immediate,
+                    end: Timepoint::Never,
+                    repeats: RepeatInterval::Monthly,
+                    cash_flow_limits: Some(CashFlowLimits {
+                        limit: 1_000.0,
+                        limit_period: LimitPeriod::Yearly,
+                    }),
+                    adjust_for_inflation: false,
+                }],
+            }],
+        };
+
+        let result = simulate(&params, 42);
+
+        dbg!(&result);
     }
 }
