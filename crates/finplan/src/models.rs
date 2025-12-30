@@ -3,11 +3,11 @@ use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AccountType {
-    Taxable,
-    TaxDeferred, // 401k, Traditional IRA
-    TaxFree,     // Roth IRA
-    Liability,   // Mortgages, loans
+pub enum AssetClass {
+    Investable,   // Stocks, bonds, mutual funds
+    RealEstate,   // Property value
+    Depreciating, // Cars, boats, equipment
+    Liability,    // Loans, mortgages (value should be negative)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,6 +15,15 @@ pub struct Asset {
     pub name: String,
     pub value: f64,
     pub return_profile: ReturnProfile,
+    pub asset_class: AssetClass,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AccountType {
+    Taxable,
+    TaxDeferred, // 401k, Traditional IRA
+    TaxFree,     // Roth IRA
+    Illiquid,    // Real estate, vehicles - not liquid
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,10 +111,16 @@ pub struct Event {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventTrigger {
     Date(jiff::civil::Date),
-    AccountBalance {
+    TotalAccountBalance {
         account_id: u64,
         threshold: f64,
         above: bool, // true = trigger when balance > threshold, false = balance < threshold
+    },
+    AssetBalance {
+        account_id: u64,
+        asset_name: String,
+        threshold: f64,
+        above: bool,
     },
 }
 

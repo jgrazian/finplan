@@ -134,72 +134,74 @@ impl SimulationState {
                 false
             };
 
-            if !has_ended {
-                let mut amount = cf.amount;
-                if cf.adjust_for_inflation {
-                    let years_passed =
-                        (self.current_date - self.start_date).get_days() as f64 / 365.0;
-                    let year_idx = (years_passed.floor() as usize).min(params.duration_years - 1);
-                    let fraction = years_passed - (year_idx as f64);
-                    let inflation_multiplier = self.cumulative_inflation[year_idx]
-                        * (1.0 + self.inflation_rates[year_idx]).powf(fraction);
-                    amount *= inflation_multiplier;
-                }
+            if has_ended {
+                acf.next_date = None;
+                continue;
+            }
 
-                if let Some(limits) = &cf.cash_flow_limits {
-                    let current_year = self.current_date.year();
-                    let period_key = match limits.limit_period {
-                        LimitPeriod::Yearly => current_year,
-                        LimitPeriod::Lifetime => 0,
-                    };
+            // Event has not ended, apply cash flow
+            let mut amount = cf.amount;
+            if cf.adjust_for_inflation {
+                let years_passed = (self.current_date - self.start_date).get_days() as f64 / 365.0;
+                let year_idx = (years_passed.floor() as usize).min(params.duration_years - 1);
+                let fraction = years_passed - (year_idx as f64);
+                let inflation_multiplier = self.cumulative_inflation[year_idx]
+                    * (1.0 + self.inflation_rates[year_idx]).powf(fraction);
+                amount *= inflation_multiplier;
+            }
 
-                    if period_key != acf.last_period_key {
-                        acf.period_accumulated = 0.0;
-                        acf.last_period_key = period_key;
-                    }
-
-                    let magnitude = amount.abs();
-                    let remaining = limits.limit - acf.period_accumulated;
-                    let allowed_magnitude = magnitude.min(remaining.max(0.0));
-
-                    if allowed_magnitude < magnitude {
-                        amount = amount.signum() * allowed_magnitude;
-                    }
-
-                    acf.period_accumulated += allowed_magnitude;
-                }
-
-                let history = &mut self.histories[acf.account_index];
-
-                let target_asset_index = if let Some(name) = &cf.target_asset {
-                    history.assets.iter().position(|a| &a.name == name)
-                } else if !history.assets.is_empty() {
-                    Some(0)
-                } else {
-                    None
+            if let Some(limits) = &cf.cash_flow_limits {
+                let current_year = self.current_date.year();
+                let period_key = match limits.limit_period {
+                    LimitPeriod::Yearly => current_year,
+                    LimitPeriod::Lifetime => 0,
                 };
 
-                if let Some(idx) = target_asset_index {
-                    let asset = &mut history.assets[idx];
-                    let last_val = asset
-                        .values
-                        .last_mut()
-                        .expect("asset must have at least 1 value");
-                    *last_val += amount;
+                if period_key != acf.last_period_key {
+                    acf.period_accumulated = 0.0;
+                    acf.last_period_key = period_key;
                 }
 
-                match &cf.repeats {
-                    RepeatInterval::Never => acf.next_date = None,
-                    interval => {
-                        let next = date.saturating_add(interval.span());
-                        acf.next_date = Some(next);
-                    }
+                let magnitude = amount.abs();
+                let remaining = limits.limit - acf.period_accumulated;
+                let allowed_magnitude = magnitude.min(remaining.max(0.0));
+
+                if allowed_magnitude < magnitude {
+                    amount = amount.signum() * allowed_magnitude;
                 }
-                something_happened = true;
-            } else {
-                acf.next_date = None;
+
+                acf.period_accumulated += allowed_magnitude;
             }
+
+            let history = &mut self.histories[acf.account_index];
+
+            let target_asset_index = if let Some(name) = &cf.target_asset {
+                history.assets.iter().position(|a| &a.name == name)
+            } else if !history.assets.is_empty() {
+                Some(0)
+            } else {
+                None
+            };
+
+            if let Some(idx) = target_asset_index {
+                let asset = &mut history.assets[idx];
+                let last_val = asset
+                    .values
+                    .last_mut()
+                    .expect("asset must have at least 1 value");
+                *last_val += amount;
+            }
+
+            match &cf.repeats {
+                RepeatInterval::Never => acf.next_date = None,
+                interval => {
+                    let next = date.saturating_add(interval.span());
+                    acf.next_date = Some(next);
+                }
+            }
+            something_happened = true;
         }
+
         something_happened
     }
 
@@ -212,7 +214,7 @@ impl SimulationState {
 
             let triggered = match event.trigger {
                 EventTrigger::Date(d) => self.current_date >= d,
-                EventTrigger::AccountBalance {
+                EventTrigger::TotalAccountBalance {
                     account_id,
                     threshold,
                     above,
@@ -222,6 +224,27 @@ impl SimulationState {
                             acc.current_balance() >= threshold
                         } else {
                             acc.current_balance() <= threshold
+                        }
+                    } else {
+                        false
+                    }
+                }
+                EventTrigger::AssetBalance {
+                    account_id,
+                    ref asset_name,
+                    threshold,
+                    above,
+                } => {
+                    if let Some(acc) = self.histories.iter().find(|a| a.account_id == account_id) {
+                        if let Some(asset) = acc.assets.iter().find(|a| &a.name == asset_name) {
+                            let balance = *asset.values.last().unwrap_or(&0.0);
+                            if above {
+                                balance >= threshold
+                            } else {
+                                balance <= threshold
+                            }
+                        } else {
+                            false
                         }
                     } else {
                         false
@@ -361,6 +384,7 @@ mod tests {
                     name: "Cash".to_string(),
                     value: 10_000.0,
                     return_profile: ReturnProfile::Fixed(0.05),
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![CashFlow {
@@ -396,6 +420,7 @@ mod tests {
                     name: "Cash".to_string(),
                     value: 10_000.0,
                     return_profile: ReturnProfile::None,
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![CashFlow {
@@ -447,6 +472,7 @@ mod tests {
                     name: "Cash".to_string(),
                     value: 10_000.0,
                     return_profile: ReturnProfile::None,
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![],
@@ -473,6 +499,7 @@ mod tests {
                     name: "Cash".to_string(),
                     value: 0.0,
                     return_profile: ReturnProfile::None,
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![CashFlow {
@@ -519,6 +546,7 @@ mod tests {
                     name: "Cash".to_string(),
                     value: 0.0,
                     return_profile: ReturnProfile::None,
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![CashFlow {
@@ -551,7 +579,7 @@ mod tests {
             inflation_profile: InflationProfile::None,
             events: vec![Event {
                 name: "RichEnough".to_string(),
-                trigger: EventTrigger::AccountBalance {
+                trigger: EventTrigger::TotalAccountBalance {
                     account_id: 1,
                     threshold: 5000.0,
                     above: true,
@@ -564,6 +592,7 @@ mod tests {
                     name: "Cash".to_string(),
                     value: 0.0,
                     return_profile: ReturnProfile::None,
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![
@@ -622,6 +651,7 @@ mod tests {
                     name: "Stock".to_string(),
                     value: 0.0,
                     return_profile: ReturnProfile::Fixed(0.10),
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![CashFlow {
@@ -658,7 +688,7 @@ mod tests {
             inflation_profile: InflationProfile::None,
             events: vec![Event {
                 name: "DebtPaid".to_string(),
-                trigger: EventTrigger::AccountBalance {
+                trigger: EventTrigger::TotalAccountBalance {
                     account_id: 1, // Debt account
                     threshold: 0.0,
                     above: true, // When balance >= 0 (debt paid off)
@@ -672,8 +702,9 @@ mod tests {
                         name: "Loan".to_string(),
                         value: -2000.0,
                         return_profile: ReturnProfile::None,
+                        asset_class: AssetClass::Liability,
                     }],
-                    account_type: AccountType::Liability,
+                    account_type: AccountType::Illiquid,
                     cash_flows: vec![CashFlow {
                         cash_flow_id: 1,
                         amount: 1000.0,
@@ -693,6 +724,7 @@ mod tests {
                         name: "Cash".to_string(),
                         value: 0.0,
                         return_profile: ReturnProfile::None,
+                        asset_class: AssetClass::Investable,
                     }],
                     account_type: AccountType::Taxable,
                     cash_flows: vec![CashFlow {
@@ -742,6 +774,60 @@ mod tests {
     }
 
     #[test]
+    fn test_house_mortgage_scenario() {
+        let params = SimulationParameters {
+            start_date: None,
+            duration_years: 10,
+            inflation_profile: InflationProfile::Fixed(0.03),
+            events: vec![Event {
+                name: "MortgagePaidOff".to_string(),
+                trigger: EventTrigger::AssetBalance {
+                    account_id: 1,
+                    asset_name: "Home Mortgage".to_string(),
+                    threshold: -1.0,
+                    above: true,
+                },
+            }],
+            accounts: vec![Account {
+                account_id: 1,
+                name: "House".to_string(),
+                assets: vec![
+                    Asset {
+                        name: "Home Mortgage".to_string(),
+                        value: -300_000.0,
+                        return_profile: ReturnProfile::Fixed(0.06),
+                        asset_class: AssetClass::Liability,
+                    },
+                    Asset {
+                        name: "Home Value".to_string(),
+                        value: 300_000.0,
+                        return_profile: ReturnProfile::Normal {
+                            mean: 0.03,
+                            std_dev: 0.02,
+                        },
+                        asset_class: AssetClass::RealEstate,
+                    },
+                ],
+                account_type: AccountType::Illiquid,
+                cash_flows: vec![CashFlow {
+                    cash_flow_id: 1,
+                    amount: 3_500.0, // Monthly payment
+                    description: Some("Mortgage Payment".to_string()),
+                    start: Timepoint::Immediate,
+                    end: Timepoint::Event("MortgagePaidOff".to_string()),
+                    repeats: RepeatInterval::Monthly,
+                    cash_flow_limits: None,
+                    adjust_for_inflation: true,
+                    target_asset: Some("Home Mortgage".to_string()),
+                }],
+            }],
+        };
+
+        let result = simulate(&params, 42);
+        dbg!(&result);
+    }
+
+    #[test]
     fn test_event_and_limits() {
         let start_date = jiff::civil::date(2025, 1, 1);
         let params = SimulationParameters {
@@ -759,6 +845,7 @@ mod tests {
                     name: "Cash".to_string(),
                     value: 0.0,
                     return_profile: ReturnProfile::None,
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![CashFlow {
@@ -812,6 +899,7 @@ mod tests {
                         mean: 0.07,
                         std_dev: 0.15,
                     },
+                    asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
                 cash_flows: vec![],
