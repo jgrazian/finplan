@@ -2,6 +2,14 @@ use crate::profiles::{InflationProfile, ReturnProfile};
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 
+/// Unique identifier for an Account within a simulation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AccountId(pub u64);
+
+/// Unique identifier for a CashFlow within a simulation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CashFlowId(pub u64);
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AssetClass {
     Investable,   // Stocks, bonds, mutual funds
@@ -28,11 +36,10 @@ pub enum AccountType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
-    pub account_id: u64,
+    pub account_id: AccountId,
     pub name: String,
     pub assets: Vec<Asset>,
     pub account_type: AccountType,
-    pub cash_flows: Vec<CashFlow>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,9 +75,21 @@ pub enum Timepoint {
     Never,
 }
 
+/// Specifies where money flows from or to
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CashFlowEndpoint {
+    /// Income from outside the simulation / expenses leaving the simulation
+    External,
+    /// A specific asset within an account
+    Asset {
+        account_id: AccountId,
+        asset_name: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CashFlow {
-    pub cash_flow_id: u64,
+    pub cash_flow_id: CashFlowId,
     pub description: Option<String>,
     pub amount: f64,
     pub start: Timepoint,
@@ -78,12 +97,15 @@ pub struct CashFlow {
     pub repeats: RepeatInterval,
     pub cash_flow_limits: Option<CashFlowLimits>,
     pub adjust_for_inflation: bool,
-    pub target_asset: Option<String>,
+    /// Where money comes from (None = External for backward compatibility)
+    pub source: CashFlowEndpoint,
+    /// Where money goes to
+    pub target: CashFlowEndpoint,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CashFlowEvent {
-    pub cash_flow_id: u64,
+    pub cash_flow_id: CashFlowId,
     pub amount: f64,
     pub date: jiff::civil::Date,
 }
@@ -112,12 +134,12 @@ pub struct Event {
 pub enum EventTrigger {
     Date(jiff::civil::Date),
     TotalAccountBalance {
-        account_id: u64,
+        account_id: AccountId,
         threshold: f64,
         above: bool, // true = trigger when balance > threshold, false = balance < threshold
     },
     AssetBalance {
-        account_id: u64,
+        account_id: AccountId,
         asset_name: String,
         threshold: f64,
         above: bool,
@@ -131,6 +153,7 @@ pub struct SimulationParameters {
     pub inflation_profile: InflationProfile,
     pub events: Vec<Event>,
     pub accounts: Vec<Account>,
+    pub cash_flows: Vec<CashFlow>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -141,7 +164,7 @@ pub struct SimulationResult {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountHistory {
-    pub account_id: u64,
+    pub account_id: AccountId,
     pub assets: Vec<AssetHistory>,
     pub dates: Vec<jiff::civil::Date>,
 }

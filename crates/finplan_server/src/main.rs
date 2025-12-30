@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     routing::{get, post},
 };
-use finplan::models::{MonteCarloResult, SimulationParameters};
+use finplan::models::{AccountId, MonteCarloResult, SimulationParameters};
 use finplan::simulation::monte_carlo_simulate;
 use jiff::civil::Date;
 use serde::Serialize;
@@ -32,7 +32,7 @@ async fn run_simulation(Json(params): Json<SimulationParameters>) -> Json<Aggreg
 
 #[derive(Serialize)]
 struct AggregatedResult {
-    accounts: HashMap<u64, Vec<TimePointStats>>,
+    accounts: HashMap<AccountId, Vec<TimePointStats>>,
     total_portfolio: Vec<TimePointStats>,
 }
 
@@ -45,7 +45,7 @@ struct TimePointStats {
 }
 
 fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
-    let mut account_values: HashMap<u64, HashMap<Date, Vec<f64>>> = HashMap::new();
+    let mut account_values: HashMap<AccountId, HashMap<Date, Vec<f64>>> = HashMap::new();
     let mut portfolio_values: HashMap<Date, Vec<f64>> = HashMap::new();
 
     for sim_result in mc_result.iterations {

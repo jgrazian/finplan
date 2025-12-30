@@ -9,7 +9,6 @@ pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
 
 /// Internal state for a running cash flow
 struct ActiveCashFlowState {
-    account_index: usize,
     cash_flow_index: usize,
     next_date: Option<jiff::civil::Date>,
     period_accumulated: f64,
@@ -95,19 +94,16 @@ impl SimulationState {
     }
 
     fn init_cash_flows(&mut self, params: &SimulationParameters) {
-        for (acc_idx, acc) in params.accounts.iter().enumerate() {
-            for (cf_idx, cf) in acc.cash_flows.iter().enumerate() {
-                let start = Self::resolve_start(self.start_date, &self.triggered_events, &cf.start);
-                // If start depends on an event not yet triggered, it will be None.
-                // We still track it.
-                self.active_cash_flows.push(ActiveCashFlowState {
-                    account_index: acc_idx,
-                    cash_flow_index: cf_idx,
-                    next_date: start,
-                    period_accumulated: 0.0,
-                    last_period_key: self.start_date.year(),
-                });
-            }
+        for (cf_idx, cf) in params.cash_flows.iter().enumerate() {
+            let start = Self::resolve_start(self.start_date, &self.triggered_events, &cf.start);
+            // If start depends on an event not yet triggered, it will be None.
+            // We still track it.
+            self.active_cash_flows.push(ActiveCashFlowState {
+                cash_flow_index: cf_idx,
+                next_date: start,
+                period_accumulated: 0.0,
+                last_period_key: self.start_date.year(),
+            });
         }
     }
 
@@ -122,8 +118,7 @@ impl SimulationState {
                 continue;
             }
 
-            let acc = &params.accounts[acf.account_index];
-            let cf = &acc.cash_flows[acf.cash_flow_index];
+            let cf = &params.cash_flows[acf.cash_flow_index];
 
             // Check end date
             let end_date_opt =
@@ -173,18 +168,35 @@ impl SimulationState {
                 acf.period_accumulated += allowed_magnitude;
             }
 
-            let history = &mut self.histories[acf.account_index];
+            // Apply source (subtract from source account/asset)
+            if let CashFlowEndpoint::Asset {
+                account_id,
+                ref asset_name,
+            } = cf.source
+                && let Some(history) = self
+                    .histories
+                    .iter_mut()
+                    .find(|h| h.account_id == account_id)
+                && let Some(asset) = history.assets.iter_mut().find(|a| &a.name == asset_name)
+            {
+                let last_val = asset
+                    .values
+                    .last_mut()
+                    .expect("asset must have at least 1 value");
+                *last_val -= amount;
+            }
 
-            let target_asset_index = if let Some(name) = &cf.target_asset {
-                history.assets.iter().position(|a| &a.name == name)
-            } else if !history.assets.is_empty() {
-                Some(0)
-            } else {
-                None
-            };
-
-            if let Some(idx) = target_asset_index {
-                let asset = &mut history.assets[idx];
+            // Apply target (add to target account/asset)
+            if let CashFlowEndpoint::Asset {
+                account_id,
+                ref asset_name,
+            } = cf.target
+                && let Some(history) = self
+                    .histories
+                    .iter_mut()
+                    .find(|h| h.account_id == account_id)
+                && let Some(asset) = history.assets.iter_mut().find(|a| &a.name == asset_name)
+            {
                 let last_val = asset
                     .values
                     .last_mut()
@@ -212,18 +224,18 @@ impl SimulationState {
                 continue;
             }
 
-            let triggered = match event.trigger {
-                EventTrigger::Date(d) => self.current_date >= d,
+            let triggered = match &event.trigger {
+                EventTrigger::Date(d) => self.current_date >= *d,
                 EventTrigger::TotalAccountBalance {
                     account_id,
                     threshold,
                     above,
                 } => {
-                    if let Some(acc) = self.histories.iter().find(|a| a.account_id == account_id) {
-                        if above {
-                            acc.current_balance() >= threshold
+                    if let Some(acc) = self.histories.iter().find(|a| a.account_id == *account_id) {
+                        if *above {
+                            acc.current_balance() >= *threshold
                         } else {
-                            acc.current_balance() <= threshold
+                            acc.current_balance() <= *threshold
                         }
                     } else {
                         false
@@ -231,17 +243,17 @@ impl SimulationState {
                 }
                 EventTrigger::AssetBalance {
                     account_id,
-                    ref asset_name,
+                    asset_name,
                     threshold,
                     above,
                 } => {
-                    if let Some(acc) = self.histories.iter().find(|a| a.account_id == account_id) {
+                    if let Some(acc) = self.histories.iter().find(|a| a.account_id == *account_id) {
                         if let Some(asset) = acc.assets.iter().find(|a| &a.name == asset_name) {
                             let balance = *asset.values.last().unwrap_or(&0.0);
-                            if above {
-                                balance >= threshold
+                            if *above {
+                                balance >= *threshold
                             } else {
-                                balance <= threshold
+                                balance <= *threshold
                             }
                         } else {
                             false
@@ -264,7 +276,7 @@ impl SimulationState {
 
                 // Wake up cashflows waiting for this event
                 for acf in &mut self.active_cash_flows {
-                    let cf = &params.accounts[acf.account_index].cash_flows[acf.cash_flow_index];
+                    let cf = &params.cash_flows[acf.cash_flow_index];
                     if let Timepoint::Event(ref event_name) = cf.start
                         && event_name == &name
                     {
@@ -378,7 +390,7 @@ mod tests {
             inflation_profile: InflationProfile::Fixed(0.02),
             events: vec![],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Savings".to_string(),
                 assets: vec![Asset {
                     name: "Cash".to_string(),
@@ -387,17 +399,21 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![CashFlow {
-                    cash_flow_id: 1,
-                    amount: 100.0,
-                    description: Some("Monthly contribution".to_string()),
-                    start: Timepoint::Immediate,
-                    end: Timepoint::Never,
-                    repeats: RepeatInterval::Monthly,
-                    cash_flow_limits: None,
-                    adjust_for_inflation: false,
-                    target_asset: None,
-                }],
+            }],
+            cash_flows: vec![CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 100.0,
+                description: Some("Monthly contribution".to_string()),
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Monthly,
+                cash_flow_limits: None,
+                adjust_for_inflation: false,
+                source: CashFlowEndpoint::External,
+                target: CashFlowEndpoint::Asset {
+                    account_id: AccountId(1),
+                    asset_name: "Cash".to_string(),
+                },
             }],
         };
 
@@ -414,7 +430,7 @@ mod tests {
             inflation_profile: InflationProfile::None,
             events: vec![],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Savings".to_string(),
                 assets: vec![Asset {
                     name: "Cash".to_string(),
@@ -423,20 +439,24 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![CashFlow {
-                    cash_flow_id: 1,
-                    amount: 100.0,
-                    description: Some("Monthly contribution".to_string()),
-                    start: Timepoint::Immediate,
-                    end: Timepoint::Never,
-                    repeats: RepeatInterval::Monthly,
-                    cash_flow_limits: Some(CashFlowLimits {
-                        limit: 1_000.0,
-                        limit_period: LimitPeriod::Yearly,
-                    }),
-                    adjust_for_inflation: false,
-                    target_asset: None,
-                }],
+            }],
+            cash_flows: vec![CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 100.0,
+                description: Some("Monthly contribution".to_string()),
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Monthly,
+                cash_flow_limits: Some(CashFlowLimits {
+                    limit: 1_000.0,
+                    limit_period: LimitPeriod::Yearly,
+                }),
+                adjust_for_inflation: false,
+                source: CashFlowEndpoint::External,
+                target: CashFlowEndpoint::Asset {
+                    account_id: AccountId(1),
+                    asset_name: "Cash".to_string(),
+                },
             }],
         };
 
@@ -466,7 +486,7 @@ mod tests {
             inflation_profile: InflationProfile::None,
             events: vec![],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Savings".to_string(),
                 assets: vec![Asset {
                     name: "Cash".to_string(),
@@ -475,8 +495,8 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![],
             }],
+            cash_flows: vec![],
         };
 
         let result = simulate(&params, 42);
@@ -493,7 +513,7 @@ mod tests {
             inflation_profile: InflationProfile::Fixed(0.10), // 10% inflation
             events: vec![],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Checking".to_string(),
                 assets: vec![Asset {
                     name: "Cash".to_string(),
@@ -502,17 +522,21 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![CashFlow {
-                    cash_flow_id: 1,
-                    amount: 100.0,
-                    description: Some("Yearly income".to_string()),
-                    start: Timepoint::Immediate,
-                    end: Timepoint::Never,
-                    repeats: RepeatInterval::Yearly,
-                    cash_flow_limits: None,
-                    adjust_for_inflation: true,
-                    target_asset: None,
-                }],
+            }],
+            cash_flows: vec![CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 100.0,
+                description: Some("Yearly income".to_string()),
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Yearly,
+                cash_flow_limits: None,
+                adjust_for_inflation: true,
+                source: CashFlowEndpoint::External,
+                target: CashFlowEndpoint::Asset {
+                    account_id: AccountId(1),
+                    asset_name: "Cash".to_string(),
+                },
             }],
         };
 
@@ -540,7 +564,7 @@ mod tests {
             inflation_profile: InflationProfile::None,
             events: vec![],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Savings".to_string(),
                 assets: vec![Asset {
                     name: "Cash".to_string(),
@@ -549,20 +573,24 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![CashFlow {
-                    cash_flow_id: 1,
-                    amount: 1000.0,
-                    description: None,
-                    start: Timepoint::Immediate,
-                    end: Timepoint::Never,
-                    repeats: RepeatInterval::Yearly,
-                    cash_flow_limits: Some(CashFlowLimits {
-                        limit: 2500.0,
-                        limit_period: LimitPeriod::Lifetime,
-                    }),
-                    adjust_for_inflation: false,
-                    target_asset: None,
-                }],
+            }],
+            cash_flows: vec![CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 1000.0,
+                description: None,
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Yearly,
+                cash_flow_limits: Some(CashFlowLimits {
+                    limit: 2500.0,
+                    limit_period: LimitPeriod::Lifetime,
+                }),
+                adjust_for_inflation: false,
+                source: CashFlowEndpoint::External,
+                target: CashFlowEndpoint::Asset {
+                    account_id: AccountId(1),
+                    asset_name: "Cash".to_string(),
+                },
             }],
         };
 
@@ -580,13 +608,13 @@ mod tests {
             events: vec![Event {
                 name: "RichEnough".to_string(),
                 trigger: EventTrigger::TotalAccountBalance {
-                    account_id: 1,
+                    account_id: AccountId(1),
                     threshold: 5000.0,
                     above: true,
                 },
             }],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Savings".to_string(),
                 assets: vec![Asset {
                     name: "Cash".to_string(),
@@ -595,33 +623,41 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![
-                    // Base income: 2000/year
-                    CashFlow {
-                        cash_flow_id: 1,
-                        amount: 2000.0,
-                        description: None,
-                        start: Timepoint::Immediate,
-                        end: Timepoint::Never,
-                        repeats: RepeatInterval::Yearly,
-                        cash_flow_limits: None,
-                        adjust_for_inflation: false,
-                        target_asset: None,
-                    },
-                    // Bonus starts when RichEnough
-                    CashFlow {
-                        cash_flow_id: 2,
-                        amount: 10000.0,
-                        description: None,
-                        start: Timepoint::Event("RichEnough".to_string()),
-                        end: Timepoint::Never,
-                        repeats: RepeatInterval::Never, // One time bonus
-                        cash_flow_limits: None,
-                        adjust_for_inflation: false,
-                        target_asset: None,
-                    },
-                ],
             }],
+            cash_flows: vec![
+                // Base income: 2000/year
+                CashFlow {
+                    cash_flow_id: CashFlowId(1),
+                    amount: 2000.0,
+                    description: None,
+                    start: Timepoint::Immediate,
+                    end: Timepoint::Never,
+                    repeats: RepeatInterval::Yearly,
+                    cash_flow_limits: None,
+                    adjust_for_inflation: false,
+                    source: CashFlowEndpoint::External,
+                    target: CashFlowEndpoint::Asset {
+                        account_id: AccountId(1),
+                        asset_name: "Cash".to_string(),
+                    },
+                },
+                // Bonus starts when RichEnough
+                CashFlow {
+                    cash_flow_id: CashFlowId(2),
+                    amount: 10000.0,
+                    description: None,
+                    start: Timepoint::Event("RichEnough".to_string()),
+                    end: Timepoint::Never,
+                    repeats: RepeatInterval::Never, // One time bonus
+                    cash_flow_limits: None,
+                    adjust_for_inflation: false,
+                    source: CashFlowEndpoint::External,
+                    target: CashFlowEndpoint::Asset {
+                        account_id: AccountId(1),
+                        asset_name: "Cash".to_string(),
+                    },
+                },
+            ],
         };
 
         let result = simulate(&params, 42);
@@ -645,7 +681,7 @@ mod tests {
             inflation_profile: InflationProfile::None,
             events: vec![],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Invest".to_string(),
                 assets: vec![Asset {
                     name: "Stock".to_string(),
@@ -654,17 +690,21 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![CashFlow {
-                    cash_flow_id: 1,
-                    amount: 1000.0,
-                    description: None,
-                    start: Timepoint::Immediate,
-                    end: Timepoint::Never,
-                    repeats: RepeatInterval::Never,
-                    cash_flow_limits: None,
-                    adjust_for_inflation: false,
-                    target_asset: None,
-                }],
+            }],
+            cash_flows: vec![CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 1000.0,
+                description: None,
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Never,
+                cash_flow_limits: None,
+                adjust_for_inflation: false,
+                source: CashFlowEndpoint::External,
+                target: CashFlowEndpoint::Asset {
+                    account_id: AccountId(1),
+                    asset_name: "Stock".to_string(),
+                },
             }],
         };
 
@@ -689,14 +729,14 @@ mod tests {
             events: vec![Event {
                 name: "DebtPaid".to_string(),
                 trigger: EventTrigger::TotalAccountBalance {
-                    account_id: 1, // Debt account
+                    account_id: AccountId(1), // Debt account
                     threshold: 0.0,
                     above: true, // When balance >= 0 (debt paid off)
                 },
             }],
             accounts: vec![
                 Account {
-                    account_id: 1,
+                    account_id: AccountId(1),
                     name: "Debt".to_string(),
                     assets: vec![Asset {
                         name: "Loan".to_string(),
@@ -705,20 +745,9 @@ mod tests {
                         asset_class: AssetClass::Liability,
                     }],
                     account_type: AccountType::Illiquid,
-                    cash_flows: vec![CashFlow {
-                        cash_flow_id: 1,
-                        amount: 1000.0,
-                        description: Some("Debt Payment".to_string()),
-                        start: Timepoint::Immediate,
-                        end: Timepoint::Event("DebtPaid".to_string()),
-                        repeats: RepeatInterval::Yearly,
-                        cash_flow_limits: None,
-                        adjust_for_inflation: false,
-                        target_asset: None,
-                    }],
                 },
                 Account {
-                    account_id: 2,
+                    account_id: AccountId(2),
                     name: "Savings".to_string(),
                     assets: vec![Asset {
                         name: "Cash".to_string(),
@@ -727,17 +756,38 @@ mod tests {
                         asset_class: AssetClass::Investable,
                     }],
                     account_type: AccountType::Taxable,
-                    cash_flows: vec![CashFlow {
-                        cash_flow_id: 2,
-                        amount: 1000.0,
-                        description: Some("Savings after debt".to_string()),
-                        start: Timepoint::Event("DebtPaid".to_string()),
-                        end: Timepoint::Never,
-                        repeats: RepeatInterval::Yearly,
-                        cash_flow_limits: None,
-                        adjust_for_inflation: false,
-                        target_asset: None,
-                    }],
+                },
+            ],
+            cash_flows: vec![
+                CashFlow {
+                    cash_flow_id: CashFlowId(1),
+                    amount: 1000.0,
+                    description: Some("Debt Payment".to_string()),
+                    start: Timepoint::Immediate,
+                    end: Timepoint::Event("DebtPaid".to_string()),
+                    repeats: RepeatInterval::Yearly,
+                    cash_flow_limits: None,
+                    adjust_for_inflation: false,
+                    source: CashFlowEndpoint::External,
+                    target: CashFlowEndpoint::Asset {
+                        account_id: AccountId(1),
+                        asset_name: "Loan".to_string(),
+                    },
+                },
+                CashFlow {
+                    cash_flow_id: CashFlowId(2),
+                    amount: 1000.0,
+                    description: Some("Savings after debt".to_string()),
+                    start: Timepoint::Event("DebtPaid".to_string()),
+                    end: Timepoint::Never,
+                    repeats: RepeatInterval::Yearly,
+                    cash_flow_limits: None,
+                    adjust_for_inflation: false,
+                    source: CashFlowEndpoint::External,
+                    target: CashFlowEndpoint::Asset {
+                        account_id: AccountId(2),
+                        asset_name: "Cash".to_string(),
+                    },
                 },
             ],
         };
@@ -782,14 +832,14 @@ mod tests {
             events: vec![Event {
                 name: "MortgagePaidOff".to_string(),
                 trigger: EventTrigger::AssetBalance {
-                    account_id: 1,
+                    account_id: AccountId(1),
                     asset_name: "Home Mortgage".to_string(),
                     threshold: -1.0,
                     above: true,
                 },
             }],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "House".to_string(),
                 assets: vec![
                     Asset {
@@ -809,17 +859,21 @@ mod tests {
                     },
                 ],
                 account_type: AccountType::Illiquid,
-                cash_flows: vec![CashFlow {
-                    cash_flow_id: 1,
-                    amount: 3_500.0, // Monthly payment
-                    description: Some("Mortgage Payment".to_string()),
-                    start: Timepoint::Immediate,
-                    end: Timepoint::Event("MortgagePaidOff".to_string()),
-                    repeats: RepeatInterval::Monthly,
-                    cash_flow_limits: None,
-                    adjust_for_inflation: true,
-                    target_asset: Some("Home Mortgage".to_string()),
-                }],
+            }],
+            cash_flows: vec![CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 3_500.0, // Monthly payment
+                description: Some("Mortgage Payment".to_string()),
+                start: Timepoint::Immediate,
+                end: Timepoint::Event("MortgagePaidOff".to_string()),
+                repeats: RepeatInterval::Monthly,
+                cash_flow_limits: None,
+                adjust_for_inflation: true,
+                source: CashFlowEndpoint::External,
+                target: CashFlowEndpoint::Asset {
+                    account_id: AccountId(1),
+                    asset_name: "Home Mortgage".to_string(),
+                },
             }],
         };
 
@@ -839,7 +893,7 @@ mod tests {
                 trigger: EventTrigger::Date(start_date.saturating_add(2.years())),
             }],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "LimitedSavings".to_string(),
                 assets: vec![Asset {
                     name: "Cash".to_string(),
@@ -848,20 +902,24 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![CashFlow {
-                    cash_flow_id: 1,
-                    amount: 1000.0, // Monthly
-                    description: None,
-                    start: Timepoint::Event("StartSaving".to_string()),
-                    end: Timepoint::Never,
-                    repeats: RepeatInterval::Monthly,
-                    cash_flow_limits: Some(CashFlowLimits {
-                        limit: 5000.0,
-                        limit_period: LimitPeriod::Yearly,
-                    }),
-                    adjust_for_inflation: false,
-                    target_asset: None,
-                }],
+            }],
+            cash_flows: vec![CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 1000.0, // Monthly
+                description: None,
+                start: Timepoint::Event("StartSaving".to_string()),
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Monthly,
+                cash_flow_limits: Some(CashFlowLimits {
+                    limit: 5000.0,
+                    limit_period: LimitPeriod::Yearly,
+                }),
+                adjust_for_inflation: false,
+                source: CashFlowEndpoint::External,
+                target: CashFlowEndpoint::Asset {
+                    account_id: AccountId(1),
+                    asset_name: "Cash".to_string(),
+                },
             }],
         };
 
@@ -890,7 +948,7 @@ mod tests {
             inflation_profile: InflationProfile::Fixed(0.02),
             events: vec![],
             accounts: vec![Account {
-                account_id: 1,
+                account_id: AccountId(1),
                 name: "Savings".to_string(),
                 assets: vec![Asset {
                     name: "Stock".to_string(),
@@ -902,8 +960,8 @@ mod tests {
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
-                cash_flows: vec![],
             }],
+            cash_flows: vec![],
         };
 
         let result = monte_carlo_simulate(&params, 100);
