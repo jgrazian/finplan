@@ -1,6 +1,7 @@
 use crate::models::*;
 use jiff::ToSpan;
 use rand::{RngCore, SeedableRng};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::HashMap;
 
 pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
@@ -380,9 +381,9 @@ pub fn monte_carlo_simulate(
     params: &SimulationParameters,
     num_iterations: usize,
 ) -> MonteCarloResult {
-    let mut rng = rand::rng();
     let iterations = (0..num_iterations)
-        .map(|_| {
+        .into_par_iter()
+        .map_init(rand::rng, |rng, _| {
             let seed = rng.next_u64();
             simulate(params, seed)
         })
@@ -1018,15 +1019,19 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        
+
         // Both assets should have the same return_profile_index, which means they use
         // the same returns from result.return_profile_returns
         let asset1_profile_idx = result.account_histories[0].assets[0].return_profile_index;
         let asset2_profile_idx = result.account_histories[1].assets[0].return_profile_index;
-        
-        assert_eq!(asset1_profile_idx, asset2_profile_idx, 
-            "Both assets should reference the same return profile");
-        assert_eq!(asset1_profile_idx, 0,
-            "Both assets should use return_profile_index 0");
+
+        assert_eq!(
+            asset1_profile_idx, asset2_profile_idx,
+            "Both assets should reference the same return profile"
+        );
+        assert_eq!(
+            asset1_profile_idx, 0,
+            "Both assets should use return_profile_index 0"
+        );
     }
 }
