@@ -18,6 +18,8 @@ struct ActiveCashFlowState {
 struct SimulationState {
     triggered_events: HashMap<EventId, jiff::civil::Date>,
     histories: Vec<AccountHistory>,
+    dates: Vec<jiff::civil::Date>,
+    return_profile_returns: Vec<Vec<f64>>,
     active_cash_flows: Vec<ActiveCashFlowState>,
     cumulative_inflation: Vec<f64>,
     inflation_rates: Vec<f64>,
@@ -34,6 +36,17 @@ impl SimulationState {
             .unwrap_or_else(|| jiff::Zoned::now().date());
         let end_date = start_date.saturating_add((params.duration_years as i64).years());
 
+        // Sample returns once per return profile, not per asset
+        let sampled_returns: Vec<Vec<f64>> = params
+            .return_profiles
+            .iter()
+            .map(|profile| {
+                (0..params.duration_years)
+                    .map(|_| profile.sample(&mut rng))
+                    .collect()
+            })
+            .collect();
+
         let histories: Vec<AccountHistory> = params
             .accounts
             .iter()
@@ -43,9 +56,7 @@ impl SimulationState {
                     .iter()
                     .map(|asset| AssetHistory {
                         asset_id: asset.asset_id,
-                        yearly_returns: (0..params.duration_years)
-                            .map(|_| asset.return_profile.sample(&mut rng))
-                            .collect(),
+                        return_profile_index: asset.return_profile_index,
                         values: vec![asset.initial_value],
                     })
                     .collect();
@@ -53,7 +64,6 @@ impl SimulationState {
                 AccountHistory {
                     account_id: a.account_id,
                     assets: asset_histories,
-                    dates: vec![start_date],
                 }
             })
             .collect();
@@ -71,6 +81,8 @@ impl SimulationState {
         Self {
             triggered_events: HashMap::new(),
             histories,
+            dates: vec![start_date],
+            return_profile_returns: sampled_returns,
             active_cash_flows: Vec::new(),
             cumulative_inflation,
             inflation_rates,
@@ -324,14 +336,14 @@ impl SimulationState {
 
             for acc in &mut self.histories {
                 for asset in &mut acc.assets {
-                    let rate = asset.yearly_returns[year_idx];
+                    let rate = self.return_profile_returns[asset.return_profile_index][year_idx];
                     let start_value = *asset.values.last().unwrap();
                     let new_value = start_value * (1.0 + n_day_rate(rate, days_passed as f64));
                     asset.values.push(new_value);
                 }
-
-                acc.dates.push(next_checkpoint);
             }
+
+            self.dates.push(next_checkpoint);
         }
         self.current_date = next_checkpoint;
     }
@@ -357,6 +369,9 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
 
     SimulationResult {
         yearly_inflation: state.inflation_rates,
+        dates: state.dates,
+        return_profile_returns: state.return_profile_returns,
+        triggered_events: state.triggered_events,
         account_histories: state.histories,
     }
 }
@@ -387,13 +402,14 @@ mod tests {
             start_date: None,
             duration_years: 30,
             inflation_profile: InflationProfile::Fixed(0.02),
+            return_profiles: vec![ReturnProfile::Fixed(0.05)],
             events: vec![],
             accounts: vec![Account {
                 account_id: AccountId(1),
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 10_000.0,
-                    return_profile: ReturnProfile::Fixed(0.05),
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -425,13 +441,14 @@ mod tests {
             start_date: Some(jiff::civil::date(2022, 1, 1)),
             duration_years: 10,
             inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
             events: vec![],
             accounts: vec![Account {
                 account_id: AccountId(1),
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 10_000.0,
-                    return_profile: ReturnProfile::None,
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -479,13 +496,14 @@ mod tests {
             start_date: Some(start_date),
             duration_years: 1,
             inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
             events: vec![],
             accounts: vec![Account {
                 account_id: AccountId(1),
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 10_000.0,
-                    return_profile: ReturnProfile::None,
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -496,7 +514,7 @@ mod tests {
         let result = simulate(&params, 42);
 
         // Check that the first snapshot date matches the start date
-        assert_eq!(result.account_histories[0].dates[0], start_date);
+        assert_eq!(result.dates[0], start_date);
     }
 
     #[test]
@@ -505,13 +523,14 @@ mod tests {
             start_date: None,
             duration_years: 2,
             inflation_profile: InflationProfile::Fixed(0.10), // 10% inflation
+            return_profiles: vec![ReturnProfile::None],
             events: vec![],
             accounts: vec![Account {
                 account_id: AccountId(1),
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 0.0,
-                    return_profile: ReturnProfile::None,
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -554,13 +573,14 @@ mod tests {
             start_date: None,
             duration_years: 5,
             inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
             events: vec![],
             accounts: vec![Account {
                 account_id: AccountId(1),
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 0.0,
-                    return_profile: ReturnProfile::None,
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -595,6 +615,7 @@ mod tests {
             start_date: None,
             duration_years: 5,
             inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
             events: vec![Event {
                 event_id: EventId(1),
                 trigger: EventTrigger::TotalAccountBalance {
@@ -608,7 +629,7 @@ mod tests {
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 0.0,
-                    return_profile: ReturnProfile::None,
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -666,13 +687,14 @@ mod tests {
             start_date: None,
             duration_years: 1,
             inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::Fixed(0.10)],
             events: vec![],
             accounts: vec![Account {
                 account_id: AccountId(1),
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 0.0,
-                    return_profile: ReturnProfile::Fixed(0.10),
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -711,6 +733,7 @@ mod tests {
             start_date: None,
             duration_years: 5,
             inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
             events: vec![Event {
                 event_id: EventId(1),
                 trigger: EventTrigger::TotalAccountBalance {
@@ -725,7 +748,7 @@ mod tests {
                     assets: vec![Asset {
                         asset_id: AssetId(1),
                         initial_value: -2000.0,
-                        return_profile: ReturnProfile::None,
+                        return_profile_index: 0,
                         asset_class: AssetClass::Liability,
                     }],
                     account_type: AccountType::Illiquid,
@@ -735,7 +758,7 @@ mod tests {
                     assets: vec![Asset {
                         asset_id: AssetId(1),
                         initial_value: 0.0,
-                        return_profile: ReturnProfile::None,
+                        return_profile_index: 0,
                         asset_class: AssetClass::Investable,
                     }],
                     account_type: AccountType::Taxable,
@@ -810,6 +833,13 @@ mod tests {
             start_date: None,
             duration_years: 10,
             inflation_profile: InflationProfile::Fixed(0.03),
+            return_profiles: vec![
+                ReturnProfile::Fixed(0.06),
+                ReturnProfile::Normal {
+                    mean: 0.03,
+                    std_dev: 0.02,
+                },
+            ],
             events: vec![Event {
                 event_id: EventId(1),
                 trigger: EventTrigger::AssetBalance {
@@ -825,16 +855,13 @@ mod tests {
                     Asset {
                         asset_id: AssetId(1),
                         initial_value: -300_000.0,
-                        return_profile: ReturnProfile::Fixed(0.06),
+                        return_profile_index: 0,
                         asset_class: AssetClass::Liability,
                     },
                     Asset {
                         asset_id: AssetId(2),
                         initial_value: 300_000.0,
-                        return_profile: ReturnProfile::Normal {
-                            mean: 0.03,
-                            std_dev: 0.02,
-                        },
+                        return_profile_index: 1,
                         asset_class: AssetClass::RealEstate,
                     },
                 ],
@@ -867,6 +894,7 @@ mod tests {
             start_date: Some(start_date),
             duration_years: 5,
             inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
             events: vec![Event {
                 event_id: EventId(1),
                 trigger: EventTrigger::Date(start_date.saturating_add(2.years())),
@@ -876,7 +904,7 @@ mod tests {
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 0.0,
-                    return_profile: ReturnProfile::None,
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -923,16 +951,17 @@ mod tests {
             start_date: None,
             duration_years: 30,
             inflation_profile: InflationProfile::Fixed(0.02),
+            return_profiles: vec![ReturnProfile::Normal {
+                mean: 0.07,
+                std_dev: 0.15,
+            }],
             events: vec![],
             accounts: vec![Account {
                 account_id: AccountId(1),
                 assets: vec![Asset {
                     asset_id: AssetId(1),
                     initial_value: 10_000.0,
-                    return_profile: ReturnProfile::Normal {
-                        mean: 0.07,
-                        std_dev: 0.15,
-                    },
+                    return_profile_index: 0,
                     asset_class: AssetClass::Investable,
                 }],
                 account_type: AccountType::Taxable,
@@ -948,5 +977,56 @@ mod tests {
         let second_final = result.iterations[1].account_histories[0].current_balance();
 
         assert_ne!(first_final, second_final);
+    }
+
+    #[test]
+    fn test_shared_return_profile() {
+        // Test that assets in different accounts with the same return_profile_index
+        // share the same yearly returns
+        let params = SimulationParameters {
+            start_date: None,
+            duration_years: 10,
+            inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::Normal {
+                mean: 0.07,
+                std_dev: 0.15,
+            }],
+            events: vec![],
+            accounts: vec![
+                Account {
+                    account_id: AccountId(1),
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 10_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                    account_type: AccountType::Taxable,
+                },
+                Account {
+                    account_id: AccountId(2),
+                    assets: vec![Asset {
+                        asset_id: AssetId(2),
+                        initial_value: 5_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                    account_type: AccountType::TaxDeferred,
+                },
+            ],
+            cash_flows: vec![],
+        };
+
+        let result = simulate(&params, 42);
+        
+        // Both assets should have the same return_profile_index, which means they use
+        // the same returns from result.return_profile_returns
+        let asset1_profile_idx = result.account_histories[0].assets[0].return_profile_index;
+        let asset2_profile_idx = result.account_histories[1].assets[0].return_profile_index;
+        
+        assert_eq!(asset1_profile_idx, asset2_profile_idx, 
+            "Both assets should reference the same return profile");
+        assert_eq!(asset1_profile_idx, 0,
+            "Both assets should use return_profile_index 0");
     }
 }

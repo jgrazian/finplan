@@ -31,7 +31,7 @@ pub struct Asset {
     pub asset_id: AssetId,
     pub asset_class: AssetClass,
     pub initial_value: f64,
-    pub return_profile: ReturnProfile,
+    pub return_profile_index: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +157,7 @@ pub struct SimulationParameters {
     pub start_date: Option<jiff::civil::Date>,
     pub duration_years: usize,
     pub inflation_profile: InflationProfile,
+    pub return_profiles: Vec<ReturnProfile>,
     pub events: Vec<Event>,
     pub accounts: Vec<Account>,
     pub cash_flows: Vec<CashFlow>,
@@ -165,6 +166,9 @@ pub struct SimulationParameters {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimulationResult {
     pub yearly_inflation: Vec<f64>,
+    pub dates: Vec<jiff::civil::Date>,
+    pub return_profile_returns: Vec<Vec<f64>>,
+    pub triggered_events: std::collections::HashMap<EventId, jiff::civil::Date>,
     pub account_histories: Vec<AccountHistory>,
 }
 
@@ -172,12 +176,11 @@ pub struct SimulationResult {
 pub struct AccountHistory {
     pub account_id: AccountId,
     pub assets: Vec<AssetHistory>,
-    pub dates: Vec<jiff::civil::Date>,
 }
 
 impl AccountHistory {
-    pub fn values(&self) -> Vec<AccountSnapshot> {
-        self.dates
+    pub fn values(&self, dates: &[jiff::civil::Date]) -> Vec<AccountSnapshot> {
+        dates
             .iter()
             .enumerate()
             .map(|(i, date)| {
@@ -201,7 +204,7 @@ impl AccountHistory {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AssetHistory {
     pub asset_id: AssetId,
-    pub yearly_returns: Vec<f64>,
+    pub return_profile_index: usize,
     pub values: Vec<f64>,
 }
 
