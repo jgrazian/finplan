@@ -4,11 +4,19 @@ use serde::{Deserialize, Serialize};
 
 /// Unique identifier for an Account within a simulation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct AccountId(pub u64);
+pub struct AccountId(pub u16);
+
+/// Unique identifier for a Asset within a simulation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct AssetId(pub u16);
 
 /// Unique identifier for a CashFlow within a simulation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CashFlowId(pub u64);
+pub struct CashFlowId(pub u16);
+
+/// Unique identifier for a Event within a simulation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EventId(pub u16);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AssetClass {
@@ -20,10 +28,10 @@ pub enum AssetClass {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Asset {
-    pub name: String,
-    pub value: f64,
-    pub return_profile: ReturnProfile,
+    pub asset_id: AssetId,
     pub asset_class: AssetClass,
+    pub initial_value: f64,
+    pub return_profile: ReturnProfile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,9 +45,8 @@ pub enum AccountType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
     pub account_id: AccountId,
-    pub name: String,
-    pub assets: Vec<Asset>,
     pub account_type: AccountType,
+    pub assets: Vec<Asset>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +78,7 @@ pub enum Timepoint {
     /// A specific fixed date (ad-hoc)
     Date(jiff::civil::Date),
     /// Reference to a named event in SimulationParameters
-    Event(String),
+    Event(EventId),
     Never,
 }
 
@@ -83,14 +90,13 @@ pub enum CashFlowEndpoint {
     /// A specific asset within an account
     Asset {
         account_id: AccountId,
-        asset_name: String,
+        asset_id: AssetId,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CashFlow {
     pub cash_flow_id: CashFlowId,
-    pub description: Option<String>,
     pub amount: f64,
     pub start: Timepoint,
     pub end: Timepoint,
@@ -126,7 +132,7 @@ pub struct CashFlowLimits {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
-    pub name: String,
+    pub event_id: EventId,
     pub trigger: EventTrigger,
 }
 
@@ -140,7 +146,7 @@ pub enum EventTrigger {
     },
     AssetBalance {
         account_id: AccountId,
-        asset_name: String,
+        asset_id: AssetId,
         threshold: f64,
         above: bool,
     },
@@ -194,7 +200,7 @@ impl AccountHistory {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AssetHistory {
-    pub name: String,
+    pub asset_id: AssetId,
     pub yearly_returns: Vec<f64>,
     pub values: Vec<f64>,
 }
