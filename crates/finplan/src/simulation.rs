@@ -1,4 +1,5 @@
 use crate::models::*;
+use crate::taxes::{calculate_withdrawal_tax, gross_up_for_net_target};
 use jiff::ToSpan;
 use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
@@ -16,17 +17,39 @@ struct ActiveCashFlowState {
     last_period_key: i16,
 }
 
+/// Internal state for a running spending target
+struct ActiveSpendingTargetState {
+    spending_target_index: usize,
+    next_date: Option<jiff::civil::Date>,
+}
+
+/// Year-to-date tax tracking
+#[derive(Default)]
+struct YtdTaxState {
+    year: i16,
+    ordinary_income: f64,
+    capital_gains: f64,
+    tax_free_withdrawals: f64,
+    federal_tax: f64,
+    state_tax: f64,
+}
+
 struct SimulationState {
     triggered_events: HashMap<EventId, jiff::civil::Date>,
     histories: Vec<AccountHistory>,
     dates: Vec<jiff::civil::Date>,
     return_profile_returns: Vec<Vec<f64>>,
     active_cash_flows: Vec<ActiveCashFlowState>,
+    active_spending_targets: Vec<ActiveSpendingTargetState>,
     cumulative_inflation: Vec<f64>,
     inflation_rates: Vec<f64>,
     current_date: jiff::civil::Date,
     start_date: jiff::civil::Date,
     end_date: jiff::civil::Date,
+    // Tax tracking
+    ytd_tax: YtdTaxState,
+    yearly_taxes: Vec<TaxSummary>,
+    withdrawal_history: Vec<WithdrawalRecord>,
 }
 
 impl SimulationState {
@@ -85,11 +108,18 @@ impl SimulationState {
             dates: vec![start_date],
             return_profile_returns: sampled_returns,
             active_cash_flows: Vec::new(),
+            active_spending_targets: Vec::new(),
             cumulative_inflation,
             inflation_rates,
             current_date: start_date,
             start_date,
             end_date,
+            ytd_tax: YtdTaxState {
+                year: start_date.year(),
+                ..Default::default()
+            },
+            yearly_taxes: Vec::new(),
+            withdrawal_history: Vec::new(),
         }
     }
 
@@ -118,6 +148,279 @@ impl SimulationState {
                 last_period_key: self.start_date.year(),
             });
         }
+    }
+
+    fn init_spending_targets(&mut self, params: &SimulationParameters) {
+        for (st_idx, st) in params.spending_targets.iter().enumerate() {
+            let start = Self::resolve_start(self.start_date, &self.triggered_events, &st.start);
+            self.active_spending_targets
+                .push(ActiveSpendingTargetState {
+                    spending_target_index: st_idx,
+                    next_date: start,
+                });
+        }
+    }
+
+    /// Finalize YTD taxes when year changes or simulation ends
+    fn finalize_year_taxes(&mut self) {
+        if self.ytd_tax.ordinary_income > 0.0
+            || self.ytd_tax.capital_gains > 0.0
+            || self.ytd_tax.tax_free_withdrawals > 0.0
+        {
+            self.yearly_taxes.push(TaxSummary {
+                year: self.ytd_tax.year,
+                ordinary_income: self.ytd_tax.ordinary_income,
+                capital_gains: self.ytd_tax.capital_gains,
+                tax_free_withdrawals: self.ytd_tax.tax_free_withdrawals,
+                federal_tax: self.ytd_tax.federal_tax,
+                state_tax: self.ytd_tax.state_tax,
+                total_tax: self.ytd_tax.federal_tax + self.ytd_tax.state_tax,
+            });
+        }
+    }
+
+    /// Check if we've crossed into a new year and finalize previous year's taxes
+    fn maybe_rollover_year(&mut self) {
+        let current_year = self.current_date.year();
+        if current_year != self.ytd_tax.year {
+            self.finalize_year_taxes();
+            self.ytd_tax = YtdTaxState {
+                year: current_year,
+                ..Default::default()
+            };
+        }
+    }
+
+    fn apply_spending_targets(&mut self, params: &SimulationParameters) -> bool {
+        self.maybe_rollover_year();
+
+        let mut something_happened = false;
+
+        for ast_idx in 0..self.active_spending_targets.len() {
+            let ast = &self.active_spending_targets[ast_idx];
+            let Some(date) = ast.next_date else {
+                continue;
+            };
+
+            if date > self.current_date {
+                continue;
+            }
+
+            let st = &params.spending_targets[ast.spending_target_index];
+
+            // Check end date
+            let end_date_opt =
+                Self::resolve_start(self.start_date, &self.triggered_events, &st.end);
+            let has_ended = if let Some(end) = end_date_opt {
+                self.current_date >= end
+            } else {
+                false
+            };
+
+            if has_ended {
+                self.active_spending_targets[ast_idx].next_date = None;
+                continue;
+            }
+
+            // Calculate target amount (with inflation adjustment)
+            let mut target_amount = st.amount;
+            if st.adjust_for_inflation {
+                let years_passed = (self.current_date - self.start_date).get_days() as f64 / 365.0;
+                let year_idx = (years_passed.floor() as usize).min(params.duration_years - 1);
+                let fraction = years_passed - (year_idx as f64);
+                let inflation_multiplier = self.cumulative_inflation[year_idx]
+                    * (1.0 + self.inflation_rates[year_idx]).powf(fraction);
+                target_amount *= inflation_multiplier;
+            }
+
+            // Execute withdrawal strategy
+            let withdrawal_order = self.get_withdrawal_order(params, st);
+            let mut remaining_target = target_amount;
+
+            for (account_id, asset_id) in withdrawal_order {
+                if remaining_target <= 0.0 {
+                    break;
+                }
+
+                // Find account type
+                let account_type = params
+                    .accounts
+                    .iter()
+                    .find(|a| a.account_id == account_id)
+                    .map(|a| &a.account_type)
+                    .unwrap_or(&AccountType::Taxable);
+
+                // Get available balance
+                let available = self
+                    .histories
+                    .iter()
+                    .find(|h| h.account_id == account_id)
+                    .and_then(|h| h.assets.iter().find(|a| a.asset_id == asset_id))
+                    .and_then(|a| a.values.last().copied())
+                    .unwrap_or(0.0)
+                    .max(0.0);
+
+                if available <= 0.0 {
+                    continue;
+                }
+
+                // Calculate how much to withdraw
+                let gross_withdrawal = if st.net_amount_mode {
+                    // Need to gross up for taxes
+                    let gross = gross_up_for_net_target(
+                        remaining_target,
+                        account_type,
+                        &params.tax_config,
+                        self.ytd_tax.ordinary_income,
+                    )
+                    .unwrap_or(remaining_target);
+                    gross.min(available)
+                } else {
+                    remaining_target.min(available)
+                };
+
+                // Calculate taxes on this withdrawal
+                let tax_result = calculate_withdrawal_tax(
+                    gross_withdrawal,
+                    account_type,
+                    &params.tax_config,
+                    self.ytd_tax.ordinary_income,
+                );
+
+                // Apply the withdrawal to the account
+                if let Some(history) = self
+                    .histories
+                    .iter_mut()
+                    .find(|h| h.account_id == account_id)
+                    && let Some(asset) = history.assets.iter_mut().find(|a| a.asset_id == asset_id)
+                    && let Some(last_val) = asset.values.last_mut()
+                {
+                    *last_val -= gross_withdrawal;
+                }
+
+                // Track taxes
+                match account_type {
+                    AccountType::TaxDeferred => {
+                        self.ytd_tax.ordinary_income += gross_withdrawal;
+                    }
+                    AccountType::Taxable => {
+                        self.ytd_tax.capital_gains +=
+                            gross_withdrawal * params.tax_config.taxable_gains_percentage;
+                    }
+                    AccountType::TaxFree => {
+                        self.ytd_tax.tax_free_withdrawals += gross_withdrawal;
+                    }
+                    AccountType::Illiquid => {}
+                }
+                self.ytd_tax.federal_tax += tax_result.federal_tax;
+                self.ytd_tax.state_tax += tax_result.state_tax + tax_result.capital_gains_tax;
+
+                // Record the withdrawal
+                self.withdrawal_history.push(WithdrawalRecord {
+                    date: self.current_date,
+                    spending_target_id: st.spending_target_id,
+                    account_id,
+                    asset_id,
+                    gross_amount: gross_withdrawal,
+                    tax_amount: tax_result.total_tax,
+                    net_amount: tax_result.net_amount,
+                });
+
+                // Update remaining target
+                if st.net_amount_mode {
+                    remaining_target -= tax_result.net_amount;
+                } else {
+                    remaining_target -= gross_withdrawal;
+                }
+
+                something_happened = true;
+            }
+
+            // Schedule next occurrence
+            let next = match &st.repeats {
+                RepeatInterval::Never => None,
+                interval => Some(date.saturating_add(interval.span())),
+            };
+            self.active_spending_targets[ast_idx].next_date = next;
+        }
+
+        something_happened
+    }
+
+    /// Get the order of (account_id, asset_id) pairs to withdraw from based on strategy
+    fn get_withdrawal_order(
+        &self,
+        params: &SimulationParameters,
+        target: &SpendingTarget,
+    ) -> Vec<(AccountId, AssetId)> {
+        // Build list of all liquid accounts/assets with their balances
+        let mut candidates: Vec<(AccountId, AssetId, &AccountType, f64)> = Vec::new();
+
+        for account in &params.accounts {
+            // Skip illiquid and excluded accounts
+            if matches!(account.account_type, AccountType::Illiquid) {
+                continue;
+            }
+            if target.exclude_accounts.contains(&account.account_id) {
+                continue;
+            }
+
+            // Get current balances from history
+            if let Some(history) = self
+                .histories
+                .iter()
+                .find(|h| h.account_id == account.account_id)
+            {
+                for asset in &account.assets {
+                    let balance = history
+                        .assets
+                        .iter()
+                        .find(|a| a.asset_id == asset.asset_id)
+                        .and_then(|a| a.values.last().copied())
+                        .unwrap_or(0.0);
+
+                    if balance > 0.0 {
+                        candidates.push((
+                            account.account_id,
+                            asset.asset_id,
+                            &account.account_type,
+                            balance,
+                        ));
+                    }
+                }
+            }
+        }
+
+        match &target.withdrawal_strategy {
+            WithdrawalStrategy::Sequential { order } => {
+                // Sort by the provided order
+                candidates.sort_by(|a, b| {
+                    let a_idx = order.iter().position(|id| *id == a.0).unwrap_or(usize::MAX);
+                    let b_idx = order.iter().position(|id| *id == b.0).unwrap_or(usize::MAX);
+                    a_idx.cmp(&b_idx)
+                });
+            }
+            WithdrawalStrategy::ProRata => {
+                // For pro-rata, we'll handle proportional withdrawal in the main loop
+                // For now, just sort by balance descending
+                candidates
+                    .sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+            }
+            WithdrawalStrategy::TaxOptimized => {
+                // Tax-optimized order: Taxable first (cap gains), then TaxDeferred, then TaxFree
+                candidates.sort_by(|a, b| {
+                    let type_order = |t: &AccountType| match t {
+                        AccountType::Taxable => 0,
+                        AccountType::TaxDeferred => 1,
+                        AccountType::TaxFree => 2,
+                        AccountType::Illiquid => 3,
+                    };
+                    type_order(a.2).cmp(&type_order(b.2))
+                });
+            }
+        }
+
+        candidates.into_iter().map(|(a, b, _, _)| (a, b)).collect()
     }
 
     fn apply_cash_flows(&mut self, params: &SimulationParameters) -> bool {
@@ -314,6 +617,15 @@ impl SimulationState {
             }
         }
 
+        for ast in &self.active_spending_targets {
+            if let Some(d) = ast.next_date
+                && d > self.current_date
+                && d < next_checkpoint
+            {
+                next_checkpoint = d;
+            }
+        }
+
         for event in &params.events {
             if !self.triggered_events.contains_key(&event.event_id)
                 && let EventTrigger::Date(d) = event.trigger
@@ -353,11 +665,15 @@ impl SimulationState {
 pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
     let mut state = SimulationState::new(params, seed);
     state.init_cash_flows(params);
+    state.init_spending_targets(params);
 
     while state.current_date < state.end_date {
         let mut something_happened = true;
         while something_happened {
             something_happened = false;
+            if state.apply_spending_targets(params) {
+                something_happened = true;
+            }
             if state.apply_cash_flows(params) {
                 something_happened = true;
             }
@@ -368,12 +684,17 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
         state.advance_time(params);
     }
 
+    // Finalize last year's taxes
+    state.finalize_year_taxes();
+
     SimulationResult {
         yearly_inflation: state.inflation_rates,
         dates: state.dates,
         return_profile_returns: state.return_profile_returns,
         triggered_events: state.triggered_events,
         account_histories: state.histories,
+        yearly_taxes: state.yearly_taxes,
+        withdrawal_history: state.withdrawal_history,
     }
 }
 
@@ -429,6 +750,7 @@ mod tests {
                     asset_id: AssetId(1),
                 },
             }],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -471,6 +793,7 @@ mod tests {
                     asset_id: AssetId(1),
                 },
             }],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -510,6 +833,7 @@ mod tests {
                 account_type: AccountType::Taxable,
             }],
             cash_flows: vec![],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -550,6 +874,7 @@ mod tests {
                     asset_id: AssetId(1),
                 },
             }],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -603,6 +928,7 @@ mod tests {
                     asset_id: AssetId(1),
                 },
             }],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -667,6 +993,7 @@ mod tests {
                     },
                 },
             ],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -714,6 +1041,7 @@ mod tests {
                     asset_id: AssetId(1),
                 },
             }],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -795,6 +1123,7 @@ mod tests {
                     },
                 },
             ],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -882,6 +1211,7 @@ mod tests {
                     asset_id: AssetId(1),
                 },
             }],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -927,6 +1257,7 @@ mod tests {
                     asset_id: AssetId(1),
                 },
             }],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -968,6 +1299,7 @@ mod tests {
                 account_type: AccountType::Taxable,
             }],
             cash_flows: vec![],
+            ..Default::default()
         };
 
         let result = monte_carlo_simulate(&params, 100);
@@ -1016,6 +1348,7 @@ mod tests {
                 },
             ],
             cash_flows: vec![],
+            ..Default::default()
         };
 
         let result = simulate(&params, 42);
@@ -1032,6 +1365,219 @@ mod tests {
         assert_eq!(
             asset1_profile_idx, 0,
             "Both assets should use return_profile_index 0"
+        );
+    }
+
+    #[test]
+    fn test_spending_target_basic() {
+        // Test basic spending target withdrawal from a single account
+        let params = SimulationParameters {
+            start_date: Some(jiff::civil::date(2025, 1, 1)),
+            duration_years: 5,
+            inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
+            events: vec![],
+            accounts: vec![Account {
+                account_id: AccountId(1),
+                account_type: AccountType::TaxDeferred, // 401k - taxed as ordinary income
+                assets: vec![Asset {
+                    asset_id: AssetId(1),
+                    initial_value: 100_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                }],
+            }],
+            cash_flows: vec![],
+            spending_targets: vec![SpendingTarget {
+                spending_target_id: SpendingTargetId(1),
+                amount: 10_000.0,
+                net_amount_mode: false, // Gross withdrawal
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Yearly,
+                adjust_for_inflation: false,
+                withdrawal_strategy: WithdrawalStrategy::Sequential {
+                    order: vec![AccountId(1)],
+                },
+                exclude_accounts: vec![],
+            }],
+            tax_config: TaxConfig::default(),
+        };
+
+        let result = simulate(&params, 42);
+        let final_balance = result.account_histories[0].current_balance();
+
+        // Starting: 100,000
+        // Yearly withdrawal: 10,000
+        // After 5 years: 100,000 - (5 * 10,000) = 50,000
+        assert!(
+            (final_balance - 50_000.0).abs() < 1.0,
+            "Expected ~50,000, got {}",
+            final_balance
+        );
+
+        // Check that taxes were tracked
+        assert!(!result.yearly_taxes.is_empty(), "Should have tax records");
+
+        // Each year should have 10,000 in ordinary income (TaxDeferred withdrawal)
+        for tax in &result.yearly_taxes {
+            assert!(
+                (tax.ordinary_income - 10_000.0).abs() < 1.0,
+                "Expected 10,000 ordinary income, got {}",
+                tax.ordinary_income
+            );
+        }
+    }
+
+    #[test]
+    fn test_spending_target_tax_optimized() {
+        // Test tax-optimized withdrawal order: Taxable -> TaxDeferred -> TaxFree
+        let params = SimulationParameters {
+            start_date: Some(jiff::civil::date(2025, 1, 1)),
+            duration_years: 3,
+            inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
+            events: vec![],
+            accounts: vec![
+                Account {
+                    account_id: AccountId(1),
+                    account_type: AccountType::TaxFree, // Roth - should be last
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 50_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                },
+                Account {
+                    account_id: AccountId(2),
+                    account_type: AccountType::TaxDeferred, // 401k - should be second
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 50_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                },
+                Account {
+                    account_id: AccountId(3),
+                    account_type: AccountType::Taxable, // Brokerage - should be first
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 30_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                },
+            ],
+            cash_flows: vec![],
+            spending_targets: vec![SpendingTarget {
+                spending_target_id: SpendingTargetId(1),
+                amount: 40_000.0,
+                net_amount_mode: false,
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Yearly,
+                adjust_for_inflation: false,
+                withdrawal_strategy: WithdrawalStrategy::TaxOptimized,
+                exclude_accounts: vec![],
+            }],
+            tax_config: TaxConfig::default(),
+        };
+
+        let result = simulate(&params, 42);
+
+        // Year 1: Need 40k. Taxable has 30k, so take all 30k from Taxable, then 10k from TaxDeferred
+        // Year 2: Taxable empty. Take 40k from TaxDeferred (has 40k left)
+        // Year 3: TaxDeferred empty. Take 40k from TaxFree
+
+        // Final balances:
+        // Taxable: 0
+        // TaxDeferred: 0
+        // TaxFree: 50,000 - 40,000 = 10,000
+
+        let taxfree_balance = result.account_histories[0].current_balance();
+        let taxdeferred_balance = result.account_histories[1].current_balance();
+        let taxable_balance = result.account_histories[2].current_balance();
+
+        assert!(
+            taxable_balance.abs() < 1.0,
+            "Taxable should be depleted first, got {}",
+            taxable_balance
+        );
+        assert!(
+            taxdeferred_balance.abs() < 1.0,
+            "TaxDeferred should be depleted second, got {}",
+            taxdeferred_balance
+        );
+        assert!(
+            (taxfree_balance - 10_000.0).abs() < 1.0,
+            "TaxFree should have ~10,000 left, got {}",
+            taxfree_balance
+        );
+    }
+
+    #[test]
+    fn test_spending_target_excludes_illiquid() {
+        // Test that Illiquid accounts are automatically skipped
+        let params = SimulationParameters {
+            start_date: Some(jiff::civil::date(2025, 1, 1)),
+            duration_years: 2,
+            inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
+            events: vec![],
+            accounts: vec![
+                Account {
+                    account_id: AccountId(1),
+                    account_type: AccountType::Illiquid, // Real estate - cannot withdraw
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 500_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::RealEstate,
+                    }],
+                },
+                Account {
+                    account_id: AccountId(2),
+                    account_type: AccountType::Taxable,
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 50_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                },
+            ],
+            cash_flows: vec![],
+            spending_targets: vec![SpendingTarget {
+                spending_target_id: SpendingTargetId(1),
+                amount: 20_000.0,
+                net_amount_mode: false,
+                start: Timepoint::Immediate,
+                end: Timepoint::Never,
+                repeats: RepeatInterval::Yearly,
+                adjust_for_inflation: false,
+                withdrawal_strategy: WithdrawalStrategy::TaxOptimized,
+                exclude_accounts: vec![],
+            }],
+            tax_config: TaxConfig::default(),
+        };
+
+        let result = simulate(&params, 42);
+
+        // Illiquid account should be untouched
+        let illiquid_balance = result.account_histories[0].current_balance();
+        assert_eq!(
+            illiquid_balance, 500_000.0,
+            "Illiquid account should be untouched"
+        );
+
+        // Taxable should have withdrawals
+        let taxable_balance = result.account_histories[1].current_balance();
+        assert!(
+            (taxable_balance - 10_000.0).abs() < 1.0,
+            "Taxable should have 10,000 left after 2 years of 20k withdrawals, got {}",
+            taxable_balance
         );
     }
 }

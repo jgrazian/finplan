@@ -1,12 +1,19 @@
 use rand::{Rng, distr::Distribution};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum InflationProfile {
+    #[default]
     None,
     Fixed(f64),
-    Normal { mean: f64, std_dev: f64 },
-    LogNormal { mean: f64, std_dev: f64 },
+    Normal {
+        mean: f64,
+        std_dev: f64,
+    },
+    LogNormal {
+        mean: f64,
+        std_dev: f64,
+    },
 }
 
 impl InflationProfile {
