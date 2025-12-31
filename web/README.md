@@ -1,86 +1,30 @@
-# FinPlan Web Frontend
-
-A professional Next.js frontend for the FinPlan Monte Carlo financial planning simulator.
-
-## Features
-
-- **Portfolio Management**: Configure multiple accounts with different asset types, initial balances, and return profiles
-- **Cash Flow Configuration**: Set up recurring income and expenses with flexible timing and frequency options
-- **Simulation Parameters**: Customize Monte Carlo simulation settings including duration and inflation profiles
-- **Visual Results**: View simulation results as interactive bar charts broken down by account
-
-## Technology Stack
-
-- **Next.js 15** - React framework with App Router
-- **TypeScript** - Type-safe development
-- **Tailwind CSS** - Utility-first styling
-- **shadcn/ui** - High-quality UI components
-- **Recharts** - Data visualization
-- **pnpm** - Fast, disk space efficient package manager
+This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started
 
-### Prerequisites
-
-- Node.js 18+ 
-- pnpm
-
-### Installation
-
-```bash
-pnpm install
-```
-
-### Development
+First, run the development server:
 
 ```bash
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to view the application.
+Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-### Build
+You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-```bash
-pnpm build
-pnpm start
-```
+This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
-## Backend API
+## Learn More
 
-The frontend expects a backend API running at `http://localhost:3000/api/simulate` that accepts POST requests with simulation parameters and returns aggregated results.
+To learn more about Next.js, take a look at the following resources:
 
-## Project Structure
+- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
+- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
-```
-src/
-├── app/
-│   ├── layout.tsx          # Root layout with fonts and metadata
-│   ├── page.tsx            # Main application page
-│   └── globals.css         # Global styles and Tailwind config
-├── components/
-│   ├── ui/                 # shadcn/ui base components
-│   │   ├── button.tsx
-│   │   ├── card.tsx
-│   │   ├── input.tsx
-│   │   ├── label.tsx
-│   │   ├── select.tsx
-│   │   └── tabs.tsx
-│   ├── portfolio-editor.tsx        # Portfolio configuration UI
-│   ├── simulation-parameters.tsx   # Simulation settings UI
-│   └── simulation-results.tsx      # Results visualization
-├── lib/
-│   └── utils.ts            # Utility functions
-└── types.ts                # TypeScript type definitions
-```
+You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
-## Usage
+## Deploy on Vercel
 
-1. **Configure Portfolio**: Add accounts, set initial balances, and configure cash flows
-2. **Set Parameters**: Adjust simulation duration and inflation settings
-3. **Run Simulation**: Click "Run Monte Carlo Simulation" to execute
-4. **View Results**: See projected portfolio values broken down by account
+The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
-## License
-
-See parent project for license information.
+Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
