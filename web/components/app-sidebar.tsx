@@ -49,6 +49,21 @@ const data = {
       isActive: true,
     },
     {
+      title: "Portfolios",
+      url: "/portfolios",
+      icon: Wallet,
+      items: [
+        {
+          title: "All Portfolios",
+          url: "/portfolios",
+        },
+        {
+          title: "New Portfolio",
+          url: "/portfolios/new",
+        },
+      ],
+    },
+    {
       title: "Simulations",
       url: "/simulations",
       icon: Calculator,
@@ -81,7 +96,12 @@ const data = {
   ],
   projects: [
     {
-      name: "Quick Start",
+      name: "New Portfolio",
+      url: "/portfolios/new",
+      icon: Wallet,
+    },
+    {
+      name: "New Simulation",
       url: "/simulations/new",
       icon: Plus,
     },

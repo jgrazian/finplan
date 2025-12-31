@@ -90,17 +90,22 @@ import {
     InflationProfile,
     ReturnProfile,
     NamedReturnProfile,
+    NamedInflationProfile,
+    AssetInflationMapping,
     WithdrawalStrategy,
+    PortfolioListItem,
+    SavedPortfolio,
     DEFAULT_SIMULATION_PARAMETERS,
     DEFAULT_TAX_CONFIG,
     DEFAULT_NAMED_RETURN_PROFILES,
+    DEFAULT_NAMED_INFLATION_PROFILES,
 } from "@/lib/types";
-import { createSimulation, updateSimulation } from "@/lib/api";
+import { createSimulation, updateSimulation, listPortfolios, getPortfolio } from "@/lib/api";
 
 const WIZARD_STEPS = [
-    { id: "basics", title: "Basics", description: "Name and dates" },
+    { id: "basics", title: "Basics", description: "Name, dates & portfolio" },
     { id: "profiles", title: "Profiles", description: "Inflation & returns" },
-    { id: "accounts", title: "Accounts", description: "Financial accounts" },
+    { id: "asset-linking", title: "Asset Linking", description: "Link assets to profiles" },
     { id: "cashflows", title: "Cash Flows", description: "Income & expenses" },
     { id: "events", title: "Events", description: "Life events" },
     { id: "spending", title: "Spending", description: "Retirement spending" },
@@ -113,14 +118,24 @@ interface SimulationWizardProps {
         name?: string;
         description?: string;
         parameters?: SimulationParameters;
+        portfolio_id?: string;
     };
+    initialPortfolioId?: string;
     onComplete?: (simulation: { id: string }) => void;
 }
 
-export function SimulationWizard({ initialData, onComplete }: SimulationWizardProps) {
+export function SimulationWizard({ initialData, initialPortfolioId, onComplete }: SimulationWizardProps) {
     const router = useRouter();
     const [currentStep, setCurrentStep] = React.useState(0);
     const [isSubmitting, setIsSubmitting] = React.useState(false);
+
+    // Portfolio state
+    const [portfolios, setPortfolios] = React.useState<PortfolioListItem[]>([]);
+    const [selectedPortfolioId, setSelectedPortfolioId] = React.useState<string | undefined>(
+        initialPortfolioId || initialData?.portfolio_id
+    );
+    const [selectedPortfolio, setSelectedPortfolio] = React.useState<SavedPortfolio | null>(null);
+    const [loadingPortfolio, setLoadingPortfolio] = React.useState(false);
 
     // Form state
     const [name, setName] = React.useState(initialData?.name || "");
@@ -128,6 +143,31 @@ export function SimulationWizard({ initialData, onComplete }: SimulationWizardPr
     const [parameters, setParameters] = React.useState<SimulationParameters>(
         initialData?.parameters || { ...DEFAULT_SIMULATION_PARAMETERS }
     );
+
+    // Load portfolios on mount
+    React.useEffect(() => {
+        listPortfolios().then(setPortfolios).catch(console.error);
+    }, []);
+
+    // Load selected portfolio details
+    React.useEffect(() => {
+        if (selectedPortfolioId) {
+            setLoadingPortfolio(true);
+            getPortfolio(selectedPortfolioId)
+                .then((portfolio) => {
+                    setSelectedPortfolio(portfolio);
+                    // Update parameters with portfolio accounts
+                    setParameters((prev) => ({
+                        ...prev,
+                        accounts: portfolio.accounts,
+                    }));
+                })
+                .catch(console.error)
+                .finally(() => setLoadingPortfolio(false));
+        } else {
+            setSelectedPortfolio(null);
+        }
+    }, [selectedPortfolioId]);
 
     const updateParameters = <K extends keyof SimulationParameters>(
         key: K,
@@ -153,9 +193,19 @@ export function SimulationWizard({ initialData, onComplete }: SimulationWizardPr
         try {
             let result;
             if (initialData?.id) {
-                result = await updateSimulation(initialData.id, { name, description, parameters });
+                result = await updateSimulation(initialData.id, {
+                    name,
+                    description,
+                    parameters,
+                    portfolio_id: selectedPortfolioId,
+                });
             } else {
-                result = await createSimulation({ name, description, parameters });
+                result = await createSimulation({
+                    name,
+                    description,
+                    parameters,
+                    portfolio_id: selectedPortfolioId,
+                });
             }
             onComplete?.(result);
             router.push(`/simulations/${result.id}`);
@@ -189,6 +239,11 @@ export function SimulationWizard({ initialData, onComplete }: SimulationWizardPr
                             setDescription={setDescription}
                             parameters={parameters}
                             updateParameters={updateParameters}
+                            portfolios={portfolios}
+                            selectedPortfolioId={selectedPortfolioId}
+                            setSelectedPortfolioId={setSelectedPortfolioId}
+                            selectedPortfolio={selectedPortfolio}
+                            loadingPortfolio={loadingPortfolio}
                         />
                     )}
                     {currentStep === 1 && (
@@ -198,15 +253,17 @@ export function SimulationWizard({ initialData, onComplete }: SimulationWizardPr
                         />
                     )}
                     {currentStep === 2 && (
-                        <AccountsStep
+                        <AssetLinkingStep
                             parameters={parameters}
                             updateParameters={updateParameters}
+                            selectedPortfolio={selectedPortfolio}
                         />
                     )}
                     {currentStep === 3 && (
                         <CashFlowsStep
                             parameters={parameters}
                             updateParameters={updateParameters}
+                            selectedPortfolio={selectedPortfolio}
                         />
                     )}
                     {currentStep === 4 && (
@@ -226,6 +283,7 @@ export function SimulationWizard({ initialData, onComplete }: SimulationWizardPr
                             name={name}
                             description={description}
                             parameters={parameters}
+                            selectedPortfolio={selectedPortfolio}
                         />
                     )}
                 </CardContent>
@@ -274,11 +332,21 @@ function BasicsStep({
     setDescription,
     parameters,
     updateParameters,
+    portfolios,
+    selectedPortfolioId,
+    setSelectedPortfolioId,
+    selectedPortfolio,
+    loadingPortfolio,
 }: StepProps & {
     name: string;
     setName: (v: string) => void;
     description: string;
     setDescription: (v: string) => void;
+    portfolios: PortfolioListItem[];
+    selectedPortfolioId?: string;
+    setSelectedPortfolioId: (id: string | undefined) => void;
+    selectedPortfolio: SavedPortfolio | null;
+    loadingPortfolio: boolean;
 }) {
     const [startDate, setStartDate] = React.useState<Date | undefined>(
         parameters.start_date ? new Date(parameters.start_date) : undefined
@@ -287,8 +355,64 @@ function BasicsStep({
         parameters.birth_date ? new Date(parameters.birth_date) : undefined
     );
 
+    const formatCurrency = (amount: number) =>
+        new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(amount);
+
     return (
         <div className="space-y-6">
+            {/* Portfolio Selection */}
+            <div className="space-y-4 p-4 bg-muted/50 rounded-lg">
+                <div className="flex justify-between items-center">
+                    <div>
+                        <h3 className="font-medium">Portfolio</h3>
+                        <p className="text-sm text-muted-foreground">Select a portfolio to run this simulation against</p>
+                    </div>
+                    <a href="/portfolios/new" className="text-sm text-primary hover:underline">
+                        + Create New Portfolio
+                    </a>
+                </div>
+                <Select
+                    value={selectedPortfolioId || "none"}
+                    onValueChange={(v) => setSelectedPortfolioId(v === "none" ? undefined : v)}
+                >
+                    <SelectTrigger>
+                        <SelectValue placeholder="Select a portfolio..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="none">No portfolio (define accounts manually)</SelectItem>
+                        {portfolios.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                                {p.name} ({formatCurrency(p.total_value)})
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                {loadingPortfolio && (
+                    <p className="text-sm text-muted-foreground">Loading portfolio...</p>
+                )}
+                {selectedPortfolio && !loadingPortfolio && (
+                    <div className="text-sm bg-background rounded p-3 border">
+                        <div className="flex justify-between">
+                            <span className="text-muted-foreground">Net Worth:</span>
+                            <span className="font-medium">
+                                {formatCurrency(selectedPortfolio.accounts.reduce(
+                                    (sum, acc) => sum + acc.assets.reduce((s, a) => s + a.initial_value, 0),
+                                    0
+                                ))}
+                            </span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-muted-foreground">Accounts:</span>
+                            <span>{selectedPortfolio.accounts.length}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span className="text-muted-foreground">Assets:</span>
+                            <span>{selectedPortfolio.accounts.reduce((sum, acc) => sum + acc.assets.length, 0)}</span>
+                        </div>
+                    </div>
+                )}
+            </div>
+
             <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
                     <Label htmlFor="name">Simulation Name *</Label>
@@ -401,6 +525,23 @@ function BasicsStep({
                     </Popover>
                 </div>
             </div>
+
+            {/* Retirement Age */}
+            <div className="space-y-2">
+                <Label htmlFor="retirement-age">Retirement Age</Label>
+                <Input
+                    id="retirement-age"
+                    type="number"
+                    min={30}
+                    max={100}
+                    value={parameters.retirement_age || 65}
+                    onChange={(e) => updateParameters("retirement_age", parseInt(e.target.value) || 65)}
+                    placeholder="65"
+                />
+                <p className="text-xs text-muted-foreground">
+                    Age when spending targets typically activate and income stops
+                </p>
+            </div>
         </div>
     );
 }
@@ -417,6 +558,10 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
 
     const [namedProfiles, setNamedProfiles] = React.useState<NamedReturnProfile[]>(
         parameters.named_return_profiles || DEFAULT_NAMED_RETURN_PROFILES
+    );
+
+    const [namedInflationProfiles, setNamedInflationProfiles] = React.useState<NamedInflationProfile[]>(
+        parameters.named_inflation_profiles || DEFAULT_NAMED_INFLATION_PROFILES
     );
 
     const getInflationValue = (key: "mean" | "std_dev" | "fixed"): number => {
@@ -443,6 +588,59 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
         updateParameters("inflation_profile", profile);
     };
 
+    // Inflation profile helpers
+    const addInflationProfile = () => {
+        const newProfile: NamedInflationProfile = {
+            name: `Inflation ${namedInflationProfiles.length + 1}`,
+            profile: { Normal: { mean: 0.035, std_dev: 0.028 } },
+        };
+        const updated = [...namedInflationProfiles, newProfile];
+        setNamedInflationProfiles(updated);
+        updateParameters("named_inflation_profiles", updated);
+    };
+
+    const updateInflationProfile = (index: number, updates: Partial<NamedInflationProfile>) => {
+        const updated = namedInflationProfiles.map((p, i) => (i === index ? { ...p, ...updates } : p));
+        setNamedInflationProfiles(updated);
+        updateParameters("named_inflation_profiles", updated);
+    };
+
+    const removeInflationProfile = (index: number) => {
+        const updated = namedInflationProfiles.filter((_, i) => i !== index);
+        setNamedInflationProfiles(updated);
+        updateParameters("named_inflation_profiles", updated);
+    };
+
+    const getInflationProfileValue = (profile: InflationProfile, key: "mean" | "std_dev" | "fixed"): number => {
+        if (key === "fixed" && typeof profile === "object" && "Fixed" in profile) {
+            return Math.round(profile.Fixed * 100 * 10) / 10;
+        }
+        if (typeof profile === "object" && "Normal" in profile) {
+            const value = key === "mean" ? profile.Normal.mean * 100 : profile.Normal.std_dev * 100;
+            return Math.round(value * 10) / 10;
+        }
+        return key === "mean" ? 3.5 : 2.8;
+    };
+
+    const getInflationProfileType = (profile: InflationProfile): string => {
+        if (profile === "None") return "none";
+        if (typeof profile === "object" && "Fixed" in profile) return "fixed";
+        return "normal";
+    };
+
+    const updateInflationProfileValues = (index: number, type: string, mean?: number, stdDev?: number, fixed?: number) => {
+        let profile: InflationProfile;
+        if (type === "none") {
+            profile = "None";
+        } else if (type === "fixed") {
+            profile = { Fixed: (fixed ?? 3.5) / 100 };
+        } else {
+            profile = { Normal: { mean: (mean ?? 3.5) / 100, std_dev: (stdDev ?? 2.8) / 100 } };
+        }
+        updateInflationProfile(index, { profile });
+    };
+
+    // Return profile helpers
     const addReturnProfile = () => {
         const newProfile: NamedReturnProfile = {
             name: `Profile ${namedProfiles.length + 1}`,
@@ -500,9 +698,12 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
 
     return (
         <div className="space-y-8">
-            {/* Inflation Profile */}
+            {/* Default Inflation Profile */}
             <div className="space-y-4">
-                <h3 className="text-lg font-medium">Inflation Profile</h3>
+                <h3 className="text-lg font-medium">Default Inflation Profile</h3>
+                <p className="text-sm text-muted-foreground">
+                    This is the default inflation rate used for cash flows and general adjustments.
+                </p>
                 <RadioGroup
                     value={inflationType}
                     onValueChange={(v) => {
@@ -559,6 +760,111 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
                             />
                             <p className="text-xs text-muted-foreground">US historical: ~2.8%</p>
                         </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Named Inflation Profiles */}
+            <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                    <div>
+                        <h3 className="text-lg font-medium">Inflation Profiles</h3>
+                        <p className="text-sm text-muted-foreground">
+                            Define different inflation profiles for various asset categories (e.g., healthcare, housing).
+                            Assets can be linked to these in the next step.
+                        </p>
+                    </div>
+                    <Button onClick={addInflationProfile} size="sm" variant="outline">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Inflation Profile
+                    </Button>
+                </div>
+
+                {namedInflationProfiles.length === 0 ? (
+                    <Card className="border-dashed">
+                        <CardContent className="flex flex-col items-center justify-center py-6">
+                            <p className="text-muted-foreground mb-4">No custom inflation profiles defined</p>
+                            <Button onClick={addInflationProfile} variant="outline" size="sm">
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Inflation Profile
+                            </Button>
+                        </CardContent>
+                    </Card>
+                ) : (
+                    <div className="space-y-3">
+                        {namedInflationProfiles.map((namedProfile, index) => {
+                            const profileType = getInflationProfileType(namedProfile.profile);
+                            return (
+                                <Card key={index} className="p-4">
+                                    <div className="flex justify-between items-start mb-3">
+                                        <Input
+                                            value={namedProfile.name}
+                                            onChange={(e) => updateInflationProfile(index, { name: e.target.value })}
+                                            className="font-medium max-w-xs"
+                                            placeholder="Profile Name"
+                                        />
+                                        <Button
+                                            variant="ghost"
+                                            size="icon"
+                                            onClick={() => removeInflationProfile(index)}
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                    <div className="grid gap-3 md:grid-cols-3">
+                                        <Select
+                                            value={profileType}
+                                            onValueChange={(v) => updateInflationProfileValues(index, v)}
+                                        >
+                                            <SelectTrigger className="h-8">
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="none">None</SelectItem>
+                                                <SelectItem value="fixed">Fixed</SelectItem>
+                                                <SelectItem value="normal">Variable</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        {profileType === "fixed" && (
+                                            <div className="flex items-center gap-2">
+                                                <Label className="text-xs whitespace-nowrap">Rate (%)</Label>
+                                                <Input
+                                                    type="number"
+                                                    step="0.1"
+                                                    value={getInflationProfileValue(namedProfile.profile, "fixed")}
+                                                    onChange={(e) => updateInflationProfileValues(index, "fixed", undefined, undefined, parseFloat(e.target.value))}
+                                                    className="h-8"
+                                                />
+                                            </div>
+                                        )}
+                                        {profileType === "normal" && (
+                                            <>
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="text-xs whitespace-nowrap">Mean (%)</Label>
+                                                    <Input
+                                                        type="number"
+                                                        step="0.1"
+                                                        value={getInflationProfileValue(namedProfile.profile, "mean")}
+                                                        onChange={(e) => updateInflationProfileValues(index, "normal", parseFloat(e.target.value), getInflationProfileValue(namedProfile.profile, "std_dev"))}
+                                                        className="h-8"
+                                                    />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <Label className="text-xs whitespace-nowrap">Std Dev (%)</Label>
+                                                    <Input
+                                                        type="number"
+                                                        step="0.1"
+                                                        value={getInflationProfileValue(namedProfile.profile, "std_dev")}
+                                                        onChange={(e) => updateInflationProfileValues(index, "normal", getInflationProfileValue(namedProfile.profile, "mean"), parseFloat(e.target.value))}
+                                                        className="h-8"
+                                                    />
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                </Card>
+                            );
+                        })}
                     </div>
                 )}
             </div>
@@ -675,6 +981,160 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
                     </div>
                 )}
             </div>
+        </div>
+    );
+}
+
+// Asset Linking Step - Link portfolio assets to return and inflation profiles
+function AssetLinkingStep({
+    parameters,
+    updateParameters,
+    selectedPortfolio,
+}: StepProps & { selectedPortfolio: SavedPortfolio | null }) {
+    const namedReturnProfiles = parameters.named_return_profiles || DEFAULT_NAMED_RETURN_PROFILES;
+    const namedInflationProfiles = parameters.named_inflation_profiles || DEFAULT_NAMED_INFLATION_PROFILES;
+    const accounts = parameters.accounts || [];
+
+    const [assetMappings, setAssetMappings] = React.useState<AssetInflationMapping[]>(
+        parameters.asset_inflation_mappings || []
+    );
+
+    const getAssetInflationIndex = (accountId: number, assetId: number): number => {
+        const mapping = assetMappings.find(m => m.account_id === accountId && m.asset_id === assetId);
+        return mapping?.inflation_profile_index ?? 0;
+    };
+
+    const updateAssetInflationMapping = (accountId: number, assetId: number, inflationIndex: number) => {
+        const existingIndex = assetMappings.findIndex(m => m.account_id === accountId && m.asset_id === assetId);
+        let newMappings: AssetInflationMapping[];
+
+        if (existingIndex >= 0) {
+            newMappings = assetMappings.map((m, i) =>
+                i === existingIndex ? { ...m, inflation_profile_index: inflationIndex } : m
+            );
+        } else {
+            newMappings = [...assetMappings, { account_id: accountId, asset_id: assetId, inflation_profile_index: inflationIndex }];
+        }
+
+        setAssetMappings(newMappings);
+        updateParameters("asset_inflation_mappings", newMappings);
+    };
+
+    const updateAssetReturnProfile = (accountIndex: number, assetIndex: number, returnIndex: number) => {
+        const newAccounts = accounts.map((acc, i) => {
+            if (i !== accountIndex) return acc;
+            const newAssets = acc.assets.map((asset, j) =>
+                j === assetIndex ? { ...asset, return_profile_index: returnIndex } : asset
+            );
+            return { ...acc, assets: newAssets };
+        });
+        updateParameters("accounts", newAccounts);
+    };
+
+    const formatCurrency = (amount: number) =>
+        new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(amount);
+
+    if (!selectedPortfolio && accounts.length === 0) {
+        return (
+            <div className="space-y-6">
+                <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-center justify-center py-10">
+                        <p className="text-muted-foreground mb-4">No portfolio selected</p>
+                        <p className="text-sm text-muted-foreground text-center max-w-md">
+                            Go back to the Basics step to select a portfolio, or create one first.
+                        </p>
+                    </CardContent>
+                </Card>
+            </div>
+        );
+    }
+
+    return (
+        <div className="space-y-6">
+            <div className="bg-muted/50 rounded-lg p-4">
+                <h3 className="font-medium mb-2">Link Assets to Profiles</h3>
+                <p className="text-sm text-muted-foreground">
+                    Assign return and inflation profiles to each asset in your portfolio.
+                    This determines how each asset grows and how inflation affects its real value.
+                </p>
+            </div>
+
+            {accounts.map((account, accountIndex) => (
+                <Card key={account.account_id}>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-base">
+                            {account.name || `Account #${account.account_id}`}
+                            <span className="text-sm font-normal text-muted-foreground ml-2">
+                                ({account.account_type})
+                            </span>
+                        </CardTitle>
+                        <p className="text-sm text-muted-foreground">
+                            {formatCurrency(account.assets.reduce((s, a) => s + a.initial_value, 0))}
+                        </p>
+                    </CardHeader>
+                    <CardContent>
+                        {account.assets.length === 0 ? (
+                            <p className="text-sm text-muted-foreground">No assets in this account</p>
+                        ) : (
+                            <div className="space-y-3">
+                                {account.assets.map((asset, assetIndex) => (
+                                    <div
+                                        key={asset.asset_id}
+                                        className="grid gap-3 md:grid-cols-4 items-center p-3 bg-muted/30 rounded-lg"
+                                    >
+                                        <div>
+                                            <p className="font-medium text-sm">{asset.name || `Asset #${asset.asset_id}`}</p>
+                                            <p className="text-xs text-muted-foreground">
+                                                {formatCurrency(asset.initial_value)} • {asset.asset_class}
+                                            </p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label className="text-xs">Return Profile</Label>
+                                            <Select
+                                                value={asset.return_profile_index.toString()}
+                                                onValueChange={(v) => updateAssetReturnProfile(accountIndex, assetIndex, parseInt(v))}
+                                            >
+                                                <SelectTrigger className="h-8">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {namedReturnProfiles.map((profile, idx) => (
+                                                        <SelectItem key={idx} value={idx.toString()}>
+                                                            {profile.name}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <Label className="text-xs">Inflation Profile</Label>
+                                            <Select
+                                                value={getAssetInflationIndex(account.account_id, asset.asset_id).toString()}
+                                                onValueChange={(v) => updateAssetInflationMapping(account.account_id, asset.asset_id, parseInt(v))}
+                                            >
+                                                <SelectTrigger className="h-8">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="0">Default (General CPI)</SelectItem>
+                                                    {namedInflationProfiles.map((profile, idx) => (
+                                                        <SelectItem key={idx} value={(idx + 1).toString()}>
+                                                            {profile.name}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <div className="text-right text-xs text-muted-foreground">
+                                            ID: {asset.asset_id}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            ))}
         </div>
     );
 }
@@ -925,19 +1385,46 @@ function AccountsStep({ parameters, updateParameters }: StepProps) {
     );
 }
 
-function CashFlowsStep({ parameters, updateParameters }: StepProps) {
+function CashFlowsStep({ parameters, updateParameters, selectedPortfolio }: StepProps & { selectedPortfolio: SavedPortfolio | null }) {
     const [cashFlows, setCashFlows] = React.useState<CashFlow[]>(parameters.cash_flows || []);
+    // Use portfolio accounts for names if available, otherwise fall back to parameters.accounts
+    const accounts = selectedPortfolio?.accounts || parameters.accounts || [];
+
+    // Build a list of account + asset options
+    const accountAssetOptions = React.useMemo(() => {
+        const options: { accountId: number; assetId: number; label: string }[] = [];
+        accounts.forEach((acc) => {
+            acc.assets.forEach((asset) => {
+                const accountName = acc.name || `Account #${acc.account_id}`;
+                const assetName = asset.name || `Asset #${asset.asset_id}`;
+                options.push({
+                    accountId: acc.account_id,
+                    assetId: asset.asset_id,
+                    label: `${accountName} → ${assetName}`,
+                });
+            });
+        });
+        return options;
+    }, [accounts]);
+
+    const getDefaultAccountAsset = () => {
+        if (accountAssetOptions.length > 0) {
+            return { accountId: accountAssetOptions[0].accountId, assetId: accountAssetOptions[0].assetId };
+        }
+        return { accountId: 1, assetId: 100 };
+    };
 
     const addCashFlow = (type: "income" | "expense") => {
         const newId = cashFlows.length > 0 ? Math.max(...cashFlows.map((cf) => cf.cash_flow_id)) + 1 : 1;
+        const defaults = getDefaultAccountAsset();
         const newCashFlow: CashFlow = {
             cash_flow_id: newId,
             amount: 0,
             repeats: "Monthly",
             adjust_for_inflation: true,
             direction: type === "income"
-                ? { Income: { target_account_id: 1, target_asset_id: 100 } }
-                : { Expense: { source_account_id: 1, source_asset_id: 100 } },
+                ? { Income: { target_account_id: defaults.accountId, target_asset_id: defaults.assetId } }
+                : { Expense: { source_account_id: defaults.accountId, source_asset_id: defaults.assetId } },
             state: "Active",
         };
         const updated = [...cashFlows, newCashFlow];
@@ -1059,32 +1546,58 @@ function CashFlowsStep({ parameters, updateParameters }: StepProps) {
                                         </Select>
                                     </div>
                                 </div>
-                                {isIncome(cf) && parameters.accounts.length > 0 && (
+                                {isIncome(cf) && accountAssetOptions.length > 0 && (
                                     <div className="space-y-2">
-                                        <Label>Deposit to Account</Label>
+                                        <Label>Deposit to Account / Asset</Label>
                                         <Select
                                             value={
                                                 "Income" in cf.direction
-                                                    ? cf.direction.Income.target_account_id.toString()
-                                                    : "1"
+                                                    ? `${cf.direction.Income.target_account_id}-${cf.direction.Income.target_asset_id}`
+                                                    : accountAssetOptions[0] ? `${accountAssetOptions[0].accountId}-${accountAssetOptions[0].assetId}` : ""
                                             }
                                             onValueChange={(v) => {
-                                                const accountId = parseInt(v);
-                                                const account = parameters.accounts.find((a) => a.account_id === accountId);
-                                                if (account) {
-                                                    updateCashFlow(index, {
-                                                        direction: { Income: { target_account_id: accountId, target_asset_id: account.assets[0]?.asset_id || 100 } },
-                                                    });
-                                                }
+                                                const [accountId, assetId] = v.split("-").map(Number);
+                                                updateCashFlow(index, {
+                                                    direction: { Income: { target_account_id: accountId, target_asset_id: assetId } },
+                                                });
                                             }}
                                         >
                                             <SelectTrigger>
-                                                <SelectValue />
+                                                <SelectValue placeholder="Select account & asset" />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                {parameters.accounts.map((acc) => (
-                                                    <SelectItem key={acc.account_id} value={acc.account_id.toString()}>
-                                                        Account #{acc.account_id} ({acc.account_type})
+                                                {accountAssetOptions.map((opt) => (
+                                                    <SelectItem key={`${opt.accountId}-${opt.assetId}`} value={`${opt.accountId}-${opt.assetId}`}>
+                                                        {opt.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                )}
+                                {!isIncome(cf) && accountAssetOptions.length > 0 && (
+                                    <div className="space-y-2">
+                                        <Label>Withdraw from Account / Asset</Label>
+                                        <Select
+                                            value={
+                                                "Expense" in cf.direction
+                                                    ? `${cf.direction.Expense.source_account_id}-${cf.direction.Expense.source_asset_id}`
+                                                    : accountAssetOptions[0] ? `${accountAssetOptions[0].accountId}-${accountAssetOptions[0].assetId}` : ""
+                                            }
+                                            onValueChange={(v) => {
+                                                const [accountId, assetId] = v.split("-").map(Number);
+                                                updateCashFlow(index, {
+                                                    direction: { Expense: { source_account_id: accountId, source_asset_id: assetId } },
+                                                });
+                                            }}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="Select account & asset" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {accountAssetOptions.map((opt) => (
+                                                    <SelectItem key={`${opt.accountId}-${opt.assetId}`} value={`${opt.accountId}-${opt.assetId}`}>
+                                                        {opt.label}
                                                     </SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -1277,10 +1790,12 @@ function ReviewStep({
     name,
     description,
     parameters,
+    selectedPortfolio,
 }: {
     name: string;
     description: string;
     parameters: SimulationParameters;
+    selectedPortfolio: SavedPortfolio | null;
 }) {
     const formatCurrency = (amount: number) =>
         new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
@@ -1325,12 +1840,25 @@ function ReviewStep({
 
                 <Card>
                     <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Portfolio</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-2xl font-bold">{selectedPortfolio?.name || "None"}</p>
+                        <p className="text-sm text-muted-foreground">
+                            {selectedPortfolio ? `${selectedPortfolio.accounts.length} accounts` : "No portfolio linked"}
+                        </p>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader className="pb-2">
                         <CardTitle className="text-sm font-medium text-muted-foreground">Duration</CardTitle>
                     </CardHeader>
                     <CardContent>
                         <p className="text-2xl font-bold">{parameters.duration_years} years</p>
                         <p className="text-sm text-muted-foreground">
                             {parameters.start_date ? `Starting ${parameters.start_date}` : "Starting today"}
+                            {parameters.retirement_age && ` • Retire at ${parameters.retirement_age}`}
                         </p>
                     </CardContent>
                 </Card>

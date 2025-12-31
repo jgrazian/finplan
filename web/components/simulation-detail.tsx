@@ -296,7 +296,7 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                                 >
                                                     <div className="flex items-center justify-between mb-2">
                                                         <div className="flex items-center gap-2">
-                                                            <p className="font-medium">Account #{acc.account_id}</p>
+                                                            <p className="font-medium">{acc.name || `Account #${acc.account_id}`}</p>
                                                             <Badge variant="secondary" className="text-xs">
                                                                 {acc.account_type}
                                                             </Badge>
@@ -351,22 +351,42 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                     <p className="text-muted-foreground text-sm">No cash flows configured</p>
                                 ) : (
                                     <div className="space-y-3">
-                                        {simulation.parameters.cash_flows.map((cf) => (
-                                            <div
-                                                key={cf.cash_flow_id}
-                                                className="flex items-center justify-between border-b pb-2 last:border-0"
-                                            >
-                                                <div>
-                                                    <p className="font-medium">
-                                                        {"Income" in cf.direction ? "💰 Income" : "💸 Expense"} #{cf.cash_flow_id}
-                                                    </p>
-                                                    <Badge variant="outline" className="text-xs">
-                                                        {cf.repeats}
-                                                    </Badge>
+                                        {simulation.parameters.cash_flows.map((cf) => {
+                                            const isIncome = "Income" in cf.direction;
+                                            let accountId: number;
+                                            let assetId: number;
+                                            if ("Income" in cf.direction) {
+                                                accountId = cf.direction.Income.target_account_id;
+                                                assetId = cf.direction.Income.target_asset_id;
+                                            } else {
+                                                accountId = cf.direction.Expense.source_account_id;
+                                                assetId = cf.direction.Expense.source_asset_id;
+                                            }
+                                            const account = simulation.parameters.accounts.find(a => a.account_id === accountId);
+                                            const asset = account?.assets.find(a => a.asset_id === assetId);
+                                            const accountName = account?.name || `Account #${accountId}`;
+                                            const assetName = asset?.name || `Asset #${assetId}`;
+
+                                            return (
+                                                <div
+                                                    key={cf.cash_flow_id}
+                                                    className="flex items-center justify-between border-b pb-2 last:border-0"
+                                                >
+                                                    <div>
+                                                        <p className="font-medium">
+                                                            {isIncome ? "💰 Income" : "💸 Expense"}
+                                                        </p>
+                                                        <p className="text-xs text-muted-foreground">
+                                                            {isIncome ? "To" : "From"}: {accountName} → {assetName}
+                                                        </p>
+                                                        <Badge variant="outline" className="text-xs">
+                                                            {cf.repeats}
+                                                        </Badge>
+                                                    </div>
+                                                    <p className="font-mono">{formatCurrency(cf.amount)}</p>
                                                 </div>
-                                                <p className="font-mono">{formatCurrency(cf.amount)}</p>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </CardContent>

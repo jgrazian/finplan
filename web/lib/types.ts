@@ -21,6 +21,8 @@ export interface Asset {
     return_profile_index: number;
     // Frontend-only: human-readable name for display (ignored by backend)
     name?: string;
+    // Frontend-only: inflation profile index for simulation linking
+    inflation_profile_index?: number;
 }
 
 export type AccountType = "Taxable" | "TaxDeferred" | "TaxFree" | "Illiquid";
@@ -29,6 +31,37 @@ export interface Account {
     account_id: AccountId;
     account_type: AccountType;
     assets: Asset[];
+    // Frontend-only: human-readable name for display
+    name?: string;
+}
+
+// ============================================================================
+// Portfolio Types
+// ============================================================================
+
+export interface SavedPortfolio {
+    id: string;
+    name: string;
+    description?: string;
+    accounts: Account[];
+    created_at: string;
+    updated_at: string;
+}
+
+export interface PortfolioListItem {
+    id: string;
+    name: string;
+    description?: string;
+    total_value: number;
+    account_count: number;
+    created_at: string;
+    updated_at: string;
+}
+
+export interface PortfolioNetworth {
+    total_value: number;
+    by_account_type: Record<string, number>;
+    by_asset_class: Record<string, number>;
 }
 
 // ============================================================================
@@ -176,6 +209,27 @@ export interface NamedReturnProfile {
 }
 
 // ============================================================================
+// Named Inflation Profile
+// ============================================================================
+
+// Frontend concept for named inflation profiles that assets can be linked to
+export interface NamedInflationProfile {
+    name: string;
+    profile: InflationProfile;
+}
+
+// ============================================================================
+// Asset-Inflation Profile Mapping
+// ============================================================================
+
+// Maps assets to inflation profiles for simulation
+export interface AssetInflationMapping {
+    account_id: AccountId;
+    asset_id: AssetId;
+    inflation_profile_index: number;
+}
+
+// ============================================================================
 // Simulation Parameters
 // ============================================================================
 
@@ -183,7 +237,12 @@ export interface SimulationParameters {
     start_date?: string;
     duration_years: number;
     birth_date?: string;
+    retirement_age?: number;
     inflation_profile: InflationProfile;
+    // Multiple named inflation profiles for different asset types
+    named_inflation_profiles?: NamedInflationProfile[];
+    // Asset to inflation profile mappings
+    asset_inflation_mappings?: AssetInflationMapping[];
     return_profiles: ReturnProfile[];
     // Frontend-only: human-readable names for return profiles (ignored by backend)
     named_return_profiles?: NamedReturnProfile[];
@@ -229,6 +288,7 @@ export interface SavedSimulation {
     name: string;
     description?: string;
     parameters: SimulationParameters;
+    portfolio_id?: string;
     created_at: string;
     updated_at: string;
 }
@@ -237,6 +297,7 @@ export interface SimulationListItem {
     id: string;
     name: string;
     description?: string;
+    portfolio_id?: string;
     created_at: string;
     updated_at: string;
 }
@@ -273,9 +334,17 @@ export const DEFAULT_NAMED_RETURN_PROFILES: NamedReturnProfile[] = [
     { name: "Cash", profile: { Fixed: 0.03 } },
 ];
 
+export const DEFAULT_NAMED_INFLATION_PROFILES: NamedInflationProfile[] = [
+    { name: "General (CPI)", profile: { Normal: { mean: 0.035, std_dev: 0.028 } } },
+    { name: "Healthcare", profile: { Normal: { mean: 0.055, std_dev: 0.03 } } },
+    { name: "Housing", profile: { Normal: { mean: 0.04, std_dev: 0.035 } } },
+];
+
 export const DEFAULT_SIMULATION_PARAMETERS: SimulationParameters = {
     duration_years: 30,
     inflation_profile: { Normal: { mean: 0.035, std_dev: 0.028 } },
+    named_inflation_profiles: DEFAULT_NAMED_INFLATION_PROFILES,
+    asset_inflation_mappings: [],
     return_profiles: [{ Normal: { mean: 0.096, std_dev: 0.165 } }],
     named_return_profiles: DEFAULT_NAMED_RETURN_PROFILES,
     events: [],

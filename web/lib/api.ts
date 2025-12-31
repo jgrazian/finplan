@@ -4,6 +4,10 @@ import {
     SimulationListItem,
     AggregatedResult,
     SimulationRunRecord,
+    SavedPortfolio,
+    PortfolioListItem,
+    PortfolioNetworth,
+    Account,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
@@ -14,6 +18,63 @@ async function handleResponse<T>(response: Response): Promise<T> {
         throw new Error(`API Error: ${response.status} - ${text}`);
     }
     return response.json();
+}
+
+// ============================================================================
+// Portfolio CRUD
+// ============================================================================
+
+export async function listPortfolios(): Promise<PortfolioListItem[]> {
+    const response = await fetch(`${API_BASE}/api/portfolios`);
+    return handleResponse(response);
+}
+
+export async function getPortfolio(id: string): Promise<SavedPortfolio> {
+    const response = await fetch(`${API_BASE}/api/portfolios/${id}`);
+    return handleResponse(response);
+}
+
+export async function createPortfolio(data: {
+    name: string;
+    description?: string;
+    accounts: Account[];
+}): Promise<SavedPortfolio> {
+    const response = await fetch(`${API_BASE}/api/portfolios`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+}
+
+export async function updatePortfolio(
+    id: string,
+    data: {
+        name?: string;
+        description?: string;
+        accounts?: Account[];
+    }
+): Promise<SavedPortfolio> {
+    const response = await fetch(`${API_BASE}/api/portfolios/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+}
+
+export async function deletePortfolio(id: string): Promise<void> {
+    const response = await fetch(`${API_BASE}/api/portfolios/${id}`, {
+        method: "DELETE",
+    });
+    if (!response.ok) {
+        throw new Error(`Failed to delete portfolio: ${response.status}`);
+    }
+}
+
+export async function getPortfolioNetworth(id: string): Promise<PortfolioNetworth> {
+    const response = await fetch(`${API_BASE}/api/portfolios/${id}/networth`);
+    return handleResponse(response);
 }
 
 // ============================================================================
@@ -34,6 +95,7 @@ export async function createSimulation(data: {
     name: string;
     description?: string;
     parameters: SimulationParameters;
+    portfolio_id?: string;
 }): Promise<SavedSimulation> {
     const response = await fetch(`${API_BASE}/api/simulations`, {
         method: "POST",
@@ -49,6 +111,7 @@ export async function updateSimulation(
         name?: string;
         description?: string;
         parameters?: SimulationParameters;
+        portfolio_id?: string;
     }
 ): Promise<SavedSimulation> {
     const response = await fetch(`${API_BASE}/api/simulations/${id}`, {

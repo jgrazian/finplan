@@ -1,7 +1,3 @@
-"use client";
-
-import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar"
 import {
     Breadcrumb,
@@ -17,16 +13,9 @@ import {
     SidebarProvider,
     SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { SimulationWizard } from "@/components/simulation-wizard"
+import { PortfolioWizard } from "@/components/portfolio-wizard";
 
-function SimulationContent() {
-    const searchParams = useSearchParams();
-    const portfolioId = searchParams.get("portfolio") || undefined;
-    return <SimulationWizard initialPortfolioId={portfolioId} />;
-}
-
-export default function NewSimulationPage() {
-
+export default function NewPortfolioPage() {
     return (
         <SidebarProvider>
             <AppSidebar />
@@ -45,11 +34,11 @@ export default function NewSimulationPage() {
                                 </BreadcrumbItem>
                                 <BreadcrumbSeparator className="hidden md:block" />
                                 <BreadcrumbItem className="hidden md:block">
-                                    <BreadcrumbLink href="/simulations">Simulations</BreadcrumbLink>
+                                    <BreadcrumbLink href="/portfolios">Portfolios</BreadcrumbLink>
                                 </BreadcrumbItem>
                                 <BreadcrumbSeparator className="hidden md:block" />
                                 <BreadcrumbItem>
-                                    <BreadcrumbPage>New Simulation</BreadcrumbPage>
+                                    <BreadcrumbPage>New Portfolio</BreadcrumbPage>
                                 </BreadcrumbItem>
                             </BreadcrumbList>
                         </Breadcrumb>
@@ -57,16 +46,14 @@ export default function NewSimulationPage() {
                 </header>
                 <div className="flex flex-1 flex-col gap-6 p-6 pt-0">
                     <div className="flex flex-col gap-2">
-                        <h1 className="text-3xl font-bold tracking-tight">New Simulation</h1>
+                        <h1 className="text-3xl font-bold tracking-tight">Create Portfolio</h1>
                         <p className="text-muted-foreground">
-                            Create a new financial simulation step by step
+                            Add your accounts and assets to track your net worth
                         </p>
                     </div>
-                    <Suspense fallback={<div className="animate-pulse h-96 bg-muted rounded" />}>
-                        <SimulationContent />
-                    </Suspense>
+                    <PortfolioWizard />
                 </div>
             </SidebarInset>
         </SidebarProvider>
-    )
+    );
 }

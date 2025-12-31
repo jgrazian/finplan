@@ -4,7 +4,10 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post, put},
 };
-use finplan::models::{AccountId, MonteCarloResult, SimulationParameters, SimulationResult};
+use finplan::models::{
+    AccountId, AccountType, AssetClass, AssetId, MonteCarloResult, SimulationParameters,
+    SimulationResult,
+};
 use finplan::simulation::monte_carlo_simulate;
 use jiff::civil::Date;
 use rusqlite::Connection;
@@ -24,6 +27,7 @@ fn init_db(conn: &Connection) {
             name TEXT NOT NULL,
             description TEXT,
             parameters TEXT NOT NULL,
+            portfolio_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         )",
@@ -43,6 +47,19 @@ fn init_db(conn: &Connection) {
         [],
     )
     .expect("Failed to create simulation_runs table");
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS portfolios (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            accounts TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )
+    .expect("Failed to create portfolios table");
 }
 
 #[tokio::main]
@@ -53,6 +70,13 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(|| async { "FinPlan API Server" }))
+        // Portfolio CRUD
+        .route("/api/portfolios", get(list_portfolios))
+        .route("/api/portfolios", post(create_portfolio))
+        .route("/api/portfolios/{id}", get(get_portfolio))
+        .route("/api/portfolios/{id}", put(update_portfolio))
+        .route("/api/portfolios/{id}", delete(delete_portfolio))
+        .route("/api/portfolios/{id}/networth", get(get_portfolio_networth))
         // Simulation CRUD
         .route("/api/simulations", get(list_simulations))
         .route("/api/simulations", post(create_simulation))
@@ -74,6 +98,270 @@ async fn main() {
 }
 
 // ============================================================================
+// Portfolio CRUD Types
+// ============================================================================
+
+// Shim types that extend core models with optional name field for frontend display
+// These preserve the name through JSON serialization while the core models don't need it
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PortfolioAsset {
+    asset_id: AssetId,
+    asset_class: AssetClass,
+    initial_value: f64,
+    return_profile_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PortfolioAccount {
+    account_id: AccountId,
+    account_type: AccountType,
+    assets: Vec<PortfolioAsset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedPortfolio {
+    id: String,
+    name: String,
+    description: Option<String>,
+    accounts: Vec<PortfolioAccount>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PortfolioListItem {
+    id: String,
+    name: String,
+    description: Option<String>,
+    total_value: f64,
+    account_count: usize,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatePortfolioRequest {
+    name: String,
+    description: Option<String>,
+    accounts: Vec<PortfolioAccount>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdatePortfolioRequest {
+    name: Option<String>,
+    description: Option<String>,
+    accounts: Option<Vec<PortfolioAccount>>,
+}
+
+#[derive(Debug, Serialize)]
+struct PortfolioNetworth {
+    total_value: f64,
+    by_account_type: HashMap<String, f64>,
+    by_asset_class: HashMap<String, f64>,
+}
+
+// ============================================================================
+// Portfolio CRUD Handlers
+// ============================================================================
+
+async fn list_portfolios(State(db): State<DbConn>) -> Json<Vec<PortfolioListItem>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, accounts, created_at, updated_at FROM portfolios ORDER BY updated_at DESC")
+        .unwrap();
+
+    let portfolios = stmt
+        .query_map([], |row| {
+            let accounts_json: String = row.get(3)?;
+            let accounts: Vec<PortfolioAccount> =
+                serde_json::from_str(&accounts_json).unwrap_or_default();
+            let total_value: f64 = accounts
+                .iter()
+                .flat_map(|a| a.assets.iter())
+                .map(|asset| asset.initial_value)
+                .sum();
+            Ok(PortfolioListItem {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                total_value,
+                account_count: accounts.len(),
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Json(portfolios)
+}
+
+async fn create_portfolio(
+    State(db): State<DbConn>,
+    Json(req): Json<CreatePortfolioRequest>,
+) -> Result<Json<SavedPortfolio>, StatusCode> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let accounts_json =
+        serde_json::to_string(&req.accounts).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO portfolios (id, name, description, accounts, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![id, req.name, req.description, accounts_json, now, now],
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SavedPortfolio {
+        id,
+        name: req.name,
+        description: req.description,
+        accounts: req.accounts,
+        created_at: now.clone(),
+        updated_at: now,
+    }))
+}
+
+async fn get_portfolio(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+) -> Result<Json<SavedPortfolio>, StatusCode> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, accounts, created_at, updated_at FROM portfolios WHERE id = ?1")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let portfolio = stmt
+        .query_row([&id], |row| {
+            let accounts_json: String = row.get(3)?;
+            let accounts: Vec<PortfolioAccount> =
+                serde_json::from_str(&accounts_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok(SavedPortfolio {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                accounts,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    Ok(Json(portfolio))
+}
+
+async fn update_portfolio(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdatePortfolioRequest>,
+) -> Result<Json<SavedPortfolio>, StatusCode> {
+    let conn = db.lock().unwrap();
+
+    // Get existing portfolio
+    let mut stmt = conn
+        .prepare("SELECT name, description, accounts, created_at FROM portfolios WHERE id = ?1")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let (current_name, current_desc, current_accounts_json, created_at): (
+        String,
+        Option<String>,
+        String,
+        String,
+    ) = stmt
+        .query_row([&id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let name = req.name.unwrap_or(current_name);
+    let description = req.description.or(current_desc);
+    let accounts = if let Some(a) = req.accounts {
+        a
+    } else {
+        serde_json::from_str(&current_accounts_json)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+
+    let accounts_json = serde_json::to_string(&accounts).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+        "UPDATE portfolios SET name = ?1, description = ?2, accounts = ?3, updated_at = ?4 WHERE id = ?5",
+        rusqlite::params![name, description, accounts_json, now, id],
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SavedPortfolio {
+        id,
+        name,
+        description,
+        accounts,
+        created_at,
+        updated_at: now,
+    }))
+}
+
+async fn delete_portfolio(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let conn = db.lock().unwrap();
+
+    let affected = conn
+        .execute("DELETE FROM portfolios WHERE id = ?1", [&id])
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if affected == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}
+
+async fn get_portfolio_networth(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+) -> Result<Json<PortfolioNetworth>, StatusCode> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT accounts FROM portfolios WHERE id = ?1")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let accounts_json: String = stmt
+        .query_row([&id], |row| row.get(0))
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let accounts: Vec<PortfolioAccount> =
+        serde_json::from_str(&accounts_json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let mut total_value = 0.0;
+    let mut by_account_type: HashMap<String, f64> = HashMap::new();
+    let mut by_asset_class: HashMap<String, f64> = HashMap::new();
+
+    for account in &accounts {
+        let account_type = format!("{:?}", account.account_type);
+        for asset in &account.assets {
+            total_value += asset.initial_value;
+            *by_account_type.entry(account_type.clone()).or_insert(0.0) += asset.initial_value;
+            let asset_class = format!("{:?}", asset.asset_class);
+            *by_asset_class.entry(asset_class).or_insert(0.0) += asset.initial_value;
+        }
+    }
+
+    Ok(Json(PortfolioNetworth {
+        total_value,
+        by_account_type,
+        by_asset_class,
+    }))
+}
+
+// ============================================================================
 // Simulation CRUD Types
 // ============================================================================
 
@@ -83,6 +371,7 @@ struct SavedSimulation {
     name: String,
     description: Option<String>,
     parameters: SimulationParameters,
+    portfolio_id: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -92,6 +381,7 @@ struct SimulationListItem {
     id: String,
     name: String,
     description: Option<String>,
+    portfolio_id: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -101,6 +391,7 @@ struct CreateSimulationRequest {
     name: String,
     description: Option<String>,
     parameters: SimulationParameters,
+    portfolio_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +399,7 @@ struct UpdateSimulationRequest {
     name: Option<String>,
     description: Option<String>,
     parameters: Option<SimulationParameters>,
+    portfolio_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -135,7 +427,7 @@ struct SimulationRunRecord {
 async fn list_simulations(State(db): State<DbConn>) -> Json<Vec<SimulationListItem>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn
-        .prepare("SELECT id, name, description, created_at, updated_at FROM simulations ORDER BY updated_at DESC")
+        .prepare("SELECT id, name, description, portfolio_id, created_at, updated_at FROM simulations ORDER BY updated_at DESC")
         .unwrap();
 
     let simulations = stmt
@@ -144,8 +436,9 @@ async fn list_simulations(State(db): State<DbConn>) -> Json<Vec<SimulationListIt
                 id: row.get(0)?,
                 name: row.get(1)?,
                 description: row.get(2)?,
-                created_at: row.get(3)?,
-                updated_at: row.get(4)?,
+                portfolio_id: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })
         .unwrap()
@@ -166,8 +459,8 @@ async fn create_simulation(
 
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO simulations (id, name, description, parameters, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, req.name, req.description, params_json, now, now],
+        "INSERT INTO simulations (id, name, description, parameters, portfolio_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![id, req.name, req.description, params_json, req.portfolio_id, now, now],
     )
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -176,6 +469,7 @@ async fn create_simulation(
         name: req.name,
         description: req.description,
         parameters: req.parameters,
+        portfolio_id: req.portfolio_id,
         created_at: now.clone(),
         updated_at: now,
     }))
@@ -187,7 +481,7 @@ async fn get_simulation(
 ) -> Result<Json<SavedSimulation>, StatusCode> {
     let conn = db.lock().unwrap();
     let mut stmt = conn
-        .prepare("SELECT id, name, description, parameters, created_at, updated_at FROM simulations WHERE id = ?1")
+        .prepare("SELECT id, name, description, parameters, portfolio_id, created_at, updated_at FROM simulations WHERE id = ?1")
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let simulation = stmt
@@ -200,8 +494,9 @@ async fn get_simulation(
                 name: row.get(1)?,
                 description: row.get(2)?,
                 parameters,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                portfolio_id: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
             })
         })
         .map_err(|_| StatusCode::NOT_FOUND)?;
@@ -218,22 +513,30 @@ async fn update_simulation(
 
     // Get existing simulation
     let mut stmt = conn
-        .prepare("SELECT name, description, parameters, created_at FROM simulations WHERE id = ?1")
+        .prepare("SELECT name, description, parameters, portfolio_id, created_at FROM simulations WHERE id = ?1")
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (current_name, current_desc, current_params_json, created_at): (
+    let (current_name, current_desc, current_params_json, current_portfolio_id, created_at): (
         String,
         Option<String>,
         String,
+        Option<String>,
         String,
     ) = stmt
         .query_row([&id], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })
         .map_err(|_| StatusCode::NOT_FOUND)?;
 
     let name = req.name.unwrap_or(current_name);
     let description = req.description.or(current_desc);
+    let portfolio_id = req.portfolio_id.or(current_portfolio_id);
     let parameters = if let Some(p) = req.parameters {
         p
     } else {
@@ -244,8 +547,8 @@ async fn update_simulation(
     let now = chrono::Utc::now().to_rfc3339();
 
     conn.execute(
-        "UPDATE simulations SET name = ?1, description = ?2, parameters = ?3, updated_at = ?4 WHERE id = ?5",
-        rusqlite::params![name, description, params_json, now, id],
+        "UPDATE simulations SET name = ?1, description = ?2, parameters = ?3, portfolio_id = ?4, updated_at = ?5 WHERE id = ?6",
+        rusqlite::params![name, description, params_json, portfolio_id, now, id],
     )
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -254,6 +557,7 @@ async fn update_simulation(
         name,
         description,
         parameters,
+        portfolio_id,
         created_at,
         updated_at: now,
     }))
@@ -421,9 +725,15 @@ struct YearlyGrowthComponents {
 }
 
 /// Calculate the balance of an account at a specific date by replaying transactions
-fn calculate_balance_at_date(result: &SimulationResult, account_id: AccountId, target_date: Date) -> f64 {
+fn calculate_balance_at_date(
+    result: &SimulationResult,
+    account_id: AccountId,
+    target_date: Date,
+) -> f64 {
     // Start with initial value
-    let mut balance = result.accounts.iter()
+    let mut balance = result
+        .accounts
+        .iter()
         .find(|a| a.account_id == account_id)
         .map(|a| a.starting_balance())
         .unwrap_or(0.0);
@@ -467,7 +777,7 @@ fn calculate_balance_at_date(result: &SimulationResult, account_id: AccountId, t
 fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
     let mut account_values: HashMap<AccountId, HashMap<Date, Vec<f64>>> = HashMap::new();
     let mut portfolio_values: HashMap<Date, Vec<f64>> = HashMap::new();
-    
+
     // Growth components aggregation across all iterations (keyed by year)
     let mut growth_by_year: HashMap<i32, YearlyGrowthComponents> = HashMap::new();
     let num_iterations = mc_result.iterations.len() as f64;
@@ -480,7 +790,7 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
             for date in &sim_result.dates {
                 // Calculate balance at this date by replaying transactions up to this date
                 let balance = calculate_balance_at_date(&sim_result, account.account_id, *date);
-                
+
                 // Account aggregation
                 account_values
                     .entry(account.account_id)
@@ -498,42 +808,48 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
         for (date, total) in iteration_portfolio {
             portfolio_values.entry(date).or_default().push(total);
         }
-        
+
         // Aggregate return history
         for ret in &sim_result.return_history {
             let year = ret.date.year() as i32;
-            let entry = growth_by_year.entry(year).or_insert_with(|| YearlyGrowthComponents {
-                year,
-                ..Default::default()
-            });
+            let entry = growth_by_year
+                .entry(year)
+                .or_insert_with(|| YearlyGrowthComponents {
+                    year,
+                    ..Default::default()
+                });
             if ret.return_amount >= 0.0 {
                 entry.investment_returns += ret.return_amount / num_iterations;
             } else {
                 entry.losses += ret.return_amount / num_iterations; // Already negative
             }
         }
-        
+
         // Aggregate cash flow history
         for cf in &sim_result.cash_flow_history {
             let year = cf.date.year() as i32;
-            let entry = growth_by_year.entry(year).or_insert_with(|| YearlyGrowthComponents {
-                year,
-                ..Default::default()
-            });
+            let entry = growth_by_year
+                .entry(year)
+                .or_insert_with(|| YearlyGrowthComponents {
+                    year,
+                    ..Default::default()
+                });
             if cf.amount >= 0.0 {
                 entry.contributions += cf.amount / num_iterations;
             } else {
                 entry.cash_flow_expenses += cf.amount / num_iterations; // Already negative
             }
         }
-        
+
         // Aggregate withdrawal history
         for wd in &sim_result.withdrawal_history {
             let year = wd.date.year() as i32;
-            let entry = growth_by_year.entry(year).or_insert_with(|| YearlyGrowthComponents {
-                year,
-                ..Default::default()
-            });
+            let entry = growth_by_year
+                .entry(year)
+                .or_insert_with(|| YearlyGrowthComponents {
+                    year,
+                    ..Default::default()
+                });
             entry.withdrawals -= wd.gross_amount / num_iterations; // Negative (outflow)
         }
     }
@@ -571,7 +887,7 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
     for (id, values) in account_values {
         accounts_result.insert(id, process_stats(values));
     }
-    
+
     // Sort growth components by year
     let mut growth_components: Vec<YearlyGrowthComponents> = growth_by_year.into_values().collect();
     growth_components.sort_by(|a, b| a.year.cmp(&b.year));
