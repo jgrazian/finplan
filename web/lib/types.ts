@@ -16,6 +16,7 @@ export type AssetClass = "Investable" | "RealEstate" | "Depreciating" | "Liabili
 
 export interface Asset {
     asset_id: AssetId;
+    name?: string;
     asset_class: AssetClass;
     initial_value: number;
     return_profile_index: number;
@@ -162,6 +163,15 @@ export type ReturnProfile =
     | { LogNormal: { mean: number; std_dev: number } };
 
 // ============================================================================
+// Named Return Profile
+// ============================================================================
+
+export interface NamedReturnProfile {
+    name: string;
+    profile: ReturnProfile;
+}
+
+// ============================================================================
 // Simulation Parameters
 // ============================================================================
 
@@ -171,6 +181,7 @@ export interface SimulationParameters {
     birth_date?: string;
     inflation_profile: InflationProfile;
     return_profiles: ReturnProfile[];
+    named_return_profiles?: NamedReturnProfile[];
     events: Event[];
     accounts: Account[];
     cash_flows: CashFlow[];
@@ -241,10 +252,17 @@ export const DEFAULT_TAX_CONFIG: TaxConfig = {
     taxable_gains_percentage: 0.50,
 };
 
+export const DEFAULT_NAMED_RETURN_PROFILES: NamedReturnProfile[] = [
+    { name: "US Stocks", profile: { Normal: { mean: 0.096, std_dev: 0.165 } } },
+    { name: "Bonds", profile: { Normal: { mean: 0.045, std_dev: 0.055 } } },
+    { name: "Cash", profile: { Fixed: 0.03 } },
+];
+
 export const DEFAULT_SIMULATION_PARAMETERS: SimulationParameters = {
     duration_years: 30,
     inflation_profile: { Normal: { mean: 0.035, std_dev: 0.028 } },
     return_profiles: [{ Normal: { mean: 0.096, std_dev: 0.165 } }],
+    named_return_profiles: DEFAULT_NAMED_RETURN_PROFILES,
     events: [],
     accounts: [],
     cash_flows: [],

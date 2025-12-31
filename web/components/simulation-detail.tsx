@@ -286,25 +286,55 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                 {simulation.parameters.accounts.length === 0 ? (
                                     <p className="text-muted-foreground text-sm">No accounts configured</p>
                                 ) : (
-                                    <div className="space-y-3">
-                                        {simulation.parameters.accounts.map((acc) => (
-                                            <div
-                                                key={acc.account_id}
-                                                className="flex items-center justify-between border-b pb-2 last:border-0"
-                                            >
-                                                <div>
-                                                    <p className="font-medium">Account #{acc.account_id}</p>
-                                                    <Badge variant="secondary" className="text-xs">
-                                                        {acc.account_type}
-                                                    </Badge>
-                                                </div>
-                                                <p className="font-mono">
-                                                    {formatCurrency(
-                                                        acc.assets.reduce((s, a) => s + a.initial_value, 0)
+                                    <div className="space-y-4">
+                                        {simulation.parameters.accounts.map((acc) => {
+                                            const namedProfiles = simulation.parameters.named_return_profiles || [];
+                                            return (
+                                                <div
+                                                    key={acc.account_id}
+                                                    className="border rounded-lg p-3"
+                                                >
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <p className="font-medium">Account #{acc.account_id}</p>
+                                                            <Badge variant="secondary" className="text-xs">
+                                                                {acc.account_type}
+                                                            </Badge>
+                                                        </div>
+                                                        <p className="font-mono font-medium">
+                                                            {formatCurrency(
+                                                                acc.assets.reduce((s, a) => s + (a.asset_class === "Liability" ? -a.initial_value : a.initial_value), 0)
+                                                            )}
+                                                        </p>
+                                                    </div>
+                                                    {acc.assets.length > 0 && (
+                                                        <div className="space-y-1 ml-2 mt-2 border-l-2 border-muted pl-3">
+                                                            {acc.assets.map((asset, idx) => {
+                                                                const returnProfile = namedProfiles[asset.return_profile_index];
+                                                                return (
+                                                                    <div key={idx} className="flex items-center justify-between text-sm">
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className={asset.asset_class === "Liability" ? "text-destructive" : "text-muted-foreground"}>
+                                                                                {asset.name || `Asset ${idx + 1}`}
+                                                                            </span>
+                                                                            {returnProfile && (
+                                                                                <Badge variant="outline" className="text-xs">
+                                                                                    {returnProfile.name}
+                                                                                </Badge>
+                                                                            )}
+                                                                        </div>
+                                                                        <span className={`font-mono ${asset.asset_class === "Liability" ? "text-destructive" : ""}`}>
+                                                                            {asset.asset_class === "Liability" ? "-" : ""}
+                                                                            {formatCurrency(asset.initial_value)}
+                                                                        </span>
+                                                                    </div>
+                                                                );
+                                                            })}
+                                                        </div>
                                                     )}
-                                                </p>
-                                            </div>
-                                        ))}
+                                                </div>
+                                            );
+                                        })}
                                     </div>
                                 )}
                             </CardContent>
@@ -364,20 +394,39 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                     </p>
                                 </div>
                                 <div>
-                                    <p className="text-sm font-medium">Return Profile</p>
-                                    <p className="text-sm text-muted-foreground">
-                                        {simulation.parameters.return_profiles.length === 0
-                                            ? "None"
-                                            : simulation.parameters.return_profiles[0] === "None"
+                                    <p className="text-sm font-medium mb-2">Return Profiles</p>
+                                    {simulation.parameters.named_return_profiles && simulation.parameters.named_return_profiles.length > 0 ? (
+                                        <div className="space-y-2">
+                                            {simulation.parameters.named_return_profiles.map((profile, idx) => (
+                                                <div key={idx} className="flex justify-between items-center text-sm">
+                                                    <span className="text-muted-foreground">{profile.name}</span>
+                                                    <Badge variant="outline" className="font-mono text-xs">
+                                                        {profile.profile === "None"
+                                                            ? "None"
+                                                            : typeof profile.profile === "object" && "Fixed" in profile.profile
+                                                                ? `${(profile.profile.Fixed * 100).toFixed(1)}%`
+                                                                : typeof profile.profile === "object" && "Normal" in profile.profile
+                                                                    ? `μ=${(profile.profile.Normal.mean * 100).toFixed(1)}%`
+                                                                    : "Unknown"}
+                                                    </Badge>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="text-sm text-muted-foreground">
+                                            {simulation.parameters.return_profiles.length === 0
                                                 ? "None"
-                                                : typeof simulation.parameters.return_profiles[0] === "object" &&
-                                                    "Fixed" in simulation.parameters.return_profiles[0]
-                                                    ? `Fixed ${(simulation.parameters.return_profiles[0].Fixed * 100).toFixed(1)}%`
+                                                : simulation.parameters.return_profiles[0] === "None"
+                                                    ? "None"
                                                     : typeof simulation.parameters.return_profiles[0] === "object" &&
-                                                        "Normal" in simulation.parameters.return_profiles[0]
-                                                        ? `Normal (μ=${(simulation.parameters.return_profiles[0].Normal.mean * 100).toFixed(1)}%, σ=${(simulation.parameters.return_profiles[0].Normal.std_dev * 100).toFixed(1)}%)`
-                                                        : "Unknown"}
-                                    </p>
+                                                        "Fixed" in simulation.parameters.return_profiles[0]
+                                                        ? `Fixed ${(simulation.parameters.return_profiles[0].Fixed * 100).toFixed(1)}%`
+                                                        : typeof simulation.parameters.return_profiles[0] === "object" &&
+                                                            "Normal" in simulation.parameters.return_profiles[0]
+                                                            ? `Normal (μ=${(simulation.parameters.return_profiles[0].Normal.mean * 100).toFixed(1)}%, σ=${(simulation.parameters.return_profiles[0].Normal.std_dev * 100).toFixed(1)}%)`
+                                                            : "Unknown"}
+                                        </p>
+                                    )}
                                 </div>
                             </CardContent>
                         </Card>
@@ -433,7 +482,7 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                     </Button>
                                 </div>
                             )}
-                            <ResultsDashboard result={result} simulationName={simulation.name} />
+                            <ResultsDashboard result={result} simulationName={simulation.name} simulationParameters={simulation.parameters} />
                         </div>
                     ) : runs.length > 0 ? (
                         <Card>
@@ -481,8 +530,8 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                             <div
                                                 key={run.id}
                                                 className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${isSelected
-                                                        ? 'bg-primary/10 border-primary'
-                                                        : 'hover:bg-muted/50'
+                                                    ? 'bg-primary/10 border-primary'
+                                                    : 'hover:bg-muted/50'
                                                     }`}
                                                 onClick={() => loadPreviousRun(run.id)}
                                             >

@@ -89,9 +89,11 @@ import {
     RepeatInterval,
     InflationProfile,
     ReturnProfile,
+    NamedReturnProfile,
     WithdrawalStrategy,
     DEFAULT_SIMULATION_PARAMETERS,
     DEFAULT_TAX_CONFIG,
+    DEFAULT_NAMED_RETURN_PROFILES,
 } from "@/lib/types";
 import { createSimulation, updateSimulation } from "@/lib/api";
 
@@ -413,15 +415,9 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
         return "normal";
     });
 
-    const [returnType, setReturnType] = React.useState<string>(() => {
-        const profile = parameters.return_profiles[0];
-        if (!profile || profile === "None") return "none";
-        if (typeof profile === "object") {
-            if ("Fixed" in profile) return "fixed";
-            if ("Normal" in profile) return "normal";
-        }
-        return "normal";
-    });
+    const [namedProfiles, setNamedProfiles] = React.useState<NamedReturnProfile[]>(
+        parameters.named_return_profiles || DEFAULT_NAMED_RETURN_PROFILES
+    );
 
     const getInflationValue = (key: "mean" | "std_dev" | "fixed"): number => {
         const profile = parameters.inflation_profile;
@@ -433,18 +429,6 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
             return Math.round(value * 10) / 10;
         }
         return key === "mean" ? 3.5 : 2.8;
-    };
-
-    const getReturnValue = (key: "mean" | "std_dev" | "fixed"): number => {
-        const profile = parameters.return_profiles[0];
-        if (key === "fixed" && typeof profile === "object" && "Fixed" in profile) {
-            return Math.round(profile.Fixed * 100 * 10) / 10;
-        }
-        if (typeof profile === "object" && "Normal" in profile) {
-            const value = key === "mean" ? profile.Normal.mean * 100 : profile.Normal.std_dev * 100;
-            return Math.round(value * 10) / 10;
-        }
-        return key === "mean" ? 9.6 : 16.5;
     };
 
     const updateInflation = (type: string, mean?: number, stdDev?: number, fixed?: number) => {
@@ -459,16 +443,59 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
         updateParameters("inflation_profile", profile);
     };
 
-    const updateReturn = (type: string, mean?: number, stdDev?: number, fixed?: number) => {
+    const addReturnProfile = () => {
+        const newProfile: NamedReturnProfile = {
+            name: `Profile ${namedProfiles.length + 1}`,
+            profile: { Normal: { mean: 0.07, std_dev: 0.12 } },
+        };
+        const updated = [...namedProfiles, newProfile];
+        setNamedProfiles(updated);
+        updateParameters("named_return_profiles", updated);
+        // Keep return_profiles in sync for backend compatibility
+        updateParameters("return_profiles", updated.map((p) => p.profile));
+    };
+
+    const updateReturnProfile = (index: number, updates: Partial<NamedReturnProfile>) => {
+        const updated = namedProfiles.map((p, i) => (i === index ? { ...p, ...updates } : p));
+        setNamedProfiles(updated);
+        updateParameters("named_return_profiles", updated);
+        updateParameters("return_profiles", updated.map((p) => p.profile));
+    };
+
+    const removeReturnProfile = (index: number) => {
+        const updated = namedProfiles.filter((_, i) => i !== index);
+        setNamedProfiles(updated);
+        updateParameters("named_return_profiles", updated);
+        updateParameters("return_profiles", updated.map((p) => p.profile));
+    };
+
+    const getProfileValue = (profile: ReturnProfile, key: "mean" | "std_dev" | "fixed"): number => {
+        if (key === "fixed" && typeof profile === "object" && "Fixed" in profile) {
+            return Math.round(profile.Fixed * 100 * 10) / 10;
+        }
+        if (typeof profile === "object" && "Normal" in profile) {
+            const value = key === "mean" ? profile.Normal.mean * 100 : profile.Normal.std_dev * 100;
+            return Math.round(value * 10) / 10;
+        }
+        return key === "mean" ? 7.0 : 12.0;
+    };
+
+    const getProfileType = (profile: ReturnProfile): string => {
+        if (profile === "None") return "none";
+        if (typeof profile === "object" && "Fixed" in profile) return "fixed";
+        return "normal";
+    };
+
+    const updateProfileValues = (index: number, type: string, mean?: number, stdDev?: number, fixed?: number) => {
         let profile: ReturnProfile;
         if (type === "none") {
             profile = "None";
         } else if (type === "fixed") {
-            profile = { Fixed: (fixed ?? 9.6) / 100 };
+            profile = { Fixed: (fixed ?? 5.0) / 100 };
         } else {
-            profile = { Normal: { mean: (mean ?? 9.6) / 100, std_dev: (stdDev ?? 16.5) / 100 } };
+            profile = { Normal: { mean: (mean ?? 7.0) / 100, std_dev: (stdDev ?? 12.0) / 100 } };
         }
-        updateParameters("return_profiles", [profile]);
+        updateReturnProfile(index, { profile });
     };
 
     return (
@@ -536,65 +563,115 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
                 )}
             </div>
 
-            {/* Return Profile */}
+            {/* Named Return Profiles */}
             <div className="space-y-4">
-                <h3 className="text-lg font-medium">Investment Return Profile</h3>
-                <RadioGroup
-                    value={returnType}
-                    onValueChange={(v) => {
-                        setReturnType(v);
-                        updateReturn(v);
-                    }}
-                    className="grid grid-cols-3 gap-4"
-                >
-                    <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="none" id="return-none" />
-                        <Label htmlFor="return-none">None</Label>
+                <div className="flex justify-between items-center">
+                    <div>
+                        <h3 className="text-lg font-medium">Return Profiles</h3>
+                        <p className="text-sm text-muted-foreground">
+                            Define return profiles that can be assigned to assets in your accounts.
+                        </p>
                     </div>
-                    <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="fixed" id="return-fixed" />
-                        <Label htmlFor="return-fixed">Fixed Rate</Label>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="normal" id="return-normal" />
-                        <Label htmlFor="return-normal">Variable (Normal)</Label>
-                    </div>
-                </RadioGroup>
+                    <Button onClick={addReturnProfile} size="sm" variant="outline">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Profile
+                    </Button>
+                </div>
 
-                {returnType === "fixed" && (
-                    <div className="space-y-2">
-                        <Label>Annual Return Rate (%)</Label>
-                        <Input
-                            type="number"
-                            step="0.1"
-                            value={getReturnValue("fixed")}
-                            onChange={(e) => updateReturn("fixed", undefined, undefined, parseFloat(e.target.value))}
-                        />
-                    </div>
-                )}
+                {namedProfiles.length === 0 ? (
+                    <Card className="border-dashed">
+                        <CardContent className="flex flex-col items-center justify-center py-8">
+                            <p className="text-muted-foreground mb-4">No return profiles defined</p>
+                            <Button onClick={addReturnProfile} variant="outline">
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Return Profile
+                            </Button>
+                        </CardContent>
+                    </Card>
+                ) : (
+                    <div className="space-y-4">
+                        {namedProfiles.map((namedProfile, index) => {
+                            const profileType = getProfileType(namedProfile.profile);
+                            return (
+                                <Card key={index}>
+                                    <CardHeader className="pb-3">
+                                        <div className="flex justify-between items-start">
+                                            <div className="flex-1 mr-4">
+                                                <Input
+                                                    value={namedProfile.name}
+                                                    onChange={(e) => updateReturnProfile(index, { name: e.target.value })}
+                                                    className="font-medium"
+                                                    placeholder="Profile Name"
+                                                />
+                                            </div>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                onClick={() => removeReturnProfile(index)}
+                                                disabled={namedProfiles.length === 1}
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                            </Button>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="space-y-4">
+                                        <RadioGroup
+                                            value={profileType}
+                                            onValueChange={(v) => updateProfileValues(index, v)}
+                                            className="grid grid-cols-3 gap-4"
+                                        >
+                                            <div className="flex items-center space-x-2">
+                                                <RadioGroupItem value="none" id={`return-none-${index}`} />
+                                                <Label htmlFor={`return-none-${index}`}>None</Label>
+                                            </div>
+                                            <div className="flex items-center space-x-2">
+                                                <RadioGroupItem value="fixed" id={`return-fixed-${index}`} />
+                                                <Label htmlFor={`return-fixed-${index}`}>Fixed Rate</Label>
+                                            </div>
+                                            <div className="flex items-center space-x-2">
+                                                <RadioGroupItem value="normal" id={`return-normal-${index}`} />
+                                                <Label htmlFor={`return-normal-${index}`}>Variable (Normal)</Label>
+                                            </div>
+                                        </RadioGroup>
 
-                {returnType === "normal" && (
-                    <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                            <Label>Mean (%)</Label>
-                            <Input
-                                type="number"
-                                step="0.1"
-                                value={getReturnValue("mean")}
-                                onChange={(e) => updateReturn("normal", parseFloat(e.target.value), getReturnValue("std_dev"))}
-                            />
-                            <p className="text-xs text-muted-foreground">S&P 500 historical: ~9.6%</p>
-                        </div>
-                        <div className="space-y-2">
-                            <Label>Standard Deviation (%)</Label>
-                            <Input
-                                type="number"
-                                step="0.1"
-                                value={getReturnValue("std_dev")}
-                                onChange={(e) => updateReturn("normal", getReturnValue("mean"), parseFloat(e.target.value))}
-                            />
-                            <p className="text-xs text-muted-foreground">S&P 500 historical: ~16.5%</p>
-                        </div>
+                                        {profileType === "fixed" && (
+                                            <div className="space-y-2">
+                                                <Label>Annual Return Rate (%)</Label>
+                                                <Input
+                                                    type="number"
+                                                    step="0.1"
+                                                    value={getProfileValue(namedProfile.profile, "fixed")}
+                                                    onChange={(e) => updateProfileValues(index, "fixed", undefined, undefined, parseFloat(e.target.value))}
+                                                />
+                                            </div>
+                                        )}
+
+                                        {profileType === "normal" && (
+                                            <div className="grid gap-4 md:grid-cols-2">
+                                                <div className="space-y-2">
+                                                    <Label>Mean (%)</Label>
+                                                    <Input
+                                                        type="number"
+                                                        step="0.1"
+                                                        value={getProfileValue(namedProfile.profile, "mean")}
+                                                        onChange={(e) => updateProfileValues(index, "normal", parseFloat(e.target.value), getProfileValue(namedProfile.profile, "std_dev"))}
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label>Standard Deviation (%)</Label>
+                                                    <Input
+                                                        type="number"
+                                                        step="0.1"
+                                                        value={getProfileValue(namedProfile.profile, "std_dev")}
+                                                        onChange={(e) => updateProfileValues(index, "normal", getProfileValue(namedProfile.profile, "mean"), parseFloat(e.target.value))}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            );
+                        })}
                     </div>
                 )}
             </div>
@@ -604,20 +681,14 @@ function ProfilesStep({ parameters, updateParameters }: StepProps) {
 
 function AccountsStep({ parameters, updateParameters }: StepProps) {
     const [accounts, setAccounts] = React.useState<Account[]>(parameters.accounts || []);
+    const namedProfiles = parameters.named_return_profiles || DEFAULT_NAMED_RETURN_PROFILES;
 
     const addAccount = () => {
         const newId = accounts.length > 0 ? Math.max(...accounts.map((a) => a.account_id)) + 1 : 1;
         const newAccount: Account = {
             account_id: newId,
             account_type: "Taxable",
-            assets: [
-                {
-                    asset_id: newId * 100,
-                    asset_class: "Investable",
-                    initial_value: 0,
-                    return_profile_index: 0,
-                },
-            ],
+            assets: [],
         };
         const updated = [...accounts, newAccount];
         setAccounts(updated);
@@ -630,6 +701,22 @@ function AccountsStep({ parameters, updateParameters }: StepProps) {
         updateParameters("accounts", updated);
     };
 
+    const addAsset = (accountIndex: number) => {
+        const account = accounts[accountIndex];
+        const newAssetId = account.assets.length > 0
+            ? Math.max(...account.assets.map((a) => a.asset_id)) + 1
+            : account.account_id * 100;
+        const newAsset: Asset = {
+            asset_id: newAssetId,
+            name: `Asset ${account.assets.length + 1}`,
+            asset_class: "Investable",
+            initial_value: 0,
+            return_profile_index: 0,
+        };
+        const updatedAssets = [...account.assets, newAsset];
+        updateAccount(accountIndex, { assets: updatedAssets });
+    };
+
     const updateAsset = (accountIndex: number, assetIndex: number, updates: Partial<Asset>) => {
         const updated = accounts.map((acc, i) => {
             if (i !== accountIndex) return acc;
@@ -637,6 +724,15 @@ function AccountsStep({ parameters, updateParameters }: StepProps) {
                 j === assetIndex ? { ...asset, ...updates } : asset
             );
             return { ...acc, assets: newAssets };
+        });
+        setAccounts(updated);
+        updateParameters("accounts", updated);
+    };
+
+    const removeAsset = (accountIndex: number, assetIndex: number) => {
+        const updated = accounts.map((acc, i) => {
+            if (i !== accountIndex) return acc;
+            return { ...acc, assets: acc.assets.filter((_, j) => j !== assetIndex) };
         });
         setAccounts(updated);
         updateParameters("accounts", updated);
@@ -655,11 +751,18 @@ function AccountsStep({ parameters, updateParameters }: StepProps) {
         { value: "Illiquid", label: "Illiquid", description: "Real estate, vehicles" },
     ];
 
+    const ASSET_CLASSES: { value: AssetClass; label: string }[] = [
+        { value: "Investable", label: "Investable" },
+        { value: "RealEstate", label: "Real Estate" },
+        { value: "Depreciating", label: "Depreciating" },
+        { value: "Liability", label: "Liability (Debt)" },
+    ];
+
     return (
         <div className="space-y-6">
             <div className="flex justify-between items-center">
                 <p className="text-sm text-muted-foreground">
-                    Add your financial accounts. Each account can hold assets with different values.
+                    Add your financial accounts. Each account can hold multiple assets with different return profiles.
                 </p>
                 <Button onClick={addAccount} size="sm">
                     <Plus className="mr-2 h-4 w-4" />
@@ -683,8 +786,33 @@ function AccountsStep({ parameters, updateParameters }: StepProps) {
                         <Card key={account.account_id}>
                             <CardHeader className="pb-3">
                                 <div className="flex justify-between items-start">
-                                    <div className="space-y-1">
-                                        <CardTitle className="text-base">Account #{account.account_id}</CardTitle>
+                                    <div className="space-y-1 flex-1">
+                                        <div className="flex items-center gap-4">
+                                            <CardTitle className="text-base">Account #{account.account_id}</CardTitle>
+                                            <Select
+                                                value={account.account_type}
+                                                onValueChange={(v) => updateAccount(accountIndex, { account_type: v as AccountType })}
+                                            >
+                                                <SelectTrigger className="w-[180px]">
+                                                    <SelectValue />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    {ACCOUNT_TYPES.map((type) => (
+                                                        <SelectItem key={type.value} value={type.value}>
+                                                            <div>
+                                                                <span>{type.label}</span>
+                                                                <span className="text-xs text-muted-foreground ml-2">
+                                                                    ({type.description})
+                                                                </span>
+                                                            </div>
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+                                        <p className="text-sm text-muted-foreground">
+                                            Total: ${account.assets.reduce((s, a) => s + (a.asset_class === "Liability" ? -a.initial_value : a.initial_value), 0).toLocaleString()}
+                                        </p>
                                     </div>
                                     <Button
                                         variant="ghost"
@@ -696,41 +824,97 @@ function AccountsStep({ parameters, updateParameters }: StepProps) {
                                 </div>
                             </CardHeader>
                             <CardContent className="space-y-4">
-                                <div className="grid gap-4 md:grid-cols-2">
-                                    <div className="space-y-2">
-                                        <Label>Account Type</Label>
-                                        <Select
-                                            value={account.account_type}
-                                            onValueChange={(v) => updateAccount(accountIndex, { account_type: v as AccountType })}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {ACCOUNT_TYPES.map((type) => (
-                                                    <SelectItem key={type.value} value={type.value}>
-                                                        <div>
-                                                            <span>{type.label}</span>
-                                                            <span className="text-xs text-muted-foreground ml-2">
-                                                                ({type.description})
-                                                            </span>
+                                {/* Assets List */}
+                                <div className="space-y-3">
+                                    <div className="flex justify-between items-center">
+                                        <Label className="text-sm font-medium">Assets</Label>
+                                        <Button onClick={() => addAsset(accountIndex)} size="sm" variant="outline">
+                                            <Plus className="mr-2 h-3 w-3" />
+                                            Add Asset
+                                        </Button>
+                                    </div>
+
+                                    {account.assets.length === 0 ? (
+                                        <div className="border-2 border-dashed rounded-lg p-4 text-center">
+                                            <p className="text-sm text-muted-foreground mb-2">No assets in this account</p>
+                                            <Button onClick={() => addAsset(accountIndex)} size="sm" variant="ghost">
+                                                <Plus className="mr-2 h-3 w-3" />
+                                                Add First Asset
+                                            </Button>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-3">
+                                            {account.assets.map((asset, assetIndex) => (
+                                                <div
+                                                    key={asset.asset_id}
+                                                    className="border rounded-lg p-3 space-y-3 bg-muted/30"
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        <Input
+                                                            value={asset.name || `Asset ${assetIndex + 1}`}
+                                                            onChange={(e) => updateAsset(accountIndex, assetIndex, { name: e.target.value })}
+                                                            className="flex-1 h-8"
+                                                            placeholder="Asset Name"
+                                                        />
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-8 w-8"
+                                                            onClick={() => removeAsset(accountIndex, assetIndex)}
+                                                        >
+                                                            <Trash2 className="h-3 w-3" />
+                                                        </Button>
+                                                    </div>
+                                                    <div className="grid gap-3 md:grid-cols-3">
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">Value ($)</Label>
+                                                            <MoneyInput
+                                                                value={asset.initial_value}
+                                                                onChange={(value) => updateAsset(accountIndex, assetIndex, { initial_value: value })}
+                                                                className="h-8"
+                                                            />
                                                         </div>
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <Label>Initial Value ($)</Label>
-                                        <MoneyInput
-                                            value={account.assets[0]?.initial_value || 0}
-                                            onChange={(value) =>
-                                                updateAsset(accountIndex, 0, {
-                                                    initial_value: value,
-                                                })
-                                            }
-                                        />
-                                    </div>
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">Asset Class</Label>
+                                                            <Select
+                                                                value={asset.asset_class}
+                                                                onValueChange={(v) => updateAsset(accountIndex, assetIndex, { asset_class: v as AssetClass })}
+                                                            >
+                                                                <SelectTrigger className="h-8">
+                                                                    <SelectValue />
+                                                                </SelectTrigger>
+                                                                <SelectContent>
+                                                                    {ASSET_CLASSES.map((ac) => (
+                                                                        <SelectItem key={ac.value} value={ac.value}>
+                                                                            {ac.label}
+                                                                        </SelectItem>
+                                                                    ))}
+                                                                </SelectContent>
+                                                            </Select>
+                                                        </div>
+                                                        <div className="space-y-1">
+                                                            <Label className="text-xs">Return Profile</Label>
+                                                            <Select
+                                                                value={asset.return_profile_index.toString()}
+                                                                onValueChange={(v) => updateAsset(accountIndex, assetIndex, { return_profile_index: parseInt(v) })}
+                                                            >
+                                                                <SelectTrigger className="h-8">
+                                                                    <SelectValue />
+                                                                </SelectTrigger>
+                                                                <SelectContent>
+                                                                    {namedProfiles.map((profile, idx) => (
+                                                                        <SelectItem key={idx} value={idx.toString()}>
+                                                                            {profile.name}
+                                                                        </SelectItem>
+                                                                    ))}
+                                                                </SelectContent>
+                                                            </Select>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             </CardContent>
                         </Card>
@@ -1213,17 +1397,11 @@ function ReviewStep({
                             </dd>
                         </div>
                         <div className="flex justify-between">
-                            <dt className="text-muted-foreground">Return Profile</dt>
+                            <dt className="text-muted-foreground">Return Profiles</dt>
                             <dd>
-                                {parameters.return_profiles.length === 0
-                                    ? "None"
-                                    : parameters.return_profiles[0] === "None"
-                                        ? "None"
-                                        : typeof parameters.return_profiles[0] === "object" && "Fixed" in parameters.return_profiles[0]
-                                            ? `Fixed ${(parameters.return_profiles[0].Fixed * 100).toFixed(1)}%`
-                                            : typeof parameters.return_profiles[0] === "object" && "Normal" in parameters.return_profiles[0]
-                                                ? `Normal (μ=${(parameters.return_profiles[0].Normal.mean * 100).toFixed(1)}%)`
-                                                : "Unknown"}
+                                {parameters.named_return_profiles && parameters.named_return_profiles.length > 0
+                                    ? `${parameters.named_return_profiles.length} profile${parameters.named_return_profiles.length !== 1 ? "s" : ""}`
+                                    : "None"}
                             </dd>
                         </div>
                     </dl>

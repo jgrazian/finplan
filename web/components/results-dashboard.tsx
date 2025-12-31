@@ -4,6 +4,8 @@ import * as React from "react";
 import {
     Area,
     AreaChart,
+    Bar,
+    BarChart,
     CartesianGrid,
     XAxis,
     YAxis,
@@ -22,12 +24,13 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ChartContainer, ChartTooltipContent } from "@/components/ui/chart";
-import { AggregatedResult, TimePointStats } from "@/lib/types";
+import { ChartContainer, ChartTooltipContent, ChartLegend, ChartLegendContent, ChartTooltip } from "@/components/ui/chart";
+import { AggregatedResult, TimePointStats, SimulationParameters, AccountType } from "@/lib/types";
 
 interface ResultsDashboardProps {
     result: AggregatedResult;
     simulationName?: string;
+    simulationParameters?: SimulationParameters;
 }
 
 const chartConfig = {
@@ -45,7 +48,49 @@ const chartConfig = {
     },
 };
 
-export function ResultsDashboard({ result, simulationName }: ResultsDashboardProps) {
+const accountTypeConfig = {
+    Taxable: {
+        label: "Taxable",
+        color: "var(--chart-1)",
+    },
+    TaxDeferred: {
+        label: "Tax-Deferred",
+        color: "var(--chart-2)",
+    },
+    TaxFree: {
+        label: "Tax-Free",
+        color: "var(--chart-3)",
+    },
+    Illiquid: {
+        label: "Illiquid",
+        color: "var(--chart-4)",
+    },
+    Debt: {
+        label: "Debt",
+        color: "var(--chart-5)",
+    },
+};
+
+const growthComponentsConfig = {
+    principal: {
+        label: "Initial Principal",
+        color: "var(--chart-1)",
+    },
+    contributions: {
+        label: "Contributions",
+        color: "var(--chart-2)",
+    },
+    returns: {
+        label: "Investment Returns",
+        color: "var(--chart-3)",
+    },
+    withdrawals: {
+        label: "Withdrawals",
+        color: "var(--chart-4)",
+    },
+};
+
+export function ResultsDashboard({ result, simulationName, simulationParameters }: ResultsDashboardProps) {
     const formatCurrency = (value: number) =>
         new Intl.NumberFormat("en-US", {
             style: "currency",
@@ -87,6 +132,178 @@ export function ResultsDashboard({ result, simulationName }: ResultsDashboardPro
 
     // Get account data
     const accountIds = Object.keys(result.accounts);
+
+    // Build account type to account IDs mapping
+    const accountTypeMap = React.useMemo(() => {
+        const map: Record<string, AccountType> = {};
+        if (simulationParameters?.accounts) {
+            simulationParameters.accounts.forEach((acc) => {
+                map[acc.account_id.toString()] = acc.account_type;
+            });
+        }
+        return map;
+    }, [simulationParameters]);
+
+    // Check if an account has any liabilities
+    const hasLiabilities = React.useMemo(() => {
+        const liabilityAccounts: Record<string, boolean> = {};
+        if (simulationParameters?.accounts) {
+            simulationParameters.accounts.forEach((acc) => {
+                const hasLiability = acc.assets.some((asset) => asset.asset_class === "Liability");
+                if (hasLiability) {
+                    liabilityAccounts[acc.account_id.toString()] = true;
+                }
+            });
+        }
+        return liabilityAccounts;
+    }, [simulationParameters]);
+
+    // Prepare portfolio breakdown data by account type (yearly, using median values)
+    const portfolioBreakdownData = React.useMemo(() => {
+        // Group data by year and take the last data point for each year
+        const yearlyDataMap = new Map<string, typeof result.total_portfolio[0]>();
+
+        result.total_portfolio.forEach((point) => {
+            const year = new Date(point.date).getFullYear().toString();
+            yearlyDataMap.set(year, point); // Keep overwriting to get the last point of each year
+        });
+
+        // Convert to array and sort by year
+        const yearlyData = Array.from(yearlyDataMap.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([year, point]) => {
+                const breakdown: { year: string; Taxable: number; TaxDeferred: number; TaxFree: number; Illiquid: number; Debt: number } = {
+                    year,
+                    Taxable: 0,
+                    TaxDeferred: 0,
+                    TaxFree: 0,
+                    Illiquid: 0,
+                    Debt: 0,
+                };
+
+                // Aggregate account values by type
+                Object.entries(result.accounts).forEach(([accountId, accountData]) => {
+                    const matchingPoint = accountData.find((p) => new Date(p.date).getFullYear().toString() === year);
+                    if (matchingPoint) {
+                        const accountType = accountTypeMap[accountId] || "Taxable";
+                        const isLiability = hasLiabilities[accountId];
+
+                        if (isLiability) {
+                            // Show liabilities as negative (debt)
+                            breakdown.Debt -= Math.abs(matchingPoint.p50);
+                        } else {
+                            breakdown[accountType] += matchingPoint.p50;
+                        }
+                    }
+                });
+
+                return breakdown;
+            });
+
+        return yearlyData;
+    }, [result, accountTypeMap, hasLiabilities]);
+
+    // Determine which account types have data
+    const activeAccountTypes = React.useMemo(() => {
+        const types = new Set<string>();
+        portfolioBreakdownData.forEach((point) => {
+            if (point.Taxable > 0) types.add("Taxable");
+            if (point.TaxDeferred > 0) types.add("TaxDeferred");
+            if (point.TaxFree > 0) types.add("TaxFree");
+            if (point.Illiquid > 0) types.add("Illiquid");
+            if (point.Debt < 0) types.add("Debt");
+        });
+        return Array.from(types);
+    }, [portfolioBreakdownData]);
+
+    // Estimate yearly contributions from cash flows
+    const estimatedYearlyContributions = React.useMemo(() => {
+        if (!simulationParameters) return 0;
+
+        return simulationParameters.cash_flows
+            .filter((cf) => cf.source === "External" && cf.state === "Active")
+            .reduce((sum, cf) => {
+                const multiplier =
+                    cf.repeats === "Monthly" ? 12 :
+                        cf.repeats === "Yearly" ? 1 :
+                            cf.repeats === "Weekly" ? 52 :
+                                cf.repeats === "BiWeekly" ? 26 :
+                                    cf.repeats === "Quarterly" ? 4 : 0;
+                return sum + cf.amount * multiplier;
+            }, 0);
+    }, [simulationParameters]);
+
+    // Estimate yearly withdrawals from spending targets
+    const estimatedYearlyWithdrawals = React.useMemo(() => {
+        if (!simulationParameters) return 0;
+
+        return simulationParameters.spending_targets
+            .filter((st) => st.state === "Active" || st.state === "Pending")
+            .reduce((sum, st) => {
+                const multiplier = st.repeats === "Monthly" ? 12 : st.repeats === "Yearly" ? 1 : 0;
+                return sum + st.amount * multiplier;
+            }, 0);
+    }, [simulationParameters]);
+
+    // Prepare growth components data (waterfall-style breakdown)
+    const growthComponentsData = React.useMemo(() => {
+        if (portfolioBreakdownData.length === 0) return [];
+
+        const initialPrincipal = portfolioBreakdownData[0]
+            ? portfolioBreakdownData[0].Taxable + portfolioBreakdownData[0].TaxDeferred +
+            portfolioBreakdownData[0].TaxFree + portfolioBreakdownData[0].Illiquid + portfolioBreakdownData[0].Debt
+            : 0;
+
+        return portfolioBreakdownData.map((point, index) => {
+            const currentTotal = point.Taxable + point.TaxDeferred + point.TaxFree + point.Illiquid + point.Debt;
+
+            if (index === 0) {
+                // First year - everything is principal
+                return {
+                    year: point.year,
+                    principal: Math.max(0, currentTotal),
+                    contributions: 0,
+                    returns: 0,
+                    withdrawals: Math.min(0, currentTotal),
+                };
+            }
+
+            const prevPoint = portfolioBreakdownData[index - 1];
+            const prevTotal = prevPoint.Taxable + prevPoint.TaxDeferred + prevPoint.TaxFree + prevPoint.Illiquid + prevPoint.Debt;
+
+            // Calculate change from previous year
+            const yearChange = currentTotal - prevTotal;
+
+            // Estimate contributions (from cash flows)
+            const estContributions = estimatedYearlyContributions;
+
+            // Estimate withdrawals (from spending targets) - shown as negative
+            const estWithdrawals = -estimatedYearlyWithdrawals;
+
+            // Returns = change - contributions - withdrawals (what's left over)
+            const estReturns = yearChange - estContributions - estWithdrawals;
+
+            return {
+                year: point.year,
+                principal: initialPrincipal,
+                contributions: Math.max(0, estContributions * index), // Cumulative contributions
+                returns: estReturns > 0 ? estReturns : 0, // Only positive returns shown here
+                withdrawals: estReturns < 0 ? estReturns : estWithdrawals, // Negative values
+            };
+        });
+    }, [portfolioBreakdownData, estimatedYearlyContributions, estimatedYearlyWithdrawals]);
+
+    // Determine which growth components have data
+    const activeGrowthComponents = React.useMemo(() => {
+        const components = new Set<string>();
+        growthComponentsData.forEach((point) => {
+            if (point.principal > 0) components.add("principal");
+            if (point.contributions > 0) components.add("contributions");
+            if (point.returns > 0) components.add("returns");
+            if (point.withdrawals < 0) components.add("withdrawals");
+        });
+        return Array.from(components);
+    }, [growthComponentsData]);
 
     return (
         <div className="space-y-6">
@@ -240,6 +457,180 @@ export function ResultsDashboard({ result, simulationName }: ResultsDashboardPro
                     </ChartContainer>
                 </CardContent>
             </Card>
+
+            {/* Portfolio Breakdown by Account Type */}
+            {simulationParameters && portfolioBreakdownData.length > 0 && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Portfolio Breakdown by Account Type</CardTitle>
+                        <CardDescription>
+                            Yearly contribution breakdown showing assets by tax treatment. Debts shown below the axis.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <ChartContainer config={accountTypeConfig} className="h-[400px] w-full">
+                            <BarChart
+                                accessibilityLayer
+                                data={portfolioBreakdownData}
+                                margin={{ top: 20, right: 30, left: 0, bottom: 5 }}
+                                stackOffset="sign"
+                            >
+                                <CartesianGrid vertical={false} />
+                                <XAxis
+                                    dataKey="year"
+                                    tickLine={false}
+                                    tickMargin={10}
+                                    axisLine={false}
+                                />
+                                <YAxis
+                                    tickFormatter={(value) => formatCurrency(value)}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    width={80}
+                                />
+                                <ChartTooltip
+                                    content={
+                                        <ChartTooltipContent
+                                            formatter={(value, name) => (
+                                                <div className="flex items-center justify-between gap-8">
+                                                    <span>{name}</span>
+                                                    <span className="font-mono font-medium">
+                                                        {formatFullCurrency(value as number)}
+                                                    </span>
+                                                </div>
+                                            )}
+                                        />
+                                    }
+                                />
+                                <ChartLegend content={<ChartLegendContent />} />
+                                {activeAccountTypes.includes("Taxable") && (
+                                    <Bar
+                                        dataKey="Taxable"
+                                        stackId="a"
+                                        fill="var(--color-Taxable)"
+                                        radius={[0, 0, 0, 0]}
+                                    />
+                                )}
+                                {activeAccountTypes.includes("TaxDeferred") && (
+                                    <Bar
+                                        dataKey="TaxDeferred"
+                                        stackId="a"
+                                        fill="var(--color-TaxDeferred)"
+                                        radius={[0, 0, 0, 0]}
+                                    />
+                                )}
+                                {activeAccountTypes.includes("TaxFree") && (
+                                    <Bar
+                                        dataKey="TaxFree"
+                                        stackId="a"
+                                        fill="var(--color-TaxFree)"
+                                        radius={[4, 4, 0, 0]}
+                                    />
+                                )}
+                                {activeAccountTypes.includes("Illiquid") && (
+                                    <Bar
+                                        dataKey="Illiquid"
+                                        stackId="a"
+                                        fill="var(--color-Illiquid)"
+                                        radius={[4, 4, 0, 0]}
+                                    />
+                                )}
+                                {activeAccountTypes.includes("Debt") && (
+                                    <Bar
+                                        dataKey="Debt"
+                                        stackId="a"
+                                        fill="var(--color-Debt)"
+                                        radius={[0, 0, 4, 4]}
+                                    />
+                                )}
+                            </BarChart>
+                        </ChartContainer>
+                    </CardContent>
+                </Card>
+            )}
+
+            {/* Portfolio Growth Components */}
+            {simulationParameters && growthComponentsData.length > 0 && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle>Portfolio Growth Components</CardTitle>
+                        <CardDescription>
+                            Estimated breakdown of portfolio value by source: initial principal, contributions, investment returns, and withdrawals.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <ChartContainer config={growthComponentsConfig} className="h-[400px] w-full">
+                            <BarChart
+                                accessibilityLayer
+                                data={growthComponentsData}
+                                margin={{ top: 20, right: 30, left: 0, bottom: 5 }}
+                                stackOffset="sign"
+                            >
+                                <CartesianGrid vertical={false} />
+                                <XAxis
+                                    dataKey="year"
+                                    tickLine={false}
+                                    tickMargin={10}
+                                    axisLine={false}
+                                />
+                                <YAxis
+                                    tickFormatter={(value) => formatCurrency(value)}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    width={80}
+                                />
+                                <ChartTooltip
+                                    content={
+                                        <ChartTooltipContent
+                                            formatter={(value, name) => (
+                                                <div className="flex items-center justify-between gap-8">
+                                                    <span>{name}</span>
+                                                    <span className="font-mono font-medium">
+                                                        {formatFullCurrency(value as number)}
+                                                    </span>
+                                                </div>
+                                            )}
+                                        />
+                                    }
+                                />
+                                <ChartLegend content={<ChartLegendContent />} />
+                                {activeGrowthComponents.includes("principal") && (
+                                    <Bar
+                                        dataKey="principal"
+                                        stackId="a"
+                                        fill="var(--color-principal)"
+                                        radius={[0, 0, 0, 0]}
+                                    />
+                                )}
+                                {activeGrowthComponents.includes("contributions") && (
+                                    <Bar
+                                        dataKey="contributions"
+                                        stackId="a"
+                                        fill="var(--color-contributions)"
+                                        radius={[0, 0, 0, 0]}
+                                    />
+                                )}
+                                {activeGrowthComponents.includes("returns") && (
+                                    <Bar
+                                        dataKey="returns"
+                                        stackId="a"
+                                        fill="var(--color-returns)"
+                                        radius={[4, 4, 0, 0]}
+                                    />
+                                )}
+                                {activeGrowthComponents.includes("withdrawals") && (
+                                    <Bar
+                                        dataKey="withdrawals"
+                                        stackId="a"
+                                        fill="var(--color-withdrawals)"
+                                        radius={[0, 0, 4, 4]}
+                                    />
+                                )}
+                            </BarChart>
+                        </ChartContainer>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Detailed Data */}
             <Tabs defaultValue="portfolio">
