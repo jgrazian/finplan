@@ -1,6 +1,7 @@
 use crate::profiles::{InflationProfile, ReturnProfile};
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Unique identifier for an Account within a simulation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -542,4 +543,489 @@ pub struct AccountSnapshot {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MonteCarloResult {
     pub iterations: Vec<SimulationResult>,
+}
+
+// ============================================================================
+// Simulation Metadata
+// ============================================================================
+
+/// Metadata entry for any simulation entity
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EntityMetadata {
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Holds human-readable names and descriptions for simulation entities
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SimulationMetadata {
+    pub accounts: HashMap<AccountId, EntityMetadata>,
+    pub assets: HashMap<AssetId, EntityMetadata>,
+    pub cash_flows: HashMap<CashFlowId, EntityMetadata>,
+    pub events: HashMap<EventId, EntityMetadata>,
+    pub spending_targets: HashMap<SpendingTargetId, EntityMetadata>,
+}
+
+impl SimulationMetadata {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get_account_name(&self, id: AccountId) -> Option<&str> {
+        self.accounts.get(&id)?.name.as_deref()
+    }
+
+    pub fn get_asset_name(&self, id: AssetId) -> Option<&str> {
+        self.assets.get(&id)?.name.as_deref()
+    }
+
+    pub fn get_cash_flow_name(&self, id: CashFlowId) -> Option<&str> {
+        self.cash_flows.get(&id)?.name.as_deref()
+    }
+
+    pub fn get_event_name(&self, id: EventId) -> Option<&str> {
+        self.events.get(&id)?.name.as_deref()
+    }
+
+    pub fn get_spending_target_name(&self, id: SpendingTargetId) -> Option<&str> {
+        self.spending_targets.get(&id)?.name.as_deref()
+    }
+}
+
+// ============================================================================
+// Descriptor Structs (for Builder API)
+// ============================================================================
+
+/// Descriptor for creating an account (without ID)
+#[derive(Debug, Clone)]
+pub struct AccountDescriptor {
+    pub account_type: AccountType,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+impl AccountDescriptor {
+    pub fn new(account_type: AccountType) -> Self {
+        Self {
+            account_type,
+            name: None,
+            description: None,
+        }
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+/// Descriptor for creating an asset (without ID)
+#[derive(Debug, Clone)]
+pub struct AssetDescriptor {
+    pub asset_class: AssetClass,
+    pub initial_value: f64,
+    pub return_profile_index: usize,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+impl AssetDescriptor {
+    pub fn new(asset_class: AssetClass, initial_value: f64, return_profile_index: usize) -> Self {
+        Self {
+            asset_class,
+            initial_value,
+            return_profile_index,
+            name: None,
+            description: None,
+        }
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+/// Descriptor for creating a cash flow (without ID)
+#[derive(Debug, Clone)]
+pub struct CashFlowDescriptor {
+    pub amount: f64,
+    pub repeats: RepeatInterval,
+    pub source: CashFlowEndpoint,
+    pub target: CashFlowEndpoint,
+    pub adjust_for_inflation: bool,
+    pub state: CashFlowState,
+    pub limits: Option<CashFlowLimits>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+impl CashFlowDescriptor {
+    pub fn new(
+        amount: f64,
+        repeats: RepeatInterval,
+        source: CashFlowEndpoint,
+        target: CashFlowEndpoint,
+    ) -> Self {
+        Self {
+            amount,
+            repeats,
+            source,
+            target,
+            adjust_for_inflation: false,
+            state: CashFlowState::Pending,
+            limits: None,
+            name: None,
+            description: None,
+        }
+    }
+
+    pub fn adjust_for_inflation(mut self, adjust: bool) -> Self {
+        self.adjust_for_inflation = adjust;
+        self
+    }
+
+    pub fn state(mut self, state: CashFlowState) -> Self {
+        self.state = state;
+        self
+    }
+
+    pub fn limits(mut self, limits: CashFlowLimits) -> Self {
+        self.limits = Some(limits);
+        self
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+/// Descriptor for creating an event (without ID)
+#[derive(Debug, Clone)]
+pub struct EventDescriptor {
+    pub trigger: EventTrigger,
+    pub effects: Vec<EventEffect>,
+    pub once: bool,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+impl EventDescriptor {
+    pub fn new(trigger: EventTrigger, effects: Vec<EventEffect>) -> Self {
+        Self {
+            trigger,
+            effects,
+            once: false,
+            name: None,
+            description: None,
+        }
+    }
+
+    pub fn once(mut self) -> Self {
+        self.once = true;
+        self
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+/// Descriptor for creating a spending target (without ID)
+#[derive(Debug, Clone)]
+pub struct SpendingTargetDescriptor {
+    pub amount: f64,
+    pub repeats: RepeatInterval,
+    pub withdrawal_strategy: WithdrawalStrategy,
+    pub adjust_for_inflation: bool,
+    pub net_amount_mode: bool,
+    pub state: SpendingTargetState,
+    pub name: Option<String>,
+    pub description: Option<String>,
+}
+
+impl SpendingTargetDescriptor {
+    pub fn new(amount: f64, repeats: RepeatInterval) -> Self {
+        Self {
+            amount,
+            repeats,
+            withdrawal_strategy: WithdrawalStrategy::default(),
+            adjust_for_inflation: false,
+            net_amount_mode: false,
+            state: SpendingTargetState::Pending,
+            name: None,
+            description: None,
+        }
+    }
+
+    pub fn withdrawal_strategy(mut self, strategy: WithdrawalStrategy) -> Self {
+        self.withdrawal_strategy = strategy;
+        self
+    }
+
+    pub fn adjust_for_inflation(mut self, adjust: bool) -> Self {
+        self.adjust_for_inflation = adjust;
+        self
+    }
+
+    pub fn net_amount_mode(mut self, net: bool) -> Self {
+        self.net_amount_mode = net;
+        self
+    }
+
+    pub fn state(mut self, state: SpendingTargetState) -> Self {
+        self.state = state;
+        self
+    }
+
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+// ============================================================================
+// Simulation Builder
+// ============================================================================
+
+/// Builder for creating simulations with automatic ID assignment and metadata tracking
+pub struct SimulationBuilder {
+    params: SimulationParameters,
+    metadata: SimulationMetadata,
+    next_account_id: u16,
+    next_asset_id: u16,
+    next_cash_flow_id: u16,
+    next_event_id: u16,
+    next_spending_target_id: u16,
+}
+
+impl Default for SimulationBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SimulationBuilder {
+    pub fn new() -> Self {
+        Self {
+            params: SimulationParameters::default(),
+            metadata: SimulationMetadata::new(),
+            next_account_id: 0,
+            next_asset_id: 0,
+            next_cash_flow_id: 0,
+            next_event_id: 0,
+            next_spending_target_id: 0,
+        }
+    }
+
+    /// Set the simulation start date
+    pub fn start_date(mut self, date: jiff::civil::Date) -> Self {
+        self.params.start_date = Some(date);
+        self
+    }
+
+    /// Set the simulation duration in years
+    pub fn duration_years(mut self, years: usize) -> Self {
+        self.params.duration_years = years;
+        self
+    }
+
+    /// Set the birth date for age-based triggers
+    pub fn birth_date(mut self, date: jiff::civil::Date) -> Self {
+        self.params.birth_date = Some(date);
+        self
+    }
+
+    /// Set the inflation profile
+    pub fn inflation_profile(mut self, profile: InflationProfile) -> Self {
+        self.params.inflation_profile = profile;
+        self
+    }
+
+    /// Add a return profile
+    pub fn add_return_profile(mut self, profile: ReturnProfile) -> Self {
+        self.params.return_profiles.push(profile);
+        self
+    }
+
+    /// Set the tax configuration
+    pub fn tax_config(mut self, config: TaxConfig) -> Self {
+        self.params.tax_config = config;
+        self
+    }
+
+    /// Add an account using a descriptor
+    pub fn add_account(mut self, descriptor: AccountDescriptor) -> (Self, AccountId) {
+        let account_id = AccountId(self.next_account_id);
+        self.next_account_id += 1;
+
+        let account = Account {
+            account_id,
+            account_type: descriptor.account_type,
+            assets: Vec::new(),
+        };
+
+        self.params.accounts.push(account);
+        self.metadata.accounts.insert(
+            account_id,
+            EntityMetadata {
+                name: descriptor.name,
+                description: descriptor.description,
+            },
+        );
+
+        (self, account_id)
+    }
+
+    /// Add an asset to an existing account using a descriptor
+    pub fn add_asset(
+        mut self,
+        account_id: AccountId,
+        descriptor: AssetDescriptor,
+    ) -> (Self, AssetId) {
+        let asset_id = AssetId(self.next_asset_id);
+        self.next_asset_id += 1;
+
+        let asset = Asset {
+            asset_id,
+            asset_class: descriptor.asset_class,
+            initial_value: descriptor.initial_value,
+            return_profile_index: descriptor.return_profile_index,
+        };
+
+        // Find the account and add the asset
+        if let Some(account) = self
+            .params
+            .accounts
+            .iter_mut()
+            .find(|a| a.account_id == account_id)
+        {
+            account.assets.push(asset);
+        }
+
+        self.metadata.assets.insert(
+            asset_id,
+            EntityMetadata {
+                name: descriptor.name,
+                description: descriptor.description,
+            },
+        );
+
+        (self, asset_id)
+    }
+
+    /// Add a cash flow using a descriptor
+    pub fn add_cash_flow(mut self, descriptor: CashFlowDescriptor) -> (Self, CashFlowId) {
+        let cash_flow_id = CashFlowId(self.next_cash_flow_id);
+        self.next_cash_flow_id += 1;
+
+        let cash_flow = CashFlow {
+            cash_flow_id,
+            amount: descriptor.amount,
+            repeats: descriptor.repeats,
+            cash_flow_limits: descriptor.limits,
+            adjust_for_inflation: descriptor.adjust_for_inflation,
+            source: descriptor.source,
+            target: descriptor.target,
+            state: descriptor.state,
+        };
+
+        self.params.cash_flows.push(cash_flow);
+        self.metadata.cash_flows.insert(
+            cash_flow_id,
+            EntityMetadata {
+                name: descriptor.name,
+                description: descriptor.description,
+            },
+        );
+
+        (self, cash_flow_id)
+    }
+
+    /// Add an event using a descriptor
+    pub fn add_event(mut self, descriptor: EventDescriptor) -> (Self, EventId) {
+        let event_id = EventId(self.next_event_id);
+        self.next_event_id += 1;
+
+        let event = Event {
+            event_id,
+            trigger: descriptor.trigger,
+            effects: descriptor.effects,
+            once: descriptor.once,
+        };
+
+        self.params.events.push(event);
+        self.metadata.events.insert(
+            event_id,
+            EntityMetadata {
+                name: descriptor.name,
+                description: descriptor.description,
+            },
+        );
+
+        (self, event_id)
+    }
+
+    /// Add a spending target using a descriptor
+    pub fn add_spending_target(
+        mut self,
+        descriptor: SpendingTargetDescriptor,
+    ) -> (Self, SpendingTargetId) {
+        let spending_target_id = SpendingTargetId(self.next_spending_target_id);
+        self.next_spending_target_id += 1;
+
+        let spending_target = SpendingTarget {
+            spending_target_id,
+            amount: descriptor.amount,
+            repeats: descriptor.repeats,
+            net_amount_mode: descriptor.net_amount_mode,
+            adjust_for_inflation: descriptor.adjust_for_inflation,
+            withdrawal_strategy: descriptor.withdrawal_strategy,
+            exclude_accounts: Vec::new(),
+            state: descriptor.state,
+        };
+
+        self.params.spending_targets.push(spending_target);
+        self.metadata.spending_targets.insert(
+            spending_target_id,
+            EntityMetadata {
+                name: descriptor.name,
+                description: descriptor.description,
+            },
+        );
+
+        (self, spending_target_id)
+    }
+
+    /// Build and return the simulation parameters and metadata
+    pub fn build(self) -> (SimulationParameters, SimulationMetadata) {
+        (self.params, self.metadata)
+    }
 }
