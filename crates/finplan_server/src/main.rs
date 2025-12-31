@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post, put},
 };
-use finplan::models::{AccountId, MonteCarloResult, SimulationParameters};
+use finplan::models::{AccountId, MonteCarloResult, SimulationParameters, SimulationResult};
 use finplan::simulation::monte_carlo_simulate;
 use jiff::civil::Date;
 use rusqlite::Connection;
@@ -393,6 +393,8 @@ async fn get_simulation_run(
 struct AggregatedResult {
     accounts: HashMap<AccountId, Vec<TimePointStats>>,
     total_portfolio: Vec<TimePointStats>,
+    /// Growth components broken down by year (aggregated from transaction logs)
+    growth_components: Vec<YearlyGrowthComponents>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -403,31 +405,136 @@ struct TimePointStats {
     p90: f64,
 }
 
+#[derive(Serialize, Deserialize, Default, Clone)]
+struct YearlyGrowthComponents {
+    year: i32,
+    /// Positive investment returns
+    investment_returns: f64,
+    /// Negative returns (losses and debt interest)
+    losses: f64,
+    /// Cash inflows (income via CashFlow)
+    contributions: f64,
+    /// Cash outflows via CashFlow (expenses, NOT spending targets)
+    cash_flow_expenses: f64,
+    /// Withdrawals via SpendingTarget
+    withdrawals: f64,
+}
+
+/// Calculate the balance of an account at a specific date by replaying transactions
+fn calculate_balance_at_date(result: &SimulationResult, account_id: AccountId, target_date: Date) -> f64 {
+    // Start with initial value
+    let mut balance = result.accounts.iter()
+        .find(|a| a.account_id == account_id)
+        .map(|a| a.starting_balance())
+        .unwrap_or(0.0);
+
+    // Replay cash flows up to target date
+    for cf in &result.cash_flow_history {
+        if cf.account_id == account_id && cf.date <= target_date {
+            balance += cf.amount;
+        }
+    }
+
+    // Replay returns up to target date
+    for ret in &result.return_history {
+        if ret.account_id == account_id && ret.date <= target_date {
+            balance += ret.return_amount;
+        }
+    }
+
+    // Replay transfers up to target date
+    for transfer in &result.transfer_history {
+        if transfer.date <= target_date {
+            if transfer.from_account_id == account_id {
+                balance -= transfer.amount;
+            }
+            if transfer.to_account_id == account_id {
+                balance += transfer.amount;
+            }
+        }
+    }
+
+    // Replay withdrawals up to target date
+    for withdrawal in &result.withdrawal_history {
+        if withdrawal.account_id == account_id && withdrawal.date <= target_date {
+            balance -= withdrawal.gross_amount;
+        }
+    }
+
+    balance
+}
+
 fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
     let mut account_values: HashMap<AccountId, HashMap<Date, Vec<f64>>> = HashMap::new();
     let mut portfolio_values: HashMap<Date, Vec<f64>> = HashMap::new();
+    
+    // Growth components aggregation across all iterations (keyed by year)
+    let mut growth_by_year: HashMap<i32, YearlyGrowthComponents> = HashMap::new();
+    let num_iterations = mc_result.iterations.len() as f64;
 
     for sim_result in mc_result.iterations {
         let mut iteration_portfolio: HashMap<Date, f64> = HashMap::new();
 
-        for history in sim_result.account_histories {
-            for snapshot in history.values(&sim_result.dates) {
+        // Build time series by replaying transactions for each date
+        for account in &sim_result.accounts {
+            for date in &sim_result.dates {
+                // Calculate balance at this date by replaying transactions up to this date
+                let balance = calculate_balance_at_date(&sim_result, account.account_id, *date);
+                
                 // Account aggregation
                 account_values
-                    .entry(history.account_id)
+                    .entry(account.account_id)
                     .or_default()
-                    .entry(snapshot.date)
+                    .entry(*date)
                     .or_default()
-                    .push(snapshot.balance);
+                    .push(balance);
 
                 // Portfolio aggregation (summing up for this iteration)
-                *iteration_portfolio.entry(snapshot.date).or_default() += snapshot.balance;
+                *iteration_portfolio.entry(*date).or_default() += balance;
             }
         }
 
         // Add iteration totals to global portfolio stats
         for (date, total) in iteration_portfolio {
             portfolio_values.entry(date).or_default().push(total);
+        }
+        
+        // Aggregate return history
+        for ret in &sim_result.return_history {
+            let year = ret.date.year() as i32;
+            let entry = growth_by_year.entry(year).or_insert_with(|| YearlyGrowthComponents {
+                year,
+                ..Default::default()
+            });
+            if ret.return_amount >= 0.0 {
+                entry.investment_returns += ret.return_amount / num_iterations;
+            } else {
+                entry.losses += ret.return_amount / num_iterations; // Already negative
+            }
+        }
+        
+        // Aggregate cash flow history
+        for cf in &sim_result.cash_flow_history {
+            let year = cf.date.year() as i32;
+            let entry = growth_by_year.entry(year).or_insert_with(|| YearlyGrowthComponents {
+                year,
+                ..Default::default()
+            });
+            if cf.amount >= 0.0 {
+                entry.contributions += cf.amount / num_iterations;
+            } else {
+                entry.cash_flow_expenses += cf.amount / num_iterations; // Already negative
+            }
+        }
+        
+        // Aggregate withdrawal history
+        for wd in &sim_result.withdrawal_history {
+            let year = wd.date.year() as i32;
+            let entry = growth_by_year.entry(year).or_insert_with(|| YearlyGrowthComponents {
+                year,
+                ..Default::default()
+            });
+            entry.withdrawals -= wd.gross_amount / num_iterations; // Negative (outflow)
         }
     }
 
@@ -464,9 +571,14 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
     for (id, values) in account_values {
         accounts_result.insert(id, process_stats(values));
     }
+    
+    // Sort growth components by year
+    let mut growth_components: Vec<YearlyGrowthComponents> = growth_by_year.into_values().collect();
+    growth_components.sort_by(|a, b| a.year.cmp(&b.year));
 
     AggregatedResult {
         accounts: accounts_result,
         total_portfolio: process_stats(portfolio_values),
+        growth_components,
     }
 }

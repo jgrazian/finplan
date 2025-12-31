@@ -45,9 +45,12 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
         yearly_inflation: state.inflation_rates.clone(),
         dates: state.dates.clone(),
         return_profile_returns: state.return_profile_returns.clone(),
-        triggered_events: state.triggered_events.clone(),
-        account_histories: state.build_account_histories(params),
+        accounts: state.build_account_snapshots(params),
         yearly_taxes: state.yearly_taxes.clone(),
+        event_history: state.event_history.clone(),
+        cash_flow_history: state.cash_flow_history.clone(),
+        return_history: state.return_history.clone(),
+        transfer_history: state.transfer_history.clone(),
         withdrawal_history: state.withdrawal_history.clone(),
     }
 }
@@ -323,24 +326,49 @@ fn apply_cash_flows(state: &mut SimulationState, params: &SimulationParameters) 
             }
         }
 
-        // Apply source (subtract from source account/asset)
-        if let CashFlowEndpoint::Asset {
-            account_id,
-            asset_id,
-        } = cf.source
-            && let Some(balance) = state.asset_balances.get_mut(&(account_id, asset_id))
-        {
-            *balance -= amount;
-        }
+        // Apply the cash flow based on direction
+        match &cf.direction {
+            CashFlowDirection::Income {
+                target_account_id,
+                target_asset_id,
+            } => {
+                if let Some(balance) = state
+                    .asset_balances
+                    .get_mut(&(*target_account_id, *target_asset_id))
+                {
+                    *balance += amount;
+                }
 
-        // Apply target (add to target account/asset)
-        if let CashFlowEndpoint::Asset {
-            account_id,
-            asset_id,
-        } = cf.target
-            && let Some(balance) = state.asset_balances.get_mut(&(account_id, asset_id))
-        {
-            *balance += amount;
+                // Record as contribution (positive amount)
+                state.cash_flow_history.push(CashFlowRecord {
+                    date: state.current_date,
+                    cash_flow_id: cf_id,
+                    account_id: *target_account_id,
+                    asset_id: *target_asset_id,
+                    amount,
+                });
+            }
+
+            CashFlowDirection::Expense {
+                source_account_id,
+                source_asset_id,
+            } => {
+                if let Some(balance) = state
+                    .asset_balances
+                    .get_mut(&(*source_account_id, *source_asset_id))
+                {
+                    *balance -= amount;
+                }
+
+                // Record as expense (negative amount)
+                state.cash_flow_history.push(CashFlowRecord {
+                    date: state.current_date,
+                    cash_flow_id: cf_id,
+                    account_id: *source_account_id,
+                    asset_id: *source_asset_id,
+                    amount: -amount,
+                });
+            }
         }
 
         // Schedule next occurrence
@@ -385,8 +413,11 @@ fn advance_time(state: &mut SimulationState, params: &SimulationParameters) {
 
     // Check event dates
     for event in state.events.values() {
-        // Skip if already triggered and once=true
-        if event.once && state.triggered_events.contains_key(&event.event_id) {
+        // Skip if already triggered and once=true (unless Repeating)
+        if event.once
+            && state.triggered_events.contains_key(&event.event_id)
+            && !matches!(event.trigger, EventTrigger::Repeating { .. })
+        {
             continue;
         }
 
@@ -415,6 +446,13 @@ fn advance_time(state: &mut SimulationState, params: &SimulationParameters) {
         }
     }
 
+    // Check repeating event scheduled dates
+    for date in state.event_next_date.values() {
+        if *date > state.current_date && *date < next_checkpoint {
+            next_checkpoint = *date;
+        }
+    }
+
     // Heartbeat - advance at least monthly
     let heartbeat = state.current_date.saturating_add(1.month());
     if heartbeat < next_checkpoint {
@@ -433,18 +471,33 @@ fn advance_time(state: &mut SimulationState, params: &SimulationParameters) {
                 if asset.return_profile_index < state.return_profile_returns.len()
                     && year_idx < state.return_profile_returns[asset.return_profile_index].len()
                 {
-                    let rate = state.return_profile_returns[asset.return_profile_index][year_idx];
+                    let yearly_rate =
+                        state.return_profile_returns[asset.return_profile_index][year_idx];
+                    let rate = n_day_rate(yearly_rate, days_passed as f64);
                     let key = (account.account_id, asset.asset_id);
                     if let Some(balance) = state.asset_balances.get_mut(&key) {
-                        let new_value = *balance * (1.0 + n_day_rate(rate, days_passed as f64));
+                        let balance_before = *balance;
+                        let return_amount = balance_before * rate;
+                        let new_value = balance_before + return_amount;
                         *balance = new_value;
+
+                        // Record the return transaction (includes negative returns for debt/losses)
+                        if return_amount.abs() > 0.001 {
+                            state.return_history.push(ReturnRecord {
+                                date: next_checkpoint,
+                                account_id: account.account_id,
+                                asset_id: asset.asset_id,
+                                balance_before,
+                                return_rate: rate,
+                                return_amount,
+                            });
+                        }
                     }
                 }
             }
         }
 
-        // Record snapshot
-        state.record_snapshot();
+        // Record date checkpoint
         state.dates.push(next_checkpoint);
     }
 
@@ -517,8 +570,8 @@ mod tests {
         assert_eq!(result.iterations.len(), NUM_ITERATIONS);
 
         // Check that results are different (due to random seed)
-        let first_final = result.iterations[0].account_histories[0].current_balance();
-        let second_final = result.iterations[1].account_histories[0].current_balance();
+        let first_final = result.iterations[0].final_account_balance(AccountId(1));
+        let second_final = result.iterations[1].final_account_balance(AccountId(1));
 
         assert_ne!(first_final, second_final);
     }
@@ -548,10 +601,9 @@ mod tests {
                 repeats: RepeatInterval::Monthly,
                 cash_flow_limits: None,
                 adjust_for_inflation: false,
-                source: CashFlowEndpoint::External,
-                target: CashFlowEndpoint::Asset {
-                    account_id: AccountId(1),
-                    asset_id: AssetId(1),
+                direction: CashFlowDirection::Income {
+                    target_account_id: AccountId(1),
+                    target_asset_id: AssetId(1),
                 },
                 state: CashFlowState::Active,
             }],
@@ -559,7 +611,7 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        dbg!(&result.account_histories[0].current_balance());
+        dbg!(&result.final_account_balance(AccountId(1)));
     }
 
     #[test]
@@ -590,10 +642,9 @@ mod tests {
                     limit_period: LimitPeriod::Yearly,
                 }),
                 adjust_for_inflation: false,
-                source: CashFlowEndpoint::External,
-                target: CashFlowEndpoint::Asset {
-                    account_id: AccountId(1),
-                    asset_id: AssetId(1),
+                direction: CashFlowDirection::Income {
+                    target_account_id: AccountId(1),
+                    target_asset_id: AssetId(1),
                 },
                 state: CashFlowState::Active,
             }],
@@ -610,7 +661,7 @@ mod tests {
         // Total added: 10 * 1000 = 10,000.
         // Final Balance: 10,000 + 10,000 = 20,000.
 
-        let final_balance = result.account_histories[0].current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
         assert_eq!(
             final_balance, 20_000.0,
             "Balance should be capped by yearly limits"
@@ -672,10 +723,9 @@ mod tests {
                 repeats: RepeatInterval::Yearly,
                 cash_flow_limits: None,
                 adjust_for_inflation: true,
-                source: CashFlowEndpoint::External,
-                target: CashFlowEndpoint::Asset {
-                    account_id: AccountId(1),
-                    asset_id: AssetId(1),
+                direction: CashFlowDirection::Income {
+                    target_account_id: AccountId(1),
+                    target_asset_id: AssetId(1),
                 },
                 state: CashFlowState::Active,
             }],
@@ -683,13 +733,12 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        let history = &result.account_histories[0];
 
         // Year 0: 100.0
         // Year 1: 100.0 * 1.10 = 110.0
         // Total: 210.0
 
-        let final_balance = history.current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
         // Floating point comparison
         assert!(
             (final_balance - 210.0).abs() < 1e-6,
@@ -726,10 +775,9 @@ mod tests {
                     limit_period: LimitPeriod::Lifetime,
                 }),
                 adjust_for_inflation: false,
-                source: CashFlowEndpoint::External,
-                target: CashFlowEndpoint::Asset {
-                    account_id: AccountId(1),
-                    asset_id: AssetId(1),
+                direction: CashFlowDirection::Income {
+                    target_account_id: AccountId(1),
+                    target_asset_id: AssetId(1),
                 },
                 state: CashFlowState::Active,
             }],
@@ -737,7 +785,7 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        let final_balance = result.account_histories[0].current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
         assert_eq!(final_balance, 2500.0);
     }
 
@@ -778,10 +826,9 @@ mod tests {
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
-                    source: CashFlowEndpoint::External,
-                    target: CashFlowEndpoint::Asset {
-                        account_id: AccountId(1),
-                        asset_id: AssetId(1),
+                    direction: CashFlowDirection::Income {
+                        target_account_id: AccountId(1),
+                        target_asset_id: AssetId(1),
                     },
                     state: CashFlowState::Active,
                 },
@@ -792,10 +839,9 @@ mod tests {
                     repeats: RepeatInterval::Never, // One time bonus
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
-                    source: CashFlowEndpoint::External,
-                    target: CashFlowEndpoint::Asset {
-                        account_id: AccountId(1),
-                        asset_id: AssetId(1),
+                    direction: CashFlowDirection::Income {
+                        target_account_id: AccountId(1),
+                        target_asset_id: AssetId(1),
                     },
                     state: CashFlowState::Pending,
                 },
@@ -804,7 +850,7 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        let final_balance = result.account_histories[0].current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
 
         // Year 0: +2000 -> Bal 2000
         // Year 1: +2000 -> Bal 4000
@@ -850,10 +896,9 @@ mod tests {
                     limit_period: LimitPeriod::Yearly,
                 }),
                 adjust_for_inflation: false,
-                source: CashFlowEndpoint::External,
-                target: CashFlowEndpoint::Asset {
-                    account_id: AccountId(1),
-                    asset_id: AssetId(1),
+                direction: CashFlowDirection::Income {
+                    target_account_id: AccountId(1),
+                    target_asset_id: AssetId(1),
                 },
                 state: CashFlowState::Pending, // Starts pending, activated by event
             }],
@@ -861,7 +906,6 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        let history = &result.account_histories[0];
 
         // StartSaving triggers at Year 2 (2027-01-01).
         // Year 0 (2025): 0
@@ -871,7 +915,7 @@ mod tests {
         // Year 4 (2029): 5000.
         // Total: 15000.
 
-        let final_balance = history.current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
         assert_eq!(final_balance, 15000.0);
     }
 
@@ -900,10 +944,9 @@ mod tests {
                 repeats: RepeatInterval::Never,
                 cash_flow_limits: None,
                 adjust_for_inflation: false,
-                source: CashFlowEndpoint::External,
-                target: CashFlowEndpoint::Asset {
-                    account_id: AccountId(1),
-                    asset_id: AssetId(1),
+                direction: CashFlowDirection::Income {
+                    target_account_id: AccountId(1),
+                    target_asset_id: AssetId(1),
                 },
                 state: CashFlowState::Active,
             }],
@@ -911,7 +954,7 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        let final_balance = result.account_histories[0].current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
 
         // 1000 invested immediately. 10% return. 1 year.
         // Should be 1100.
@@ -974,10 +1017,9 @@ mod tests {
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
-                    source: CashFlowEndpoint::External,
-                    target: CashFlowEndpoint::Asset {
-                        account_id: AccountId(1),
-                        asset_id: AssetId(1),
+                    direction: CashFlowDirection::Income {
+                        target_account_id: AccountId(1),
+                        target_asset_id: AssetId(1),
                     },
                     state: CashFlowState::Active,
                 },
@@ -988,10 +1030,9 @@ mod tests {
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
-                    source: CashFlowEndpoint::External,
-                    target: CashFlowEndpoint::Asset {
-                        account_id: AccountId(2),
-                        asset_id: AssetId(1),
+                    direction: CashFlowDirection::Income {
+                        target_account_id: AccountId(2),
+                        target_asset_id: AssetId(1),
                     },
                     state: CashFlowState::Pending,
                 },
@@ -1000,8 +1041,6 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        let debt_history = &result.account_histories[0];
-        let savings_history = &result.account_histories[1];
 
         // Debt Account:
         // Year 0: -2000 + 1000 = -1000
@@ -1015,8 +1054,8 @@ mod tests {
         // Year 3: +1000 -> Bal 3000.
         // Year 4: +1000 -> Bal 4000.
 
-        let final_debt = debt_history.current_balance();
-        let final_savings = savings_history.current_balance();
+        let final_debt = result.final_account_balance(AccountId(1));
+        let final_savings = result.final_account_balance(AccountId(2));
 
         assert_eq!(final_debt, 0.0, "Debt should be paid off");
         assert_eq!(
@@ -1062,7 +1101,7 @@ mod tests {
         };
 
         let result = simulate(&params, 42);
-        let final_balance = result.account_histories[0].current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
 
         // Starting: 100,000
         // Yearly withdrawal: 10,000
@@ -1153,9 +1192,9 @@ mod tests {
         // TaxDeferred: 0
         // TaxFree: 50,000 - 40,000 = 10,000
 
-        let taxfree_balance = result.account_histories[0].current_balance();
-        let taxdeferred_balance = result.account_histories[1].current_balance();
-        let taxable_balance = result.account_histories[2].current_balance();
+        let taxfree_balance = result.final_account_balance(AccountId(1));
+        let taxdeferred_balance = result.final_account_balance(AccountId(2));
+        let taxable_balance = result.final_account_balance(AccountId(3));
 
         assert!(
             taxable_balance.abs() < 1.0,
@@ -1223,14 +1262,14 @@ mod tests {
         let result = simulate(&params, 42);
 
         // Illiquid account should be untouched
-        let illiquid_balance = result.account_histories[0].current_balance();
+        let illiquid_balance = result.final_account_balance(AccountId(1));
         assert_eq!(
             illiquid_balance, 500_000.0,
             "Illiquid account should be untouched"
         );
 
         // Taxable should have withdrawals
-        let taxable_balance = result.account_histories[1].current_balance();
+        let taxable_balance = result.final_account_balance(AccountId(2));
         assert!(
             (taxable_balance - 10_000.0).abs() < 1.0,
             "Taxable should have 10,000 left after 2 years of 20k withdrawals, got {}",
@@ -1277,10 +1316,9 @@ mod tests {
                 repeats: RepeatInterval::Yearly,
                 cash_flow_limits: None,
                 adjust_for_inflation: false,
-                source: CashFlowEndpoint::External,
-                target: CashFlowEndpoint::Asset {
-                    account_id: AccountId(1),
-                    asset_id: AssetId(1),
+                direction: CashFlowDirection::Income {
+                    target_account_id: AccountId(1),
+                    target_asset_id: AssetId(1),
                 },
                 state: CashFlowState::Active,
             }],
@@ -1310,11 +1348,11 @@ mod tests {
         // Withdrawals: 5 * 40k = 200k
         // Final: 550k - 200k = 350k
 
-        let final_balance = result.account_histories[0].current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
 
         // Verify retirement event was triggered
         assert!(
-            result.triggered_events.contains_key(&EventId(1)),
+            result.event_was_triggered(EventId(1)),
             "Retirement event should have triggered"
         );
 
@@ -1368,10 +1406,9 @@ mod tests {
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
-                    source: CashFlowEndpoint::External,
-                    target: CashFlowEndpoint::Asset {
-                        account_id: AccountId(1),
-                        asset_id: AssetId(1),
+                    direction: CashFlowDirection::Income {
+                        target_account_id: AccountId(1),
+                        target_asset_id: AssetId(1),
                     },
                     state: CashFlowState::Pending,
                 },
@@ -1381,10 +1418,9 @@ mod tests {
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
                     adjust_for_inflation: false,
-                    source: CashFlowEndpoint::External,
-                    target: CashFlowEndpoint::Asset {
-                        account_id: AccountId(1),
-                        asset_id: AssetId(1),
+                    direction: CashFlowDirection::Income {
+                        target_account_id: AccountId(1),
+                        target_asset_id: AssetId(1),
                     },
                     state: CashFlowState::Pending,
                 },
@@ -1396,11 +1432,11 @@ mod tests {
 
         // Both events should have triggered
         assert!(
-            result.triggered_events.contains_key(&EventId(1)),
+            result.event_was_triggered(EventId(1)),
             "Primary event should trigger"
         );
         assert!(
-            result.triggered_events.contains_key(&EventId(2)),
+            result.event_was_triggered(EventId(2)),
             "Secondary event should be chained"
         );
 
@@ -1408,7 +1444,172 @@ mod tests {
         // Year 1 (2026): Primary triggers -> Flow1 +1000, Flow2 +500 = 1500
         // Year 2 (2027): Flow1 +1000, Flow2 +500 = 1500
 
-        let final_balance = result.account_histories[0].current_balance();
+        let final_balance = result.final_account_balance(AccountId(1));
         assert_eq!(final_balance, 3000.0, "Should have 3000 from chained flows");
+    }
+
+    #[test]
+    fn test_repeating_event_transfer() {
+        // Test repeating event that transfers $100/month between accounts
+        let params = SimulationParameters {
+            start_date: Some(jiff::civil::date(2025, 1, 1)),
+            duration_years: 1,
+            birth_date: None,
+            inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
+            accounts: vec![
+                Account {
+                    account_id: AccountId(1),
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 10_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                    account_type: AccountType::Taxable,
+                },
+                Account {
+                    account_id: AccountId(2),
+                    assets: vec![Asset {
+                        asset_id: AssetId(2),
+                        initial_value: 0.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                    account_type: AccountType::TaxFree,
+                },
+            ],
+            events: vec![Event {
+                event_id: EventId(1),
+                trigger: EventTrigger::Repeating {
+                    interval: RepeatInterval::Monthly,
+                    start_condition: None, // Start immediately
+                },
+                effects: vec![EventEffect::TransferAsset {
+                    from_account: AccountId(1),
+                    to_account: AccountId(2),
+                    from_asset_id: AssetId(1),
+                    to_asset_id: AssetId(2),
+                    amount: Some(100.0),
+                }],
+                once: false,
+            }],
+            cash_flows: vec![],
+            spending_targets: vec![],
+            ..Default::default()
+        };
+
+        let result = simulate(&params, 42);
+
+        // Should have triggered the repeating event
+        assert!(
+            result.event_was_triggered(EventId(1)),
+            "Repeating event should trigger"
+        );
+
+        // Monthly transfers for 1 year (13 occurrences: Jan 1 start + 12 months)
+        let account1_balance = result.final_account_balance(AccountId(1));
+        let account2_balance = result.final_account_balance(AccountId(2));
+
+        // The exact count depends on simulation timing, but should be ~12-13 transfers
+        assert!(
+            (1200.0..=1400.0).contains(&account2_balance),
+            "Account 2 should have 12-14 transfers worth, got {}",
+            account2_balance
+        );
+        assert_eq!(
+            account1_balance + account2_balance,
+            10_000.0,
+            "Total should still be 10000"
+        );
+
+        // Check transfer history has reasonable count
+        assert!(
+            result.transfer_history.len() >= 12 && result.transfer_history.len() <= 14,
+            "Should have 12-14 transfer records, got {}",
+            result.transfer_history.len()
+        );
+    }
+
+    #[test]
+    fn test_repeating_event_with_start_condition() {
+        // Test repeating event that only starts after age 65
+        let params = SimulationParameters {
+            start_date: Some(jiff::civil::date(2025, 1, 1)),
+            duration_years: 3,
+            birth_date: Some(jiff::civil::date(1960, 6, 15)), // Age 64.5 at start
+            inflation_profile: InflationProfile::None,
+            return_profiles: vec![ReturnProfile::None],
+            accounts: vec![
+                Account {
+                    account_id: AccountId(1),
+                    assets: vec![Asset {
+                        asset_id: AssetId(1),
+                        initial_value: 100_000.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                    account_type: AccountType::TaxDeferred,
+                },
+                Account {
+                    account_id: AccountId(2),
+                    assets: vec![Asset {
+                        asset_id: AssetId(2),
+                        initial_value: 0.0,
+                        return_profile_index: 0,
+                        asset_class: AssetClass::Investable,
+                    }],
+                    account_type: AccountType::TaxFree,
+                },
+            ],
+            events: vec![Event {
+                event_id: EventId(1),
+                trigger: EventTrigger::Repeating {
+                    interval: RepeatInterval::Yearly,
+                    start_condition: Some(Box::new(EventTrigger::Age {
+                        years: 65,
+                        months: None,
+                    })),
+                },
+                effects: vec![EventEffect::TransferAsset {
+                    from_account: AccountId(1),
+                    to_account: AccountId(2),
+                    from_asset_id: AssetId(1),
+                    to_asset_id: AssetId(2),
+                    amount: Some(10_000.0), // Roth conversion
+                }],
+                once: false,
+            }],
+            cash_flows: vec![],
+            spending_targets: vec![],
+            ..Default::default()
+        };
+
+        let result = simulate(&params, 42);
+
+        // Event should trigger (start_condition met mid-2025)
+        assert!(
+            result.event_was_triggered(EventId(1)),
+            "Repeating event should trigger after age 65"
+        );
+
+        // Age 65 is June 2025, then yearly transfers through end of 2027
+        // The exact number depends on when condition is checked
+        let account2_balance = result.final_account_balance(AccountId(2));
+        let account1_balance = result.final_account_balance(AccountId(1));
+
+        // Verify transfers happened
+        assert!(
+            account2_balance >= 20_000.0,
+            "Account 2 should have at least 2 transfers worth (got {})",
+            account2_balance
+        );
+
+        // Verify conservation of value
+        assert_eq!(
+            account1_balance + account2_balance,
+            100_000.0,
+            "Total should still be 100000"
+        );
     }
 }

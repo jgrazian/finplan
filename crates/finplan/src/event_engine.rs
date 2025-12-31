@@ -82,6 +82,12 @@ pub fn evaluate_trigger(trigger: &EventTrigger, state: &SimulationState) -> bool
 
         EventTrigger::Or(triggers) => triggers.iter().any(|t| evaluate_trigger(t, state)),
 
+        EventTrigger::Repeating { .. } => {
+            // Repeating triggers are handled specially in process_events
+            // This should not be called directly for scheduling logic
+            false
+        }
+
         EventTrigger::Manual => false, // Only triggered via TriggerEvent effect
     }
 }
@@ -99,15 +105,6 @@ pub fn apply_effect(
                 state
                     .asset_balances
                     .insert((account.account_id, asset.asset_id), asset.initial_value);
-
-                // Initialize history for new account
-                state
-                    .account_histories
-                    .entry(account.account_id)
-                    .or_default()
-                    .entry(asset.asset_id)
-                    .or_default()
-                    .push(asset.initial_value);
             }
             state.accounts.insert(account.account_id, account.clone());
         }
@@ -260,11 +257,23 @@ pub fn apply_effect(
             let from_balance = state.asset_balances.get(&from_key).copied().unwrap_or(0.0);
             let transfer_amount = amount.unwrap_or(from_balance).min(from_balance);
 
-            if let Some(balance) = state.asset_balances.get_mut(&from_key) {
-                *balance -= transfer_amount;
-            }
+            if transfer_amount > 0.0 {
+                if let Some(balance) = state.asset_balances.get_mut(&from_key) {
+                    *balance -= transfer_amount;
+                }
 
-            *state.asset_balances.entry(to_key).or_insert(0.0) += transfer_amount;
+                *state.asset_balances.entry(to_key).or_insert(0.0) += transfer_amount;
+
+                // Record the transfer transaction
+                state.transfer_history.push(TransferRecord {
+                    date: state.current_date,
+                    from_account_id: *from_account,
+                    from_asset_id: *from_asset_id,
+                    to_account_id: *to_account,
+                    to_asset_id: *to_asset_id,
+                    amount: transfer_amount,
+                });
+            }
         }
 
         // === Event Chaining ===
@@ -285,8 +294,11 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
         .events
         .iter()
         .filter(|(id, event)| {
-            // Skip if already triggered and once=true
-            if event.once && state.triggered_events.contains_key(id) {
+            // Skip if already triggered and once=true (but not for Repeating)
+            if event.once 
+                && state.triggered_events.contains_key(id) 
+                && !matches!(event.trigger, EventTrigger::Repeating { .. })
+            {
                 return false;
             }
             true
@@ -296,9 +308,54 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
 
     // Evaluate each event
     for (event_id, event) in events_to_check {
-        if evaluate_trigger(&event.trigger, state) {
-            // Record trigger
+        let should_trigger = match &event.trigger {
+            EventTrigger::Repeating { interval, start_condition } => {
+                // Check if this repeating event is active
+                let is_active = state.repeating_event_active.get(&event_id).copied().unwrap_or(false);
+                
+                if !is_active {
+                    // Check if start_condition is met (or no condition)
+                    let condition_met = match start_condition {
+                        None => true,
+                        Some(condition) => evaluate_trigger(condition, state),
+                    };
+                    
+                    if condition_met {
+                        // Activate the repeating event and schedule first occurrence
+                        state.repeating_event_active.insert(event_id, true);
+                        state.event_next_date.insert(event_id, state.current_date);
+                        true // Trigger immediately on activation
+                    } else {
+                        false
+                    }
+                } else {
+                    // Check if scheduled for today
+                    if let Some(next_date) = state.event_next_date.get(&event_id) {
+                        if state.current_date >= *next_date {
+                            // Schedule next occurrence
+                            let next = next_date.saturating_add(interval.span());
+                            state.event_next_date.insert(event_id, next);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                }
+            }
+            other => evaluate_trigger(other, state),
+        };
+
+        if should_trigger {
+            // Record trigger for once checks and RelativeToEvent
             state.triggered_events.insert(event_id, state.current_date);
+            
+            // Record to linear event history for replay
+            state.event_history.push(EventRecord {
+                date: state.current_date,
+                event_id,
+            });
 
             triggered.push(event_id);
 
@@ -323,6 +380,13 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                 }
 
                 state.triggered_events.insert(event_id, state.current_date);
+                
+                // Record to linear event history for replay
+                state.event_history.push(EventRecord {
+                    date: state.current_date,
+                    event_id,
+                });
+                
                 triggered.push(event_id);
 
                 for effect in &event.effects {

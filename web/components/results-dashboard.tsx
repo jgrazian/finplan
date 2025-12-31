@@ -245,8 +245,39 @@ export function ResultsDashboard({ result, simulationName, simulationParameters 
             }, 0);
     }, [simulationParameters]);
 
-    // Prepare growth components data (waterfall-style breakdown)
+    // Prepare growth components data using real transaction logs from backend
     const growthComponentsData = React.useMemo(() => {
+        // Use real growth_components from the API if available
+        if (result.growth_components && result.growth_components.length > 0) {
+            // Calculate cumulative totals for stacked display
+            let cumulativeReturns = 0;
+            let cumulativeLosses = 0;
+            let cumulativeContributions = 0;
+            let cumulativeWithdrawals = 0;
+            let cumulativeExpenses = 0;
+
+            // Get initial principal from first year's total
+            const initialPrincipal = result.total_portfolio[0]?.p50 || 0;
+
+            return result.growth_components.map((gc) => {
+                cumulativeReturns += gc.investment_returns;
+                cumulativeLosses += gc.losses; // Already negative
+                cumulativeContributions += gc.contributions;
+                cumulativeWithdrawals += gc.withdrawals; // Already negative
+                cumulativeExpenses += gc.cash_flow_expenses; // Already negative
+
+                return {
+                    year: gc.year.toString(),
+                    principal: initialPrincipal,
+                    contributions: cumulativeContributions,
+                    returns: cumulativeReturns,
+                    // Combine all negative flows
+                    withdrawals: cumulativeLosses + cumulativeWithdrawals + cumulativeExpenses,
+                };
+            });
+        }
+
+        // Fallback to estimation if growth_components not available
         if (portfolioBreakdownData.length === 0) return [];
 
         const initialPrincipal = portfolioBreakdownData[0]
@@ -258,7 +289,6 @@ export function ResultsDashboard({ result, simulationName, simulationParameters 
             const currentTotal = point.Taxable + point.TaxDeferred + point.TaxFree + point.Illiquid + point.Debt;
 
             if (index === 0) {
-                // First year - everything is principal
                 return {
                     year: point.year,
                     principal: Math.max(0, currentTotal),
@@ -270,28 +300,20 @@ export function ResultsDashboard({ result, simulationName, simulationParameters 
 
             const prevPoint = portfolioBreakdownData[index - 1];
             const prevTotal = prevPoint.Taxable + prevPoint.TaxDeferred + prevPoint.TaxFree + prevPoint.Illiquid + prevPoint.Debt;
-
-            // Calculate change from previous year
             const yearChange = currentTotal - prevTotal;
-
-            // Estimate contributions (from cash flows)
             const estContributions = estimatedYearlyContributions;
-
-            // Estimate withdrawals (from spending targets) - shown as negative
             const estWithdrawals = -estimatedYearlyWithdrawals;
-
-            // Returns = change - contributions - withdrawals (what's left over)
             const estReturns = yearChange - estContributions - estWithdrawals;
 
             return {
                 year: point.year,
                 principal: initialPrincipal,
-                contributions: Math.max(0, estContributions * index), // Cumulative contributions
-                returns: estReturns > 0 ? estReturns : 0, // Only positive returns shown here
-                withdrawals: estReturns < 0 ? estReturns : estWithdrawals, // Negative values
+                contributions: Math.max(0, estContributions * index),
+                returns: estReturns > 0 ? estReturns : 0,
+                withdrawals: estReturns < 0 ? estReturns : estWithdrawals,
             };
         });
-    }, [portfolioBreakdownData, estimatedYearlyContributions, estimatedYearlyWithdrawals]);
+    }, [result.growth_components, portfolioBreakdownData, estimatedYearlyContributions, estimatedYearlyWithdrawals, result.total_portfolio]);
 
     // Determine which growth components have data
     const activeGrowthComponents = React.useMemo(() => {
@@ -550,12 +572,12 @@ export function ResultsDashboard({ result, simulationName, simulationParameters 
             )}
 
             {/* Portfolio Growth Components */}
-            {simulationParameters && growthComponentsData.length > 0 && (
+            {growthComponentsData.length > 0 && (
                 <Card>
                     <CardHeader>
                         <CardTitle>Portfolio Growth Components</CardTitle>
                         <CardDescription>
-                            Estimated breakdown of portfolio value by source: initial principal, contributions, investment returns, and withdrawals.
+                            Breakdown of portfolio value by source: initial principal, cumulative contributions, investment returns, and withdrawals.
                         </CardDescription>
                     </CardHeader>
                     <CardContent>

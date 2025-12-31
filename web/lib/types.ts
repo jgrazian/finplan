@@ -200,9 +200,19 @@ export interface TimePointStats {
     p90: number;
 }
 
+export interface YearlyGrowthComponents {
+    year: number;
+    investment_returns: number;
+    losses: number;
+    contributions: number;
+    cash_flow_expenses: number;
+    withdrawals: number;
+}
+
 export interface AggregatedResult {
     accounts: Record<string, TimePointStats[]>;
     total_portfolio: TimePointStats[];
+    growth_components: YearlyGrowthComponents[];
 }
 
 // ============================================================================

@@ -35,6 +35,12 @@ pub struct SimulationState {
     /// All events
     pub events: HashMap<EventId, Event>,
 
+    /// Next scheduled date for repeating events
+    pub event_next_date: HashMap<EventId, jiff::civil::Date>,
+
+    /// Whether repeating events have been activated (start_condition met)
+    pub repeating_event_active: HashMap<EventId, bool>,
+
     /// Birth date for age calculations (from SimulationParameters)
     pub birth_date: Option<jiff::civil::Date>,
 
@@ -58,11 +64,17 @@ pub struct SimulationState {
     /// Yearly tax summaries
     pub yearly_taxes: Vec<TaxSummary>,
 
-    /// Detailed withdrawal history
+    // === Transaction Logs ===
+    /// Record of all CashFlow executions (income deposits, expense withdrawals)
+    pub cash_flow_history: Vec<CashFlowRecord>,
+    /// Record of all investment returns applied to assets
+    pub return_history: Vec<ReturnRecord>,
+    /// Record of all transfers between accounts/assets
+    pub transfer_history: Vec<TransferRecord>,
+    /// Record of all SpendingTarget withdrawals
     pub withdrawal_history: Vec<WithdrawalRecord>,
-
-    /// History of account values over time (for result output)
-    pub account_histories: HashMap<AccountId, HashMap<AssetId, Vec<f64>>>,
+    /// Record of all event triggers in chronological order
+    pub event_history: Vec<EventRecord>,
 
     /// Recorded dates for history
     pub dates: Vec<jiff::civil::Date>,
@@ -122,6 +134,8 @@ impl SimulationState {
             spending_target_next_date: HashMap::new(),
             triggered_events: HashMap::new(),
             events: HashMap::new(),
+            event_next_date: HashMap::new(),
+            repeating_event_active: HashMap::new(),
             birth_date: params.birth_date,
             cash_flow_ytd: HashMap::new(),
             cash_flow_lifetime: HashMap::new(),
@@ -134,8 +148,11 @@ impl SimulationState {
                 ..Default::default()
             },
             yearly_taxes: Vec::new(),
+            cash_flow_history: Vec::new(),
+            return_history: Vec::new(),
+            transfer_history: Vec::new(),
             withdrawal_history: Vec::new(),
-            account_histories: HashMap::new(),
+            event_history: Vec::new(),
             dates: vec![start_date],
         };
 
@@ -145,15 +162,6 @@ impl SimulationState {
                 state
                     .asset_balances
                     .insert((account.account_id, asset.asset_id), asset.initial_value);
-
-                // Initialize history
-                state
-                    .account_histories
-                    .entry(account.account_id)
-                    .or_default()
-                    .entry(asset.asset_id)
-                    .or_default()
-                    .push(asset.initial_value);
             }
             state.accounts.insert(account.account_id, account.clone());
         }
@@ -222,13 +230,13 @@ impl SimulationState {
             .unwrap_or(0.0)
     }
 
-    /// Calculate total income from active external cash flows
+    /// Calculate total income from active income cash flows
     pub fn calculate_total_income(&self) -> f64 {
         self.cash_flows
             .values()
             .filter(|(cf, state)| {
                 *state == CashFlowState::Active
-                    && matches!(cf.source, CashFlowEndpoint::External)
+                    && matches!(cf.direction, CashFlowDirection::Income { .. })
                     && cf.amount > 0.0
             })
             .map(|(cf, _)| cf.annualized_amount())
@@ -316,20 +324,8 @@ impl SimulationState {
         }
     }
 
-    /// Record current balances to history
-    pub fn record_snapshot(&mut self) {
-        for ((account_id, asset_id), balance) in &self.asset_balances {
-            self.account_histories
-                .entry(*account_id)
-                .or_default()
-                .entry(*asset_id)
-                .or_default()
-                .push(*balance);
-        }
-    }
-
-    /// Convert to AccountHistory format for SimulationResult
-    pub fn build_account_histories(&self, params: &SimulationParameters) -> Vec<AccountHistory> {
+    /// Build account snapshots with starting values from SimulationParameters
+    pub fn build_account_snapshots(&self, params: &SimulationParameters) -> Vec<AccountSnapshot> {
         params
             .accounts
             .iter()
@@ -337,24 +333,16 @@ impl SimulationState {
                 let assets = account
                     .assets
                     .iter()
-                    .map(|asset| {
-                        let values = self
-                            .account_histories
-                            .get(&account.account_id)
-                            .and_then(|h| h.get(&asset.asset_id))
-                            .cloned()
-                            .unwrap_or_default();
-
-                        AssetHistory {
-                            asset_id: asset.asset_id,
-                            return_profile_index: asset.return_profile_index,
-                            values,
-                        }
+                    .map(|asset| AssetSnapshot {
+                        asset_id: asset.asset_id,
+                        return_profile_index: asset.return_profile_index,
+                        starting_value: asset.initial_value,
                     })
                     .collect();
 
-                AccountHistory {
+                AccountSnapshot {
                     account_id: account.account_id,
+                    account_type: account.account_type.clone(),
                     assets,
                 }
             })

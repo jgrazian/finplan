@@ -87,15 +87,19 @@ pub enum Timepoint {
     Never,
 }
 
-/// Specifies where money flows from or to
+/// Direction of a CashFlow - either income (money entering) or expense (money leaving)
+/// Internal transfers between assets should use EventEffect::TransferAsset instead
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum CashFlowEndpoint {
-    /// Income from outside the simulation / expenses leaving the simulation
-    External,
-    /// A specific asset within an account
-    Asset {
-        account_id: AccountId,
-        asset_id: AssetId,
+pub enum CashFlowDirection {
+    /// Income: money flows from External into an Asset
+    Income {
+        target_account_id: AccountId,
+        target_asset_id: AssetId,
+    },
+    /// Expense: money flows from an Asset to External
+    Expense {
+        source_account_id: AccountId,
+        source_asset_id: AssetId,
     },
 }
 
@@ -106,10 +110,9 @@ pub struct CashFlow {
     pub repeats: RepeatInterval,
     pub cash_flow_limits: Option<CashFlowLimits>,
     pub adjust_for_inflation: bool,
-    /// Where money comes from (External = income from outside the simulation)
-    pub source: CashFlowEndpoint,
-    /// Where money goes to (External = expense leaving the simulation)
-    pub target: CashFlowEndpoint,
+    /// Direction of money flow (income or expense)
+    /// For internal transfers, use Events with TransferAsset effect
+    pub direction: CashFlowDirection,
     /// Initial state when loaded (runtime state tracked in SimulationState)
     #[serde(default)]
     pub state: CashFlowState,
@@ -129,11 +132,51 @@ impl CashFlow {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct CashFlowEvent {
-    pub cash_flow_id: CashFlowId,
-    pub amount: f64,
+/// Record of a CashFlow execution (income or expense only)
+/// Internal transfers are recorded as TransferRecord instead
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CashFlowRecord {
     pub date: jiff::civil::Date,
+    pub cash_flow_id: CashFlowId,
+    /// The account affected (target for income, source for expense)
+    pub account_id: AccountId,
+    /// The asset affected
+    pub asset_id: AssetId,
+    /// Positive for deposits (income), negative for withdrawals (expenses)
+    pub amount: f64,
+}
+
+/// Record of investment return applied to an asset
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReturnRecord {
+    pub date: jiff::civil::Date,
+    pub account_id: AccountId,
+    pub asset_id: AssetId,
+    /// Balance before return was applied
+    pub balance_before: f64,
+    /// The return rate applied (can be negative for losses/debt interest)
+    pub return_rate: f64,
+    /// The dollar amount of return (balance_before * return_rate)
+    pub return_amount: f64,
+}
+
+/// Record of a transfer between assets (triggered by EventEffect::TransferAsset)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransferRecord {
+    pub date: jiff::civil::Date,
+    pub from_account_id: AccountId,
+    pub from_asset_id: AssetId,
+    pub to_account_id: AccountId,
+    pub to_asset_id: AssetId,
+    /// Amount transferred (always positive)
+    pub amount: f64,
+}
+
+/// Record of an event being triggered
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventRecord {
+    pub date: jiff::civil::Date,
+    pub event_id: EventId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,6 +295,16 @@ pub enum EventTrigger {
 
     /// Any condition can be true
     Or(Vec<EventTrigger>),
+
+    // === Scheduled/Repeating Triggers ===
+    /// Trigger on a repeating schedule (like a cron job)
+    /// Useful for recurring transfers, rebalancing, etc.
+    Repeating {
+        interval: RepeatInterval,
+        /// Optional: only start repeating after this condition is met
+        #[serde(default)]
+        start_condition: Option<Box<EventTrigger>>,
+    },
 
     // === Manual/Simulation Control ===
     /// Never triggers automatically; can only be triggered by TriggerEvent effect
@@ -490,54 +543,146 @@ pub struct SimulationResult {
     pub yearly_inflation: Vec<f64>,
     pub dates: Vec<jiff::civil::Date>,
     pub return_profile_returns: Vec<Vec<f64>>,
-    pub triggered_events: std::collections::HashMap<EventId, jiff::civil::Date>,
-    pub account_histories: Vec<AccountHistory>,
+    /// Starting state of all accounts (replay from transaction logs to get future values)
+    pub accounts: Vec<AccountSnapshot>,
     /// Tax summaries per year
     pub yearly_taxes: Vec<TaxSummary>,
-    /// Detailed record of all withdrawals
+    
+    // === Transaction Logs ===
+    /// Record of all event triggers in chronological order (for replay)
+    pub event_history: Vec<EventRecord>,
+    /// Record of all CashFlow executions (income deposits, expense withdrawals)
+    pub cash_flow_history: Vec<CashFlowRecord>,
+    /// Record of all investment returns applied to assets
+    pub return_history: Vec<ReturnRecord>,
+    /// Record of all transfers between accounts/assets
+    pub transfer_history: Vec<TransferRecord>,
+    /// Record of all SpendingTarget withdrawals
     pub withdrawal_history: Vec<WithdrawalRecord>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AccountHistory {
-    pub account_id: AccountId,
-    pub assets: Vec<AssetHistory>,
-}
-
-impl AccountHistory {
-    pub fn values(&self, dates: &[jiff::civil::Date]) -> Vec<AccountSnapshot> {
-        dates
-            .iter()
-            .enumerate()
-            .map(|(i, date)| {
-                let balance = self.assets.iter().map(|a| a.values[i]).sum();
-                AccountSnapshot {
-                    date: *date,
-                    balance,
-                }
-            })
-            .collect()
-    }
-
-    pub fn current_balance(&self) -> f64 {
-        self.assets
-            .iter()
-            .map(|a| a.values.last().copied().unwrap_or(0.0))
-            .sum()
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AssetHistory {
-    pub asset_id: AssetId,
-    pub return_profile_index: usize,
-    pub values: Vec<f64>,
-}
-
+/// Snapshot of an account's starting state
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountSnapshot {
-    pub date: jiff::civil::Date,
-    pub balance: f64,
+    pub account_id: AccountId,
+    pub account_type: AccountType,
+    pub assets: Vec<AssetSnapshot>,
+}
+
+impl AccountSnapshot {
+    /// Get starting balance (sum of all asset initial values)
+    pub fn starting_balance(&self) -> f64 {
+        self.assets.iter().map(|a| a.starting_value).sum()
+    }
+}
+
+/// Snapshot of an asset's starting state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetSnapshot {
+    pub asset_id: AssetId,
+    pub return_profile_index: usize,
+    pub starting_value: f64,
+}
+
+impl SimulationResult {
+    /// Calculate the final balance for a specific account by replaying transaction logs
+    pub fn final_account_balance(&self, account_id: AccountId) -> f64 {
+        // Start with initial values
+        let account = self.accounts.iter().find(|a| a.account_id == account_id);
+        let mut balance: f64 = account
+            .map(|a| a.starting_balance())
+            .unwrap_or(0.0);
+
+        // Add cash flows (income positive, expenses negative via amount field)
+        for cf in &self.cash_flow_history {
+            if cf.account_id == account_id {
+                balance += cf.amount;
+            }
+        }
+
+        // Add returns
+        for ret in &self.return_history {
+            if ret.account_id == account_id {
+                balance += ret.return_amount;
+            }
+        }
+
+        // Apply transfers (subtract outgoing, add incoming)
+        for transfer in &self.transfer_history {
+            if transfer.from_account_id == account_id {
+                balance -= transfer.amount;
+            }
+            if transfer.to_account_id == account_id {
+                balance += transfer.amount;
+            }
+        }
+
+        // Subtract spending target withdrawals
+        for withdrawal in &self.withdrawal_history {
+            if withdrawal.account_id == account_id {
+                balance -= withdrawal.gross_amount;
+            }
+        }
+
+        balance
+    }
+
+    /// Calculate the final balance for a specific asset by replaying transaction logs
+    pub fn final_asset_balance(&self, account_id: AccountId, asset_id: AssetId) -> f64 {
+        // Start with initial value
+        let initial = self.accounts.iter()
+            .find(|a| a.account_id == account_id)
+            .and_then(|a| a.assets.iter().find(|asset| asset.asset_id == asset_id))
+            .map(|a| a.starting_value)
+            .unwrap_or(0.0);
+
+        let mut balance = initial;
+
+        // Add cash flows
+        for cf in &self.cash_flow_history {
+            if cf.account_id == account_id && cf.asset_id == asset_id {
+                balance += cf.amount;
+            }
+        }
+
+        // Add returns
+        for ret in &self.return_history {
+            if ret.account_id == account_id && ret.asset_id == asset_id {
+                balance += ret.return_amount;
+            }
+        }
+
+        // Apply transfers
+        for transfer in &self.transfer_history {
+            if transfer.from_account_id == account_id && transfer.from_asset_id == asset_id {
+                balance -= transfer.amount;
+            }
+            if transfer.to_account_id == account_id && transfer.to_asset_id == asset_id {
+                balance += transfer.amount;
+            }
+        }
+
+        // Subtract spending target withdrawals
+        for withdrawal in &self.withdrawal_history {
+            if withdrawal.account_id == account_id && withdrawal.asset_id == asset_id {
+                balance -= withdrawal.gross_amount;
+            }
+        }
+
+        balance
+    }
+
+    /// Check if an event was triggered at any point
+    pub fn event_was_triggered(&self, event_id: EventId) -> bool {
+        self.event_history.iter().any(|e| e.event_id == event_id)
+    }
+
+    /// Get the date when an event was first triggered
+    pub fn event_trigger_date(&self, event_id: EventId) -> Option<jiff::civil::Date> {
+        self.event_history.iter()
+            .find(|e| e.event_id == event_id)
+            .map(|e| e.date)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -661,8 +806,7 @@ impl AssetDescriptor {
 pub struct CashFlowDescriptor {
     pub amount: f64,
     pub repeats: RepeatInterval,
-    pub source: CashFlowEndpoint,
-    pub target: CashFlowEndpoint,
+    pub direction: CashFlowDirection,
     pub adjust_for_inflation: bool,
     pub state: CashFlowState,
     pub limits: Option<CashFlowLimits>,
@@ -671,23 +815,51 @@ pub struct CashFlowDescriptor {
 }
 
 impl CashFlowDescriptor {
-    pub fn new(
-        amount: f64,
-        repeats: RepeatInterval,
-        source: CashFlowEndpoint,
-        target: CashFlowEndpoint,
-    ) -> Self {
+    pub fn new(amount: f64, repeats: RepeatInterval, direction: CashFlowDirection) -> Self {
         Self {
             amount,
             repeats,
-            source,
-            target,
+            direction,
             adjust_for_inflation: false,
             state: CashFlowState::Pending,
             limits: None,
             name: None,
             description: None,
         }
+    }
+
+    /// Create an income CashFlow (External → Asset)
+    pub fn income(
+        amount: f64,
+        repeats: RepeatInterval,
+        target_account_id: AccountId,
+        target_asset_id: AssetId,
+    ) -> Self {
+        Self::new(
+            amount,
+            repeats,
+            CashFlowDirection::Income {
+                target_account_id,
+                target_asset_id,
+            },
+        )
+    }
+
+    /// Create an expense CashFlow (Asset → External)
+    pub fn expense(
+        amount: f64,
+        repeats: RepeatInterval,
+        source_account_id: AccountId,
+        source_asset_id: AssetId,
+    ) -> Self {
+        Self::new(
+            amount,
+            repeats,
+            CashFlowDirection::Expense {
+                source_account_id,
+                source_asset_id,
+            },
+        )
     }
 
     pub fn adjust_for_inflation(mut self, adjust: bool) -> Self {
@@ -952,8 +1124,7 @@ impl SimulationBuilder {
             repeats: descriptor.repeats,
             cash_flow_limits: descriptor.limits,
             adjust_for_inflation: descriptor.adjust_for_inflation,
-            source: descriptor.source,
-            target: descriptor.target,
+            direction: descriptor.direction,
             state: descriptor.state,
         };
 
