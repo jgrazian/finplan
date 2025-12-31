@@ -935,8 +935,9 @@ function CashFlowsStep({ parameters, updateParameters }: StepProps) {
             amount: 0,
             repeats: "Monthly",
             adjust_for_inflation: true,
-            source: type === "income" ? "External" : { Asset: { account_id: 1, asset_id: 100 } },
-            target: type === "income" ? { Asset: { account_id: 1, asset_id: 100 } } : "External",
+            direction: type === "income"
+                ? { Income: { target_account_id: 1, target_asset_id: 100 } }
+                : { Expense: { source_account_id: 1, source_asset_id: 100 } },
             state: "Active",
         };
         const updated = [...cashFlows, newCashFlow];
@@ -956,7 +957,7 @@ function CashFlowsStep({ parameters, updateParameters }: StepProps) {
         updateParameters("cash_flows", updated);
     };
 
-    const isIncome = (cf: CashFlow) => cf.source === "External";
+    const isIncome = (cf: CashFlow) => "Income" in cf.direction;
 
     const REPEAT_OPTIONS: { value: RepeatInterval; label: string }[] = [
         { value: "Never", label: "One-time" },
@@ -1063,8 +1064,8 @@ function CashFlowsStep({ parameters, updateParameters }: StepProps) {
                                         <Label>Deposit to Account</Label>
                                         <Select
                                             value={
-                                                typeof cf.target === "object" && "Asset" in cf.target
-                                                    ? cf.target.Asset.account_id.toString()
+                                                "Income" in cf.direction
+                                                    ? cf.direction.Income.target_account_id.toString()
                                                     : "1"
                                             }
                                             onValueChange={(v) => {
@@ -1072,7 +1073,7 @@ function CashFlowsStep({ parameters, updateParameters }: StepProps) {
                                                 const account = parameters.accounts.find((a) => a.account_id === accountId);
                                                 if (account) {
                                                     updateCashFlow(index, {
-                                                        target: { Asset: { account_id: accountId, asset_id: account.assets[0]?.asset_id || 100 } },
+                                                        direction: { Income: { target_account_id: accountId, target_asset_id: account.assets[0]?.asset_id || 100 } },
                                                     });
                                                 }
                                             }}
@@ -1290,14 +1291,14 @@ function ReviewStep({
     );
 
     const monthlyIncome = parameters.cash_flows
-        .filter((cf) => cf.source === "External")
+        .filter((cf) => "Income" in cf.direction)
         .reduce((sum, cf) => {
             const multiplier = cf.repeats === "Monthly" ? 1 : cf.repeats === "Yearly" ? 1 / 12 : cf.repeats === "Weekly" ? 4.33 : cf.repeats === "BiWeekly" ? 2.17 : 0;
             return sum + cf.amount * multiplier;
         }, 0);
 
     const monthlyExpenses = parameters.cash_flows
-        .filter((cf) => cf.target === "External")
+        .filter((cf) => "Expense" in cf.direction)
         .reduce((sum, cf) => {
             const multiplier = cf.repeats === "Monthly" ? 1 : cf.repeats === "Yearly" ? 1 / 12 : cf.repeats === "Weekly" ? 4.33 : cf.repeats === "BiWeekly" ? 2.17 : 0;
             return sum + cf.amount * multiplier;

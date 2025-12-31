@@ -358,7 +358,7 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                             >
                                                 <div>
                                                     <p className="font-medium">
-                                                        {cf.source === "External" ? "💰 Income" : "💸 Expense"} #{cf.cash_flow_id}
+                                                        {"Income" in cf.direction ? "💰 Income" : "💸 Expense"} #{cf.cash_flow_id}
                                                     </p>
                                                     <Badge variant="outline" className="text-xs">
                                                         {cf.repeats}
@@ -395,38 +395,19 @@ export function SimulationDetail({ simulationId }: SimulationDetailProps) {
                                 </div>
                                 <div>
                                     <p className="text-sm font-medium mb-2">Return Profiles</p>
-                                    {simulation.parameters.named_return_profiles && simulation.parameters.named_return_profiles.length > 0 ? (
-                                        <div className="space-y-2">
-                                            {simulation.parameters.named_return_profiles.map((profile, idx) => (
-                                                <div key={idx} className="flex justify-between items-center text-sm">
-                                                    <span className="text-muted-foreground">{profile.name}</span>
-                                                    <Badge variant="outline" className="font-mono text-xs">
-                                                        {profile.profile === "None"
-                                                            ? "None"
-                                                            : typeof profile.profile === "object" && "Fixed" in profile.profile
-                                                                ? `${(profile.profile.Fixed * 100).toFixed(1)}%`
-                                                                : typeof profile.profile === "object" && "Normal" in profile.profile
-                                                                    ? `μ=${(profile.profile.Normal.mean * 100).toFixed(1)}%`
-                                                                    : "Unknown"}
-                                                    </Badge>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <p className="text-sm text-muted-foreground">
-                                            {simulation.parameters.return_profiles.length === 0
+                                    <p className="text-sm text-muted-foreground">
+                                        {simulation.parameters.return_profiles.length === 0
+                                            ? "None"
+                                            : simulation.parameters.return_profiles[0] === "None"
                                                 ? "None"
-                                                : simulation.parameters.return_profiles[0] === "None"
-                                                    ? "None"
+                                                : typeof simulation.parameters.return_profiles[0] === "object" &&
+                                                    "Fixed" in simulation.parameters.return_profiles[0]
+                                                    ? `Fixed ${(simulation.parameters.return_profiles[0].Fixed * 100).toFixed(1)}%`
                                                     : typeof simulation.parameters.return_profiles[0] === "object" &&
-                                                        "Fixed" in simulation.parameters.return_profiles[0]
-                                                        ? `Fixed ${(simulation.parameters.return_profiles[0].Fixed * 100).toFixed(1)}%`
-                                                        : typeof simulation.parameters.return_profiles[0] === "object" &&
-                                                            "Normal" in simulation.parameters.return_profiles[0]
-                                                            ? `Normal (μ=${(simulation.parameters.return_profiles[0].Normal.mean * 100).toFixed(1)}%, σ=${(simulation.parameters.return_profiles[0].Normal.std_dev * 100).toFixed(1)}%)`
-                                                            : "Unknown"}
-                                        </p>
-                                    )}
+                                                        "Normal" in simulation.parameters.return_profiles[0]
+                                                        ? `Normal (μ=${(simulation.parameters.return_profiles[0].Normal.mean * 100).toFixed(1)}%, σ=${(simulation.parameters.return_profiles[0].Normal.std_dev * 100).toFixed(1)}%)`
+                                                        : "Unknown"}
+                                    </p>
                                 </div>
                             </CardContent>
                         </Card>

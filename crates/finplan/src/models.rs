@@ -547,7 +547,7 @@ pub struct SimulationResult {
     pub accounts: Vec<AccountSnapshot>,
     /// Tax summaries per year
     pub yearly_taxes: Vec<TaxSummary>,
-    
+
     // === Transaction Logs ===
     /// Record of all event triggers in chronological order (for replay)
     pub event_history: Vec<EventRecord>,
@@ -589,9 +589,7 @@ impl SimulationResult {
     pub fn final_account_balance(&self, account_id: AccountId) -> f64 {
         // Start with initial values
         let account = self.accounts.iter().find(|a| a.account_id == account_id);
-        let mut balance: f64 = account
-            .map(|a| a.starting_balance())
-            .unwrap_or(0.0);
+        let mut balance: f64 = account.map(|a| a.starting_balance()).unwrap_or(0.0);
 
         // Add cash flows (income positive, expenses negative via amount field)
         for cf in &self.cash_flow_history {
@@ -630,7 +628,9 @@ impl SimulationResult {
     /// Calculate the final balance for a specific asset by replaying transaction logs
     pub fn final_asset_balance(&self, account_id: AccountId, asset_id: AssetId) -> f64 {
         // Start with initial value
-        let initial = self.accounts.iter()
+        let initial = self
+            .accounts
+            .iter()
             .find(|a| a.account_id == account_id)
             .and_then(|a| a.assets.iter().find(|asset| asset.asset_id == asset_id))
             .map(|a| a.starting_value)
@@ -679,7 +679,8 @@ impl SimulationResult {
 
     /// Get the date when an event was first triggered
     pub fn event_trigger_date(&self, event_id: EventId) -> Option<jiff::civil::Date> {
-        self.event_history.iter()
+        self.event_history
+            .iter()
             .find(|e| e.event_id == event_id)
             .map(|e| e.date)
     }

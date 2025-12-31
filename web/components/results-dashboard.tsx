@@ -221,7 +221,7 @@ export function ResultsDashboard({ result, simulationName, simulationParameters 
         if (!simulationParameters) return 0;
 
         return simulationParameters.cash_flows
-            .filter((cf) => cf.source === "External" && cf.state === "Active")
+            .filter((cf) => "Income" in cf.direction && cf.state === "Active")
             .reduce((sum, cf) => {
                 const multiplier =
                     cf.repeats === "Monthly" ? 12 :

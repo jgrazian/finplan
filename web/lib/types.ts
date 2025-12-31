@@ -16,10 +16,11 @@ export type AssetClass = "Investable" | "RealEstate" | "Depreciating" | "Liabili
 
 export interface Asset {
     asset_id: AssetId;
-    name?: string;
     asset_class: AssetClass;
     initial_value: number;
     return_profile_index: number;
+    // Frontend-only: human-readable name for display (ignored by backend)
+    name?: string;
 }
 
 export type AccountType = "Taxable" | "TaxDeferred" | "TaxFree" | "Illiquid";
@@ -36,9 +37,9 @@ export interface Account {
 
 export type RepeatInterval = "Never" | "Weekly" | "BiWeekly" | "Monthly" | "Quarterly" | "Yearly";
 
-export type CashFlowEndpoint =
-    | "External"
-    | { Asset: { account_id: AccountId; asset_id: AssetId } };
+export type CashFlowDirection =
+    | { Income: { target_account_id: AccountId; target_asset_id: AssetId } }
+    | { Expense: { source_account_id: AccountId; source_asset_id: AssetId } };
 
 export type CashFlowState = "Pending" | "Active" | "Paused" | "Terminated";
 
@@ -55,8 +56,7 @@ export interface CashFlow {
     repeats: RepeatInterval;
     cash_flow_limits?: CashFlowLimits;
     adjust_for_inflation: boolean;
-    source: CashFlowEndpoint;
-    target: CashFlowEndpoint;
+    direction: CashFlowDirection;
     state: CashFlowState;
 }
 
@@ -166,6 +166,10 @@ export type ReturnProfile =
 // Named Return Profile
 // ============================================================================
 
+// Note: NamedReturnProfile is a frontend-only concept for UI display purposes.
+// The backend only uses return_profiles array indexed by return_profile_index.
+// When saving, the frontend keeps both in sync - named_return_profiles for UI,
+// return_profiles for the backend simulation engine.
 export interface NamedReturnProfile {
     name: string;
     profile: ReturnProfile;
@@ -181,6 +185,7 @@ export interface SimulationParameters {
     birth_date?: string;
     inflation_profile: InflationProfile;
     return_profiles: ReturnProfile[];
+    // Frontend-only: human-readable names for return profiles (ignored by backend)
     named_return_profiles?: NamedReturnProfile[];
     events: Event[];
     accounts: Account[];
