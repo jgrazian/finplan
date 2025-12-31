@@ -101,16 +101,32 @@ pub enum CashFlowEndpoint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CashFlow {
     pub cash_flow_id: CashFlowId,
+    pub name: Option<String>,
     pub amount: f64,
-    pub start: Timepoint,
-    pub end: Timepoint,
     pub repeats: RepeatInterval,
     pub cash_flow_limits: Option<CashFlowLimits>,
     pub adjust_for_inflation: bool,
-    /// Where money comes from (None = External for backward compatibility)
+    /// Where money comes from (External = income from outside the simulation)
     pub source: CashFlowEndpoint,
-    /// Where money goes to
+    /// Where money goes to (External = expense leaving the simulation)
     pub target: CashFlowEndpoint,
+    /// Initial state when loaded (runtime state tracked in SimulationState)
+    #[serde(default)]
+    pub state: CashFlowState,
+}
+
+impl CashFlow {
+    /// Calculate annualized amount for income calculations
+    pub fn annualized_amount(&self) -> f64 {
+        match self.repeats {
+            RepeatInterval::Never => self.amount,
+            RepeatInterval::Weekly => self.amount * 52.0,
+            RepeatInterval::BiWeekly => self.amount * 26.0,
+            RepeatInterval::Monthly => self.amount * 12.0,
+            RepeatInterval::Quarterly => self.amount * 4.0,
+            RepeatInterval::Yearly => self.amount,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,7 +136,7 @@ pub struct CashFlowEvent {
     pub date: jiff::civil::Date,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LimitPeriod {
     /// Resets every calendar
     Yearly,
@@ -134,26 +150,159 @@ pub struct CashFlowLimits {
     pub limit_period: LimitPeriod,
 }
 
+// ============================================================================
+// Event System - Triggers and Effects
+// ============================================================================
+
+/// Current runtime state of a CashFlow
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum CashFlowState {
+    /// Not yet started (created via config, waiting for activation)
+    #[default]
+    Pending,
+    /// Actively generating cash flow events
+    Active,
+    /// Temporarily paused (can be resumed)
+    Paused,
+    /// Permanently stopped
+    Terminated,
+}
+
+/// Current runtime state of a SpendingTarget
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum SpendingTargetState {
+    /// Not yet started (created via config, waiting for activation)
+    #[default]
+    Pending,
+    /// Actively generating withdrawal events
+    Active,
+    /// Temporarily paused (can be resumed)
+    Paused,
+    /// Permanently stopped
+    Terminated,
+}
+
+/// Time offset relative to another event
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TriggerOffset {
+    Days(i32),
+    Months(i32),
+    Years(i32),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub event_id: EventId,
+    /// Human-readable name for debugging/UI
+    pub name: Option<String>,
     pub trigger: EventTrigger,
+    /// Effects to apply when this event triggers (executed in order)
+    #[serde(default)]
+    pub effects: Vec<EventEffect>,
+    /// If true, this event can only trigger once
+    #[serde(default)]
+    pub once: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventTrigger {
+    // === Time-Based Triggers ===
+    /// Trigger on a specific date
     Date(jiff::civil::Date),
-    TotalAccountBalance {
+
+    /// Trigger at a specific age (requires birth_date in SimulationParameters)
+    Age { years: u8, months: Option<u8> },
+
+    /// Trigger N days/months/years after another event
+    RelativeToEvent {
+        event_id: EventId,
+        offset: TriggerOffset,
+    },
+
+    // === Balance-Based Triggers ===
+    /// Trigger when total account balance crosses threshold
+    AccountBalance {
         account_id: AccountId,
         threshold: f64,
         above: bool, // true = trigger when balance > threshold, false = balance < threshold
     },
+
+    /// Trigger when a specific asset balance crosses threshold
     AssetBalance {
         account_id: AccountId,
         asset_id: AssetId,
         threshold: f64,
         above: bool,
     },
+
+    /// Trigger when total net worth crosses threshold
+    NetWorth { threshold: f64, above: bool },
+
+    /// Trigger when an account is depleted (balance <= 0)
+    AccountDepleted(AccountId),
+
+    // === CashFlow-Based Triggers ===
+    /// Trigger when a cash flow is terminated
+    CashFlowEnded(CashFlowId),
+
+    /// Trigger when total income (from External sources) drops below threshold
+    TotalIncomeBelow(f64),
+
+    // === Compound Triggers ===
+    /// All conditions must be true
+    And(Vec<EventTrigger>),
+
+    /// Any condition can be true
+    Or(Vec<EventTrigger>),
+
+    // === Manual/Simulation Control ===
+    /// Never triggers automatically; can only be triggered by TriggerEvent effect
+    Manual,
+}
+
+/// Actions that can occur when an event triggers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum EventEffect {
+    // === Account Effects ===
+    CreateAccount(Account),
+    DeleteAccount(AccountId),
+
+    // === CashFlow Effects ===
+    CreateCashFlow(Box<CashFlow>),
+    ActivateCashFlow(CashFlowId),
+    PauseCashFlow(CashFlowId),
+    ResumeCashFlow(CashFlowId),
+    TerminateCashFlow(CashFlowId),
+    ModifyCashFlow {
+        cash_flow_id: CashFlowId,
+        new_amount: Option<f64>,
+        new_repeats: Option<RepeatInterval>,
+    },
+
+    // === SpendingTarget Effects ===
+    CreateSpendingTarget(Box<SpendingTarget>),
+    ActivateSpendingTarget(SpendingTargetId),
+    PauseSpendingTarget(SpendingTargetId),
+    ResumeSpendingTarget(SpendingTargetId),
+    TerminateSpendingTarget(SpendingTargetId),
+    ModifySpendingTarget {
+        spending_target_id: SpendingTargetId,
+        new_amount: Option<f64>,
+    },
+
+    // === Asset Effects ===
+    TransferAsset {
+        from_account: AccountId,
+        to_account: AccountId,
+        from_asset_id: AssetId,
+        to_asset_id: AssetId,
+        /// None = transfer entire balance
+        amount: Option<f64>,
+    },
+
+    // === Event Chaining ===
+    /// Trigger another event (for chaining effects)
+    TriggerEvent(EventId),
 }
 
 // ============================================================================
@@ -249,23 +398,27 @@ pub enum WithdrawalStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpendingTarget {
     pub spending_target_id: SpendingTargetId,
+    pub name: Option<String>,
     /// The target amount (gross or net depending on net_amount_mode)
     pub amount: f64,
     /// If true, `amount` is the after-tax target; system will gross up for taxes
     /// If false, `amount` is the pre-tax withdrawal amount
+    #[serde(default)]
     pub net_amount_mode: bool,
-    /// When to start withdrawing
-    pub start: Timepoint,
-    /// When to stop withdrawing
-    pub end: Timepoint,
     /// How often to withdraw
     pub repeats: RepeatInterval,
     /// Whether to adjust the target amount for inflation over time
+    #[serde(default)]
     pub adjust_for_inflation: bool,
     /// Strategy for selecting which accounts to withdraw from
+    #[serde(default)]
     pub withdrawal_strategy: WithdrawalStrategy,
     /// Accounts to exclude from withdrawals (in addition to Illiquid accounts)
+    #[serde(default)]
     pub exclude_accounts: Vec<AccountId>,
+    /// Initial state when loaded (runtime state tracked in SimulationState)
+    #[serde(default)]
+    pub state: SpendingTargetState,
 }
 
 // ============================================================================
@@ -307,17 +460,23 @@ pub struct SimulationParameters {
     pub start_date: Option<jiff::civil::Date>,
     #[serde(default = "default_duration_years")]
     pub duration_years: usize,
+    /// Birth date for age-based triggers
+    pub birth_date: Option<jiff::civil::Date>,
     #[serde(default)]
     pub inflation_profile: InflationProfile,
     #[serde(default)]
     pub return_profiles: Vec<ReturnProfile>,
+    /// Events define triggers and their effects
     #[serde(default)]
     pub events: Vec<Event>,
+    /// Initial accounts (more can be created via events)
     #[serde(default)]
     pub accounts: Vec<Account>,
+    /// Initial cash flows - typically start in Pending state
+    /// Use events to activate them, or set state: Active for immediate
     #[serde(default)]
     pub cash_flows: Vec<CashFlow>,
-    /// Spending targets for retirement withdrawals
+    /// Spending targets for retirement withdrawals (more can be created via events)
     #[serde(default)]
     pub spending_targets: Vec<SpendingTarget>,
     /// Tax configuration (uses US 2024 defaults if not specified)
