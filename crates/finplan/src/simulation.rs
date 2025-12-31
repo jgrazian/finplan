@@ -2,8 +2,9 @@ use crate::event_engine::process_events;
 use crate::models::*;
 use crate::simulation_state::SimulationState;
 use crate::taxes::{calculate_withdrawal_tax, gross_up_for_net_target};
+
 use jiff::ToSpan;
-use rand::RngCore;
+use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
@@ -454,11 +455,26 @@ pub fn monte_carlo_simulate(
     params: &SimulationParameters,
     num_iterations: usize,
 ) -> MonteCarloResult {
-    let iterations = (0..num_iterations)
+    const MAX_BATCH_SIZE: usize = 100;
+    let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
+
+    let iterations = (0..num_batches)
         .into_par_iter()
-        .map_init(rand::rng, |rng, _| {
-            let seed = rng.next_u64();
-            simulate(params, seed)
+        .flat_map(|i| {
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(i as u64);
+
+            let batch_size = if i == num_batches - 1 {
+                num_iterations - i * MAX_BATCH_SIZE
+            } else {
+                MAX_BATCH_SIZE
+            };
+
+            (0..batch_size)
+                .map(|_| {
+                    let seed = rng.next_u64();
+                    simulate(params, seed)
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
 
@@ -469,6 +485,43 @@ pub fn monte_carlo_simulate(
 mod tests {
     use super::*;
     use crate::profiles::*;
+
+    #[test]
+    fn test_monte_carlo_simulation() {
+        let params = SimulationParameters {
+            start_date: None,
+            duration_years: 30,
+            birth_date: None,
+            inflation_profile: InflationProfile::Fixed(0.02),
+            return_profiles: vec![ReturnProfile::Normal {
+                mean: 0.07,
+                std_dev: 0.15,
+            }],
+            events: vec![],
+            accounts: vec![Account {
+                account_id: AccountId(1),
+                assets: vec![Asset {
+                    asset_id: AssetId(1),
+                    initial_value: 10_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                }],
+                account_type: AccountType::Taxable,
+            }],
+            cash_flows: vec![],
+            ..Default::default()
+        };
+
+        const NUM_ITERATIONS: usize = 100;
+        let result = monte_carlo_simulate(&params, NUM_ITERATIONS);
+        assert_eq!(result.iterations.len(), NUM_ITERATIONS);
+
+        // Check that results are different (due to random seed)
+        let first_final = result.iterations[0].account_histories[0].current_balance();
+        let second_final = result.iterations[1].account_histories[0].current_balance();
+
+        assert_ne!(first_final, second_final);
+    }
 
     #[test]
     fn test_simulation_basic() {
@@ -491,7 +544,6 @@ mod tests {
             }],
             cash_flows: vec![CashFlow {
                 cash_flow_id: CashFlowId(1),
-                name: Some("Monthly Contribution".to_string()),
                 amount: 100.0,
                 repeats: RepeatInterval::Monthly,
                 cash_flow_limits: None,
@@ -531,7 +583,6 @@ mod tests {
             }],
             cash_flows: vec![CashFlow {
                 cash_flow_id: CashFlowId(1),
-                name: None,
                 amount: 100.0,
                 repeats: RepeatInterval::Monthly,
                 cash_flow_limits: Some(CashFlowLimits {
@@ -617,7 +668,6 @@ mod tests {
             }],
             cash_flows: vec![CashFlow {
                 cash_flow_id: CashFlowId(1),
-                name: None,
                 amount: 100.0,
                 repeats: RepeatInterval::Yearly,
                 cash_flow_limits: None,
@@ -669,7 +719,6 @@ mod tests {
             }],
             cash_flows: vec![CashFlow {
                 cash_flow_id: CashFlowId(1),
-                name: None,
                 amount: 1000.0,
                 repeats: RepeatInterval::Yearly,
                 cash_flow_limits: Some(CashFlowLimits {
@@ -703,7 +752,6 @@ mod tests {
             return_profiles: vec![ReturnProfile::None],
             events: vec![Event {
                 event_id: EventId(1),
-                name: Some("RichEnough".to_string()),
                 trigger: EventTrigger::AccountBalance {
                     account_id: AccountId(1),
                     threshold: 5000.0,
@@ -726,7 +774,6 @@ mod tests {
                 // Base income: 2000/year - starts active
                 CashFlow {
                     cash_flow_id: CashFlowId(1),
-                    name: Some("Base Income".to_string()),
                     amount: 2000.0,
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
@@ -741,7 +788,6 @@ mod tests {
                 // Bonus starts when RichEnough event triggers - starts pending
                 CashFlow {
                     cash_flow_id: CashFlowId(2),
-                    name: Some("Bonus".to_string()),
                     amount: 10000.0,
                     repeats: RepeatInterval::Never, // One time bonus
                     cash_flow_limits: None,
@@ -781,7 +827,6 @@ mod tests {
             return_profiles: vec![ReturnProfile::None],
             events: vec![Event {
                 event_id: EventId(1),
-                name: Some("StartSaving".to_string()),
                 trigger: EventTrigger::Date(start_date.saturating_add(2.years())),
                 effects: vec![EventEffect::ActivateCashFlow(CashFlowId(1))],
                 once: true,
@@ -798,7 +843,6 @@ mod tests {
             }],
             cash_flows: vec![CashFlow {
                 cash_flow_id: CashFlowId(1),
-                name: None,
                 amount: 1000.0,
                 repeats: RepeatInterval::Monthly,
                 cash_flow_limits: Some(CashFlowLimits {
@@ -852,7 +896,6 @@ mod tests {
             }],
             cash_flows: vec![CashFlow {
                 cash_flow_id: CashFlowId(1),
-                name: None,
                 amount: 1000.0,
                 repeats: RepeatInterval::Never,
                 cash_flow_limits: None,
@@ -890,7 +933,6 @@ mod tests {
             return_profiles: vec![ReturnProfile::None],
             events: vec![Event {
                 event_id: EventId(1),
-                name: Some("DebtPaid".to_string()),
                 trigger: EventTrigger::AccountBalance {
                     account_id: AccountId(1), // Debt account
                     threshold: 0.0,
@@ -928,7 +970,6 @@ mod tests {
                 // Debt payment - starts active
                 CashFlow {
                     cash_flow_id: CashFlowId(1),
-                    name: Some("Debt Payment".to_string()),
                     amount: 1000.0,
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
@@ -943,7 +984,6 @@ mod tests {
                 // Savings - starts pending, activated when debt is paid
                 CashFlow {
                     cash_flow_id: CashFlowId(2),
-                    name: Some("Savings".to_string()),
                     amount: 1000.0,
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
@@ -1008,7 +1048,6 @@ mod tests {
             cash_flows: vec![],
             spending_targets: vec![SpendingTarget {
                 spending_target_id: SpendingTargetId(1),
-                name: Some("Retirement Spending".to_string()),
                 amount: 10_000.0,
                 net_amount_mode: false, // Gross withdrawal
                 repeats: RepeatInterval::Yearly,
@@ -1092,7 +1131,6 @@ mod tests {
             cash_flows: vec![],
             spending_targets: vec![SpendingTarget {
                 spending_target_id: SpendingTargetId(1),
-                name: None,
                 amount: 40_000.0,
                 net_amount_mode: false,
                 repeats: RepeatInterval::Yearly,
@@ -1171,7 +1209,6 @@ mod tests {
             cash_flows: vec![],
             spending_targets: vec![SpendingTarget {
                 spending_target_id: SpendingTargetId(1),
-                name: None,
                 amount: 20_000.0,
                 net_amount_mode: false,
                 repeats: RepeatInterval::Yearly,
@@ -1202,42 +1239,6 @@ mod tests {
     }
 
     #[test]
-    fn test_monte_carlo_simulation() {
-        let params = SimulationParameters {
-            start_date: None,
-            duration_years: 30,
-            birth_date: None,
-            inflation_profile: InflationProfile::Fixed(0.02),
-            return_profiles: vec![ReturnProfile::Normal {
-                mean: 0.07,
-                std_dev: 0.15,
-            }],
-            events: vec![],
-            accounts: vec![Account {
-                account_id: AccountId(1),
-                assets: vec![Asset {
-                    asset_id: AssetId(1),
-                    initial_value: 10_000.0,
-                    return_profile_index: 0,
-                    asset_class: AssetClass::Investable,
-                }],
-                account_type: AccountType::Taxable,
-            }],
-            cash_flows: vec![],
-            ..Default::default()
-        };
-
-        let result = monte_carlo_simulate(&params, 100);
-        assert_eq!(result.iterations.len(), 100);
-
-        // Check that results are different (due to random seed)
-        let first_final = result.iterations[0].account_histories[0].current_balance();
-        let second_final = result.iterations[1].account_histories[0].current_balance();
-
-        assert_ne!(first_final, second_final);
-    }
-
-    #[test]
     fn test_age_based_event() {
         let birth_date = jiff::civil::date(1960, 6, 15);
         let start_date = jiff::civil::date(2025, 1, 1); // Person is 64
@@ -1250,7 +1251,6 @@ mod tests {
             return_profiles: vec![ReturnProfile::None],
             events: vec![Event {
                 event_id: EventId(1),
-                name: Some("Retirement".to_string()),
                 trigger: EventTrigger::Age {
                     years: 65,
                     months: None,
@@ -1273,7 +1273,6 @@ mod tests {
             }],
             cash_flows: vec![CashFlow {
                 cash_flow_id: CashFlowId(1),
-                name: Some("Salary".to_string()),
                 amount: 50_000.0,
                 repeats: RepeatInterval::Yearly,
                 cash_flow_limits: None,
@@ -1287,7 +1286,6 @@ mod tests {
             }],
             spending_targets: vec![SpendingTarget {
                 spending_target_id: SpendingTargetId(1),
-                name: Some("Retirement Spending".to_string()),
                 amount: 40_000.0,
                 net_amount_mode: false,
                 repeats: RepeatInterval::Yearly,
@@ -1339,7 +1337,6 @@ mod tests {
             events: vec![
                 Event {
                     event_id: EventId(1),
-                    name: Some("Primary".to_string()),
                     trigger: EventTrigger::Date(jiff::civil::date(2026, 1, 1)),
                     effects: vec![
                         EventEffect::ActivateCashFlow(CashFlowId(1)),
@@ -1349,7 +1346,6 @@ mod tests {
                 },
                 Event {
                     event_id: EventId(2),
-                    name: Some("Secondary".to_string()),
                     trigger: EventTrigger::Manual, // Only triggered via TriggerEvent
                     effects: vec![EventEffect::ActivateCashFlow(CashFlowId(2))],
                     once: true,
@@ -1368,7 +1364,6 @@ mod tests {
             cash_flows: vec![
                 CashFlow {
                     cash_flow_id: CashFlowId(1),
-                    name: Some("Flow 1".to_string()),
                     amount: 1000.0,
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,
@@ -1382,7 +1377,6 @@ mod tests {
                 },
                 CashFlow {
                     cash_flow_id: CashFlowId(2),
-                    name: Some("Flow 2".to_string()),
                     amount: 500.0,
                     repeats: RepeatInterval::Yearly,
                     cash_flow_limits: None,

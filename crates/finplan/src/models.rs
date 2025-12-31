@@ -101,7 +101,6 @@ pub enum CashFlowEndpoint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CashFlow {
     pub cash_flow_id: CashFlowId,
-    pub name: Option<String>,
     pub amount: f64,
     pub repeats: RepeatInterval,
     pub cash_flow_limits: Option<CashFlowLimits>,
@@ -193,8 +192,6 @@ pub enum TriggerOffset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub event_id: EventId,
-    /// Human-readable name for debugging/UI
-    pub name: Option<String>,
     pub trigger: EventTrigger,
     /// Effects to apply when this event triggers (executed in order)
     #[serde(default)]
@@ -398,7 +395,6 @@ pub enum WithdrawalStrategy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpendingTarget {
     pub spending_target_id: SpendingTargetId,
-    pub name: Option<String>,
     /// The target amount (gross or net depending on net_amount_mode)
     pub amount: f64,
     /// If true, `amount` is the after-tax target; system will gross up for taxes

@@ -276,7 +276,7 @@ pub fn apply_effect(
 
 /// Process all events that should trigger on the current date
 /// Returns list of (EventId, event name) for logging
-pub fn process_events(state: &mut SimulationState) -> Vec<(EventId, String)> {
+pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
     let mut triggered = Vec::new();
     let mut pending_triggers: Vec<EventId> = Vec::new();
 
@@ -300,11 +300,7 @@ pub fn process_events(state: &mut SimulationState) -> Vec<(EventId, String)> {
             // Record trigger
             state.triggered_events.insert(event_id, state.current_date);
 
-            let name = event
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Event {}", event_id.0));
-            triggered.push((event_id, name));
+            triggered.push(event_id);
 
             // Apply effects in order
             for effect in &event.effects {
@@ -327,11 +323,7 @@ pub fn process_events(state: &mut SimulationState) -> Vec<(EventId, String)> {
                 }
 
                 state.triggered_events.insert(event_id, state.current_date);
-                let name = event
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| format!("Event {}", event_id.0));
-                triggered.push((event_id, name));
+                triggered.push(event_id);
 
                 for effect in &event.effects {
                     apply_effect(effect, state, &mut pending_triggers);
