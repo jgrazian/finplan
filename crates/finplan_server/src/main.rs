@@ -1,24 +1,335 @@
 use axum::{
     Json, Router,
-    routing::{get, post},
+    extract::{Path, State},
+    http::StatusCode,
+    routing::{delete, get, post, put},
 };
 use finplan::models::{AccountId, MonteCarloResult, SimulationParameters};
 use finplan::simulation::monte_carlo_simulate;
 use jiff::civil::Date;
-use serde::Serialize;
+use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
+use uuid::Uuid;
+
+// Database connection wrapper
+type DbConn = Arc<Mutex<Connection>>;
+
+fn init_db(conn: &Connection) {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS simulations (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            parameters TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )
+    .expect("Failed to create simulations table");
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS simulation_runs (
+            id TEXT PRIMARY KEY,
+            simulation_id TEXT NOT NULL,
+            result TEXT NOT NULL,
+            iterations INTEGER NOT NULL,
+            ran_at TEXT NOT NULL,
+            FOREIGN KEY (simulation_id) REFERENCES simulations(id) ON DELETE CASCADE
+        )",
+        [],
+    )
+    .expect("Failed to create simulation_runs table");
+}
 
 #[tokio::main]
 async fn main() {
+    let conn = Connection::open("finplan.db").expect("Failed to open database");
+    init_db(&conn);
+    let db: DbConn = Arc::new(Mutex::new(conn));
+
     let app = Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
+        .route("/", get(|| async { "FinPlan API Server" }))
+        // Simulation CRUD
+        .route("/api/simulations", get(list_simulations))
+        .route("/api/simulations", post(create_simulation))
+        .route("/api/simulations/{id}", get(get_simulation))
+        .route("/api/simulations/{id}", put(update_simulation))
+        .route("/api/simulations/{id}", delete(delete_simulation))
+        // Run simulation
+        .route("/api/simulations/{id}/run", post(run_saved_simulation))
         .route("/api/simulate", post(run_simulation))
+        // Simulation runs history
+        .route("/api/simulations/{id}/runs", get(list_simulation_runs))
+        .route("/api/runs/{id}", get(get_simulation_run))
+        .with_state(db)
         .layer(CorsLayer::permissive());
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await.unwrap();
     println!("listening on {}", listener.local_addr().unwrap());
     axum::serve(listener, app).await.unwrap();
+}
+
+// ============================================================================
+// Simulation CRUD Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SavedSimulation {
+    id: String,
+    name: String,
+    description: Option<String>,
+    parameters: SimulationParameters,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SimulationListItem {
+    id: String,
+    name: String,
+    description: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSimulationRequest {
+    name: String,
+    description: Option<String>,
+    parameters: SimulationParameters,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSimulationRequest {
+    name: Option<String>,
+    description: Option<String>,
+    parameters: Option<SimulationParameters>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunSimulationRequest {
+    #[serde(default = "default_iterations")]
+    iterations: usize,
+}
+
+fn default_iterations() -> usize {
+    100
+}
+
+#[derive(Debug, Serialize)]
+struct SimulationRunRecord {
+    id: String,
+    simulation_id: String,
+    iterations: i32,
+    ran_at: String,
+}
+
+// ============================================================================
+// Simulation CRUD Handlers
+// ============================================================================
+
+async fn list_simulations(State(db): State<DbConn>) -> Json<Vec<SimulationListItem>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, created_at, updated_at FROM simulations ORDER BY updated_at DESC")
+        .unwrap();
+
+    let simulations = stmt
+        .query_map([], |row| {
+            Ok(SimulationListItem {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Json(simulations)
+}
+
+async fn create_simulation(
+    State(db): State<DbConn>,
+    Json(req): Json<CreateSimulationRequest>,
+) -> Result<Json<SavedSimulation>, StatusCode> {
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let params_json =
+        serde_json::to_string(&req.parameters).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO simulations (id, name, description, parameters, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![id, req.name, req.description, params_json, now, now],
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SavedSimulation {
+        id,
+        name: req.name,
+        description: req.description,
+        parameters: req.parameters,
+        created_at: now.clone(),
+        updated_at: now,
+    }))
+}
+
+async fn get_simulation(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+) -> Result<Json<SavedSimulation>, StatusCode> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, name, description, parameters, created_at, updated_at FROM simulations WHERE id = ?1")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let simulation = stmt
+        .query_row([&id], |row| {
+            let params_json: String = row.get(3)?;
+            let parameters: SimulationParameters =
+                serde_json::from_str(&params_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
+            Ok(SavedSimulation {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                parameters,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    Ok(Json(simulation))
+}
+
+async fn update_simulation(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateSimulationRequest>,
+) -> Result<Json<SavedSimulation>, StatusCode> {
+    let conn = db.lock().unwrap();
+
+    // Get existing simulation
+    let mut stmt = conn
+        .prepare("SELECT name, description, parameters, created_at FROM simulations WHERE id = ?1")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let (current_name, current_desc, current_params_json, created_at): (
+        String,
+        Option<String>,
+        String,
+        String,
+    ) = stmt
+        .query_row([&id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let name = req.name.unwrap_or(current_name);
+    let description = req.description.or(current_desc);
+    let parameters = if let Some(p) = req.parameters {
+        p
+    } else {
+        serde_json::from_str(&current_params_json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+
+    let params_json = serde_json::to_string(&parameters).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    conn.execute(
+        "UPDATE simulations SET name = ?1, description = ?2, parameters = ?3, updated_at = ?4 WHERE id = ?5",
+        rusqlite::params![name, description, params_json, now, id],
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(SavedSimulation {
+        id,
+        name,
+        description,
+        parameters,
+        created_at,
+        updated_at: now,
+    }))
+}
+
+async fn delete_simulation(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, StatusCode> {
+    let conn = db.lock().unwrap();
+
+    // Delete associated runs first
+    conn.execute(
+        "DELETE FROM simulation_runs WHERE simulation_id = ?1",
+        [&id],
+    )
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let affected = conn
+        .execute("DELETE FROM simulations WHERE id = ?1", [&id])
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if affected == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(StatusCode::NO_CONTENT)
+    }
+}
+
+// ============================================================================
+// Simulation Run Handlers
+// ============================================================================
+
+async fn run_saved_simulation(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+    Json(req): Json<RunSimulationRequest>,
+) -> Result<Json<AggregatedResult>, StatusCode> {
+    // Get the simulation parameters
+    let params = {
+        let conn = db.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT parameters FROM simulations WHERE id = ?1")
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let params_json: String = stmt
+            .query_row([&id], |row| row.get(0))
+            .map_err(|_| StatusCode::NOT_FOUND)?;
+
+        serde_json::from_str::<SimulationParameters>(&params_json)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+
+    let iterations = req.iterations;
+    let result = tokio::task::spawn_blocking(move || monte_carlo_simulate(&params, iterations))
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let aggregated = aggregate_results(result);
+
+    // Save the run
+    let run_id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let result_json =
+        serde_json::to_string(&aggregated).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO simulation_runs (id, simulation_id, result, iterations, ran_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![run_id, id, result_json, iterations as i32, now],
+        )
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
+    Ok(Json(aggregated))
 }
 
 async fn run_simulation(Json(params): Json<SimulationParameters>) -> Json<AggregatedResult> {
@@ -30,13 +341,61 @@ async fn run_simulation(Json(params): Json<SimulationParameters>) -> Json<Aggreg
     Json(aggregated)
 }
 
-#[derive(Serialize)]
+async fn list_simulation_runs(
+    State(db): State<DbConn>,
+    Path(simulation_id): Path<String>,
+) -> Json<Vec<SimulationRunRecord>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT id, simulation_id, iterations, ran_at FROM simulation_runs WHERE simulation_id = ?1 ORDER BY ran_at DESC")
+        .unwrap();
+
+    let runs = stmt
+        .query_map([&simulation_id], |row| {
+            Ok(SimulationRunRecord {
+                id: row.get(0)?,
+                simulation_id: row.get(1)?,
+                iterations: row.get(2)?,
+                ran_at: row.get(3)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Json(runs)
+}
+
+async fn get_simulation_run(
+    State(db): State<DbConn>,
+    Path(id): Path<String>,
+) -> Result<Json<AggregatedResult>, StatusCode> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT result FROM simulation_runs WHERE id = ?1")
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let result_json: String = stmt
+        .query_row([&id], |row| row.get(0))
+        .map_err(|_| StatusCode::NOT_FOUND)?;
+
+    let result: AggregatedResult =
+        serde_json::from_str(&result_json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(result))
+}
+
+// ============================================================================
+// Aggregation Types and Functions
+// ============================================================================
+
+#[derive(Serialize, Deserialize)]
 struct AggregatedResult {
     accounts: HashMap<AccountId, Vec<TimePointStats>>,
     total_portfolio: Vec<TimePointStats>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct TimePointStats {
     date: String,
     p10: f64,

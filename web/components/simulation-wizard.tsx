@@ -1,0 +1,1234 @@
+"use client";
+
+import * as React from "react";
+import { useRouter } from "next/navigation";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Wizard } from "@/components/ui/wizard";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { cn } from "@/lib/utils";
+import { format } from "date-fns";
+import { CalendarIcon, Plus, Trash2, ArrowRight, ArrowLeft, Save } from "lucide-react";
+
+// Format number with commas for display
+const formatMoney = (value: number): string => {
+    return new Intl.NumberFormat("en-US").format(value);
+};
+
+// Parse formatted string back to number
+const parseMoney = (value: string): number => {
+    return parseFloat(value.replace(/,/g, "")) || 0;
+};
+
+// Custom hook for money input formatting
+function useMoneyInput(initialValue: number, onChange: (value: number) => void) {
+    const [displayValue, setDisplayValue] = React.useState(formatMoney(initialValue));
+    const [isFocused, setIsFocused] = React.useState(false);
+
+    React.useEffect(() => {
+        if (!isFocused) {
+            setDisplayValue(formatMoney(initialValue));
+        }
+    }, [initialValue, isFocused]);
+
+    const handleFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+        setIsFocused(true);
+        // Show raw number on focus
+        setDisplayValue(initialValue.toString());
+        // Select all text for easy replacement
+        e.target.select();
+    };
+
+    const handleBlur = () => {
+        setIsFocused(false);
+        const numValue = parseMoney(displayValue);
+        onChange(numValue);
+        setDisplayValue(formatMoney(numValue));
+    };
+
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        setDisplayValue(e.target.value);
+    };
+
+    return {
+        value: displayValue,
+        onChange: handleChange,
+        onFocus: handleFocus,
+        onBlur: handleBlur,
+    };
+}
+
+// MoneyInput component for formatted currency inputs
+function MoneyInput({
+    value,
+    onChange,
+    ...props
+}: {
+    value: number;
+    onChange: (value: number) => void;
+} & Omit<React.ComponentProps<typeof Input>, 'value' | 'onChange' | 'type'>) {
+    const moneyProps = useMoneyInput(value, onChange);
+    return <Input {...props} {...moneyProps} />;
+}
+
+import {
+    SimulationParameters,
+    Account,
+    Asset,
+    CashFlow,
+    Event,
+    SpendingTarget,
+    AccountType,
+    AssetClass,
+    RepeatInterval,
+    InflationProfile,
+    ReturnProfile,
+    WithdrawalStrategy,
+    DEFAULT_SIMULATION_PARAMETERS,
+    DEFAULT_TAX_CONFIG,
+} from "@/lib/types";
+import { createSimulation, updateSimulation } from "@/lib/api";
+
+const WIZARD_STEPS = [
+    { id: "basics", title: "Basics", description: "Name and dates" },
+    { id: "profiles", title: "Profiles", description: "Inflation & returns" },
+    { id: "accounts", title: "Accounts", description: "Financial accounts" },
+    { id: "cashflows", title: "Cash Flows", description: "Income & expenses" },
+    { id: "events", title: "Events", description: "Life events" },
+    { id: "spending", title: "Spending", description: "Retirement spending" },
+    { id: "review", title: "Review", description: "Final review" },
+];
+
+interface SimulationWizardProps {
+    initialData?: {
+        id?: string;
+        name?: string;
+        description?: string;
+        parameters?: SimulationParameters;
+    };
+    onComplete?: (simulation: { id: string }) => void;
+}
+
+export function SimulationWizard({ initialData, onComplete }: SimulationWizardProps) {
+    const router = useRouter();
+    const [currentStep, setCurrentStep] = React.useState(0);
+    const [isSubmitting, setIsSubmitting] = React.useState(false);
+
+    // Form state
+    const [name, setName] = React.useState(initialData?.name || "");
+    const [description, setDescription] = React.useState(initialData?.description || "");
+    const [parameters, setParameters] = React.useState<SimulationParameters>(
+        initialData?.parameters || { ...DEFAULT_SIMULATION_PARAMETERS }
+    );
+
+    const updateParameters = <K extends keyof SimulationParameters>(
+        key: K,
+        value: SimulationParameters[K]
+    ) => {
+        setParameters((prev) => ({ ...prev, [key]: value }));
+    };
+
+    const handleNext = () => {
+        if (currentStep < WIZARD_STEPS.length - 1) {
+            setCurrentStep((prev) => prev + 1);
+        }
+    };
+
+    const handlePrevious = () => {
+        if (currentStep > 0) {
+            setCurrentStep((prev) => prev - 1);
+        }
+    };
+
+    const handleSave = async () => {
+        setIsSubmitting(true);
+        try {
+            let result;
+            if (initialData?.id) {
+                result = await updateSimulation(initialData.id, { name, description, parameters });
+            } else {
+                result = await createSimulation({ name, description, parameters });
+            }
+            onComplete?.(result);
+            router.push(`/simulations/${result.id}`);
+        } catch (error) {
+            console.error("Failed to save simulation:", error);
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
+
+    return (
+        <div className="space-y-8">
+            <Wizard
+                steps={WIZARD_STEPS}
+                currentStep={currentStep}
+                onStepClick={setCurrentStep}
+                allowNavigation
+            />
+
+            <Card>
+                <CardHeader>
+                    <CardTitle>{WIZARD_STEPS[currentStep].title}</CardTitle>
+                    <CardDescription>{WIZARD_STEPS[currentStep].description}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                    {currentStep === 0 && (
+                        <BasicsStep
+                            name={name}
+                            setName={setName}
+                            description={description}
+                            setDescription={setDescription}
+                            parameters={parameters}
+                            updateParameters={updateParameters}
+                        />
+                    )}
+                    {currentStep === 1 && (
+                        <ProfilesStep
+                            parameters={parameters}
+                            updateParameters={updateParameters}
+                        />
+                    )}
+                    {currentStep === 2 && (
+                        <AccountsStep
+                            parameters={parameters}
+                            updateParameters={updateParameters}
+                        />
+                    )}
+                    {currentStep === 3 && (
+                        <CashFlowsStep
+                            parameters={parameters}
+                            updateParameters={updateParameters}
+                        />
+                    )}
+                    {currentStep === 4 && (
+                        <EventsStep
+                            parameters={parameters}
+                            updateParameters={updateParameters}
+                        />
+                    )}
+                    {currentStep === 5 && (
+                        <SpendingStep
+                            parameters={parameters}
+                            updateParameters={updateParameters}
+                        />
+                    )}
+                    {currentStep === 6 && (
+                        <ReviewStep
+                            name={name}
+                            description={description}
+                            parameters={parameters}
+                        />
+                    )}
+                </CardContent>
+            </Card>
+
+            <div className="flex justify-between">
+                <Button
+                    variant="outline"
+                    onClick={handlePrevious}
+                    disabled={currentStep === 0}
+                >
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    Previous
+                </Button>
+                <div className="flex gap-2">
+                    {currentStep === WIZARD_STEPS.length - 1 ? (
+                        <Button onClick={handleSave} disabled={isSubmitting || !name}>
+                            <Save className="mr-2 h-4 w-4" />
+                            {isSubmitting ? "Saving..." : "Save Simulation"}
+                        </Button>
+                    ) : (
+                        <Button onClick={handleNext}>
+                            Next
+                            <ArrowRight className="ml-2 h-4 w-4" />
+                        </Button>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+// ============================================================================
+// Step Components
+// ============================================================================
+
+interface StepProps {
+    parameters: SimulationParameters;
+    updateParameters: <K extends keyof SimulationParameters>(key: K, value: SimulationParameters[K]) => void;
+}
+
+function BasicsStep({
+    name,
+    setName,
+    description,
+    setDescription,
+    parameters,
+    updateParameters,
+}: StepProps & {
+    name: string;
+    setName: (v: string) => void;
+    description: string;
+    setDescription: (v: string) => void;
+}) {
+    const [startDate, setStartDate] = React.useState<Date | undefined>(
+        parameters.start_date ? new Date(parameters.start_date) : undefined
+    );
+    const [birthDate, setBirthDate] = React.useState<Date | undefined>(
+        parameters.birth_date ? new Date(parameters.birth_date) : undefined
+    );
+
+    return (
+        <div className="space-y-6">
+            <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                    <Label htmlFor="name">Simulation Name *</Label>
+                    <Input
+                        id="name"
+                        placeholder="My Retirement Plan"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                    />
+                </div>
+                <div className="space-y-2">
+                    <Label htmlFor="duration">Duration (years)</Label>
+                    <Input
+                        id="duration"
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={parameters.duration_years}
+                        onChange={(e) => updateParameters("duration_years", parseInt(e.target.value) || 30)}
+                    />
+                </div>
+            </div>
+
+            <div className="space-y-2">
+                <Label htmlFor="description">Description</Label>
+                <Textarea
+                    id="description"
+                    placeholder="Describe your financial scenario..."
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={3}
+                />
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                    <Label>Start Date</Label>
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="outline"
+                                className={cn(
+                                    "w-full justify-start text-left font-normal",
+                                    !startDate && "text-muted-foreground"
+                                )}
+                            >
+                                <CalendarIcon className="mr-2 h-4 w-4" />
+                                {startDate ? format(startDate, "PPP") : "Today (default)"}
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0">
+                            <Card>
+                                <CardContent>
+                                    <Calendar
+                                        mode="single"
+                                        selected={startDate}
+                                        onSelect={(date) => {
+                                            setStartDate(date);
+                                            updateParameters("start_date", date ? format(date, "yyyy-MM-dd") : undefined);
+                                        }}
+                                        captionLayout="dropdown"
+                                    />
+                                </CardContent>
+                                <CardFooter>
+                                    <Button
+                                        variant="ghost"
+                                        onClick={() => {
+                                            setStartDate(undefined);
+                                            updateParameters("start_date", undefined);
+                                        }}
+                                    >
+                                        Clear
+                                    </Button>
+                                </CardFooter>
+                            </Card>
+                        </PopoverContent>
+                    </Popover>
+                </div>
+
+                <div className="space-y-2">
+                    <Label>Birth Date (for age-based events)</Label>
+                    <Popover>
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="outline"
+                                className={cn(
+                                    "w-full justify-start text-left font-normal",
+                                    !birthDate && "text-muted-foreground"
+                                )}
+                            >
+                                <CalendarIcon className="mr-2 h-4 w-4" />
+                                {birthDate ? format(birthDate, "PPP") : "Select birth date"}
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0">
+                            <Card>
+                                <CardContent>
+                                    <Calendar
+                                        mode="single"
+                                        selected={birthDate}
+                                        onSelect={(date) => {
+                                            setBirthDate(date);
+                                            updateParameters("birth_date", date ? format(date, "yyyy-MM-dd") : undefined);
+                                        }}
+                                        captionLayout="dropdown"
+                                    />
+                                </CardContent>
+                            </Card>
+                        </PopoverContent>
+                    </Popover>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ProfilesStep({ parameters, updateParameters }: StepProps) {
+    const [inflationType, setInflationType] = React.useState<string>(() => {
+        if (parameters.inflation_profile === "None") return "none";
+        if (typeof parameters.inflation_profile === "object") {
+            if ("Fixed" in parameters.inflation_profile) return "fixed";
+            if ("Normal" in parameters.inflation_profile) return "normal";
+        }
+        return "normal";
+    });
+
+    const [returnType, setReturnType] = React.useState<string>(() => {
+        const profile = parameters.return_profiles[0];
+        if (!profile || profile === "None") return "none";
+        if (typeof profile === "object") {
+            if ("Fixed" in profile) return "fixed";
+            if ("Normal" in profile) return "normal";
+        }
+        return "normal";
+    });
+
+    const getInflationValue = (key: "mean" | "std_dev" | "fixed"): number => {
+        const profile = parameters.inflation_profile;
+        if (key === "fixed" && typeof profile === "object" && "Fixed" in profile) {
+            return Math.round(profile.Fixed * 100 * 10) / 10;
+        }
+        if (typeof profile === "object" && "Normal" in profile) {
+            const value = key === "mean" ? profile.Normal.mean * 100 : profile.Normal.std_dev * 100;
+            return Math.round(value * 10) / 10;
+        }
+        return key === "mean" ? 3.5 : 2.8;
+    };
+
+    const getReturnValue = (key: "mean" | "std_dev" | "fixed"): number => {
+        const profile = parameters.return_profiles[0];
+        if (key === "fixed" && typeof profile === "object" && "Fixed" in profile) {
+            return Math.round(profile.Fixed * 100 * 10) / 10;
+        }
+        if (typeof profile === "object" && "Normal" in profile) {
+            const value = key === "mean" ? profile.Normal.mean * 100 : profile.Normal.std_dev * 100;
+            return Math.round(value * 10) / 10;
+        }
+        return key === "mean" ? 9.6 : 16.5;
+    };
+
+    const updateInflation = (type: string, mean?: number, stdDev?: number, fixed?: number) => {
+        let profile: InflationProfile;
+        if (type === "none") {
+            profile = "None";
+        } else if (type === "fixed") {
+            profile = { Fixed: (fixed ?? 3.5) / 100 };
+        } else {
+            profile = { Normal: { mean: (mean ?? 3.5) / 100, std_dev: (stdDev ?? 2.8) / 100 } };
+        }
+        updateParameters("inflation_profile", profile);
+    };
+
+    const updateReturn = (type: string, mean?: number, stdDev?: number, fixed?: number) => {
+        let profile: ReturnProfile;
+        if (type === "none") {
+            profile = "None";
+        } else if (type === "fixed") {
+            profile = { Fixed: (fixed ?? 9.6) / 100 };
+        } else {
+            profile = { Normal: { mean: (mean ?? 9.6) / 100, std_dev: (stdDev ?? 16.5) / 100 } };
+        }
+        updateParameters("return_profiles", [profile]);
+    };
+
+    return (
+        <div className="space-y-8">
+            {/* Inflation Profile */}
+            <div className="space-y-4">
+                <h3 className="text-lg font-medium">Inflation Profile</h3>
+                <RadioGroup
+                    value={inflationType}
+                    onValueChange={(v) => {
+                        setInflationType(v);
+                        updateInflation(v);
+                    }}
+                    className="grid grid-cols-3 gap-4"
+                >
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="none" id="inflation-none" />
+                        <Label htmlFor="inflation-none">None</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="fixed" id="inflation-fixed" />
+                        <Label htmlFor="inflation-fixed">Fixed Rate</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="normal" id="inflation-normal" />
+                        <Label htmlFor="inflation-normal">Variable (Normal)</Label>
+                    </div>
+                </RadioGroup>
+
+                {inflationType === "fixed" && (
+                    <div className="space-y-2">
+                        <Label>Annual Inflation Rate (%)</Label>
+                        <Input
+                            type="number"
+                            step="0.1"
+                            value={getInflationValue("fixed")}
+                            onChange={(e) => updateInflation("fixed", undefined, undefined, parseFloat(e.target.value))}
+                        />
+                    </div>
+                )}
+
+                {inflationType === "normal" && (
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                            <Label>Mean (%)</Label>
+                            <Input
+                                type="number"
+                                step="0.1"
+                                value={getInflationValue("mean")}
+                                onChange={(e) => updateInflation("normal", parseFloat(e.target.value), getInflationValue("std_dev"))}
+                            />
+                            <p className="text-xs text-muted-foreground">US historical: ~3.5%</p>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Standard Deviation (%)</Label>
+                            <Input
+                                type="number"
+                                step="0.1"
+                                value={getInflationValue("std_dev")}
+                                onChange={(e) => updateInflation("normal", getInflationValue("mean"), parseFloat(e.target.value))}
+                            />
+                            <p className="text-xs text-muted-foreground">US historical: ~2.8%</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* Return Profile */}
+            <div className="space-y-4">
+                <h3 className="text-lg font-medium">Investment Return Profile</h3>
+                <RadioGroup
+                    value={returnType}
+                    onValueChange={(v) => {
+                        setReturnType(v);
+                        updateReturn(v);
+                    }}
+                    className="grid grid-cols-3 gap-4"
+                >
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="none" id="return-none" />
+                        <Label htmlFor="return-none">None</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="fixed" id="return-fixed" />
+                        <Label htmlFor="return-fixed">Fixed Rate</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="normal" id="return-normal" />
+                        <Label htmlFor="return-normal">Variable (Normal)</Label>
+                    </div>
+                </RadioGroup>
+
+                {returnType === "fixed" && (
+                    <div className="space-y-2">
+                        <Label>Annual Return Rate (%)</Label>
+                        <Input
+                            type="number"
+                            step="0.1"
+                            value={getReturnValue("fixed")}
+                            onChange={(e) => updateReturn("fixed", undefined, undefined, parseFloat(e.target.value))}
+                        />
+                    </div>
+                )}
+
+                {returnType === "normal" && (
+                    <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                            <Label>Mean (%)</Label>
+                            <Input
+                                type="number"
+                                step="0.1"
+                                value={getReturnValue("mean")}
+                                onChange={(e) => updateReturn("normal", parseFloat(e.target.value), getReturnValue("std_dev"))}
+                            />
+                            <p className="text-xs text-muted-foreground">S&P 500 historical: ~9.6%</p>
+                        </div>
+                        <div className="space-y-2">
+                            <Label>Standard Deviation (%)</Label>
+                            <Input
+                                type="number"
+                                step="0.1"
+                                value={getReturnValue("std_dev")}
+                                onChange={(e) => updateReturn("normal", getReturnValue("mean"), parseFloat(e.target.value))}
+                            />
+                            <p className="text-xs text-muted-foreground">S&P 500 historical: ~16.5%</p>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function AccountsStep({ parameters, updateParameters }: StepProps) {
+    const [accounts, setAccounts] = React.useState<Account[]>(parameters.accounts || []);
+
+    const addAccount = () => {
+        const newId = accounts.length > 0 ? Math.max(...accounts.map((a) => a.account_id)) + 1 : 1;
+        const newAccount: Account = {
+            account_id: newId,
+            account_type: "Taxable",
+            assets: [
+                {
+                    asset_id: newId * 100,
+                    asset_class: "Investable",
+                    initial_value: 0,
+                    return_profile_index: 0,
+                },
+            ],
+        };
+        const updated = [...accounts, newAccount];
+        setAccounts(updated);
+        updateParameters("accounts", updated);
+    };
+
+    const updateAccount = (index: number, updates: Partial<Account>) => {
+        const updated = accounts.map((acc, i) => (i === index ? { ...acc, ...updates } : acc));
+        setAccounts(updated);
+        updateParameters("accounts", updated);
+    };
+
+    const updateAsset = (accountIndex: number, assetIndex: number, updates: Partial<Asset>) => {
+        const updated = accounts.map((acc, i) => {
+            if (i !== accountIndex) return acc;
+            const newAssets = acc.assets.map((asset, j) =>
+                j === assetIndex ? { ...asset, ...updates } : asset
+            );
+            return { ...acc, assets: newAssets };
+        });
+        setAccounts(updated);
+        updateParameters("accounts", updated);
+    };
+
+    const removeAccount = (index: number) => {
+        const updated = accounts.filter((_, i) => i !== index);
+        setAccounts(updated);
+        updateParameters("accounts", updated);
+    };
+
+    const ACCOUNT_TYPES: { value: AccountType; label: string; description: string }[] = [
+        { value: "Taxable", label: "Taxable", description: "Regular brokerage account" },
+        { value: "TaxDeferred", label: "Tax-Deferred", description: "401(k), Traditional IRA" },
+        { value: "TaxFree", label: "Tax-Free", description: "Roth IRA, Roth 401(k)" },
+        { value: "Illiquid", label: "Illiquid", description: "Real estate, vehicles" },
+    ];
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <p className="text-sm text-muted-foreground">
+                    Add your financial accounts. Each account can hold assets with different values.
+                </p>
+                <Button onClick={addAccount} size="sm">
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Account
+                </Button>
+            </div>
+
+            {accounts.length === 0 ? (
+                <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-center justify-center py-10">
+                        <p className="text-muted-foreground mb-4">No accounts added yet</p>
+                        <Button onClick={addAccount} variant="outline">
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add Your First Account
+                        </Button>
+                    </CardContent>
+                </Card>
+            ) : (
+                <div className="space-y-4">
+                    {accounts.map((account, accountIndex) => (
+                        <Card key={account.account_id}>
+                            <CardHeader className="pb-3">
+                                <div className="flex justify-between items-start">
+                                    <div className="space-y-1">
+                                        <CardTitle className="text-base">Account #{account.account_id}</CardTitle>
+                                    </div>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => removeAccount(accountIndex)}
+                                    >
+                                        <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <div className="space-y-2">
+                                        <Label>Account Type</Label>
+                                        <Select
+                                            value={account.account_type}
+                                            onValueChange={(v) => updateAccount(accountIndex, { account_type: v as AccountType })}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {ACCOUNT_TYPES.map((type) => (
+                                                    <SelectItem key={type.value} value={type.value}>
+                                                        <div>
+                                                            <span>{type.label}</span>
+                                                            <span className="text-xs text-muted-foreground ml-2">
+                                                                ({type.description})
+                                                            </span>
+                                                        </div>
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Initial Value ($)</Label>
+                                        <MoneyInput
+                                            value={account.assets[0]?.initial_value || 0}
+                                            onChange={(value) =>
+                                                updateAsset(accountIndex, 0, {
+                                                    initial_value: value,
+                                                })
+                                            }
+                                        />
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function CashFlowsStep({ parameters, updateParameters }: StepProps) {
+    const [cashFlows, setCashFlows] = React.useState<CashFlow[]>(parameters.cash_flows || []);
+
+    const addCashFlow = (type: "income" | "expense") => {
+        const newId = cashFlows.length > 0 ? Math.max(...cashFlows.map((cf) => cf.cash_flow_id)) + 1 : 1;
+        const newCashFlow: CashFlow = {
+            cash_flow_id: newId,
+            amount: 0,
+            repeats: "Monthly",
+            adjust_for_inflation: true,
+            source: type === "income" ? "External" : { Asset: { account_id: 1, asset_id: 100 } },
+            target: type === "income" ? { Asset: { account_id: 1, asset_id: 100 } } : "External",
+            state: "Active",
+        };
+        const updated = [...cashFlows, newCashFlow];
+        setCashFlows(updated);
+        updateParameters("cash_flows", updated);
+    };
+
+    const updateCashFlow = (index: number, updates: Partial<CashFlow>) => {
+        const updated = cashFlows.map((cf, i) => (i === index ? { ...cf, ...updates } : cf));
+        setCashFlows(updated);
+        updateParameters("cash_flows", updated);
+    };
+
+    const removeCashFlow = (index: number) => {
+        const updated = cashFlows.filter((_, i) => i !== index);
+        setCashFlows(updated);
+        updateParameters("cash_flows", updated);
+    };
+
+    const isIncome = (cf: CashFlow) => cf.source === "External";
+
+    const REPEAT_OPTIONS: { value: RepeatInterval; label: string }[] = [
+        { value: "Never", label: "One-time" },
+        { value: "Weekly", label: "Weekly" },
+        { value: "BiWeekly", label: "Bi-weekly" },
+        { value: "Monthly", label: "Monthly" },
+        { value: "Quarterly", label: "Quarterly" },
+        { value: "Yearly", label: "Yearly" },
+    ];
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <p className="text-sm text-muted-foreground">
+                    Define your income sources and regular expenses.
+                </p>
+                <div className="flex gap-2">
+                    <Button onClick={() => addCashFlow("income")} size="sm" variant="outline">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Income
+                    </Button>
+                    <Button onClick={() => addCashFlow("expense")} size="sm" variant="outline">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Expense
+                    </Button>
+                </div>
+            </div>
+
+            {cashFlows.length === 0 ? (
+                <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-center justify-center py-10">
+                        <p className="text-muted-foreground mb-4">No cash flows defined yet</p>
+                        <div className="flex gap-2">
+                            <Button onClick={() => addCashFlow("income")} variant="outline">
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Income
+                            </Button>
+                            <Button onClick={() => addCashFlow("expense")} variant="outline">
+                                <Plus className="mr-2 h-4 w-4" />
+                                Add Expense
+                            </Button>
+                        </div>
+                    </CardContent>
+                </Card>
+            ) : (
+                <div className="space-y-4">
+                    {cashFlows.map((cf, index) => (
+                        <Card key={cf.cash_flow_id}>
+                            <CardHeader className="pb-3">
+                                <div className="flex justify-between items-start">
+                                    <CardTitle className="text-base">
+                                        {isIncome(cf) ? "💰 Income" : "💸 Expense"} #{cf.cash_flow_id}
+                                    </CardTitle>
+                                    <Button variant="ghost" size="icon" onClick={() => removeCashFlow(index)}>
+                                        <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="grid gap-4 md:grid-cols-3">
+                                    <div className="space-y-2">
+                                        <Label>Amount ($)</Label>
+                                        <MoneyInput
+                                            value={cf.amount}
+                                            onChange={(value) => updateCashFlow(index, { amount: value })}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Frequency</Label>
+                                        <Select
+                                            value={cf.repeats}
+                                            onValueChange={(v) => updateCashFlow(index, { repeats: v as RepeatInterval })}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {REPEAT_OPTIONS.map((opt) => (
+                                                    <SelectItem key={opt.value} value={opt.value}>
+                                                        {opt.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Adjust for Inflation</Label>
+                                        <Select
+                                            value={cf.adjust_for_inflation ? "yes" : "no"}
+                                            onValueChange={(v) => updateCashFlow(index, { adjust_for_inflation: v === "yes" })}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="yes">Yes</SelectItem>
+                                                <SelectItem value="no">No</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                                {isIncome(cf) && parameters.accounts.length > 0 && (
+                                    <div className="space-y-2">
+                                        <Label>Deposit to Account</Label>
+                                        <Select
+                                            value={
+                                                typeof cf.target === "object" && "Asset" in cf.target
+                                                    ? cf.target.Asset.account_id.toString()
+                                                    : "1"
+                                            }
+                                            onValueChange={(v) => {
+                                                const accountId = parseInt(v);
+                                                const account = parameters.accounts.find((a) => a.account_id === accountId);
+                                                if (account) {
+                                                    updateCashFlow(index, {
+                                                        target: { Asset: { account_id: accountId, asset_id: account.assets[0]?.asset_id || 100 } },
+                                                    });
+                                                }
+                                            }}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {parameters.accounts.map((acc) => (
+                                                    <SelectItem key={acc.account_id} value={acc.account_id.toString()}>
+                                                        Account #{acc.account_id} ({acc.account_type})
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function EventsStep({ parameters, updateParameters }: StepProps) {
+    const [events, setEvents] = React.useState<Event[]>(parameters.events || []);
+
+    // Events are complex - for now, show a simplified interface
+    return (
+        <div className="space-y-6">
+            <div className="bg-muted/50 rounded-lg p-6 text-center">
+                <h3 className="text-lg font-medium mb-2">Life Events</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                    Events allow you to model life changes like retirement, Social Security, or major purchases.
+                    This is an advanced feature.
+                </p>
+                <p className="text-sm text-muted-foreground">
+                    Events configured: <strong>{events.length}</strong>
+                </p>
+                <p className="text-xs text-muted-foreground mt-4">
+                    Advanced event configuration coming soon. For now, events can be added via JSON import.
+                </p>
+            </div>
+        </div>
+    );
+}
+
+function SpendingStep({ parameters, updateParameters }: StepProps) {
+    const [targets, setTargets] = React.useState<SpendingTarget[]>(parameters.spending_targets || []);
+
+    const addTarget = () => {
+        const newId = targets.length > 0 ? Math.max(...targets.map((t) => t.spending_target_id)) + 1 : 1;
+        const newTarget: SpendingTarget = {
+            spending_target_id: newId,
+            amount: 0,
+            net_amount_mode: false,
+            repeats: "Monthly",
+            adjust_for_inflation: true,
+            withdrawal_strategy: "TaxOptimized",
+            exclude_accounts: [],
+            state: "Pending",
+        };
+        const updated = [...targets, newTarget];
+        setTargets(updated);
+        updateParameters("spending_targets", updated);
+    };
+
+    const updateTarget = (index: number, updates: Partial<SpendingTarget>) => {
+        const updated = targets.map((t, i) => (i === index ? { ...t, ...updates } : t));
+        setTargets(updated);
+        updateParameters("spending_targets", updated);
+    };
+
+    const removeTarget = (index: number) => {
+        const updated = targets.filter((_, i) => i !== index);
+        setTargets(updated);
+        updateParameters("spending_targets", updated);
+    };
+
+    const STRATEGY_OPTIONS: { value: string; label: string; description: string }[] = [
+        { value: "TaxOptimized", label: "Tax Optimized", description: "Minimize taxes by withdrawing from taxable accounts first" },
+        { value: "ProRata", label: "Pro-Rata", description: "Withdraw proportionally from all accounts" },
+    ];
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center">
+                <p className="text-sm text-muted-foreground">
+                    Define spending targets for retirement. These determine how much you&apos;ll withdraw from accounts.
+                </p>
+                <Button onClick={addTarget} size="sm">
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Spending Target
+                </Button>
+            </div>
+
+            {targets.length === 0 ? (
+                <Card className="border-dashed">
+                    <CardContent className="flex flex-col items-center justify-center py-10">
+                        <p className="text-muted-foreground mb-4">No spending targets defined</p>
+                        <p className="text-xs text-muted-foreground mb-4">
+                            Spending targets are used during retirement to model withdrawals from your accounts.
+                        </p>
+                        <Button onClick={addTarget} variant="outline">
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add Spending Target
+                        </Button>
+                    </CardContent>
+                </Card>
+            ) : (
+                <div className="space-y-4">
+                    {targets.map((target, index) => (
+                        <Card key={target.spending_target_id}>
+                            <CardHeader className="pb-3">
+                                <div className="flex justify-between items-start">
+                                    <CardTitle className="text-base">
+                                        Spending Target #{target.spending_target_id}
+                                    </CardTitle>
+                                    <Button variant="ghost" size="icon" onClick={() => removeTarget(index)}>
+                                        <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="grid gap-4 md:grid-cols-3">
+                                    <div className="space-y-2">
+                                        <Label>Amount ($)</Label>
+                                        <MoneyInput
+                                            value={target.amount}
+                                            onChange={(value) => updateTarget(index, { amount: value })}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Frequency</Label>
+                                        <Select
+                                            value={target.repeats}
+                                            onValueChange={(v) => updateTarget(index, { repeats: v as RepeatInterval })}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="Monthly">Monthly</SelectItem>
+                                                <SelectItem value="Yearly">Yearly</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>Withdrawal Strategy</Label>
+                                        <Select
+                                            value={typeof target.withdrawal_strategy === "string" ? target.withdrawal_strategy : "Sequential"}
+                                            onValueChange={(v) => updateTarget(index, { withdrawal_strategy: v as WithdrawalStrategy })}
+                                        >
+                                            <SelectTrigger>
+                                                <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {STRATEGY_OPTIONS.map((opt) => (
+                                                    <SelectItem key={opt.value} value={opt.value}>
+                                                        {opt.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-4">
+                                    <div className="flex items-center space-x-2">
+                                        <input
+                                            type="checkbox"
+                                            id={`inflation-${target.spending_target_id}`}
+                                            checked={target.adjust_for_inflation}
+                                            onChange={(e) => updateTarget(index, { adjust_for_inflation: e.target.checked })}
+                                            className="rounded border-input"
+                                        />
+                                        <Label htmlFor={`inflation-${target.spending_target_id}`}>Adjust for inflation</Label>
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                        <input
+                                            type="checkbox"
+                                            id={`net-${target.spending_target_id}`}
+                                            checked={target.net_amount_mode}
+                                            onChange={(e) => updateTarget(index, { net_amount_mode: e.target.checked })}
+                                            className="rounded border-input"
+                                        />
+                                        <Label htmlFor={`net-${target.spending_target_id}`}>Net amount (after taxes)</Label>
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function ReviewStep({
+    name,
+    description,
+    parameters,
+}: {
+    name: string;
+    description: string;
+    parameters: SimulationParameters;
+}) {
+    const formatCurrency = (amount: number) =>
+        new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(amount);
+
+    const totalAccountValue = parameters.accounts.reduce(
+        (sum, acc) => sum + acc.assets.reduce((s, a) => s + a.initial_value, 0),
+        0
+    );
+
+    const monthlyIncome = parameters.cash_flows
+        .filter((cf) => cf.source === "External")
+        .reduce((sum, cf) => {
+            const multiplier = cf.repeats === "Monthly" ? 1 : cf.repeats === "Yearly" ? 1 / 12 : cf.repeats === "Weekly" ? 4.33 : cf.repeats === "BiWeekly" ? 2.17 : 0;
+            return sum + cf.amount * multiplier;
+        }, 0);
+
+    const monthlyExpenses = parameters.cash_flows
+        .filter((cf) => cf.target === "External")
+        .reduce((sum, cf) => {
+            const multiplier = cf.repeats === "Monthly" ? 1 : cf.repeats === "Yearly" ? 1 / 12 : cf.repeats === "Weekly" ? 4.33 : cf.repeats === "BiWeekly" ? 2.17 : 0;
+            return sum + cf.amount * multiplier;
+        }, 0);
+
+    return (
+        <div className="space-y-6">
+            {!name && (
+                <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4">
+                    <p className="text-sm text-destructive">Please provide a name for your simulation before saving.</p>
+                </div>
+            )}
+
+            <div className="grid gap-4 md:grid-cols-2">
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Simulation Name</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-2xl font-bold">{name || "Untitled"}</p>
+                        {description && <p className="text-sm text-muted-foreground mt-1">{description}</p>}
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Duration</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-2xl font-bold">{parameters.duration_years} years</p>
+                        <p className="text-sm text-muted-foreground">
+                            {parameters.start_date ? `Starting ${parameters.start_date}` : "Starting today"}
+                        </p>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Total Account Value</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-2xl font-bold">{formatCurrency(totalAccountValue)}</p>
+                        <p className="text-sm text-muted-foreground">
+                            Across {parameters.accounts.length} account{parameters.accounts.length !== 1 ? "s" : ""}
+                        </p>
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm font-medium text-muted-foreground">Monthly Cash Flow</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                        <p className="text-2xl font-bold">
+                            {formatCurrency(monthlyIncome - monthlyExpenses)}
+                            <span className="text-sm font-normal text-muted-foreground">/mo</span>
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                            {formatCurrency(monthlyIncome)} income - {formatCurrency(monthlyExpenses)} expenses
+                        </p>
+                    </CardContent>
+                </Card>
+            </div>
+
+            <Card>
+                <CardHeader>
+                    <CardTitle className="text-sm font-medium">Summary</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <dl className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                            <dt className="text-muted-foreground">Accounts</dt>
+                            <dd>{parameters.accounts.length}</dd>
+                        </div>
+                        <div className="flex justify-between">
+                            <dt className="text-muted-foreground">Cash Flows</dt>
+                            <dd>{parameters.cash_flows.length}</dd>
+                        </div>
+                        <div className="flex justify-between">
+                            <dt className="text-muted-foreground">Events</dt>
+                            <dd>{parameters.events.length}</dd>
+                        </div>
+                        <div className="flex justify-between">
+                            <dt className="text-muted-foreground">Spending Targets</dt>
+                            <dd>{parameters.spending_targets.length}</dd>
+                        </div>
+                        <div className="flex justify-between">
+                            <dt className="text-muted-foreground">Inflation Profile</dt>
+                            <dd>
+                                {parameters.inflation_profile === "None"
+                                    ? "None"
+                                    : typeof parameters.inflation_profile === "object" && "Fixed" in parameters.inflation_profile
+                                        ? `Fixed ${(parameters.inflation_profile.Fixed * 100).toFixed(1)}%`
+                                        : typeof parameters.inflation_profile === "object" && "Normal" in parameters.inflation_profile
+                                            ? `Normal (μ=${(parameters.inflation_profile.Normal.mean * 100).toFixed(1)}%)`
+                                            : "Unknown"}
+                            </dd>
+                        </div>
+                        <div className="flex justify-between">
+                            <dt className="text-muted-foreground">Return Profile</dt>
+                            <dd>
+                                {parameters.return_profiles.length === 0
+                                    ? "None"
+                                    : parameters.return_profiles[0] === "None"
+                                        ? "None"
+                                        : typeof parameters.return_profiles[0] === "object" && "Fixed" in parameters.return_profiles[0]
+                                            ? `Fixed ${(parameters.return_profiles[0].Fixed * 100).toFixed(1)}%`
+                                            : typeof parameters.return_profiles[0] === "object" && "Normal" in parameters.return_profiles[0]
+                                                ? `Normal (μ=${(parameters.return_profiles[0].Normal.mean * 100).toFixed(1)}%)`
+                                                : "Unknown"}
+                            </dd>
+                        </div>
+                    </dl>
+                </CardContent>
+            </Card>
+        </div>
+    );
+}
