@@ -275,7 +275,7 @@ impl OptimizationGoal {
 }
 
 /// Type alias for backward compatibility
-/// 
+///
 /// `SimulationParameters` is the old name for `SimulationConfig`.
 /// New code should use `SimulationConfig` directly.
 pub type SimulationParameters = SimulationConfig;
