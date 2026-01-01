@@ -134,6 +134,20 @@ pub enum EventEffect {
         account_id: AccountId,
         starting_age: u8,
     },
+
+    // === Cash Management Effects ===
+    /// Sweep funds to maintain minimum balance in target account
+    /// Liquidates assets from funding sources (in order) to replenish target
+    SweepToAccount {
+        /// Account to keep funded (e.g., cash/checking account)
+        target_account_id: AccountId,
+        target_asset_id: AssetId,
+        /// Balance to replenish to when triggered
+        target_balance: f64,
+        /// Accounts/assets to liquidate from (in priority order)
+        /// Will sell from first source until exhausted, then move to next
+        funding_sources: Vec<(AccountId, AssetId)>,
+    },
 }
 
 /// An event with a trigger condition and effects

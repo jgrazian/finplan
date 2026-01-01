@@ -5,9 +5,7 @@
 
 use crate::accounts::AccountType;
 use crate::ids::{AccountId, AssetId, EventId};
-use crate::records::{
-    CashFlowRecord, EventRecord, ReturnRecord, RmdRecord, TransferRecord, WithdrawalRecord,
-};
+use crate::records::{Record, RecordKind};
 use crate::tax_config::TaxSummary;
 use serde::{Deserialize, Serialize};
 
@@ -45,18 +43,8 @@ pub struct SimulationResult {
     /// Tax summaries per year
     pub yearly_taxes: Vec<TaxSummary>,
 
-    // === Transaction Logs ===
-    /// Record of all event triggers in chronological order (for replay)
-    pub event_history: Vec<EventRecord>,
-    /// Record of all CashFlow executions (income deposits, expense withdrawals)
-    pub cash_flow_history: Vec<CashFlowRecord>,
-    /// Record of all investment returns applied to assets
-    pub return_history: Vec<ReturnRecord>,
-    /// Record of all transfers between accounts/assets
-    pub transfer_history: Vec<TransferRecord>,
-    /// Record of all SpendingTarget withdrawals
-    pub withdrawal_history: Vec<WithdrawalRecord>,
-    pub rmd_history: Vec<RmdRecord>,
+    /// Unified transaction log in chronological order
+    pub records: Vec<Record>,
 }
 
 impl SimulationResult {
@@ -66,34 +54,59 @@ impl SimulationResult {
         let account = self.accounts.iter().find(|a| a.account_id == account_id);
         let mut balance: f64 = account.map(|a| a.starting_balance()).unwrap_or(0.0);
 
-        // Add cash flows (income positive, expenses negative via amount field)
-        for cf in &self.cash_flow_history {
-            if cf.account_id == account_id {
-                balance += cf.amount;
-            }
-        }
-
-        // Add returns
-        for ret in &self.return_history {
-            if ret.account_id == account_id {
-                balance += ret.return_amount;
-            }
-        }
-
-        // Apply transfers (subtract outgoing, add incoming)
-        for transfer in &self.transfer_history {
-            if transfer.from_account_id == account_id {
-                balance -= transfer.amount;
-            }
-            if transfer.to_account_id == account_id {
-                balance += transfer.amount;
-            }
-        }
-
-        // Subtract spending target withdrawals
-        for withdrawal in &self.withdrawal_history {
-            if withdrawal.account_id == account_id {
-                balance -= withdrawal.gross_amount;
+        for record in &self.records {
+            match &record.kind {
+                RecordKind::CashFlow {
+                    account_id: acc_id,
+                    amount,
+                    ..
+                } if *acc_id == account_id => {
+                    balance += amount;
+                }
+                RecordKind::Return {
+                    account_id: acc_id,
+                    return_amount,
+                    ..
+                } if *acc_id == account_id => {
+                    balance += return_amount;
+                }
+                RecordKind::Transfer {
+                    from_account_id,
+                    to_account_id,
+                    amount,
+                    ..
+                } => {
+                    if *from_account_id == account_id {
+                        balance -= amount;
+                    }
+                    if *to_account_id == account_id {
+                        balance += amount;
+                    }
+                }
+                RecordKind::Withdrawal {
+                    account_id: acc_id,
+                    gross_amount,
+                    ..
+                } if *acc_id == account_id => {
+                    balance -= gross_amount;
+                }
+                RecordKind::Liquidation {
+                    from_account_id,
+                    to_account_id,
+                    gross_amount,
+                    net_amount,
+                    ..
+                } => {
+                    // Source account loses gross amount
+                    if *from_account_id == account_id {
+                        balance -= gross_amount;
+                    }
+                    // Target account gains net amount (after taxes)
+                    if *to_account_id == account_id {
+                        balance += net_amount;
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -113,34 +126,66 @@ impl SimulationResult {
 
         let mut balance = initial;
 
-        // Add cash flows
-        for cf in &self.cash_flow_history {
-            if cf.account_id == account_id && cf.asset_id == asset_id {
-                balance += cf.amount;
-            }
-        }
-
-        // Add returns
-        for ret in &self.return_history {
-            if ret.account_id == account_id && ret.asset_id == asset_id {
-                balance += ret.return_amount;
-            }
-        }
-
-        // Apply transfers
-        for transfer in &self.transfer_history {
-            if transfer.from_account_id == account_id && transfer.from_asset_id == asset_id {
-                balance -= transfer.amount;
-            }
-            if transfer.to_account_id == account_id && transfer.to_asset_id == asset_id {
-                balance += transfer.amount;
-            }
-        }
-
-        // Subtract spending target withdrawals
-        for withdrawal in &self.withdrawal_history {
-            if withdrawal.account_id == account_id && withdrawal.asset_id == asset_id {
-                balance -= withdrawal.gross_amount;
+        for record in &self.records {
+            match &record.kind {
+                RecordKind::CashFlow {
+                    account_id: acc_id,
+                    asset_id: ass_id,
+                    amount,
+                    ..
+                } if *acc_id == account_id && *ass_id == asset_id => {
+                    balance += amount;
+                }
+                RecordKind::Return {
+                    account_id: acc_id,
+                    asset_id: ass_id,
+                    return_amount,
+                    ..
+                } if *acc_id == account_id && *ass_id == asset_id => {
+                    balance += return_amount;
+                }
+                RecordKind::Transfer {
+                    from_account_id,
+                    from_asset_id,
+                    to_account_id,
+                    to_asset_id,
+                    amount,
+                    ..
+                } => {
+                    if *from_account_id == account_id && *from_asset_id == asset_id {
+                        balance -= amount;
+                    }
+                    if *to_account_id == account_id && *to_asset_id == asset_id {
+                        balance += amount;
+                    }
+                }
+                RecordKind::Withdrawal {
+                    account_id: acc_id,
+                    asset_id: ass_id,
+                    gross_amount,
+                    ..
+                } if *acc_id == account_id && *ass_id == asset_id => {
+                    balance -= gross_amount;
+                }
+                RecordKind::Liquidation {
+                    from_account_id,
+                    from_asset_id,
+                    to_account_id,
+                    to_asset_id,
+                    gross_amount,
+                    net_amount,
+                    ..
+                } => {
+                    // Source asset loses gross amount
+                    if *from_account_id == account_id && *from_asset_id == asset_id {
+                        balance -= gross_amount;
+                    }
+                    // Target asset gains net amount (after taxes)
+                    if *to_account_id == account_id && *to_asset_id == asset_id {
+                        balance += net_amount;
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -149,15 +194,72 @@ impl SimulationResult {
 
     /// Check if an event was triggered at any point
     pub fn event_was_triggered(&self, event_id: EventId) -> bool {
-        self.event_history.iter().any(|e| e.event_id == event_id)
+        self.records
+            .iter()
+            .any(|r| matches!(&r.kind, RecordKind::Event { event_id: eid } if *eid == event_id))
     }
 
     /// Get the date when an event was first triggered
     pub fn event_trigger_date(&self, event_id: EventId) -> Option<jiff::civil::Date> {
-        self.event_history
+        self.records.iter().find_map(|r| {
+            if let RecordKind::Event { event_id: eid } = &r.kind
+                && *eid == event_id
+            {
+                return Some(r.date);
+            }
+            None
+        })
+    }
+
+    // === Helper methods to filter records by type ===
+
+    /// Get all cash flow records
+    pub fn cash_flow_records(&self) -> impl Iterator<Item = &Record> {
+        self.records
             .iter()
-            .find(|e| e.event_id == event_id)
-            .map(|e| e.date)
+            .filter(|r| matches!(r.kind, RecordKind::CashFlow { .. }))
+    }
+
+    /// Get all return records
+    pub fn return_records(&self) -> impl Iterator<Item = &Record> {
+        self.records
+            .iter()
+            .filter(|r| matches!(r.kind, RecordKind::Return { .. }))
+    }
+
+    /// Get all transfer records
+    pub fn transfer_records(&self) -> impl Iterator<Item = &Record> {
+        self.records
+            .iter()
+            .filter(|r| matches!(r.kind, RecordKind::Transfer { .. }))
+    }
+
+    /// Get all withdrawal records
+    pub fn withdrawal_records(&self) -> impl Iterator<Item = &Record> {
+        self.records
+            .iter()
+            .filter(|r| matches!(r.kind, RecordKind::Withdrawal { .. }))
+    }
+
+    /// Get all event records
+    pub fn event_records(&self) -> impl Iterator<Item = &Record> {
+        self.records
+            .iter()
+            .filter(|r| matches!(r.kind, RecordKind::Event { .. }))
+    }
+
+    /// Get all RMD records
+    pub fn rmd_records(&self) -> impl Iterator<Item = &Record> {
+        self.records
+            .iter()
+            .filter(|r| matches!(r.kind, RecordKind::Rmd { .. }))
+    }
+
+    /// Get all liquidation records
+    pub fn liquidation_records(&self) -> impl Iterator<Item = &Record> {
+        self.records
+            .iter()
+            .filter(|r| matches!(r.kind, RecordKind::Liquidation { .. }))
     }
 }
 

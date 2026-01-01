@@ -274,30 +274,37 @@ fn test_rmd_withdrawal() {
 
     // Should have RMD withdrawals recorded
     assert!(
-        !result.withdrawal_history.is_empty(),
+        result.withdrawal_records().next().is_some(),
         "Should have RMD withdrawals"
     );
 
     let final_balance = result.final_account_balance(AccountId(1));
 
+    let withdrawal_count = result.withdrawal_records().count();
     println!(
         "After RMDs: Starting balance=$1,000,000, Final balance=${:.2}",
         final_balance
     );
-    println!("RMD withdrawals: {}", result.withdrawal_history.len());
+    println!("RMD withdrawals: {}", withdrawal_count);
 
     // Verify exactly 5 RMD withdrawals (one per year for 5-year simulation)
     assert_eq!(
-        result.withdrawal_history.len(),
+        withdrawal_count,
         5,
         "Should have exactly 5 RMD withdrawals"
     );
 
     // Verify RMDs were taken (total withdrawals should be substantial)
+    use crate::records::RecordKind;
     let total_withdrawn: f64 = result
-        .withdrawal_history
-        .iter()
-        .map(|w| w.gross_amount)
+        .withdrawal_records()
+        .filter_map(|r| {
+            if let RecordKind::Withdrawal { gross_amount, .. } = &r.kind {
+                Some(*gross_amount)
+            } else {
+                None
+            }
+        })
         .sum();
     println!("RMD withdrawal total: {}", total_withdrawn);
     assert!(
@@ -723,7 +730,7 @@ fn test_comprehensive_lifecycle_simulation() {
         result.event_was_triggered(EventId(3)),
         "RMD event should trigger at age 73"
     );
-    let rmd_count = result.rmd_history.len();
+    let rmd_count = result.rmd_records().count();
     println!("RMD records: {}", rmd_count);
     assert!(
         rmd_count >= 5,

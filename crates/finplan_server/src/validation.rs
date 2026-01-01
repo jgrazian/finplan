@@ -1,5 +1,5 @@
 use crate::error::{ApiError, ApiResult};
-use finplan::models::SimulationParameters;
+use finplan::SimulationParameters;
 
 /// Validate portfolio creation request
 pub fn validate_portfolio_name(name: &str) -> ApiResult<()> {

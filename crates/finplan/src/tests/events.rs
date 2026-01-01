@@ -3,9 +3,11 @@
 //! Tests for event triggers, effects, and chaining.
 
 use crate::accounts::{Account, AccountType, Asset, AssetClass};
-use crate::cash_flows::{CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval};
+use crate::cash_flows::{
+    CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
+};
 use crate::config::SimulationParameters;
-use crate::events::{Event, EventEffect, EventTrigger, TriggerOffset};
+use crate::events::{Event, EventEffect, EventTrigger};
 use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
 use crate::profiles::{InflationProfile, ReturnProfile};
 use crate::simulation::simulate;
@@ -87,8 +89,6 @@ fn test_event_trigger_balance() {
 
 #[test]
 fn test_event_date_trigger() {
-    
-    
     let start_date = jiff::civil::date(2025, 1, 1);
     let params = SimulationParameters {
         start_date: Some(start_date),
@@ -146,8 +146,6 @@ fn test_event_date_trigger() {
 
 #[test]
 fn test_cross_account_events() {
-    
-    
     // Test: Debt payoff triggers savings to start
     let params = SimulationParameters {
         start_date: None,
@@ -247,9 +245,8 @@ fn test_cross_account_events() {
 
 #[test]
 fn test_age_based_event() {
-    
     use crate::tax_config::TaxConfig;
-    
+
     let birth_date = jiff::civil::date(1960, 6, 15);
     let start_date = jiff::civil::date(2025, 1, 1); // Person is 64
 
@@ -336,8 +333,6 @@ fn test_age_based_event() {
 
 #[test]
 fn test_event_chaining() {
-    
-    
     // Test that TriggerEvent effect works for chaining events
     let params = SimulationParameters {
         start_date: Some(jiff::civil::date(2025, 1, 1)),
@@ -423,8 +418,6 @@ fn test_event_chaining() {
 
 #[test]
 fn test_repeating_event_transfer() {
-    
-    
     // Test repeating event that transfers $100/month between accounts
     let params = SimulationParameters {
         start_date: Some(jiff::civil::date(2025, 1, 1)),
@@ -499,17 +492,16 @@ fn test_repeating_event_transfer() {
     );
 
     // Check transfer history has reasonable count
+    let transfer_count = result.transfer_records().count();
     assert!(
-        result.transfer_history.len() >= 12 && result.transfer_history.len() <= 14,
+        (12..=14).contains(&transfer_count),
         "Should have 12-14 transfer records, got {}",
-        result.transfer_history.len()
+        transfer_count
     );
 }
 
 #[test]
 fn test_repeating_event_with_start_condition() {
-    
-    
     // Test repeating event that only starts after age 65
     let params = SimulationParameters {
         start_date: Some(jiff::civil::date(2025, 1, 1)),
@@ -587,5 +579,151 @@ fn test_repeating_event_with_start_condition() {
         account1_balance + account2_balance,
         100_000.0,
         "Total should still be 100000"
+    );
+}
+
+#[test]
+fn test_cash_sweep_liquidation() {
+    use crate::records::RecordKind;
+
+    // Test scenario: Cash account goes negative from expenses, triggers liquidation from brokerage
+    //
+    // Setup:
+    // - Cash account: $5,000 starting balance
+    // - Brokerage account: $50,000 starting balance
+    // - Monthly expense of $2,000 from cash account
+    // - When cash drops below $1,000, sweep from brokerage to bring cash to $5,000
+
+    const CASH_ACCOUNT: AccountId = AccountId(1);
+    const CASH_ASSET: AssetId = AssetId(1);
+    const BROKERAGE: AccountId = AccountId(2);
+    const STOCKS: AssetId = AssetId(2);
+
+    let params = SimulationParameters {
+        start_date: Some(jiff::civil::date(2025, 1, 1)),
+        duration_years: 1,
+        birth_date: None,
+        inflation_profile: InflationProfile::None,
+        return_profiles: vec![ReturnProfile::None], // No returns for simplicity
+        accounts: vec![
+            Account {
+                account_id: CASH_ACCOUNT,
+                assets: vec![Asset {
+                    asset_id: CASH_ASSET,
+                    initial_value: 5_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                }],
+                account_type: AccountType::Taxable, // Cash in taxable account
+            },
+            Account {
+                account_id: BROKERAGE,
+                assets: vec![Asset {
+                    asset_id: STOCKS,
+                    initial_value: 50_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                }],
+                account_type: AccountType::Taxable,
+            },
+        ],
+        cash_flows: vec![
+            // Monthly expense of $2,000 from cash account
+            CashFlow {
+                cash_flow_id: CashFlowId(1),
+                amount: 2_000.0,
+                repeats: RepeatInterval::Monthly,
+                cash_flow_limits: None,
+                adjust_for_inflation: false,
+                direction: CashFlowDirection::Expense {
+                    source_account_id: CASH_ACCOUNT,
+                    source_asset_id: CASH_ASSET,
+                },
+                state: CashFlowState::Active,
+            },
+        ],
+        events: vec![
+            // When cash falls below $1,000, sweep from brokerage to bring it back to $5,000
+            Event {
+                event_id: EventId(1),
+                trigger: EventTrigger::AccountBalance {
+                    account_id: CASH_ACCOUNT,
+                    threshold: 1_000.0,
+                    above: false, // Trigger when BELOW threshold
+                },
+                effects: vec![EventEffect::SweepToAccount {
+                    target_account_id: CASH_ACCOUNT,
+                    target_asset_id: CASH_ASSET,
+                    target_balance: 5_000.0,
+                    funding_sources: vec![(BROKERAGE, STOCKS)],
+                }],
+                once: false, // Can trigger multiple times
+            },
+        ],
+        spending_targets: vec![],
+        tax_config: Default::default(),
+    };
+
+    let result = simulate(&params, 42);
+
+    // Check that liquidations occurred
+    let liquidation_count = result.liquidation_records().count();
+    println!("Liquidation records: {}", liquidation_count);
+    assert!(
+        liquidation_count > 0,
+        "Should have liquidation records from cash sweeps"
+    );
+
+    // Check final balances
+    let final_cash = result.final_account_balance(CASH_ACCOUNT);
+    let final_brokerage = result.final_account_balance(BROKERAGE);
+
+    println!("Final cash balance: ${:.2}", final_cash);
+    println!("Final brokerage balance: ${:.2}", final_brokerage);
+
+    // Cash should never have gone too negative (sweep should have replenished)
+    // After 12 months of $2000 expenses = $24,000 total expenses
+    // Started with $5,000 cash + $50,000 brokerage = $55,000
+    // After expenses: should have roughly $55,000 - $24,000 = $31,000 total
+    // (minus taxes on liquidations)
+
+    let total = final_cash + final_brokerage;
+    println!("Total portfolio value: ${:.2}", total);
+
+    // Verify we have liquidation records with proper tax tracking
+    for record in result.liquidation_records() {
+        if let RecordKind::Liquidation {
+            gross_amount,
+            net_amount,
+            federal_tax,
+            state_tax,
+            ..
+        } = &record.kind
+        {
+            println!(
+                "Liquidation: gross=${:.2}, net=${:.2}, fed_tax=${:.2}, state_tax=${:.2}",
+                gross_amount, net_amount, federal_tax, state_tax
+            );
+            // Net should be less than gross due to taxes (taxable account)
+            assert!(
+                *net_amount <= *gross_amount,
+                "Net amount should be <= gross amount after taxes"
+            );
+        }
+    }
+
+    // Total should be less than starting amount due to expenses and taxes
+    let starting_total = 5_000.0 + 50_000.0;
+    assert!(
+        total < starting_total,
+        "Total should be less than starting due to expenses, got {:.2}",
+        total
+    );
+
+    // But should still have positive balances
+    assert!(final_cash >= 0.0, "Cash should not be deeply negative");
+    assert!(
+        final_brokerage >= 0.0,
+        "Brokerage should still have positive balance"
     );
 }

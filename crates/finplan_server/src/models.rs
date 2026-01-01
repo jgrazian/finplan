@@ -1,4 +1,4 @@
-use finplan::models::{AccountId, AccountType, AssetClass, AssetId, SimulationParameters};
+use finplan::{AccountId, AccountType, AssetClass, AssetId, SimulationParameters};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

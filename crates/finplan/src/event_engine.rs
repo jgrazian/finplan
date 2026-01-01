@@ -1,11 +1,13 @@
-use crate::accounts::{Account, AccountType};
-use crate::cash_flows::{CashFlow, CashFlowState, RepeatInterval};
+use crate::accounts::AccountType;
+use crate::cash_flows::{CashFlowState, RepeatInterval};
 use crate::events::{Event, EventEffect, EventTrigger, TriggerOffset};
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::records::{EventRecord, RmdRecord, TransferRecord};
+use crate::ids::{EventId, SpendingTargetId};
+use crate::records::Record;
 use crate::rmd::RmdTable;
 use crate::simulation_state::SimulationState;
 use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
+use crate::tax_config::TaxConfig;
+use crate::taxes::{calculate_liquidation_tax, gross_up_liquidation_for_net_target};
 use jiff::ToSpan;
 
 /// Evaluates whether a trigger condition is met
@@ -270,15 +272,16 @@ pub fn apply_effect(
 
                 *state.asset_balances.entry(to_key).or_insert(0.0) += transfer_amount;
 
-                // Record the transfer transaction
-                state.transfer_history.push(TransferRecord {
-                    date: state.current_date,
-                    from_account_id: *from_account,
-                    from_asset_id: *from_asset_id,
-                    to_account_id: *to_account,
-                    to_asset_id: *to_asset_id,
-                    amount: transfer_amount,
-                });
+                // Record the transfer transaction (triggered_by will be set by caller)
+                state.records.push(Record::transfer(
+                    state.current_date,
+                    *from_account,
+                    *from_asset_id,
+                    *to_account,
+                    *to_asset_id,
+                    transfer_amount,
+                    None, // TODO: pass event_id from caller
+                ));
             }
         }
 
@@ -338,17 +341,138 @@ pub fn apply_effect(
                         .spending_target_next_date
                         .insert(st_id, state.current_date);
 
-                    // Record RMD
-                    state.rmd_history.push(RmdRecord {
-                        date: state.current_date,
-                        account_id: *account_id,
-                        age: current_age,
-                        prior_year_balance: balance_for_rmd,
-                        irs_divisor: divisor,
-                        required_amount: rmd_amount,
-                        spending_target_id: st_id,
-                    });
+                    // Record RMD (actual_withdrawn starts at 0, updated as withdrawals occur)
+                    state.records.push(Record::rmd(
+                        state.current_date,
+                        *account_id,
+                        current_age,
+                        balance_for_rmd,
+                        divisor,
+                        rmd_amount,
+                        0.0, // actual_withdrawn updated later
+                        st_id,
+                    ));
                 }
+            }
+        }
+
+        // === Cash Management Effects ===
+        EventEffect::SweepToAccount {
+            target_account_id,
+            target_asset_id,
+            target_balance,
+            funding_sources,
+        } => {
+            // Get current balance of target account/asset
+            let current_balance = state
+                .asset_balances
+                .get(&(*target_account_id, *target_asset_id))
+                .copied()
+                .unwrap_or(0.0);
+
+            // Calculate how much we need to add
+            let needed = target_balance - current_balance;
+            if needed <= 0.0 {
+                return; // Already at or above target
+            }
+
+            let mut remaining_needed = needed;
+
+            // Try each funding source in order
+            for (from_account_id, from_asset_id) in funding_sources {
+                if remaining_needed <= 0.0 {
+                    break;
+                }
+
+                // Get account type for tax calculation
+                let account_type = state
+                    .accounts
+                    .get(from_account_id)
+                    .map(|a| &a.account_type)
+                    .cloned()
+                    .unwrap_or(AccountType::Taxable);
+
+                // Skip illiquid accounts
+                if matches!(account_type, AccountType::Illiquid) {
+                    continue;
+                }
+
+                // Get available balance
+                let available = state
+                    .asset_balances
+                    .get(&(*from_account_id, *from_asset_id))
+                    .copied()
+                    .unwrap_or(0.0);
+
+                if available <= 0.0 {
+                    continue;
+                }
+
+                // Calculate how much to liquidate to get remaining_needed net
+                // Use default tax config if not available (will be improved when we pass params)
+                let tax_config = TaxConfig::default();
+                let gross_needed = gross_up_liquidation_for_net_target(
+                    remaining_needed,
+                    &account_type,
+                    &tax_config,
+                    state.ytd_tax.ordinary_income,
+                )
+                .unwrap_or(remaining_needed);
+
+                let gross_to_liquidate = gross_needed.min(available);
+
+                // Calculate actual taxes
+                let tax_result = calculate_liquidation_tax(
+                    gross_to_liquidate,
+                    &account_type,
+                    &tax_config,
+                    state.ytd_tax.ordinary_income,
+                );
+
+                // Update source balance
+                if let Some(balance) = state
+                    .asset_balances
+                    .get_mut(&(*from_account_id, *from_asset_id))
+                {
+                    *balance -= gross_to_liquidate;
+                }
+
+                // Update target balance (receives net amount)
+                *state
+                    .asset_balances
+                    .entry((*target_account_id, *target_asset_id))
+                    .or_insert(0.0) += tax_result.net_amount;
+
+                // Track taxes
+                match account_type {
+                    AccountType::TaxDeferred => {
+                        state.ytd_tax.ordinary_income += gross_to_liquidate;
+                    }
+                    AccountType::Taxable => {
+                        state.ytd_tax.capital_gains += tax_result.realized_gain;
+                    }
+                    _ => {}
+                }
+                state.ytd_tax.federal_tax += tax_result.federal_tax;
+                state.ytd_tax.state_tax += tax_result.state_tax;
+
+                // Record the liquidation
+                state.records.push(Record::liquidation(
+                    state.current_date,
+                    *from_account_id,
+                    *from_asset_id,
+                    *target_account_id,
+                    *target_asset_id,
+                    gross_to_liquidate,
+                    tax_result.cost_basis,
+                    tax_result.realized_gain,
+                    tax_result.federal_tax,
+                    tax_result.state_tax,
+                    tax_result.net_amount,
+                    None, // TODO: pass event_id from caller
+                ));
+
+                remaining_needed -= tax_result.net_amount;
             }
         }
     }
@@ -431,10 +555,9 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
             state.triggered_events.insert(event_id, state.current_date);
 
             // Record to linear event history for replay
-            state.event_history.push(EventRecord {
-                date: state.current_date,
-                event_id,
-            });
+            state
+                .records
+                .push(Record::event(state.current_date, event_id));
 
             triggered.push(event_id);
 
@@ -461,10 +584,9 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                 state.triggered_events.insert(event_id, state.current_date);
 
                 // Record to linear event history for replay
-                state.event_history.push(EventRecord {
-                    date: state.current_date,
-                    event_id,
-                });
+                state
+                    .records
+                    .push(Record::event(state.current_date, event_id));
 
                 triggered.push(event_id);
 

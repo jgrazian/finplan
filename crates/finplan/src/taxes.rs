@@ -197,6 +197,159 @@ pub fn gross_up_for_net_target(
     Some((low + high) / 2.0)
 }
 
+/// Result of a liquidation tax calculation
+#[derive(Debug, Clone)]
+pub struct LiquidationTaxResult {
+    /// The gross amount being liquidated (market value)
+    pub gross_amount: f64,
+    /// Cost basis of the assets being sold
+    pub cost_basis: f64,
+    /// Realized gain (or loss if negative)
+    pub realized_gain: f64,
+    /// Federal tax on the sale
+    pub federal_tax: f64,
+    /// State tax on the sale
+    pub state_tax: f64,
+    /// Total tax owed
+    pub total_tax: f64,
+    /// Net amount after taxes
+    pub net_amount: f64,
+}
+
+/// Calculate taxes on liquidating assets from an account
+///
+/// # Arguments
+/// * `gross_amount` - The market value of assets being sold
+/// * `account_type` - The type of account being liquidated from
+/// * `tax_config` - Tax configuration
+/// * `ytd_ordinary_income` - Year-to-date ordinary income (for bracket calculation)
+///
+/// For taxable accounts, uses the configured `taxable_gains_percentage` as an estimate
+/// of the gains portion. For tax-deferred accounts, the entire amount is taxed as
+/// ordinary income. Tax-free and illiquid accounts have no tax.
+pub fn calculate_liquidation_tax(
+    gross_amount: f64,
+    account_type: &AccountType,
+    tax_config: &TaxConfig,
+    ytd_ordinary_income: f64,
+) -> LiquidationTaxResult {
+    match account_type {
+        AccountType::TaxFree => {
+            // Roth IRA: No tax on qualified liquidations
+            LiquidationTaxResult {
+                gross_amount,
+                cost_basis: gross_amount, // Assume all basis (no gain)
+                realized_gain: 0.0,
+                federal_tax: 0.0,
+                state_tax: 0.0,
+                total_tax: 0.0,
+                net_amount: gross_amount,
+            }
+        }
+        AccountType::TaxDeferred => {
+            // Traditional IRA/401k: All liquidations taxed as ordinary income
+            let federal_tax = calculate_marginal_tax(
+                gross_amount,
+                ytd_ordinary_income,
+                &tax_config.federal_brackets,
+            );
+            let state_tax = gross_amount * tax_config.state_rate;
+            let total_tax = federal_tax + state_tax;
+
+            LiquidationTaxResult {
+                gross_amount,
+                cost_basis: 0.0, // Tax-deferred has no cost basis concept
+                realized_gain: gross_amount, // Entire amount is "gain" for tax purposes
+                federal_tax,
+                state_tax,
+                total_tax,
+                net_amount: gross_amount - total_tax,
+            }
+        }
+        AccountType::Taxable => {
+            // Brokerage account: Only gains are taxed (at capital gains rate)
+            let cost_basis = gross_amount * (1.0 - tax_config.taxable_gains_percentage);
+            let realized_gain = gross_amount - cost_basis;
+            let capital_gains_tax = realized_gain.max(0.0) * tax_config.capital_gains_rate;
+            // State tax typically applies to capital gains too
+            let state_tax = realized_gain.max(0.0) * tax_config.state_rate;
+            let total_tax = capital_gains_tax + state_tax;
+
+            LiquidationTaxResult {
+                gross_amount,
+                cost_basis,
+                realized_gain,
+                federal_tax: capital_gains_tax, // Using federal_tax field for cap gains
+                state_tax,
+                total_tax,
+                net_amount: gross_amount - total_tax,
+            }
+        }
+        AccountType::Illiquid => {
+            // Cannot liquidate from illiquid accounts
+            LiquidationTaxResult {
+                gross_amount: 0.0,
+                cost_basis: 0.0,
+                realized_gain: 0.0,
+                federal_tax: 0.0,
+                state_tax: 0.0,
+                total_tax: 0.0,
+                net_amount: 0.0,
+            }
+        }
+    }
+}
+
+/// Calculate the gross amount to liquidate to achieve a target net amount
+/// Similar to gross_up_for_net_target but for liquidations
+pub fn gross_up_liquidation_for_net_target(
+    target_net: f64,
+    account_type: &AccountType,
+    tax_config: &TaxConfig,
+    ytd_ordinary_income: f64,
+) -> Option<f64> {
+    if matches!(account_type, AccountType::Illiquid) {
+        return None;
+    }
+
+    if matches!(account_type, AccountType::TaxFree) {
+        // No tax, gross = net
+        return Some(target_net);
+    }
+
+    // Binary search for the gross amount
+    let mut low = target_net;
+    let mut high = target_net * 2.0;
+
+    // Expand upper bound if needed
+    let check_high = calculate_liquidation_tax(high, account_type, tax_config, ytd_ordinary_income);
+    if check_high.net_amount < target_net {
+        high = target_net * 3.0;
+    }
+
+    const TOLERANCE: f64 = 0.01;
+    const MAX_ITERATIONS: usize = 50;
+
+    for _ in 0..MAX_ITERATIONS {
+        let mid = (low + high) / 2.0;
+        let result = calculate_liquidation_tax(mid, account_type, tax_config, ytd_ordinary_income);
+
+        let diff = result.net_amount - target_net;
+
+        if diff.abs() < TOLERANCE {
+            return Some(mid);
+        }
+
+        if diff < 0.0 {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+
+    Some((low + high) / 2.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

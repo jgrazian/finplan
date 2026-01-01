@@ -15,7 +15,7 @@ use crate::models::{
     SimulationRunRecord, UpdateSimulationRequest,
 };
 use crate::validation;
-use finplan::models::{AccountId, MonteCarloResult, SimulationParameters, SimulationResult};
+use finplan::{AccountId, MonteCarloResult, SimulationParameters, SimulationResult};
 use finplan::simulation::monte_carlo_simulate;
 use jiff::civil::Date;
 
@@ -348,6 +348,8 @@ fn calculate_balance_at_date(
     account_id: AccountId,
     target_date: Date,
 ) -> f64 {
+    use finplan::RecordKind;
+
     // Start with initial value
     let mut balance = result
         .accounts
@@ -356,36 +358,64 @@ fn calculate_balance_at_date(
         .map(|a| a.starting_balance())
         .unwrap_or(0.0);
 
-    // Replay cash flows up to target date
-    for cf in &result.cash_flow_history {
-        if cf.account_id == account_id && cf.date <= target_date {
-            balance += cf.amount;
+    // Replay all records up to target date
+    for record in &result.records {
+        if record.date > target_date {
+            continue;
         }
-    }
 
-    // Replay returns up to target date
-    for ret in &result.return_history {
-        if ret.account_id == account_id && ret.date <= target_date {
-            balance += ret.return_amount;
-        }
-    }
-
-    // Replay transfers up to target date
-    for transfer in &result.transfer_history {
-        if transfer.date <= target_date {
-            if transfer.from_account_id == account_id {
-                balance -= transfer.amount;
+        match &record.kind {
+            RecordKind::CashFlow {
+                account_id: acc_id,
+                amount,
+                ..
+            } if *acc_id == account_id => {
+                balance += amount;
             }
-            if transfer.to_account_id == account_id {
-                balance += transfer.amount;
+            RecordKind::Return {
+                account_id: acc_id,
+                return_amount,
+                ..
+            } if *acc_id == account_id => {
+                balance += return_amount;
             }
-        }
-    }
-
-    // Replay withdrawals up to target date
-    for withdrawal in &result.withdrawal_history {
-        if withdrawal.account_id == account_id && withdrawal.date <= target_date {
-            balance -= withdrawal.gross_amount;
+            RecordKind::Transfer {
+                from_account_id,
+                to_account_id,
+                amount,
+                ..
+            } => {
+                if *from_account_id == account_id {
+                    balance -= amount;
+                }
+                if *to_account_id == account_id {
+                    balance += amount;
+                }
+            }
+            RecordKind::Withdrawal {
+                account_id: acc_id,
+                gross_amount,
+                ..
+            } if *acc_id == account_id => {
+                balance -= gross_amount;
+            }
+            RecordKind::Liquidation {
+                from_account_id,
+                to_account_id,
+                gross_amount,
+                net_amount,
+                ..
+            } => {
+                // Source account loses gross amount
+                if *from_account_id == account_id {
+                    balance -= gross_amount;
+                }
+                // Target account gains net amount (after taxes)
+                if *to_account_id == account_id {
+                    balance += net_amount;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -427,48 +457,37 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
             portfolio_values.entry(date).or_default().push(total);
         }
 
-        // Aggregate return history
-        for ret in &sim_result.return_history {
-            let year = ret.date.year() as i32;
+        // Aggregate records by type
+        use finplan::RecordKind;
+        for record in &sim_result.records {
+            let year = record.date.year() as i32;
             let entry = growth_by_year
                 .entry(year)
                 .or_insert_with(|| YearlyGrowthComponents {
                     year,
                     ..Default::default()
                 });
-            if ret.return_amount >= 0.0 {
-                entry.investment_returns += ret.return_amount / num_iterations;
-            } else {
-                entry.losses += ret.return_amount / num_iterations; // Already negative
-            }
-        }
 
-        // Aggregate cash flow history
-        for cf in &sim_result.cash_flow_history {
-            let year = cf.date.year() as i32;
-            let entry = growth_by_year
-                .entry(year)
-                .or_insert_with(|| YearlyGrowthComponents {
-                    year,
-                    ..Default::default()
-                });
-            if cf.amount >= 0.0 {
-                entry.contributions += cf.amount / num_iterations;
-            } else {
-                entry.cash_flow_expenses += cf.amount / num_iterations; // Already negative
+            match &record.kind {
+                RecordKind::Return { return_amount, .. } => {
+                    if *return_amount >= 0.0 {
+                        entry.investment_returns += return_amount / num_iterations;
+                    } else {
+                        entry.losses += return_amount / num_iterations; // Already negative
+                    }
+                }
+                RecordKind::CashFlow { amount, .. } => {
+                    if *amount >= 0.0 {
+                        entry.contributions += amount / num_iterations;
+                    } else {
+                        entry.cash_flow_expenses += amount / num_iterations; // Already negative
+                    }
+                }
+                RecordKind::Withdrawal { gross_amount, .. } => {
+                    entry.withdrawals -= gross_amount / num_iterations; // Negative (outflow)
+                }
+                _ => {}
             }
-        }
-
-        // Aggregate withdrawal history
-        for wd in &sim_result.withdrawal_history {
-            let year = wd.date.year() as i32;
-            let entry = growth_by_year
-                .entry(year)
-                .or_insert_with(|| YearlyGrowthComponents {
-                    year,
-                    ..Default::default()
-                });
-            entry.withdrawals -= wd.gross_amount / num_iterations; // Negative (outflow)
         }
     }
 

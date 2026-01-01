@@ -1,16 +1,13 @@
-use crate::accounts::{Account, AccountType, Asset};
-use crate::cash_flows::{
-    CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
-};
+use crate::accounts::AccountType;
+use crate::cash_flows::{CashFlow, CashFlowDirection, CashFlowState, LimitPeriod, RepeatInterval};
 use crate::config::SimulationParameters;
 use crate::event_engine::process_events;
-use crate::events::{Event, EventEffect, EventTrigger, TriggerOffset};
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::records::{CashFlowRecord, EventRecord, ReturnRecord, TransferRecord, WithdrawalRecord};
-use crate::results::{AccountSnapshot, AssetSnapshot, MonteCarloResult, SimulationResult};
+use crate::events::{EventTrigger, TriggerOffset};
+use crate::ids::{AccountId, AssetId, CashFlowId, SpendingTargetId};
+use crate::records::Record;
+use crate::results::{MonteCarloResult, SimulationResult};
 use crate::simulation_state::SimulationState;
 use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
-use crate::tax_config::{TaxBracket, TaxConfig, TaxSummary};
 use crate::taxes::{calculate_withdrawal_tax, gross_up_for_net_target};
 
 use jiff::ToSpan;
@@ -58,12 +55,7 @@ pub fn simulate(params: &SimulationParameters, seed: u64) -> SimulationResult {
         return_profile_returns: state.return_profile_returns.clone(),
         accounts: state.build_account_snapshots(params),
         yearly_taxes: state.yearly_taxes.clone(),
-        event_history: state.event_history.clone(),
-        cash_flow_history: state.cash_flow_history.clone(),
-        return_history: state.return_history.clone(),
-        transfer_history: state.transfer_history.clone(),
-        withdrawal_history: state.withdrawal_history.clone(),
-        rmd_history: state.rmd_history.clone(),
+        records: state.records.clone(),
     }
 }
 
@@ -168,15 +160,16 @@ fn apply_spending_targets(state: &mut SimulationState, params: &SimulationParame
             state.ytd_tax.state_tax += tax_result.state_tax + tax_result.capital_gains_tax;
 
             // Record the withdrawal
-            state.withdrawal_history.push(WithdrawalRecord {
-                date: state.current_date,
-                spending_target_id: st.spending_target_id,
+            state.records.push(Record::withdrawal(
+                state.current_date,
+                st.spending_target_id,
                 account_id,
                 asset_id,
-                gross_amount: gross_withdrawal,
-                tax_amount: tax_result.total_tax,
-                net_amount: tax_result.net_amount,
-            });
+                gross_withdrawal,
+                tax_result.federal_tax,
+                tax_result.state_tax + tax_result.capital_gains_tax,
+                tax_result.net_amount,
+            ));
 
             // Update remaining target
             if st.net_amount_mode {
@@ -352,13 +345,13 @@ fn apply_cash_flows(state: &mut SimulationState, params: &SimulationParameters) 
                 }
 
                 // Record as contribution (positive amount)
-                state.cash_flow_history.push(CashFlowRecord {
-                    date: state.current_date,
-                    cash_flow_id: cf_id,
-                    account_id: *target_account_id,
-                    asset_id: *target_asset_id,
+                state.records.push(Record::cash_flow(
+                    state.current_date,
+                    cf_id,
+                    *target_account_id,
+                    *target_asset_id,
                     amount,
-                });
+                ));
             }
 
             CashFlowDirection::Expense {
@@ -373,13 +366,13 @@ fn apply_cash_flows(state: &mut SimulationState, params: &SimulationParameters) 
                 }
 
                 // Record as expense (negative amount)
-                state.cash_flow_history.push(CashFlowRecord {
-                    date: state.current_date,
-                    cash_flow_id: cf_id,
-                    account_id: *source_account_id,
-                    asset_id: *source_asset_id,
-                    amount: -amount,
-                });
+                state.records.push(Record::cash_flow(
+                    state.current_date,
+                    cf_id,
+                    *source_account_id,
+                    *source_asset_id,
+                    -amount,
+                ));
             }
         }
 
@@ -505,14 +498,14 @@ fn advance_time(state: &mut SimulationState, params: &SimulationParameters) {
 
                         // Record the return transaction (includes negative returns for debt/losses)
                         if return_amount.abs() > 0.001 {
-                            state.return_history.push(ReturnRecord {
-                                date: next_checkpoint,
-                                account_id: account.account_id,
-                                asset_id: asset.asset_id,
+                            state.records.push(Record::investment_return(
+                                next_checkpoint,
+                                account.account_id,
+                                asset.asset_id,
                                 balance_before,
-                                return_rate: rate,
+                                rate,
                                 return_amount,
-                            });
+                            ));
                         }
                     }
                 }

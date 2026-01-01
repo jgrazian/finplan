@@ -7,10 +7,8 @@ use crate::cash_flows::{
     CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
 };
 use crate::config::SimulationParameters;
-use crate::events::{Event, EventEffect, EventTrigger};
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId};
+use crate::ids::{AccountId, AssetId, CashFlowId};
 use crate::profiles::{InflationProfile, ReturnProfile};
-use crate::results::MonteCarloResult;
 use crate::simulation::{monte_carlo_simulate, simulate};
 
 #[test]
@@ -39,7 +37,7 @@ fn test_monte_carlo_simulation() {
         ..Default::default()
     };
 
-    const NUM_ITERATIONS: usize = 100;
+    const NUM_ITERATIONS: usize = 1_000_000;
     let result = monte_carlo_simulate(&params, NUM_ITERATIONS);
     assert_eq!(result.iterations.len(), NUM_ITERATIONS);
 

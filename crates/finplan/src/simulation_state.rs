@@ -1,17 +1,17 @@
-use crate::accounts::{Account, AccountType, Asset};
-use crate::cash_flows::{CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval};
+use crate::accounts::Account;
+use crate::cash_flows::{
+    CashFlow, CashFlowDirection, CashFlowState,
+};
 use crate::config::SimulationParameters;
-use crate::events::{Event, EventEffect, EventTrigger};
+use crate::events::Event;
 use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::profiles::{InflationProfile, ReturnProfile};
-use crate::records::{CashFlowRecord, EventRecord, ReturnRecord, RmdRecord, TransferRecord, WithdrawalRecord};
+use crate::records::{Record, RecordKind};
 use crate::results::{AccountSnapshot, AssetSnapshot};
 use crate::rmd::RmdTable;
-use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
-use crate::tax_config::{TaxConfig, TaxSummary};
+use crate::spending::{SpendingTarget, SpendingTargetState};
+use crate::tax_config::TaxSummary;
 use jiff::ToSpan;
 use rand::SeedableRng;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Runtime state for the simulation, mutated as events trigger
@@ -75,17 +75,9 @@ pub struct SimulationState {
     /// Yearly tax summaries
     pub yearly_taxes: Vec<TaxSummary>,
 
-    // === Transaction Logs ===
-    /// Record of all CashFlow executions (income deposits, expense withdrawals)
-    pub cash_flow_history: Vec<CashFlowRecord>,
-    /// Record of all investment returns applied to assets
-    pub return_history: Vec<ReturnRecord>,
-    /// Record of all transfers between accounts/assets
-    pub transfer_history: Vec<TransferRecord>,
-    /// Record of all SpendingTarget withdrawals
-    pub withdrawal_history: Vec<WithdrawalRecord>,
-    /// Record of all event triggers in chronological order
-    pub event_history: Vec<EventRecord>,
+    // === Transaction Log ===
+    /// Unified record of all transactions in chronological order
+    pub records: Vec<Record>,
 
     /// Recorded dates for history
     pub dates: Vec<jiff::civil::Date>,
@@ -95,8 +87,6 @@ pub struct SimulationState {
     pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
     /// Active RMD accounts (account_id -> starting_age)
     pub active_rmd_accounts: HashMap<AccountId, u8>,
-    /// RMD-specific withdrawal history
-    pub rmd_history: Vec<RmdRecord>,
 }
 
 impl SimulationState {
@@ -106,15 +96,18 @@ impl SimulationState {
         spending_target_id: SpendingTargetId,
         amount: f64,
     ) {
-        if let Some(rmd) = self
-            .rmd_history
-            .iter_mut()
-            .rev() // Search backwards to find most recent
-            .find(|r| r.spending_target_id == spending_target_id)
-        {
-            // Track cumulative withdrawals for this RMD spending target
-            // (Note: could be called multiple times if withdrawals span multiple accounts)
-            rmd.required_amount = rmd.required_amount.max(amount);
+        // Search backwards to find most recent RMD record for this spending target
+        for record in self.records.iter_mut().rev() {
+            if let RecordKind::Rmd {
+                spending_target_id: st_id,
+                actual_withdrawn,
+                ..
+            } = &mut record.kind
+                && *st_id == spending_target_id {
+                    // Track cumulative withdrawals for this RMD spending target
+                    *actual_withdrawn += amount;
+                    break;
+                }
         }
     }
 }
@@ -187,15 +180,10 @@ impl SimulationState {
                 ..Default::default()
             },
             yearly_taxes: Vec::new(),
-            cash_flow_history: Vec::new(),
-            return_history: Vec::new(),
-            transfer_history: Vec::new(),
-            withdrawal_history: Vec::new(),
-            event_history: Vec::new(),
+            records: Vec::new(),
             dates: vec![start_date],
             year_end_balances: HashMap::new(),
             active_rmd_accounts: HashMap::new(),
-            rmd_history: Vec::new(),
         };
 
         // Load initial accounts
