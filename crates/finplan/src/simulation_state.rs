@@ -1,4 +1,14 @@
-use crate::models::*;
+use crate::accounts::{Account, AccountType, Asset};
+use crate::cash_flows::{CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval};
+use crate::config::SimulationParameters;
+use crate::events::{Event, EventEffect, EventTrigger};
+use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
+use crate::profiles::{InflationProfile, ReturnProfile};
+use crate::records::{CashFlowRecord, EventRecord, ReturnRecord, RmdRecord, TransferRecord, WithdrawalRecord};
+use crate::results::{AccountSnapshot, AssetSnapshot};
+use crate::rmd::RmdTable;
+use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
+use crate::tax_config::{TaxConfig, TaxSummary};
 use jiff::ToSpan;
 use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
@@ -87,18 +97,6 @@ pub struct SimulationState {
     pub active_rmd_accounts: HashMap<AccountId, u8>,
     /// RMD-specific withdrawal history
     pub rmd_history: Vec<RmdRecord>,
-}
-
-/// Record of a Required Minimum Distribution withdrawal
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RmdRecord {
-    pub date: jiff::civil::Date,
-    pub account_id: AccountId,
-    pub age: u8,
-    pub prior_year_balance: f64,
-    pub irs_divisor: f64,
-    pub required_amount: f64,
-    pub spending_target_id: SpendingTargetId,
 }
 
 impl SimulationState {

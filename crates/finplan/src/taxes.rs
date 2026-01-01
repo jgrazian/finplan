@@ -1,6 +1,7 @@
 //! Tax calculation utilities for retirement withdrawal modeling
 
-use crate::models::{AccountType, TaxBracket, TaxConfig};
+use crate::accounts::AccountType;
+use crate::tax_config::{TaxBracket, TaxConfig};
 
 /// Calculate federal income tax using progressive brackets
 /// Returns the total tax owed on the given income
