@@ -291,16 +291,16 @@ pub fn apply_effect(
 
             // Calculate RMD amount using IRS table
             let rmd_table = RmdTable::irs_uniform_lifetime_2024();
-            
+
             if let Some((current_age, _)) = state.current_age() {
                 // Use prior year balance if available, otherwise current balance
                 let balance_for_rmd = state
                     .prior_year_end_balance(*account_id)
                     .unwrap_or_else(|| state.account_balance(*account_id));
-                
+
                 if let Some(divisor) = state.current_rmd_divisor(&rmd_table) {
                     let rmd_amount = balance_for_rmd / divisor;
-                    
+
                     // Generate unique SpendingTargetId
                     let max_id = state
                         .spending_targets
@@ -309,27 +309,29 @@ pub fn apply_effect(
                         .max()
                         .unwrap_or(0);
                     let st_id = SpendingTargetId(max_id + 1);
-                    
+
                     let spending_target = SpendingTarget {
                         spending_target_id: st_id,
                         amount: rmd_amount,
-                        net_amount_mode: false, // RMD is gross amount
-                        repeats: RepeatInterval::Yearly,
-                        adjust_for_inflation: false, // RMD recalculates based on balance
+                        net_amount_mode: false,         // RMD is gross amount
+                        repeats: RepeatInterval::Never, // One-time; event creates new RMD each year
+                        adjust_for_inflation: false,    // RMD recalculates based on balance
                         withdrawal_strategy: WithdrawalStrategy::Sequential {
                             order: vec![*account_id],
                         },
                         exclude_accounts: Vec::new(),
                         state: SpendingTargetState::Active,
                     };
-                    
+
                     // Add to state
                     state.spending_targets.insert(
                         st_id,
                         (spending_target.clone(), SpendingTargetState::Active),
                     );
-                    state.spending_target_next_date.insert(st_id, state.current_date);
-                    
+                    state
+                        .spending_target_next_date
+                        .insert(st_id, state.current_date);
+
                     // Record RMD
                     state.rmd_history.push(RmdRecord {
                         date: state.current_date,
@@ -358,8 +360,8 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
         .iter()
         .filter(|(id, event)| {
             // Skip if already triggered and once=true (but not for Repeating)
-            if event.once 
-                && state.triggered_events.contains_key(id) 
+            if event.once
+                && state.triggered_events.contains_key(id)
                 && !matches!(event.trigger, EventTrigger::Repeating { .. })
             {
                 return false;
@@ -372,21 +374,29 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
     // Evaluate each event
     for (event_id, event) in events_to_check {
         let should_trigger = match &event.trigger {
-            EventTrigger::Repeating { interval, start_condition } => {
+            EventTrigger::Repeating {
+                interval,
+                start_condition,
+            } => {
                 // Check if this repeating event is active
-                let is_active = state.repeating_event_active.get(&event_id).copied().unwrap_or(false);
-                
+                let is_active = state
+                    .repeating_event_active
+                    .get(&event_id)
+                    .copied()
+                    .unwrap_or(false);
+
                 if !is_active {
                     // Check if start_condition is met (or no condition)
                     let condition_met = match start_condition {
                         None => true,
                         Some(condition) => evaluate_trigger(condition, state),
                     };
-                    
+
                     if condition_met {
-                        // Activate the repeating event and schedule first occurrence
+                        // Activate the repeating event and schedule NEXT occurrence
                         state.repeating_event_active.insert(event_id, true);
-                        state.event_next_date.insert(event_id, state.current_date);
+                        let next = state.current_date.saturating_add(interval.span());
+                        state.event_next_date.insert(event_id, next);
                         true // Trigger immediately on activation
                     } else {
                         false
@@ -413,7 +423,7 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
         if should_trigger {
             // Record trigger for once checks and RelativeToEvent
             state.triggered_events.insert(event_id, state.current_date);
-            
+
             // Record to linear event history for replay
             state.event_history.push(EventRecord {
                 date: state.current_date,
@@ -443,13 +453,13 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                 }
 
                 state.triggered_events.insert(event_id, state.current_date);
-                
+
                 // Record to linear event history for replay
                 state.event_history.push(EventRecord {
                     date: state.current_date,
                     event_id,
                 });
-                
+
                 triggered.push(event_id);
 
                 for effect in &event.effects {

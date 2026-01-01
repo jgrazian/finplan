@@ -1,4 +1,7 @@
-use crate::profiles::{InflationProfile, ReturnProfile};
+use crate::{
+    profiles::{InflationProfile, ReturnProfile},
+    simulation_state::RmdRecord,
+};
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -566,6 +569,7 @@ pub struct SimulationResult {
     pub transfer_history: Vec<TransferRecord>,
     /// Record of all SpendingTarget withdrawals
     pub withdrawal_history: Vec<WithdrawalRecord>,
+    pub rmd_history: Vec<RmdRecord>,
 }
 
 /// Snapshot of an account's starting state

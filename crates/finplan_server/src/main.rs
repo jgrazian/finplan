@@ -1,9 +1,13 @@
+mod error;
+mod validation;
+
 use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
+use error::{ApiError, ApiResult};
 use finplan::models::{
     AccountId, AccountType, AssetClass, AssetId, MonteCarloResult, SimulationParameters,
     SimulationResult,
@@ -20,7 +24,7 @@ use uuid::Uuid;
 // Database connection wrapper
 type DbConn = Arc<Mutex<Connection>>;
 
-fn init_db(conn: &Connection) {
+fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS simulations (
             id TEXT PRIMARY KEY,
@@ -32,8 +36,7 @@ fn init_db(conn: &Connection) {
             updated_at TEXT NOT NULL
         )",
         [],
-    )
-    .expect("Failed to create simulations table");
+    )?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS simulation_runs (
@@ -45,8 +48,7 @@ fn init_db(conn: &Connection) {
             FOREIGN KEY (simulation_id) REFERENCES simulations(id) ON DELETE CASCADE
         )",
         [],
-    )
-    .expect("Failed to create simulation_runs table");
+    )?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS portfolios (
@@ -58,14 +60,15 @@ fn init_db(conn: &Connection) {
             updated_at TEXT NOT NULL
         )",
         [],
-    )
-    .expect("Failed to create portfolios table");
+    )?;
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() {
     let conn = Connection::open("finplan.db").expect("Failed to open database");
-    init_db(&conn);
+    init_db(&conn).expect("Failed to initialize database");
     let db: DbConn = Arc::new(Mutex::new(conn));
 
     let app = Router::new()
@@ -169,11 +172,10 @@ struct PortfolioNetworth {
 // Portfolio CRUD Handlers
 // ============================================================================
 
-async fn list_portfolios(State(db): State<DbConn>) -> Json<Vec<PortfolioListItem>> {
-    let conn = db.lock().unwrap();
+async fn list_portfolios(State(db): State<DbConn>) -> ApiResult<Json<Vec<PortfolioListItem>>> {
+    let conn = db.lock()?;
     let mut stmt = conn
-        .prepare("SELECT id, name, description, accounts, created_at, updated_at FROM portfolios ORDER BY updated_at DESC")
-        .unwrap();
+        .prepare("SELECT id, name, description, accounts, created_at, updated_at FROM portfolios ORDER BY updated_at DESC")?;
 
     let portfolios = stmt
         .query_map([], |row| {
@@ -194,29 +196,30 @@ async fn list_portfolios(State(db): State<DbConn>) -> Json<Vec<PortfolioListItem
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
             })
-        })
-        .unwrap()
+        })?
         .filter_map(|r| r.ok())
         .collect();
 
-    Json(portfolios)
+    Ok(Json(portfolios))
 }
 
 async fn create_portfolio(
     State(db): State<DbConn>,
     Json(req): Json<CreatePortfolioRequest>,
-) -> Result<Json<SavedPortfolio>, StatusCode> {
+) -> ApiResult<Json<SavedPortfolio>> {
+    // Validate input
+    validation::validate_portfolio_name(&req.name)?;
+    validation::validate_portfolio_has_accounts(req.accounts.len())?;
+
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let accounts_json =
-        serde_json::to_string(&req.accounts).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let accounts_json = serde_json::to_string(&req.accounts)?;
 
-    let conn = db.lock().unwrap();
+    let conn = db.lock()?;
     conn.execute(
         "INSERT INTO portfolios (id, name, description, accounts, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![id, req.name, req.description, accounts_json, now, now],
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    )?;
 
     Ok(Json(SavedPortfolio {
         id,
@@ -231,11 +234,10 @@ async fn create_portfolio(
 async fn get_portfolio(
     State(db): State<DbConn>,
     Path(id): Path<String>,
-) -> Result<Json<SavedPortfolio>, StatusCode> {
-    let conn = db.lock().unwrap();
+) -> ApiResult<Json<SavedPortfolio>> {
+    let conn = db.lock()?;
     let mut stmt = conn
-        .prepare("SELECT id, name, description, accounts, created_at, updated_at FROM portfolios WHERE id = ?1")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .prepare("SELECT id, name, description, accounts, created_at, updated_at FROM portfolios WHERE id = ?1")?;
 
     let portfolio = stmt
         .query_row([&id], |row| {
@@ -251,7 +253,10 @@ async fn get_portfolio(
                 updated_at: row.get(5)?,
             })
         })
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ApiError::PortfolioNotFound(id.clone()),
+            _ => ApiError::from(e),
+        })?;
 
     Ok(Json(portfolio))
 }
@@ -260,13 +265,22 @@ async fn update_portfolio(
     State(db): State<DbConn>,
     Path(id): Path<String>,
     Json(req): Json<UpdatePortfolioRequest>,
-) -> Result<Json<SavedPortfolio>, StatusCode> {
-    let conn = db.lock().unwrap();
+) -> ApiResult<Json<SavedPortfolio>> {
+    let conn = db.lock()?;
+
+    // Validate name if provided
+    if let Some(ref name) = req.name {
+        validation::validate_portfolio_name(name)?;
+    }
+
+    // Validate accounts if provided
+    if let Some(ref accounts) = req.accounts {
+        validation::validate_portfolio_has_accounts(accounts.len())?;
+    }
 
     // Get existing portfolio
     let mut stmt = conn
-        .prepare("SELECT name, description, accounts, created_at FROM portfolios WHERE id = ?1")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .prepare("SELECT name, description, accounts, created_at FROM portfolios WHERE id = ?1")?;
 
     let (current_name, current_desc, current_accounts_json, created_at): (
         String,
@@ -277,25 +291,26 @@ async fn update_portfolio(
         .query_row([&id], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ApiError::PortfolioNotFound(id.clone()),
+            _ => ApiError::from(e),
+        })?;
 
     let name = req.name.unwrap_or(current_name);
     let description = req.description.or(current_desc);
     let accounts = if let Some(a) = req.accounts {
         a
     } else {
-        serde_json::from_str(&current_accounts_json)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        serde_json::from_str(&current_accounts_json)?
     };
 
-    let accounts_json = serde_json::to_string(&accounts).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let accounts_json = serde_json::to_string(&accounts)?;
     let now = chrono::Utc::now().to_rfc3339();
 
     conn.execute(
         "UPDATE portfolios SET name = ?1, description = ?2, accounts = ?3, updated_at = ?4 WHERE id = ?5",
         rusqlite::params![name, description, accounts_json, now, id],
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    )?;
 
     Ok(Json(SavedPortfolio {
         id,
@@ -310,15 +325,13 @@ async fn update_portfolio(
 async fn delete_portfolio(
     State(db): State<DbConn>,
     Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
-    let conn = db.lock().unwrap();
+) -> ApiResult<StatusCode> {
+    let conn = db.lock()?;
 
-    let affected = conn
-        .execute("DELETE FROM portfolios WHERE id = ?1", [&id])
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let affected = conn.execute("DELETE FROM portfolios WHERE id = ?1", [&id])?;
 
     if affected == 0 {
-        Err(StatusCode::NOT_FOUND)
+        Err(ApiError::PortfolioNotFound(id))
     } else {
         Ok(StatusCode::NO_CONTENT)
     }
@@ -327,18 +340,18 @@ async fn delete_portfolio(
 async fn get_portfolio_networth(
     State(db): State<DbConn>,
     Path(id): Path<String>,
-) -> Result<Json<PortfolioNetworth>, StatusCode> {
-    let conn = db.lock().unwrap();
-    let mut stmt = conn
-        .prepare("SELECT accounts FROM portfolios WHERE id = ?1")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> ApiResult<Json<PortfolioNetworth>> {
+    let conn = db.lock()?;
+    let mut stmt = conn.prepare("SELECT accounts FROM portfolios WHERE id = ?1")?;
 
     let accounts_json: String = stmt
         .query_row([&id], |row| row.get(0))
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ApiError::PortfolioNotFound(id.clone()),
+            _ => ApiError::from(e),
+        })?;
 
-    let accounts: Vec<PortfolioAccount> =
-        serde_json::from_str(&accounts_json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let accounts: Vec<PortfolioAccount> = serde_json::from_str(&accounts_json)?;
 
     let mut total_value = 0.0;
     let mut by_account_type: HashMap<String, f64> = HashMap::new();
@@ -424,11 +437,10 @@ struct SimulationRunRecord {
 // Simulation CRUD Handlers
 // ============================================================================
 
-async fn list_simulations(State(db): State<DbConn>) -> Json<Vec<SimulationListItem>> {
-    let conn = db.lock().unwrap();
+async fn list_simulations(State(db): State<DbConn>) -> ApiResult<Json<Vec<SimulationListItem>>> {
+    let conn = db.lock()?;
     let mut stmt = conn
-        .prepare("SELECT id, name, description, portfolio_id, created_at, updated_at FROM simulations ORDER BY updated_at DESC")
-        .unwrap();
+        .prepare("SELECT id, name, description, portfolio_id, created_at, updated_at FROM simulations ORDER BY updated_at DESC")?;
 
     let simulations = stmt
         .query_map([], |row| {
@@ -440,29 +452,30 @@ async fn list_simulations(State(db): State<DbConn>) -> Json<Vec<SimulationListIt
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
             })
-        })
-        .unwrap()
+        })?
         .filter_map(|r| r.ok())
         .collect();
 
-    Json(simulations)
+    Ok(Json(simulations))
 }
 
 async fn create_simulation(
     State(db): State<DbConn>,
     Json(req): Json<CreateSimulationRequest>,
-) -> Result<Json<SavedSimulation>, StatusCode> {
+) -> ApiResult<Json<SavedSimulation>> {
+    // Validate input
+    validation::validate_simulation_name(&req.name)?;
+    validation::validate_simulation_params(&req.parameters)?;
+
     let id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let params_json =
-        serde_json::to_string(&req.parameters).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let params_json = serde_json::to_string(&req.parameters)?;
 
-    let conn = db.lock().unwrap();
+    let conn = db.lock()?;
     conn.execute(
         "INSERT INTO simulations (id, name, description, parameters, portfolio_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![id, req.name, req.description, params_json, req.portfolio_id, now, now],
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    )?;
 
     Ok(Json(SavedSimulation {
         id,
@@ -478,11 +491,10 @@ async fn create_simulation(
 async fn get_simulation(
     State(db): State<DbConn>,
     Path(id): Path<String>,
-) -> Result<Json<SavedSimulation>, StatusCode> {
-    let conn = db.lock().unwrap();
+) -> ApiResult<Json<SavedSimulation>> {
+    let conn = db.lock()?;
     let mut stmt = conn
-        .prepare("SELECT id, name, description, parameters, portfolio_id, created_at, updated_at FROM simulations WHERE id = ?1")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .prepare("SELECT id, name, description, parameters, portfolio_id, created_at, updated_at FROM simulations WHERE id = ?1")?;
 
     let simulation = stmt
         .query_row([&id], |row| {
@@ -499,7 +511,10 @@ async fn get_simulation(
                 updated_at: row.get(6)?,
             })
         })
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ApiError::SimulationNotFound(id.clone()),
+            _ => ApiError::from(e),
+        })?;
 
     Ok(Json(simulation))
 }
@@ -508,13 +523,22 @@ async fn update_simulation(
     State(db): State<DbConn>,
     Path(id): Path<String>,
     Json(req): Json<UpdateSimulationRequest>,
-) -> Result<Json<SavedSimulation>, StatusCode> {
-    let conn = db.lock().unwrap();
+) -> ApiResult<Json<SavedSimulation>> {
+    let conn = db.lock()?;
+
+    // Validate name if provided
+    if let Some(ref name) = req.name {
+        validation::validate_simulation_name(name)?;
+    }
+
+    // Validate parameters if provided
+    if let Some(ref params) = req.parameters {
+        validation::validate_simulation_params(params)?;
+    }
 
     // Get existing simulation
     let mut stmt = conn
-        .prepare("SELECT name, description, parameters, portfolio_id, created_at FROM simulations WHERE id = ?1")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .prepare("SELECT name, description, parameters, portfolio_id, created_at FROM simulations WHERE id = ?1")?;
 
     let (current_name, current_desc, current_params_json, current_portfolio_id, created_at): (
         String,
@@ -532,7 +556,10 @@ async fn update_simulation(
                 row.get(4)?,
             ))
         })
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ApiError::SimulationNotFound(id.clone()),
+            _ => ApiError::from(e),
+        })?;
 
     let name = req.name.unwrap_or(current_name);
     let description = req.description.or(current_desc);
@@ -540,17 +567,16 @@ async fn update_simulation(
     let parameters = if let Some(p) = req.parameters {
         p
     } else {
-        serde_json::from_str(&current_params_json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        serde_json::from_str(&current_params_json)?
     };
 
-    let params_json = serde_json::to_string(&parameters).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let params_json = serde_json::to_string(&parameters)?;
     let now = chrono::Utc::now().to_rfc3339();
 
     conn.execute(
         "UPDATE simulations SET name = ?1, description = ?2, parameters = ?3, portfolio_id = ?4, updated_at = ?5 WHERE id = ?6",
         rusqlite::params![name, description, params_json, portfolio_id, now, id],
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    )?;
 
     Ok(Json(SavedSimulation {
         id,
@@ -566,22 +592,19 @@ async fn update_simulation(
 async fn delete_simulation(
     State(db): State<DbConn>,
     Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
-    let conn = db.lock().unwrap();
+) -> ApiResult<StatusCode> {
+    let conn = db.lock()?;
 
-    // Delete associated runs first
+    // Delete associated runs first (cascade should handle this, but be explicit)
     conn.execute(
         "DELETE FROM simulation_runs WHERE simulation_id = ?1",
         [&id],
-    )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    )?;
 
-    let affected = conn
-        .execute("DELETE FROM simulations WHERE id = ?1", [&id])
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let affected = conn.execute("DELETE FROM simulations WHERE id = ?1", [&id])?;
 
     if affected == 0 {
-        Err(StatusCode::NOT_FOUND)
+        Err(ApiError::SimulationNotFound(id))
     } else {
         Ok(StatusCode::NO_CONTENT)
     }
@@ -595,64 +618,69 @@ async fn run_saved_simulation(
     State(db): State<DbConn>,
     Path(id): Path<String>,
     Json(req): Json<RunSimulationRequest>,
-) -> Result<Json<AggregatedResult>, StatusCode> {
+) -> ApiResult<Json<AggregatedResult>> {
+    // Validate iterations
+    validation::validate_iterations(req.iterations)?;
+
     // Get the simulation parameters
     let params = {
-        let conn = db.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT parameters FROM simulations WHERE id = ?1")
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        let conn = db.lock()?;
+        let mut stmt = conn.prepare("SELECT parameters FROM simulations WHERE id = ?1")?;
 
         let params_json: String = stmt
             .query_row([&id], |row| row.get(0))
-            .map_err(|_| StatusCode::NOT_FOUND)?;
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ApiError::SimulationNotFound(id.clone()),
+                _ => ApiError::from(e),
+            })?;
 
-        serde_json::from_str::<SimulationParameters>(&params_json)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        serde_json::from_str::<SimulationParameters>(&params_json)?
     };
 
     let iterations = req.iterations;
     let result = tokio::task::spawn_blocking(move || monte_carlo_simulate(&params, iterations))
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| ApiError::InternalError)?;
 
     let aggregated = aggregate_results(result);
 
     // Save the run
     let run_id = Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let result_json =
-        serde_json::to_string(&aggregated).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result_json = serde_json::to_string(&aggregated)?;
 
     {
-        let conn = db.lock().unwrap();
+        let conn = db.lock()?;
         conn.execute(
             "INSERT INTO simulation_runs (id, simulation_id, result, iterations, ran_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![run_id, id, result_json, iterations as i32, now],
-        )
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        )?;
     }
 
     Ok(Json(aggregated))
 }
 
-async fn run_simulation(Json(params): Json<SimulationParameters>) -> Json<AggregatedResult> {
+async fn run_simulation(
+    Json(params): Json<SimulationParameters>,
+) -> ApiResult<Json<AggregatedResult>> {
+    // Validate parameters
+    validation::validate_simulation_params(&params)?;
+
     let result = tokio::task::spawn_blocking(move || monte_carlo_simulate(&params, 100))
         .await
-        .unwrap();
+        .map_err(|_| ApiError::InternalError)?;
 
     let aggregated = aggregate_results(result);
-    Json(aggregated)
+    Ok(Json(aggregated))
 }
 
 async fn list_simulation_runs(
     State(db): State<DbConn>,
     Path(simulation_id): Path<String>,
-) -> Json<Vec<SimulationRunRecord>> {
-    let conn = db.lock().unwrap();
+) -> ApiResult<Json<Vec<SimulationRunRecord>>> {
+    let conn = db.lock()?;
     let mut stmt = conn
-        .prepare("SELECT id, simulation_id, iterations, ran_at FROM simulation_runs WHERE simulation_id = ?1 ORDER BY ran_at DESC")
-        .unwrap();
+        .prepare("SELECT id, simulation_id, iterations, ran_at FROM simulation_runs WHERE simulation_id = ?1 ORDER BY ran_at DESC")?;
 
     let runs = stmt
         .query_map([&simulation_id], |row| {
@@ -662,29 +690,28 @@ async fn list_simulation_runs(
                 iterations: row.get(2)?,
                 ran_at: row.get(3)?,
             })
-        })
-        .unwrap()
+        })?
         .filter_map(|r| r.ok())
         .collect();
 
-    Json(runs)
+    Ok(Json(runs))
 }
 
 async fn get_simulation_run(
     State(db): State<DbConn>,
     Path(id): Path<String>,
-) -> Result<Json<AggregatedResult>, StatusCode> {
-    let conn = db.lock().unwrap();
-    let mut stmt = conn
-        .prepare("SELECT result FROM simulation_runs WHERE id = ?1")
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> ApiResult<Json<AggregatedResult>> {
+    let conn = db.lock()?;
+    let mut stmt = conn.prepare("SELECT result FROM simulation_runs WHERE id = ?1")?;
 
     let result_json: String = stmt
         .query_row([&id], |row| row.get(0))
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => ApiError::SimulationRunNotFound(id.clone()),
+            _ => ApiError::from(e),
+        })?;
 
-    let result: AggregatedResult =
-        serde_json::from_str(&result_json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let result: AggregatedResult = serde_json::from_str(&result_json)?;
 
     Ok(Json(result))
 }
