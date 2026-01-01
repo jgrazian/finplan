@@ -1361,9 +1361,8 @@ function TaxConfigEditor({ config, onChange }) {
 ### Phase 1: Foundation (Weeks 1-2)
 **Goal:** Fix critical issues, improve code quality
 
-- [ ] F1: Fix TypeScript build error
-- [ ] B12: Add API validation and error types
-- [ ] F2: Split simulation-wizard.tsx into step components
+- [x] B12: Add API validation and error types
+- [x] F2: Split simulation-wizard.tsx into step components
 - [ ] F5: Add toast notifications for user feedback
 - [ ] F4: Add error boundaries
 
@@ -1377,7 +1376,7 @@ function TaxConfigEditor({ config, onChange }) {
 ### Phase 2: Core Features (Weeks 3-6)
 **Goal:** Add essential retirement planning features
 
-- [ ] B1: Implement RMD support (see RMD_IMPLEMENTATION_PLAN.md)
+- [x] B1: Implement RMD support (see RMD_IMPLEMENTATION_PLAN.md)
 - [ ] B2: Add Social Security modeling
 - [ ] B8: Support multiple filing statuses
 - [ ] F8: Build Events UI for trigger/effect configuration
