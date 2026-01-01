@@ -1,5 +1,5 @@
 use crate::models::*;
-use crate::simulation_state::SimulationState;
+use crate::simulation_state::{RmdRecord, SimulationState};
 use jiff::ToSpan;
 
 /// Evaluates whether a trigger condition is met
@@ -279,6 +279,69 @@ pub fn apply_effect(
         // === Event Chaining ===
         EventEffect::TriggerEvent(event_id) => {
             pending_triggers.push(*event_id);
+        }
+
+        // === RMD Effects ===
+        EventEffect::CreateRmdWithdrawal {
+            account_id,
+            starting_age,
+        } => {
+            // Register this account for RMD tracking
+            state.active_rmd_accounts.insert(*account_id, *starting_age);
+
+            // Calculate RMD amount using IRS table
+            let rmd_table = RmdTable::irs_uniform_lifetime_2024();
+            
+            if let Some((current_age, _)) = state.current_age() {
+                // Use prior year balance if available, otherwise current balance
+                let balance_for_rmd = state
+                    .prior_year_end_balance(*account_id)
+                    .unwrap_or_else(|| state.account_balance(*account_id));
+                
+                if let Some(divisor) = state.current_rmd_divisor(&rmd_table) {
+                    let rmd_amount = balance_for_rmd / divisor;
+                    
+                    // Generate unique SpendingTargetId
+                    let max_id = state
+                        .spending_targets
+                        .keys()
+                        .map(|id| id.0)
+                        .max()
+                        .unwrap_or(0);
+                    let st_id = SpendingTargetId(max_id + 1);
+                    
+                    let spending_target = SpendingTarget {
+                        spending_target_id: st_id,
+                        amount: rmd_amount,
+                        net_amount_mode: false, // RMD is gross amount
+                        repeats: RepeatInterval::Yearly,
+                        adjust_for_inflation: false, // RMD recalculates based on balance
+                        withdrawal_strategy: WithdrawalStrategy::Sequential {
+                            order: vec![*account_id],
+                        },
+                        exclude_accounts: Vec::new(),
+                        state: SpendingTargetState::Active,
+                    };
+                    
+                    // Add to state
+                    state.spending_targets.insert(
+                        st_id,
+                        (spending_target.clone(), SpendingTargetState::Active),
+                    );
+                    state.spending_target_next_date.insert(st_id, state.current_date);
+                    
+                    // Record RMD
+                    state.rmd_history.push(RmdRecord {
+                        date: state.current_date,
+                        account_id: *account_id,
+                        age: current_age,
+                        prior_year_balance: balance_for_rmd,
+                        irs_divisor: divisor,
+                        required_amount: rmd_amount,
+                        spending_target_id: st_id,
+                    });
+                }
+            }
         }
     }
 }

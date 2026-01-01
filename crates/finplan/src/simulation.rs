@@ -6,6 +6,7 @@ use crate::taxes::{calculate_withdrawal_tax, gross_up_for_net_target};
 use jiff::ToSpan;
 use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use std::collections::HashMap;
 
 pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
     (1.0 + yearly_rate).powf(n_days / 365.0) - 1.0
@@ -459,6 +460,13 @@ fn advance_time(state: &mut SimulationState, params: &SimulationParameters) {
         next_checkpoint = heartbeat;
     }
 
+    // Ensure we capture December 31 for RMD year-end balance tracking
+    let current_year = state.current_date.year();
+    let dec_31 = jiff::civil::date(current_year, 12, 31);
+    if state.current_date < dec_31 && dec_31 < next_checkpoint {
+        next_checkpoint = dec_31;
+    }
+
     // Apply interest/returns
     let days_passed = (next_checkpoint - state.current_date).get_days();
     if days_passed > 0 {
@@ -499,6 +507,21 @@ fn advance_time(state: &mut SimulationState, params: &SimulationParameters) {
 
         // Record date checkpoint
         state.dates.push(next_checkpoint);
+    }
+
+    // Capture year-end balances for RMD calculations (December 31)
+    if next_checkpoint == dec_31 {
+        let year = next_checkpoint.year();
+        let mut year_balances = HashMap::new();
+
+        for (account_id, account) in &state.accounts {
+            if matches!(account.account_type, AccountType::TaxDeferred) {
+                let balance = state.account_balance(*account_id);
+                year_balances.insert(*account_id, balance);
+            }
+        }
+
+        state.year_end_balances.insert(year, year_balances);
     }
 
     state.current_date = next_checkpoint;
@@ -1610,6 +1633,73 @@ mod tests {
             account1_balance + account2_balance,
             100_000.0,
             "Total should still be 100000"
+        );
+    }
+
+    #[test]
+    fn test_rmd_withdrawal() {
+        let params = SimulationParameters {
+            start_date: Some(jiff::civil::date(2024, 1, 1)),
+            duration_years: 5,
+            birth_date: Some(jiff::civil::date(1951, 6, 15)), // Age 73 in 2024
+            return_profiles: vec![ReturnProfile::Fixed(0.05)],
+            accounts: vec![Account {
+                account_id: AccountId(1),
+                assets: vec![Asset {
+                    asset_id: AssetId(1),
+                    initial_value: 1_000_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                }],
+                account_type: AccountType::TaxDeferred,
+            }],
+            events: vec![Event {
+                event_id: EventId(1),
+                trigger: EventTrigger::Repeating {
+                    interval: RepeatInterval::Yearly,
+                    start_condition: Some(Box::new(EventTrigger::Age {
+                        years: 73,
+                        months: Some(0),
+                    })),
+                },
+                effects: vec![EventEffect::CreateRmdWithdrawal {
+                    account_id: AccountId(1),
+                    starting_age: 73,
+                }],
+                once: false,
+            }],
+            cash_flows: vec![],
+            spending_targets: vec![],
+            ..Default::default()
+        };
+
+        let result = simulate(&params, 42);
+
+        // RMD event should trigger
+        assert!(
+            result.event_was_triggered(EventId(1)),
+            "RMD event should trigger at age 73"
+        );
+
+        // Should have RMD withdrawals recorded
+        assert!(
+            !result.withdrawal_history.is_empty(),
+            "Should have RMD withdrawals"
+        );
+
+        let final_balance = result.final_account_balance(AccountId(1));
+
+        println!(
+            "After RMDs: Starting balance=$1,000,000, Final balance=${:.2}",
+            final_balance
+        );
+        println!("RMD withdrawals: {}", result.withdrawal_history.len());
+
+        // Balance should be less than starting due to RMDs
+        // (even with 5% returns, RMDs at ~3.77% should reduce balance)
+        assert!(
+            final_balance < 1_000_000.0,
+            "Balance should decrease from RMD withdrawals"
         );
     }
 }

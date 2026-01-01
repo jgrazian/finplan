@@ -1,6 +1,7 @@
 use crate::models::*;
 use jiff::ToSpan;
 use rand::SeedableRng;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Runtime state for the simulation, mutated as events trigger
@@ -78,6 +79,46 @@ pub struct SimulationState {
 
     /// Recorded dates for history
     pub dates: Vec<jiff::civil::Date>,
+
+    // === RMD Tracking ===
+    /// Year-end account balances for RMD calculation (year -> account_id -> balance)
+    pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
+    /// Active RMD accounts (account_id -> starting_age)
+    pub active_rmd_accounts: HashMap<AccountId, u8>,
+    /// RMD-specific withdrawal history
+    pub rmd_history: Vec<RmdRecord>,
+}
+
+/// Record of a Required Minimum Distribution withdrawal
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RmdRecord {
+    pub date: jiff::civil::Date,
+    pub account_id: AccountId,
+    pub age: u8,
+    pub prior_year_balance: f64,
+    pub irs_divisor: f64,
+    pub required_amount: f64,
+    pub spending_target_id: SpendingTargetId,
+}
+
+impl SimulationState {
+    /// Update RMD record with actual withdrawal amount after spending target executes
+    pub fn update_rmd_actual_withdrawn(
+        &mut self,
+        spending_target_id: SpendingTargetId,
+        amount: f64,
+    ) {
+        if let Some(rmd) = self
+            .rmd_history
+            .iter_mut()
+            .rev() // Search backwards to find most recent
+            .find(|r| r.spending_target_id == spending_target_id)
+        {
+            // Track cumulative withdrawals for this RMD spending target
+            // (Note: could be called multiple times if withdrawals span multiple accounts)
+            rmd.required_amount = rmd.required_amount.max(amount);
+        }
+    }
 }
 
 /// Year-to-date tax tracking
@@ -154,6 +195,9 @@ impl SimulationState {
             withdrawal_history: Vec::new(),
             event_history: Vec::new(),
             dates: vec![start_date],
+            year_end_balances: HashMap::new(),
+            active_rmd_accounts: HashMap::new(),
+            rmd_history: Vec::new(),
         };
 
         // Load initial accounts
@@ -347,5 +391,29 @@ impl SimulationState {
                 }
             })
             .collect()
+    }
+
+    // === RMD Helper Functions ===
+
+    /// Get prior year-end balance for an account
+    pub fn prior_year_end_balance(&self, account_id: AccountId) -> Option<f64> {
+        let prior_year = self.current_date.year() - 1;
+        self.year_end_balances
+            .get(&prior_year)?
+            .get(&account_id)
+            .copied()
+    }
+
+    /// Get IRS divisor for current age
+    pub fn current_rmd_divisor(&self, rmd_table: &RmdTable) -> Option<f64> {
+        let (years, _months) = self.current_age()?;
+        rmd_table.divisor_for_age(years)
+    }
+
+    /// Calculate RMD amount for an account
+    pub fn calculate_rmd_amount(&self, account_id: AccountId, rmd_table: &RmdTable) -> Option<f64> {
+        let balance = self.prior_year_end_balance(account_id)?;
+        let divisor = self.current_rmd_divisor(rmd_table)?;
+        Some(balance / divisor)
     }
 }
