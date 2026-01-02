@@ -10,7 +10,7 @@ use super::tax_config::TaxSummary;
 use serde::{Deserialize, Serialize};
 
 /// Snapshot of an asset's starting state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AssetSnapshot {
     pub asset_id: AssetId,
     pub return_profile_index: usize,

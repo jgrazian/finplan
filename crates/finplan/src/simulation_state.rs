@@ -193,10 +193,10 @@ impl SimulationState {
 
         // Load cash flows
         for cf in &params.cash_flows {
-            let initial_state = cf.state.clone();
+            let initial_state = cf.state;
             state
                 .cash_flows
-                .insert(cf.cash_flow_id, (cf.clone(), initial_state.clone()));
+                .insert(cf.cash_flow_id, (*cf, initial_state));
 
             // If active, schedule immediately
             if initial_state == CashFlowState::Active {
@@ -212,10 +212,10 @@ impl SimulationState {
 
         // Load spending targets
         for st in &params.spending_targets {
-            let initial_state = st.state.clone();
+            let initial_state = st.state;
             state
                 .spending_targets
-                .insert(st.spending_target_id, (st.clone(), initial_state.clone()));
+                .insert(st.spending_target_id, (st.clone(), initial_state));
 
             // If active, schedule immediately
             if initial_state == SpendingTargetState::Active {
@@ -367,7 +367,7 @@ impl SimulationState {
 
                 AccountSnapshot {
                     account_id: account.account_id,
-                    account_type: account.account_type.clone(),
+                    account_type: account.account_type,
                     assets,
                 }
             })

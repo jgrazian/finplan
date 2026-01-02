@@ -180,7 +180,7 @@ impl Record {
 }
 
 /// The kind of transaction recorded
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum RecordKind {
     /// CashFlow execution (income or expense only, not internal transfers)

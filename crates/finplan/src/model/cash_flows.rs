@@ -7,7 +7,7 @@ use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 
 /// How often a cash flow repeats
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum RepeatInterval {
     Never,
     Weekly,
@@ -34,7 +34,7 @@ impl RepeatInterval {
 /// Direction of a CashFlow - either income (money entering) or expense (money leaving)
 ///
 /// Internal transfers between assets should use EventEffect::TransferAsset instead
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum CashFlowDirection {
     /// Income: money flows from external source into an asset
     Income {
@@ -49,7 +49,7 @@ pub enum CashFlowDirection {
 }
 
 /// How a limit resets
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LimitPeriod {
     /// Resets every calendar year
     Yearly,
@@ -58,14 +58,14 @@ pub enum LimitPeriod {
 }
 
 /// Limits on a cash flow (e.g., IRS contribution limits)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CashFlowLimits {
     pub limit: f64,
     pub limit_period: LimitPeriod,
 }
 
 /// Current runtime state of a CashFlow
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum CashFlowState {
     /// Not yet started (created via config, waiting for activation)
     #[default]
@@ -79,7 +79,7 @@ pub enum CashFlowState {
 }
 
 /// A recurring or one-time money flow into or out of an asset
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CashFlow {
     pub cash_flow_id: CashFlowId,
     pub amount: f64,

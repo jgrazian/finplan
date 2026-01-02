@@ -1,7 +1,7 @@
 use rand::{Rng, distr::Distribution};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum InflationProfile {
     #[default]
     None,
@@ -44,7 +44,7 @@ impl InflationProfile {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum ReturnProfile {
     None,
     Fixed(f64),

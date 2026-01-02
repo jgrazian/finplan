@@ -25,7 +25,7 @@ pub enum WithdrawalStrategy {
 }
 
 /// Current runtime state of a SpendingTarget
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum SpendingTargetState {
     /// Not yet started (created via config, waiting for activation)
     #[default]

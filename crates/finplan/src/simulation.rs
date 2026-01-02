@@ -267,7 +267,7 @@ fn apply_cash_flows(state: &mut SimulationState, params: &SimulationParameters) 
         .cash_flows
         .iter()
         .filter(|(_, (_, cf_state))| *cf_state == CashFlowState::Active)
-        .map(|(id, (cf, _))| (*id, cf.clone()))
+        .map(|(id, (cf, _))| (*id, *cf))
         .collect();
 
     for (cf_id, cf) in flows_to_process {

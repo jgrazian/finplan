@@ -12,7 +12,7 @@ pub struct RmdTable {
 }
 
 /// Single entry in the RMD table mapping age to IRS divisor
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct RmdTableEntry {
     pub age: u8,
     pub divisor: f64,

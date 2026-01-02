@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A single bracket in a progressive tax system
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct TaxBracket {
     /// Income threshold where this bracket begins
     pub threshold: f64,
@@ -70,7 +70,7 @@ impl Default for TaxConfig {
 }
 
 /// Summary of taxes for a single year
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 pub struct TaxSummary {
     pub year: i16,
     /// Income from TaxDeferred account withdrawals (taxed as ordinary income)

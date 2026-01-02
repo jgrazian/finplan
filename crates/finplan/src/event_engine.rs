@@ -109,10 +109,10 @@ pub fn apply_effect(
 
         // === CashFlow Effects ===
         EventEffect::CreateCashFlow(cf) => {
-            let initial_state = cf.state.clone();
+            let initial_state = cf.state;
             state
                 .cash_flows
-                .insert(cf.cash_flow_id, (*cf.clone(), initial_state.clone()));
+                .insert(cf.cash_flow_id, (*cf.clone(), initial_state));
 
             if initial_state == CashFlowState::Active {
                 state
@@ -166,17 +166,17 @@ pub fn apply_effect(
                     cf.amount = *amount;
                 }
                 if let Some(repeats) = new_repeats {
-                    cf.repeats = repeats.clone();
+                    cf.repeats = *repeats;
                 }
             }
         }
 
         // === SpendingTarget Effects ===
         EventEffect::CreateSpendingTarget(st) => {
-            let initial_state = st.state.clone();
+            let initial_state = st.state;
             state
                 .spending_targets
-                .insert(st.spending_target_id, (*st.clone(), initial_state.clone()));
+                .insert(st.spending_target_id, (*st.clone(), initial_state));
 
             if initial_state == SpendingTargetState::Active {
                 state

@@ -7,7 +7,7 @@ use super::ids::{AccountId, AssetId};
 use serde::{Deserialize, Serialize};
 
 /// Classification of an asset for valuation behavior
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum AssetClass {
     /// Stocks, bonds, mutual funds - liquid and investable
     Investable,
@@ -20,7 +20,7 @@ pub enum AssetClass {
 }
 
 /// An individual asset within an account
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Asset {
     pub asset_id: AssetId,
     pub asset_class: AssetClass,
@@ -30,7 +30,7 @@ pub struct Asset {
 }
 
 /// Tax treatment for an account
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum AccountType {
     /// Regular brokerage - capital gains taxed
     Taxable,
