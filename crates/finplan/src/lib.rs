@@ -37,6 +37,6 @@ mod tests;
 // ============================================================================
 
 pub use config::SimulationBuilder;
-pub use config::{SimulationConfig, SimulationParameters};
+pub use config::SimulationConfig;
 pub use simulation::{monte_carlo_simulate, simulate};
 pub use taxes::{LiquidationTaxResult, WithdrawalTaxResult};

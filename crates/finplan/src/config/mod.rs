@@ -4,8 +4,7 @@
 //! needed to run a simulation. Helper methods support optimization use cases.
 
 use crate::model::{
-    Account, CashFlow, Event, EventId, EventTrigger, InflationProfile, ReturnProfile,
-    SpendingTarget, SpendingTargetId, TaxConfig,
+    Account, Event, EventId, EventTrigger, InflationProfile, ReturnProfile, TaxConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -94,14 +93,6 @@ pub struct SimulationConfig {
     /// Events that trigger state changes (retirement, home purchase, etc.)
     #[serde(default)]
     pub events: Vec<Event>,
-
-    /// Cash flows (salary, contributions, expenses)
-    #[serde(default)]
-    pub cash_flows: Vec<CashFlow>,
-
-    /// Spending targets for withdrawals
-    #[serde(default)]
-    pub spending_targets: Vec<SpendingTarget>,
 }
 
 impl SimulationConfig {
@@ -138,19 +129,6 @@ impl SimulationConfig {
             }
             _ => None,
         }
-    }
-
-    /// Create a variant with a different spending target amount
-    pub fn with_spending_amount(&self, target_id: SpendingTargetId, amount: f64) -> Option<Self> {
-        let mut config = self.clone();
-
-        let target = config
-            .spending_targets
-            .iter_mut()
-            .find(|t| t.spending_target_id == target_id)?;
-
-        target.amount = amount;
-        Some(config)
     }
 
     /// Create a variant with a different simulation duration
@@ -210,13 +188,6 @@ impl SimulationConfig {
     pub fn event(&self, id: EventId) -> Option<&Event> {
         self.events.iter().find(|e| e.event_id == id)
     }
-
-    /// Find a spending target by ID
-    pub fn spending_target(&self, id: SpendingTargetId) -> Option<&SpendingTarget> {
-        self.spending_targets
-            .iter()
-            .find(|t| t.spending_target_id == id)
-    }
 }
 
 // ============================================================================
@@ -275,9 +246,3 @@ impl OptimizationGoal {
         self
     }
 }
-
-/// Type alias for backward compatibility
-///
-/// `SimulationParameters` is the old name for `SimulationConfig`.
-/// New code should use `SimulationConfig` directly.
-pub type SimulationParameters = SimulationConfig;

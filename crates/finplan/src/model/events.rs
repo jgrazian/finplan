@@ -4,20 +4,218 @@
 //! Each event has a trigger condition and a list of effects to apply when triggered.
 
 use super::accounts::Account;
-use super::cash_flows::{CashFlow, RepeatInterval};
-use super::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use super::spending::SpendingTarget;
+use super::ids::{AccountId, AssetId, EventId};
+
+use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 
-/// Time offset relative to another event
+/// How often a repeating event occurs
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum RepeatInterval {
+    Never,
+    Weekly,
+    BiWeekly,
+    Monthly,
+    Quarterly,
+    Yearly,
+}
+
+impl RepeatInterval {
+    /// Convert to a jiff::Span for date arithmetic
+    pub fn span(&self) -> jiff::Span {
+        match self {
+            RepeatInterval::Never => 0.days(),
+            RepeatInterval::Weekly => 1.week(),
+            RepeatInterval::BiWeekly => 2.weeks(),
+            RepeatInterval::Monthly => 1.month(),
+            RepeatInterval::Quarterly => 3.months(),
+            RepeatInterval::Yearly => 1.year(),
+        }
+    }
+}
+
+/// How a limit resets
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LimitPeriod {
+    /// Resets every calendar year
+    Yearly,
+    /// Never resets
+    Lifetime,
+}
+
+/// Specifies how much to transfer - supports both simple cases and complex calculations
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TransferAmount {
+    // === Simple Cases (90% of use) ===
+    /// Fixed dollar amount
+    Fixed(f64),
+
+    /// Transfer entire source balance
+    SourceBalance,
+
+    /// Transfer enough to zero out target balance (for debt payoff)
+    /// Calculates: -1 * target_balance (turns negative debt to zero)
+    ZeroTargetBalance,
+
+    /// Transfer enough to bring target to specified balance
+    /// Calculates: max(0, target_balance - current_target_balance)
+    TargetToBalance(f64),
+
+    // === Balance References ===
+    /// Reference a specific asset's balance
+    AssetBalance {
+        account_id: AccountId,
+        asset_id: AssetId,
+    },
+
+    /// Reference total account balance (sum of all assets)
+    AccountBalance { account_id: AccountId },
+
+    // === Arithmetic Operations (for complex cases) ===
+    /// Minimum of two amounts
+    Min(Box<TransferAmount>, Box<TransferAmount>),
+
+    /// Maximum of two amounts
+    Max(Box<TransferAmount>, Box<TransferAmount>),
+
+    /// Subtract: left - right
+    Sub(Box<TransferAmount>, Box<TransferAmount>),
+
+    /// Add: left + right
+    Add(Box<TransferAmount>, Box<TransferAmount>),
+
+    /// Multiply: left * right
+    Mul(Box<TransferAmount>, Box<TransferAmount>),
+}
+
+impl TransferAmount {
+    /// Transfer the lesser of a fixed amount or available balance
+    pub fn up_to(amount: f64) -> Self {
+        TransferAmount::Min(
+            Box::new(TransferAmount::Fixed(amount)),
+            Box::new(TransferAmount::SourceBalance),
+        )
+    }
+
+    /// Transfer all balance above a reserve amount
+    pub fn excess_above(reserve: f64) -> Self {
+        TransferAmount::Max(
+            Box::new(TransferAmount::Fixed(0.0)),
+            Box::new(TransferAmount::Sub(
+                Box::new(TransferAmount::SourceBalance),
+                Box::new(TransferAmount::Fixed(reserve)),
+            )),
+        )
+    }
+}
+
+/// Source or destination for a transfer
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum TransferEndpoint {
+    /// External world (income source or expense destination)
+    /// No cost basis tracking, no capital gains
+    External,
+
+    /// Specific asset within an account
+    Asset {
+        account_id: AccountId,
+        asset_id: AssetId,
+    },
+}
+
+/// Limits on cumulative transfer amounts (e.g., IRS contribution limits)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FlowLimits {
+    /// Maximum cumulative amount
+    pub limit: f64,
+    /// How often the limit resets
+    pub period: LimitPeriod,
+}
+
+/// Method for selecting which lots to sell (affects capital gains calculation)
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub enum LotMethod {
+    /// First-in, first-out (default, most common)
+    #[default]
+    Fifo,
+    /// Last-in, first-out
+    Lifo,
+    /// Sell highest cost lots first (minimize realized gains)
+    HighestCost,
+    /// Sell lowest cost lots first (realize gains in low-income years)
+    LowestCost,
+    /// Average cost basis (common for mutual funds)
+    AverageCost,
+}
+
+/// Pre-defined withdrawal order strategies
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub enum WithdrawalOrder {
+    /// Taxable accounts first, then tax-deferred, then tax-free
+    /// Minimizes taxes in early retirement, preserves tax-advantaged growth
+    #[default]
+    TaxEfficientEarly,
+
+    /// Tax-deferred first, then taxable, then tax-free
+    /// Good for filling lower tax brackets in early retirement
+    TaxDeferredFirst,
+
+    /// Tax-free first, then taxable, then tax-deferred
+    /// Rarely optimal, but available
+    TaxFreeFirst,
+
+    /// Pro-rata from all accounts proportionally
+    /// Maintains consistent tax treatment over time
+    ProRata,
+}
+
+/// Source configuration for Sweep withdrawals
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WithdrawalSources {
+    /// Use a pre-defined withdrawal order strategy
+    /// Automatically selects from all non-excluded liquid accounts
+    Strategy {
+        order: WithdrawalOrder,
+        /// Accounts to exclude from automatic selection
+        #[serde(default)]
+        exclude_accounts: Vec<AccountId>,
+    },
+
+    /// Explicitly specify accounts/assets in priority order
+    Custom(Vec<(AccountId, AssetId)>),
+}
+
+impl Default for WithdrawalSources {
+    fn default() -> Self {
+        WithdrawalSources::Strategy {
+            order: WithdrawalOrder::TaxEfficientEarly,
+            exclude_accounts: vec![],
+        }
+    }
+}
+
+/// How to interpret the withdrawal amount
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub enum WithdrawalAmountMode {
+    /// Amount is gross (before taxes)
+    /// Withdraw exactly this amount, taxes come out of it
+    #[default]
+    Gross,
+
+    /// Amount is net (after taxes)
+    /// Gross up withdrawal to cover taxes, so you receive this amount
+    Net,
+}
+
+/// Time offset relative to another event
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum TriggerOffset {
     Days(i32),
     Months(i32),
     Years(i32),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum BalanceThreshold {
     GreaterThanOrEqual(f64),
     LessThanOrEqual(f64),
@@ -75,13 +273,6 @@ pub enum EventTrigger {
     /// Trigger when an account is depleted (balance <= 0)
     AccountDepleted(AccountId),
 
-    // === CashFlow-Based Triggers ===
-    /// Trigger when a cash flow is terminated
-    CashFlowEnded(CashFlowId),
-
-    /// Trigger when total income (from External sources) drops below threshold
-    TotalIncomeBelow(f64),
-
     // === Compound Triggers ===
     /// All conditions must be true
     And(Vec<EventTrigger>),
@@ -97,6 +288,9 @@ pub enum EventTrigger {
         /// Optional: only start repeating after this condition is met
         #[serde(default)]
         start_condition: Option<Box<EventTrigger>>,
+        /// Optional: stop repeating when this condition is met
+        #[serde(default)]
+        end_condition: Option<Box<EventTrigger>>,
     },
 
     // === Manual/Simulation Control ===
@@ -107,66 +301,63 @@ pub enum EventTrigger {
 /// Actions that can occur when an event triggers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventEffect {
-    // === Account Effects ===
+    // === Account Management ===
     CreateAccount(Account),
     DeleteAccount(AccountId),
 
-    // === CashFlow Effects ===
-    CreateCashFlow(Box<CashFlow>),
-    ActivateCashFlow(CashFlowId),
-    PauseCashFlow(CashFlowId),
-    ResumeCashFlow(CashFlowId),
-    TerminateCashFlow(CashFlowId),
-    ModifyCashFlow {
-        cash_flow_id: CashFlowId,
-        new_amount: Option<f64>,
-        new_repeats: Option<RepeatInterval>,
+    // === Money Movement ===
+    /// Transfer money between endpoints (external or assets)
+    /// Tax implications are automatic based on account types
+    Transfer {
+        from: TransferEndpoint,
+        to: TransferEndpoint,
+        amount: TransferAmount,
+        #[serde(default)]
+        adjust_for_inflation: bool,
+        #[serde(default)]
+        limits: Option<FlowLimits>,
     },
 
-    // === SpendingTarget Effects ===
-    CreateSpendingTarget(Box<SpendingTarget>),
-    ActivateSpendingTarget(SpendingTargetId),
-    PauseSpendingTarget(SpendingTargetId),
-    ResumeSpendingTarget(SpendingTargetId),
-    TerminateSpendingTarget(SpendingTargetId),
-    ModifySpendingTarget {
-        spending_target_id: SpendingTargetId,
-        new_amount: Option<f64>,
-    },
-
-    // === Asset Effects ===
-    TransferAsset {
+    /// Explicitly liquidate assets with capital gains handling
+    Liquidate {
         from_account: AccountId,
+        from_asset: AssetId,
         to_account: AccountId,
-        from_asset_id: AssetId,
-        to_asset_id: AssetId,
-        /// None = transfer entire balance
-        amount: Option<f64>,
+        to_asset: AssetId,
+        amount: TransferAmount,
+        #[serde(default)]
+        lot_method: LotMethod,
     },
 
-    // === Event Chaining ===
-    /// Trigger another event (for chaining effects)
-    TriggerEvent(EventId),
+    /// Multi-source sweep with withdrawal strategy
+    /// Replaces SpendingTarget functionality
+    Sweep {
+        to_account: AccountId,
+        to_asset: AssetId,
+        target: TransferAmount,
+        #[serde(default)]
+        sources: WithdrawalSources,
+        #[serde(default)]
+        amount_mode: WithdrawalAmountMode,
+        #[serde(default)]
+        lot_method: LotMethod,
+    },
 
-    // === RMD Effects ===
-    /// Create automatic Required Minimum Distribution withdrawal from tax-deferred account
+    // === Event Control ===
+    /// Trigger another event immediately
+    TriggerEvent(EventId),
+    /// Pause a repeating event
+    PauseEvent(EventId),
+    /// Resume a paused event  
+    ResumeEvent(EventId),
+    /// Terminate an event permanently
+    TerminateEvent(EventId),
+
+    // === RMD (Required Minimum Distributions) ===
+    /// Set up automatic RMD withdrawals from tax-deferred account
     CreateRmdWithdrawal {
         account_id: AccountId,
         starting_age: u8,
-    },
-
-    // === Cash Management Effects ===
-    /// Sweep funds to maintain minimum balance in target account
-    /// Liquidates assets from funding sources (in order) to replenish target
-    SweepToAccount {
-        /// Account to keep funded (e.g., cash/checking account)
-        target_account_id: AccountId,
-        target_asset_id: AssetId,
-        /// Balance to replenish to when triggered
-        target_balance: f64,
-        /// Accounts/assets to liquidate from (in priority order)
-        /// Will sell from first source until exhausted, then move to next
-        funding_sources: Vec<(AccountId, AssetId)>,
     },
 }
 

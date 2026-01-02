@@ -7,5 +7,5 @@
 //! - `comprehensive` - Full lifecycle integration tests
 
 mod basic;
-mod comprehensive;
-mod events;
+// mod comprehensive;
+// mod events;

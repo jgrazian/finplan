@@ -13,14 +13,6 @@ pub struct AccountId(pub u16);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct AssetId(pub u16);
 
-/// Unique identifier for a CashFlow within a simulation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct CashFlowId(pub u16);
-
 /// Unique identifier for an Event within a simulation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EventId(pub u16);
-
-/// Unique identifier for a SpendingTarget within a simulation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct SpendingTargetId(pub u16);

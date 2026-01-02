@@ -404,16 +404,16 @@ fn calculate_balance_at_date(
                 from_account_id,
                 to_account_id,
                 gross_amount,
-                net_amount,
+                net_proceeds,
                 ..
             } => {
                 // Source account loses gross amount
                 if *from_account_id == account_id {
                     balance -= gross_amount;
                 }
-                // Target account gains net amount (after taxes)
+                // Target account gains net proceeds (after taxes)
                 if *to_account_id == account_id {
-                    balance += net_amount;
+                    balance += net_proceeds;
                 }
             }
             _ => {}

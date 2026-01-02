@@ -9,7 +9,8 @@
 //! - Makes it easy to filter by type using pattern matching
 //! - Is extensible - new record types just add enum variants
 
-use super::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
+use super::events::{LotMethod, WithdrawalAmountMode};
+use super::ids::{AccountId, AssetId, EventId};
 use serde::{Deserialize, Serialize};
 
 /// A single record entry representing any transaction/event in the simulation
@@ -22,25 +23,6 @@ pub struct Record {
 impl Record {
     pub fn new(date: jiff::civil::Date, kind: RecordKind) -> Self {
         Self { date, kind }
-    }
-
-    /// Create a cash flow record
-    pub fn cash_flow(
-        date: jiff::civil::Date,
-        cash_flow_id: CashFlowId,
-        account_id: AccountId,
-        asset_id: AssetId,
-        amount: f64,
-    ) -> Self {
-        Self::new(
-            date,
-            RecordKind::CashFlow {
-                cash_flow_id,
-                account_id,
-                asset_id,
-                amount,
-            },
-        )
     }
 
     /// Create a return record
@@ -72,7 +54,7 @@ impl Record {
         to_account_id: AccountId,
         to_asset_id: AssetId,
         amount: f64,
-        triggered_by: Option<EventId>,
+        event_id: EventId,
     ) -> Self {
         Self::new(
             date,
@@ -82,7 +64,7 @@ impl Record {
                 to_account_id,
                 to_asset_id,
                 amount,
-                triggered_by,
+                event_id,
             },
         )
     }
@@ -90,32 +72,6 @@ impl Record {
     /// Create an event record
     pub fn event(date: jiff::civil::Date, event_id: EventId) -> Self {
         Self::new(date, RecordKind::Event { event_id })
-    }
-
-    /// Create a withdrawal record
-    #[allow(clippy::too_many_arguments)]
-    pub fn withdrawal(
-        date: jiff::civil::Date,
-        spending_target_id: SpendingTargetId,
-        account_id: AccountId,
-        asset_id: AssetId,
-        gross_amount: f64,
-        federal_tax: f64,
-        state_tax: f64,
-        net_amount: f64,
-    ) -> Self {
-        Self::new(
-            date,
-            RecordKind::Withdrawal {
-                spending_target_id,
-                account_id,
-                asset_id,
-                gross_amount,
-                federal_tax,
-                state_tax,
-                net_amount,
-            },
-        )
     }
 
     /// Create an RMD record
@@ -128,7 +84,6 @@ impl Record {
         irs_divisor: f64,
         required_amount: f64,
         actual_withdrawn: f64,
-        spending_target_id: SpendingTargetId,
     ) -> Self {
         Self::new(
             date,
@@ -139,7 +94,6 @@ impl Record {
                 irs_divisor,
                 required_amount,
                 actual_withdrawn,
-                spending_target_id,
             },
         )
     }
@@ -154,11 +108,13 @@ impl Record {
         to_asset_id: AssetId,
         gross_amount: f64,
         cost_basis: f64,
-        realized_gain: f64,
+        short_term_gain: f64,
+        long_term_gain: f64,
         federal_tax: f64,
         state_tax: f64,
-        net_amount: f64,
-        triggered_by: Option<EventId>,
+        net_proceeds: f64,
+        lot_method: LotMethod,
+        event_id: EventId,
     ) -> Self {
         Self::new(
             date,
@@ -169,105 +125,95 @@ impl Record {
                 to_asset_id,
                 gross_amount,
                 cost_basis,
-                realized_gain,
+                short_term_gain,
+                long_term_gain,
                 federal_tax,
                 state_tax,
-                net_amount,
-                triggered_by,
+                net_proceeds,
+                lot_method,
+                event_id,
             },
         )
     }
 }
 
 /// The kind of transaction recorded
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum RecordKind {
-    /// CashFlow execution (income or expense only, not internal transfers)
-    CashFlow {
-        cash_flow_id: CashFlowId,
-        /// The account affected (target for income, source for expense)
-        account_id: AccountId,
-        /// The asset affected
-        asset_id: AssetId,
-        /// Positive for deposits (income), negative for withdrawals (expenses)
+    /// External income received
+    Income {
+        to_account_id: AccountId,
+        to_asset_id: AssetId,
         amount: f64,
+        event_id: EventId,
     },
 
-    /// Investment return applied to an asset
-    Return {
-        account_id: AccountId,
-        asset_id: AssetId,
-        /// Balance before return was applied
-        balance_before: f64,
-        /// The return rate applied (can be negative for losses/debt interest)
-        return_rate: f64,
-        /// The dollar amount of return (balance_before * return_rate)
-        return_amount: f64,
+    /// External expense paid
+    Expense {
+        from_account_id: AccountId,
+        from_asset_id: AssetId,
+        amount: f64,
+        event_id: EventId,
     },
 
-    /// Transfer between assets (triggered by EventEffect::TransferAsset)
+    /// Internal transfer between assets (no tax implications tracked here)
     Transfer {
         from_account_id: AccountId,
         from_asset_id: AssetId,
         to_account_id: AccountId,
         to_asset_id: AssetId,
-        /// Amount transferred (always positive)
         amount: f64,
-        /// The event that triggered this transfer, if any
-        triggered_by: Option<EventId>,
+        event_id: EventId,
     },
 
-    /// Event being triggered
-    Event { event_id: EventId },
+    /// Liquidation with capital gains
+    Liquidation {
+        from_account_id: AccountId,
+        from_asset_id: AssetId,
+        to_account_id: AccountId,
+        to_asset_id: AssetId,
+        gross_amount: f64,
+        cost_basis: f64,
+        short_term_gain: f64,
+        long_term_gain: f64,
+        federal_tax: f64,
+        state_tax: f64,
+        net_proceeds: f64,
+        lot_method: LotMethod,
+        event_id: EventId,
+    },
 
-    /// SpendingTarget withdrawal
-    Withdrawal {
-        spending_target_id: SpendingTargetId,
+    /// Sweep withdrawal (may include multiple liquidations)
+    Sweep {
+        to_account_id: AccountId,
+        to_asset_id: AssetId,
+        target_amount: f64,
+        actual_gross: f64,
+        actual_net: f64,
+        amount_mode: WithdrawalAmountMode,
+        event_id: EventId,
+    },
+
+    /// Investment return applied
+    Return {
         account_id: AccountId,
         asset_id: AssetId,
-        gross_amount: f64,
-        /// Federal income tax on this withdrawal
-        federal_tax: f64,
-        /// State tax (income + capital gains) on this withdrawal
-        state_tax: f64,
-        net_amount: f64,
+        balance_before: f64,
+        return_rate: f64,
+        return_amount: f64,
     },
 
-    /// Required Minimum Distribution calculation and withdrawal
+    /// Event triggered
+    Event { event_id: EventId },
+
+    /// RMD withdrawal
     Rmd {
         account_id: AccountId,
         age: u8,
         prior_year_balance: f64,
         irs_divisor: f64,
         required_amount: f64,
-        /// Actual amount withdrawn (may differ from required if account balance is lower)
         actual_withdrawn: f64,
-        spending_target_id: SpendingTargetId,
-    },
-
-    /// Liquidation: selling assets from one account to fund another (with tax implications)
-    /// Used for cash sweeps, rebalancing with tax consequences, etc.
-    Liquidation {
-        /// Source account where assets are being sold
-        from_account_id: AccountId,
-        from_asset_id: AssetId,
-        /// Destination account receiving net proceeds
-        to_account_id: AccountId,
-        to_asset_id: AssetId,
-        /// Market value of assets sold
-        gross_amount: f64,
-        /// Original purchase price (for capital gains calculation)
-        cost_basis: f64,
-        /// Realized gain/loss (gross_amount - cost_basis)
-        realized_gain: f64,
-        /// Federal tax on the sale
-        federal_tax: f64,
-        /// State tax on the sale
-        state_tax: f64,
-        /// Net amount arriving at destination (gross - taxes)
-        net_amount: f64,
-        /// The event that triggered this liquidation, if any
-        triggered_by: Option<EventId>,
     },
 }

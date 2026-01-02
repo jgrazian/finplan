@@ -4,14 +4,10 @@
 //! with automatic ID assignment and metadata tracking.
 
 use super::SimulationConfig;
-use super::descriptors::{
-    AccountDescriptor, AssetDescriptor, CashFlowDescriptor, EventDescriptor,
-    SpendingTargetDescriptor,
-};
+use super::descriptors::{AccountDescriptor, AssetDescriptor, EventDescriptor};
 use crate::model::{
-    Account, AccountId, Asset, AssetId, CashFlow, CashFlowId, EntityMetadata, Event, EventId,
-    InflationProfile, ReturnProfile, SimulationMetadata, SpendingTarget, SpendingTargetId,
-    TaxConfig,
+    Account, AccountId, Asset, AssetId, EntityMetadata, Event, EventId, InflationProfile,
+    ReturnProfile, SimulationMetadata, TaxConfig,
 };
 
 /// Builder for creating simulations with automatic ID assignment and metadata tracking
@@ -44,9 +40,7 @@ pub struct SimulationBuilder {
     metadata: SimulationMetadata,
     next_account_id: u16,
     next_asset_id: u16,
-    next_cash_flow_id: u16,
     next_event_id: u16,
-    next_spending_target_id: u16,
 }
 
 impl Default for SimulationBuilder {
@@ -62,9 +56,7 @@ impl SimulationBuilder {
             metadata: SimulationMetadata::new(),
             next_account_id: 0,
             next_asset_id: 0,
-            next_cash_flow_id: 0,
             next_event_id: 0,
-            next_spending_target_id: 0,
         }
     }
 
@@ -141,6 +133,7 @@ impl SimulationBuilder {
             asset_class: descriptor.asset_class,
             initial_value: descriptor.initial_value,
             return_profile_index: descriptor.return_profile_index,
+            initial_cost_basis: None,
         };
 
         // Find the account and add the asset
@@ -162,33 +155,6 @@ impl SimulationBuilder {
         );
 
         (self, asset_id)
-    }
-
-    /// Add a cash flow using a descriptor
-    pub fn add_cash_flow(mut self, descriptor: CashFlowDescriptor) -> (Self, CashFlowId) {
-        let cash_flow_id = CashFlowId(self.next_cash_flow_id);
-        self.next_cash_flow_id += 1;
-
-        let cash_flow = CashFlow {
-            cash_flow_id,
-            amount: descriptor.amount,
-            repeats: descriptor.repeats,
-            cash_flow_limits: descriptor.limits,
-            adjust_for_inflation: descriptor.adjust_for_inflation,
-            direction: descriptor.direction,
-            state: descriptor.state,
-        };
-
-        self.config.cash_flows.push(cash_flow);
-        self.metadata.cash_flows.insert(
-            cash_flow_id,
-            EntityMetadata {
-                name: descriptor.name,
-                description: descriptor.description,
-            },
-        );
-
-        (self, cash_flow_id)
     }
 
     /// Add an event using a descriptor
@@ -213,37 +179,6 @@ impl SimulationBuilder {
         );
 
         (self, event_id)
-    }
-
-    /// Add a spending target using a descriptor
-    pub fn add_spending_target(
-        mut self,
-        descriptor: SpendingTargetDescriptor,
-    ) -> (Self, SpendingTargetId) {
-        let spending_target_id = SpendingTargetId(self.next_spending_target_id);
-        self.next_spending_target_id += 1;
-
-        let spending_target = SpendingTarget {
-            spending_target_id,
-            amount: descriptor.amount,
-            repeats: descriptor.repeats,
-            net_amount_mode: descriptor.net_amount_mode,
-            adjust_for_inflation: descriptor.adjust_for_inflation,
-            withdrawal_strategy: descriptor.withdrawal_strategy,
-            exclude_accounts: Vec::new(),
-            state: descriptor.state,
-        };
-
-        self.config.spending_targets.push(spending_target);
-        self.metadata.spending_targets.insert(
-            spending_target_id,
-            EntityMetadata {
-                name: descriptor.name,
-                description: descriptor.description,
-            },
-        );
-
-        (self, spending_target_id)
     }
 
     /// Build and return the simulation configuration and metadata

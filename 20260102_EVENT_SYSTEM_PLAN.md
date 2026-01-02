@@ -1349,15 +1349,15 @@ pub enum WithdrawalAmountMode {
 ### Before (Complex)
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+┌─────────────┐     ┌─────────────┐     ┌──────────────┐
 │  CashFlow   │     │   Event     │     │SpendingTarget│
-│  (income/   │     │  (triggers  │     │ (retirement │
+│  (income/   │     │  (triggers  │     │ (retirement  │
 │   expense)  │     │   actions)  │     │  withdrawals)│
-└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
+└──────┬──────┘     └──────┬──────┘     └──────┬───────┘
        │                   │                   │
        ▼                   ▼                   ▼
 ┌─────────────────────────────────────────────────────┐
-│              Simulation Engine                       │
+│              Simulation Engine                      │
 │  - apply_cash_flows()                               │
 │  - process_events()                                 │
 │  - apply_spending_targets()                         │
@@ -1374,7 +1374,7 @@ pub enum WithdrawalAmountMode {
                            │
                            ▼
 ┌─────────────────────────────────────────────────────┐
-│              Simulation Engine                       │
+│              Simulation Engine                      │
 │  - process_events()                                 │
 │    ├── Transfer (income/expense/moves)              │
 │    ├── Liquidate (tax-aware sales)                  │

@@ -7,8 +7,10 @@ use super::ids::{AccountId, AssetId};
 use serde::{Deserialize, Serialize};
 
 /// Classification of an asset for valuation behavior
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AssetClass {
+    /// Cash, money market - fully liquid, no capital gains
+    Cash,
     /// Stocks, bonds, mutual funds - liquid and investable
     Investable,
     /// Property value - typically illiquid
@@ -27,6 +29,10 @@ pub struct Asset {
     pub initial_value: f64,
     /// Index into the simulation's return_profiles vector
     pub return_profile_index: usize,
+    /// Initial cost basis (defaults to initial_value if not specified)
+    /// Only relevant for Taxable accounts
+    #[serde(default)]
+    pub initial_cost_basis: Option<f64>,
 }
 
 /// Tax treatment for an account

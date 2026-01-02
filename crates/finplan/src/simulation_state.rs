@@ -1,12 +1,22 @@
-use crate::config::SimulationParameters;
+use crate::config::SimulationConfig;
 use crate::model::{
-    Account, AccountId, AccountSnapshot, AssetId, AssetSnapshot, CashFlow, CashFlowDirection,
-    CashFlowId, CashFlowState, Event, EventId, Record, RecordKind, RmdTable, SpendingTarget,
-    SpendingTargetId, SpendingTargetState, TaxSummary,
+    Account, AccountId, AccountSnapshot, AssetId, AssetSnapshot, Event, EventId, Record,
+    RecordKind, RmdTable, TaxSummary,
 };
 use jiff::ToSpan;
 use rand::SeedableRng;
 use std::collections::HashMap;
+
+/// A single purchase lot for cost basis tracking
+#[derive(Debug, Clone)]
+pub struct AssetLot {
+    /// Date of purchase
+    pub purchase_date: jiff::civil::Date,
+    /// Number of shares/units (or dollar amount for non-share assets)
+    pub units: f64,
+    /// Total cost basis for this lot
+    pub cost_basis: f64,
+}
 
 /// Runtime state for the simulation, mutated as events trigger
 #[derive(Debug, Clone)]
@@ -21,18 +31,6 @@ pub struct SimulationState {
 
     /// Current balances per asset (separate from initial_value for mutation)
     pub asset_balances: HashMap<(AccountId, AssetId), f64>,
-
-    /// All cash flows with their current state
-    pub cash_flows: HashMap<CashFlowId, (CashFlow, CashFlowState)>,
-
-    /// Next scheduled date for each cash flow
-    pub cash_flow_next_date: HashMap<CashFlowId, jiff::civil::Date>,
-
-    /// All spending targets with their current state
-    pub spending_targets: HashMap<SpendingTargetId, (SpendingTarget, SpendingTargetState)>,
-
-    /// Next scheduled date for each spending target
-    pub spending_target_next_date: HashMap<SpendingTargetId, jiff::civil::Date>,
 
     /// Events that have already triggered (for `once: true` checks)
     pub triggered_events: HashMap<EventId, jiff::civil::Date>,
@@ -49,10 +47,13 @@ pub struct SimulationState {
     /// Birth date for age calculations (from SimulationParameters)
     pub birth_date: Option<jiff::civil::Date>,
 
-    /// Accumulated values for limit tracking (CashFlowId -> accumulated amount)
-    pub cash_flow_ytd: HashMap<CashFlowId, f64>,
-    pub cash_flow_lifetime: HashMap<CashFlowId, f64>,
-    pub cash_flow_last_period_key: HashMap<CashFlowId, i16>,
+    /// Cost basis tracking for taxable accounts (account_id, asset_id) -> lots
+    pub asset_lots: HashMap<(AccountId, AssetId), Vec<AssetLot>>,
+
+    /// Accumulated values for event flow limits (EventId -> accumulated amount)
+    pub event_flow_ytd: HashMap<EventId, f64>,
+    pub event_flow_lifetime: HashMap<EventId, f64>,
+    pub event_flow_last_period_key: HashMap<EventId, i16>,
 
     /// Sampled returns per return profile per year
     pub return_profile_returns: Vec<Vec<f64>>,
@@ -85,21 +86,16 @@ pub struct SimulationState {
 
 impl SimulationState {
     /// Update RMD record with actual withdrawal amount after spending target executes
-    pub fn update_rmd_actual_withdrawn(
-        &mut self,
-        spending_target_id: SpendingTargetId,
-        amount: f64,
-    ) {
-        // Search backwards to find most recent RMD record for this spending target
+    /// DEPRECATED: RMD tracking needs to be redesigned for new event system
+    #[deprecated(note = "RMD tracking needs to be redesigned for new event system")]
+    pub fn update_rmd_actual_withdrawn(&mut self, amount: f64) {
+        // Search backwards to find most recent RMD record
         for record in self.records.iter_mut().rev() {
             if let RecordKind::Rmd {
-                spending_target_id: st_id,
-                actual_withdrawn,
-                ..
+                actual_withdrawn, ..
             } = &mut record.kind
-                && *st_id == spending_target_id
             {
-                // Track cumulative withdrawals for this RMD spending target
+                // Track cumulative withdrawals for this RMD
                 *actual_withdrawn += amount;
                 break;
             }
@@ -119,7 +115,7 @@ pub struct YtdTaxState {
 }
 
 impl SimulationState {
-    pub fn from_parameters(params: &SimulationParameters, seed: u64) -> Self {
+    pub fn from_parameters(params: &SimulationConfig, seed: u64) -> Self {
         let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
         let start_date = params
             .start_date
@@ -155,18 +151,15 @@ impl SimulationState {
             end_date,
             accounts: HashMap::new(),
             asset_balances: HashMap::new(),
-            cash_flows: HashMap::new(),
-            cash_flow_next_date: HashMap::new(),
-            spending_targets: HashMap::new(),
-            spending_target_next_date: HashMap::new(),
             triggered_events: HashMap::new(),
             events: HashMap::new(),
             event_next_date: HashMap::new(),
             repeating_event_active: HashMap::new(),
             birth_date: params.birth_date,
-            cash_flow_ytd: HashMap::new(),
-            cash_flow_lifetime: HashMap::new(),
-            cash_flow_last_period_key: HashMap::new(),
+            asset_lots: HashMap::new(),
+            event_flow_ytd: HashMap::new(),
+            event_flow_lifetime: HashMap::new(),
+            event_flow_last_period_key: HashMap::new(),
             return_profile_returns,
             inflation_rates,
             cumulative_inflation,
@@ -187,42 +180,21 @@ impl SimulationState {
                 state
                     .asset_balances
                     .insert((account.account_id, asset.asset_id), asset.initial_value);
+
+                // Initialize cost basis lots for taxable accounts
+                if matches!(account.account_type, crate::model::AccountType::Taxable) {
+                    let cost_basis = asset.initial_cost_basis.unwrap_or(asset.initial_value);
+                    let lot = AssetLot {
+                        purchase_date: start_date,
+                        units: asset.initial_value,
+                        cost_basis,
+                    };
+                    state
+                        .asset_lots
+                        .insert((account.account_id, asset.asset_id), vec![lot]);
+                }
             }
             state.accounts.insert(account.account_id, account.clone());
-        }
-
-        // Load cash flows
-        for cf in &params.cash_flows {
-            let initial_state = cf.state;
-            state
-                .cash_flows
-                .insert(cf.cash_flow_id, (*cf, initial_state));
-
-            // If active, schedule immediately
-            if initial_state == CashFlowState::Active {
-                state
-                    .cash_flow_next_date
-                    .insert(cf.cash_flow_id, start_date);
-            }
-
-            state
-                .cash_flow_last_period_key
-                .insert(cf.cash_flow_id, start_date.year());
-        }
-
-        // Load spending targets
-        for st in &params.spending_targets {
-            let initial_state = st.state;
-            state
-                .spending_targets
-                .insert(st.spending_target_id, (st.clone(), initial_state));
-
-            // If active, schedule immediately
-            if initial_state == SpendingTargetState::Active {
-                state
-                    .spending_target_next_date
-                    .insert(st.spending_target_id, start_date);
-            }
         }
 
         // Load events
@@ -255,17 +227,11 @@ impl SimulationState {
             .unwrap_or(0.0)
     }
 
-    /// Calculate total income from active income cash flows
+    /// Calculate total income from active events (deprecated - no longer tracking CashFlows)
+    #[deprecated(note = "CashFlow system removed, income tracking needs redesign")]
     pub fn calculate_total_income(&self) -> f64 {
-        self.cash_flows
-            .values()
-            .filter(|(cf, state)| {
-                *state == CashFlowState::Active
-                    && matches!(cf.direction, CashFlowDirection::Income { .. })
-                    && cf.amount > 0.0
-            })
-            .map(|(cf, _)| cf.annualized_amount())
-            .sum()
+        // TODO: Implement income calculation based on events if needed
+        0.0
     }
 
     /// Get current age in years and months
@@ -344,13 +310,18 @@ impl SimulationState {
                 ..Default::default()
             };
 
-            // Reset YTD cash flow accumulators
-            self.cash_flow_ytd.clear();
+            // Reset YTD flow accumulators (for flow limits)
+            for (event_id, last_period) in self.event_flow_last_period_key.iter_mut() {
+                if *last_period != current_year {
+                    self.event_flow_ytd.insert(*event_id, 0.0);
+                    *last_period = current_year;
+                }
+            }
         }
     }
 
     /// Build account snapshots with starting values from SimulationParameters
-    pub fn build_account_snapshots(&self, params: &SimulationParameters) -> Vec<AccountSnapshot> {
+    pub fn build_account_snapshots(&self, params: &SimulationConfig) -> Vec<AccountSnapshot> {
         params
             .accounts
             .iter()

@@ -56,13 +56,6 @@ impl SimulationResult {
 
         for record in &self.records {
             match &record.kind {
-                RecordKind::CashFlow {
-                    account_id: acc_id,
-                    amount,
-                    ..
-                } if *acc_id == account_id => {
-                    balance += amount;
-                }
                 RecordKind::Return {
                     account_id: acc_id,
                     return_amount,
@@ -83,27 +76,20 @@ impl SimulationResult {
                         balance += amount;
                     }
                 }
-                RecordKind::Withdrawal {
-                    account_id: acc_id,
-                    gross_amount,
-                    ..
-                } if *acc_id == account_id => {
-                    balance -= gross_amount;
-                }
                 RecordKind::Liquidation {
                     from_account_id,
                     to_account_id,
                     gross_amount,
-                    net_amount,
+                    net_proceeds,
                     ..
                 } => {
                     // Source account loses gross amount
                     if *from_account_id == account_id {
                         balance -= gross_amount;
                     }
-                    // Target account gains net amount (after taxes)
+                    // Target account gains net proceeds (after taxes)
                     if *to_account_id == account_id {
-                        balance += net_amount;
+                        balance += net_proceeds;
                     }
                 }
                 _ => {}
@@ -128,14 +114,6 @@ impl SimulationResult {
 
         for record in &self.records {
             match &record.kind {
-                RecordKind::CashFlow {
-                    account_id: acc_id,
-                    asset_id: ass_id,
-                    amount,
-                    ..
-                } if *acc_id == account_id && *ass_id == asset_id => {
-                    balance += amount;
-                }
                 RecordKind::Return {
                     account_id: acc_id,
                     asset_id: ass_id,
@@ -159,30 +137,22 @@ impl SimulationResult {
                         balance += amount;
                     }
                 }
-                RecordKind::Withdrawal {
-                    account_id: acc_id,
-                    asset_id: ass_id,
-                    gross_amount,
-                    ..
-                } if *acc_id == account_id && *ass_id == asset_id => {
-                    balance -= gross_amount;
-                }
                 RecordKind::Liquidation {
                     from_account_id,
                     from_asset_id,
                     to_account_id,
                     to_asset_id,
                     gross_amount,
-                    net_amount,
+                    net_proceeds,
                     ..
                 } => {
                     // Source asset loses gross amount
                     if *from_account_id == account_id && *from_asset_id == asset_id {
                         balance -= gross_amount;
                     }
-                    // Target asset gains net amount (after taxes)
+                    // Target asset gains net proceeds (after taxes)
                     if *to_account_id == account_id && *to_asset_id == asset_id {
-                        balance += net_amount;
+                        balance += net_proceeds;
                     }
                 }
                 _ => {}
@@ -213,13 +183,6 @@ impl SimulationResult {
 
     // === Helper methods to filter records by type ===
 
-    /// Get all cash flow records
-    pub fn cash_flow_records(&self) -> impl Iterator<Item = &Record> {
-        self.records
-            .iter()
-            .filter(|r| matches!(r.kind, RecordKind::CashFlow { .. }))
-    }
-
     /// Get all return records
     pub fn return_records(&self) -> impl Iterator<Item = &Record> {
         self.records
@@ -232,13 +195,6 @@ impl SimulationResult {
         self.records
             .iter()
             .filter(|r| matches!(r.kind, RecordKind::Transfer { .. }))
-    }
-
-    /// Get all withdrawal records
-    pub fn withdrawal_records(&self) -> impl Iterator<Item = &Record> {
-        self.records
-            .iter()
-            .filter(|r| matches!(r.kind, RecordKind::Withdrawal { .. }))
     }
 
     /// Get all event records
