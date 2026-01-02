@@ -2,10 +2,11 @@
 //!
 //! Tests are organized by topic:
 //! - `basic` - Core simulation mechanics
-//! - `events` - Event trigger and effect tests
-//! - `taxes` - Tax calculation tests  
+//! - `event_effects` - Event system tests (Transfer, Sweep, triggers)
+//! - `rmd` - Required Minimum Distribution tests
 //! - `comprehensive` - Full lifecycle integration tests
 
 mod basic;
-// mod comprehensive;
-// mod events;
+mod comprehensive;
+mod event_effects;
+mod rmd;

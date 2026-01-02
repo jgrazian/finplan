@@ -56,6 +56,20 @@ impl SimulationResult {
 
         for record in &self.records {
             match &record.kind {
+                RecordKind::Income {
+                    to_account_id,
+                    amount,
+                    ..
+                } if *to_account_id == account_id => {
+                    balance += amount;
+                }
+                RecordKind::Expense {
+                    from_account_id,
+                    amount,
+                    ..
+                } if *from_account_id == account_id => {
+                    balance -= amount;
+                }
                 RecordKind::Return {
                     account_id: acc_id,
                     return_amount,
@@ -92,6 +106,16 @@ impl SimulationResult {
                         balance += net_proceeds;
                     }
                 }
+                // Note: Sweep records are summaries only - the actual balance changes
+                // are recorded via Transfer or Liquidation records from liquidate_from_source
+                RecordKind::Rmd {
+                    account_id: acc_id,
+                    actual_withdrawn,
+                    ..
+                } if *acc_id == account_id => {
+                    // RMD withdraws from account
+                    balance -= actual_withdrawn;
+                }
                 _ => {}
             }
         }
@@ -114,6 +138,22 @@ impl SimulationResult {
 
         for record in &self.records {
             match &record.kind {
+                RecordKind::Income {
+                    to_account_id,
+                    to_asset_id,
+                    amount,
+                    ..
+                } if *to_account_id == account_id && *to_asset_id == asset_id => {
+                    balance += amount;
+                }
+                RecordKind::Expense {
+                    from_account_id,
+                    from_asset_id,
+                    amount,
+                    ..
+                } if *from_account_id == account_id && *from_asset_id == asset_id => {
+                    balance -= amount;
+                }
                 RecordKind::Return {
                     account_id: acc_id,
                     asset_id: ass_id,
@@ -155,6 +195,8 @@ impl SimulationResult {
                         balance += net_proceeds;
                     }
                 }
+                // Note: Sweep records are summaries only - the actual balance changes
+                // are recorded via Transfer or Liquidation records from liquidate_from_source
                 _ => {}
             }
         }

@@ -61,10 +61,6 @@ fn liquidate_from_source(
             .asset_balances
             .entry((src_account, src_asset))
             .or_insert(0.0) -= actual_amount;
-        *state
-            .asset_balances
-            .entry((to_account, to_asset))
-            .or_insert(0.0) += actual_amount;
 
         // Tax-deferred accounts have ordinary income tax on withdrawal
         let (federal_tax, state_tax) = if is_tax_deferred {
@@ -79,21 +75,52 @@ fn liquidate_from_source(
             (0.0, 0.0)
         };
 
-        state.records.push(Record::new(
-            state.current_date,
-            RecordKind::Transfer {
-                from_account_id: src_account,
-                from_asset_id: src_asset,
-                to_account_id: to_account,
-                to_asset_id: to_asset,
-                amount: actual_amount,
-                event_id,
-            },
-        ));
+        // Add net amount (after taxes) to target account
+        let net_amount = actual_amount - federal_tax - state_tax;
+        *state
+            .asset_balances
+            .entry((to_account, to_asset))
+            .or_insert(0.0) += net_amount;
+
+        // Use appropriate record type based on whether taxes were applied
+        if is_tax_deferred {
+            // TaxDeferred accounts use Liquidation record to track gross vs net
+            state.records.push(Record::new(
+                state.current_date,
+                RecordKind::Liquidation {
+                    from_account_id: src_account,
+                    from_asset_id: src_asset,
+                    to_account_id: to_account,
+                    to_asset_id: to_asset,
+                    gross_amount: actual_amount,
+                    cost_basis: actual_amount, // Tax-deferred has no cost basis distinction
+                    short_term_gain: 0.0,
+                    long_term_gain: 0.0,
+                    federal_tax,
+                    state_tax,
+                    net_proceeds: net_amount,
+                    lot_method,
+                    event_id,
+                },
+            ));
+        } else {
+            // TaxFree and other non-taxable accounts use Transfer
+            state.records.push(Record::new(
+                state.current_date,
+                RecordKind::Transfer {
+                    from_account_id: src_account,
+                    from_asset_id: src_asset,
+                    to_account_id: to_account,
+                    to_asset_id: to_asset,
+                    amount: actual_amount,
+                    event_id,
+                },
+            ));
+        }
 
         return LiquidationResult {
             gross_amount: actual_amount,
-            net_proceeds: actual_amount - federal_tax - state_tax,
+            net_proceeds: net_amount,
             cost_basis: actual_amount,
             short_term_gain: 0.0,
             long_term_gain: 0.0,
@@ -557,18 +584,21 @@ pub fn apply_effect(
                 let remaining = (flow_limits.limit - accumulated).max(0.0);
                 calculated_amount = calculated_amount.min(remaining);
 
-                // Update accumulators
-                match flow_limits.period {
-                    LimitPeriod::Yearly => {
-                        *state.event_flow_ytd.entry(event_id).or_insert(0.0) += calculated_amount;
-                        let current_year = state.current_date.year();
-                        state
-                            .event_flow_last_period_key
-                            .insert(event_id, current_year);
-                    }
-                    LimitPeriod::Lifetime => {
-                        *state.event_flow_lifetime.entry(event_id).or_insert(0.0) +=
-                            calculated_amount;
+                // Update accumulators only if we're actually transferring something
+                if calculated_amount > 0.0 {
+                    match flow_limits.period {
+                        LimitPeriod::Yearly => {
+                            *state.event_flow_ytd.entry(event_id).or_insert(0.0) +=
+                                calculated_amount;
+                            let current_year = state.current_date.year();
+                            state
+                                .event_flow_last_period_key
+                                .insert(event_id, current_year);
+                        }
+                        LimitPeriod::Lifetime => {
+                            *state.event_flow_lifetime.entry(event_id).or_insert(0.0) +=
+                                calculated_amount;
+                        }
                     }
                 }
             }
@@ -811,8 +841,8 @@ pub fn apply_effect(
         }
 
         EventEffect::TerminateEvent(event_id) => {
-            // Remove event from active tracking
-            state.repeating_event_active.remove(event_id);
+            // Mark event as inactive (permanently) - keep in map so it doesn't re-activate
+            state.repeating_event_active.insert(*event_id, false);
             state.event_next_date.remove(event_id);
             // Mark it as triggered if it was a once event
             state.triggered_events.insert(*event_id, state.current_date);
@@ -830,8 +860,67 @@ pub fn apply_effect(
         } => {
             // Register this account for RMD tracking
             state.active_rmd_accounts.insert(*account_id, *starting_age);
-            // TODO: Implement RMD withdrawal using new Sweep effect
-            eprintln!("WARNING: RMD CreateRmdWithdrawal effect needs reimplementation");
+
+            // Check if person has reached RMD age
+            let current_age = state.current_age();
+            if let Some((years, _months)) = current_age {
+                if years >= *starting_age {
+                    // Calculate RMD amount using IRS Uniform Lifetime Table
+                    let rmd_table = crate::model::RmdTable::irs_uniform_lifetime_2024();
+
+                    // Get prior year balance and divisor for recording
+                    let prior_year_balance = state.prior_year_end_balance(*account_id);
+                    let irs_divisor = rmd_table.divisor_for_age(years);
+
+                    if let (Some(prior_balance), Some(divisor)) = (prior_year_balance, irs_divisor)
+                    {
+                        let rmd_amount = prior_balance / divisor;
+
+                        // Find the first (default) asset in this account for withdrawal
+                        let asset_id = state
+                            .accounts
+                            .get(account_id)
+                            .and_then(|acc| acc.assets.first())
+                            .map(|a| a.asset_id);
+
+                        if let Some(asset_id) = asset_id {
+                            // Perform withdrawal from tax-deferred account to external (spending)
+                            let balance = state.asset_balance(*account_id, asset_id);
+                            let actual_amount = rmd_amount.min(balance);
+
+                            if actual_amount > 0.0 {
+                                // Deduct from account
+                                *state
+                                    .asset_balances
+                                    .entry((*account_id, asset_id))
+                                    .or_insert(0.0) -= actual_amount;
+
+                                // Tax-deferred withdrawals are ordinary income
+                                let tax_config = &state.tax_config;
+                                let federal_tax = actual_amount * 0.22; // Simplified rate
+                                let state_tax = actual_amount * tax_config.state_rate;
+
+                                state.ytd_tax.ordinary_income += actual_amount;
+                                state.ytd_tax.federal_tax += federal_tax;
+                                state.ytd_tax.state_tax += state_tax;
+
+                                // Record the RMD withdrawal
+                                state.records.push(Record::new(
+                                    state.current_date,
+                                    RecordKind::Rmd {
+                                        account_id: *account_id,
+                                        age: years,
+                                        prior_year_balance: prior_balance,
+                                        irs_divisor: divisor,
+                                        required_amount: rmd_amount,
+                                        actual_withdrawn: actual_amount,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -889,12 +978,27 @@ fn estimate_gross_for_net_single(
 
 /// Process all events that should trigger on the current date
 /// Returns list of (EventId, event name) for logging
+/// Helper to determine event priority (lower = higher priority = processed first)
+/// Control events (Pause/Resume/Terminate) should be processed before other events
+fn event_priority(event: &Event) -> u8 {
+    // Check if any effect is a control effect
+    for effect in &event.effects {
+        match effect {
+            EventEffect::PauseEvent(_)
+            | EventEffect::ResumeEvent(_)
+            | EventEffect::TerminateEvent(_) => return 0, // Highest priority
+            _ => {}
+        }
+    }
+    1 // Normal priority
+}
+
 pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
     let mut triggered = Vec::new();
     let mut pending_triggers: Vec<EventId> = Vec::new();
 
     // Collect events to evaluate (avoid borrow issues)
-    let events_to_check: Vec<(EventId, Event)> = state
+    let mut events_to_check: Vec<(EventId, Event)> = state
         .events
         .iter()
         .filter(|(id, event)| {
@@ -910,6 +1014,9 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
         .map(|(id, e)| (*id, e.clone()))
         .collect();
 
+    // Sort events so control events (Pause/Resume/Terminate) are processed first
+    events_to_check.sort_by_key(|(_, event)| event_priority(event));
+
     // Evaluate each event
     for (event_id, event) in events_to_check {
         let should_trigger = match &event.trigger {
@@ -918,12 +1025,10 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                 start_condition,
                 end_condition,
             } => {
-                // Check if this repeating event is active
-                let is_active = state
-                    .repeating_event_active
-                    .get(&event_id)
-                    .copied()
-                    .unwrap_or(false);
+                // Check if this repeating event has been started and its active status
+                let active_status = state.repeating_event_active.get(&event_id);
+                let is_started = active_status.is_some(); // Event has been activated at least once
+                let is_active = active_status.copied().unwrap_or(false);
 
                 // Check if end_condition is met - if so, terminate the event
                 if let Some(end_cond) = end_condition {
@@ -934,8 +1039,8 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                     }
                 }
 
-                if !is_active {
-                    // Check if start_condition is met (or no condition)
+                if !is_started {
+                    // Event hasn't been started yet - check if start_condition is met
                     let condition_met = match start_condition {
                         None => true,
                         Some(condition) => evaluate_trigger(condition, state),
@@ -950,8 +1055,11 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                     } else {
                         false
                     }
+                } else if !is_active {
+                    // Event was started but is now paused - don't trigger
+                    false
                 } else {
-                    // Check if scheduled for today
+                    // Active event - check if scheduled for today
                     if let Some(next_date) = state.event_next_date.get(&event_id) {
                         if state.current_date >= *next_date {
                             // Schedule next occurrence
