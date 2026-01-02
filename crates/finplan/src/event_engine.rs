@@ -1,9 +1,10 @@
 use crate::model::{
     AccountId, AccountType, AssetId, Event, EventEffect, EventId, EventTrigger, LimitPeriod,
-    LotMethod, Record, RecordKind, TransferAmount, TransferEndpoint, TriggerOffset,
+    LotMethod, Record, RecordKind, RmdTable, TransferAmount, TransferEndpoint, TriggerOffset,
     WithdrawalAmountMode, WithdrawalOrder, WithdrawalSources,
 };
 use crate::simulation_state::SimulationState;
+use crate::taxes::calculate_marginal_tax;
 use jiff::ToSpan;
 
 /// Result of liquidating assets from a single source
@@ -65,7 +66,12 @@ fn liquidate_from_source(
         // Tax-deferred accounts have ordinary income tax on withdrawal
         let (federal_tax, state_tax) = if is_tax_deferred {
             let tax_config = &state.tax_config;
-            let fed = actual_amount * 0.22;
+            // Use marginal tax calculation for accurate progressive taxation
+            let fed = calculate_marginal_tax(
+                actual_amount,
+                state.ytd_tax.ordinary_income,
+                &tax_config.federal_brackets,
+            );
             let st = actual_amount * tax_config.state_rate;
             state.ytd_tax.ordinary_income += actual_amount;
             state.ytd_tax.federal_tax += fed;
@@ -255,8 +261,20 @@ fn liquidate_from_source(
     }
 
     // Calculate taxes on gains using config rates
+    // Short-term gains are taxed as ordinary income (use marginal rate)
+    // Long-term gains use capital gains rate
     let tax_config = &state.tax_config;
-    let federal_tax = short_term_gain * 0.22 + long_term_gain * tax_config.capital_gains_rate;
+    let short_term_tax = if short_term_gain > 0.0 {
+        calculate_marginal_tax(
+            short_term_gain,
+            state.ytd_tax.ordinary_income,
+            &tax_config.federal_brackets,
+        )
+    } else {
+        0.0
+    };
+    let long_term_tax = long_term_gain * tax_config.capital_gains_rate;
+    let federal_tax = short_term_tax + long_term_tax;
     let state_tax = (short_term_gain + long_term_gain) * tax_config.state_rate;
     let net_proceeds = actual_amount - federal_tax - state_tax;
 
@@ -854,73 +872,97 @@ pub fn apply_effect(
         }
 
         // === RMD Effects ===
-        EventEffect::CreateRmdWithdrawal {
-            account_id,
+        EventEffect::ApplyRmd {
+            to_account,
+            to_asset,
             starting_age,
         } => {
-            // Register this account for RMD tracking
-            state.active_rmd_accounts.insert(*account_id, *starting_age);
-
             // Check if person has reached RMD age
             let current_age = state.current_age();
             if let Some((years, _months)) = current_age {
                 if years >= *starting_age {
                     // Calculate RMD amount using IRS Uniform Lifetime Table
-                    let rmd_table = crate::model::RmdTable::irs_uniform_lifetime_2024();
+                    let rmd_table = RmdTable::irs_uniform_lifetime_2024();
 
-                    // Get prior year balance and divisor for recording
-                    let prior_year_balance = state.prior_year_end_balance(*account_id);
-                    let irs_divisor = rmd_table.divisor_for_age(years);
+                    // Find all tax-deferred accounts eligible for RMD
+                    let eligible_accounts: Vec<(AccountId, AssetId)> = state
+                        .accounts
+                        .iter()
+                        .filter(|(_, acc)| matches!(acc.account_type, AccountType::TaxDeferred))
+                        .flat_map(|(id, acc)| {
+                            acc.assets.iter().map(move |asset| (*id, asset.asset_id))
+                        })
+                        .collect();
 
-                    if let (Some(prior_balance), Some(divisor)) = (prior_year_balance, irs_divisor)
-                    {
-                        let rmd_amount = prior_balance / divisor;
-
-                        // Find the first (default) asset in this account for withdrawal
-                        let asset_id = state
-                            .accounts
-                            .get(account_id)
-                            .and_then(|acc| acc.assets.first())
-                            .map(|a| a.asset_id);
-
-                        if let Some(asset_id) = asset_id {
-                            // Perform withdrawal from tax-deferred account to external (spending)
-                            let balance = state.asset_balance(*account_id, asset_id);
-                            let actual_amount = rmd_amount.min(balance);
-
-                            if actual_amount > 0.0 {
-                                // Deduct from account
-                                *state
-                                    .asset_balances
-                                    .entry((*account_id, asset_id))
-                                    .or_insert(0.0) -= actual_amount;
-
-                                // Tax-deferred withdrawals are ordinary income
-                                let tax_config = &state.tax_config;
-                                let federal_tax = actual_amount * 0.22; // Simplified rate
-                                let state_tax = actual_amount * tax_config.state_rate;
-
-                                state.ytd_tax.ordinary_income += actual_amount;
-                                state.ytd_tax.federal_tax += federal_tax;
-                                state.ytd_tax.state_tax += state_tax;
-
-                                // Record the RMD withdrawal
-                                state.records.push(Record::new(
-                                    state.current_date,
-                                    RecordKind::Rmd {
-                                        account_id: *account_id,
-                                        age: years,
-                                        prior_year_balance: prior_balance,
-                                        irs_divisor: divisor,
-                                        required_amount: rmd_amount,
-                                        actual_withdrawn: actual_amount,
-                                    },
-                                ));
-                            }
-                        }
+                    // Process RMD for each eligible account/asset
+                    for (src_account, src_asset) in eligible_accounts {
+                        apply_rmd_to_account(
+                            src_account,
+                            src_asset,
+                            *to_account,
+                            *to_asset,
+                            years,
+                            &rmd_table,
+                            state,
+                            event_id,
+                        );
                     }
                 }
             }
+        }
+    }
+}
+
+/// Apply RMD withdrawal to a single tax-deferred account using liquidation logic
+fn apply_rmd_to_account(
+    src_account: AccountId,
+    src_asset: AssetId,
+    to_account: AccountId,
+    to_asset: AssetId,
+    age: u8,
+    rmd_table: &RmdTable,
+    state: &mut SimulationState,
+    event_id: EventId,
+) {
+    // Get prior year balance and divisor
+    let prior_year_balance = state.prior_year_end_balance(src_account);
+    let irs_divisor = rmd_table.divisor_for_age(age);
+
+    if let (Some(prior_balance), Some(divisor)) = (prior_year_balance, irs_divisor) {
+        if prior_balance <= 0.0 {
+            return; // No RMD needed for empty accounts
+        }
+
+        let rmd_amount = prior_balance / divisor;
+        let balance = state.asset_balance(src_account, src_asset);
+        let actual_amount = rmd_amount.min(balance);
+
+        if actual_amount > 0.0 {
+            // Use liquidate_from_source for consistent tax handling
+            // This handles the withdrawal, taxes, and deposit to destination
+            let result = liquidate_from_source(
+                src_account,
+                src_asset,
+                to_account,
+                to_asset,
+                actual_amount,
+                LotMethod::Fifo, // RMDs use FIFO by default
+                state,
+                event_id,
+            );
+
+            // Record the RMD-specific information
+            state.records.push(Record::new(
+                state.current_date,
+                RecordKind::Rmd {
+                    account_id: src_account,
+                    age,
+                    prior_year_balance: prior_balance,
+                    irs_divisor: divisor,
+                    required_amount: rmd_amount,
+                    actual_withdrawn: result.gross_amount,
+                },
+            ));
         }
     }
 }

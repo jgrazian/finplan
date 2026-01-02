@@ -180,7 +180,7 @@ fn test_comprehensive_lifecycle_simulation() {
         ],
         events: vec![
             // === ACCUMULATION PHASE EVENTS ===
-            
+
             // Monthly contribution to Brokerage VFIAX
             Event {
                 event_id: EVENT_BROKERAGE_CONTRIBUTION,
@@ -201,7 +201,6 @@ fn test_comprehensive_lifecycle_simulation() {
                 }],
                 once: false,
             },
-            
             // Mega backdoor Roth 401k - $43.5k/year limit
             Event {
                 event_id: EVENT_ROTH_401K_CONTRIBUTION,
@@ -225,7 +224,6 @@ fn test_comprehensive_lifecycle_simulation() {
                 }],
                 once: false,
             },
-            
             // Backdoor Roth IRA - $7k/year
             Event {
                 event_id: EVENT_ROTH_IRA_CONTRIBUTION,
@@ -246,7 +244,6 @@ fn test_comprehensive_lifecycle_simulation() {
                 }],
                 once: false,
             },
-            
             // === HOME PURCHASE EVENT (Age 35) ===
             Event {
                 event_id: EVENT_HOME_PURCHASE,
@@ -280,7 +277,6 @@ fn test_comprehensive_lifecycle_simulation() {
                 ],
                 once: true,
             },
-            
             // === RETIREMENT EVENT (Age 45) ===
             Event {
                 event_id: EVENT_RETIREMENT,
@@ -296,7 +292,6 @@ fn test_comprehensive_lifecycle_simulation() {
                 ],
                 once: true,
             },
-            
             // Retirement spending - yearly withdrawal
             Event {
                 event_id: EVENT_RETIREMENT_SPENDING,
@@ -321,8 +316,8 @@ fn test_comprehensive_lifecycle_simulation() {
                 }],
                 once: false,
             },
-            
             // === RMD EVENT (Age 73) ===
+            // ApplyRmd automatically processes all tax-deferred accounts
             Event {
                 event_id: EVENT_RMD,
                 trigger: EventTrigger::Repeating {
@@ -333,8 +328,9 @@ fn test_comprehensive_lifecycle_simulation() {
                     })),
                     end_condition: None,
                 },
-                effects: vec![EventEffect::CreateRmdWithdrawal {
-                    account_id: TRAD_401K,
+                effects: vec![EventEffect::ApplyRmd {
+                    to_account: CASH_ACCOUNT,
+                    to_asset: CASH,
                     starting_age: 73,
                 }],
                 once: false,
@@ -342,13 +338,34 @@ fn test_comprehensive_lifecycle_simulation() {
         ],
         tax_config: TaxConfig {
             federal_brackets: vec![
-                TaxBracket { threshold: 0.0, rate: 0.10 },
-                TaxBracket { threshold: 11_600.0, rate: 0.12 },
-                TaxBracket { threshold: 47_150.0, rate: 0.22 },
-                TaxBracket { threshold: 100_525.0, rate: 0.24 },
-                TaxBracket { threshold: 191_950.0, rate: 0.32 },
-                TaxBracket { threshold: 243_725.0, rate: 0.35 },
-                TaxBracket { threshold: 609_350.0, rate: 0.37 },
+                TaxBracket {
+                    threshold: 0.0,
+                    rate: 0.10,
+                },
+                TaxBracket {
+                    threshold: 11_600.0,
+                    rate: 0.12,
+                },
+                TaxBracket {
+                    threshold: 47_150.0,
+                    rate: 0.22,
+                },
+                TaxBracket {
+                    threshold: 100_525.0,
+                    rate: 0.24,
+                },
+                TaxBracket {
+                    threshold: 191_950.0,
+                    rate: 0.32,
+                },
+                TaxBracket {
+                    threshold: 243_725.0,
+                    rate: 0.35,
+                },
+                TaxBracket {
+                    threshold: 609_350.0,
+                    rate: 0.37,
+                },
             ],
             state_rate: 0.05,
             capital_gains_rate: 0.15,
@@ -627,9 +644,18 @@ fn test_retirement_withdrawals() {
         ],
         tax_config: TaxConfig {
             federal_brackets: vec![
-                TaxBracket { threshold: 0.0, rate: 0.10 },
-                TaxBracket { threshold: 11_600.0, rate: 0.12 },
-                TaxBracket { threshold: 47_150.0, rate: 0.22 },
+                TaxBracket {
+                    threshold: 0.0,
+                    rate: 0.10,
+                },
+                TaxBracket {
+                    threshold: 11_600.0,
+                    rate: 0.12,
+                },
+                TaxBracket {
+                    threshold: 47_150.0,
+                    rate: 0.22,
+                },
             ],
             state_rate: 0.05,
             capital_gains_rate: 0.15,
@@ -666,10 +692,7 @@ fn test_retirement_withdrawals() {
     );
 
     // Cash account should have accumulated some from sweeps
-    assert!(
-        final_cash > 0.0,
-        "Cash should have money from sweeps"
-    );
+    assert!(final_cash > 0.0, "Cash should have money from sweeps");
 
     // Verify sweep records exist
     let sweep_count = result
@@ -756,9 +779,7 @@ fn test_event_chaining_retirement() {
                     years: 65,
                     months: None,
                 },
-                effects: vec![
-                    EventEffect::TerminateEvent(EVENT_CONTRIBUTION),
-                ],
+                effects: vec![EventEffect::TerminateEvent(EVENT_CONTRIBUTION)],
                 once: true,
             },
             // Post-retirement: yearly spending
@@ -809,8 +830,5 @@ fn test_event_chaining_retirement() {
     println!("  Final Cash: ${:.2}", final_cash);
 
     // Verify contributions stopped and spending occurred
-    assert!(
-        final_cash > 0.0,
-        "Cash should have spending transfers"
-    );
+    assert!(final_cash > 0.0, "Cash should have spending transfers");
 }

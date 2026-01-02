@@ -10,6 +10,25 @@ use crate::model::{
 };
 use crate::simulation::simulate;
 
+// Common constants for RMD tests
+const CASH_ACCOUNT: AccountId = AccountId(100);
+const CASH: AssetId = AssetId(100);
+
+/// Helper to create a cash account for RMD proceeds
+fn cash_account() -> Account {
+    Account {
+        account_id: CASH_ACCOUNT,
+        account_type: AccountType::Taxable,
+        assets: vec![Asset {
+            asset_id: CASH,
+            initial_value: 0.0,
+            return_profile_index: 0,
+            asset_class: AssetClass::Cash,
+            initial_cost_basis: Some(0.0),
+        }],
+    }
+}
+
 // ============================================================================
 // RMD Table Tests
 // ============================================================================
@@ -80,17 +99,20 @@ fn test_rmd_starts_at_age_73() {
         birth_date: Some(birth_date),
         inflation_profile: InflationProfile::None,
         return_profiles: vec![ReturnProfile::None], // No growth for easy verification
-        accounts: vec![Account {
-            account_id: TRAD_401K,
-            account_type: AccountType::TaxDeferred,
-            assets: vec![Asset {
-                asset_id: SP500,
-                initial_value: 1_000_000.0,
-                return_profile_index: 0,
-                asset_class: AssetClass::Investable,
-                initial_cost_basis: None,
-            }],
-        }],
+        accounts: vec![
+            Account {
+                account_id: TRAD_401K,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: SP500,
+                    initial_value: 1_000_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                    initial_cost_basis: None,
+                }],
+            },
+            cash_account(),
+        ],
         events: vec![Event {
             event_id: EventId(1),
             trigger: EventTrigger::Repeating {
@@ -101,8 +123,9 @@ fn test_rmd_starts_at_age_73() {
                 })),
                 end_condition: None,
             },
-            effects: vec![EventEffect::CreateRmdWithdrawal {
-                account_id: TRAD_401K,
+            effects: vec![EventEffect::ApplyRmd {
+                to_account: CASH_ACCOUNT,
+                to_asset: CASH,
                 starting_age: 73,
             }],
             once: false,
@@ -152,6 +175,14 @@ fn test_rmd_starts_at_age_73() {
     } else {
         panic!("Expected RMD record kind");
     }
+
+    // Verify RMD proceeds went to cash account
+    let cash_balance = result.final_account_balance(CASH_ACCOUNT);
+    assert!(
+        cash_balance > 0.0,
+        "Cash account should have RMD proceeds, got {}",
+        cash_balance
+    );
 }
 
 /// Test RMD does not trigger before age 73
@@ -170,17 +201,20 @@ fn test_rmd_does_not_trigger_before_73() {
         birth_date: Some(birth_date),
         inflation_profile: InflationProfile::None,
         return_profiles: vec![ReturnProfile::None],
-        accounts: vec![Account {
-            account_id: TRAD_401K,
-            account_type: AccountType::TaxDeferred,
-            assets: vec![Asset {
-                asset_id: SP500,
-                initial_value: 500_000.0,
-                return_profile_index: 0,
-                asset_class: AssetClass::Investable,
-                initial_cost_basis: None,
-            }],
-        }],
+        accounts: vec![
+            Account {
+                account_id: TRAD_401K,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: SP500,
+                    initial_value: 500_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                    initial_cost_basis: None,
+                }],
+            },
+            cash_account(),
+        ],
         events: vec![Event {
             event_id: EventId(1),
             trigger: EventTrigger::Repeating {
@@ -191,8 +225,9 @@ fn test_rmd_does_not_trigger_before_73() {
                 })),
                 end_condition: None,
             },
-            effects: vec![EventEffect::CreateRmdWithdrawal {
-                account_id: TRAD_401K,
+            effects: vec![EventEffect::ApplyRmd {
+                to_account: CASH_ACCOUNT,
+                to_asset: CASH,
                 starting_age: 73,
             }],
             once: false,
@@ -234,17 +269,20 @@ fn test_rmd_with_account_growth() {
         birth_date: Some(birth_date),
         inflation_profile: InflationProfile::None,
         return_profiles: vec![ReturnProfile::Fixed(0.07)], // 7% annual return
-        accounts: vec![Account {
-            account_id: TRAD_401K,
-            account_type: AccountType::TaxDeferred,
-            assets: vec![Asset {
-                asset_id: SP500,
-                initial_value: 500_000.0,
-                return_profile_index: 0,
-                asset_class: AssetClass::Investable,
-                initial_cost_basis: None,
-            }],
-        }],
+        accounts: vec![
+            Account {
+                account_id: TRAD_401K,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: SP500,
+                    initial_value: 500_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                    initial_cost_basis: None,
+                }],
+            },
+            cash_account(),
+        ],
         events: vec![Event {
             event_id: EventId(1),
             trigger: EventTrigger::Repeating {
@@ -255,8 +293,9 @@ fn test_rmd_with_account_growth() {
                 })),
                 end_condition: None,
             },
-            effects: vec![EventEffect::CreateRmdWithdrawal {
-                account_id: TRAD_401K,
+            effects: vec![EventEffect::ApplyRmd {
+                to_account: CASH_ACCOUNT,
+                to_asset: CASH,
                 starting_age: 73,
             }],
             once: false,
@@ -347,43 +386,26 @@ fn test_rmd_multiple_accounts() {
                     initial_cost_basis: None,
                 }],
             },
+            cash_account(),
         ],
-        events: vec![
-            // RMD for 401k
-            Event {
-                event_id: EventId(1),
-                trigger: EventTrigger::Repeating {
-                    interval: RepeatInterval::Yearly,
-                    start_condition: Some(Box::new(EventTrigger::Age {
-                        years: 73,
-                        months: Some(0),
-                    })),
-                    end_condition: None,
-                },
-                effects: vec![EventEffect::CreateRmdWithdrawal {
-                    account_id: TRAD_401K,
-                    starting_age: 73,
-                }],
-                once: false,
+        // ApplyRmd automatically processes all tax-deferred accounts
+        events: vec![Event {
+            event_id: EventId(1),
+            trigger: EventTrigger::Repeating {
+                interval: RepeatInterval::Yearly,
+                start_condition: Some(Box::new(EventTrigger::Age {
+                    years: 73,
+                    months: Some(0),
+                })),
+                end_condition: None,
             },
-            // RMD for IRA
-            Event {
-                event_id: EventId(2),
-                trigger: EventTrigger::Repeating {
-                    interval: RepeatInterval::Yearly,
-                    start_condition: Some(Box::new(EventTrigger::Age {
-                        years: 73,
-                        months: Some(0),
-                    })),
-                    end_condition: None,
-                },
-                effects: vec![EventEffect::CreateRmdWithdrawal {
-                    account_id: TRAD_IRA,
-                    starting_age: 73,
-                }],
-                once: false,
-            },
-        ],
+            effects: vec![EventEffect::ApplyRmd {
+                to_account: CASH_ACCOUNT,
+                to_asset: CASH,
+                starting_age: 73,
+            }],
+            once: false,
+        }],
         ..Default::default()
     };
 
@@ -412,6 +434,13 @@ fn test_rmd_multiple_accounts() {
     }
     assert!(found_401k, "Should have RMD from 401k");
     assert!(found_ira, "Should have RMD from IRA");
+
+    // Verify all proceeds went to cash account
+    let cash_balance = result.final_account_balance(CASH_ACCOUNT);
+    assert!(
+        cash_balance > 0.0,
+        "Cash account should have RMD proceeds from both accounts"
+    );
 }
 
 /// Test RMD calculation amounts are correct
@@ -431,17 +460,20 @@ fn test_rmd_amount_calculation() {
         birth_date: Some(birth_date),
         inflation_profile: InflationProfile::None,
         return_profiles: vec![ReturnProfile::None],
-        accounts: vec![Account {
-            account_id: TRAD_IRA,
-            account_type: AccountType::TaxDeferred,
-            assets: vec![Asset {
-                asset_id: BONDS,
-                initial_value: INITIAL_BALANCE,
-                return_profile_index: 0,
-                asset_class: AssetClass::Investable,
-                initial_cost_basis: None,
-            }],
-        }],
+        accounts: vec![
+            Account {
+                account_id: TRAD_IRA,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: BONDS,
+                    initial_value: INITIAL_BALANCE,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                    initial_cost_basis: None,
+                }],
+            },
+            cash_account(),
+        ],
         events: vec![Event {
             event_id: EventId(1),
             trigger: EventTrigger::Repeating {
@@ -452,8 +484,9 @@ fn test_rmd_amount_calculation() {
                 })),
                 end_condition: None,
             },
-            effects: vec![EventEffect::CreateRmdWithdrawal {
-                account_id: TRAD_IRA,
+            effects: vec![EventEffect::ApplyRmd {
+                to_account: CASH_ACCOUNT,
+                to_asset: CASH,
                 starting_age: 73,
             }],
             once: false,
@@ -592,17 +625,20 @@ fn test_rmd_late_starter() {
         birth_date: Some(birth_date),
         inflation_profile: InflationProfile::None,
         return_profiles: vec![ReturnProfile::None],
-        accounts: vec![Account {
-            account_id: TRAD_401K,
-            account_type: AccountType::TaxDeferred,
-            assets: vec![Asset {
-                asset_id: SP500,
-                initial_value: 800_000.0,
-                return_profile_index: 0,
-                asset_class: AssetClass::Investable,
-                initial_cost_basis: None,
-            }],
-        }],
+        accounts: vec![
+            Account {
+                account_id: TRAD_401K,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: SP500,
+                    initial_value: 800_000.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Investable,
+                    initial_cost_basis: None,
+                }],
+            },
+            cash_account(),
+        ],
         events: vec![Event {
             event_id: EventId(1),
             trigger: EventTrigger::Repeating {
@@ -613,8 +649,9 @@ fn test_rmd_late_starter() {
                 })),
                 end_condition: None,
             },
-            effects: vec![EventEffect::CreateRmdWithdrawal {
-                account_id: TRAD_401K,
+            effects: vec![EventEffect::ApplyRmd {
+                to_account: CASH_ACCOUNT,
+                to_asset: CASH,
                 starting_age: 73,
             }],
             once: false,

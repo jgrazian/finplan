@@ -354,11 +354,23 @@ pub enum EventEffect {
     TerminateEvent(EventId),
 
     // === RMD (Required Minimum Distributions) ===
-    /// Set up automatic RMD withdrawals from tax-deferred account
-    CreateRmdWithdrawal {
-        account_id: AccountId,
+    /// Apply RMD withdrawals to all eligible tax-deferred accounts
+    /// Uses the IRS Uniform Lifetime Table to calculate required amounts
+    /// Only processes accounts where the person has reached RMD age (typically 73)
+    /// Proceeds are deposited to the specified destination account/asset
+    ApplyRmd {
+        /// Destination account for RMD proceeds
+        to_account: AccountId,
+        /// Destination asset for RMD proceeds
+        to_asset: AssetId,
+        /// Starting age for RMD (default 73 for 2024 rules)
+        #[serde(default = "default_rmd_age")]
         starting_age: u8,
     },
+}
+
+fn default_rmd_age() -> u8 {
+    73
 }
 
 /// An event with a trigger condition and effects
