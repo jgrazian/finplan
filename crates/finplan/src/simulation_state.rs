@@ -1,7 +1,7 @@
 use crate::config::SimulationConfig;
 use crate::model::{
     Account, AccountId, AccountSnapshot, AssetId, AssetSnapshot, Event, EventId, Record,
-    RecordKind, RmdTable, TaxSummary,
+    RecordKind, RmdTable, TaxConfig, TaxSummary,
 };
 use jiff::ToSpan;
 use rand::SeedableRng;
@@ -69,6 +69,9 @@ pub struct SimulationState {
 
     /// Yearly tax summaries
     pub yearly_taxes: Vec<TaxSummary>,
+
+    /// Tax configuration
+    pub tax_config: TaxConfig,
 
     // === Transaction Log ===
     /// Unified record of all transactions in chronological order
@@ -168,6 +171,7 @@ impl SimulationState {
                 ..Default::default()
             },
             yearly_taxes: Vec::new(),
+            tax_config: params.tax_config.clone(),
             records: Vec::new(),
             dates: vec![start_date],
             year_end_balances: HashMap::new(),
@@ -227,11 +231,20 @@ impl SimulationState {
             .unwrap_or(0.0)
     }
 
-    /// Calculate total income from active events (deprecated - no longer tracking CashFlows)
-    #[deprecated(note = "CashFlow system removed, income tracking needs redesign")]
+    /// Calculate total income from Transfer events in the current year
+    /// This sums all Income records (External -> Asset transfers) for the current calendar year
     pub fn calculate_total_income(&self) -> f64 {
-        // TODO: Implement income calculation based on events if needed
-        0.0
+        self.records
+            .iter()
+            .filter(|r| r.date.year() == self.current_date.year())
+            .map(|r| {
+                if let RecordKind::Income { amount, .. } = r.kind {
+                    amount
+                } else {
+                    0.0
+                }
+            })
+            .sum()
     }
 
     /// Get current age in years and months

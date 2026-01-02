@@ -133,7 +133,7 @@ pub struct FlowLimits {
 }
 
 /// Method for selecting which lots to sell (affects capital gains calculation)
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LotMethod {
     /// First-in, first-out (default, most common)
     #[default]
@@ -172,6 +172,13 @@ pub enum WithdrawalOrder {
 /// Source configuration for Sweep withdrawals
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WithdrawalSources {
+    /// Withdraw from a single specific account/asset
+    /// Use this for simple single-source liquidations
+    Single {
+        account_id: AccountId,
+        asset_id: AssetId,
+    },
+
     /// Use a pre-defined withdrawal order strategy
     /// Automatically selects from all non-excluded liquid accounts
     Strategy {
@@ -318,25 +325,18 @@ pub enum EventEffect {
         limits: Option<FlowLimits>,
     },
 
-    /// Explicitly liquidate assets with capital gains handling
-    Liquidate {
-        from_account: AccountId,
-        from_asset: AssetId,
-        to_account: AccountId,
-        to_asset: AssetId,
-        amount: TransferAmount,
-        #[serde(default)]
-        lot_method: LotMethod,
-    },
-
-    /// Multi-source sweep with withdrawal strategy
-    /// Replaces SpendingTarget functionality
+    /// Sweep: Withdraw from source(s) to fund a target account
+    /// Handles capital gains, lot tracking, and tax calculation automatically
+    /// Use WithdrawalSources::Single for single-source liquidations
+    /// Use WithdrawalSources::Strategy for tax-efficient multi-source withdrawals
     Sweep {
         to_account: AccountId,
         to_asset: AssetId,
         target: TransferAmount,
         #[serde(default)]
         sources: WithdrawalSources,
+        /// Gross = withdraw target amount gross (net varies by taxes)
+        /// Net = withdraw enough gross to achieve target net after taxes
         #[serde(default)]
         amount_mode: WithdrawalAmountMode,
         #[serde(default)]
