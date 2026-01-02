@@ -4,3 +4,6 @@ members = [
     "crates/finplan",
     "crates/finplan_server"
 ]
+
+[profile.release]
+lto = "thin"

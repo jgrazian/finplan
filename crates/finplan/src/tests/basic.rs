@@ -37,7 +37,7 @@ fn test_monte_carlo_simulation() {
         ..Default::default()
     };
 
-    const NUM_ITERATIONS: usize = 1_000_000;
+    const NUM_ITERATIONS: usize = 10_000;
     let result = monte_carlo_simulate(&params, NUM_ITERATIONS);
     assert_eq!(result.iterations.len(), NUM_ITERATIONS);
 

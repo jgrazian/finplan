@@ -7,7 +7,7 @@ use crate::cash_flows::{
     CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
 };
 use crate::config::SimulationParameters;
-use crate::events::{Event, EventEffect, EventTrigger, TriggerOffset};
+use crate::events::{Event, EventEffect, EventTrigger, TriggerOffset, BalanceThreshold};
 use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
 use crate::profiles::{InflationProfile, ReturnProfile};
 use crate::simulation::simulate;
@@ -616,8 +616,7 @@ fn test_comprehensive_lifecycle_simulation() {
                     },
                     EventTrigger::AccountBalance {
                         account_id: MORTGAGE_DEBT,
-                        threshold: -1000.0,
-                        above: true,
+                        threshold: BalanceThreshold::LessThanOrEqual(-1000.0),
                     },
                 ]),
                 effects: vec![EventEffect::TerminateCashFlow(CashFlowId(4))],

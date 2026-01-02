@@ -17,6 +17,28 @@ pub enum TriggerOffset {
     Years(i32),
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BalanceThreshold {
+    GreaterThanOrEqual(f64),
+    LessThanOrEqual(f64),
+}
+
+impl BalanceThreshold {
+    pub fn value(&self) -> f64 {
+        match self {
+            BalanceThreshold::GreaterThanOrEqual(v) => *v,
+            BalanceThreshold::LessThanOrEqual(v) => *v,
+        }
+    }
+
+    pub fn evaluate(&self, balance: f64) -> bool {
+        match self {
+            BalanceThreshold::GreaterThanOrEqual(v) => balance >= *v,
+            BalanceThreshold::LessThanOrEqual(v) => balance <= *v,
+        }
+    }
+}
+
 /// Conditions that can trigger an event
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventTrigger {
@@ -37,20 +59,18 @@ pub enum EventTrigger {
     /// Trigger when total account balance crosses threshold
     AccountBalance {
         account_id: AccountId,
-        threshold: f64,
-        above: bool, // true = trigger when balance > threshold, false = balance < threshold
+        threshold: BalanceThreshold,
     },
 
     /// Trigger when a specific asset balance crosses threshold
     AssetBalance {
         account_id: AccountId,
         asset_id: AssetId,
-        threshold: f64,
-        above: bool,
+        threshold: BalanceThreshold
     },
 
     /// Trigger when total net worth crosses threshold
-    NetWorth { threshold: f64, above: bool },
+    NetWorth { threshold: BalanceThreshold },
 
     /// Trigger when an account is depleted (balance <= 0)
     AccountDepleted(AccountId),

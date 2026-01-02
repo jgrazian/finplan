@@ -43,37 +43,23 @@ pub fn evaluate_trigger(trigger: &EventTrigger, state: &SimulationState) -> bool
         EventTrigger::AccountBalance {
             account_id,
             threshold,
-            above,
         } => {
             let balance = state.account_balance(*account_id);
-            if *above {
-                balance >= *threshold
-            } else {
-                balance <= *threshold
-            }
+            threshold.evaluate(balance)
         }
 
         EventTrigger::AssetBalance {
             account_id,
             asset_id,
-            threshold,
-            above,
+            threshold
         } => {
             let balance = state.asset_balance(*account_id, *asset_id);
-            if *above {
-                balance >= *threshold
-            } else {
-                balance <= *threshold
-            }
+            threshold.evaluate(balance)
         }
 
-        EventTrigger::NetWorth { threshold, above } => {
+        EventTrigger::NetWorth { threshold } => {
             let net_worth = state.net_worth();
-            if *above {
-                net_worth >= *threshold
-            } else {
-                net_worth <= *threshold
-            }
+            threshold.evaluate(net_worth)
         }
 
         EventTrigger::AccountDepleted(account_id) => state.account_balance(*account_id) <= 0.0,

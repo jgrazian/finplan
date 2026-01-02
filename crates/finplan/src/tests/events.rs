@@ -7,7 +7,7 @@ use crate::cash_flows::{
     CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
 };
 use crate::config::SimulationParameters;
-use crate::events::{Event, EventEffect, EventTrigger};
+use crate::events::{Event, EventEffect, EventTrigger, BalanceThreshold};
 use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
 use crate::profiles::{InflationProfile, ReturnProfile};
 use crate::simulation::simulate;
@@ -27,8 +27,7 @@ fn test_event_trigger_balance() {
             event_id: EventId(1),
             trigger: EventTrigger::AccountBalance {
                 account_id: AccountId(1),
-                threshold: 5000.0,
-                above: true,
+                threshold: BalanceThreshold::GreaterThanOrEqual(5000.0),
             },
             effects: vec![EventEffect::ActivateCashFlow(CashFlowId(2))],
             once: true,
@@ -157,8 +156,7 @@ fn test_cross_account_events() {
             event_id: EventId(1),
             trigger: EventTrigger::AccountBalance {
                 account_id: AccountId(1), // Debt account
-                threshold: 0.0,
-                above: true, // When balance >= 0 (debt paid off)
+                threshold: BalanceThreshold::GreaterThanOrEqual(0.0),
             },
             effects: vec![
                 EventEffect::TerminateCashFlow(CashFlowId(1)), // Stop debt payments
@@ -648,8 +646,7 @@ fn test_cash_sweep_liquidation() {
                 event_id: EventId(1),
                 trigger: EventTrigger::AccountBalance {
                     account_id: CASH_ACCOUNT,
-                    threshold: 1_000.0,
-                    above: false, // Trigger when BELOW threshold
+                    threshold: BalanceThreshold::LessThanOrEqual(1_000.0),
                 },
                 effects: vec![EventEffect::SweepToAccount {
                     target_account_id: CASH_ACCOUNT,
