@@ -15,8 +15,11 @@ use crate::models::{
     SimulationRunRecord, UpdateSimulationRequest,
 };
 use crate::validation;
-use finplan::{AccountId, MonteCarloResult, SimulationParameters, SimulationResult};
 use finplan::simulation::monte_carlo_simulate;
+use finplan::{
+    SimulationParameters,
+    model::{AccountId, MonteCarloResult, RecordKind, SimulationResult},
+};
 use jiff::civil::Date;
 
 // Database connection wrapper
@@ -348,8 +351,6 @@ fn calculate_balance_at_date(
     account_id: AccountId,
     target_date: Date,
 ) -> f64 {
-    use finplan::RecordKind;
-
     // Start with initial value
     let mut balance = result
         .accounts
@@ -458,7 +459,6 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
         }
 
         // Aggregate records by type
-        use finplan::RecordKind;
         for record in &sim_result.records {
             let year = record.date.year() as i32;
             let entry = growth_by_year

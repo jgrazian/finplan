@@ -4,8 +4,8 @@
 //! The simulation will pull from accounts to meet these targets using the
 //! specified withdrawal strategy.
 
-use crate::cash_flows::RepeatInterval;
-use crate::ids::{AccountId, SpendingTargetId};
+use super::cash_flows::RepeatInterval;
+use super::ids::{AccountId, SpendingTargetId};
 use serde::{Deserialize, Serialize};
 
 /// Strategy for withdrawing funds from multiple accounts to meet a spending target

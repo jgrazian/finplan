@@ -3,14 +3,16 @@
 //! The main configuration type is `SimulationConfig`, which contains everything
 //! needed to run a simulation. Helper methods support optimization use cases.
 
-use crate::accounts::Account;
-use crate::cash_flows::CashFlow;
-use crate::events::{Event, EventTrigger};
-use crate::ids::{EventId, SpendingTargetId};
-use crate::profiles::{InflationProfile, ReturnProfile};
-use crate::spending::SpendingTarget;
-use crate::tax_config::TaxConfig;
+use crate::model::{
+    Account, CashFlow, Event, EventId, EventTrigger, InflationProfile, ReturnProfile,
+    SpendingTarget, SpendingTargetId, TaxConfig,
+};
 use serde::{Deserialize, Serialize};
+
+mod builder;
+mod descriptors;
+
+pub use builder::SimulationBuilder;
 
 fn default_duration_years() -> usize {
     30

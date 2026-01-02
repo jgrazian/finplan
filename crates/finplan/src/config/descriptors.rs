@@ -3,11 +3,10 @@
 //! Descriptors are used with SimulationBuilder to create entities without
 //! manually assigning IDs. The builder assigns IDs automatically.
 
-use crate::accounts::{AccountType, AssetClass};
-use crate::cash_flows::{CashFlowDirection, CashFlowLimits, CashFlowState, RepeatInterval};
-use crate::events::{EventEffect, EventTrigger};
-use crate::ids::AccountId;
-use crate::spending::{SpendingTargetState, WithdrawalStrategy};
+use crate::model::{
+    AccountId, AccountType, AssetClass, AssetId, CashFlowDirection, CashFlowLimits, CashFlowState,
+    EventEffect, EventTrigger, RepeatInterval, SpendingTargetState, WithdrawalStrategy,
+};
 
 /// Descriptor for creating an account (without ID)
 #[derive(Debug, Clone)]
@@ -101,7 +100,7 @@ impl CashFlowDescriptor {
         amount: f64,
         repeats: RepeatInterval,
         target_account_id: AccountId,
-        target_asset_id: crate::ids::AssetId,
+        target_asset_id: AssetId,
     ) -> Self {
         Self::new(
             amount,
@@ -118,7 +117,7 @@ impl CashFlowDescriptor {
         amount: f64,
         repeats: RepeatInterval,
         source_account_id: AccountId,
-        source_asset_id: crate::ids::AssetId,
+        source_asset_id: AssetId,
     ) -> Self {
         Self::new(
             amount,

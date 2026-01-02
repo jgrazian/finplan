@@ -2,13 +2,12 @@
 //!
 //! Tests for core simulation mechanics: cash flows, returns, inflation, limits.
 
-use crate::accounts::{Account, AccountType, Asset, AssetClass};
-use crate::cash_flows::{
-    CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
-};
 use crate::config::SimulationParameters;
-use crate::ids::{AccountId, AssetId, CashFlowId};
-use crate::profiles::{InflationProfile, ReturnProfile};
+use crate::model::{
+    Account, AccountId, AccountType, Asset, AssetClass, AssetId, CashFlow, CashFlowDirection,
+    CashFlowId, CashFlowLimits, CashFlowState, InflationProfile, LimitPeriod, RepeatInterval,
+    ReturnProfile,
+};
 use crate::simulation::{monte_carlo_simulate, simulate};
 
 #[test]

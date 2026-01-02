@@ -2,16 +2,14 @@
 //!
 //! Tests for event triggers, effects, and chaining.
 
-use crate::accounts::{Account, AccountType, Asset, AssetClass};
-use crate::cash_flows::{
-    CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
-};
 use crate::config::SimulationParameters;
-use crate::events::{Event, EventEffect, EventTrigger, BalanceThreshold};
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::profiles::{InflationProfile, ReturnProfile};
+use crate::model::{
+    Account, AccountId, AccountType, Asset, AssetClass, AssetId, BalanceThreshold, CashFlow,
+    CashFlowDirection, CashFlowId, CashFlowLimits, CashFlowState, Event, EventEffect, EventId,
+    EventTrigger, InflationProfile, LimitPeriod, RecordKind, RepeatInterval, ReturnProfile,
+    SpendingTarget, SpendingTargetId, SpendingTargetState, TaxConfig, WithdrawalStrategy,
+};
 use crate::simulation::simulate;
-use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
 use jiff::ToSpan;
 
 #[test]
@@ -243,8 +241,6 @@ fn test_cross_account_events() {
 
 #[test]
 fn test_age_based_event() {
-    use crate::tax_config::TaxConfig;
-
     let birth_date = jiff::civil::date(1960, 6, 15);
     let start_date = jiff::civil::date(2025, 1, 1); // Person is 64
 
@@ -582,8 +578,6 @@ fn test_repeating_event_with_start_condition() {
 
 #[test]
 fn test_cash_sweep_liquidation() {
-    use crate::records::RecordKind;
-
     // Test scenario: Cash account goes negative from expenses, triggers liquidation from brokerage
     //
     // Setup:

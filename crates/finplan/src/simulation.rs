@@ -1,13 +1,11 @@
-use crate::accounts::AccountType;
-use crate::cash_flows::{CashFlow, CashFlowDirection, CashFlowState, LimitPeriod, RepeatInterval};
 use crate::config::SimulationParameters;
 use crate::event_engine::process_events;
-use crate::events::{EventTrigger, TriggerOffset};
-use crate::ids::{AccountId, AssetId, CashFlowId, SpendingTargetId};
-use crate::records::Record;
-use crate::results::{MonteCarloResult, SimulationResult};
+use crate::model::{
+    AccountId, AccountType, AssetId, CashFlow, CashFlowDirection, CashFlowId, CashFlowState,
+    EventTrigger, LimitPeriod, MonteCarloResult, Record, RepeatInterval, SimulationResult,
+    SpendingTarget, SpendingTargetId, SpendingTargetState, TriggerOffset, WithdrawalStrategy,
+};
 use crate::simulation_state::SimulationState;
-use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
 use crate::taxes::{calculate_withdrawal_tax, gross_up_for_net_target};
 
 use jiff::ToSpan;

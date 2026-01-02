@@ -5,7 +5,7 @@ mod models;
 mod routes;
 mod validation;
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use handlers::DbConn;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
@@ -27,9 +27,12 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
         .await
         .expect("Failed to bind to port 3001");
-    
-    println!("FinPlan API Server listening on {}", listener.local_addr().unwrap());
-    
+
+    println!(
+        "FinPlan API Server listening on {}",
+        listener.local_addr().unwrap()
+    );
+
     axum::serve(listener, app)
         .await
         .expect("Failed to start server");

@@ -3,7 +3,7 @@
 //! Accounts are containers for assets with specific tax treatments.
 //! Assets represent individual investments or property within accounts.
 
-use crate::ids::{AccountId, AssetId};
+use super::ids::{AccountId, AssetId};
 use serde::{Deserialize, Serialize};
 
 /// Classification of an asset for valuation behavior

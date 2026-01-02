@@ -1,7 +1,6 @@
 //! Tax calculation utilities for retirement withdrawal modeling
 
-use crate::accounts::AccountType;
-use crate::tax_config::{TaxBracket, TaxConfig};
+use crate::model::{AccountType, TaxBracket, TaxConfig};
 
 /// Calculate federal income tax using progressive brackets
 /// Returns the total tax owed on the given income
@@ -258,7 +257,7 @@ pub fn calculate_liquidation_tax(
 
             LiquidationTaxResult {
                 gross_amount,
-                cost_basis: 0.0, // Tax-deferred has no cost basis concept
+                cost_basis: 0.0,             // Tax-deferred has no cost basis concept
                 realized_gain: gross_amount, // Entire amount is "gain" for tax purposes
                 federal_tax,
                 state_tax,

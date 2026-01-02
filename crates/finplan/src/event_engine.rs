@@ -1,12 +1,9 @@
-use crate::accounts::AccountType;
-use crate::cash_flows::{CashFlowState, RepeatInterval};
-use crate::events::{Event, EventEffect, EventTrigger, TriggerOffset};
-use crate::ids::{EventId, SpendingTargetId};
-use crate::records::Record;
-use crate::rmd::RmdTable;
+use crate::model::{
+    AccountType, CashFlowState, Event, EventEffect, EventId, EventTrigger, Record, RepeatInterval,
+    RmdTable, SpendingTarget, SpendingTargetId, SpendingTargetState, TaxConfig, TriggerOffset,
+    WithdrawalStrategy,
+};
 use crate::simulation_state::SimulationState;
-use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
-use crate::tax_config::TaxConfig;
 use crate::taxes::{calculate_liquidation_tax, gross_up_liquidation_for_net_target};
 use jiff::ToSpan;
 
@@ -51,7 +48,7 @@ pub fn evaluate_trigger(trigger: &EventTrigger, state: &SimulationState) -> bool
         EventTrigger::AssetBalance {
             account_id,
             asset_id,
-            threshold
+            threshold,
         } => {
             let balance = state.asset_balance(*account_id, *asset_id);
             threshold.evaluate(balance)

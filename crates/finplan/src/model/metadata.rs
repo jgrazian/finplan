@@ -3,7 +3,7 @@
 //! EntityMetadata provides optional names and descriptions for accounts,
 //! assets, cash flows, events, and spending targets.
 
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
+use super::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

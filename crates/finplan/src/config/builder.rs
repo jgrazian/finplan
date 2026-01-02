@@ -3,19 +3,16 @@
 //! The SimulationBuilder provides a fluent API for creating simulations
 //! with automatic ID assignment and metadata tracking.
 
-use crate::accounts::{Account, Asset};
-use crate::cash_flows::CashFlow;
-use crate::config::SimulationConfig;
-use crate::descriptors::{
+use super::SimulationConfig;
+use super::descriptors::{
     AccountDescriptor, AssetDescriptor, CashFlowDescriptor, EventDescriptor,
     SpendingTargetDescriptor,
 };
-use crate::events::Event;
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::metadata::{EntityMetadata, SimulationMetadata};
-use crate::profiles::{InflationProfile, ReturnProfile};
-use crate::spending::SpendingTarget;
-use crate::tax_config::TaxConfig;
+use crate::model::{
+    Account, AccountId, Asset, AssetId, CashFlow, CashFlowId, EntityMetadata, Event, EventId,
+    InflationProfile, ReturnProfile, SimulationMetadata, SpendingTarget, SpendingTargetId,
+    TaxConfig,
+};
 
 /// Builder for creating simulations with automatic ID assignment and metadata tracking
 ///

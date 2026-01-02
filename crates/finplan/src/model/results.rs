@@ -3,10 +3,10 @@
 //! Contains the output types from running simulations, including
 //! account snapshots and transaction histories.
 
-use crate::accounts::AccountType;
-use crate::ids::{AccountId, AssetId, EventId};
-use crate::records::{Record, RecordKind};
-use crate::tax_config::TaxSummary;
+use super::accounts::AccountType;
+use super::ids::{AccountId, AssetId, EventId};
+use super::records::{Record, RecordKind};
+use super::tax_config::TaxSummary;
 use serde::{Deserialize, Serialize};
 
 /// Snapshot of an asset's starting state

@@ -1,15 +1,9 @@
-use crate::accounts::Account;
-use crate::cash_flows::{
-    CashFlow, CashFlowDirection, CashFlowState,
-};
 use crate::config::SimulationParameters;
-use crate::events::Event;
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::records::{Record, RecordKind};
-use crate::results::{AccountSnapshot, AssetSnapshot};
-use crate::rmd::RmdTable;
-use crate::spending::{SpendingTarget, SpendingTargetState};
-use crate::tax_config::TaxSummary;
+use crate::model::{
+    Account, AccountId, AccountSnapshot, AssetId, AssetSnapshot, CashFlow, CashFlowDirection,
+    CashFlowId, CashFlowState, Event, EventId, Record, RecordKind, RmdTable, SpendingTarget,
+    SpendingTargetId, SpendingTargetState, TaxSummary,
+};
 use jiff::ToSpan;
 use rand::SeedableRng;
 use std::collections::HashMap;
@@ -103,11 +97,12 @@ impl SimulationState {
                 actual_withdrawn,
                 ..
             } = &mut record.kind
-                && *st_id == spending_target_id {
-                    // Track cumulative withdrawals for this RMD spending target
-                    *actual_withdrawn += amount;
-                    break;
-                }
+                && *st_id == spending_target_id
+            {
+                // Track cumulative withdrawals for this RMD spending target
+                *actual_withdrawn += amount;
+                break;
+            }
         }
     }
 }

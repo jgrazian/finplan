@@ -3,10 +3,10 @@
 //! Events are the mechanism for changing simulation state over time.
 //! Each event has a trigger condition and a list of effects to apply when triggered.
 
-use crate::accounts::Account;
-use crate::cash_flows::{CashFlow, RepeatInterval};
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::spending::SpendingTarget;
+use super::accounts::Account;
+use super::cash_flows::{CashFlow, RepeatInterval};
+use super::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
+use super::spending::SpendingTarget;
 use serde::{Deserialize, Serialize};
 
 /// Time offset relative to another event
@@ -66,7 +66,7 @@ pub enum EventTrigger {
     AssetBalance {
         account_id: AccountId,
         asset_id: AssetId,
-        threshold: BalanceThreshold
+        threshold: BalanceThreshold,
     },
 
     /// Trigger when total net worth crosses threshold

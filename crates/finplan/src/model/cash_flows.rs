@@ -2,7 +2,7 @@
 //!
 //! Cash flows represent regular income or expenses that affect asset balances.
 
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId};
+use super::ids::{AccountId, AssetId, CashFlowId, EventId};
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 

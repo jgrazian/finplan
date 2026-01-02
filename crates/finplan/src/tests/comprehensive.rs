@@ -2,17 +2,15 @@
 //!
 //! These tests model realistic financial scenarios over multiple decades.
 
-use crate::accounts::{Account, AccountType, Asset, AssetClass};
-use crate::cash_flows::{
-    CashFlow, CashFlowDirection, CashFlowLimits, CashFlowState, LimitPeriod, RepeatInterval,
-};
 use crate::config::SimulationParameters;
-use crate::events::{Event, EventEffect, EventTrigger, TriggerOffset, BalanceThreshold};
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
-use crate::profiles::{InflationProfile, ReturnProfile};
+use crate::model::{
+    Account, AccountId, AccountType, Asset, AssetClass, AssetId, BalanceThreshold, CashFlow,
+    CashFlowDirection, CashFlowId, CashFlowLimits, CashFlowState, Event, EventEffect, EventId,
+    EventTrigger, InflationProfile, LimitPeriod, RecordKind, RepeatInterval, ReturnProfile,
+    SpendingTarget, SpendingTargetId, SpendingTargetState, TaxBracket, TaxConfig, TriggerOffset,
+    WithdrawalStrategy,
+};
 use crate::simulation::simulate;
-use crate::spending::{SpendingTarget, SpendingTargetState, WithdrawalStrategy};
-use crate::tax_config::{TaxBracket, TaxConfig};
 
 #[test]
 fn test_spending_target_basic() {
@@ -288,14 +286,9 @@ fn test_rmd_withdrawal() {
     println!("RMD withdrawals: {}", withdrawal_count);
 
     // Verify exactly 5 RMD withdrawals (one per year for 5-year simulation)
-    assert_eq!(
-        withdrawal_count,
-        5,
-        "Should have exactly 5 RMD withdrawals"
-    );
+    assert_eq!(withdrawal_count, 5, "Should have exactly 5 RMD withdrawals");
 
     // Verify RMDs were taken (total withdrawals should be substantial)
-    use crate::records::RecordKind;
     let total_withdrawn: f64 = result
         .withdrawal_records()
         .filter_map(|r| {

@@ -9,7 +9,7 @@
 //! - Makes it easy to filter by type using pattern matching
 //! - Is extensible - new record types just add enum variants
 
-use crate::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
+use super::ids::{AccountId, AssetId, CashFlowId, EventId, SpendingTargetId};
 use serde::{Deserialize, Serialize};
 
 /// A single record entry representing any transaction/event in the simulation
