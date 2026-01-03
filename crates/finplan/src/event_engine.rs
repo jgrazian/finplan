@@ -3,12 +3,15 @@ use crate::model::{
     LotMethod, Record, RecordKind, RmdTable, TaxInfo, TransactionSource, TransferAmount,
     TransferEndpoint, TriggerOffset, WithdrawalAmountMode, WithdrawalOrder, WithdrawalSources,
 };
-use crate::simulation_state::SimulationState;
-use crate::taxes::calculate_marginal_tax;
+use crate::simulation_state::{AssetLot, SimulationState};
+use crate::taxes::{
+    calculate_marginal_tax, calculate_realized_gains_tax, calculate_tax_deferred_withdrawal_tax,
+    consume_lots, gross_up_for_net_target_with_lots,
+};
 use jiff::ToSpan;
 
 /// Result of liquidating assets from a single source
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 #[allow(dead_code)] // Fields tracked for potential future reporting
 struct LiquidationResult {
     gross_amount: f64,
@@ -20,8 +23,14 @@ struct LiquidationResult {
     state_tax: f64,
 }
 
-/// Liquidate assets from a single source with proper lot tracking and tax calculation
-/// Returns the result of the liquidation including taxes paid
+/// Liquidate assets from a single source with proper lot tracking and tax calculation.
+///
+/// This function handles:
+/// - Taxable accounts: Lot-based cost basis tracking with short/long-term gain distinction
+/// - Tax-deferred accounts: Ordinary income taxation
+/// - Tax-free accounts: No taxation
+///
+/// Returns the result of the liquidation including taxes paid.
 fn liquidate_from_source(
     src_account: AccountId,
     src_asset: AssetId,
@@ -36,268 +45,113 @@ fn liquidate_from_source(
     let actual_amount = amount.min(balance);
 
     if actual_amount <= 0.001 {
-        return LiquidationResult {
-            gross_amount: 0.0,
-            net_proceeds: 0.0,
-            cost_basis: 0.0,
-            short_term_gain: 0.0,
-            long_term_gain: 0.0,
-            federal_tax: 0.0,
-            state_tax: 0.0,
-        };
+        return LiquidationResult::default();
     }
 
-    // Check if this is a taxable account
     let account = state.accounts.get(&src_account);
-    let is_taxable = account
-        .map(|a| matches!(a.account_type, AccountType::Taxable))
-        .unwrap_or(false);
-    let is_tax_deferred = account
-        .map(|a| matches!(a.account_type, AccountType::TaxDeferred))
-        .unwrap_or(false);
+    let account_type = account
+        .map(|a| a.account_type)
+        .unwrap_or(AccountType::Taxable);
 
-    if !is_taxable {
-        // Non-taxable accounts: simple transfer, no lot tracking needed
-        *state
-            .asset_balances
-            .entry((src_account, src_asset))
-            .or_insert(0.0) -= actual_amount;
-
-        // Tax-deferred accounts have ordinary income tax on withdrawal
-        let (federal_tax, state_tax) = if is_tax_deferred {
-            let tax_config = &state.tax_config;
-            // Use marginal tax calculation for accurate progressive taxation
-            let fed = calculate_marginal_tax(
-                actual_amount,
-                state.ytd_tax.ordinary_income,
-                &tax_config.federal_brackets,
-            );
-            let st = actual_amount * tax_config.state_rate;
-            state.ytd_tax.ordinary_income += actual_amount;
-            state.ytd_tax.federal_tax += fed;
-            state.ytd_tax.state_tax += st;
-            (fed, st)
-        } else {
-            (0.0, 0.0)
-        };
-
-        // Add net amount (after taxes) to target account
-        let net_amount = actual_amount - federal_tax - state_tax;
-        *state
-            .asset_balances
-            .entry((to_account, to_asset))
-            .or_insert(0.0) += net_amount;
-
-        // Use appropriate record type based on whether taxes were applied
-        if is_tax_deferred {
-            // TaxDeferred accounts use Liquidation record to track gross vs net
-            state.records.push(Record::new(
-                state.current_date,
-                RecordKind::Transfer {
-                    from_account_id: src_account,
-                    from_asset_id: src_asset,
-                    to_account_id: to_account,
-                    to_asset_id: to_asset,
-                    gross_amount: actual_amount,
-                    net_amount: net_amount,
-                    tax_info: Some(Box::new(TaxInfo {
-                        cost_basis: actual_amount, // Tax-deferred has no cost basis distinction
-                        short_term_gain: 0.0,
-                        long_term_gain: 0.0,
-                        federal_tax,
-                        state_tax,
-                        lot_method,
-                    })),
-                    source: Box::new(source),
-                },
-            ));
-        } else {
-            // TaxFree and other non-taxable accounts use Transfer
-            state.records.push(Record::new(
-                state.current_date,
-                RecordKind::Transfer {
-                    from_account_id: src_account,
-                    from_asset_id: src_asset,
-                    to_account_id: to_account,
-                    to_asset_id: to_asset,
-                    gross_amount: actual_amount,
-                    net_amount: net_amount,
-                    tax_info: None,
-                    source: Box::new(source),
-                },
-            ));
+    match account_type {
+        AccountType::Taxable => liquidate_taxable(
+            src_account,
+            src_asset,
+            to_account,
+            to_asset,
+            actual_amount,
+            lot_method,
+            state,
+            source,
+        ),
+        AccountType::TaxDeferred => liquidate_tax_deferred(
+            src_account,
+            src_asset,
+            to_account,
+            to_asset,
+            actual_amount,
+            lot_method,
+            state,
+            source,
+        ),
+        AccountType::TaxFree => liquidate_tax_free(
+            src_account,
+            src_asset,
+            to_account,
+            to_asset,
+            actual_amount,
+            state,
+            source,
+        ),
+        AccountType::Illiquid => {
+            // Cannot liquidate from illiquid accounts
+            eprintln!("Cannot liquidate from illiquid account: {:?}", src_account);
+            LiquidationResult::default()
         }
-
-        return LiquidationResult {
-            gross_amount: actual_amount,
-            net_proceeds: net_amount,
-            cost_basis: actual_amount,
-            short_term_gain: 0.0,
-            long_term_gain: 0.0,
-            federal_tax,
-            state_tax,
-        };
     }
+}
 
-    // Taxable account - need cost basis tracking
+/// Liquidate from a taxable account with full lot tracking
+fn liquidate_taxable(
+    src_account: AccountId,
+    src_asset: AssetId,
+    to_account: AccountId,
+    to_asset: AssetId,
+    amount: f64,
+    lot_method: LotMethod,
+    state: &mut SimulationState,
+    source: TransactionSource,
+) -> LiquidationResult {
+    // Get balance first before borrowing lots
+    let balance = state.asset_balance(src_account, src_asset);
+
+    // Get or create lots for this asset
     let lots = state
         .asset_lots
         .entry((src_account, src_asset))
         .or_insert_with(Vec::new);
 
-    // If no lots exist, create one with current balance (assume cost basis = current value)
+    // If no lots exist but there's a balance, create a lot with basis = value
+    // (This handles legacy data or accounts initialized without cost basis)
     if lots.is_empty() && balance > 0.0 {
-        lots.push(crate::simulation_state::AssetLot {
+        lots.push(AssetLot {
             purchase_date: state.current_date,
             units: balance,
             cost_basis: balance,
         });
     }
 
-    // Sort lots based on method
-    match lot_method {
-        LotMethod::Fifo => lots.sort_by_key(|l| l.purchase_date),
-        LotMethod::Lifo => lots.sort_by(|a, b| b.purchase_date.cmp(&a.purchase_date)),
-        LotMethod::HighestCost => lots.sort_by(|a, b| {
-            let a_basis = if a.units > 0.0 {
-                a.cost_basis / a.units
-            } else {
-                0.0
-            };
-            let b_basis = if b.units > 0.0 {
-                b.cost_basis / b.units
-            } else {
-                0.0
-            };
-            b_basis
-                .partial_cmp(&a_basis)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
-        LotMethod::LowestCost => lots.sort_by(|a, b| {
-            let a_basis = if a.units > 0.0 {
-                a.cost_basis / a.units
-            } else {
-                0.0
-            };
-            let b_basis = if b.units > 0.0 {
-                b.cost_basis / b.units
-            } else {
-                0.0
-            };
-            a_basis
-                .partial_cmp(&b_basis)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
-        LotMethod::AverageCost => {
-            // Average cost handled specially below
-        }
-    }
+    // Consume lots using the unified tax module function
+    let lot_result = consume_lots(lots, amount, lot_method, state.current_date);
 
-    // Consume lots to satisfy the liquidation amount
-    let mut remaining = actual_amount;
-    let mut total_cost_basis = 0.0;
-    let mut short_term_gain = 0.0;
-    let mut long_term_gain = 0.0;
-    let mut lots_to_remove = Vec::new();
+    // Calculate taxes on the realized gains using unified tax module
+    let tax_result = calculate_realized_gains_tax(
+        lot_result.short_term_gain,
+        lot_result.long_term_gain,
+        &state.tax_config,
+        state.ytd_tax.ordinary_income,
+    );
 
-    if lot_method == LotMethod::AverageCost {
-        // Average cost: calculate weighted average
-        let total_units: f64 = lots.iter().map(|l| l.units).sum();
-        let total_basis: f64 = lots.iter().map(|l| l.cost_basis).sum();
-        let avg_basis_per_unit = if total_units > 0.0 {
-            total_basis / total_units
-        } else {
-            0.0
-        };
-
-        total_cost_basis = remaining * avg_basis_per_unit;
-        let gain = remaining - total_cost_basis;
-        // For average cost, treat all as long-term for simplicity
-        long_term_gain = gain.max(0.0);
-
-        // Remove units proportionally
-        for lot in lots.iter_mut() {
-            let proportion = lot.units / total_units;
-            let remove = remaining * proportion;
-            lot.units -= remove;
-            lot.cost_basis -= remove * avg_basis_per_unit;
-        }
-        lots.retain(|l| l.units > 0.001);
-    } else {
-        // FIFO, LIFO, HighestCost, LowestCost
-        for (idx, lot) in lots.iter_mut().enumerate() {
-            if remaining <= 0.001 {
-                break;
-            }
-
-            let take_amount = remaining.min(lot.units);
-            let take_fraction = if lot.units > 0.0 {
-                take_amount / lot.units
-            } else {
-                0.0
-            };
-            let basis_used = lot.cost_basis * take_fraction;
-            total_cost_basis += basis_used;
-
-            let gain = take_amount - basis_used;
-
-            // Determine if short-term or long-term (>1 year)
-            let holding_days = (state.current_date - lot.purchase_date).get_days();
-            if holding_days >= 365 {
-                long_term_gain += gain.max(0.0);
-            } else {
-                short_term_gain += gain.max(0.0);
-            }
-
-            lot.units -= take_amount;
-            lot.cost_basis -= basis_used;
-
-            if lot.units <= 0.001 {
-                lots_to_remove.push(idx);
-            }
-            remaining -= take_amount;
-        }
-
-        // Remove depleted lots (in reverse order)
-        for idx in lots_to_remove.iter().rev() {
-            lots.remove(*idx);
-        }
-    }
-
-    // Calculate taxes on gains using config rates
-    // Short-term gains are taxed as ordinary income (use marginal rate)
-    // Long-term gains use capital gains rate
-    let tax_config = &state.tax_config;
-    let short_term_tax = if short_term_gain > 0.0 {
-        calculate_marginal_tax(
-            short_term_gain,
-            state.ytd_tax.ordinary_income,
-            &tax_config.federal_brackets,
-        )
-    } else {
-        0.0
-    };
-    let long_term_tax = long_term_gain * tax_config.capital_gains_rate;
-    let federal_tax = short_term_tax + long_term_tax;
-    let state_tax = (short_term_gain + long_term_gain) * tax_config.state_rate;
-    let net_proceeds = actual_amount - federal_tax - state_tax;
+    let gross_amount = lot_result.amount_consumed;
+    let net_proceeds = gross_amount - tax_result.total_tax;
 
     // Update balances
     *state
         .asset_balances
         .entry((src_account, src_asset))
-        .or_insert(0.0) -= actual_amount;
+        .or_insert(0.0) -= gross_amount;
     *state
         .asset_balances
         .entry((to_account, to_asset))
         .or_insert(0.0) += net_proceeds;
 
-    // Track for year-end tax calculation
-    state.ytd_tax.capital_gains += short_term_gain + long_term_gain;
-    state.ytd_tax.federal_tax += federal_tax;
-    state.ytd_tax.state_tax += state_tax;
+    // Track YTD taxes - short-term gains add to ordinary income for bracket purposes
+    state.ytd_tax.ordinary_income += lot_result.short_term_gain;
+    state.ytd_tax.capital_gains += lot_result.short_term_gain + lot_result.long_term_gain;
+    state.ytd_tax.federal_tax += tax_result.federal_tax;
+    state.ytd_tax.state_tax += tax_result.state_tax;
 
-    // Record liquidation
+    // Record the transfer
     state.records.push(Record::new(
         state.current_date,
         RecordKind::Transfer {
@@ -305,14 +159,14 @@ fn liquidate_from_source(
             from_asset_id: src_asset,
             to_account_id: to_account,
             to_asset_id: to_asset,
-            gross_amount: actual_amount,
+            gross_amount,
             net_amount: net_proceeds,
             tax_info: Some(Box::new(TaxInfo {
-                cost_basis: total_cost_basis,
-                short_term_gain,
-                long_term_gain,
-                federal_tax,
-                state_tax,
+                cost_basis: lot_result.cost_basis,
+                short_term_gain: lot_result.short_term_gain,
+                long_term_gain: lot_result.long_term_gain,
+                federal_tax: tax_result.federal_tax,
+                state_tax: tax_result.state_tax,
                 lot_method,
             })),
             source: Box::new(source),
@@ -320,13 +174,130 @@ fn liquidate_from_source(
     ));
 
     LiquidationResult {
-        gross_amount: actual_amount,
+        gross_amount,
         net_proceeds,
-        cost_basis: total_cost_basis,
-        short_term_gain,
-        long_term_gain,
-        federal_tax,
-        state_tax,
+        cost_basis: lot_result.cost_basis,
+        short_term_gain: lot_result.short_term_gain,
+        long_term_gain: lot_result.long_term_gain,
+        federal_tax: tax_result.federal_tax,
+        state_tax: tax_result.state_tax,
+    }
+}
+
+/// Liquidate from a tax-deferred account (Traditional IRA, 401k)
+fn liquidate_tax_deferred(
+    src_account: AccountId,
+    src_asset: AssetId,
+    to_account: AccountId,
+    to_asset: AssetId,
+    amount: f64,
+    lot_method: LotMethod,
+    state: &mut SimulationState,
+    source: TransactionSource,
+) -> LiquidationResult {
+    // Calculate ordinary income tax using unified tax module
+    let tax_result = calculate_tax_deferred_withdrawal_tax(
+        amount,
+        &state.tax_config,
+        state.ytd_tax.ordinary_income,
+    );
+
+    let net_amount = tax_result.net_amount;
+
+    // Update balances
+    *state
+        .asset_balances
+        .entry((src_account, src_asset))
+        .or_insert(0.0) -= amount;
+    *state
+        .asset_balances
+        .entry((to_account, to_asset))
+        .or_insert(0.0) += net_amount;
+
+    // Track YTD taxes
+    state.ytd_tax.ordinary_income += amount;
+    state.ytd_tax.federal_tax += tax_result.federal_tax;
+    state.ytd_tax.state_tax += tax_result.state_tax;
+
+    // Record the transfer
+    state.records.push(Record::new(
+        state.current_date,
+        RecordKind::Transfer {
+            from_account_id: src_account,
+            from_asset_id: src_asset,
+            to_account_id: to_account,
+            to_asset_id: to_asset,
+            gross_amount: amount,
+            net_amount,
+            tax_info: Some(Box::new(TaxInfo {
+                cost_basis: amount, // Tax-deferred has no meaningful cost basis
+                short_term_gain: 0.0,
+                long_term_gain: 0.0,
+                federal_tax: tax_result.federal_tax,
+                state_tax: tax_result.state_tax,
+                lot_method,
+            })),
+            source: Box::new(source),
+        },
+    ));
+
+    LiquidationResult {
+        gross_amount: amount,
+        net_proceeds: net_amount,
+        cost_basis: amount,
+        short_term_gain: 0.0,
+        long_term_gain: 0.0,
+        federal_tax: tax_result.federal_tax,
+        state_tax: tax_result.state_tax,
+    }
+}
+
+/// Liquidate from a tax-free account (Roth IRA)
+fn liquidate_tax_free(
+    src_account: AccountId,
+    src_asset: AssetId,
+    to_account: AccountId,
+    to_asset: AssetId,
+    amount: f64,
+    state: &mut SimulationState,
+    source: TransactionSource,
+) -> LiquidationResult {
+    // No taxes on Roth withdrawals (assuming qualified)
+    *state
+        .asset_balances
+        .entry((src_account, src_asset))
+        .or_insert(0.0) -= amount;
+    *state
+        .asset_balances
+        .entry((to_account, to_asset))
+        .or_insert(0.0) += amount;
+
+    // Track for reporting (even though tax-free)
+    state.ytd_tax.tax_free_withdrawals += amount;
+
+    // Record the transfer (no tax info needed)
+    state.records.push(Record::new(
+        state.current_date,
+        RecordKind::Transfer {
+            from_account_id: src_account,
+            from_asset_id: src_asset,
+            to_account_id: to_account,
+            to_asset_id: to_asset,
+            gross_amount: amount,
+            net_amount: amount,
+            tax_info: None,
+            source: Box::new(source),
+        },
+    ));
+
+    LiquidationResult {
+        gross_amount: amount,
+        net_proceeds: amount,
+        cost_basis: amount,
+        short_term_gain: 0.0,
+        long_term_gain: 0.0,
+        federal_tax: 0.0,
+        state_tax: 0.0,
     }
 }
 
@@ -765,19 +736,14 @@ pub fn apply_effect(
             // Resolve withdrawal sources
             let source_list = resolve_withdrawal_sources(sources, state);
 
-            // Calculate how much gross we need to withdraw
-            // For Net mode: estimate initial gross needed (will iterate if needed)
-            // For Gross mode: gross_needed = target_amount
-            let mut remaining_value = match amount_mode {
-                WithdrawalAmountMode::Gross => target_amount,
-                WithdrawalAmountMode::Net => {
-                    estimate_gross_for_net(&source_list, target_amount, state)
-                }
-            };
+            // Track remaining amount needed
+            // For Gross mode: remaining gross to withdraw
+            // For Net mode: remaining net proceeds needed
+            let mut remaining = target_amount;
 
             // Withdraw from sources in order until target is met
             for (src_account, src_asset) in source_list {
-                if remaining_value < 0.01 {
+                if remaining < 0.01 {
                     break;
                 }
 
@@ -786,14 +752,19 @@ pub fn apply_effect(
                     continue;
                 }
 
-                // For Net mode, we may need to withdraw more gross to hit net target
+                // Calculate gross amount to withdraw from this source
                 let take_gross = match amount_mode {
-                    WithdrawalAmountMode::Gross => remaining_value.min(available),
+                    WithdrawalAmountMode::Gross => remaining.min(available),
                     WithdrawalAmountMode::Net => {
-                        // Estimate gross needed for remaining net
-                        let estimated =
-                            estimate_gross_for_net_single(src_account, remaining_value, state);
-                        estimated.min(available)
+                        // Calculate exact gross needed for remaining net using lot data
+                        let gross_needed = calculate_gross_for_net(
+                            src_account,
+                            src_asset,
+                            remaining,
+                            *lot_method,
+                            state,
+                        );
+                        gross_needed.min(available)
                     }
                 };
 
@@ -813,10 +784,15 @@ pub fn apply_effect(
                     },
                 );
 
-                remaining_value -= match amount_mode {
+                // Subtract what we actually got
+                remaining -= match amount_mode {
                     WithdrawalAmountMode::Gross => result.gross_amount,
                     WithdrawalAmountMode::Net => result.net_proceeds,
                 };
+            }
+
+            if remaining > 0.01 {
+                eprintln!("Failed to fully meet sweep target: remaining {}", remaining);
             }
         }
 
@@ -950,54 +926,77 @@ fn apply_rmd_to_account(
     );
 }
 
-/// Estimate gross withdrawal needed to achieve a target net amount
-/// Takes into account the account types in the source list
-fn estimate_gross_for_net(
-    sources: &[(AccountId, AssetId)],
-    net_target: f64,
-    state: &SimulationState,
-) -> f64 {
-    if sources.is_empty() {
-        return net_target;
-    }
-
-    // Use the first source to estimate effective tax rate
-    let (first_account, _) = sources[0];
-    estimate_gross_for_net_single(first_account, net_target, state)
-}
-
-/// Estimate gross withdrawal from a single account to achieve target net
-fn estimate_gross_for_net_single(
+/// Calculate the gross withdrawal needed from a single account to achieve a target net amount.
+/// For taxable accounts, uses actual lot data for precise calculation.
+/// For tax-deferred accounts, uses marginal tax rate calculation.
+/// For tax-free accounts, gross equals net.
+fn calculate_gross_for_net(
     account_id: AccountId,
+    asset_id: AssetId,
     net_target: f64,
+    lot_method: LotMethod,
     state: &SimulationState,
 ) -> f64 {
-    let tax_config = &state.tax_config;
-
-    if let Some(account) = state.accounts.get(&account_id) {
-        match account.account_type {
-            AccountType::Taxable => {
-                // Capital gains: assume mostly long-term for estimation
-                let effective_rate = tax_config.capital_gains_rate + tax_config.state_rate;
-                net_target / (1.0 - effective_rate)
-            }
-            AccountType::TaxDeferred => {
-                // Ordinary income tax
-                let effective_rate = 0.22 + tax_config.state_rate;
-                net_target / (1.0 - effective_rate)
-            }
-            AccountType::TaxFree => {
-                // No tax on Roth withdrawals
-                net_target
-            }
-            AccountType::Illiquid => {
-                // Typically can't withdraw from illiquid
-                net_target
-            }
-        }
-    } else {
+    let Some(account) = state.accounts.get(&account_id) else {
         // Unknown account, assume 25% effective rate
-        net_target / 0.75
+        eprintln!(
+            "WARNING: Unknown account {:?} when calculating gross for net, assuming 25% effective tax rate",
+            account_id
+        );
+        return net_target / 0.75;
+    };
+
+    match account.account_type {
+        AccountType::Taxable => {
+            // Use actual lot data for taxable accounts
+            if let Some(lots) = state.asset_lots.get(&(account_id, asset_id)) {
+                if !lots.is_empty() {
+                    return gross_up_for_net_target_with_lots(
+                        net_target,
+                        lots,
+                        lot_method,
+                        state.current_date,
+                        &state.tax_config,
+                        state.ytd_tax.ordinary_income,
+                    );
+                }
+            }
+            // No lots - assume no gain (basis = value), so no tax
+            net_target
+        }
+        AccountType::TaxDeferred => {
+            // Binary search for gross amount that yields target net after tax
+            let mut low = net_target;
+            let mut high = net_target * 2.0;
+
+            for _ in 0..30 {
+                let mid = (low + high) / 2.0;
+                let tax = calculate_marginal_tax(
+                    mid,
+                    state.ytd_tax.ordinary_income,
+                    &state.tax_config.federal_brackets,
+                ) + mid * state.tax_config.state_rate;
+                let net = mid - tax;
+
+                if (net - net_target).abs() < 0.01 {
+                    return mid;
+                }
+                if net < net_target {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            (low + high) / 2.0
+        }
+        AccountType::TaxFree => {
+            // No tax, gross equals net
+            net_target
+        }
+        AccountType::Illiquid => {
+            // Can't withdraw from illiquid, return target as-is
+            net_target
+        }
     }
 }
 

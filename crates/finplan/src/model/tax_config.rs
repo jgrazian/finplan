@@ -23,9 +23,6 @@ pub struct TaxConfig {
     pub state_rate: f64,
     /// Long-term capital gains tax rate (e.g., 0.15 for 15%)
     pub capital_gains_rate: f64,
-    /// Estimated percentage of taxable account withdrawals that are gains (0.0 to 1.0)
-    /// Used as a simplification instead of full cost basis tracking
-    pub taxable_gains_percentage: f64,
 }
 
 impl Default for TaxConfig {
@@ -64,7 +61,6 @@ impl Default for TaxConfig {
             ],
             state_rate: 0.05,
             capital_gains_rate: 0.15,
-            taxable_gains_percentage: 0.50,
         }
     }
 }

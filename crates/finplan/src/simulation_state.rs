@@ -65,7 +65,7 @@ pub struct SimulationState {
     pub cumulative_inflation: Vec<f64>,
 
     /// Year-to-date tax tracking
-    pub ytd_tax: YtdTaxState,
+    pub ytd_tax: TaxSummary,
 
     /// Yearly tax summaries
     pub yearly_taxes: Vec<TaxSummary>,
@@ -85,19 +85,6 @@ pub struct SimulationState {
     pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
     /// Active RMD accounts (account_id -> starting_age)
     pub active_rmd_accounts: HashMap<AccountId, u8>,
-}
-
-impl SimulationState {}
-
-/// Year-to-date tax tracking
-#[derive(Debug, Clone, Default)]
-pub struct YtdTaxState {
-    pub year: i16,
-    pub ordinary_income: f64,
-    pub capital_gains: f64,
-    pub tax_free_withdrawals: f64,
-    pub federal_tax: f64,
-    pub state_tax: f64,
 }
 
 impl SimulationState {
@@ -149,7 +136,7 @@ impl SimulationState {
             return_profile_returns,
             inflation_rates,
             cumulative_inflation,
-            ytd_tax: YtdTaxState {
+            ytd_tax: TaxSummary {
                 year: start_date.year(),
                 ..Default::default()
             },
@@ -301,7 +288,7 @@ impl SimulationState {
         let current_year = self.current_date.year();
         if current_year != self.ytd_tax.year {
             self.finalize_year_taxes();
-            self.ytd_tax = YtdTaxState {
+            self.ytd_tax = TaxSummary {
                 year: current_year,
                 ..Default::default()
             };

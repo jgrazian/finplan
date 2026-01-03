@@ -369,7 +369,6 @@ fn test_comprehensive_lifecycle_simulation() {
             ],
             state_rate: 0.05,
             capital_gains_rate: 0.15,
-            taxable_gains_percentage: 0.5,
         },
     };
 
@@ -659,7 +658,6 @@ fn test_retirement_withdrawals() {
             ],
             state_rate: 0.05,
             capital_gains_rate: 0.15,
-            taxable_gains_percentage: 0.5,
         },
     };
 
