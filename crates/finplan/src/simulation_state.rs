@@ -87,24 +87,7 @@ pub struct SimulationState {
     pub active_rmd_accounts: HashMap<AccountId, u8>,
 }
 
-impl SimulationState {
-    /// Update RMD record with actual withdrawal amount after spending target executes
-    /// DEPRECATED: RMD tracking needs to be redesigned for new event system
-    #[deprecated(note = "RMD tracking needs to be redesigned for new event system")]
-    pub fn update_rmd_actual_withdrawn(&mut self, amount: f64) {
-        // Search backwards to find most recent RMD record
-        for record in self.records.iter_mut().rev() {
-            if let RecordKind::Rmd {
-                actual_withdrawn, ..
-            } = &mut record.kind
-            {
-                // Track cumulative withdrawals for this RMD
-                *actual_withdrawn += amount;
-                break;
-            }
-        }
-    }
-}
+impl SimulationState {}
 
 /// Year-to-date tax tracking
 #[derive(Debug, Clone, Default)]

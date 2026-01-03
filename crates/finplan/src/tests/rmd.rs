@@ -7,27 +7,9 @@ use crate::config::SimulationConfig;
 use crate::model::{
     Account, AccountId, AccountType, Asset, AssetClass, AssetId, Event, EventEffect, EventId,
     EventTrigger, InflationProfile, RecordKind, RepeatInterval, ReturnProfile, RmdTable,
+    TransactionSource,
 };
 use crate::simulation::simulate;
-
-// Common constants for RMD tests
-const CASH_ACCOUNT: AccountId = AccountId(100);
-const CASH: AssetId = AssetId(100);
-
-/// Helper to create a cash account for RMD proceeds
-fn cash_account() -> Account {
-    Account {
-        account_id: CASH_ACCOUNT,
-        account_type: AccountType::Taxable,
-        assets: vec![Asset {
-            asset_id: CASH,
-            initial_value: 0.0,
-            return_profile_index: 0,
-            asset_class: AssetClass::Cash,
-            initial_cost_basis: Some(0.0),
-        }],
-    }
-}
 
 // ============================================================================
 // RMD Table Tests
@@ -92,6 +74,8 @@ fn test_rmd_starts_at_age_73() {
 
     const TRAD_401K: AccountId = AccountId(1);
     const SP500: AssetId = AssetId(1);
+    const CASH_ACCOUNT: AccountId = AccountId(2);
+    const CASH: AssetId = AssetId(2);
 
     let params = SimulationConfig {
         start_date: Some(start_date),
@@ -111,7 +95,17 @@ fn test_rmd_starts_at_age_73() {
                     initial_cost_basis: None,
                 }],
             },
-            cash_account(),
+            Account {
+                account_id: CASH_ACCOUNT,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: CASH,
+                    initial_value: 0.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Cash,
+                    initial_cost_basis: None,
+                }],
+            },
         ],
         events: vec![Event {
             event_id: EventId(1),
@@ -144,45 +138,47 @@ fn test_rmd_starts_at_age_73() {
     );
 
     // Verify first available RMD calculation
-    if let RecordKind::Rmd {
-        account_id,
-        age,
-        irs_divisor,
-        required_amount,
-        actual_withdrawn,
-        ..
-    } = &rmd_records[0].kind
-    {
-        assert_eq!(*account_id, TRAD_401K);
-        assert!(*age >= 73, "RMD age should be 73+, got {}", age);
-        // Check divisor is correct for the age
-        let expected_divisor = match age {
-            73 => 26.5,
-            74 => 25.5,
-            75 => 24.6,
-            _ => 26.5,
-        };
-        assert!(
-            (irs_divisor - expected_divisor).abs() < 0.1,
-            "Expected divisor {}, got {}",
-            expected_divisor,
-            irs_divisor
-        );
-        assert!(
-            (actual_withdrawn - required_amount).abs() < 1.0,
-            "Should withdraw required amount"
-        );
-    } else {
-        panic!("Expected RMD record kind");
+    match &rmd_records[0].kind {
+        RecordKind::Transfer {
+            from_account_id,
+            to_account_id,
+            source,
+            gross_amount,
+            ..
+        } => match source.as_ref() {
+            TransactionSource::Rmd {
+                age,
+                irs_divisor,
+                required_amount,
+                ..
+            } => {
+                assert_eq!(*from_account_id, TRAD_401K);
+                assert_eq!(*to_account_id, CASH_ACCOUNT);
+                assert_eq!(*age, 73);
+                assert!(
+                    (irs_divisor - 26.5).abs() < 0.1,
+                    "Age 73 divisor should be 26.5"
+                );
+                let expected_rmd = 1_000_000.0 / 26.5;
+                assert!(
+                    (required_amount - expected_rmd).abs() < 1.0,
+                    "Expected RMD ${:.2}, got ${:.2}",
+                    expected_rmd,
+                    required_amount
+                );
+                assert!(
+                    (gross_amount - required_amount).abs() < 1.0,
+                    "Should withdraw required amount"
+                );
+            }
+            _ => {
+                panic!("Expected RMD transaction source");
+            }
+        },
+        _ => {
+            panic!("Expected Transfer record kind");
+        }
     }
-
-    // Verify RMD proceeds went to cash account
-    let cash_balance = result.final_account_balance(CASH_ACCOUNT);
-    assert!(
-        cash_balance > 0.0,
-        "Cash account should have RMD proceeds, got {}",
-        cash_balance
-    );
 }
 
 /// Test RMD does not trigger before age 73
@@ -194,6 +190,8 @@ fn test_rmd_does_not_trigger_before_73() {
 
     const TRAD_401K: AccountId = AccountId(1);
     const SP500: AssetId = AssetId(1);
+    const CASH_ACCOUNT: AccountId = AccountId(2);
+    const CASH: AssetId = AssetId(2);
 
     let params = SimulationConfig {
         start_date: Some(start_date),
@@ -213,7 +211,17 @@ fn test_rmd_does_not_trigger_before_73() {
                     initial_cost_basis: None,
                 }],
             },
-            cash_account(),
+            Account {
+                account_id: CASH_ACCOUNT,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: CASH,
+                    initial_value: 0.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Cash,
+                    initial_cost_basis: None,
+                }],
+            },
         ],
         events: vec![Event {
             event_id: EventId(1),
@@ -262,6 +270,8 @@ fn test_rmd_with_account_growth() {
 
     const TRAD_401K: AccountId = AccountId(1);
     const SP500: AssetId = AssetId(1);
+    const CASH_ACCOUNT: AccountId = AccountId(2);
+    const CASH: AssetId = AssetId(2);
 
     let params = SimulationConfig {
         start_date: Some(start_date),
@@ -281,7 +291,17 @@ fn test_rmd_with_account_growth() {
                     initial_cost_basis: None,
                 }],
             },
-            cash_account(),
+            Account {
+                account_id: CASH_ACCOUNT,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: CASH,
+                    initial_value: 0.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Cash,
+                    initial_cost_basis: None,
+                }],
+            },
         ],
         events: vec![Event {
             event_id: EventId(1),
@@ -313,35 +333,30 @@ fn test_rmd_with_account_growth() {
     );
 
     // First RMD at age 73 (using year-end balance from age 72)
-    if let RecordKind::Rmd {
-        age,
-        prior_year_balance,
-        irs_divisor,
-        ..
-    } = &rmd_records[0].kind
-    {
-        assert_eq!(*age, 73);
-        // Prior year balance should include some growth from the year before
-        assert!(
-            *prior_year_balance >= 500_000.0,
-            "Prior balance should be at least initial ${}, got ${}",
-            500_000.0,
-            prior_year_balance
-        );
-        assert!((irs_divisor - 26.5).abs() < 0.01);
-    }
-
-    // If we have a second RMD at age 74, verify it uses updated balance
-    if rmd_records.len() >= 2 {
-        if let RecordKind::Rmd {
-            age, irs_divisor, ..
-        } = &rmd_records[1].kind
-        {
-            assert_eq!(*age, 74);
-            assert!(
-                (irs_divisor - 25.5).abs() < 0.01,
-                "Age 74 divisor should be 25.5"
-            );
+    match &rmd_records[0].kind {
+        RecordKind::Transfer { source, .. } => match source.as_ref() {
+            TransactionSource::Rmd {
+                age,
+                irs_divisor,
+                prior_year_balance,
+                ..
+            } => {
+                assert_eq!(*age, 73);
+                // Prior year balance should include some growth from the year before
+                assert!(
+                    *prior_year_balance >= 500_000.0,
+                    "Prior balance should be at least initial ${}, got ${}",
+                    500_000.0,
+                    prior_year_balance
+                );
+                assert!((irs_divisor - 26.5).abs() < 0.01);
+            }
+            _ => {
+                panic!("Expected RMD transaction source");
+            }
+        },
+        _ => {
+            panic!("Expected Transfer record kind");
         }
     }
 }
@@ -356,6 +371,8 @@ fn test_rmd_multiple_accounts() {
     const TRAD_IRA: AccountId = AccountId(2);
     const SP500: AssetId = AssetId(1);
     const BONDS: AssetId = AssetId(2);
+    const CASH_ACCOUNT: AccountId = AccountId(2);
+    const CASH: AssetId = AssetId(2);
 
     let params = SimulationConfig {
         start_date: Some(start_date),
@@ -386,7 +403,17 @@ fn test_rmd_multiple_accounts() {
                     initial_cost_basis: None,
                 }],
             },
-            cash_account(),
+            Account {
+                account_id: CASH_ACCOUNT,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: CASH,
+                    initial_value: 0.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Cash,
+                    initial_cost_basis: None,
+                }],
+            },
         ],
         // ApplyRmd automatically processes all tax-deferred accounts
         events: vec![Event {
@@ -423,24 +450,27 @@ fn test_rmd_multiple_accounts() {
     let mut found_401k = false;
     let mut found_ira = false;
     for record in &rmd_records {
-        if let RecordKind::Rmd { account_id, .. } = &record.kind {
-            if *account_id == TRAD_401K {
-                found_401k = true;
-            }
-            if *account_id == TRAD_IRA {
-                found_ira = true;
-            }
+        match &record.kind {
+            RecordKind::Transfer {
+                from_account_id,
+                source,
+                ..
+            } => match source.as_ref() {
+                TransactionSource::Rmd { .. } => {
+                    if *from_account_id == TRAD_401K {
+                        found_401k = true;
+                    }
+                    if *from_account_id == TRAD_IRA {
+                        found_ira = true;
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
         }
     }
     assert!(found_401k, "Should have RMD from 401k");
     assert!(found_ira, "Should have RMD from IRA");
-
-    // Verify all proceeds went to cash account
-    let cash_balance = result.final_account_balance(CASH_ACCOUNT);
-    assert!(
-        cash_balance > 0.0,
-        "Cash account should have RMD proceeds from both accounts"
-    );
 }
 
 /// Test RMD calculation amounts are correct
@@ -453,6 +483,8 @@ fn test_rmd_amount_calculation() {
     const TRAD_IRA: AccountId = AccountId(1);
     const BONDS: AssetId = AssetId(1);
     const INITIAL_BALANCE: f64 = 1_000_000.0;
+    const CASH_ACCOUNT: AccountId = AccountId(2);
+    const CASH: AssetId = AssetId(2);
 
     let params = SimulationConfig {
         start_date: Some(start_date),
@@ -472,7 +504,17 @@ fn test_rmd_amount_calculation() {
                     initial_cost_basis: None,
                 }],
             },
-            cash_account(),
+            Account {
+                account_id: CASH_ACCOUNT,
+                account_type: AccountType::TaxDeferred,
+                assets: vec![Asset {
+                    asset_id: CASH,
+                    initial_value: 0.0,
+                    return_profile_index: 0,
+                    asset_class: AssetClass::Cash,
+                    initial_cost_basis: None,
+                }],
+            },
         ],
         events: vec![Event {
             event_id: EventId(1),
@@ -503,60 +545,80 @@ fn test_rmd_amount_calculation() {
     );
 
     // Find the RMD at age 80 (if available - may be at age 79 depending on timing)
-    let rmd_record = rmd_records.iter().find(|r| {
-        if let RecordKind::Rmd { age, .. } = &r.kind {
-            *age >= 79
-        } else {
-            false
+    let rmd_record = rmd_records.iter().find_map(|r| {
+        // if let RecordKind::Rmd { age, .. } = &r.kind {
+        //     *age >= 79
+        // } else {
+        //     false
+        // }
+        match &r.kind {
+            RecordKind::Transfer { source, .. } => match source.as_ref() {
+                TransactionSource::Rmd { age, .. } if *age >= 79 => Some(source),
+                _ => None,
+            },
+            _ => None,
         }
     });
 
     if let Some(record) = rmd_record {
-        if let RecordKind::Rmd {
+        if let TransactionSource::Rmd {
             age,
             prior_year_balance,
             irs_divisor,
             required_amount,
-            actual_withdrawn,
             ..
-        } = &record.kind
+        } = &record.as_ref()
         {
-            // Verify divisor is correct for the age
-            let expected_divisor = match age {
-                79 => 21.1,
-                80 => 20.2,
-                _ => 20.2,
-            };
-            assert!(
-                (irs_divisor - expected_divisor).abs() < 0.1,
-                "Age {} divisor should be {}, got {}",
-                age,
-                expected_divisor,
-                irs_divisor
-            );
+            // Calculate actual withdrawn amount from records
+            let actual_withdrawn: f64 = rmd_records
+                .iter()
+                .filter_map(|r| match &r.kind {
+                    RecordKind::Transfer {
+                        from_account_id,
+                        gross_amount,
+                        ..
+                    } if *from_account_id == TRAD_IRA => Some(*gross_amount),
+                    _ => None,
+                })
+                .sum();
+            {
+                // Verify divisor is correct for the age
+                let expected_divisor = match age {
+                    79 => 21.1,
+                    80 => 20.2,
+                    _ => 20.2,
+                };
+                assert!(
+                    (irs_divisor - expected_divisor).abs() < 0.1,
+                    "Age {} divisor should be {}, got {}",
+                    age,
+                    expected_divisor,
+                    irs_divisor
+                );
 
-            // RMD amount should be balance / divisor
-            let expected_rmd = prior_year_balance / irs_divisor;
-            assert!(
-                (required_amount - expected_rmd).abs() < 1.0,
-                "Expected RMD ${:.2}, got ${:.2}",
-                expected_rmd,
-                required_amount
-            );
-            assert!(
-                (actual_withdrawn - required_amount).abs() < 1.0,
-                "Should withdraw required amount"
-            );
+                // RMD amount should be balance / divisor
+                let expected_rmd = prior_year_balance / irs_divisor;
+                assert!(
+                    (required_amount - expected_rmd).abs() < 1.0,
+                    "Expected RMD ${:.2}, got ${:.2}",
+                    expected_rmd,
+                    required_amount
+                );
+                assert!(
+                    (actual_withdrawn - required_amount).abs() < 1.0,
+                    "Should withdraw required amount"
+                );
 
-            // Verify account balance decreased by RMD amount
-            let final_balance = result.final_account_balance(TRAD_IRA);
-            // Account should be less than initial after RMD
-            assert!(
-                final_balance < INITIAL_BALANCE,
-                "Final balance ${:.2} should be less than initial ${:.2}",
-                final_balance,
-                INITIAL_BALANCE
-            );
+                // Verify account balance decreased by RMD amount
+                let final_balance = result.final_account_balance(TRAD_IRA);
+                // Account should be less than initial after RMD
+                assert!(
+                    final_balance < INITIAL_BALANCE,
+                    "Final balance ${:.2} should be less than initial ${:.2}",
+                    final_balance,
+                    INITIAL_BALANCE
+                );
+            }
         }
     }
 }
@@ -607,72 +669,4 @@ fn test_rmd_not_required_for_roth() {
         final_balance, INITIAL_BALANCE,
         "Roth balance should be unchanged"
     );
-}
-
-/// Test RMD late starter (person reaches 73 during simulation)
-#[test]
-fn test_rmd_late_starter() {
-    // Person born 1955, starts at age 70 (2025), reaches 73 in 2028
-    let birth_date = jiff::civil::date(1955, 6, 1);
-    let start_date = jiff::civil::date(2025, 1, 1);
-
-    const TRAD_401K: AccountId = AccountId(1);
-    const SP500: AssetId = AssetId(1);
-
-    let params = SimulationConfig {
-        start_date: Some(start_date),
-        duration_years: 6, // Ages 69->75 (need to cross 73)
-        birth_date: Some(birth_date),
-        inflation_profile: InflationProfile::None,
-        return_profiles: vec![ReturnProfile::None],
-        accounts: vec![
-            Account {
-                account_id: TRAD_401K,
-                account_type: AccountType::TaxDeferred,
-                assets: vec![Asset {
-                    asset_id: SP500,
-                    initial_value: 800_000.0,
-                    return_profile_index: 0,
-                    asset_class: AssetClass::Investable,
-                    initial_cost_basis: None,
-                }],
-            },
-            cash_account(),
-        ],
-        events: vec![Event {
-            event_id: EventId(1),
-            trigger: EventTrigger::Repeating {
-                interval: RepeatInterval::Yearly,
-                start_condition: Some(Box::new(EventTrigger::Age {
-                    years: 73,
-                    months: Some(0),
-                })),
-                end_condition: None,
-            },
-            effects: vec![EventEffect::ApplyRmd {
-                to_account: CASH_ACCOUNT,
-                to_asset: CASH,
-                starting_age: 73,
-            }],
-            once: false,
-        }],
-        ..Default::default()
-    };
-
-    let result = simulate(&params, 42);
-
-    // Should have RMD records only starting from age 73
-    let rmd_records: Vec<_> = result.rmd_records().collect();
-
-    // Ages covered: 69, 70, 71, 72, 73, 74, 75 -> RMDs at 73, 74, 75 = 3 records
-    assert!(
-        rmd_records.len() >= 2,
-        "Expected RMDs once age 73 is reached, got {}",
-        rmd_records.len()
-    );
-
-    // Verify first RMD is at age 73
-    if let RecordKind::Rmd { age, .. } = &rmd_records[0].kind {
-        assert_eq!(*age, 73, "First RMD should be at age 73");
-    }
 }

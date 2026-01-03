@@ -1,7 +1,7 @@
 use crate::model::{
     AccountId, AccountType, AssetId, Event, EventEffect, EventId, EventTrigger, LimitPeriod,
-    LotMethod, Record, RecordKind, RmdTable, TransferAmount, TransferEndpoint, TriggerOffset,
-    WithdrawalAmountMode, WithdrawalOrder, WithdrawalSources,
+    LotMethod, Record, RecordKind, RmdTable, TaxInfo, TransactionSource, TransferAmount,
+    TransferEndpoint, TriggerOffset, WithdrawalAmountMode, WithdrawalOrder, WithdrawalSources,
 };
 use crate::simulation_state::SimulationState;
 use crate::taxes::calculate_marginal_tax;
@@ -30,7 +30,7 @@ fn liquidate_from_source(
     amount: f64,
     lot_method: LotMethod,
     state: &mut SimulationState,
-    event_id: EventId,
+    source: TransactionSource,
 ) -> LiquidationResult {
     let balance = state.asset_balance(src_account, src_asset);
     let actual_amount = amount.min(balance);
@@ -93,20 +93,22 @@ fn liquidate_from_source(
             // TaxDeferred accounts use Liquidation record to track gross vs net
             state.records.push(Record::new(
                 state.current_date,
-                RecordKind::Liquidation {
+                RecordKind::Transfer {
                     from_account_id: src_account,
                     from_asset_id: src_asset,
                     to_account_id: to_account,
                     to_asset_id: to_asset,
                     gross_amount: actual_amount,
-                    cost_basis: actual_amount, // Tax-deferred has no cost basis distinction
-                    short_term_gain: 0.0,
-                    long_term_gain: 0.0,
-                    federal_tax,
-                    state_tax,
-                    net_proceeds: net_amount,
-                    lot_method,
-                    event_id,
+                    net_amount: net_amount,
+                    tax_info: Some(Box::new(TaxInfo {
+                        cost_basis: actual_amount, // Tax-deferred has no cost basis distinction
+                        short_term_gain: 0.0,
+                        long_term_gain: 0.0,
+                        federal_tax,
+                        state_tax,
+                        lot_method,
+                    })),
+                    source: Box::new(source),
                 },
             ));
         } else {
@@ -118,8 +120,10 @@ fn liquidate_from_source(
                     from_asset_id: src_asset,
                     to_account_id: to_account,
                     to_asset_id: to_asset,
-                    amount: actual_amount,
-                    event_id,
+                    gross_amount: actual_amount,
+                    net_amount: net_amount,
+                    tax_info: None,
+                    source: Box::new(source),
                 },
             ));
         }
@@ -296,20 +300,22 @@ fn liquidate_from_source(
     // Record liquidation
     state.records.push(Record::new(
         state.current_date,
-        RecordKind::Liquidation {
+        RecordKind::Transfer {
             from_account_id: src_account,
             from_asset_id: src_asset,
             to_account_id: to_account,
             to_asset_id: to_asset,
             gross_amount: actual_amount,
-            cost_basis: total_cost_basis,
-            short_term_gain,
-            long_term_gain,
-            federal_tax,
-            state_tax,
-            net_proceeds,
-            lot_method,
-            event_id,
+            net_amount: net_proceeds,
+            tax_info: Some(Box::new(TaxInfo {
+                cost_basis: total_cost_basis,
+                short_term_gain,
+                long_term_gain,
+                federal_tax,
+                state_tax,
+                lot_method,
+            })),
+            source: Box::new(source),
         },
     ));
 
@@ -622,113 +628,117 @@ pub fn apply_effect(
             }
 
             // Execute the transfer
-            if calculated_amount > 0.0 {
-                match (from, to) {
-                    (
-                        TransferEndpoint::External,
-                        TransferEndpoint::Asset {
-                            account_id,
-                            asset_id,
+            if calculated_amount <= 0.0 {
+                return;
+            }
+
+            match (from, to) {
+                (
+                    TransferEndpoint::External,
+                    TransferEndpoint::Asset {
+                        account_id,
+                        asset_id,
+                    },
+                ) => {
+                    // Income: external -> asset
+                    let balance = state
+                        .asset_balances
+                        .entry((*account_id, *asset_id))
+                        .or_insert(0.0);
+                    *balance += calculated_amount;
+
+                    // Record as income
+                    state.records.push(Record::new(
+                        state.current_date,
+                        RecordKind::Income {
+                            to_account_id: *account_id,
+                            to_asset_id: *asset_id,
+                            amount: calculated_amount,
+                            event_id,
                         },
-                    ) => {
-                        // Income: external -> asset
-                        let balance = state
-                            .asset_balances
-                            .entry((*account_id, *asset_id))
-                            .or_insert(0.0);
-                        *balance += calculated_amount;
+                    ));
 
-                        // Record as income
-                        state.records.push(Record::new(
-                            state.current_date,
-                            RecordKind::Income {
-                                to_account_id: *account_id,
-                                to_asset_id: *asset_id,
-                                amount: calculated_amount,
-                                event_id,
-                            },
-                        ));
-
-                        // Track for taxes if applicable
-                        if let Some(account) = state.accounts.get(account_id) {
-                            if matches!(
-                                account.account_type,
-                                AccountType::Taxable | AccountType::TaxDeferred
-                            ) {
-                                state.ytd_tax.ordinary_income += calculated_amount;
-                            }
+                    // Track for taxes if applicable
+                    if let Some(account) = state.accounts.get(account_id) {
+                        if matches!(
+                            account.account_type,
+                            AccountType::Taxable | AccountType::TaxDeferred
+                        ) {
+                            state.ytd_tax.ordinary_income += calculated_amount;
                         }
                     }
+                }
 
-                    (
-                        TransferEndpoint::Asset {
-                            account_id,
-                            asset_id,
+                (
+                    TransferEndpoint::Asset {
+                        account_id,
+                        asset_id,
+                    },
+                    TransferEndpoint::External,
+                ) => {
+                    // Expense: asset -> external
+                    let balance = state
+                        .asset_balances
+                        .entry((*account_id, *asset_id))
+                        .or_insert(0.0);
+                    let actual_amount = calculated_amount.min(*balance);
+                    *balance -= actual_amount;
+
+                    // Record as expense
+                    state.records.push(Record::new(
+                        state.current_date,
+                        RecordKind::Expense {
+                            from_account_id: *account_id,
+                            from_asset_id: *asset_id,
+                            amount: actual_amount,
+                            event_id,
                         },
-                        TransferEndpoint::External,
-                    ) => {
-                        // Expense: asset -> external
-                        let balance = state
-                            .asset_balances
-                            .entry((*account_id, *asset_id))
-                            .or_insert(0.0);
-                        let actual_amount = calculated_amount.min(*balance);
-                        *balance -= actual_amount;
+                    ));
+                }
 
-                        // Record as expense
-                        state.records.push(Record::new(
-                            state.current_date,
-                            RecordKind::Expense {
-                                from_account_id: *account_id,
-                                from_asset_id: *asset_id,
-                                amount: actual_amount,
-                                event_id,
-                            },
-                        ));
-                    }
+                (
+                    TransferEndpoint::Asset {
+                        account_id: from_acc,
+                        asset_id: from_asset,
+                    },
+                    TransferEndpoint::Asset {
+                        account_id: to_acc,
+                        asset_id: to_asset,
+                    },
+                ) => {
+                    // Internal transfer: asset -> asset
+                    let from_balance = state
+                        .asset_balances
+                        .entry((*from_acc, *from_asset))
+                        .or_insert(0.0);
+                    let actual_amount = calculated_amount.min(*from_balance);
+                    *from_balance -= actual_amount;
 
-                    (
-                        TransferEndpoint::Asset {
-                            account_id: from_acc,
-                            asset_id: from_asset,
+                    let to_balance = state
+                        .asset_balances
+                        .entry((*to_acc, *to_asset))
+                        .or_insert(0.0);
+                    *to_balance += actual_amount;
+
+                    // Record as transfer
+                    state.records.push(Record::new(
+                        state.current_date,
+                        RecordKind::Transfer {
+                            from_account_id: *from_acc,
+                            from_asset_id: *from_asset,
+                            to_account_id: *to_acc,
+                            to_asset_id: *to_asset,
+                            gross_amount: actual_amount,
+                            net_amount: actual_amount,
+                            tax_info: None,
+                            source: Box::new(TransactionSource::Event(event_id)),
                         },
-                        TransferEndpoint::Asset {
-                            account_id: to_acc,
-                            asset_id: to_asset,
-                        },
-                    ) => {
-                        // Internal transfer: asset -> asset
-                        let from_balance = state
-                            .asset_balances
-                            .entry((*from_acc, *from_asset))
-                            .or_insert(0.0);
-                        let actual_amount = calculated_amount.min(*from_balance);
-                        *from_balance -= actual_amount;
+                    ));
+                }
 
-                        let to_balance = state
-                            .asset_balances
-                            .entry((*to_acc, *to_asset))
-                            .or_insert(0.0);
-                        *to_balance += actual_amount;
-
-                        // Record as transfer
-                        state.records.push(Record::new(
-                            state.current_date,
-                            RecordKind::Transfer {
-                                from_account_id: *from_acc,
-                                from_asset_id: *from_asset,
-                                to_account_id: *to_acc,
-                                to_asset_id: *to_asset,
-                                amount: actual_amount,
-                                event_id,
-                            },
-                        ));
-                    }
-
-                    (TransferEndpoint::External, TransferEndpoint::External) => {
-                        // Invalid: external -> external
-                        eprintln!("WARNING: Invalid transfer from External to External");
-                    }
+                (TransferEndpoint::External, TransferEndpoint::External) => {
+                    // Invalid: external -> external
+                    eprintln!("WARNING: Invalid transfer from External to External");
                 }
             }
         }
@@ -755,58 +765,34 @@ pub fn apply_effect(
             // Resolve withdrawal sources
             let source_list = resolve_withdrawal_sources(sources, state);
 
-            // For Net mode, we need to withdraw enough gross to end up with target_amount net
-            // This is iterative since taxes depend on the amount withdrawn
-            let mut total_gross = 0.0;
-            let mut total_net = 0.0;
-
-            // Determine target based on mode
-            let net_target = match amount_mode {
-                WithdrawalAmountMode::Gross => {
-                    // For gross mode, we withdraw target_amount gross
-                    // The net will be whatever remains after taxes
-                    target_amount // This is actually gross target
-                }
-                WithdrawalAmountMode::Net => target_amount,
-            };
-
             // Calculate how much gross we need to withdraw
             // For Net mode: estimate initial gross needed (will iterate if needed)
             // For Gross mode: gross_needed = target_amount
-            let gross_needed = match amount_mode {
+            let mut remaining_value = match amount_mode {
                 WithdrawalAmountMode::Gross => target_amount,
                 WithdrawalAmountMode::Net => {
-                    // Estimate: assume ~25% effective tax rate for initial gross-up
-                    // We'll adjust as we go
-                    estimate_gross_for_net(&source_list, net_target, state)
+                    estimate_gross_for_net(&source_list, target_amount, state)
                 }
             };
 
-            let mut remaining_gross = gross_needed;
-            let mut remaining_net = net_target;
-
             // Withdraw from sources in order until target is met
             for (src_account, src_asset) in source_list {
-                let done = match amount_mode {
-                    WithdrawalAmountMode::Gross => remaining_gross <= 0.001,
-                    WithdrawalAmountMode::Net => remaining_net <= 0.001,
-                };
-                if done {
+                if remaining_value < 0.01 {
                     break;
                 }
 
                 let available = state.asset_balance(src_account, src_asset);
-                if available <= 0.001 {
+                if available < 0.01 {
                     continue;
                 }
 
                 // For Net mode, we may need to withdraw more gross to hit net target
                 let take_gross = match amount_mode {
-                    WithdrawalAmountMode::Gross => remaining_gross.min(available),
+                    WithdrawalAmountMode::Gross => remaining_value.min(available),
                     WithdrawalAmountMode::Net => {
                         // Estimate gross needed for remaining net
                         let estimated =
-                            estimate_gross_for_net_single(src_account, remaining_net, state);
+                            estimate_gross_for_net_single(src_account, remaining_value, state);
                         estimated.min(available)
                     }
                 };
@@ -820,29 +806,18 @@ pub fn apply_effect(
                     take_gross,
                     *lot_method,
                     state,
-                    event_id,
+                    TransactionSource::Sweep {
+                        event_id,
+                        target_amount,
+                        amount_mode: *amount_mode,
+                    },
                 );
 
-                total_gross += result.gross_amount;
-                total_net += result.net_proceeds;
-
-                remaining_gross -= result.gross_amount;
-                remaining_net -= result.net_proceeds;
+                remaining_value -= match amount_mode {
+                    WithdrawalAmountMode::Gross => result.gross_amount,
+                    WithdrawalAmountMode::Net => result.net_proceeds,
+                };
             }
-
-            // Record sweep summary
-            state.records.push(Record::new(
-                state.current_date,
-                RecordKind::Sweep {
-                    to_account_id: *to_account,
-                    to_asset_id: *to_asset,
-                    target_amount,
-                    actual_gross: total_gross,
-                    actual_net: total_net,
-                    amount_mode: *amount_mode,
-                    event_id,
-                },
-            ));
         }
 
         // === Event Control Effects ===
@@ -879,35 +854,39 @@ pub fn apply_effect(
         } => {
             // Check if person has reached RMD age
             let current_age = state.current_age();
-            if let Some((years, _months)) = current_age {
-                if years >= *starting_age {
-                    // Calculate RMD amount using IRS Uniform Lifetime Table
-                    let rmd_table = RmdTable::irs_uniform_lifetime_2024();
 
-                    // Find all tax-deferred accounts eligible for RMD
-                    let eligible_accounts: Vec<(AccountId, AssetId)> = state
-                        .accounts
-                        .iter()
-                        .filter(|(_, acc)| matches!(acc.account_type, AccountType::TaxDeferred))
-                        .flat_map(|(id, acc)| {
-                            acc.assets.iter().map(move |asset| (*id, asset.asset_id))
-                        })
-                        .collect();
+            let Some((years, _months)) = current_age else {
+                eprintln!("WARNING: Cannot apply RMD - current age unknown");
+                return;
+            };
 
-                    // Process RMD for each eligible account/asset
-                    for (src_account, src_asset) in eligible_accounts {
-                        apply_rmd_to_account(
-                            src_account,
-                            src_asset,
-                            *to_account,
-                            *to_asset,
-                            years,
-                            &rmd_table,
-                            state,
-                            event_id,
-                        );
-                    }
-                }
+            if years < *starting_age {
+                return; // Not yet at RMD age
+            }
+
+            // Calculate RMD amount using IRS Uniform Lifetime Table
+            let rmd_table = RmdTable::irs_uniform_lifetime_2024();
+
+            // Find all tax-deferred accounts eligible for RMD
+            let eligible_accounts: Vec<(AccountId, AssetId)> = state
+                .accounts
+                .iter()
+                .filter(|(_, acc)| matches!(acc.account_type, AccountType::TaxDeferred))
+                .flat_map(|(id, acc)| acc.assets.iter().map(move |asset| (*id, asset.asset_id)))
+                .collect();
+
+            // Process RMD for each eligible account/asset
+            for (src_account, src_asset) in eligible_accounts {
+                apply_rmd_to_account(
+                    src_account,
+                    src_asset,
+                    *to_account,
+                    *to_asset,
+                    years,
+                    &rmd_table,
+                    state,
+                    event_id,
+                );
             }
         }
     }
@@ -928,43 +907,47 @@ fn apply_rmd_to_account(
     let prior_year_balance = state.prior_year_end_balance(src_account);
     let irs_divisor = rmd_table.divisor_for_age(age);
 
-    if let (Some(prior_balance), Some(divisor)) = (prior_year_balance, irs_divisor) {
-        if prior_balance <= 0.0 {
-            return; // No RMD needed for empty accounts
-        }
-
-        let rmd_amount = prior_balance / divisor;
-        let balance = state.asset_balance(src_account, src_asset);
-        let actual_amount = rmd_amount.min(balance);
-
-        if actual_amount > 0.0 {
-            // Use liquidate_from_source for consistent tax handling
-            // This handles the withdrawal, taxes, and deposit to destination
-            let result = liquidate_from_source(
-                src_account,
-                src_asset,
-                to_account,
-                to_asset,
-                actual_amount,
-                LotMethod::Fifo, // RMDs use FIFO by default
-                state,
-                event_id,
+    let (prior_balance, divisor) = match (prior_year_balance, irs_divisor) {
+        (Some(pb), Some(d)) => (pb, d),
+        _ => {
+            eprintln!(
+                "WARNING: Cannot apply RMD for account {:?} asset {:?} at age {} - missing prior balance or divisor",
+                src_account, src_asset, age
             );
-
-            // Record the RMD-specific information
-            state.records.push(Record::new(
-                state.current_date,
-                RecordKind::Rmd {
-                    account_id: src_account,
-                    age,
-                    prior_year_balance: prior_balance,
-                    irs_divisor: divisor,
-                    required_amount: rmd_amount,
-                    actual_withdrawn: result.gross_amount,
-                },
-            ));
+            return;
         }
+    };
+
+    if prior_balance <= 0.0 {
+        return; // No RMD needed for empty accounts
     }
+
+    let rmd_amount = prior_balance / divisor;
+    let balance = state.asset_balance(src_account, src_asset);
+    let actual_amount = rmd_amount.min(balance);
+
+    if actual_amount <= 0.0 {
+        return; // Nothing to withdraw
+    }
+
+    // Use liquidate_from_source for consistent tax handling
+    // This handles the withdrawal, taxes, and deposit to destination
+    let _result = liquidate_from_source(
+        src_account,
+        src_asset,
+        to_account,
+        to_asset,
+        actual_amount,
+        LotMethod::Fifo, // RMDs use FIFO by default
+        state,
+        TransactionSource::Rmd {
+            event_id,
+            age,
+            prior_year_balance: prior_balance,
+            irs_divisor: divisor,
+            required_amount: rmd_amount,
+        },
+    );
 }
 
 /// Estimate gross withdrawal needed to achieve a target net amount

@@ -3,6 +3,8 @@
 //! Contains the output types from running simulations, including
 //! account snapshots and transaction histories.
 
+use crate::model::TransactionSource;
+
 use super::accounts::AccountType;
 use super::ids::{AccountId, AssetId, EventId};
 use super::records::{Record, RecordKind};
@@ -80,41 +82,16 @@ impl SimulationResult {
                 RecordKind::Transfer {
                     from_account_id,
                     to_account_id,
-                    amount,
-                    ..
-                } => {
-                    if *from_account_id == account_id {
-                        balance -= amount;
-                    }
-                    if *to_account_id == account_id {
-                        balance += amount;
-                    }
-                }
-                RecordKind::Liquidation {
-                    from_account_id,
-                    to_account_id,
                     gross_amount,
-                    net_proceeds,
+                    net_amount,
                     ..
                 } => {
-                    // Source account loses gross amount
                     if *from_account_id == account_id {
                         balance -= gross_amount;
                     }
-                    // Target account gains net proceeds (after taxes)
                     if *to_account_id == account_id {
-                        balance += net_proceeds;
+                        balance += net_amount;
                     }
-                }
-                // Note: Sweep records are summaries only - the actual balance changes
-                // are recorded via Transfer or Liquidation records from liquidate_from_source
-                RecordKind::Rmd {
-                    account_id: acc_id,
-                    actual_withdrawn,
-                    ..
-                } if *acc_id == account_id => {
-                    // RMD withdraws from account
-                    balance -= actual_withdrawn;
                 }
                 _ => {}
             }
@@ -167,36 +144,17 @@ impl SimulationResult {
                     from_asset_id,
                     to_account_id,
                     to_asset_id,
-                    amount,
-                    ..
-                } => {
-                    if *from_account_id == account_id && *from_asset_id == asset_id {
-                        balance -= amount;
-                    }
-                    if *to_account_id == account_id && *to_asset_id == asset_id {
-                        balance += amount;
-                    }
-                }
-                RecordKind::Liquidation {
-                    from_account_id,
-                    from_asset_id,
-                    to_account_id,
-                    to_asset_id,
                     gross_amount,
-                    net_proceeds,
+                    net_amount,
                     ..
                 } => {
-                    // Source asset loses gross amount
                     if *from_account_id == account_id && *from_asset_id == asset_id {
                         balance -= gross_amount;
                     }
-                    // Target asset gains net proceeds (after taxes)
                     if *to_account_id == account_id && *to_asset_id == asset_id {
-                        balance += net_proceeds;
+                        balance += net_amount;
                     }
                 }
-                // Note: Sweep records are summaries only - the actual balance changes
-                // are recorded via Transfer or Liquidation records from liquidate_from_source
                 _ => {}
             }
         }
@@ -248,16 +206,12 @@ impl SimulationResult {
 
     /// Get all RMD records
     pub fn rmd_records(&self) -> impl Iterator<Item = &Record> {
-        self.records
-            .iter()
-            .filter(|r| matches!(r.kind, RecordKind::Rmd { .. }))
-    }
-
-    /// Get all liquidation records
-    pub fn liquidation_records(&self) -> impl Iterator<Item = &Record> {
-        self.records
-            .iter()
-            .filter(|r| matches!(r.kind, RecordKind::Liquidation { .. }))
+        self.records.iter().filter(|r| match &r.kind {
+            RecordKind::Transfer { source, .. } => {
+                matches!(source.as_ref(), &TransactionSource::Rmd { .. })
+            }
+            _ => false,
+        })
     }
 }
 
