@@ -8,10 +8,10 @@ use crate::model::{
 };
 use serde::{Deserialize, Serialize};
 
-mod builder;
-mod descriptors;
-
-pub use builder::SimulationBuilder;
+// TODO: Update builder and descriptors to use new Account structure
+// mod builder;
+// mod descriptors;
+// pub use builder::SimulationBuilder;
 
 fn default_duration_years() -> usize {
     30
@@ -177,11 +177,7 @@ impl SimulationConfig {
 
     /// Calculate total initial net worth
     pub fn total_initial_net_worth(&self) -> f64 {
-        self.accounts
-            .iter()
-            .flat_map(|a| &a.assets)
-            .map(|asset| asset.initial_value)
-            .sum()
+        self.accounts.iter().map(|a| a.total_value()).sum()
     }
 
     /// Find an event by ID

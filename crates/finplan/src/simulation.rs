@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+use crate::apply::process_events;
 use crate::config::SimulationConfig;
-use crate::event_engine::process_events;
 use crate::model::{
-    AccountType, EventTrigger, MonteCarloResult, Record, SimulationResult, TriggerOffset,
+    AccountFlavor, EventTrigger, MonteCarloResult, SimulationResult, TaxStatus, TriggerOffset,
 };
 use crate::simulation_state::SimulationState;
 
@@ -11,9 +11,8 @@ use jiff::ToSpan;
 use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
-    (1.0 + yearly_rate).powf(n_days / 365.0) - 1.0
-}
+// Re-export for backwards compatibility
+pub use crate::model::n_day_rate;
 
 pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     let mut state = SimulationState::from_parameters(params, seed);
@@ -36,16 +35,14 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     state.finalize_year_taxes();
 
     SimulationResult {
-        yearly_inflation: state.inflation_rates.clone(),
         dates: state.dates.clone(),
-        return_profile_returns: state.return_profile_returns.clone(),
         accounts: state.build_account_snapshots(params),
         yearly_taxes: state.yearly_taxes.clone(),
         records: state.records.clone(),
     }
 }
 
-fn advance_time(state: &mut SimulationState, params: &SimulationConfig) {
+fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     // Check for year rollover before advancing
     state.maybe_rollover_year();
 
@@ -110,40 +107,10 @@ fn advance_time(state: &mut SimulationState, params: &SimulationConfig) {
     // Apply interest/returns
     let days_passed = (next_checkpoint - state.current_date).get_days();
     if days_passed > 0 {
-        let years_passed = (state.current_date - state.start_date).get_days() as f64 / 365.0;
-        let year_idx = (years_passed.floor() as usize).min(params.duration_years.saturating_sub(1));
-
-        // Apply returns to each asset
-        for account in &params.accounts {
-            for asset in &account.assets {
-                if asset.return_profile_index < state.return_profile_returns.len()
-                    && year_idx < state.return_profile_returns[asset.return_profile_index].len()
-                {
-                    let yearly_rate =
-                        state.return_profile_returns[asset.return_profile_index][year_idx];
-                    let rate = n_day_rate(yearly_rate, days_passed as f64);
-                    let key = (account.account_id, asset.asset_id);
-                    if let Some(balance) = state.asset_balances.get_mut(&key) {
-                        let balance_before = *balance;
-                        let return_amount = balance_before * rate;
-                        let new_value = balance_before + return_amount;
-                        *balance = new_value;
-
-                        // Record the return transaction (includes negative returns for debt/losses)
-                        if return_amount.abs() > 0.001 {
-                            state.records.push(Record::investment_return(
-                                next_checkpoint,
-                                account.account_id,
-                                asset.asset_id,
-                                balance_before,
-                                rate,
-                                return_amount,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        // TODO: Returns are now calculated dynamically via Market.get_asset_value()
+        // The lot-based system tracks cost basis and units; current value is derived
+        // from Market prices at evaluation time. This section may need to be removed
+        // or simplified to just advance the date.
 
         // Record date checkpoint
         state.dates.push(next_checkpoint);
@@ -155,8 +122,10 @@ fn advance_time(state: &mut SimulationState, params: &SimulationConfig) {
         let mut year_balances = HashMap::new();
 
         for (account_id, account) in &state.accounts {
-            if matches!(account.account_type, AccountType::TaxDeferred) {
-                let balance = state.account_balance(*account_id);
+            if let AccountFlavor::Investment(inv) = &account.flavor
+                && matches!(inv.tax_status, TaxStatus::TaxDeferred)
+                && let Ok(balance) = state.account_balance(*account_id)
+            {
                 year_balances.insert(*account_id, balance);
             }
         }

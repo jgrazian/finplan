@@ -4,8 +4,8 @@
 //! account snapshots and transaction histories.
 
 use crate::model::TransactionSource;
+use crate::model::accounts::AccountFlavor;
 
-use super::accounts::AccountType;
 use super::ids::{AccountId, AssetId, EventId};
 use super::records::{Record, RecordKind};
 use super::tax_config::TaxSummary;
@@ -23,7 +23,7 @@ pub struct AssetSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountSnapshot {
     pub account_id: AccountId,
-    pub account_type: AccountType,
+    pub flavor: AccountFlavor,
     pub assets: Vec<AssetSnapshot>,
 }
 
@@ -37,9 +37,7 @@ impl AccountSnapshot {
 /// Complete results from a single simulation run
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimulationResult {
-    pub yearly_inflation: Vec<f64>,
     pub dates: Vec<jiff::civil::Date>,
-    pub return_profile_returns: Vec<Vec<f64>>,
     /// Starting state of all accounts (replay from transaction logs to get future values)
     pub accounts: Vec<AccountSnapshot>,
     /// Tax summaries per year

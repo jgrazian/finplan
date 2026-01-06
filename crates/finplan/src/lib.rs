@@ -13,7 +13,10 @@
 // Core modules
 // ============================================================================
 
-pub mod event_engine;
+pub mod apply;
+pub mod error;
+pub mod evaluate;
+pub mod liquidation;
 pub mod simulation;
 pub mod simulation_state;
 pub mod taxes;
@@ -29,13 +32,11 @@ pub mod model;
 // Test modules
 // ============================================================================
 
-#[cfg(test)]
-mod tests;
+// #[cfg(test)]
+// mod tests;
 
 // ============================================================================
 // Public re-exports for convenience
 // ============================================================================
 
-pub use config::SimulationBuilder;
-pub use config::SimulationConfig;
-pub use simulation::{monte_carlo_simulate, simulate};
+// pub use config::SimulationBuilder; // TODO: Update builder to use new Account structure

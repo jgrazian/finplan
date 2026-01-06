@@ -9,7 +9,7 @@
 //! - Makes it easy to filter by type using pattern matching
 //! - Is extensible - new record types just add enum variants
 
-use super::events::{LotMethod, WithdrawalAmountMode};
+use super::events::{AmountMode, LotMethod};
 use super::ids::{AccountId, AssetId, EventId};
 use serde::{Deserialize, Serialize};
 
@@ -61,7 +61,7 @@ pub enum TransactionSource {
     Sweep {
         event_id: EventId,
         target_amount: f64,
-        amount_mode: WithdrawalAmountMode,
+        amount_mode: AmountMode,
     },
     /// Required Minimum Distribution
     Rmd {

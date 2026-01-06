@@ -327,7 +327,7 @@ fn test_rmd_with_account_growth() {
 
     let rmd_records: Vec<_> = result.rmd_records().collect();
     assert!(
-        rmd_records.len() >= 1,
+        !rmd_records.is_empty(),
         "Expected at least 1 RMD record, got {}",
         rmd_records.len()
     );
@@ -450,23 +450,19 @@ fn test_rmd_multiple_accounts() {
     let mut found_401k = false;
     let mut found_ira = false;
     for record in &rmd_records {
-        match &record.kind {
-            RecordKind::Transfer {
-                from_account_id,
-                source,
-                ..
-            } => match source.as_ref() {
-                TransactionSource::Rmd { .. } => {
-                    if *from_account_id == TRAD_401K {
-                        found_401k = true;
-                    }
-                    if *from_account_id == TRAD_IRA {
-                        found_ira = true;
-                    }
-                }
-                _ => {}
-            },
-            _ => {}
+        if let RecordKind::Transfer {
+            from_account_id,
+            source,
+            ..
+        } = &record.kind
+            && let TransactionSource::Rmd { .. } = source.as_ref()
+        {
+            if *from_account_id == TRAD_401K {
+                found_401k = true;
+            }
+            if *from_account_id == TRAD_IRA {
+                found_ira = true;
+            }
         }
     }
     assert!(found_401k, "Should have RMD from 401k");
@@ -560,65 +556,64 @@ fn test_rmd_amount_calculation() {
         }
     });
 
-    if let Some(record) = rmd_record {
-        if let TransactionSource::Rmd {
+    if let Some(record) = rmd_record
+        && let TransactionSource::Rmd {
             age,
             prior_year_balance,
             irs_divisor,
             required_amount,
             ..
         } = &record.as_ref()
+    {
+        // Calculate actual withdrawn amount from records
+        let actual_withdrawn: f64 = rmd_records
+            .iter()
+            .filter_map(|r| match &r.kind {
+                RecordKind::Transfer {
+                    from_account_id,
+                    gross_amount,
+                    ..
+                } if *from_account_id == TRAD_IRA => Some(*gross_amount),
+                _ => None,
+            })
+            .sum();
         {
-            // Calculate actual withdrawn amount from records
-            let actual_withdrawn: f64 = rmd_records
-                .iter()
-                .filter_map(|r| match &r.kind {
-                    RecordKind::Transfer {
-                        from_account_id,
-                        gross_amount,
-                        ..
-                    } if *from_account_id == TRAD_IRA => Some(*gross_amount),
-                    _ => None,
-                })
-                .sum();
-            {
-                // Verify divisor is correct for the age
-                let expected_divisor = match age {
-                    79 => 21.1,
-                    80 => 20.2,
-                    _ => 20.2,
-                };
-                assert!(
-                    (irs_divisor - expected_divisor).abs() < 0.1,
-                    "Age {} divisor should be {}, got {}",
-                    age,
-                    expected_divisor,
-                    irs_divisor
-                );
+            // Verify divisor is correct for the age
+            let expected_divisor = match age {
+                79 => 21.1,
+                80 => 20.2,
+                _ => 20.2,
+            };
+            assert!(
+                (irs_divisor - expected_divisor).abs() < 0.1,
+                "Age {} divisor should be {}, got {}",
+                age,
+                expected_divisor,
+                irs_divisor
+            );
 
-                // RMD amount should be balance / divisor
-                let expected_rmd = prior_year_balance / irs_divisor;
-                assert!(
-                    (required_amount - expected_rmd).abs() < 1.0,
-                    "Expected RMD ${:.2}, got ${:.2}",
-                    expected_rmd,
-                    required_amount
-                );
-                assert!(
-                    (actual_withdrawn - required_amount).abs() < 1.0,
-                    "Should withdraw required amount"
-                );
+            // RMD amount should be balance / divisor
+            let expected_rmd = prior_year_balance / irs_divisor;
+            assert!(
+                (required_amount - expected_rmd).abs() < 1.0,
+                "Expected RMD ${:.2}, got ${:.2}",
+                expected_rmd,
+                required_amount
+            );
+            assert!(
+                (actual_withdrawn - required_amount).abs() < 1.0,
+                "Should withdraw required amount"
+            );
 
-                // Verify account balance decreased by RMD amount
-                let final_balance = result.final_account_balance(TRAD_IRA);
-                // Account should be less than initial after RMD
-                assert!(
-                    final_balance < INITIAL_BALANCE,
-                    "Final balance ${:.2} should be less than initial ${:.2}",
-                    final_balance,
-                    INITIAL_BALANCE
-                );
-            }
+            // Verify account balance decreased by RMD amount
+            let final_balance = result.final_account_balance(TRAD_IRA);
+            // Account should be less than initial after RMD
+            assert!(
+                final_balance < INITIAL_BALANCE,
+                "Final balance ${:.2} should be less than initial ${:.2}",
+                final_balance,
+                INITIAL_BALANCE
+            );
         }
     }
 }

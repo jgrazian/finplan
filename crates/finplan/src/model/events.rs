@@ -3,6 +3,8 @@
 //! Events are the mechanism for changing simulation state over time.
 //! Each event has a trigger condition and a list of effects to apply when triggered.
 
+use crate::model::AssetCoord;
+
 use super::accounts::Account;
 use super::ids::{AccountId, AssetId, EventId};
 
@@ -10,7 +12,7 @@ use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 
 /// How often a repeating event occurs
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
 pub enum RepeatInterval {
     Never,
     Weekly,
@@ -64,12 +66,17 @@ pub enum TransferAmount {
     // === Balance References ===
     /// Reference a specific asset's balance
     AssetBalance {
-        account_id: AccountId,
-        asset_id: AssetId,
+        asset_coord: AssetCoord,
     },
 
     /// Reference total account balance (sum of all assets)
-    AccountBalance { account_id: AccountId },
+    AccountTotalBalance {
+        account_id: AccountId,
+    },
+
+    AccountCashBalance {
+        account_id: AccountId,
+    },
 
     // === Arithmetic Operations (for complex cases) ===
     /// Minimum of two amounts
@@ -115,11 +122,12 @@ pub enum TransferEndpoint {
     /// External world (income source or expense destination)
     /// No cost basis tracking, no capital gains
     External,
-
+    Cash {
+        account_id: AccountId,
+    },
     /// Specific asset within an account
     Asset {
-        account_id: AccountId,
-        asset_id: AssetId,
+        asset_coord: AssetCoord,
     },
 }
 
@@ -174,10 +182,7 @@ pub enum WithdrawalOrder {
 pub enum WithdrawalSources {
     /// Withdraw from a single specific account/asset
     /// Use this for simple single-source liquidations
-    Single {
-        account_id: AccountId,
-        asset_id: AssetId,
-    },
+    Single { asset_coord: AssetCoord },
 
     /// Use a pre-defined withdrawal order strategy
     /// Automatically selects from all non-excluded liquid accounts
@@ -189,7 +194,7 @@ pub enum WithdrawalSources {
     },
 
     /// Explicitly specify accounts/assets in priority order
-    Custom(Vec<(AccountId, AssetId)>),
+    Custom(Vec<AssetCoord>),
 }
 
 impl Default for WithdrawalSources {
@@ -203,19 +208,16 @@ impl Default for WithdrawalSources {
 
 /// How to interpret the withdrawal amount
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub enum WithdrawalAmountMode {
+pub enum AmountMode {
     /// Amount is gross (before taxes)
-    /// Withdraw exactly this amount, taxes come out of it
     #[default]
     Gross,
-
     /// Amount is net (after taxes)
-    /// Gross up withdrawal to cover taxes, so you receive this amount
     Net,
 }
 
 /// Time offset relative to another event
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
 pub enum TriggerOffset {
     Days(i32),
     Months(i32),
@@ -269,16 +271,12 @@ pub enum EventTrigger {
 
     /// Trigger when a specific asset balance crosses threshold
     AssetBalance {
-        account_id: AccountId,
-        asset_id: AssetId,
+        asset_coord: AssetCoord,
         threshold: BalanceThreshold,
     },
 
     /// Trigger when total net worth crosses threshold
     NetWorth { threshold: BalanceThreshold },
-
-    /// Trigger when an account is depleted (balance <= 0)
-    AccountDepleted(AccountId),
 
     // === Compound Triggers ===
     /// All conditions must be true
@@ -300,9 +298,17 @@ pub enum EventTrigger {
         end_condition: Option<Box<EventTrigger>>,
     },
 
+    // TODO: Add account limits triggers
+
     // === Manual/Simulation Control ===
     /// Never triggers automatically; can only be triggered by TriggerEvent effect
     Manual,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum IncomeType {
+    Taxable,
+    TaxFree,
 }
 
 /// Actions that can occur when an event triggers
@@ -312,33 +318,38 @@ pub enum EventEffect {
     CreateAccount(Account),
     DeleteAccount(AccountId),
 
-    // === Money Movement ===
-    /// Transfer money between endpoints (external or assets)
-    /// Tax implications are automatic based on account types
-    Transfer {
-        from: TransferEndpoint,
-        to: TransferEndpoint,
+    Income {
+        to: AccountId,
         amount: TransferAmount,
-        #[serde(default)]
-        adjust_for_inflation: bool,
-        #[serde(default)]
-        limits: Option<FlowLimits>,
+        amount_mode: AmountMode,
+        income_type: IncomeType,
+    },
+
+    Expense {
+        from: AccountId,
+        amount: TransferAmount,
+    },
+
+    /// Buy asset with cash (within same or different account)
+    AssetPurchase {
+        from: AccountId,
+        to: AssetCoord,
+        amount: TransferAmount,
     },
 
     /// Sweep: Withdraw from source(s) to fund a target account
     /// Handles capital gains, lot tracking, and tax calculation automatically
     /// Use WithdrawalSources::Single for single-source liquidations
     /// Use WithdrawalSources::Strategy for tax-efficient multi-source withdrawals
-    Sweep {
-        to_account: AccountId,
-        to_asset: AssetId,
-        target: TransferAmount,
+    AssetSale {
+        to: AccountId,
+        amount: TransferAmount,
         #[serde(default)]
         sources: WithdrawalSources,
         /// Gross = withdraw target amount gross (net varies by taxes)
         /// Net = withdraw enough gross to achieve target net after taxes
         #[serde(default)]
-        amount_mode: WithdrawalAmountMode,
+        amount_mode: AmountMode,
         #[serde(default)]
         lot_method: LotMethod,
     },

@@ -1,68 +1,47 @@
 use crate::config::SimulationConfig;
+use crate::error::{EngineError, Result};
 use crate::model::{
-    Account, AccountId, AccountSnapshot, AssetId, AssetSnapshot, Event, EventId, Record,
-    RecordKind, RmdTable, TaxConfig, TaxSummary,
+    Account, AccountFlavor, AccountId, AccountSnapshot, AssetCoord, AssetId, AssetSnapshot, Event,
+    EventId, Market, Record, RecordKind, ReturnProfileId, RmdTable, TaxConfig, TaxSummary,
 };
 use jiff::ToSpan;
+use jiff::civil::Date;
 use rand::SeedableRng;
 use std::collections::HashMap;
 
-/// A single purchase lot for cost basis tracking
-#[derive(Debug, Clone)]
-pub struct AssetLot {
-    /// Date of purchase
-    pub purchase_date: jiff::civil::Date,
-    /// Number of shares/units (or dollar amount for non-share assets)
-    pub units: f64,
-    /// Total cost basis for this lot
-    pub cost_basis: f64,
+#[derive(Debug, Clone, Copy)]
+pub struct AssetPrice {
+    pub price: f64,
+    pub inflation_profile_id: ReturnProfileId,
 }
 
 /// Runtime state for the simulation, mutated as events trigger
 #[derive(Debug, Clone)]
 pub struct SimulationState {
     /// Current simulation date
-    pub current_date: jiff::civil::Date,
     pub start_date: jiff::civil::Date,
     pub end_date: jiff::civil::Date,
+    pub birth_date: jiff::civil::Date,
+    pub current_date: jiff::civil::Date,
 
+    // === Assets tracking ===
     /// All accounts (keyed for fast lookup)
     pub accounts: HashMap<AccountId, Account>,
-
-    /// Current balances per asset (separate from initial_value for mutation)
-    pub asset_balances: HashMap<(AccountId, AssetId), f64>,
+    /// Market containing asset prices and returns
+    pub market: Market,
 
     /// Events that have already triggered (for `once: true` checks)
-    pub triggered_events: HashMap<EventId, jiff::civil::Date>,
-
-    /// All events
     pub events: HashMap<EventId, Event>,
-
-    /// Next scheduled date for repeating events
+    pub triggered_events: HashMap<EventId, jiff::civil::Date>,
     pub event_next_date: HashMap<EventId, jiff::civil::Date>,
 
     /// Whether repeating events have been activated (start_condition met)
     pub repeating_event_active: HashMap<EventId, bool>,
 
-    /// Birth date for age calculations (from SimulationParameters)
-    pub birth_date: Option<jiff::civil::Date>,
-
-    /// Cost basis tracking for taxable accounts (account_id, asset_id) -> lots
-    pub asset_lots: HashMap<(AccountId, AssetId), Vec<AssetLot>>,
-
     /// Accumulated values for event flow limits (EventId -> accumulated amount)
     pub event_flow_ytd: HashMap<EventId, f64>,
     pub event_flow_lifetime: HashMap<EventId, f64>,
     pub event_flow_last_period_key: HashMap<EventId, i16>,
-
-    /// Sampled returns per return profile per year
-    pub return_profile_returns: Vec<Vec<f64>>,
-
-    /// Sampled inflation rates per year
-    pub inflation_rates: Vec<f64>,
-
-    /// Cumulative inflation multipliers
-    pub cumulative_inflation: Vec<f64>,
 
     /// Year-to-date tax tracking
     pub ytd_tax: TaxSummary,
@@ -73,18 +52,20 @@ pub struct SimulationState {
     /// Tax configuration
     pub tax_config: TaxConfig,
 
-    // === Transaction Log ===
-    /// Unified record of all transactions in chronological order
+    // === Records ===
+    /// Transaction records
     pub records: Vec<Record>,
-
-    /// Recorded dates for history
-    pub dates: Vec<jiff::civil::Date>,
+    /// Dates tracked in the simulation
+    pub dates: Vec<Date>,
 
     // === RMD Tracking ===
     /// Year-end account balances for RMD calculation (year -> account_id -> balance)
     pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
     /// Active RMD accounts (account_id -> starting_age)
     pub active_rmd_accounts: HashMap<AccountId, u8>,
+
+    /// Events pending immediate triggering (from TriggerEvent effect)
+    pub pending_triggers: Vec<EventId>,
 }
 
 impl SimulationState {
@@ -95,79 +76,56 @@ impl SimulationState {
             .unwrap_or_else(|| jiff::Zoned::now().date());
         let end_date = start_date.saturating_add((params.duration_years as i64).years());
 
-        // Sample returns once per return profile
-        let return_profile_returns: Vec<Vec<f64>> = params
+        // Build return profiles HashMap from Vec
+        let return_profiles: HashMap<ReturnProfileId, _> = params
             .return_profiles
             .iter()
-            .map(|profile| {
-                (0..params.duration_years)
-                    .map(|_| profile.sample(&mut rng))
-                    .collect()
-            })
+            .enumerate()
+            .map(|(i, rp)| (ReturnProfileId(i as u16), *rp))
             .collect();
 
-        // Sample inflation rates
-        let inflation_rates: Vec<f64> = (0..params.duration_years)
-            .map(|_| params.inflation_profile.sample(&mut rng))
-            .collect();
+        // Extract assets from accounts
+        // TODO: Properly extract assets with their return profile mappings
+        let assets: HashMap<AssetId, (f64, ReturnProfileId)> = HashMap::new();
 
-        // Build cumulative inflation
-        let mut cumulative_inflation = Vec::with_capacity(params.duration_years + 1);
-        cumulative_inflation.push(1.0);
-        for r in &inflation_rates {
-            cumulative_inflation.push(cumulative_inflation.last().unwrap() * (1.0 + r));
-        }
+        // Build Market from sampled returns using from_profiles
+        let market = Market::from_profiles(
+            &mut rng,
+            params.duration_years,
+            &params.inflation_profile,
+            &return_profiles,
+            &assets,
+        );
 
         let mut state = Self {
             current_date: start_date,
             start_date,
             end_date,
             accounts: HashMap::new(),
-            asset_balances: HashMap::new(),
             triggered_events: HashMap::new(),
             events: HashMap::new(),
             event_next_date: HashMap::new(),
             repeating_event_active: HashMap::new(),
-            birth_date: params.birth_date,
-            asset_lots: HashMap::new(),
+            birth_date: params.birth_date.unwrap_or(jiff::civil::date(1970, 1, 1)),
             event_flow_ytd: HashMap::new(),
             event_flow_lifetime: HashMap::new(),
             event_flow_last_period_key: HashMap::new(),
-            return_profile_returns,
-            inflation_rates,
-            cumulative_inflation,
             ytd_tax: TaxSummary {
                 year: start_date.year(),
                 ..Default::default()
             },
             yearly_taxes: Vec::new(),
             tax_config: params.tax_config.clone(),
+            market,
             records: Vec::new(),
             dates: vec![start_date],
             year_end_balances: HashMap::new(),
             active_rmd_accounts: HashMap::new(),
+            pending_triggers: Vec::new(),
         };
 
         // Load initial accounts
         for account in &params.accounts {
-            for asset in &account.assets {
-                state
-                    .asset_balances
-                    .insert((account.account_id, asset.asset_id), asset.initial_value);
-
-                // Initialize cost basis lots for taxable accounts
-                if matches!(account.account_type, crate::model::AccountType::Taxable) {
-                    let cost_basis = asset.initial_cost_basis.unwrap_or(asset.initial_value);
-                    let lot = AssetLot {
-                        purchase_date: start_date,
-                        units: asset.initial_value,
-                        cost_basis,
-                    };
-                    state
-                        .asset_lots
-                        .insert((account.account_id, asset.asset_id), vec![lot]);
-                }
-            }
             state.accounts.insert(account.account_id, account.clone());
         }
 
@@ -181,24 +139,66 @@ impl SimulationState {
 
     /// Calculate total net worth across all accounts
     pub fn net_worth(&self) -> f64 {
-        self.asset_balances.values().sum()
+        self.accounts.values().map(|acc| acc.total_value()).sum()
     }
 
     /// Calculate account balance
-    pub fn account_balance(&self, account_id: AccountId) -> f64 {
-        self.asset_balances
-            .iter()
-            .filter(|((acc_id, _), _)| *acc_id == account_id)
-            .map(|(_, balance)| balance)
-            .sum()
+    pub fn account_balance(&self, account_id: AccountId) -> Result<f64> {
+        self.accounts
+            .get(&account_id)
+            .map(|acc| acc.total_value())
+            .ok_or(EngineError::AccountNotFound(account_id))
+    }
+
+    pub fn account_cash_balance(&self, account_id: AccountId) -> Result<f64> {
+        self.accounts
+            .get(&account_id)
+            .and_then(|acc| acc.cash_balance())
+            .ok_or(EngineError::AccountNotFound(account_id))
     }
 
     /// Get current balance of a specific asset
-    pub fn asset_balance(&self, account_id: AccountId, asset_id: AssetId) -> f64 {
-        self.asset_balances
-            .get(&(account_id, asset_id))
-            .copied()
-            .unwrap_or(0.0)
+    /// Uses Market prices to calculate current value from lot units
+    pub fn asset_balance(&self, asset_coord: AssetCoord) -> Result<f64> {
+        let account = self
+            .accounts
+            .get(&asset_coord.account_id)
+            .ok_or(EngineError::AccountNotFound(asset_coord.account_id))?;
+
+        match &account.flavor {
+            AccountFlavor::Investment(inv) => {
+                // Get current price from Market
+                let current_price = self
+                    .market
+                    .get_asset_value(self.start_date, self.current_date, asset_coord.asset_id)
+                    .unwrap_or(0.0);
+
+                // Sum up units for this asset across all lots
+                let total_units: f64 = inv
+                    .positions
+                    .iter()
+                    .filter(|lot| lot.asset_id == asset_coord.asset_id)
+                    .map(|lot| lot.units)
+                    .sum();
+
+                Ok(total_units * current_price)
+            }
+            AccountFlavor::Property(assets) => {
+                let value = assets
+                    .iter()
+                    .find(|a| a.asset_id == asset_coord.asset_id)
+                    .map(|a| a.value)
+                    .unwrap_or(0.0);
+                Ok(value)
+            }
+            _ => Err(EngineError::AssetNotFound(asset_coord)),
+        }
+    }
+
+    pub fn current_asset_price(&self, asset_coord: AssetCoord) -> Result<f64> {
+        self.market
+            .get_asset_value(self.start_date, self.current_date, asset_coord.asset_id)
+            .ok_or(EngineError::AssetNotFound(asset_coord))
     }
 
     /// Calculate total income from Transfer events in the current year
@@ -218,16 +218,15 @@ impl SimulationState {
     }
 
     /// Get current age in years and months
-    pub fn current_age(&self) -> Option<(u8, u8)> {
-        let birth = self.birth_date?;
-
+    pub fn current_age(&self) -> (u8, u8) {
         // Calculate age manually since jiff::Span from until() is in days only
-        let mut years = self.current_date.year() - birth.year();
-        let mut months = self.current_date.month() as i32 - birth.month() as i32;
+        let mut years = self.current_date.year() - self.birth_date.year();
+        let mut months = self.current_date.month() as i32 - self.birth_date.month() as i32;
 
         // Adjust for birthday not yet reached in current year
-        if self.current_date.month() < birth.month()
-            || (self.current_date.month() == birth.month() && self.current_date.day() < birth.day())
+        if self.current_date.month() < self.birth_date.month()
+            || (self.current_date.month() == self.birth_date.month()
+                && self.current_date.day() < self.birth_date.day())
         {
             years -= 1;
             months += 12;
@@ -238,31 +237,7 @@ impl SimulationState {
             months += 12;
         }
 
-        Some((years as u8, months as u8))
-    }
-
-    /// Calculate inflation-adjusted amount
-    pub fn inflation_adjusted_amount(
-        &self,
-        base_amount: f64,
-        adjust_for_inflation: bool,
-        duration_years: usize,
-    ) -> f64 {
-        if !adjust_for_inflation {
-            return base_amount;
-        }
-
-        let years_passed = (self.current_date - self.start_date).get_days() as f64 / 365.0;
-        let year_idx = (years_passed.floor() as usize).min(duration_years.saturating_sub(1));
-        let fraction = years_passed - (year_idx as f64);
-
-        if year_idx < self.inflation_rates.len() {
-            let inflation_multiplier = self.cumulative_inflation[year_idx]
-                * (1.0 + self.inflation_rates[year_idx]).powf(fraction);
-            base_amount * inflation_multiplier
-        } else {
-            base_amount
-        }
+        (years as u8, months as u8)
     }
 
     /// Finalize YTD taxes when year changes or simulation ends
@@ -304,24 +279,53 @@ impl SimulationState {
     }
 
     /// Build account snapshots with starting values from SimulationParameters
-    pub fn build_account_snapshots(&self, params: &SimulationConfig) -> Vec<AccountSnapshot> {
-        params
-            .accounts
-            .iter()
+    pub fn build_account_snapshots(&self, _params: &SimulationConfig) -> Vec<AccountSnapshot> {
+        // Build snapshots from current state accounts
+        self.accounts
+            .values()
             .map(|account| {
-                let assets = account
-                    .assets
-                    .iter()
-                    .map(|asset| AssetSnapshot {
-                        asset_id: asset.asset_id,
-                        return_profile_index: asset.return_profile_index,
-                        starting_value: asset.initial_value,
-                    })
-                    .collect();
+                let assets = match &account.flavor {
+                    AccountFlavor::Investment(inv) => {
+                        // Get unique asset_ids from positions
+                        let mut asset_ids: std::collections::HashSet<AssetId> =
+                            std::collections::HashSet::new();
+                        for lot in &inv.positions {
+                            asset_ids.insert(lot.asset_id);
+                        }
+
+                        asset_ids
+                            .iter()
+                            .map(|&asset_id| {
+                                // Sum up cost basis as starting value
+                                let starting_value: f64 = inv
+                                    .positions
+                                    .iter()
+                                    .filter(|lot| lot.asset_id == asset_id)
+                                    .map(|lot| lot.cost_basis)
+                                    .sum();
+
+                                AssetSnapshot {
+                                    asset_id,
+                                    return_profile_index: 0, // TODO: lookup from Market
+                                    starting_value,
+                                }
+                            })
+                            .collect()
+                    }
+                    AccountFlavor::Property(assets) => assets
+                        .iter()
+                        .map(|asset| AssetSnapshot {
+                            asset_id: asset.asset_id,
+                            return_profile_index: 0,
+                            starting_value: asset.value,
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
 
                 AccountSnapshot {
                     account_id: account.account_id,
-                    account_type: account.account_type,
+                    flavor: account.flavor.clone(),
                     assets,
                 }
             })
@@ -341,7 +345,7 @@ impl SimulationState {
 
     /// Get IRS divisor for current age
     pub fn current_rmd_divisor(&self, rmd_table: &RmdTable) -> Option<f64> {
-        let (years, _months) = self.current_age()?;
+        let (years, _months) = self.current_age();
         rmd_table.divisor_for_age(years)
     }
 
