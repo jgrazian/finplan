@@ -18,18 +18,39 @@ pub struct AssetPrice {
 /// Runtime state for the simulation, mutated as events trigger
 #[derive(Debug, Clone)]
 pub struct SimulationState {
-    /// Current simulation date
+    pub timeline: SimTimeline,
+    pub portfolio: SimPortfolio,
+    pub event_state: SimEventState,
+    pub taxes: SimTaxState,
+    pub history: SimHistory,
+
+    /// Events pending immediate triggering (from TriggerEvent effect)
+    pub pending_triggers: Vec<EventId>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimTimeline {
     pub start_date: jiff::civil::Date,
     pub end_date: jiff::civil::Date,
     pub birth_date: jiff::civil::Date,
     pub current_date: jiff::civil::Date,
+}
 
-    // === Assets tracking ===
+#[derive(Debug, Clone)]
+pub struct SimPortfolio {
     /// All accounts (keyed for fast lookup)
     pub accounts: HashMap<AccountId, Account>,
     /// Market containing asset prices and returns
     pub market: Market,
+    // === RMD Tracking ===
+    /// Year-end account balances for RMD calculation (year -> account_id -> balance)
+    pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
+    /// Active RMD accounts (account_id -> starting_age)
+    pub active_rmd_accounts: HashMap<AccountId, u8>,
+}
 
+#[derive(Debug, Clone)]
+pub struct SimEventState {
     /// Events that have already triggered (for `once: true` checks)
     pub events: HashMap<EventId, Event>,
     pub triggered_events: HashMap<EventId, jiff::civil::Date>,
@@ -42,30 +63,24 @@ pub struct SimulationState {
     pub event_flow_ytd: HashMap<EventId, f64>,
     pub event_flow_lifetime: HashMap<EventId, f64>,
     pub event_flow_last_period_key: HashMap<EventId, i16>,
+}
 
+#[derive(Debug, Clone)]
+pub struct SimTaxState {
     /// Year-to-date tax tracking
     pub ytd_tax: TaxSummary,
-
     /// Yearly tax summaries
     pub yearly_taxes: Vec<TaxSummary>,
-
     /// Tax configuration
-    pub tax_config: TaxConfig,
+    pub config: TaxConfig,
+}
 
-    // === Records ===
+#[derive(Debug, Clone)]
+pub struct SimHistory {
     /// Transaction records
     pub records: Vec<Record>,
     /// Dates tracked in the simulation
     pub dates: Vec<Date>,
-
-    // === RMD Tracking ===
-    /// Year-end account balances for RMD calculation (year -> account_id -> balance)
-    pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
-    /// Active RMD accounts (account_id -> starting_age)
-    pub active_rmd_accounts: HashMap<AccountId, u8>,
-
-    /// Events pending immediate triggering (from TriggerEvent effect)
-    pub pending_triggers: Vec<EventId>,
 }
 
 impl SimulationState {
@@ -77,15 +92,9 @@ impl SimulationState {
         let end_date = start_date.saturating_add((params.duration_years as i64).years());
 
         // Build return profiles HashMap from Vec
-        let return_profiles: HashMap<ReturnProfileId, _> = params
-            .return_profiles
-            .iter()
-            .enumerate()
-            .map(|(i, rp)| (ReturnProfileId(i as u16), *rp))
-            .collect();
+        let return_profiles = params.return_profiles.clone();
 
         // Extract assets from accounts
-        // TODO: Properly extract assets with their return profile mappings
         let assets: HashMap<AssetId, (f64, ReturnProfileId)> = HashMap::new();
 
         // Build Market from sampled returns using from_profiles
@@ -97,61 +106,85 @@ impl SimulationState {
             &assets,
         );
 
-        let mut state = Self {
-            current_date: start_date,
-            start_date,
-            end_date,
-            accounts: HashMap::new(),
-            triggered_events: HashMap::new(),
-            events: HashMap::new(),
-            event_next_date: HashMap::new(),
-            repeating_event_active: HashMap::new(),
-            birth_date: params.birth_date.unwrap_or(jiff::civil::date(1970, 1, 1)),
-            event_flow_ytd: HashMap::new(),
-            event_flow_lifetime: HashMap::new(),
-            event_flow_last_period_key: HashMap::new(),
-            ytd_tax: TaxSummary {
-                year: start_date.year(),
-                ..Default::default()
-            },
-            yearly_taxes: Vec::new(),
-            tax_config: params.tax_config.clone(),
-            market,
-            records: Vec::new(),
-            dates: vec![start_date],
-            year_end_balances: HashMap::new(),
-            active_rmd_accounts: HashMap::new(),
-            pending_triggers: Vec::new(),
-        };
-
+        let mut accounts = HashMap::new();
         // Load initial accounts
         for account in &params.accounts {
-            state.accounts.insert(account.account_id, account.clone());
+            accounts.insert(account.account_id, account.clone());
         }
 
+        let mut events = HashMap::new();
         // Load events
         for event in &params.events {
-            state.events.insert(event.event_id, event.clone());
+            events.insert(event.event_id, event.clone());
         }
 
-        state
+        Self {
+            timeline: SimTimeline {
+                current_date: start_date,
+                start_date,
+                end_date,
+                birth_date: params.birth_date.unwrap_or(jiff::civil::date(1970, 1, 1)),
+            },
+            portfolio: SimPortfolio {
+                accounts,
+                market,
+                year_end_balances: HashMap::new(),
+                active_rmd_accounts: HashMap::new(),
+            },
+            event_state: SimEventState {
+                events,
+                triggered_events: HashMap::new(),
+                event_next_date: HashMap::new(),
+                repeating_event_active: HashMap::new(),
+                event_flow_ytd: HashMap::new(),
+                event_flow_lifetime: HashMap::new(),
+                event_flow_last_period_key: HashMap::new(),
+            },
+            taxes: SimTaxState {
+                ytd_tax: TaxSummary {
+                    year: start_date.year(),
+                    ..Default::default()
+                },
+                yearly_taxes: Vec::new(),
+                config: params.tax_config.clone(),
+            },
+            history: SimHistory {
+                records: Vec::new(),
+                dates: vec![start_date],
+            },
+            pending_triggers: Vec::new(),
+        }
     }
 
     /// Calculate total net worth across all accounts
     pub fn net_worth(&self) -> f64 {
-        self.accounts.values().map(|acc| acc.total_value()).sum()
+        let market = &self.portfolio.market;
+
+        self.portfolio
+            .accounts
+            .values()
+            .map(|acc| {
+                acc.total_value(market, self.timeline.start_date, self.timeline.current_date)
+            })
+            .sum()
     }
 
     /// Calculate account balance
     pub fn account_balance(&self, account_id: AccountId) -> Result<f64> {
-        self.accounts
+        let market = &self.portfolio.market;
+
+        self.portfolio
+            .accounts
             .get(&account_id)
-            .map(|acc| acc.total_value())
+            .map(|acc| {
+                acc.total_value(market, self.timeline.start_date, self.timeline.current_date)
+            })
             .ok_or(EngineError::AccountNotFound(account_id))
     }
 
     pub fn account_cash_balance(&self, account_id: AccountId) -> Result<f64> {
-        self.accounts
+        self.portfolio
+            .accounts
             .get(&account_id)
             .and_then(|acc| acc.cash_balance())
             .ok_or(EngineError::AccountNotFound(account_id))
@@ -161,6 +194,7 @@ impl SimulationState {
     /// Uses Market prices to calculate current value from lot units
     pub fn asset_balance(&self, asset_coord: AssetCoord) -> Result<f64> {
         let account = self
+            .portfolio
             .accounts
             .get(&asset_coord.account_id)
             .ok_or(EngineError::AccountNotFound(asset_coord.account_id))?;
@@ -169,8 +203,13 @@ impl SimulationState {
             AccountFlavor::Investment(inv) => {
                 // Get current price from Market
                 let current_price = self
+                    .portfolio
                     .market
-                    .get_asset_value(self.start_date, self.current_date, asset_coord.asset_id)
+                    .get_asset_value(
+                        self.timeline.start_date,
+                        self.timeline.current_date,
+                        asset_coord.asset_id,
+                    )
                     .unwrap_or(0.0);
 
                 // Sum up units for this asset across all lots
@@ -187,7 +226,13 @@ impl SimulationState {
                 let value = assets
                     .iter()
                     .find(|a| a.asset_id == asset_coord.asset_id)
-                    .map(|a| a.value)
+                    .and_then(|a| {
+                        self.portfolio.market.get_asset_value(
+                            self.timeline.start_date,
+                            self.timeline.current_date,
+                            a.asset_id,
+                        )
+                    })
                     .unwrap_or(0.0);
                 Ok(value)
             }
@@ -196,17 +241,23 @@ impl SimulationState {
     }
 
     pub fn current_asset_price(&self, asset_coord: AssetCoord) -> Result<f64> {
-        self.market
-            .get_asset_value(self.start_date, self.current_date, asset_coord.asset_id)
+        self.portfolio
+            .market
+            .get_asset_value(
+                self.timeline.start_date,
+                self.timeline.current_date,
+                asset_coord.asset_id,
+            )
             .ok_or(EngineError::AssetNotFound(asset_coord))
     }
 
     /// Calculate total income from Transfer events in the current year
     /// This sums all Income records (External -> Asset transfers) for the current calendar year
     pub fn calculate_total_income(&self) -> f64 {
-        self.records
+        self.history
+            .records
             .iter()
-            .filter(|r| r.date.year() == self.current_date.year())
+            .filter(|r| r.date.year() == self.timeline.current_date.year())
             .map(|r| {
                 if let RecordKind::Income { amount, .. } = r.kind {
                     amount
@@ -220,13 +271,14 @@ impl SimulationState {
     /// Get current age in years and months
     pub fn current_age(&self) -> (u8, u8) {
         // Calculate age manually since jiff::Span from until() is in days only
-        let mut years = self.current_date.year() - self.birth_date.year();
-        let mut months = self.current_date.month() as i32 - self.birth_date.month() as i32;
+        let mut years = self.timeline.current_date.year() - self.timeline.birth_date.year();
+        let mut months =
+            self.timeline.current_date.month() as i32 - self.timeline.birth_date.month() as i32;
 
         // Adjust for birthday not yet reached in current year
-        if self.current_date.month() < self.birth_date.month()
-            || (self.current_date.month() == self.birth_date.month()
-                && self.current_date.day() < self.birth_date.day())
+        if self.timeline.current_date.month() < self.timeline.birth_date.month()
+            || (self.timeline.current_date.month() == self.timeline.birth_date.month()
+                && self.timeline.current_date.day() < self.timeline.birth_date.day())
         {
             years -= 1;
             months += 12;
@@ -242,36 +294,37 @@ impl SimulationState {
 
     /// Finalize YTD taxes when year changes or simulation ends
     pub fn finalize_year_taxes(&mut self) {
-        if self.ytd_tax.ordinary_income > 0.0
-            || self.ytd_tax.capital_gains > 0.0
-            || self.ytd_tax.tax_free_withdrawals > 0.0
+        if self.taxes.ytd_tax.ordinary_income > 0.0
+            || self.taxes.ytd_tax.capital_gains > 0.0
+            || self.taxes.ytd_tax.tax_free_withdrawals > 0.0
         {
-            self.yearly_taxes.push(TaxSummary {
-                year: self.ytd_tax.year,
-                ordinary_income: self.ytd_tax.ordinary_income,
-                capital_gains: self.ytd_tax.capital_gains,
-                tax_free_withdrawals: self.ytd_tax.tax_free_withdrawals,
-                federal_tax: self.ytd_tax.federal_tax,
-                state_tax: self.ytd_tax.state_tax,
-                total_tax: self.ytd_tax.federal_tax + self.ytd_tax.state_tax,
-            });
+            let tax_summary = TaxSummary {
+                year: self.taxes.ytd_tax.year,
+                ordinary_income: self.taxes.ytd_tax.ordinary_income,
+                capital_gains: self.taxes.ytd_tax.capital_gains,
+                tax_free_withdrawals: self.taxes.ytd_tax.tax_free_withdrawals,
+                federal_tax: self.taxes.ytd_tax.federal_tax,
+                state_tax: self.taxes.ytd_tax.state_tax,
+                total_tax: self.taxes.ytd_tax.federal_tax + self.taxes.ytd_tax.state_tax,
+            };
+            self.taxes.yearly_taxes.push(tax_summary);
         }
     }
 
     /// Check if we've crossed into a new year and finalize previous year's taxes
     pub fn maybe_rollover_year(&mut self) {
-        let current_year = self.current_date.year();
-        if current_year != self.ytd_tax.year {
+        let current_year = self.timeline.current_date.year();
+        if current_year != self.taxes.ytd_tax.year {
             self.finalize_year_taxes();
-            self.ytd_tax = TaxSummary {
+            self.taxes.ytd_tax = TaxSummary {
                 year: current_year,
                 ..Default::default()
             };
 
             // Reset YTD flow accumulators (for flow limits)
-            for (event_id, last_period) in self.event_flow_last_period_key.iter_mut() {
+            for (event_id, last_period) in self.event_state.event_flow_last_period_key.iter_mut() {
                 if *last_period != current_year {
-                    self.event_flow_ytd.insert(*event_id, 0.0);
+                    self.event_state.event_flow_ytd.insert(*event_id, 0.0);
                     *last_period = current_year;
                 }
             }
@@ -281,7 +334,8 @@ impl SimulationState {
     /// Build account snapshots with starting values from SimulationParameters
     pub fn build_account_snapshots(&self, _params: &SimulationConfig) -> Vec<AccountSnapshot> {
         // Build snapshots from current state accounts
-        self.accounts
+        self.portfolio
+            .accounts
             .values()
             .map(|account| {
                 let assets = match &account.flavor {
@@ -336,8 +390,9 @@ impl SimulationState {
 
     /// Get prior year-end balance for an account
     pub fn prior_year_end_balance(&self, account_id: AccountId) -> Option<f64> {
-        let prior_year = self.current_date.year() - 1;
-        self.year_end_balances
+        let prior_year = self.timeline.current_date.year() - 1;
+        self.portfolio
+            .year_end_balances
             .get(&prior_year)?
             .get(&account_id)
             .copied()

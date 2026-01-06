@@ -33,103 +33,80 @@ pub struct LiquidationResult {
     pub net_proceeds: f64,
 }
 
+/// Parameters for liquidating assets from an investment container
+#[derive(Debug, Clone)]
+pub struct LiquidationParams<'a> {
+    /// The investment container to liquidate from
+    pub investment: &'a InvestmentContainer,
+    /// The full asset coordinate (for generating StateEvents)
+    pub asset_coord: AssetCoord,
+    /// Where to credit the cash proceeds
+    pub to_account: AccountId,
+    /// Dollar amount to liquidate (at current prices)
+    pub amount: f64,
+    /// Current price per unit from Market
+    pub current_price: f64,
+    /// How to select lots for sale
+    pub lot_method: LotMethod,
+    /// Current simulation date
+    pub current_date: Date,
+    /// Tax configuration for calculating taxes
+    pub tax_config: &'a TaxConfig,
+    /// Year-to-date ordinary income for marginal tax calculation
+    pub ytd_ordinary_income: f64,
+}
+
 /// Liquidate assets from an investment container.
 ///
 /// This is the main entry point for liquidating assets. It takes the investment
 /// container directly along with the current asset price from Market.
 ///
 /// # Arguments
-/// * `investment` - The investment container to liquidate from
-/// * `asset_id` - The specific asset to liquidate
-/// * `asset_coord` - The full asset coordinate (for generating StateEvents)
-/// * `to_account` - Where to credit the cash proceeds
-/// * `amount` - Dollar amount to liquidate (at current prices)
-/// * `current_price` - Current price per unit from Market
-/// * `lot_method` - How to select lots for sale
-/// * `current_date` - Current simulation date
-/// * `tax_config` - Tax configuration for calculating taxes
-/// * `ytd_ordinary_income` - Year-to-date ordinary income for marginal tax calculation
-pub fn liquidate_investment(
-    investment: &InvestmentContainer,
-    asset_coord: AssetCoord,
-    to_account: AccountId,
-    amount: f64,
-    current_price: f64,
-    lot_method: LotMethod,
-    current_date: Date,
-    tax_config: &TaxConfig,
-    ytd_ordinary_income: f64,
-) -> (LiquidationResult, Vec<StateEvent>) {
+/// * `params` - Liquidation parameters containing all necessary information
+pub fn liquidate_investment(params: &LiquidationParams) -> (LiquidationResult, Vec<StateEvent>) {
     // Get positions for this specific asset
-    let lots: Vec<AssetLot> = investment
+    let lots: Vec<AssetLot> = params
+        .investment
         .positions
         .iter()
-        .filter(|lot| lot.asset_id == asset_coord.asset_id)
+        .filter(|lot| lot.asset_id == params.asset_coord.asset_id)
         .cloned()
         .collect();
 
-    if lots.is_empty() || amount <= 0.001 || current_price <= 0.0 {
+    if lots.is_empty() || params.amount <= 0.001 || params.current_price <= 0.0 {
         return (LiquidationResult::default(), Vec::new());
     }
 
     // Calculate total available value
     let total_units: f64 = lots.iter().map(|l| l.units).sum();
-    let available_value = total_units * current_price;
-    let actual_amount = amount.min(available_value);
+    let available_value = total_units * params.current_price;
+    let actual_amount = params.amount.min(available_value);
 
     if actual_amount <= 0.001 {
         return (LiquidationResult::default(), Vec::new());
     }
 
-    match investment.tax_status {
-        TaxStatus::Taxable => liquidate_taxable(
-            &lots,
-            current_price,
-            asset_coord,
-            to_account,
-            actual_amount,
-            lot_method,
-            current_date,
-            tax_config,
-            ytd_ordinary_income,
-        ),
-        TaxStatus::TaxDeferred => liquidate_tax_deferred(
-            &lots,
-            current_price,
-            asset_coord,
-            to_account,
-            actual_amount,
-            lot_method,
-            current_date,
-            tax_config,
-            ytd_ordinary_income,
-        ),
-        TaxStatus::TaxFree => liquidate_tax_free(
-            &lots,
-            current_price,
-            asset_coord,
-            to_account,
-            actual_amount,
-            lot_method,
-            current_date,
-        ),
+    match params.investment.tax_status {
+        TaxStatus::Taxable => liquidate_taxable(&lots, actual_amount, params),
+        TaxStatus::TaxDeferred => liquidate_tax_deferred(&lots, actual_amount, params),
+        TaxStatus::TaxFree => liquidate_tax_free(&lots, actual_amount, params),
     }
 }
 
 /// Liquidate from a taxable account with full lot tracking
 fn liquidate_taxable(
     lots: &[AssetLot],
-    current_price: f64,
-    asset_coord: AssetCoord,
-    to_account: AccountId,
     amount: f64,
-    lot_method: LotMethod,
-    current_date: Date,
-    tax_config: &TaxConfig,
-    ytd_ordinary_income: f64,
+    params: &LiquidationParams,
 ) -> (LiquidationResult, Vec<StateEvent>) {
-    let lot_result = consume_lots(lots, amount, current_price, lot_method, current_date);
-    let mut effects = lot_subtractions_to_effects(asset_coord, &lot_result);
+    let lot_result = consume_lots(
+        lots,
+        amount,
+        params.current_price,
+        params.lot_method,
+        params.current_date,
+    );
+    let mut effects = lot_subtractions_to_effects(params.asset_coord, &lot_result);
 
     let gross_amount = lot_result.proceeds;
     let mut net_amount = gross_amount;
@@ -138,10 +115,10 @@ fn liquidate_taxable(
     if lot_result.short_term_gain > 0.0 {
         let federal_short_term_tax = calculate_federal_marginal_tax(
             lot_result.short_term_gain,
-            ytd_ordinary_income,
-            &tax_config.federal_brackets,
+            params.ytd_ordinary_income,
+            &params.tax_config.federal_brackets,
         );
-        let state_short_term_tax = lot_result.short_term_gain * tax_config.state_rate;
+        let state_short_term_tax = lot_result.short_term_gain * params.tax_config.state_rate;
 
         effects.push(StateEvent::ShortTermCapitalGainsTax {
             gross_gain_amount: lot_result.short_term_gain,
@@ -154,8 +131,9 @@ fn liquidate_taxable(
 
     // Long-term gains taxed at capital gains rate
     if lot_result.long_term_gain > 0.0 {
-        let federal_long_term_tax = lot_result.long_term_gain * tax_config.capital_gains_rate;
-        let state_long_term_tax = lot_result.long_term_gain * tax_config.state_rate;
+        let federal_long_term_tax =
+            lot_result.long_term_gain * params.tax_config.capital_gains_rate;
+        let state_long_term_tax = lot_result.long_term_gain * params.tax_config.state_rate;
 
         effects.push(StateEvent::LongTermCapitalGainsTax {
             gross_gain_amount: lot_result.long_term_gain,
@@ -167,7 +145,7 @@ fn liquidate_taxable(
     }
 
     effects.push(StateEvent::CashCredit {
-        to: to_account,
+        to: params.to_account,
         net_amount,
     });
 
@@ -184,27 +162,27 @@ fn liquidate_taxable(
 /// All withdrawals are taxed as ordinary income
 fn liquidate_tax_deferred(
     lots: &[AssetLot],
-    current_price: f64,
-    asset_coord: AssetCoord,
-    to_account: AccountId,
     amount: f64,
-    lot_method: LotMethod,
-    current_date: Date,
-    tax_config: &TaxConfig,
-    ytd_ordinary_income: f64,
+    params: &LiquidationParams,
 ) -> (LiquidationResult, Vec<StateEvent>) {
-    let lot_result = consume_lots(lots, amount, current_price, lot_method, current_date);
-    let mut effects = lot_subtractions_to_effects(asset_coord, &lot_result);
+    let lot_result = consume_lots(
+        lots,
+        amount,
+        params.current_price,
+        params.lot_method,
+        params.current_date,
+    );
+    let mut effects = lot_subtractions_to_effects(params.asset_coord, &lot_result);
 
     let gross_amount = lot_result.proceeds;
 
     // Entire withdrawal taxed as ordinary income
     let federal_tax = calculate_federal_marginal_tax(
         gross_amount,
-        ytd_ordinary_income,
-        &tax_config.federal_brackets,
+        params.ytd_ordinary_income,
+        &params.tax_config.federal_brackets,
     );
-    let state_tax = gross_amount * tax_config.state_rate;
+    let state_tax = gross_amount * params.tax_config.state_rate;
     let net_amount = gross_amount - federal_tax - state_tax;
 
     effects.push(StateEvent::IncomeTax {
@@ -214,7 +192,7 @@ fn liquidate_tax_deferred(
     });
 
     effects.push(StateEvent::CashCredit {
-        to: to_account,
+        to: params.to_account,
         net_amount,
     });
 
@@ -231,21 +209,23 @@ fn liquidate_tax_deferred(
 /// Qualified withdrawals are completely tax-free
 fn liquidate_tax_free(
     lots: &[AssetLot],
-    current_price: f64,
-    asset_coord: AssetCoord,
-    to_account: AccountId,
     amount: f64,
-    lot_method: LotMethod,
-    current_date: Date,
+    params: &LiquidationParams,
 ) -> (LiquidationResult, Vec<StateEvent>) {
-    let lot_result = consume_lots(lots, amount, current_price, lot_method, current_date);
-    let mut effects = lot_subtractions_to_effects(asset_coord, &lot_result);
+    let lot_result = consume_lots(
+        lots,
+        amount,
+        params.current_price,
+        params.lot_method,
+        params.current_date,
+    );
+    let mut effects = lot_subtractions_to_effects(params.asset_coord, &lot_result);
 
     let gross_amount = lot_result.proceeds;
     let net_amount = gross_amount; // No taxes
 
     effects.push(StateEvent::CashCredit {
-        to: to_account,
+        to: params.to_account,
         net_amount,
     });
 

@@ -2,7 +2,7 @@ use jiff::ToSpan;
 use jiff::civil::Date;
 
 use crate::error::{StateEventError, TransferEvaluationError, TriggerEventError};
-use crate::liquidation::{get_current_price, liquidate_investment};
+use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment};
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, EventEffect, EventId,
     EventTrigger, IncomeType, TaxStatus, TransferAmount, TransferEndpoint, TriggerOffset,
@@ -102,7 +102,7 @@ pub fn evaluate_trigger(
     state: &SimulationState,
 ) -> Result<TriggerEvent, TriggerEventError> {
     match trigger {
-        EventTrigger::Date(date) => Ok(if state.current_date >= *date {
+        EventTrigger::Date(date) => Ok(if state.timeline.current_date >= *date {
             TriggerEvent::Triggered
         } else {
             TriggerEvent::NextTriggerDate(*date)
@@ -119,6 +119,7 @@ pub fn evaluate_trigger(
                 Ok(TriggerEvent::Triggered)
             } else {
                 let trigger_date = state
+                    .timeline
                     .current_date
                     .checked_add(remaining_years.years().months(remaining_months))?;
 
@@ -127,14 +128,14 @@ pub fn evaluate_trigger(
         }
 
         EventTrigger::RelativeToEvent { event_id, offset } => {
-            if let Some(trigger_date) = state.triggered_events.get(event_id) {
+            if let Some(trigger_date) = state.event_state.triggered_events.get(event_id) {
                 let target_date = match offset {
                     TriggerOffset::Days(d) => trigger_date.checked_add((*d as i64).days()),
                     TriggerOffset::Months(m) => trigger_date.checked_add((*m as i64).months()),
                     TriggerOffset::Years(y) => trigger_date.checked_add((*y as i64).years()),
                 }?;
 
-                if state.current_date >= target_date {
+                if state.timeline.current_date >= target_date {
                     Ok(TriggerEvent::Triggered)
                 } else {
                     Ok(TriggerEvent::NextTriggerDate(target_date))
@@ -213,7 +214,7 @@ pub fn evaluate_trigger(
             end_condition,
         } => {
             // Check if this repeating event has been started and its active status
-            let active_status = state.repeating_event_active.get(event_id);
+            let active_status = state.event_state.repeating_event_active.get(event_id);
             let is_started = active_status.is_some(); // Event has been activated at least once
             let is_active = active_status.copied().unwrap_or(false);
 
@@ -221,9 +222,6 @@ pub fn evaluate_trigger(
             if let Some(end_cond) = end_condition
                 && let TriggerEvent::Triggered = evaluate_trigger(event_id, end_cond, state)?
             {
-                // // Terminate the repeating event
-                // state.repeating_event_active.remove(&event_id);
-                // state.event_next_date.remove(&event_id);
                 return Ok(TriggerEvent::StopRepeating);
             }
 
@@ -241,13 +239,8 @@ pub fn evaluate_trigger(
 
                 if condition_met {
                     Ok(TriggerEvent::StartRepeating(
-                        state.current_date.saturating_add(interval.span()),
+                        state.timeline.current_date.saturating_add(interval.span()),
                     ))
-                    // // Activate the repeating event and schedule NEXT occurrence
-                    // state.repeating_event_active.insert(event_id, true);
-                    // let next = state.current_date.saturating_add(interval.span());
-                    // state.event_next_date.insert(event_id, next);
-                    // true // Trigger immediately on activation
                 } else {
                     Ok(if let Some(date) = next_try_date {
                         TriggerEvent::NextTriggerDate(date)
@@ -260,13 +253,11 @@ pub fn evaluate_trigger(
                 Ok(TriggerEvent::NotTriggered)
             } else {
                 // Active event - check if scheduled for today
-                if let Some(next_date) = state.event_next_date.get(event_id) {
-                    if state.current_date >= *next_date {
+                if let Some(next_date) = state.event_state.event_next_date.get(event_id) {
+                    if state.timeline.current_date >= *next_date {
                         // Schedule next occurrence
                         let next = next_date.saturating_add(interval.span());
                         Ok(TriggerEvent::TriggerRepeating(next))
-                        // state.event_next_date.insert(event_id, next);
-                        // true
                     } else {
                         Ok(TriggerEvent::NotTriggered)
                     }
@@ -361,9 +352,9 @@ pub fn evaluate_effect(
                     net_amount: calculated_amount,
                 }]),
                 (IncomeType::Taxable, AmountMode::Gross) => {
-                    let ytd_income = state.ytd_tax.ordinary_income;
-                    let brackets = &state.tax_config.federal_brackets;
-                    let state_rate = state.tax_config.state_rate;
+                    let ytd_income = state.taxes.ytd_tax.ordinary_income;
+                    let brackets = &state.taxes.config.federal_brackets;
+                    let state_rate = state.taxes.config.state_rate;
 
                     let federal_tax =
                         calculate_federal_marginal_tax(calculated_amount, ytd_income, brackets);
@@ -382,9 +373,9 @@ pub fn evaluate_effect(
                     ])
                 }
                 (IncomeType::Taxable, AmountMode::Net) => {
-                    let ytd_income = state.ytd_tax.ordinary_income;
-                    let brackets = &state.tax_config.federal_brackets;
-                    let state_rate = state.tax_config.state_rate;
+                    let ytd_income = state.taxes.ytd_tax.ordinary_income;
+                    let brackets = &state.taxes.config.federal_brackets;
+                    let state_rate = state.taxes.config.state_rate;
 
                     // Calculate gross from the net amount received
                     let gross_amount = calculate_gross_from_net(
@@ -486,9 +477,9 @@ pub fn evaluate_effect(
 
                 // Get current price from Market
                 let current_price = match get_current_price(
-                    &state.market,
-                    state.start_date,
-                    state.current_date,
+                    &state.portfolio.market,
+                    state.timeline.start_date,
+                    state.timeline.current_date,
                     asset_id,
                 ) {
                     Some(price) => price,
@@ -521,17 +512,17 @@ pub fn evaluate_effect(
                 };
 
                 // Liquidate from this source (handles lot tracking, taxes, records)
-                let (result, effects) = liquidate_investment(
+                let (result, effects) = liquidate_investment(&LiquidationParams {
                     investment,
                     asset_coord,
-                    *to,
-                    take_gross,
+                    to_account: *to,
+                    amount: take_gross,
                     current_price,
-                    *lot_method,
-                    state.current_date,
-                    &state.tax_config,
-                    state.ytd_tax.ordinary_income,
-                );
+                    lot_method: *lot_method,
+                    current_date: state.timeline.current_date,
+                    tax_config: &state.taxes.config,
+                    ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income,
+                });
 
                 // Subtract what we actually got
                 remaining -= match amount_mode {
@@ -567,6 +558,7 @@ pub fn resolve_withdrawal_sources(
         } => {
             // Filter to only Investment accounts (the only ones with positions to sell)
             let mut investment_accounts: Vec<_> = state
+                .portfolio
                 .accounts
                 .iter()
                 .filter(|(id, _)| !exclude_accounts.contains(id))
@@ -634,7 +626,7 @@ fn resolve_withdrawal_sources_with_containers<'a>(
     match sources {
         WithdrawalSources::Single { asset_coord } => {
             // Find the investment container for this asset_coord
-            if let Some(account) = state.accounts.get(&asset_coord.account_id)
+            if let Some(account) = state.portfolio.accounts.get(&asset_coord.account_id)
                 && let AccountFlavor::Investment(inv) = &account.flavor
             {
                 return vec![(asset_coord.account_id, asset_coord.asset_id, inv)];
@@ -644,13 +636,17 @@ fn resolve_withdrawal_sources_with_containers<'a>(
         WithdrawalSources::Custom(list) => list
             .iter()
             .filter_map(|coord| {
-                state.accounts.get(&coord.account_id).and_then(|acc| {
-                    if let AccountFlavor::Investment(inv) = &acc.flavor {
-                        Some((coord.account_id, coord.asset_id, inv))
-                    } else {
-                        None
-                    }
-                })
+                state
+                    .portfolio
+                    .accounts
+                    .get(&coord.account_id)
+                    .and_then(|acc| {
+                        if let AccountFlavor::Investment(inv) = &acc.flavor {
+                            Some((coord.account_id, coord.asset_id, inv))
+                        } else {
+                            None
+                        }
+                    })
             })
             .collect(),
         WithdrawalSources::Strategy {
@@ -659,6 +655,7 @@ fn resolve_withdrawal_sources_with_containers<'a>(
         } => {
             // Filter to only Investment accounts
             let mut investment_accounts: Vec<_> = state
+                .portfolio
                 .accounts
                 .iter()
                 .filter(|(id, _)| !exclude_accounts.contains(id))

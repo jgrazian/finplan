@@ -17,7 +17,7 @@ pub use crate::model::n_day_rate;
 pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     let mut state = SimulationState::from_parameters(params, seed);
 
-    while state.current_date < state.end_date {
+    while state.timeline.current_date < state.timeline.end_date {
         let mut something_happened = true;
         while something_happened {
             something_happened = false;
@@ -35,10 +35,10 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     state.finalize_year_taxes();
 
     SimulationResult {
-        dates: state.dates.clone(),
+        dates: state.history.dates.clone(),
         accounts: state.build_account_snapshots(params),
-        yearly_taxes: state.yearly_taxes.clone(),
-        records: state.records.clone(),
+        yearly_taxes: state.taxes.yearly_taxes.clone(),
+        records: state.history.records.clone(),
     }
 }
 
@@ -47,20 +47,23 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     state.maybe_rollover_year();
 
     // Find next checkpoint
-    let mut next_checkpoint = state.end_date;
+    let mut next_checkpoint = state.timeline.end_date;
 
     // Check event dates
-    for event in state.events.values() {
+    for event in state.event_state.events.values() {
         // Skip if already triggered and once=true (unless Repeating)
         if event.once
-            && state.triggered_events.contains_key(&event.event_id)
+            && state
+                .event_state
+                .triggered_events
+                .contains_key(&event.event_id)
             && !matches!(event.trigger, EventTrigger::Repeating { .. })
         {
             continue;
         }
 
         if let EventTrigger::Date(d) = event.trigger
-            && d > state.current_date
+            && d > state.timeline.current_date
             && d < next_checkpoint
         {
             next_checkpoint = d;
@@ -68,7 +71,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
 
         // Also check relative events
         if let EventTrigger::RelativeToEvent { event_id, offset } = &event.trigger
-            && let Some(trigger_date) = state.triggered_events.get(event_id)
+            && let Some(trigger_date) = state.event_state.triggered_events.get(event_id)
         {
             let target_date = match offset {
                 TriggerOffset::Days(d) => trigger_date.checked_add((*d as i64).days()),
@@ -76,7 +79,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
                 TriggerOffset::Years(y) => trigger_date.checked_add((*y as i64).years()),
             };
             if let Ok(d) = target_date
-                && d > state.current_date
+                && d > state.timeline.current_date
                 && d < next_checkpoint
             {
                 next_checkpoint = d;
@@ -85,27 +88,27 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     }
 
     // Check repeating event scheduled dates
-    for date in state.event_next_date.values() {
-        if *date > state.current_date && *date < next_checkpoint {
+    for date in state.event_state.event_next_date.values() {
+        if *date > state.timeline.current_date && *date < next_checkpoint {
             next_checkpoint = *date;
         }
     }
 
     // Heartbeat - advance at least quarterly
-    let heartbeat = state.current_date.saturating_add(3.months());
+    let heartbeat = state.timeline.current_date.saturating_add(3.months());
     if heartbeat < next_checkpoint {
         next_checkpoint = heartbeat;
     }
 
     // Ensure we capture December 31 for RMD year-end balance tracking
-    let current_year = state.current_date.year();
+    let current_year = state.timeline.current_date.year();
     let dec_31 = jiff::civil::date(current_year, 12, 31);
-    if state.current_date < dec_31 && dec_31 < next_checkpoint {
+    if state.timeline.current_date < dec_31 && dec_31 < next_checkpoint {
         next_checkpoint = dec_31;
     }
 
     // Apply interest/returns
-    let days_passed = (next_checkpoint - state.current_date).get_days();
+    let days_passed = (next_checkpoint - state.timeline.current_date).get_days();
     if days_passed > 0 {
         // TODO: Returns are now calculated dynamically via Market.get_asset_value()
         // The lot-based system tracks cost basis and units; current value is derived
@@ -113,7 +116,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
         // or simplified to just advance the date.
 
         // Record date checkpoint
-        state.dates.push(next_checkpoint);
+        state.history.dates.push(next_checkpoint);
     }
 
     // Capture year-end balances for RMD calculations (December 31)
@@ -121,7 +124,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
         let year = next_checkpoint.year();
         let mut year_balances = HashMap::new();
 
-        for (account_id, account) in &state.accounts {
+        for (account_id, account) in &state.portfolio.accounts {
             if let AccountFlavor::Investment(inv) = &account.flavor
                 && matches!(inv.tax_status, TaxStatus::TaxDeferred)
                 && let Ok(balance) = state.account_balance(*account_id)
@@ -130,10 +133,13 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             }
         }
 
-        state.year_end_balances.insert(year, year_balances);
+        state
+            .portfolio
+            .year_end_balances
+            .insert(year, year_balances);
     }
 
-    state.current_date = next_checkpoint;
+    state.timeline.current_date = next_checkpoint;
 }
 
 pub fn monte_carlo_simulate(params: &SimulationConfig, num_iterations: usize) -> MonteCarloResult {

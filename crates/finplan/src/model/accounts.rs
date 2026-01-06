@@ -3,7 +3,10 @@
 //! Accounts are containers for assets with specific tax treatments.
 //! Assets represent individual investments or property within accounts.
 
+use crate::model::Market;
+
 use super::ids::{AccountId, AssetId, ReturnProfileId};
+use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -82,7 +85,7 @@ pub struct Account {
 }
 
 impl Account {
-    pub fn total_value(&self) -> f64 {
+    pub fn total_value(&self, market: &Market, start_date: Date, current_date: Date) -> f64 {
         match &self.flavor {
             AccountFlavor::Bank(cash) => cash.value,
             // One match arm handles Taxable, Roth, and Trad IRA!
@@ -90,7 +93,12 @@ impl Account {
                 let assets_val: f64 = inv
                     .positions
                     .iter()
-                    .map(|p| p.units * p.cost_basis) // Replace with current price lookup
+                    .map(|p| {
+                        p.units
+                            * market
+                                .get_asset_value(start_date, current_date, p.asset_id)
+                                .unwrap_or(0.0)
+                    }) // Replace with current price lookup
                     .sum();
                 inv.cash.value + assets_val
             }

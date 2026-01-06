@@ -17,17 +17,21 @@ pub fn apply_state_event(
 ) -> Result<(), ApplyError> {
     match event {
         StateEvent::CreateAccount(account) => {
-            state.accounts.insert(account.account_id, account.clone());
+            state
+                .portfolio
+                .accounts
+                .insert(account.account_id, account.clone());
             Ok(())
         }
 
         StateEvent::DeleteAccount(account_id) => {
-            state.accounts.remove(account_id);
+            state.portfolio.accounts.remove(account_id);
             Ok(())
         }
 
         StateEvent::CashCredit { to, net_amount } => {
             let account = state
+                .portfolio
                 .accounts
                 .get_mut(to)
                 .ok_or(ApplyError::AccountNotFound(*to))?;
@@ -46,6 +50,7 @@ pub fn apply_state_event(
 
         StateEvent::CashDebit { from, net_amount } => {
             let account = state
+                .portfolio
                 .accounts
                 .get_mut(from)
                 .ok_or(ApplyError::AccountNotFound(*from))?;
@@ -67,9 +72,9 @@ pub fn apply_state_event(
             federal_tax,
             state_tax,
         } => {
-            state.ytd_tax.ordinary_income += gross_income_amount;
-            state.ytd_tax.federal_tax += federal_tax;
-            state.ytd_tax.state_tax += state_tax;
+            state.taxes.ytd_tax.ordinary_income += gross_income_amount;
+            state.taxes.ytd_tax.federal_tax += federal_tax;
+            state.taxes.ytd_tax.state_tax += state_tax;
             Ok(())
         }
 
@@ -78,9 +83,9 @@ pub fn apply_state_event(
             federal_tax,
             state_tax,
         } => {
-            state.ytd_tax.capital_gains += gross_gain_amount;
-            state.ytd_tax.federal_tax += federal_tax;
-            state.ytd_tax.state_tax += state_tax;
+            state.taxes.ytd_tax.capital_gains += gross_gain_amount;
+            state.taxes.ytd_tax.federal_tax += federal_tax;
+            state.taxes.ytd_tax.state_tax += state_tax;
             Ok(())
         }
 
@@ -89,9 +94,9 @@ pub fn apply_state_event(
             federal_tax,
             state_tax,
         } => {
-            state.ytd_tax.capital_gains += gross_gain_amount;
-            state.ytd_tax.federal_tax += federal_tax;
-            state.ytd_tax.state_tax += state_tax;
+            state.taxes.ytd_tax.capital_gains += gross_gain_amount;
+            state.taxes.ytd_tax.federal_tax += federal_tax;
+            state.taxes.ytd_tax.state_tax += state_tax;
             Ok(())
         }
 
@@ -101,6 +106,7 @@ pub fn apply_state_event(
             cost_basis,
         } => {
             let account = state
+                .portfolio
                 .accounts
                 .get_mut(&to.account_id)
                 .ok_or(ApplyError::AccountNotFound(to.account_id))?;
@@ -108,7 +114,7 @@ pub fn apply_state_event(
             if let AccountFlavor::Investment(inv) = &mut account.flavor {
                 inv.positions.push(AssetLot {
                     asset_id: to.asset_id,
-                    purchase_date: state.current_date,
+                    purchase_date: state.timeline.current_date,
                     units: *units,
                     cost_basis: *cost_basis,
                 });
@@ -125,6 +131,7 @@ pub fn apply_state_event(
             cost_basis,
         } => {
             let account = state
+                .portfolio
                 .accounts
                 .get_mut(&from.account_id)
                 .ok_or(ApplyError::AccountNotFound(from.account_id))?;
@@ -159,18 +166,24 @@ pub fn apply_state_event(
         }
 
         StateEvent::PauseEvent(event_id) => {
-            state.repeating_event_active.insert(*event_id, false);
+            state
+                .event_state
+                .repeating_event_active
+                .insert(*event_id, false);
             Ok(())
         }
 
         StateEvent::ResumeEvent(event_id) => {
-            state.repeating_event_active.insert(*event_id, true);
+            state
+                .event_state
+                .repeating_event_active
+                .insert(*event_id, true);
             Ok(())
         }
 
         StateEvent::TerminateEvent(event_id) => {
-            state.repeating_event_active.remove(event_id);
-            state.event_next_date.remove(event_id);
+            state.event_state.repeating_event_active.remove(event_id);
+            state.event_state.event_next_date.remove(event_id);
             Ok(())
         }
     }
@@ -183,12 +196,13 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
 
     // Collect events to evaluate (avoid borrow issues)
     let events_to_check: Vec<(EventId, Event)> = state
+        .event_state
         .events
         .iter()
         .filter(|(id, event)| {
             // Skip if already triggered and once=true (but not for Repeating)
             if event.once
-                && state.triggered_events.contains_key(id)
+                && state.event_state.triggered_events.contains_key(id)
                 && !matches!(event.trigger, EventTrigger::Repeating { .. })
             {
                 return false;
@@ -209,19 +223,28 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
             TriggerEvent::Triggered => true,
             TriggerEvent::StartRepeating(next_date) => {
                 // Activate the repeating event
-                state.repeating_event_active.insert(event_id, true);
-                state.event_next_date.insert(event_id, next_date);
+                state
+                    .event_state
+                    .repeating_event_active
+                    .insert(event_id, true);
+                state
+                    .event_state
+                    .event_next_date
+                    .insert(event_id, next_date);
                 true // Trigger immediately on activation
             }
             TriggerEvent::TriggerRepeating(next_date) => {
                 // Schedule next occurrence
-                state.event_next_date.insert(event_id, next_date);
+                state
+                    .event_state
+                    .event_next_date
+                    .insert(event_id, next_date);
                 true
             }
             TriggerEvent::StopRepeating => {
                 // Terminate the repeating event
-                state.repeating_event_active.remove(&event_id);
-                state.event_next_date.remove(&event_id);
+                state.event_state.repeating_event_active.remove(&event_id);
+                state.event_state.event_next_date.remove(&event_id);
                 false
             }
             TriggerEvent::NotTriggered | TriggerEvent::NextTriggerDate(_) => false,
@@ -229,12 +252,16 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
 
         if should_trigger {
             // Record trigger for once checks and RelativeToEvent
-            state.triggered_events.insert(event_id, state.current_date);
+            state
+                .event_state
+                .triggered_events
+                .insert(event_id, state.timeline.current_date);
 
             // Record to linear event history
             state
+                .history
                 .records
-                .push(Record::event(state.current_date, event_id));
+                .push(Record::event(state.timeline.current_date, event_id));
 
             triggered.push(event_id);
 
@@ -264,16 +291,20 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
         let triggers = std::mem::take(&mut state.pending_triggers);
 
         for event_id in triggers {
-            if let Some(event) = state.events.get(&event_id).cloned() {
+            if let Some(event) = state.event_state.events.get(&event_id).cloned() {
                 // Skip if already triggered and once=true
-                if event.once && state.triggered_events.contains_key(&event_id) {
+                if event.once && state.event_state.triggered_events.contains_key(&event_id) {
                     continue;
                 }
 
-                state.triggered_events.insert(event_id, state.current_date);
                 state
+                    .event_state
+                    .triggered_events
+                    .insert(event_id, state.timeline.current_date);
+                state
+                    .history
                     .records
-                    .push(Record::event(state.current_date, event_id));
+                    .push(Record::event(state.timeline.current_date, event_id));
                 triggered.push(event_id);
 
                 for effect in &event.effects {

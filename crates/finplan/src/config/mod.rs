@@ -3,8 +3,11 @@
 //! The main configuration type is `SimulationConfig`, which contains everything
 //! needed to run a simulation. Helper methods support optimization use cases.
 
+use std::collections::HashMap;
+
 use crate::model::{
-    Account, Event, EventId, EventTrigger, InflationProfile, ReturnProfile, TaxConfig,
+    Account, AssetId, Event, EventId, EventTrigger, InflationProfile, ReturnProfile,
+    ReturnProfileId, TaxConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -64,11 +67,13 @@ pub struct SimulationConfig {
     /// Return profiles for different asset classes.
     /// Assets reference these by index (return_profile_index).
     #[serde(default)]
-    pub return_profiles: Vec<ReturnProfile>,
+    pub return_profiles: HashMap<ReturnProfileId, ReturnProfile>,
 
     /// Inflation model
     #[serde(default)]
     pub inflation_profile: InflationProfile,
+
+    pub asset_returns: HashMap<AssetId, ReturnProfileId>,
 
     /// Tax configuration (brackets, rates, etc.)
     #[serde(default)]
@@ -173,11 +178,6 @@ impl SimulationConfig {
         } else {
             Some(years as u8)
         }
-    }
-
-    /// Calculate total initial net worth
-    pub fn total_initial_net_worth(&self) -> f64 {
-        self.accounts.iter().map(|a| a.total_value()).sum()
     }
 
     /// Find an event by ID
