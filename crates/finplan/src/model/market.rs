@@ -175,6 +175,26 @@ impl Market {
         let returns = self.returns.get(&return_profile_id)?;
         apply_rates_to_value(returns, start_date, eval_date, initial_value)
     }
+
+    /// Get the return multiplier for a period (used for cash compounding).
+    /// Returns (1 + n_day_rate) for the given number of days at the year_index rate.
+    pub fn get_period_multiplier(
+        &self,
+        year_index: usize,
+        days: i64,
+        return_profile_id: ReturnProfileId,
+    ) -> Option<f64> {
+        if days <= 0 {
+            return Some(1.0);
+        }
+        let returns = self.returns.get(&return_profile_id)?;
+        if year_index >= returns.len() {
+            return None;
+        }
+        let yearly_rate = returns[year_index].incremental;
+        let period_rate = n_day_rate(yearly_rate, days as f64);
+        Some(1.0 + period_rate)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]

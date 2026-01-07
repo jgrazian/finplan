@@ -6,6 +6,7 @@ mod metadata;
 mod records;
 mod results;
 mod rmd;
+mod state_event;
 mod tax_config;
 
 pub use accounts::{
@@ -22,4 +23,6 @@ pub use metadata::{EntityMetadata, SimulationMetadata};
 pub use records::{Record, RecordKind, TaxInfo, TransactionSource};
 pub use results::{AccountSnapshot, AssetSnapshot, MonteCarloResult, SimulationResult};
 pub use rmd::{RmdTable, RmdTableEntry};
+pub use state_event::{LedgerEntry, StateEvent};
 pub use tax_config::{TaxBracket, TaxConfig, TaxSummary};
+

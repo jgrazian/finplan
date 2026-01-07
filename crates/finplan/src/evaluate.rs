@@ -271,8 +271,10 @@ pub fn evaluate_trigger(
     }
 }
 
+/// Internal state mutations during event evaluation.
+/// These are converted to LedgerEntry/StateEvent when recorded.
 #[derive(Debug, Clone)]
-pub enum StateEvent {
+pub enum EvalEvent {
     // === Account Management ===
     CreateAccount(Account),
     DeleteAccount(AccountId),
@@ -316,6 +318,9 @@ pub enum StateEvent {
         lot_date: Date,
         units: f64,
         cost_basis: f64,
+        proceeds: f64,
+        short_term_gain: f64,
+        long_term_gain: f64,
     },
 
     // === Event Management ===
@@ -329,10 +334,10 @@ pub enum StateEvent {
 pub fn evaluate_effect(
     effect: &EventEffect,
     state: &SimulationState,
-) -> Result<Vec<StateEvent>, StateEventError> {
+) -> Result<Vec<EvalEvent>, StateEventError> {
     match effect {
-        EventEffect::CreateAccount(account) => Ok(vec![StateEvent::CreateAccount(account.clone())]),
-        EventEffect::DeleteAccount(account_id) => Ok(vec![StateEvent::DeleteAccount(*account_id)]),
+        EventEffect::CreateAccount(account) => Ok(vec![EvalEvent::CreateAccount(account.clone())]),
+        EventEffect::DeleteAccount(account_id) => Ok(vec![EvalEvent::DeleteAccount(*account_id)]),
         EventEffect::Income {
             to,
             amount,
@@ -347,7 +352,7 @@ pub fn evaluate_effect(
             )?;
 
             match (income_type, amount_mode) {
-                (IncomeType::TaxFree, _) => Ok(vec![StateEvent::CashCredit {
+                (IncomeType::TaxFree, _) => Ok(vec![EvalEvent::CashCredit {
                     to: *to,
                     net_amount: calculated_amount,
                 }]),
@@ -359,13 +364,14 @@ pub fn evaluate_effect(
                     let federal_tax =
                         calculate_federal_marginal_tax(calculated_amount, ytd_income, brackets);
                     let state_tax = calculated_amount * state_rate;
+                    let net_amount = calculated_amount - federal_tax - state_tax;
 
                     Ok(vec![
-                        StateEvent::CashCredit {
+                        EvalEvent::CashCredit {
                             to: *to,
-                            net_amount: calculated_amount,
+                            net_amount,
                         },
-                        StateEvent::IncomeTax {
+                        EvalEvent::IncomeTax {
                             gross_income_amount: calculated_amount,
                             federal_tax,
                             state_tax,
@@ -390,11 +396,11 @@ pub fn evaluate_effect(
                     let state_tax = gross_amount * state_rate;
 
                     Ok(vec![
-                        StateEvent::CashCredit {
+                        EvalEvent::CashCredit {
                             to: *to,
                             net_amount: calculated_amount,
                         },
-                        StateEvent::IncomeTax {
+                        EvalEvent::IncomeTax {
                             gross_income_amount: gross_amount,
                             federal_tax,
                             state_tax,
@@ -411,7 +417,7 @@ pub fn evaluate_effect(
                 state,
             )?;
 
-            Ok(vec![StateEvent::CashDebit {
+            Ok(vec![EvalEvent::CashDebit {
                 from: *from,
                 net_amount: calculated_amount,
             }])
@@ -425,11 +431,11 @@ pub fn evaluate_effect(
             )?;
 
             Ok(vec![
-                StateEvent::CashDebit {
+                EvalEvent::CashDebit {
                     from: *from,
                     net_amount: calculated_amount,
                 },
-                StateEvent::AddAssetLot {
+                EvalEvent::AddAssetLot {
                     to: *to,
                     units: calculated_amount / state.current_asset_price(*to)?,
                     cost_basis: calculated_amount,
@@ -503,10 +509,45 @@ pub fn evaluate_effect(
                 let take_gross = match amount_mode {
                     AmountMode::Gross => remaining.min(available),
                     AmountMode::Net => {
-                        // For net mode, we need to overshoot to account for taxes
-                        // Use a simple estimate: request remaining / 0.7 to account for ~30% taxes
-                        // The actual tax calculation happens in liquidate_investment
-                        let estimated_gross = remaining / 0.7;
+                        // For net mode, estimate gross needed based on actual position data
+                        // Calculate average cost basis per unit for this asset
+                        let total_units: f64 = investment
+                            .positions
+                            .iter()
+                            .filter(|lot| lot.asset_id == asset_id)
+                            .map(|lot| lot.units)
+                            .sum();
+                        let total_basis: f64 = investment
+                            .positions
+                            .iter()
+                            .filter(|lot| lot.asset_id == asset_id)
+                            .map(|lot| lot.cost_basis)
+                            .sum();
+
+                        let avg_cost_per_unit = if total_units > 0.0 {
+                            total_basis / total_units
+                        } else {
+                            current_price // No gain if no basis info
+                        };
+
+                        // Estimate gain ratio: (current_price - avg_cost) / current_price
+                        let gain_ratio =
+                            ((current_price - avg_cost_per_unit) / current_price).max(0.0);
+
+                        // Estimate tax rate on gains (use capital gains + state rate)
+                        let estimated_tax_rate =
+                            state.taxes.config.capital_gains_rate + state.taxes.config.state_rate;
+
+                        // For each dollar of gross proceeds:
+                        // - gain_ratio of it is taxable gain
+                        // - (1 - gain_ratio) is return of basis (not taxed)
+                        // - tax = gain_ratio * estimated_tax_rate
+                        // So net = gross * (1 - gain_ratio * estimated_tax_rate)
+                        // Therefore gross = net / (1 - gain_ratio * estimated_tax_rate)
+                        let effective_tax_rate = gain_ratio * estimated_tax_rate;
+                        let gross_multiplier = 1.0 / (1.0 - effective_tax_rate).max(0.5);
+
+                        let estimated_gross = remaining * gross_multiplier;
                         estimated_gross.min(available)
                     }
                 };
@@ -535,10 +576,10 @@ pub fn evaluate_effect(
 
             Ok(all_effects)
         }
-        EventEffect::TriggerEvent(event_id) => Ok(vec![StateEvent::TriggerEvent(*event_id)]),
-        EventEffect::PauseEvent(event_id) => Ok(vec![StateEvent::PauseEvent(*event_id)]),
-        EventEffect::ResumeEvent(event_id) => Ok(vec![StateEvent::ResumeEvent(*event_id)]),
-        EventEffect::TerminateEvent(event_id) => Ok(vec![StateEvent::TerminateEvent(*event_id)]),
+        EventEffect::TriggerEvent(event_id) => Ok(vec![EvalEvent::TriggerEvent(*event_id)]),
+        EventEffect::PauseEvent(event_id) => Ok(vec![EvalEvent::PauseEvent(*event_id)]),
+        EventEffect::ResumeEvent(event_id) => Ok(vec![EvalEvent::ResumeEvent(*event_id)]),
+        EventEffect::TerminateEvent(event_id) => Ok(vec![EvalEvent::TerminateEvent(*event_id)]),
         EventEffect::ApplyRmd { .. } => todo!(),
     }
 }

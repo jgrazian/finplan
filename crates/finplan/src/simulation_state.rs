@@ -2,7 +2,7 @@ use crate::config::SimulationConfig;
 use crate::error::{EngineError, Result};
 use crate::model::{
     Account, AccountFlavor, AccountId, AccountSnapshot, AssetCoord, AssetId, AssetSnapshot, Event,
-    EventId, Market, Record, RecordKind, ReturnProfileId, RmdTable, TaxConfig, TaxSummary,
+    EventId, LedgerEntry, Market, ReturnProfileId, RmdTable, StateEvent, TaxConfig, TaxSummary,
 };
 use jiff::ToSpan;
 use jiff::civil::Date;
@@ -77,8 +77,8 @@ pub struct SimTaxState {
 
 #[derive(Debug, Clone)]
 pub struct SimHistory {
-    /// Transaction records
-    pub records: Vec<Record>,
+    /// Immutable ledger of all state changes
+    pub ledger: Vec<LedgerEntry>,
     /// Dates tracked in the simulation
     pub dates: Vec<Date>,
 }
@@ -94,8 +94,51 @@ impl SimulationState {
         // Build return profiles HashMap from Vec
         let return_profiles = params.return_profiles.clone();
 
-        // Extract assets from accounts
-        let assets: HashMap<AssetId, (f64, ReturnProfileId)> = HashMap::new();
+        // Extract assets from accounts and map to return profiles
+        // Use configured asset_prices if available, otherwise default to $1.00 per unit
+        let mut assets: HashMap<AssetId, (f64, ReturnProfileId)> = HashMap::new();
+        for account in &params.accounts {
+            match &account.flavor {
+                AccountFlavor::Investment(inv) => {
+                    for lot in &inv.positions {
+                        // Use the asset_returns mapping to find the return profile
+                        if let Some(&return_profile_id) = params.asset_returns.get(&lot.asset_id) {
+                            // Use configured price or default to $1.00 per unit
+                            let price = params
+                                .asset_prices
+                                .get(&lot.asset_id)
+                                .copied()
+                                .unwrap_or(1.0);
+                            assets
+                                .entry(lot.asset_id)
+                                .or_insert((price, return_profile_id));
+                        }
+                    }
+                }
+                AccountFlavor::Property(fixed_assets) => {
+                    for asset in fixed_assets {
+                        if let Some(&return_profile_id) = params.asset_returns.get(&asset.asset_id)
+                        {
+                            // Property uses asset.value as the initial price
+                            assets
+                                .entry(asset.asset_id)
+                                .or_insert((asset.value, return_profile_id));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Also register any assets defined in asset_returns or asset_prices
+        // that may not have initial positions (for purchasing later)
+        for (&asset_id, &return_profile_id) in &params.asset_returns {
+            assets.entry(asset_id).or_insert_with(|| {
+                // Use configured price or default to $1.00 per unit
+                let price = params.asset_prices.get(&asset_id).copied().unwrap_or(1.0);
+                (price, return_profile_id)
+            });
+        }
 
         // Build Market from sampled returns using from_profiles
         let market = Market::from_profiles(
@@ -149,7 +192,7 @@ impl SimulationState {
                 config: params.tax_config.clone(),
             },
             history: SimHistory {
-                records: Vec::new(),
+                ledger: Vec::new(),
                 dates: vec![start_date],
             },
             pending_triggers: Vec::new(),
@@ -251,16 +294,16 @@ impl SimulationState {
             .ok_or(EngineError::AssetNotFound(asset_coord))
     }
 
-    /// Calculate total income from Transfer events in the current year
-    /// This sums all Income records (External -> Asset transfers) for the current calendar year
+    /// Calculate total income from CashCredit events in the current year
+    /// This sums all CashCredit ledger entries for the current calendar year
     pub fn calculate_total_income(&self) -> f64 {
         self.history
-            .records
+            .ledger
             .iter()
-            .filter(|r| r.date.year() == self.timeline.current_date.year())
-            .map(|r| {
-                if let RecordKind::Income { amount, .. } = r.kind {
-                    amount
+            .filter(|entry| entry.date.year() == self.timeline.current_date.year())
+            .map(|entry| {
+                if let StateEvent::CashCredit { amount, .. } = &entry.event {
+                    *amount
                 } else {
                     0.0
                 }

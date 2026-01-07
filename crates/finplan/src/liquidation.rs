@@ -6,7 +6,7 @@
 use jiff::civil::Date;
 
 use crate::{
-    evaluate::StateEvent,
+    evaluate::EvalEvent,
     model::{
         AccountId, AssetCoord, AssetId, AssetLot, InvestmentContainer, LotMethod, Market,
         TaxConfig, TaxStatus,
@@ -63,7 +63,7 @@ pub struct LiquidationParams<'a> {
 ///
 /// # Arguments
 /// * `params` - Liquidation parameters containing all necessary information
-pub fn liquidate_investment(params: &LiquidationParams) -> (LiquidationResult, Vec<StateEvent>) {
+pub fn liquidate_investment(params: &LiquidationParams) -> (LiquidationResult, Vec<EvalEvent>) {
     // Get positions for this specific asset
     let lots: Vec<AssetLot> = params
         .investment
@@ -98,7 +98,7 @@ fn liquidate_taxable(
     lots: &[AssetLot],
     amount: f64,
     params: &LiquidationParams,
-) -> (LiquidationResult, Vec<StateEvent>) {
+) -> (LiquidationResult, Vec<EvalEvent>) {
     let lot_result = consume_lots(
         lots,
         amount,
@@ -120,7 +120,7 @@ fn liquidate_taxable(
         );
         let state_short_term_tax = lot_result.short_term_gain * params.tax_config.state_rate;
 
-        effects.push(StateEvent::ShortTermCapitalGainsTax {
+        effects.push(EvalEvent::ShortTermCapitalGainsTax {
             gross_gain_amount: lot_result.short_term_gain,
             federal_tax: federal_short_term_tax,
             state_tax: state_short_term_tax,
@@ -135,7 +135,7 @@ fn liquidate_taxable(
             lot_result.long_term_gain * params.tax_config.capital_gains_rate;
         let state_long_term_tax = lot_result.long_term_gain * params.tax_config.state_rate;
 
-        effects.push(StateEvent::LongTermCapitalGainsTax {
+        effects.push(EvalEvent::LongTermCapitalGainsTax {
             gross_gain_amount: lot_result.long_term_gain,
             federal_tax: federal_long_term_tax,
             state_tax: state_long_term_tax,
@@ -144,7 +144,7 @@ fn liquidate_taxable(
         net_amount -= federal_long_term_tax + state_long_term_tax;
     }
 
-    effects.push(StateEvent::CashCredit {
+    effects.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
     });
@@ -164,7 +164,7 @@ fn liquidate_tax_deferred(
     lots: &[AssetLot],
     amount: f64,
     params: &LiquidationParams,
-) -> (LiquidationResult, Vec<StateEvent>) {
+) -> (LiquidationResult, Vec<EvalEvent>) {
     let lot_result = consume_lots(
         lots,
         amount,
@@ -185,13 +185,13 @@ fn liquidate_tax_deferred(
     let state_tax = gross_amount * params.tax_config.state_rate;
     let net_amount = gross_amount - federal_tax - state_tax;
 
-    effects.push(StateEvent::IncomeTax {
+    effects.push(EvalEvent::IncomeTax {
         gross_income_amount: gross_amount,
         federal_tax,
         state_tax,
     });
 
-    effects.push(StateEvent::CashCredit {
+    effects.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
     });
@@ -211,7 +211,7 @@ fn liquidate_tax_free(
     lots: &[AssetLot],
     amount: f64,
     params: &LiquidationParams,
-) -> (LiquidationResult, Vec<StateEvent>) {
+) -> (LiquidationResult, Vec<EvalEvent>) {
     let lot_result = consume_lots(
         lots,
         amount,
@@ -224,7 +224,7 @@ fn liquidate_tax_free(
     let gross_amount = lot_result.proceeds;
     let net_amount = gross_amount; // No taxes
 
-    effects.push(StateEvent::CashCredit {
+    effects.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
     });
@@ -255,12 +255,15 @@ pub struct LotConsumptionResult {
     pub lot_subtractions: Vec<LotSubtraction>,
 }
 
-/// Represents a single lot subtraction
+/// Represents a single lot subtraction with gain/loss information
 #[derive(Debug, Clone)]
 pub struct LotSubtraction {
     pub lot_date: Date,
     pub units: f64,
     pub cost_basis: f64,
+    pub proceeds: f64,
+    pub short_term_gain: f64,
+    pub long_term_gain: f64,
 }
 
 /// Consume lots to satisfy a liquidation amount (in dollar value at current prices)
@@ -374,19 +377,22 @@ fn consume_lots_average_cost(
 
         // Classify by holding period
         let holding_days = (current_date - lot.purchase_date).get_days();
-        if holding_days >= 365 {
-            if gain > 0.0 {
-                result.long_term_gain += gain;
-            }
-        } else if gain > 0.0 {
-            result.short_term_gain += gain;
-        }
+        let (short_term, long_term) = if holding_days >= 365 {
+            result.long_term_gain += gain.max(0.0);
+            (0.0, gain.max(0.0))
+        } else {
+            result.short_term_gain += gain.max(0.0);
+            (gain.max(0.0), 0.0)
+        };
 
-        // Record subtraction with actual lot basis
+        // Record subtraction with actual lot basis and gains
         result.lot_subtractions.push(LotSubtraction {
             lot_date: lot.purchase_date,
             units: units_from_lot,
             cost_basis: lot.cost_basis * proportion,
+            proceeds: proceeds_from_portion,
+            short_term_gain: short_term,
+            long_term_gain: long_term,
         });
     }
 
@@ -425,18 +431,21 @@ fn consume_lots_specific(
 
         // Classify by holding period
         let holding_days = (current_date - lot.purchase_date).get_days();
-        if holding_days >= 365 {
-            if gain > 0.0 {
-                result.long_term_gain += gain;
-            }
-        } else if gain > 0.0 {
-            result.short_term_gain += gain;
-        }
+        let (short_term, long_term) = if holding_days >= 365 {
+            result.long_term_gain += gain.max(0.0);
+            (0.0, gain.max(0.0))
+        } else {
+            result.short_term_gain += gain.max(0.0);
+            (gain.max(0.0), 0.0)
+        };
 
         result.lot_subtractions.push(LotSubtraction {
             lot_date: lot.purchase_date,
             units: take_units,
             cost_basis: basis_used,
+            proceeds,
+            short_term_gain: short_term,
+            long_term_gain: long_term,
         });
 
         remaining_units -= take_units;
@@ -449,15 +458,18 @@ fn consume_lots_specific(
 pub fn lot_subtractions_to_effects(
     asset_coord: AssetCoord,
     result: &LotConsumptionResult,
-) -> Vec<StateEvent> {
+) -> Vec<EvalEvent> {
     result
         .lot_subtractions
         .iter()
-        .map(|sub| StateEvent::SubtractAssetLot {
+        .map(|sub| EvalEvent::SubtractAssetLot {
             from: asset_coord,
             lot_date: sub.lot_date,
             units: sub.units,
             cost_basis: sub.cost_basis,
+            proceeds: sub.proceeds,
+            short_term_gain: sub.short_term_gain,
+            long_term_gain: sub.long_term_gain,
         })
         .collect()
 }

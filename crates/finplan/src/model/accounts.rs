@@ -87,6 +87,7 @@ pub struct Account {
 impl Account {
     pub fn total_value(&self, market: &Market, start_date: Date, current_date: Date) -> f64 {
         match &self.flavor {
+            // Cash value is compounded incrementally during simulation, just return it
             AccountFlavor::Bank(cash) => cash.value,
             // One match arm handles Taxable, Roth, and Trad IRA!
             AccountFlavor::Investment(inv) => {
@@ -98,8 +99,9 @@ impl Account {
                             * market
                                 .get_asset_value(start_date, current_date, p.asset_id)
                                 .unwrap_or(0.0)
-                    }) // Replace with current price lookup
+                    })
                     .sum();
+                // Cash is compounded incrementally during simulation
                 inv.cash.value + assets_val
             }
             AccountFlavor::Property(assets) => assets.iter().map(|a| a.value).sum(),

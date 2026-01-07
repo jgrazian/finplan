@@ -73,7 +73,14 @@ pub struct SimulationConfig {
     #[serde(default)]
     pub inflation_profile: InflationProfile,
 
+    /// Map of AssetId to ReturnProfileId (which return profile applies to each asset)
+    #[serde(default)]
     pub asset_returns: HashMap<AssetId, ReturnProfileId>,
+
+    /// Initial asset prices (price per unit at simulation start)
+    /// If not specified, assets default to $1.00 per unit
+    #[serde(default)]
+    pub asset_prices: HashMap<AssetId, f64>,
 
     /// Tax configuration (brackets, rates, etc.)
     #[serde(default)]

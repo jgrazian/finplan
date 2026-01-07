@@ -1,13 +1,14 @@
 //! Simulation results and snapshots
 //!
 //! Contains the output types from running simulations, including
-//! account snapshots and transaction histories.
+//! account snapshots and the immutable ledger of state changes.
 
-use crate::model::TransactionSource;
+use std::collections::HashMap;
+
 use crate::model::accounts::AccountFlavor;
 
 use super::ids::{AccountId, AssetId, EventId};
-use super::records::{Record, RecordKind};
+use super::state_event::{LedgerEntry, StateEvent};
 use super::tax_config::TaxSummary;
 use serde::{Deserialize, Serialize};
 
@@ -38,178 +39,129 @@ impl AccountSnapshot {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimulationResult {
     pub dates: Vec<jiff::civil::Date>,
-    /// Starting state of all accounts (replay from transaction logs to get future values)
+    /// Starting state of all accounts
     pub accounts: Vec<AccountSnapshot>,
     /// Tax summaries per year
     pub yearly_taxes: Vec<TaxSummary>,
 
-    /// Unified transaction log in chronological order
-    pub records: Vec<Record>,
+    /// Immutable ledger of all state changes in chronological order
+    pub ledger: Vec<LedgerEntry>,
+
+    /// Final account balances at end of simulation (computed from Market prices)
+    pub final_balances: HashMap<AccountId, f64>,
+
+    /// Final asset balances at end of simulation (account_id, asset_id) -> value
+    pub final_asset_balances: HashMap<(AccountId, AssetId), f64>,
 }
 
 impl SimulationResult {
-    /// Calculate the final balance for a specific account by replaying transaction logs
+    /// Get the final balance for a specific account
+    /// Uses pre-computed final balances from the simulation
     pub fn final_account_balance(&self, account_id: AccountId) -> f64 {
-        // Start with initial values
-        let account = self.accounts.iter().find(|a| a.account_id == account_id);
-        let mut balance: f64 = account.map(|a| a.starting_balance()).unwrap_or(0.0);
-
-        for record in &self.records {
-            match &record.kind {
-                RecordKind::Income {
-                    to_account_id,
-                    amount,
-                    ..
-                } if *to_account_id == account_id => {
-                    balance += amount;
-                }
-                RecordKind::Expense {
-                    from_account_id,
-                    amount,
-                    ..
-                } if *from_account_id == account_id => {
-                    balance -= amount;
-                }
-                RecordKind::Return {
-                    account_id: acc_id,
-                    return_amount,
-                    ..
-                } if *acc_id == account_id => {
-                    balance += return_amount;
-                }
-                RecordKind::Transfer {
-                    from_account_id,
-                    to_account_id,
-                    gross_amount,
-                    net_amount,
-                    ..
-                } => {
-                    if *from_account_id == account_id {
-                        balance -= gross_amount;
-                    }
-                    if *to_account_id == account_id {
-                        balance += net_amount;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        balance
+        self.final_balances.get(&account_id).copied().unwrap_or(0.0)
     }
 
-    /// Calculate the final balance for a specific asset by replaying transaction logs
+    /// Get the final balance for a specific asset
+    /// Uses pre-computed final asset balances from the simulation
     pub fn final_asset_balance(&self, account_id: AccountId, asset_id: AssetId) -> f64 {
-        // Start with initial value
-        let initial = self
-            .accounts
-            .iter()
-            .find(|a| a.account_id == account_id)
-            .and_then(|a| a.assets.iter().find(|asset| asset.asset_id == asset_id))
-            .map(|a| a.starting_value)
-            .unwrap_or(0.0);
-
-        let mut balance = initial;
-
-        for record in &self.records {
-            match &record.kind {
-                RecordKind::Income {
-                    to_account_id,
-                    to_asset_id,
-                    amount,
-                    ..
-                } if *to_account_id == account_id && *to_asset_id == asset_id => {
-                    balance += amount;
-                }
-                RecordKind::Expense {
-                    from_account_id,
-                    from_asset_id,
-                    amount,
-                    ..
-                } if *from_account_id == account_id && *from_asset_id == asset_id => {
-                    balance -= amount;
-                }
-                RecordKind::Return {
-                    account_id: acc_id,
-                    asset_id: ass_id,
-                    return_amount,
-                    ..
-                } if *acc_id == account_id && *ass_id == asset_id => {
-                    balance += return_amount;
-                }
-                RecordKind::Transfer {
-                    from_account_id,
-                    from_asset_id,
-                    to_account_id,
-                    to_asset_id,
-                    gross_amount,
-                    net_amount,
-                    ..
-                } => {
-                    if *from_account_id == account_id && *from_asset_id == asset_id {
-                        balance -= gross_amount;
-                    }
-                    if *to_account_id == account_id && *to_asset_id == asset_id {
-                        balance += net_amount;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        balance
+        self.final_asset_balances
+            .get(&(account_id, asset_id))
+            .copied()
+            .unwrap_or(0.0)
     }
 
     /// Check if an event was triggered at any point
     pub fn event_was_triggered(&self, event_id: EventId) -> bool {
-        self.records
+        self.ledger
             .iter()
-            .any(|r| matches!(&r.kind, RecordKind::Event { event_id: eid } if *eid == event_id))
+            .any(|entry| matches!(&entry.event, StateEvent::EventTriggered { event_id: eid } if *eid == event_id))
     }
 
     /// Get the date when an event was first triggered
     pub fn event_trigger_date(&self, event_id: EventId) -> Option<jiff::civil::Date> {
-        self.records.iter().find_map(|r| {
-            if let RecordKind::Event { event_id: eid } = &r.kind
+        self.ledger.iter().find_map(|entry| {
+            if let StateEvent::EventTriggered { event_id: eid } = &entry.event
                 && *eid == event_id
             {
-                return Some(r.date);
+                return Some(entry.date);
             }
             None
         })
     }
 
-    // === Helper methods to filter records by type ===
+    // === Helper methods to filter ledger entries by type ===
 
-    /// Get all return records
-    pub fn return_records(&self) -> impl Iterator<Item = &Record> {
-        self.records
+    /// Get all cash appreciation entries
+    pub fn cash_appreciation_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
             .iter()
-            .filter(|r| matches!(r.kind, RecordKind::Return { .. }))
+            .filter(|e| matches!(e.event, StateEvent::CashAppreciation { .. }))
     }
 
-    /// Get all transfer records
-    pub fn transfer_records(&self) -> impl Iterator<Item = &Record> {
-        self.records
+    /// Get all cash credit entries
+    pub fn cash_credit_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
             .iter()
-            .filter(|r| matches!(r.kind, RecordKind::Transfer { .. }))
+            .filter(|e| matches!(e.event, StateEvent::CashCredit { .. }))
     }
 
-    /// Get all event records
-    pub fn event_records(&self) -> impl Iterator<Item = &Record> {
-        self.records
+    /// Get all cash debit entries
+    pub fn cash_debit_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
             .iter()
-            .filter(|r| matches!(r.kind, RecordKind::Event { .. }))
+            .filter(|e| matches!(e.event, StateEvent::CashDebit { .. }))
     }
 
-    /// Get all RMD records
-    pub fn rmd_records(&self) -> impl Iterator<Item = &Record> {
-        self.records.iter().filter(|r| match &r.kind {
-            RecordKind::Transfer { source, .. } => {
-                matches!(source.as_ref(), &TransactionSource::Rmd { .. })
-            }
-            _ => false,
-        })
+    /// Get all asset purchase entries
+    pub fn asset_purchase_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
+            .iter()
+            .filter(|e| matches!(e.event, StateEvent::AssetPurchase { .. }))
+    }
+
+    /// Get all asset sale entries
+    pub fn asset_sale_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
+            .iter()
+            .filter(|e| matches!(e.event, StateEvent::AssetSale { .. }))
+    }
+
+    /// Get all event triggered entries
+    pub fn event_triggered_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
+            .iter()
+            .filter(|e| matches!(e.event, StateEvent::EventTriggered { .. }))
+    }
+
+    /// Get all tax-related entries
+    pub fn tax_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger.iter().filter(|e| e.event.is_tax_event())
+    }
+
+    /// Get all RMD withdrawal entries
+    pub fn rmd_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
+            .iter()
+            .filter(|e| matches!(e.event, StateEvent::RmdWithdrawal { .. }))
+    }
+
+    /// Get all entries for a specific account
+    pub fn entries_for_account(&self, account_id: AccountId) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
+            .iter()
+            .filter(move |e| e.event.account_id() == Some(account_id))
+    }
+
+    /// Get all entries for a specific user-defined event
+    pub fn entries_for_event(&self, event_id: EventId) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger
+            .iter()
+            .filter(move |e| e.source_event == Some(event_id))
+    }
+
+    /// Get all time-related entries (advances and year rollovers)
+    pub fn time_entries(&self) -> impl Iterator<Item = &LedgerEntry> {
+        self.ledger.iter().filter(|e| e.event.is_time_event())
     }
 }
 

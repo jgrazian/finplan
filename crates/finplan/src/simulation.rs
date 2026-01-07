@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use crate::apply::process_events;
 use crate::config::SimulationConfig;
 use crate::model::{
-    AccountFlavor, EventTrigger, MonteCarloResult, SimulationResult, TaxStatus, TriggerOffset,
+    AccountFlavor, AccountId, AssetCoord, EventTrigger, LedgerEntry, MonteCarloResult,
+    SimulationResult, StateEvent, TaxStatus, TriggerOffset,
 };
 use crate::simulation_state::SimulationState;
 
@@ -34,12 +35,67 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     // Finalize last year's taxes
     state.finalize_year_taxes();
 
+    // Compute final balances for all accounts and assets
+    let (final_balances, final_asset_balances) = compute_final_balances(&state);
+
     SimulationResult {
         dates: state.history.dates.clone(),
         accounts: state.build_account_snapshots(params),
         yearly_taxes: state.taxes.yearly_taxes.clone(),
-        records: state.history.records.clone(),
+        ledger: state.history.ledger.clone(),
+        final_balances,
+        final_asset_balances,
     }
+}
+
+/// Compute final balances for all accounts and assets using the Market
+fn compute_final_balances(
+    state: &SimulationState,
+) -> (
+    HashMap<crate::model::AccountId, f64>,
+    HashMap<(crate::model::AccountId, crate::model::AssetId), f64>,
+) {
+    let mut account_balances = HashMap::new();
+    let mut asset_balances = HashMap::new();
+
+    for (account_id, account) in &state.portfolio.accounts {
+        // Calculate total account balance
+        let balance = state.account_balance(*account_id).unwrap_or(0.0);
+        account_balances.insert(*account_id, balance);
+
+        // Calculate individual asset balances
+        match &account.flavor {
+            AccountFlavor::Investment(inv) => {
+                // Track unique assets
+                let mut seen_assets = std::collections::HashSet::new();
+                for lot in &inv.positions {
+                    if seen_assets.insert(lot.asset_id) {
+                        let asset_coord = AssetCoord {
+                            account_id: *account_id,
+                            asset_id: lot.asset_id,
+                        };
+                        if let Ok(asset_balance) = state.asset_balance(asset_coord) {
+                            asset_balances.insert((*account_id, lot.asset_id), asset_balance);
+                        }
+                    }
+                }
+            }
+            AccountFlavor::Property(assets) => {
+                for asset in assets {
+                    let asset_coord = AssetCoord {
+                        account_id: *account_id,
+                        asset_id: asset.asset_id,
+                    };
+                    if let Ok(asset_balance) = state.asset_balance(asset_coord) {
+                        asset_balances.insert((*account_id, asset.asset_id), asset_balance);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    (account_balances, asset_balances)
 }
 
 fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
@@ -110,10 +166,82 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     // Apply interest/returns
     let days_passed = (next_checkpoint - state.timeline.current_date).get_days();
     if days_passed > 0 {
-        // TODO: Returns are now calculated dynamically via Market.get_asset_value()
-        // The lot-based system tracks cost basis and units; current value is derived
-        // from Market prices at evaluation time. This section may need to be removed
-        // or simplified to just advance the date.
+        // Calculate year index for rate lookup (years since simulation start)
+        let year_index =
+            (state.timeline.current_date.year() - state.timeline.start_date.year()) as usize;
+
+        // Collect appreciation events to record (need to collect IDs first due to borrow)
+        let account_ids: Vec<AccountId> = state.portfolio.accounts.keys().copied().collect();
+
+        // Compound cash balances for all accounts and record appreciation events
+        for account_id in account_ids {
+            let account = state.portfolio.accounts.get_mut(&account_id).unwrap();
+            match &mut account.flavor {
+                AccountFlavor::Bank(cash) => {
+                    // Apply return profile to bank account cash
+                    if let Some(multiplier) = state.portfolio.market.get_period_multiplier(
+                        year_index,
+                        days_passed as i64,
+                        cash.return_profile_id,
+                    ) {
+                        let previous_value = cash.value;
+                        cash.value *= multiplier;
+                        let return_rate = multiplier - 1.0;
+
+                        // Only record if there was actual appreciation
+                        if (cash.value - previous_value).abs() > 0.001 {
+                            state.history.ledger.push(LedgerEntry::new(
+                                next_checkpoint,
+                                StateEvent::CashAppreciation {
+                                    account_id,
+                                    previous_value,
+                                    new_value: cash.value,
+                                    return_rate,
+                                    days: days_passed,
+                                },
+                            ));
+                        }
+                    }
+                }
+                AccountFlavor::Investment(inv) => {
+                    // Apply return profile to investment account cash (money market, etc.)
+                    if let Some(multiplier) = state.portfolio.market.get_period_multiplier(
+                        year_index,
+                        days_passed as i64,
+                        inv.cash.return_profile_id,
+                    ) {
+                        let previous_value = inv.cash.value;
+                        inv.cash.value *= multiplier;
+                        let return_rate = multiplier - 1.0;
+
+                        // Only record if there was actual appreciation
+                        if (inv.cash.value - previous_value).abs() > 0.001 {
+                            state.history.ledger.push(LedgerEntry::new(
+                                next_checkpoint,
+                                StateEvent::CashAppreciation {
+                                    account_id,
+                                    previous_value,
+                                    new_value: inv.cash.value,
+                                    return_rate,
+                                    days: days_passed,
+                                },
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Record time advance event
+        state.history.ledger.push(LedgerEntry::new(
+            next_checkpoint,
+            StateEvent::TimeAdvance {
+                from_date: state.timeline.current_date,
+                to_date: next_checkpoint,
+                days_elapsed: days_passed,
+            },
+        ));
 
         // Record date checkpoint
         state.history.dates.push(next_checkpoint);

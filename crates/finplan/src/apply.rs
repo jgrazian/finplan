@@ -1,35 +1,57 @@
-//! Apply StateEvents to SimulationState
+//! Apply EvalEvents to SimulationState
 //!
-//! This module takes the evaluated StateEvents from evaluate.rs and applies them
-//! to mutate the SimulationState.
+//! This module takes the evaluated EvalEvents from evaluate.rs and applies them
+//! to mutate the SimulationState, recording state changes to the ledger.
 
 use crate::{
     error::ApplyError,
-    evaluate::{StateEvent, TriggerEvent, evaluate_effect, evaluate_trigger},
-    model::{AccountFlavor, AssetLot, Event, EventId, EventTrigger, Record},
+    evaluate::{EvalEvent, TriggerEvent, evaluate_effect, evaluate_trigger},
+    model::{AccountFlavor, AssetLot, Event, EventId, EventTrigger, LedgerEntry, StateEvent},
     simulation_state::SimulationState,
 };
 
-/// Apply a StateEvent to mutate the SimulationState
-pub fn apply_state_event(
+/// Apply an EvalEvent to mutate the SimulationState and record to ledger
+pub fn apply_eval_event(
     state: &mut SimulationState,
-    event: &StateEvent,
+    event: &EvalEvent,
 ) -> Result<(), ApplyError> {
+    apply_eval_event_with_source(state, event, None)
+}
+
+/// Apply an EvalEvent to mutate the SimulationState and record to ledger
+/// with an optional source event for attribution
+pub fn apply_eval_event_with_source(
+    state: &mut SimulationState,
+    event: &EvalEvent,
+    source_event: Option<EventId>,
+) -> Result<(), ApplyError> {
+    let current_date = state.timeline.current_date;
+
     match event {
-        StateEvent::CreateAccount(account) => {
+        EvalEvent::CreateAccount(account) => {
             state
                 .portfolio
                 .accounts
                 .insert(account.account_id, account.clone());
+            
+            // Record to ledger
+            let ledger_event = StateEvent::CreateAccount(account.clone());
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::DeleteAccount(account_id) => {
+        EvalEvent::DeleteAccount(account_id) => {
             state.portfolio.accounts.remove(account_id);
+            
+            // Record to ledger
+            let ledger_event = StateEvent::DeleteAccount(*account_id);
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::CashCredit { to, net_amount } => {
+        EvalEvent::CashCredit { to, net_amount } => {
             let account = state
                 .portfolio
                 .accounts
@@ -45,10 +67,18 @@ pub fn apply_state_event(
                 }
                 _ => return Err(ApplyError::NotACashAccount(*to)),
             }
+            
+            // Record to ledger
+            let ledger_event = StateEvent::CashCredit {
+                to: *to,
+                amount: *net_amount,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::CashDebit { from, net_amount } => {
+        EvalEvent::CashDebit { from, net_amount } => {
             let account = state
                 .portfolio
                 .accounts
@@ -64,10 +94,18 @@ pub fn apply_state_event(
                 }
                 _ => return Err(ApplyError::NotACashAccount(*from)),
             }
+            
+            // Record to ledger
+            let ledger_event = StateEvent::CashDebit {
+                from: *from,
+                amount: *net_amount,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::IncomeTax {
+        EvalEvent::IncomeTax {
             gross_income_amount,
             federal_tax,
             state_tax,
@@ -75,10 +113,19 @@ pub fn apply_state_event(
             state.taxes.ytd_tax.ordinary_income += gross_income_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
+            
+            // Record to ledger
+            let ledger_event = StateEvent::IncomeTax {
+                gross_amount: *gross_income_amount,
+                federal_tax: *federal_tax,
+                state_tax: *state_tax,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::ShortTermCapitalGainsTax {
+        EvalEvent::ShortTermCapitalGainsTax {
             gross_gain_amount,
             federal_tax,
             state_tax,
@@ -86,10 +133,19 @@ pub fn apply_state_event(
             state.taxes.ytd_tax.capital_gains += gross_gain_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
+            
+            // Record to ledger
+            let ledger_event = StateEvent::ShortTermCapitalGainsTax {
+                gross_gain: *gross_gain_amount,
+                federal_tax: *federal_tax,
+                state_tax: *state_tax,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::LongTermCapitalGainsTax {
+        EvalEvent::LongTermCapitalGainsTax {
             gross_gain_amount,
             federal_tax,
             state_tax,
@@ -97,10 +153,19 @@ pub fn apply_state_event(
             state.taxes.ytd_tax.capital_gains += gross_gain_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
+            
+            // Record to ledger
+            let ledger_event = StateEvent::LongTermCapitalGainsTax {
+                gross_gain: *gross_gain_amount,
+                federal_tax: *federal_tax,
+                state_tax: *state_tax,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::AddAssetLot {
+        EvalEvent::AddAssetLot {
             to,
             units,
             cost_basis,
@@ -111,6 +176,8 @@ pub fn apply_state_event(
                 .get_mut(&to.account_id)
                 .ok_or(ApplyError::AccountNotFound(to.account_id))?;
 
+            let price_per_unit = if *units > 0.0 { cost_basis / units } else { 0.0 };
+
             if let AccountFlavor::Investment(inv) = &mut account.flavor {
                 inv.positions.push(AssetLot {
                     asset_id: to.asset_id,
@@ -118,17 +185,31 @@ pub fn apply_state_event(
                     units: *units,
                     cost_basis: *cost_basis,
                 });
+                
+                // Record to ledger
+                let ledger_event = StateEvent::AssetPurchase {
+                    account_id: to.account_id,
+                    asset_id: to.asset_id,
+                    units: *units,
+                    cost_basis: *cost_basis,
+                    price_per_unit,
+                };
+                record_ledger_entry(state, current_date, source_event, ledger_event);
+                
                 Ok(())
             } else {
                 Err(ApplyError::NotAnInvestmentAccount(to.account_id))
             }
         }
 
-        StateEvent::SubtractAssetLot {
+        EvalEvent::SubtractAssetLot {
             from,
             lot_date,
             units,
             cost_basis,
+            proceeds,
+            short_term_gain,
+            long_term_gain,
         } => {
             let account = state
                 .portfolio
@@ -153,40 +234,84 @@ pub fn apply_state_event(
                         });
                     }
                 }
+                
+                // Record to ledger with proceeds and gains from lot calculation
+                let ledger_event = StateEvent::AssetSale {
+                    account_id: from.account_id,
+                    asset_id: from.asset_id,
+                    lot_date: *lot_date,
+                    units: *units,
+                    cost_basis: *cost_basis,
+                    proceeds: *proceeds,
+                    short_term_gain: *short_term_gain,
+                    long_term_gain: *long_term_gain,
+                };
+                record_ledger_entry(state, current_date, source_event, ledger_event);
+                
                 Ok(())
             } else {
                 Err(ApplyError::NotAnInvestmentAccount(from.account_id))
             }
         }
 
-        StateEvent::TriggerEvent(event_id) => {
+        EvalEvent::TriggerEvent(event_id) => {
             // Mark event for immediate triggering
             state.pending_triggers.push(*event_id);
+            // Note: EventTriggered is recorded when the event actually fires
             Ok(())
         }
 
-        StateEvent::PauseEvent(event_id) => {
+        EvalEvent::PauseEvent(event_id) => {
             state
                 .event_state
                 .repeating_event_active
                 .insert(*event_id, false);
+            
+            // Record to ledger
+            let ledger_event = StateEvent::EventPaused { event_id: *event_id };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::ResumeEvent(event_id) => {
+        EvalEvent::ResumeEvent(event_id) => {
             state
                 .event_state
                 .repeating_event_active
                 .insert(*event_id, true);
+            
+            // Record to ledger
+            let ledger_event = StateEvent::EventResumed { event_id: *event_id };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
 
-        StateEvent::TerminateEvent(event_id) => {
+        EvalEvent::TerminateEvent(event_id) => {
             state.event_state.repeating_event_active.remove(event_id);
             state.event_state.event_next_date.remove(event_id);
+            
+            // Record to ledger
+            let ledger_event = StateEvent::EventTerminated { event_id: *event_id };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+            
             Ok(())
         }
     }
+}
+
+/// Helper to record a ledger entry
+fn record_ledger_entry(
+    state: &mut SimulationState,
+    date: jiff::civil::Date,
+    source_event: Option<EventId>,
+    event: StateEvent,
+) {
+    let entry = match source_event {
+        Some(eid) => LedgerEntry::with_source(date, eid, event),
+        None => LedgerEntry::new(date, event),
+    };
+    state.history.ledger.push(entry);
 }
 
 /// Process all pending events for the current date
@@ -257,22 +382,23 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                 .triggered_events
                 .insert(event_id, state.timeline.current_date);
 
-            // Record to linear event history
-            state
-                .history
-                .records
-                .push(Record::event(state.timeline.current_date, event_id));
+            // Record event trigger to ledger
+            state.history.ledger.push(LedgerEntry::with_source(
+                state.timeline.current_date,
+                event_id,
+                StateEvent::EventTriggered { event_id },
+            ));
 
             triggered.push(event_id);
 
             // Evaluate and apply effects
             for effect in &event.effects {
                 match evaluate_effect(effect, state) {
-                    Ok(state_events) => {
-                        for se in state_events {
-                            if let Err(e) = apply_state_event(state, &se) {
+                    Ok(eval_events) => {
+                        for ee in eval_events {
+                            if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id)) {
                                 // Log error but continue processing
-                                eprintln!("Error applying state event: {:?}", e);
+                                eprintln!("Error applying eval event: {:?}", e);
                             }
                         }
                     }
@@ -301,16 +427,16 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                     .event_state
                     .triggered_events
                     .insert(event_id, state.timeline.current_date);
-                state
-                    .history
-                    .records
-                    .push(Record::event(state.timeline.current_date, event_id));
+                state.history.ledger.push(LedgerEntry::new(
+                    state.timeline.current_date,
+                    StateEvent::EventTriggered { event_id },
+                ));
                 triggered.push(event_id);
 
                 for effect in &event.effects {
-                    if let Ok(state_events) = evaluate_effect(effect, state) {
-                        for se in state_events {
-                            let _ = apply_state_event(state, &se);
+                    if let Ok(eval_events) = evaluate_effect(effect, state) {
+                        for ee in eval_events {
+                            let _ = apply_eval_event_with_source(state, &ee, Some(event_id));
                         }
                     }
                 }
