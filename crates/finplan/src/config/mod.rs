@@ -2,6 +2,40 @@
 //!
 //! The main configuration type is `SimulationConfig`, which contains everything
 //! needed to run a simulation. Helper methods support optimization use cases.
+//!
+//! # Builder DSL
+//!
+//! For a more ergonomic way to create simulations, use the builder DSL:
+//!
+//! ```ignore
+//! use finplan::config::{SimulationBuilder, AccountBuilder, AssetBuilder, EventBuilder};
+//!
+//! let (config, metadata) = SimulationBuilder::new()
+//!     .start(2025, 1, 1)
+//!     .years(30)
+//!     .birth_date(1980, 6, 15)
+//!     
+//!     // Define assets
+//!     .asset(AssetBuilder::us_total_market("VTSAX").price(100.0))
+//!     .asset(AssetBuilder::total_bond("BND").price(50.0))
+//!     
+//!     // Define accounts with preset types
+//!     .account(AccountBuilder::bank_account("Checking").cash(10_000.0))
+//!     .account(AccountBuilder::taxable_brokerage("Brokerage").cash(5_000.0))
+//!     .account(AccountBuilder::traditional_401k("Work 401k").cash(200_000.0))
+//!     
+//!     // Add positions to accounts
+//!     .position("Brokerage", "VTSAX", 500.0, 45_000.0)
+//!     
+//!     // Define events with fluent API
+//!     .event(EventBuilder::income("Salary")
+//!         .to_account("Checking")
+//!         .amount(8_000.0)
+//!         .monthly()
+//!         .until_age(65))
+//!     
+//!     .build();
+//! ```
 
 use std::collections::HashMap;
 
@@ -11,10 +45,19 @@ use crate::model::{
 };
 use serde::{Deserialize, Serialize};
 
-// TODO: Update builder and descriptors to use new Account structure
-// mod builder;
-// mod descriptors;
-// pub use builder::SimulationBuilder;
+// Builder DSL modules
+pub mod account_builder;
+pub mod asset_builder;
+pub mod builder;
+pub mod event_builder;
+pub mod metadata;
+
+// Re-export builder types for convenient access
+pub use account_builder::AccountBuilder;
+pub use asset_builder::{AssetBuilder, AssetDefinition};
+pub use builder::SimulationBuilder;
+pub use event_builder::{EventBuilder, EventDefinition};
+pub use metadata::{EntityMetadata, SimulationMetadata};
 
 fn default_duration_years() -> usize {
     30

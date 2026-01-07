@@ -8,6 +8,27 @@
 //! - Tax calculations with progressive federal brackets
 //! - Required Minimum Distribution (RMD) modeling
 //! - Spending targets with various withdrawal strategies
+//!
+//! # Builder DSL
+//!
+//! Use the fluent builder API for ergonomic simulation setup:
+//!
+//! ```ignore
+//! use finplan::config::{SimulationBuilder, AccountBuilder, AssetBuilder, EventBuilder};
+//!
+//! let (config, metadata) = SimulationBuilder::new()
+//!     .start(2025, 1, 1)
+//!     .years(30)
+//!     .birth_date(1980, 6, 15)
+//!     .asset(AssetBuilder::us_total_market("VTSAX").price(100.0))
+//!     .account(AccountBuilder::taxable_brokerage("Brokerage").cash(50_000.0))
+//!     .position("Brokerage", "VTSAX", 500.0, 45_000.0)
+//!     .event(EventBuilder::income("Salary")
+//!         .to_account("Brokerage")
+//!         .amount(8_000.0)
+//!         .monthly())
+//!     .build();
+//! ```
 
 // ============================================================================
 // Core modules
@@ -39,4 +60,4 @@ mod tests;
 // Public re-exports for convenience
 // ============================================================================
 
-// pub use config::SimulationBuilder; // TODO: Update builder to use new Account structure
+pub use config::{AccountBuilder, AssetBuilder, EventBuilder, SimulationBuilder, SimulationMetadata};

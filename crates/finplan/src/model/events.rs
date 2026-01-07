@@ -209,10 +209,15 @@ impl Default for WithdrawalSources {
 /// How to interpret the withdrawal amount
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub enum AmountMode {
-    /// Amount is gross (before taxes)
-    #[default]
+    /// The amount specified is BEFORE taxes are applied.
+    /// - For Income: Full salary; income taxes deducted from deposit
+    /// - For AssetSale: Gross proceeds; capital gains taxes deducted
     Gross,
-    /// Amount is net (after taxes)
+
+    /// The amount specified is what should be RECEIVED after taxes.
+    /// - For Income: Take-home pay; gross back-calculated for tax records
+    /// - For AssetSale: Net proceeds; system sells enough to cover taxes
+    #[default]
     Net,
 }
 
