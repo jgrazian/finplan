@@ -110,7 +110,7 @@ pub enum AmountSpec {
 /// Specification for withdrawal sources
 #[derive(Debug, Clone)]
 pub enum WithdrawalSourceSpec {
-    Single(AssetRef),
+    SingleAsset(AssetRef),
     Strategy {
         order: WithdrawalOrder,
         exclude: Vec<AccountRef>,

@@ -39,7 +39,7 @@ pub struct AssetLot {
 }
 
 /// Tax treatment for an account
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaxStatus {
     /// Regular brokerage - capital gains taxed
     Taxable,

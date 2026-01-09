@@ -11,10 +11,7 @@ use crate::{
 };
 
 /// Apply an EvalEvent to mutate the SimulationState and record to ledger
-pub fn apply_eval_event(
-    state: &mut SimulationState,
-    event: &EvalEvent,
-) -> Result<(), ApplyError> {
+pub fn apply_eval_event(state: &mut SimulationState, event: &EvalEvent) -> Result<(), ApplyError> {
     apply_eval_event_with_source(state, event, None)
 }
 
@@ -28,26 +25,31 @@ pub fn apply_eval_event_with_source(
     let current_date = state.timeline.current_date;
 
     match event {
+        EvalEvent::StateEvent(event) => {
+            // Directly apply a StateEvent (used for replaying ledger)
+            record_ledger_entry(state, current_date, source_event, event.clone());
+            Ok(())
+        }
         EvalEvent::CreateAccount(account) => {
             state
                 .portfolio
                 .accounts
                 .insert(account.account_id, account.clone());
-            
+
             // Record to ledger
             let ledger_event = StateEvent::CreateAccount(account.clone());
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
         EvalEvent::DeleteAccount(account_id) => {
             state.portfolio.accounts.remove(account_id);
-            
+
             // Record to ledger
             let ledger_event = StateEvent::DeleteAccount(*account_id);
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
@@ -67,14 +69,14 @@ pub fn apply_eval_event_with_source(
                 }
                 _ => return Err(ApplyError::NotACashAccount(*to)),
             }
-            
+
             // Record to ledger
             let ledger_event = StateEvent::CashCredit {
                 to: *to,
                 amount: *net_amount,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
@@ -94,14 +96,14 @@ pub fn apply_eval_event_with_source(
                 }
                 _ => return Err(ApplyError::NotACashAccount(*from)),
             }
-            
+
             // Record to ledger
             let ledger_event = StateEvent::CashDebit {
                 from: *from,
                 amount: *net_amount,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
@@ -113,7 +115,7 @@ pub fn apply_eval_event_with_source(
             state.taxes.ytd_tax.ordinary_income += gross_income_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
-            
+
             // Record to ledger
             let ledger_event = StateEvent::IncomeTax {
                 gross_amount: *gross_income_amount,
@@ -121,7 +123,7 @@ pub fn apply_eval_event_with_source(
                 state_tax: *state_tax,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
@@ -133,7 +135,7 @@ pub fn apply_eval_event_with_source(
             state.taxes.ytd_tax.capital_gains += gross_gain_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
-            
+
             // Record to ledger
             let ledger_event = StateEvent::ShortTermCapitalGainsTax {
                 gross_gain: *gross_gain_amount,
@@ -141,7 +143,7 @@ pub fn apply_eval_event_with_source(
                 state_tax: *state_tax,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
@@ -153,7 +155,7 @@ pub fn apply_eval_event_with_source(
             state.taxes.ytd_tax.capital_gains += gross_gain_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
             state.taxes.ytd_tax.state_tax += state_tax;
-            
+
             // Record to ledger
             let ledger_event = StateEvent::LongTermCapitalGainsTax {
                 gross_gain: *gross_gain_amount,
@@ -161,7 +163,7 @@ pub fn apply_eval_event_with_source(
                 state_tax: *state_tax,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
@@ -176,7 +178,11 @@ pub fn apply_eval_event_with_source(
                 .get_mut(&to.account_id)
                 .ok_or(ApplyError::AccountNotFound(to.account_id))?;
 
-            let price_per_unit = if *units > 0.0 { cost_basis / units } else { 0.0 };
+            let price_per_unit = if *units > 0.0 {
+                cost_basis / units
+            } else {
+                0.0
+            };
 
             if let AccountFlavor::Investment(inv) = &mut account.flavor {
                 inv.positions.push(AssetLot {
@@ -185,7 +191,7 @@ pub fn apply_eval_event_with_source(
                     units: *units,
                     cost_basis: *cost_basis,
                 });
-                
+
                 // Record to ledger
                 let ledger_event = StateEvent::AssetPurchase {
                     account_id: to.account_id,
@@ -195,7 +201,7 @@ pub fn apply_eval_event_with_source(
                     price_per_unit,
                 };
                 record_ledger_entry(state, current_date, source_event, ledger_event);
-                
+
                 Ok(())
             } else {
                 Err(ApplyError::NotAnInvestmentAccount(to.account_id))
@@ -234,7 +240,7 @@ pub fn apply_eval_event_with_source(
                         });
                     }
                 }
-                
+
                 // Record to ledger with proceeds and gains from lot calculation
                 let ledger_event = StateEvent::AssetSale {
                     account_id: from.account_id,
@@ -247,7 +253,7 @@ pub fn apply_eval_event_with_source(
                     long_term_gain: *long_term_gain,
                 };
                 record_ledger_entry(state, current_date, source_event, ledger_event);
-                
+
                 Ok(())
             } else {
                 Err(ApplyError::NotAnInvestmentAccount(from.account_id))
@@ -266,11 +272,13 @@ pub fn apply_eval_event_with_source(
                 .event_state
                 .repeating_event_active
                 .insert(*event_id, false);
-            
+
             // Record to ledger
-            let ledger_event = StateEvent::EventPaused { event_id: *event_id };
+            let ledger_event = StateEvent::EventPaused {
+                event_id: *event_id,
+            };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
@@ -279,22 +287,26 @@ pub fn apply_eval_event_with_source(
                 .event_state
                 .repeating_event_active
                 .insert(*event_id, true);
-            
+
             // Record to ledger
-            let ledger_event = StateEvent::EventResumed { event_id: *event_id };
+            let ledger_event = StateEvent::EventResumed {
+                event_id: *event_id,
+            };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
 
         EvalEvent::TerminateEvent(event_id) => {
             state.event_state.repeating_event_active.remove(event_id);
             state.event_state.event_next_date.remove(event_id);
-            
+
             // Record to ledger
-            let ledger_event = StateEvent::EventTerminated { event_id: *event_id };
+            let ledger_event = StateEvent::EventTerminated {
+                event_id: *event_id,
+            };
             record_ledger_entry(state, current_date, source_event, ledger_event);
-            
+
             Ok(())
         }
     }
@@ -396,7 +408,8 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                 match evaluate_effect(effect, state) {
                     Ok(eval_events) => {
                         for ee in eval_events {
-                            if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id)) {
+                            if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id))
+                            {
                                 // Log error but continue processing
                                 eprintln!("Error applying eval event: {:?}", e);
                             }

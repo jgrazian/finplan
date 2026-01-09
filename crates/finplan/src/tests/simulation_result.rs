@@ -882,12 +882,10 @@ fn test_ledger_asset_purchase_and_sale_events() {
                 effects: vec![EventEffect::AssetSale {
                     to: brokerage_account,
                     amount: TransferAmount::Fixed(2_000.0),
-                    sources: WithdrawalSources::Single {
-                        asset_coord: AssetCoord {
-                            account_id: brokerage_account,
-                            asset_id,
-                        },
-                    },
+                    sources: WithdrawalSources::SingleAsset(AssetCoord {
+                        account_id: brokerage_account,
+                        asset_id,
+                    }),
                     amount_mode: AmountMode::Net,
                     lot_method: crate::model::LotMethod::Fifo,
                 }],

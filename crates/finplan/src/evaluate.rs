@@ -5,8 +5,8 @@ use crate::error::{StateEventError, TransferEvaluationError, TriggerEventError};
 use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment};
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, EventEffect, EventId,
-    EventTrigger, IncomeType, TaxStatus, TransferAmount, TransferEndpoint, TriggerOffset,
-    WithdrawalOrder, WithdrawalSources,
+    EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TransferAmount, TransferEndpoint,
+    TriggerOffset, WithdrawalOrder, WithdrawalSources,
 };
 use crate::simulation_state::SimulationState;
 use crate::taxes::{calculate_federal_marginal_tax, calculate_gross_from_net};
@@ -328,6 +328,8 @@ pub enum EvalEvent {
     PauseEvent(EventId),
     ResumeEvent(EventId),
     TerminateEvent(EventId),
+
+    StateEvent(StateEvent),
 }
 
 /// Apply a single effect to the simulation state
@@ -576,11 +578,66 @@ pub fn evaluate_effect(
 
             Ok(all_effects)
         }
+        EventEffect::ApplyRmd {
+            destination,
+            lot_method,
+        } => {
+            let rmd_table = RmdTable::irs_uniform_lifetime_2024();
+
+            let (age, _) = state.current_age();
+            let Some(rmd_divisor) = rmd_table.divisor_for_age(age) else {
+                // TODO: Better handling for ages beyond table
+                return Ok(vec![]); // No RMD required for this age
+            };
+
+            let mut effects = vec![];
+            for acc in state.portfolio.accounts.values() {
+                // Only process Investment accounts with Tax-Deferred status
+                let _investment = match &acc.flavor {
+                    AccountFlavor::Investment(inv) if inv.tax_status == TaxStatus::TaxDeferred => {
+                        inv
+                    }
+                    _ => continue,
+                };
+
+                // Calculate required RMD amount
+                let Some(prior_balance) = state.prior_year_end_balance(acc.account_id) else {
+                    continue;
+                };
+                let required_value = prior_balance / rmd_divisor;
+
+                // Liquidate required amount
+                let sale = EventEffect::AssetSale {
+                    to: *destination,
+                    amount: TransferAmount::Fixed(required_value),
+                    sources: WithdrawalSources::SingleAccount(acc.account_id),
+                    amount_mode: AmountMode::Gross,
+                    lot_method: *lot_method,
+                };
+
+                let results = evaluate_effect(&sale, state)?;
+
+                // Push a RMD marker and then the actual transaction effects
+                effects.push(EvalEvent::StateEvent(StateEvent::RmdWithdrawal {
+                    account_id: acc.account_id,
+                    age,
+                    prior_year_balance: prior_balance,
+                    divisor: rmd_divisor,
+                    required_amount: required_value,
+                    actual_amount: results.iter().fold(0.0, |sum, ev| match ev {
+                        EvalEvent::CashCredit { net_amount, .. } => sum + *net_amount,
+                        _ => sum,
+                    }),
+                }));
+                effects.extend(results);
+            }
+
+            Ok(effects)
+        }
         EventEffect::TriggerEvent(event_id) => Ok(vec![EvalEvent::TriggerEvent(*event_id)]),
         EventEffect::PauseEvent(event_id) => Ok(vec![EvalEvent::PauseEvent(*event_id)]),
         EventEffect::ResumeEvent(event_id) => Ok(vec![EvalEvent::ResumeEvent(*event_id)]),
         EventEffect::TerminateEvent(event_id) => Ok(vec![EvalEvent::TerminateEvent(*event_id)]),
-        EventEffect::ApplyRmd { .. } => todo!(),
     }
 }
 
@@ -591,7 +648,23 @@ pub fn resolve_withdrawal_sources(
     state: &SimulationState,
 ) -> Vec<AssetCoord> {
     match sources {
-        WithdrawalSources::Single { asset_coord } => vec![*asset_coord],
+        WithdrawalSources::SingleAsset(asset_coord) => vec![*asset_coord],
+        WithdrawalSources::SingleAccount(account_id) => {
+            // Get all positions from this account if it's an Investment account
+            if let Some(account) = state.portfolio.accounts.get(account_id)
+                && let AccountFlavor::Investment(inv) = &account.flavor
+            {
+                inv.positions
+                    .iter()
+                    .map(|lot| AssetCoord {
+                        account_id: *account_id,
+                        asset_id: lot.asset_id,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            }
+        }
         WithdrawalSources::Custom(list) => list.clone(),
         WithdrawalSources::Strategy {
             order,
@@ -665,12 +738,25 @@ fn resolve_withdrawal_sources_with_containers<'a>(
     state: &'a SimulationState,
 ) -> Vec<(AccountId, AssetId, &'a InvestmentContainer)> {
     match sources {
-        WithdrawalSources::Single { asset_coord } => {
+        WithdrawalSources::SingleAsset(asset_coord) => {
             // Find the investment container for this asset_coord
             if let Some(account) = state.portfolio.accounts.get(&asset_coord.account_id)
                 && let AccountFlavor::Investment(inv) = &account.flavor
             {
                 return vec![(asset_coord.account_id, asset_coord.asset_id, inv)];
+            }
+            vec![]
+        }
+        WithdrawalSources::SingleAccount(account_id) => {
+            // Get all positions from this account if it's an Investment account
+            if let Some(account) = state.portfolio.accounts.get(account_id)
+                && let AccountFlavor::Investment(inv) = &account.flavor
+            {
+                return inv
+                    .positions
+                    .iter()
+                    .map(|lot| (*account_id, lot.asset_id, inv))
+                    .collect();
             }
             vec![]
         }

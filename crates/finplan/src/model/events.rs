@@ -6,7 +6,7 @@
 use crate::model::AssetCoord;
 
 use super::accounts::Account;
-use super::ids::{AccountId, AssetId, EventId};
+use super::ids::{AccountId, EventId};
 
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
@@ -180,9 +180,10 @@ pub enum WithdrawalOrder {
 /// Source configuration for Sweep withdrawals
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WithdrawalSources {
-    /// Withdraw from a single specific account/asset
+    /// Withdraw from a single specific asset
     /// Use this for simple single-source liquidations
-    Single { asset_coord: AssetCoord },
+    SingleAsset(AssetCoord),
+    SingleAccount(AccountId),
 
     /// Use a pre-defined withdrawal order strategy
     /// Automatically selects from all non-excluded liquid accounts
@@ -375,18 +376,9 @@ pub enum EventEffect {
     /// Only processes accounts where the person has reached RMD age (typically 73)
     /// Proceeds are deposited to the specified destination account/asset
     ApplyRmd {
-        /// Destination account for RMD proceeds
-        to_account: AccountId,
-        /// Destination asset for RMD proceeds
-        to_asset: AssetId,
-        /// Starting age for RMD (default 73 for 2024 rules)
-        #[serde(default = "default_rmd_age")]
-        starting_age: u8,
+        destination: AccountId,
+        lot_method: LotMethod,
     },
-}
-
-fn default_rmd_age() -> u8 {
-    73
 }
 
 /// An event with a trigger condition and effects

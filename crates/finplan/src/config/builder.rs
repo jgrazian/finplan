@@ -580,9 +580,9 @@ impl SimulationBuilder {
         asset_ids: &HashMap<String, AssetId>,
     ) -> WithdrawalSources {
         match spec {
-            WithdrawalSourceSpec::Single(asset_ref) => WithdrawalSources::Single {
-                asset_coord: self.resolve_asset_ref(asset_ref, account_ids, asset_ids),
-            },
+            WithdrawalSourceSpec::SingleAsset(asset_ref) => WithdrawalSources::SingleAsset(
+                self.resolve_asset_ref(asset_ref, account_ids, asset_ids),
+            ),
             WithdrawalSourceSpec::Strategy { order, exclude } => {
                 let exclude_accounts = exclude
                     .iter()
