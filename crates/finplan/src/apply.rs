@@ -80,6 +80,13 @@ pub fn apply_eval_event_with_source(
             Ok(())
         }
 
+        EvalEvent::RecordContribution { account_id, amount } => {
+            // Record the contribution in the tracking maps
+            // This uses the actual record_contribution method which handles limits
+            state.record_contribution(*account_id, *amount)?;
+            Ok(())
+        }
+
         EvalEvent::CashDebit { from, net_amount } => {
             let account = state
                 .portfolio

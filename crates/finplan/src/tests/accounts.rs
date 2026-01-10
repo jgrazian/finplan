@@ -10,9 +10,8 @@ use std::collections::HashMap;
 
 use crate::config::SimulationConfig;
 use crate::model::{
-    Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, FixedAsset,
-    InflationProfile, InvestmentContainer, LoanDetail, ReturnProfile, ReturnProfileId,
-    TaxStatus,
+    Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, FixedAsset, InflationProfile,
+    InvestmentContainer, LoanDetail, ReturnProfile, ReturnProfileId, TaxStatus,
 };
 use crate::simulation::simulate;
 
@@ -49,6 +48,7 @@ fn test_investment_account_cash_and_positions() {
                     units: position_amount,
                     cost_basis: position_amount,
                 }],
+                contribution_limit: None,
             }),
         }],
         events: vec![],
@@ -119,6 +119,7 @@ fn test_multiple_lots_same_asset() {
                         cost_basis: lot2_basis,
                     },
                 ],
+                contribution_limit: None,
             }),
         }],
         events: vec![],
@@ -167,10 +168,7 @@ fn test_property_account_appreciation() {
             (house_profile, ReturnProfile::Fixed(house_return)),
             (car_profile, ReturnProfile::Fixed(car_return)),
         ]),
-        asset_returns: HashMap::from([
-            (house_id, house_profile),
-            (car_id, car_profile),
-        ]),
+        asset_returns: HashMap::from([(house_id, house_profile), (car_id, car_profile)]),
         accounts: vec![Account {
             account_id: AccountId(1),
             flavor: AccountFlavor::Property(vec![
@@ -276,6 +274,7 @@ fn test_tax_status_same_returns() {
                         units: initial_value,
                         cost_basis: initial_value,
                     }],
+                    contribution_limit: None,
                 }),
             },
             // Tax-deferred (401k/IRA)
@@ -293,6 +292,7 @@ fn test_tax_status_same_returns() {
                         units: initial_value,
                         cost_basis: initial_value,
                     }],
+                    contribution_limit: None,
                 }),
             },
             // Tax-free (Roth)
@@ -310,6 +310,7 @@ fn test_tax_status_same_returns() {
                         units: initial_value,
                         cost_basis: initial_value,
                     }],
+                    contribution_limit: None,
                 }),
             },
         ],
@@ -367,6 +368,7 @@ fn test_empty_investment_account() {
                     return_profile_id: ReturnProfileId(999),
                 },
                 positions: vec![],
+                contribution_limit: None,
             }),
         }],
         events: vec![],

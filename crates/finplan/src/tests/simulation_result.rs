@@ -82,6 +82,7 @@ fn test_final_balances_stored() {
                         units: 10_000.0,
                         cost_basis: 10_000.0,
                     }],
+                    contribution_limit: None,
                 }),
             },
             Account {
@@ -175,6 +176,7 @@ fn test_final_asset_balances_stored() {
                         cost_basis: 10_000.0,
                     },
                 ],
+                contribution_limit: None,
             }),
         }],
         events: vec![],
@@ -246,6 +248,7 @@ fn test_account_snapshots() {
                     units: initial_value,
                     cost_basis: initial_value,
                 }],
+                contribution_limit: None,
             }),
         }],
         events: vec![],
@@ -465,6 +468,7 @@ fn test_record_filtering_methods() {
                     units: 0.0,
                     cost_basis: 0.0,
                 }],
+                contribution_limit: None,
             }),
         }],
         events: vec![
@@ -858,6 +862,7 @@ fn test_ledger_asset_purchase_and_sale_events() {
                 },
                 // No initial positions - Market now tracks assets from asset_returns/asset_prices
                 positions: vec![],
+                contribution_limit: None,
             }),
         }],
         events: vec![

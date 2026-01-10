@@ -9,41 +9,48 @@ use crate::model::{
     Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, InflationProfile,
     InvestmentContainer, ReturnProfile, ReturnProfileId, TaxStatus,
 };
-use crate::simulation::simulate;
+use crate::simulation::{monte_carlo_simulate, simulate};
 
-// #[test]
-// fn test_monte_carlo_simulation() {
-//     let params = SimulationConfig {
-//         start_date: Some(jiff::civil::date(2020, 2, 5)),
-//         duration_years: 10,
-//         birth_date: None,
-//         inflation_profile: InflationProfile::Fixed(0.02),
-//         return_profiles: vec![ReturnProfile::Fixed(0.05)],
-//         events: vec![],
-//         accounts: vec![Account {
-//             account_id: AccountId(1),
-//             assets: vec![Asset {
-//                 asset_id: AssetId(1),
-//                 initial_value: 10_000.0,
-//                 return_profile_index: 0,
-//                 asset_class: AssetClass::Investable,
-//                 initial_cost_basis: None,
-//             }],
-//             account_type: AccountType::Taxable,
-//         }],
-//         ..Default::default()
-//     };
+#[test]
+fn test_monte_carlo_simulation() {
+    let params = SimulationConfig {
+        start_date: Some(jiff::civil::date(2020, 2, 5)),
+        duration_years: 10,
+        birth_date: None,
+        inflation_profile: InflationProfile::Fixed(0.02),
+        return_profiles: HashMap::from([(ReturnProfileId(0), ReturnProfile::Fixed(0.05))]),
+        asset_returns: HashMap::from([(AssetId(1), ReturnProfileId(0))]),
+        events: vec![],
+        accounts: vec![Account {
+            account_id: AccountId(1),
+            flavor: AccountFlavor::Investment(InvestmentContainer {
+                tax_status: TaxStatus::Taxable,
+                cash: Cash {
+                    value: 0.0,
+                    return_profile_id: ReturnProfileId(0),
+                },
+                positions: vec![AssetLot {
+                    asset_id: AssetId(1),
+                    purchase_date: jiff::civil::date(2020, 2, 5),
+                    units: 10_000.0,
+                    cost_basis: 10_000.0,
+                }],
+                contribution_limit: None,
+            }),
+        }],
+        ..Default::default()
+    };
 
-//     const NUM_ITERATIONS: usize = 1_000;
-//     let result = monte_carlo_simulate(&params, NUM_ITERATIONS);
-//     assert_eq!(result.iterations.len(), NUM_ITERATIONS);
+    const NUM_ITERATIONS: usize = 100;
+    let result = monte_carlo_simulate(&params, NUM_ITERATIONS);
+    assert_eq!(result.iterations.len(), NUM_ITERATIONS);
 
-//     // Check that results are different (due to random seed)
-//     let first_final = result.iterations[0].final_account_balance(AccountId(1));
-//     let second_final = result.iterations[1].final_account_balance(AccountId(1));
+    // Check that results are different (due to random seed)
+    let first_final = result.iterations[0].final_account_balance(AccountId(1));
+    let second_final = result.iterations[1].final_account_balance(AccountId(1));
 
-//     assert_eq!(first_final, second_final);
-// }
+    assert_eq!(first_final, second_final);
+}
 
 #[test]
 fn test_simulation_basic() {
@@ -69,6 +76,7 @@ fn test_simulation_basic() {
                     units: 10_000.0,
                     cost_basis: 10_000.0,
                 }],
+                contribution_limit: None,
             }),
         }],
         ..Default::default()

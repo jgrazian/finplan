@@ -69,3 +69,13 @@ pub enum ApplyError {
     NotACashAccount(AccountId),
     NotAnInvestmentAccount(AccountId),
 }
+
+impl From<EngineError> for ApplyError {
+    fn from(err: EngineError) -> Self {
+        match err {
+            EngineError::AccountNotFound(id) => ApplyError::AccountNotFound(id),
+            EngineError::NotAnInvestmentAccount(id) => ApplyError::NotAnInvestmentAccount(id),
+            _ => ApplyError::AccountNotFound(AccountId(0)), // Fallback for other errors
+        }
+    }
+}

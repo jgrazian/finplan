@@ -9,6 +9,22 @@ use super::ids::{AccountId, AssetId, ReturnProfileId};
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
+/// Period type for contribution limits
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ContributionLimitPeriod {
+    Monthly,
+    Yearly,
+}
+
+/// Contribution limit configuration for an account
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ContributionLimit {
+    /// Maximum contribution per period
+    pub amount: f64,
+    /// Period type for the limit
+    pub period: ContributionLimitPeriod,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct Cash {
     pub value: f64,
@@ -54,6 +70,7 @@ pub struct InvestmentContainer {
     pub tax_status: TaxStatus,
     pub cash: Cash,
     pub positions: Vec<AssetLot>,
+    pub contribution_limit: Option<ContributionLimit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,32 +134,6 @@ impl Account {
             AccountFlavor::Liability(_) => None,
         }
     }
-
-    // pub fn asset_balance(&self, asset_id: AssetId) -> Option<f64> {
-    //     match &self.flavor {
-    //         AccountFlavor::Bank(_) => None,
-    //         AccountFlavor::Investment(inv) => inv
-    //             .positions
-    //             .iter()
-    //             .find(|a| a.asset_id == asset_id)
-    //             .map(|a| a.current_value()),
-    //         AccountFlavor::Property(assets) => assets
-    //             .iter()
-    //             .find(|a| a.asset_id == asset_id)
-    //             .map(|a| a.value),
-    //     }
-    // }
-
-    // pub fn assets(&self) -> Vec<AssetId> {
-    //     match &self.flavor {
-    //         AccountFlavor::Bank(_) => vec![],
-    //         AccountFlavor::Investment(inv) => inv.positions.iter().map(|a| a.asset_id).collect(),
-    //         AccountType::TaxDeferred { assets, .. } | AccountType::TaxFree { assets, .. } => {
-    //             assets.iter().map(|a| a.asset_id).collect()
-    //         }
-    //         AccountType::Illiquid { assets } => assets.iter().map(|a| a.asset_id).collect(),
-    //     }
-    // }
 
     pub fn is_liquid(&self) -> bool {
         match &self.flavor {

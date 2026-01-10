@@ -267,6 +267,21 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             .insert(year, year_balances);
     }
 
+    // Check if we're crossing a month boundary and reset monthly contributions
+    let prev_month = state.timeline.current_date.month();
+    let next_month = next_checkpoint.month();
+    let prev_year = state.timeline.current_date.year();
+    let next_year = next_checkpoint.year();
+
+    if prev_month != next_month || prev_year != next_year {
+        state.reset_monthly_contributions();
+    }
+
+    // Reset yearly contributions on year boundary
+    if prev_year != next_year {
+        state.portfolio.contributions_ytd.clear();
+    }
+
     state.timeline.current_date = next_checkpoint;
 }
 

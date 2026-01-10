@@ -47,6 +47,11 @@ pub struct SimPortfolio {
     pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
     /// Active RMD accounts (account_id -> starting_age)
     pub active_rmd_accounts: HashMap<AccountId, u8>,
+    // === Contribution Tracking ===
+    /// YTD contributions per account (for yearly limits)
+    pub contributions_ytd: HashMap<AccountId, f64>,
+    /// Current month contributions per account (for monthly limits)
+    pub contributions_mtd: HashMap<AccountId, f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +178,8 @@ impl SimulationState {
                 market,
                 year_end_balances: HashMap::new(),
                 active_rmd_accounts: HashMap::new(),
+                contributions_ytd: HashMap::new(),
+                contributions_mtd: HashMap::new(),
             },
             event_state: SimEventState {
                 events,
@@ -452,5 +459,90 @@ impl SimulationState {
         let balance = self.prior_year_end_balance(account_id)?;
         let divisor = self.current_rmd_divisor(rmd_table)?;
         Some(balance / divisor)
+    }
+
+    // === Contribution Limit Helper Functions ===
+
+    /// Check remaining contribution room for an account
+    /// Returns None if account has no contribution limit
+    pub fn contribution_room(&self, account_id: AccountId) -> Result<Option<f64>> {
+        use crate::model::ContributionLimitPeriod;
+
+        let account = self
+            .portfolio
+            .accounts
+            .get(&account_id)
+            .ok_or(EngineError::AccountNotFound(account_id))?;
+
+        if let AccountFlavor::Investment(inv) = &account.flavor
+            && let Some(limit) = &inv.contribution_limit
+        {
+            let contributed = match limit.period {
+                ContributionLimitPeriod::Monthly => self
+                    .portfolio
+                    .contributions_mtd
+                    .get(&account_id)
+                    .copied()
+                    .unwrap_or(0.0),
+                ContributionLimitPeriod::Yearly => self
+                    .portfolio
+                    .contributions_ytd
+                    .get(&account_id)
+                    .copied()
+                    .unwrap_or(0.0),
+            };
+            let room = (limit.amount - contributed).max(0.0);
+            return Ok(Some(room));
+        }
+
+        Ok(None) // No limit configured
+    }
+
+    /// Record a contribution and check against limits
+    /// Returns the amount that can actually be contributed (may be less than requested)
+    pub fn record_contribution(&mut self, account_id: AccountId, amount: f64) -> Result<f64> {
+        use crate::model::ContributionLimitPeriod;
+
+        let account = self
+            .portfolio
+            .accounts
+            .get(&account_id)
+            .ok_or(EngineError::AccountNotFound(account_id))?;
+
+        if let AccountFlavor::Investment(inv) = &account.flavor
+            && let Some(limit) = &inv.contribution_limit
+        {
+            // Check how much room is left
+            let room = self.contribution_room(account_id)?.unwrap_or(f64::INFINITY);
+            let allowed_amount = amount.min(room);
+
+            // Record the contribution
+            match limit.period {
+                ContributionLimitPeriod::Monthly => {
+                    *self
+                        .portfolio
+                        .contributions_mtd
+                        .entry(account_id)
+                        .or_insert(0.0) += allowed_amount;
+                }
+                ContributionLimitPeriod::Yearly => {
+                    *self
+                        .portfolio
+                        .contributions_ytd
+                        .entry(account_id)
+                        .or_insert(0.0) += allowed_amount;
+                }
+            }
+
+            return Ok(allowed_amount);
+        }
+
+        // No limit - allow full amount
+        Ok(amount)
+    }
+
+    /// Reset monthly contribution trackers (call on month boundary)
+    pub fn reset_monthly_contributions(&mut self) {
+        self.portfolio.contributions_mtd.clear();
     }
 }

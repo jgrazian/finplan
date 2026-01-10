@@ -354,6 +354,7 @@ impl AccountBuilder {
                     return_profile_id: cash_return_profile_id,
                 },
                 positions,
+                contribution_limit: None,
             }),
             AccountFlavorBuilder::Property { assets } => AccountFlavor::Property(assets),
             AccountFlavorBuilder::Liability {

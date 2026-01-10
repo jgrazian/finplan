@@ -289,6 +289,11 @@ pub enum EvalEvent {
         net_amount: f64,
     },
 
+    RecordContribution {
+        account_id: AccountId,
+        amount: f64,
+    },
+
     IncomeTax {
         gross_income_amount: f64,
         federal_tax: f64,
@@ -353,32 +358,58 @@ pub fn evaluate_effect(
                 state,
             )?;
 
+            // Check contribution limits if depositing to investment account
+            let allowed_amount = if let Some(room) = state.contribution_room(*to)? {
+                calculated_amount.min(room)
+            } else {
+                calculated_amount
+            };
+
+            // If contribution limit blocks the income, skip it
+            if allowed_amount < 0.01 {
+                return Ok(vec![]);
+            }
+
+            let mut effects = vec![];
+
+            // Track contribution if to an investment account
+            if state.contribution_room(*to)?.is_some() {
+                effects.push(EvalEvent::RecordContribution {
+                    account_id: *to,
+                    amount: allowed_amount,
+                });
+            }
+
             match (income_type, amount_mode) {
-                (IncomeType::TaxFree, _) => Ok(vec![EvalEvent::CashCredit {
-                    to: *to,
-                    net_amount: calculated_amount,
-                }]),
+                (IncomeType::TaxFree, _) => {
+                    effects.push(EvalEvent::CashCredit {
+                        to: *to,
+                        net_amount: allowed_amount,
+                    });
+                    Ok(effects)
+                }
                 (IncomeType::Taxable, AmountMode::Gross) => {
                     let ytd_income = state.taxes.ytd_tax.ordinary_income;
                     let brackets = &state.taxes.config.federal_brackets;
                     let state_rate = state.taxes.config.state_rate;
 
                     let federal_tax =
-                        calculate_federal_marginal_tax(calculated_amount, ytd_income, brackets);
-                    let state_tax = calculated_amount * state_rate;
-                    let net_amount = calculated_amount - federal_tax - state_tax;
+                        calculate_federal_marginal_tax(allowed_amount, ytd_income, brackets);
+                    let state_tax = allowed_amount * state_rate;
+                    let net_amount = allowed_amount - federal_tax - state_tax;
 
-                    Ok(vec![
+                    effects.extend(vec![
                         EvalEvent::CashCredit {
                             to: *to,
                             net_amount,
                         },
                         EvalEvent::IncomeTax {
-                            gross_income_amount: calculated_amount,
+                            gross_income_amount: allowed_amount,
                             federal_tax,
                             state_tax,
                         },
-                    ])
+                    ]);
+                    Ok(effects)
                 }
                 (IncomeType::Taxable, AmountMode::Net) => {
                     let ytd_income = state.taxes.ytd_tax.ordinary_income;
@@ -386,28 +417,25 @@ pub fn evaluate_effect(
                     let state_rate = state.taxes.config.state_rate;
 
                     // Calculate gross from the net amount received
-                    let gross_amount = calculate_gross_from_net(
-                        calculated_amount,
-                        ytd_income,
-                        brackets,
-                        state_rate,
-                    );
+                    let gross_amount =
+                        calculate_gross_from_net(allowed_amount, ytd_income, brackets, state_rate);
 
                     let federal_tax =
                         calculate_federal_marginal_tax(gross_amount, ytd_income, brackets);
                     let state_tax = gross_amount * state_rate;
 
-                    Ok(vec![
+                    effects.extend(vec![
                         EvalEvent::CashCredit {
                             to: *to,
-                            net_amount: calculated_amount,
+                            net_amount: allowed_amount,
                         },
                         EvalEvent::IncomeTax {
                             gross_income_amount: gross_amount,
                             federal_tax,
                             state_tax,
                         },
-                    ])
+                    ]);
+                    Ok(effects)
                 }
             }
         }
@@ -432,17 +460,45 @@ pub fn evaluate_effect(
                 state,
             )?;
 
-            Ok(vec![
-                EvalEvent::CashDebit {
-                    from: *from,
-                    net_amount: calculated_amount,
-                },
-                EvalEvent::AddAssetLot {
-                    to: *to,
-                    units: calculated_amount / state.current_asset_price(*to)?,
-                    cost_basis: calculated_amount,
-                },
-            ])
+            // Only check contribution limits if money is coming from a different account
+            // (i.e., this represents new money entering the investment account)
+            let is_cross_account = *from != to.account_id;
+
+            let allowed_amount = if is_cross_account {
+                if let Some(room) = state.contribution_room(to.account_id)? {
+                    calculated_amount.min(room)
+                } else {
+                    calculated_amount
+                }
+            } else {
+                calculated_amount
+            };
+
+            // If contribution limit blocks the purchase, skip it
+            if allowed_amount < 0.01 {
+                return Ok(vec![]);
+            }
+
+            let mut effects = vec![EvalEvent::CashDebit {
+                from: *from,
+                net_amount: allowed_amount,
+            }];
+
+            // Track contribution only if this is cross-account (new money entering)
+            if is_cross_account && state.contribution_room(to.account_id)?.is_some() {
+                effects.push(EvalEvent::RecordContribution {
+                    account_id: to.account_id,
+                    amount: allowed_amount,
+                });
+            }
+
+            effects.push(EvalEvent::AddAssetLot {
+                to: *to,
+                units: allowed_amount / state.current_asset_price(*to)?,
+                cost_basis: allowed_amount,
+            });
+
+            Ok(effects)
         }
         EventEffect::AssetSale {
             to,
