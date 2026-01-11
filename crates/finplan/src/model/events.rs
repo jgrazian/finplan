@@ -6,7 +6,7 @@
 use crate::model::AssetCoord;
 
 use super::accounts::Account;
-use super::ids::{AccountId, EventId};
+use super::ids::{AccountId, AssetId, EventId};
 
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
@@ -343,21 +343,43 @@ pub enum EventEffect {
         amount: TransferAmount,
     },
 
-    /// Sweep: Withdraw from source(s) to fund a target account
+    /// Liquidate assets into the source account's cash balance
     /// Handles capital gains, lot tracking, and tax calculation automatically
-    /// Use WithdrawalSources::Single for single-source liquidations
-    /// Use WithdrawalSources::Strategy for tax-efficient multi-source withdrawals
+    /// Cash proceeds remain in the source account - use Income/Expense to move money
     AssetSale {
-        to: AccountId,
+        /// Source account to liquidate from
+        from: AccountId,
+        /// Specific asset to liquidate, or None to liquidate all assets in account
+        asset_id: Option<AssetId>,
+        /// Amount to liquidate at current market prices
         amount: TransferAmount,
-        #[serde(default)]
-        sources: WithdrawalSources,
-        /// Gross = withdraw target amount gross (net varies by taxes)
-        /// Net = withdraw enough gross to achieve target net after taxes
+        /// Gross = liquidate target amount gross (net varies by taxes)
+        /// Net = liquidate enough gross to achieve target net after taxes
         #[serde(default)]
         amount_mode: AmountMode,
         #[serde(default)]
         lot_method: LotMethod,
+    },
+
+    /// Sweep: Liquidate assets and transfer to another account
+    /// Combines AssetSale + Income in a single operation
+    /// Common use case for RMDs and rebalancing between accounts
+    Sweep {
+        /// Source(s) to liquidate from
+        #[serde(default)]
+        sources: WithdrawalSources,
+        /// Destination account for cash proceeds
+        to: AccountId,
+        /// Amount to liquidate/transfer
+        amount: TransferAmount,
+        /// Gross = liquidate target amount gross
+        /// Net = liquidate enough to achieve target net after taxes
+        #[serde(default)]
+        amount_mode: AmountMode,
+        #[serde(default)]
+        lot_method: LotMethod,
+        /// Tax treatment for the transfer (e.g., Taxable for RMDs)
+        income_type: IncomeType,
     },
 
     // === Event Control ===

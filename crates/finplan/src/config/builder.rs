@@ -53,7 +53,8 @@ use super::event_builder::{
 use super::metadata::SimulationMetadata;
 use crate::model::{
     AccountId, AssetCoord, AssetId, AssetLot, Event, EventEffect, EventId, EventTrigger,
-    InflationProfile, ReturnProfile, ReturnProfileId, TaxConfig, TransferAmount, WithdrawalSources,
+    IncomeType, InflationProfile, ReturnProfile, ReturnProfileId, TaxConfig, TransferAmount,
+    WithdrawalSources,
 };
 
 /// Builder for creating simulations with automatic ID assignment and metadata tracking
@@ -523,12 +524,14 @@ impl SimulationBuilder {
                 let to_account = self.resolve_account_ref(&spec.to_account, account_ids);
                 let sources =
                     self.resolve_withdrawal_sources(&spec.sources, account_ids, asset_ids);
-                vec![EventEffect::AssetSale {
+                // AssetSale in the builder API now translates to Sweep (liquidate + transfer)
+                vec![EventEffect::Sweep {
+                    sources,
                     to: to_account,
                     amount: self.resolve_amount(&spec.amount),
-                    sources,
                     amount_mode: spec.amount_mode,
                     lot_method: spec.lot_method,
+                    income_type: IncomeType::Taxable, // Default to taxable for asset sales
                 }]
             }
             EventType::Custom(effects) => effects.clone(),

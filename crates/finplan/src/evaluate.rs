@@ -1,7 +1,7 @@
 use jiff::ToSpan;
 use jiff::civil::Date;
 
-use crate::error::{StateEventError, TransferEvaluationError, TriggerEventError};
+use crate::error::{EngineError, StateEventError, TransferEvaluationError, TriggerEventError};
 use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment};
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, EventEffect, EventId,
@@ -501,16 +501,16 @@ pub fn evaluate_effect(
             Ok(effects)
         }
         EventEffect::AssetSale {
-            to,
+            from,
+            asset_id,
             amount,
-            sources,
             amount_mode,
             lot_method,
         } => {
             let target_amount = evaluate_transfer_amount(
                 amount,
                 &TransferEndpoint::External,
-                &TransferEndpoint::Cash { account_id: *to },
+                &TransferEndpoint::External,
                 state,
             )?;
 
@@ -518,24 +518,41 @@ pub fn evaluate_effect(
                 return Ok(vec![]);
             }
 
-            // Resolve withdrawal sources to (account_id, asset_id, investment_container) tuples
-            let source_list = resolve_withdrawal_sources_with_containers(sources, state);
+            // Get the investment account
+            let account = state
+                .portfolio
+                .accounts
+                .get(from)
+                .ok_or(EngineError::AccountNotFound(*from))?;
 
-            // Track remaining amount needed
-            // For Gross mode: remaining gross to withdraw
-            // For Net mode: remaining net proceeds needed
+            let investment = match &account.flavor {
+                AccountFlavor::Investment(inv) => inv,
+                _ => return Err(EngineError::NotAnInvestmentAccount(*from).into()),
+            };
+
+            // Get assets to liquidate (specific asset or all assets in account)
+            let assets_to_liquidate: Vec<AssetId> = match asset_id {
+                Some(id) => vec![*id],
+                None => investment
+                    .positions
+                    .iter()
+                    .map(|lot| lot.asset_id)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect(),
+            };
+
             let mut remaining = target_amount;
-
             let mut all_effects = vec![];
 
-            // Withdraw from sources in order until target is met
-            for (account_id, asset_id, investment) in source_list {
+            // Liquidate assets in order until target is met
+            for asset_id in assets_to_liquidate {
                 if remaining < 0.01 {
                     break;
                 }
 
                 let asset_coord = AssetCoord {
-                    account_id,
+                    account_id: *from,
                     asset_id,
                 };
 
@@ -563,12 +580,11 @@ pub fn evaluate_effect(
                     continue;
                 }
 
-                // Calculate gross amount to withdraw from this source
+                // Calculate gross amount to liquidate
                 let take_gross = match amount_mode {
                     AmountMode::Gross => remaining.min(available),
                     AmountMode::Net => {
                         // For net mode, estimate gross needed based on actual position data
-                        // Calculate average cost basis per unit for this asset
                         let total_units: f64 = investment
                             .positions
                             .iter()
@@ -585,23 +601,13 @@ pub fn evaluate_effect(
                         let avg_cost_per_unit = if total_units > 0.0 {
                             total_basis / total_units
                         } else {
-                            current_price // No gain if no basis info
+                            current_price
                         };
 
-                        // Estimate gain ratio: (current_price - avg_cost) / current_price
                         let gain_ratio =
                             ((current_price - avg_cost_per_unit) / current_price).max(0.0);
-
-                        // Estimate tax rate on gains (use capital gains + state rate)
                         let estimated_tax_rate =
                             state.taxes.config.capital_gains_rate + state.taxes.config.state_rate;
-
-                        // For each dollar of gross proceeds:
-                        // - gain_ratio of it is taxable gain
-                        // - (1 - gain_ratio) is return of basis (not taxed)
-                        // - tax = gain_ratio * estimated_tax_rate
-                        // So net = gross * (1 - gain_ratio * estimated_tax_rate)
-                        // Therefore gross = net / (1 - gain_ratio * estimated_tax_rate)
                         let effective_tax_rate = gain_ratio * estimated_tax_rate;
                         let gross_multiplier = 1.0 / (1.0 - effective_tax_rate).max(0.5);
 
@@ -610,11 +616,11 @@ pub fn evaluate_effect(
                     }
                 };
 
-                // Liquidate from this source (handles lot tracking, taxes, records)
+                // Liquidate into the source account's cash balance
                 let (result, effects) = liquidate_investment(&LiquidationParams {
                     investment,
                     asset_coord,
-                    to_account: *to,
+                    to_account: *from, // Cash stays in source account
                     amount: take_gross,
                     current_price,
                     lot_method: *lot_method,
@@ -623,13 +629,124 @@ pub fn evaluate_effect(
                     ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income,
                 });
 
-                // Subtract what we actually got
                 remaining -= match amount_mode {
                     AmountMode::Gross => result.gross_amount,
                     AmountMode::Net => result.net_proceeds,
                 };
 
                 all_effects.extend(effects);
+            }
+
+            Ok(all_effects)
+        }
+        EventEffect::Sweep {
+            sources,
+            to,
+            amount,
+            amount_mode,
+            lot_method,
+            income_type,
+        } => {
+            // Step 1: Determine source account(s) to liquidate from
+            let source_accounts: Vec<AccountId> = match sources {
+                WithdrawalSources::SingleAsset(coord) => vec![coord.account_id],
+                WithdrawalSources::SingleAccount(id) => vec![*id],
+                WithdrawalSources::Custom(list) => list
+                    .iter()
+                    .map(|coord| coord.account_id)
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect(),
+                WithdrawalSources::Strategy {
+                    exclude_accounts, ..
+                } => state
+                    .portfolio
+                    .accounts
+                    .iter()
+                    .filter(|(id, _)| !exclude_accounts.contains(id))
+                    .filter_map(|(_, acc)| {
+                        if matches!(acc.flavor, AccountFlavor::Investment(_)) {
+                            Some(acc.account_id)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect(),
+            };
+
+            let mut all_effects = vec![];
+            let mut total_liquidated = 0.0;
+            let mut remaining = evaluate_transfer_amount(
+                amount,
+                &TransferEndpoint::External,
+                &TransferEndpoint::External,
+                state,
+            )?;
+
+            // Step 2: Liquidate from source accounts until target is met
+            for from_account in source_accounts {
+                if remaining < 0.01 {
+                    break;
+                }
+
+                let liquidation_effects = evaluate_effect(
+                    &EventEffect::AssetSale {
+                        from: from_account,
+                        asset_id: None, // Liquidate all assets in account
+                        amount: TransferAmount::Fixed(remaining),
+                        amount_mode: *amount_mode,
+                        lot_method: *lot_method,
+                    },
+                    state,
+                )?;
+
+                // Sum up what was liquidated from this account
+                let liquidated_from_account: f64 = liquidation_effects
+                    .iter()
+                    .filter_map(|ev| {
+                        if let EvalEvent::CashCredit { net_amount, .. } = ev {
+                            Some(*net_amount)
+                        } else {
+                            None
+                        }
+                    })
+                    .sum();
+
+                total_liquidated += liquidated_from_account;
+                remaining -= liquidated_from_account;
+                all_effects.extend(liquidation_effects);
+            }
+
+            // Step 3: Transfer the liquidated cash to destination
+            // Note: For multi-account sources, we transfer from each source to destination
+            // This is handled by creating Income effects from each source account
+            if total_liquidated > 0.01 {
+                // Collect all source accounts that received cash
+                let source_accounts: std::collections::HashSet<AccountId> = all_effects
+                    .iter()
+                    .filter_map(|ev| {
+                        if let EvalEvent::CashCredit { to, .. } = ev {
+                            Some(*to)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                // For simplicity, if destination is one of the source accounts, we're done
+                // Otherwise, transfer all cash to destination
+                if !source_accounts.contains(to) && !source_accounts.is_empty() {
+                    let transfer_effects = evaluate_effect(
+                        &EventEffect::Income {
+                            to: *to,
+                            amount: TransferAmount::Fixed(total_liquidated),
+                            amount_mode: AmountMode::Gross, // Already net from liquidation
+                            income_type: income_type.clone(),
+                        },
+                        state,
+                    )?;
+                    all_effects.extend(transfer_effects);
+                }
             }
 
             Ok(all_effects)
@@ -662,16 +779,17 @@ pub fn evaluate_effect(
                 };
                 let required_value = prior_balance / rmd_divisor;
 
-                // Liquidate required amount
-                let sale = EventEffect::AssetSale {
+                // Liquidate and transfer required amount using Sweep
+                let sweep = EventEffect::Sweep {
+                    sources: WithdrawalSources::SingleAccount(acc.account_id),
                     to: *destination,
                     amount: TransferAmount::Fixed(required_value),
-                    sources: WithdrawalSources::SingleAccount(acc.account_id),
                     amount_mode: AmountMode::Gross,
                     lot_method: *lot_method,
+                    income_type: IncomeType::Taxable, // RMDs are taxable income
                 };
 
-                let results = evaluate_effect(&sale, state)?;
+                let results = evaluate_effect(&sweep, state)?;
 
                 // Push a RMD marker and then the actual transaction effects
                 effects.push(EvalEvent::StateEvent(StateEvent::RmdWithdrawal {
@@ -780,116 +898,6 @@ pub fn resolve_withdrawal_sources(
                             asset_id: lot.asset_id,
                         })
                         .collect::<Vec<_>>()
-                })
-                .collect()
-        }
-    }
-}
-use crate::model::InvestmentContainer;
-
-/// Resolve withdrawal sources with their InvestmentContainers for direct liquidation
-/// Returns tuples of (AccountId, AssetId, &InvestmentContainer)
-fn resolve_withdrawal_sources_with_containers<'a>(
-    sources: &WithdrawalSources,
-    state: &'a SimulationState,
-) -> Vec<(AccountId, AssetId, &'a InvestmentContainer)> {
-    match sources {
-        WithdrawalSources::SingleAsset(asset_coord) => {
-            // Find the investment container for this asset_coord
-            if let Some(account) = state.portfolio.accounts.get(&asset_coord.account_id)
-                && let AccountFlavor::Investment(inv) = &account.flavor
-            {
-                return vec![(asset_coord.account_id, asset_coord.asset_id, inv)];
-            }
-            vec![]
-        }
-        WithdrawalSources::SingleAccount(account_id) => {
-            // Get all positions from this account if it's an Investment account
-            if let Some(account) = state.portfolio.accounts.get(account_id)
-                && let AccountFlavor::Investment(inv) = &account.flavor
-            {
-                return inv
-                    .positions
-                    .iter()
-                    .map(|lot| (*account_id, lot.asset_id, inv))
-                    .collect();
-            }
-            vec![]
-        }
-        WithdrawalSources::Custom(list) => list
-            .iter()
-            .filter_map(|coord| {
-                state
-                    .portfolio
-                    .accounts
-                    .get(&coord.account_id)
-                    .and_then(|acc| {
-                        if let AccountFlavor::Investment(inv) = &acc.flavor {
-                            Some((coord.account_id, coord.asset_id, inv))
-                        } else {
-                            None
-                        }
-                    })
-            })
-            .collect(),
-        WithdrawalSources::Strategy {
-            order,
-            exclude_accounts,
-        } => {
-            // Filter to only Investment accounts
-            let mut investment_accounts: Vec<_> = state
-                .portfolio
-                .accounts
-                .iter()
-                .filter(|(id, _)| !exclude_accounts.contains(id))
-                .filter_map(|(_, acc)| {
-                    if let AccountFlavor::Investment(inv) = &acc.flavor {
-                        Some((acc.account_id, inv))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            // Sort by tax status according to the withdrawal strategy
-            match order {
-                WithdrawalOrder::TaxEfficientEarly => {
-                    investment_accounts.sort_by_key(|(_, inv)| match inv.tax_status {
-                        TaxStatus::Taxable => 0,
-                        TaxStatus::TaxDeferred => 1,
-                        TaxStatus::TaxFree => 2,
-                    });
-                }
-                WithdrawalOrder::TaxDeferredFirst => {
-                    investment_accounts.sort_by_key(|(_, inv)| match inv.tax_status {
-                        TaxStatus::TaxDeferred => 0,
-                        TaxStatus::Taxable => 1,
-                        TaxStatus::TaxFree => 2,
-                    });
-                }
-                WithdrawalOrder::TaxFreeFirst => {
-                    investment_accounts.sort_by_key(|(_, inv)| match inv.tax_status {
-                        TaxStatus::TaxFree => 0,
-                        TaxStatus::Taxable => 1,
-                        TaxStatus::TaxDeferred => 2,
-                    });
-                }
-                WithdrawalOrder::ProRata => {
-                    // Pro-rata: return all accounts (proportional withdrawal handled in caller)
-                }
-            }
-
-            // Flatten to (AccountId, AssetId, InvestmentContainer) tuples
-            investment_accounts
-                .into_iter()
-                .flat_map(|(account_id, inv)| {
-                    // Deduplicate asset_ids in positions
-                    let asset_ids: std::collections::HashSet<_> =
-                        inv.positions.iter().map(|lot| lot.asset_id).collect();
-
-                    asset_ids
-                        .into_iter()
-                        .map(move |asset_id| (account_id, asset_id, inv))
                 })
                 .collect()
         }

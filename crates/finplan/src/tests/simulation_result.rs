@@ -835,7 +835,7 @@ fn test_ledger_income_and_expense_events() {
 /// Test ledger captures AssetPurchase and AssetSale events correctly
 #[test]
 fn test_ledger_asset_purchase_and_sale_events() {
-    use crate::model::{AssetCoord, StateEvent, WithdrawalSources};
+    use crate::model::{AssetCoord, StateEvent};
 
     let start_date = jiff::civil::date(2020, 1, 1);
     let brokerage_account = AccountId(1);
@@ -880,17 +880,14 @@ fn test_ledger_asset_purchase_and_sale_events() {
                 }],
                 once: true,
             },
-            // Sell $2,000 worth of stock after it appreciates
+            // Sell $2,000 worth of stock after it appreciates and keep in same account
             Event {
                 event_id: sale_event_id,
                 trigger: EventTrigger::Date(jiff::civil::date(2021, 6, 1)),
                 effects: vec![EventEffect::AssetSale {
-                    to: brokerage_account,
+                    from: brokerage_account,
+                    asset_id: Some(asset_id),
                     amount: TransferAmount::Fixed(2_000.0),
-                    sources: WithdrawalSources::SingleAsset(AssetCoord {
-                        account_id: brokerage_account,
-                        asset_id,
-                    }),
                     amount_mode: AmountMode::Net,
                     lot_method: crate::model::LotMethod::Fifo,
                 }],
