@@ -1,7 +1,3 @@
-"use client";
-
-import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar"
 import {
     Breadcrumb,
@@ -17,21 +13,14 @@ import {
     SidebarProvider,
     SidebarTrigger,
 } from "@/components/ui/sidebar"
-import { SimulationWizard } from "@/components/simulation-wizard"
-
-function SimulationContent() {
-    const searchParams = useSearchParams();
-    const portfolioId = searchParams.get("portfolio") || undefined;
-    return <SimulationWizard initialPortfolioId={portfolioId} />;
-}
+import { SimulationWizardV2 } from "@/components/simulation-wizard-v2";
 
 export default function NewSimulationPage() {
-
     return (
         <SidebarProvider>
             <AppSidebar />
-            <SidebarInset>
-                <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
+            <SidebarInset className="flex flex-col h-screen overflow-hidden">
+                <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 border-b">
                     <div className="flex items-center gap-2 px-4">
                         <SidebarTrigger className="-ml-1" />
                         <Separator
@@ -55,18 +44,10 @@ export default function NewSimulationPage() {
                         </Breadcrumb>
                     </div>
                 </header>
-                <div className="flex flex-1 flex-col gap-6 p-6 pt-0">
-                    <div className="flex flex-col gap-2">
-                        <h1 className="text-3xl font-bold tracking-tight">New Simulation</h1>
-                        <p className="text-muted-foreground">
-                            Create a new financial simulation step by step
-                        </p>
-                    </div>
-                    <Suspense fallback={<div className="animate-pulse h-96 bg-muted rounded" />}>
-                        <SimulationContent />
-                    </Suspense>
+                <div className="flex-1 overflow-hidden">
+                    <SimulationWizardV2 />
                 </div>
             </SidebarInset>
         </SidebarProvider>
-    )
+    );
 }

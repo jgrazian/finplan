@@ -99,6 +99,15 @@ export function useCalculations() {
         return Math.max(0, state.retirement.targetAge - currentAge);
     })();
 
+    // Calculate individual components for display
+    const liquidSavings = state.savings.checking + state.savings.savings + state.savings.hysa;
+    const totalInvestments = state.investments.reduce((sum, inv) => sum + inv.balance, 0);
+    const realEstateEquity = state.realEstate.reduce((sum, prop) => {
+        const mortgageBalance = prop.mortgage?.balance || 0;
+        return sum + (prop.value - mortgageBalance);
+    }, 0);
+    const totalDebts = state.debts.reduce((sum, debt) => sum + debt.balance, 0);
+
     // Calculate total investment accounts by tax type
     const investmentsByTaxType = (() => {
         const taxDeferred = state.investments
@@ -130,6 +139,10 @@ export function useCalculations() {
 
     return {
         netWorth,
+        liquidSavings,
+        totalInvestments,
+        realEstateEquity,
+        totalDebts,
         monthlyIncome,
         monthlyExpenses,
         currentAge,

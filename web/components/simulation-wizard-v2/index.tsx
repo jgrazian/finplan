@@ -14,6 +14,7 @@ import { RealEstateStep } from "./steps/RealEstateStep";
 import { DebtsStep } from "./steps/DebtsStep";
 import { RetirementGoalsStep } from "./steps/RetirementGoalsStep";
 import { LifeEventsStep } from "./steps/LifeEventsStep";
+import { ReviewStep } from "./steps/ReviewStep";
 
 const TOTAL_STEPS = 10;
 
@@ -74,21 +75,14 @@ export function SimulationWizardV2() {
             case 8:
                 return <LifeEventsStep />;
             case 9:
-                return (
-                    <div className="space-y-6 max-w-2xl">
-                        <div>
-                            <h2 className="text-3xl font-bold tracking-tight">Review & Refine</h2>
-                            <p className="text-muted-foreground mt-2">Coming soon...</p>
-                        </div>
-                    </div>
-                );
+                return <ReviewStep />;
             default:
                 return null;
         }
     };
 
     return (
-        <div className="flex h-screen">
+        <div className="flex h-full">
             {/* Progress Sidebar */}
             <WizardProgress />
 

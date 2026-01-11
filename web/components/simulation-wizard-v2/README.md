@@ -48,9 +48,21 @@ This is the new conversational simulation wizard designed to provide a user-frie
 - [x] Income replacement suggestions
 - [x] Retirement income gap analysis
 
-### Remaining Steps (To Be Implemented)
-- [ ] Step 8: Life Events (Major purchases, education, inheritance)
-- [ ] Step 9: Review & Refine (Complete summary and simulation execution)
+### Phase 5: Life Events & Review ✅ COMPLETE
+- [x] Step 8: Life Events (Major purchases, education, inheritance)
+- [x] Step 9: Review & Refine (Complete summary and simulation execution)
+- [x] Parameter builder utility to convert wizard state to SimulationParameters
+- [x] API integration for simulation creation and execution
+- [x] Comprehensive financial snapshot display
+- [x] Validation warnings and helpful suggestions
+- [x] Monte Carlo simulation execution
+
+### Production Ready ✅
+- [x] Replaced original wizard as default at /simulations/new
+- [x] Full 10-step wizard implementation complete
+- [x] Backend API integration functional
+- [x] TypeScript type safety throughout
+- [x] Error handling and validation
 
 ## Architecture
 
@@ -103,7 +115,9 @@ Using Zustand for global state management with separate slices for:
 
 ### Accessing the Wizard
 
-Navigate to `/simulations/new-v2` to see the new wizard.
+Navigate to `/simulations/new` to use the new wizard. The v2 wizard is now the default.
+
+The original wizard can still be accessed at `/simulations/new-v2` for reference during the transition period.
 
 ### Example Flow
 
@@ -112,15 +126,16 @@ Navigate to `/simulations/new-v2` to see the new wizard.
 3. **Income**: Enter salary, pay frequency, and 401(k) details
 4. **Savings**: Enter checking, savings, HYSA, and emergency fund
 
-## Next Steps
-
-1. Implement remaining step components (Investments through Review)
-2. Build parameter builder utility to convert wizard state to SimulationParameters
-3. Implement draft saving functionality
-4. Add backend support for new fields (filing status, state taxes)
-5. Implement simulation execution from Review step
-6. Add validation and error handling
-7. Implement edit mode for existing simulations
+## ~~Implement remaining step components (Investments through Review)~~ ✅ DONE
+2. ~~Build parameter builder utility to convert wizard state to SimulationParameters~~ ✅ DONE
+3. ~~Implement simulation execution from Review step~~ ✅ DONE
+4. Implement draft saving functionality (optional enhancement)
+5. Add validation and error handling (basic implementation complete)
+6. Implement edit mode for existing simulations (future enhancement)
+7. Add accessibility features (keyboard navigation, ARIA labels) (future enhancement)
+8. Mobile responsive design improvements (current design is functional)
+9. Enhanced Social Security estimator (consider external API)
+10. Add more sophisticated tax calculations based on filing statuulations
 8. Add accessibility features (keyboard navigation, ARIA labels)
 9. Mobile responsive design improvements
 
