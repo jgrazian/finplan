@@ -1,5 +1,5 @@
 [package]
-name = "finplan"
+name = "finplan_core"
 version = "0.1.0"
 edition = "2024"
 

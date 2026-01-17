@@ -15,9 +15,9 @@ use crate::models::{
     SimulationRunRecord, UpdateSimulationRequest,
 };
 use crate::validation;
-use finplan::config::SimulationConfig;
-use finplan::model::{AccountId, MonteCarloResult, SimulationResult, StateEvent};
-use finplan::simulation::monte_carlo_simulate;
+use finplan_core::config::SimulationConfig;
+use finplan_core::model::{AccountId, MonteCarloResult, SimulationResult, StateEvent};
+use finplan_core::simulation::monte_carlo_simulate;
 use jiff::civil::Date;
 
 // Database connection wrapper
@@ -440,12 +440,13 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
         // Aggregate ledger entries by type
         for entry in &sim_result.ledger {
             let year = entry.date.year() as i32;
-            let growth_entry = growth_by_year
-                .entry(year)
-                .or_insert_with(|| YearlyGrowthComponents {
-                    year,
-                    ..Default::default()
-                });
+            let growth_entry =
+                growth_by_year
+                    .entry(year)
+                    .or_insert_with(|| YearlyGrowthComponents {
+                        year,
+                        ..Default::default()
+                    });
 
             match &entry.event {
                 StateEvent::CashAppreciation {

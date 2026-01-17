@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-finplan = { path = "../finplan", features = ["ts"] }
+finplan_core = { path = "../finplan_core", features = ["ts"] }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

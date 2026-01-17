@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // Re-export types from finplan that are already serializable
-use finplan::model::{
+use finplan_core::model::{
     ContributionLimit, IncomeType, InflationProfile, LotMethod, RepeatInterval, ReturnProfile,
     TaxStatus, WithdrawalOrder,
 };

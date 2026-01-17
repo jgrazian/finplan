@@ -1,5 +1,5 @@
 use crate::error::{ApiError, ApiResult};
-use finplan::config::SimulationConfig;
+use finplan_core::config::SimulationConfig;
 
 /// Validate portfolio creation request
 pub fn validate_portfolio_name(name: &str) -> ApiResult<()> {

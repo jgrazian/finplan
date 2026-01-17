@@ -1,5 +1,5 @@
-use finplan::config::SimulationConfig;
-use finplan::model::{AccountId, AssetId, TaxStatus};
+use finplan_core::config::SimulationConfig;
+use finplan_core::model::{AccountId, AssetId, TaxStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

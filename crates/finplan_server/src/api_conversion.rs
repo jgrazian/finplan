@@ -5,11 +5,11 @@
 
 use crate::api_types::*;
 use crate::error::{ApiError, ApiResult};
-use finplan::config::{
+use finplan_core::config::{
     AccountBuilder, AssetBuilder, EventBuilder, SimulationBuilder, SimulationConfig,
     SimulationMetadata,
 };
-use finplan::model::LotMethod;
+use finplan_core::model::{IncomeType, LotMethod, RepeatInterval, TaxConfig, TaxStatus};
 
 /// Convert SimulationConfig and metadata back to SimulationConfig for storage
 /// Note: This is a pass-through since SimulationConfig IS what we store
@@ -87,8 +87,8 @@ impl SimulationRequest {
 }
 
 impl TaxConfigDef {
-    fn into_tax_config(self) -> finplan::model::TaxConfig {
-        let mut config = finplan::model::TaxConfig::default();
+    fn into_tax_config(self) -> TaxConfig {
+        let mut config = TaxConfig::default();
         if let Some(rate) = self.capital_gains_rate {
             config.capital_gains_rate = rate;
         }
@@ -132,13 +132,9 @@ impl AccountDef {
             AccountTypeDef::Custom { tax_status, .. } => {
                 // Use the appropriate builder based on tax status
                 match tax_status {
-                    finplan::model::TaxStatus::Taxable => {
-                        AccountBuilder::taxable_brokerage(&self.name)
-                    }
-                    finplan::model::TaxStatus::TaxDeferred => {
-                        AccountBuilder::traditional_401k(&self.name)
-                    }
-                    finplan::model::TaxStatus::TaxFree => AccountBuilder::roth_ira(&self.name),
+                    TaxStatus::Taxable => AccountBuilder::taxable_brokerage(&self.name),
+                    TaxStatus::TaxDeferred => AccountBuilder::traditional_401k(&self.name),
+                    TaxStatus::TaxFree => AccountBuilder::roth_ira(&self.name),
                 }
             }
         };
@@ -180,8 +176,8 @@ impl EventDef {
                     b = b.net();
                 }
                 match income_type {
-                    finplan::model::IncomeType::Taxable => b = b.taxable(),
-                    finplan::model::IncomeType::TaxFree => b = b.tax_free(),
+                    IncomeType::Taxable => b = b.taxable(),
+                    IncomeType::TaxFree => b = b.tax_free(),
                 }
                 b
             }
@@ -286,12 +282,12 @@ impl TriggerDef {
                 end,
             } => {
                 let mut b = match interval {
-                    finplan::model::RepeatInterval::Never => builder.once(),
-                    finplan::model::RepeatInterval::Weekly => builder.weekly(),
-                    finplan::model::RepeatInterval::BiWeekly => builder.biweekly(),
-                    finplan::model::RepeatInterval::Monthly => builder.monthly(),
-                    finplan::model::RepeatInterval::Quarterly => builder.quarterly(),
-                    finplan::model::RepeatInterval::Yearly => builder.yearly(),
+                    RepeatInterval::Never => builder.once(),
+                    RepeatInterval::Weekly => builder.weekly(),
+                    RepeatInterval::BiWeekly => builder.biweekly(),
+                    RepeatInterval::Monthly => builder.monthly(),
+                    RepeatInterval::Quarterly => builder.quarterly(),
+                    RepeatInterval::Yearly => builder.yearly(),
                 };
 
                 if let Some(start_spec) = start {
