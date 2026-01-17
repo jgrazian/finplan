@@ -1,3 +1,5 @@
+mod api_conversion;
+mod api_types;
 mod db;
 mod error;
 mod handlers;
@@ -9,10 +11,16 @@ use axum::{Router, routing::get};
 use handlers::DbConn;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
-use tower_http::cors::CorsLayer;
+use tower_http::{
+    cors::CorsLayer,
+    trace::{self, TraceLayer},
+};
+use tracing::Level;
 
 #[tokio::main]
 async fn main() {
+    tracing_subscriber::fmt::init();
+
     let conn = Connection::open("finplan.db").expect("Failed to open database");
     db::init_db(&conn).expect("Failed to initialize database");
     let db_conn: DbConn = Arc::new(Mutex::new(conn));
@@ -22,7 +30,12 @@ async fn main() {
         .merge(routes::portfolio_routes())
         .merge(routes::simulation_routes())
         .with_state(db_conn)
-        .layer(CorsLayer::permissive());
+        .layer(CorsLayer::permissive())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(trace::DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(trace::DefaultOnResponse::new().level(Level::INFO)),
+        );
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
         .await

@@ -1,7 +1,5 @@
-use finplan::{
-    SimulationParameters,
-    model::{AccountId, AccountType, AssetClass, AssetId},
-};
+use finplan::config::SimulationConfig;
+use finplan::model::{AccountId, AssetId, TaxStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -15,7 +13,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortfolioAsset {
     pub asset_id: AssetId,
-    pub asset_class: AssetClass,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_class: Option<String>,
     pub initial_value: f64,
     pub return_profile_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -25,7 +24,7 @@ pub struct PortfolioAsset {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortfolioAccount {
     pub account_id: AccountId,
-    pub account_type: AccountType,
+    pub tax_status: TaxStatus,
     pub assets: Vec<PortfolioAsset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -82,7 +81,7 @@ pub struct SavedSimulation {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
-    pub parameters: SimulationParameters,
+    pub parameters: SimulationConfig,
     pub portfolio_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
@@ -102,7 +101,7 @@ pub struct SimulationListItem {
 pub struct CreateSimulationRequest {
     pub name: String,
     pub description: Option<String>,
-    pub parameters: SimulationParameters,
+    pub parameters: SimulationConfig,
     pub portfolio_id: Option<String>,
 }
 
@@ -110,7 +109,7 @@ pub struct CreateSimulationRequest {
 pub struct UpdateSimulationRequest {
     pub name: Option<String>,
     pub description: Option<String>,
-    pub parameters: Option<SimulationParameters>,
+    pub parameters: Option<SimulationConfig>,
     pub portfolio_id: Option<String>,
 }
 

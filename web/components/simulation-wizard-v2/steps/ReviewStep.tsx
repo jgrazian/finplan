@@ -8,8 +8,9 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, Rocket, Save, AlertTriangle, CheckCircle2, Info } from "lucide-react";
 import { useWizardStore } from "../hooks/useWizardStore";
 import { useCalculations } from "../hooks/useCalculations";
-import { buildSimulationParameters } from "../utils/parameterBuilder";
+import { buildSimulationRequest } from "../utils/parameterBuilder";
 import { useRouter } from "next/navigation";
+import { postSimulationRequest } from "@/lib/api";
 
 export function ReviewStep() {
     const router = useRouter();
@@ -115,31 +116,14 @@ export function ReviewStep() {
             setIsSubmitting(true);
             setError(null);
 
-            // Build simulation parameters
-            const parameters = buildSimulationParameters(state);
+            // Build simulation request (name-based API)
+            const request = buildSimulationRequest(state);
 
             // Submit to API
-            const response = await fetch("/api/simulations", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    name: state.simulationName,
-                    description: `${state.goal || "Financial planning"} simulation`,
-                    parameters,
-                }),
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || "Failed to create simulation");
-            }
-
-            const simulation = await response.json();
+            const response = await postSimulationRequest(request);
 
             // Navigate to results
-            router.push(`/simulations/${simulation.id}`);
+            router.push(`/simulations/${response.id}`);
         } catch (err) {
             console.error("Error creating simulation:", err);
             setError(err instanceof Error ? err.message : "An error occurred");

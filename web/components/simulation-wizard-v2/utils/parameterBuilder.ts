@@ -1,28 +1,32 @@
 /**
  * Parameter Builder Utility
- * 
- * Converts wizard state (user-friendly inputs) into SimulationParameters
- * that can be sent to the backend API.
+ *
+ * Converts wizard state (user-friendly inputs) into SimulationRequest
+ * that can be sent to the backend API (name-based, no IDs).
  */
 
 import { WizardState } from "../types";
 import {
-    SimulationParameters,
-    Account,
-    Asset,
-    CashFlow,
-    Event,
-    SpendingTarget,
-    TaxConfig,
-    ReturnProfile,
-    InflationProfile,
-    AccountType,
+    SimulationRequest,
+    AccountDef,
+    AccountTypeDef,
+    AssetDef,
+    PositionDef,
+    EventDef,
+    EffectDef,
+    TriggerDef,
+    NamedReturnProfileDef,
     RepeatInterval,
-    CashFlowDirection,
-    EventTrigger,
-    EventEffect,
-    WithdrawalStrategy,
-} from "@/lib/types";
+    TaxConfigDef,
+    InflationProfile,
+} from "@/lib/api-types";
+
+// Named return profiles
+const RETURN_PROFILES: NamedReturnProfileDef[] = [
+    { name: "Cash", profile: { Fixed: 0.03 } },
+    { name: "StockBond", profile: { Normal: { mean: 0.08, std_dev: 0.15 } } },
+    { name: "Housing", profile: { Normal: { mean: 0.04, std_dev: 0.035 } } },
+];
 
 // Map wizard frequency to API repeat interval
 function mapPayFrequency(frequency: string): RepeatInterval {
@@ -31,126 +35,118 @@ function mapPayFrequency(frequency: string): RepeatInterval {
         case "BiWeekly": return "BiWeekly";
         case "SemiMonthly": return "Monthly"; // Approximate to monthly
         case "Monthly": return "Monthly";
+        case "Yearly": return "Yearly";
         default: return "Monthly";
     }
 }
 
-// Generate unique IDs
-let nextAccountId = 1;
-let nextAssetId = 1;
-let nextCashFlowId = 1;
-let nextEventId = 1;
-let nextSpendingTargetId = 1;
-
-function resetIds() {
-    nextAccountId = 1;
-    nextAssetId = 1;
-    nextCashFlowId = 1;
-    nextEventId = 1;
-    nextSpendingTargetId = 1;
+// Map wizard account type to AccountTypeDef
+function mapAccountType(type: string): AccountTypeDef {
+    switch (type) {
+        case "Traditional401k": return { type: "Traditional401k", contribution_limit: null };
+        case "Roth401k": return { type: "Roth401k", contribution_limit: null };
+        case "TraditionalIRA": return { type: "TraditionalIra", contribution_limit: null };
+        case "RothIRA": return { type: "RothIra", contribution_limit: null };
+        case "HSA": return { type: "Hsa", contribution_limit: null };
+        case "Brokerage": return { type: "TaxableBrokerage" };
+        default: return { type: "Bank" };
+    }
 }
 
-// Return profile indexes
-const CASH_PROFILE_INDEX = 0;
-const STOCK_BOND_PROFILE_INDEX = 1;
-const HOUSING_PROFILE_INDEX = 2;
+// Generate unique names to avoid collisions
+function sanitizeName(name: string): string {
+    return name.replace(/[^a-zA-Z0-9]/g, '_');
+}
 
 /**
- * Build complete simulation parameters from wizard state
+ * Build complete simulation request from wizard state
  */
-export function buildSimulationParameters(state: WizardState): SimulationParameters {
-    resetIds();
-
-    const accounts: Account[] = [];
-    const cashFlows: CashFlow[] = [];
-    const events: Event[] = [];
-    const spendingTargets: SpendingTarget[] = [];
+export function buildSimulationRequest(state: WizardState): SimulationRequest {
+    const accounts: AccountDef[] = [];
+    const assets: AssetDef[] = [];
+    const positions: PositionDef[] = [];
+    const events: EventDef[] = [];
 
     // Get current age for age-based triggers
     const currentAge = state.personalInfo.birthDate
         ? Math.floor((Date.now() - state.personalInfo.birthDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000))
         : 30;
 
+    // Define standard assets
+    assets.push(
+        { name: "Cash", description: null, price: 1, return_profile: "Cash" },
+        { name: "Investments", description: null, price: 1, return_profile: "StockBond" },
+        { name: "RealEstate", description: null, price: 1, return_profile: "Housing" }
+    );
+
     // =========================================================================
-    // 1. Create Checking/Savings Accounts
+    // 1. Create Checking/Savings Account
     // =========================================================================
 
-    const checkingAccountId = nextAccountId++;
-    const checkingAssetId = nextAssetId++;
+    const totalLiquid = state.savings.checking + state.savings.savings + state.savings.hysa;
 
-    if (state.savings.checking > 0 || state.savings.savings > 0 || state.savings.hysa > 0) {
-        const totalLiquid = state.savings.checking + state.savings.savings + state.savings.hysa;
-
-        accounts.push({
-            account_id: checkingAccountId,
-            account_type: "Taxable",
-            name: "Checking & Savings",
-            assets: [{
-                asset_id: checkingAssetId,
-                asset_class: "Investable",
-                initial_value: totalLiquid,
-                return_profile_index: CASH_PROFILE_INDEX,
-                name: "Cash",
-            }],
-        });
-    }
+    accounts.push({
+        name: "Checking",
+        description: "Checking & Savings",
+        account_type: { type: "Bank" },
+        cash: totalLiquid,
+        cash_return_profile: "Cash",
+    });
 
     // =========================================================================
     // 2. Create Investment Accounts
     // =========================================================================
 
     for (const investment of state.investments) {
-        const accountId = nextAccountId++;
-        const assetId = nextAssetId++;
-
-        let accountType: AccountType = "Taxable";
-        if (investment.type === "Traditional401k" || investment.type === "TraditionalIRA") {
-            accountType = "TaxDeferred";
-        } else if (investment.type === "Roth401k" || investment.type === "RothIRA" || investment.type === "HSA") {
-            accountType = "TaxFree";
-        }
+        const accountName = sanitizeName(investment.type);
 
         accounts.push({
-            account_id: accountId,
-            account_type: accountType,
-            name: investment.type,
-            assets: [{
-                asset_id: assetId,
-                asset_class: "Investable",
-                initial_value: investment.balance,
-                return_profile_index: STOCK_BOND_PROFILE_INDEX,
-                name: `${investment.type} Investments`,
-            }],
+            name: accountName,
+            description: `${investment.type} Account`,
+            account_type: mapAccountType(investment.type),
+            cash: 0,
+            cash_return_profile: "Cash",
         });
 
-        // Add ongoing contributions if specified
-        if (investment.contributions && investment.contributions.amount > 0) {
-            const cashFlowId = nextCashFlowId++;
+        // Create position for the investment balance
+        if (investment.balance > 0) {
+            positions.push({
+                account: accountName,
+                asset: "Investments",
+                units: investment.balance,
+                cost_basis: investment.balance,
+                purchase_date: null,
+            });
+        }
 
-            cashFlows.push({
-                cash_flow_id: cashFlowId,
-                amount: investment.contributions.amount,
-                repeats: mapPayFrequency(investment.contributions.frequency),
-                adjust_for_inflation: true,
-                direction: {
-                    Income: {
-                        target_account_id: accountId,
-                        target_asset_id: assetId,
-                    },
+        // Add ongoing contributions as repeating income events
+        if (investment.contributions && investment.contributions.amount > 0) {
+            events.push({
+                name: `${accountName}_Contribution`,
+                description: `Regular contribution to ${investment.type}`,
+                trigger: {
+                    type: "Repeating",
+                    interval: mapPayFrequency(investment.contributions.frequency),
+                    start: null,
+                    end: state.retirement.targetAge ? { type: "Age", years: state.retirement.targetAge, months: null } : null,
                 },
-                state: "Active",
+                effects: [{
+                    type: "AssetPurchase",
+                    amount: investment.contributions.amount,
+                    account: accountName,
+                    asset: "Investments",
+                    adjust_for_inflation: true,
+                }],
+                once: false,
             });
         }
     }
 
     // =========================================================================
-    // 3. Create Income Cash Flows
+    // 3. Create Income Events
     // =========================================================================
 
     if (state.income.employed && state.income.salary > 0) {
-        const cashFlowId = nextCashFlowId++;
-
-        // Convert annual salary to payment frequency
         const paymentMultipliers: Record<string, number> = {
             Weekly: 52,
             BiWeekly: 26,
@@ -161,259 +157,230 @@ export function buildSimulationParameters(state: WizardState): SimulationParamet
         const multiplier = paymentMultipliers[state.income.payFrequency] || 12;
         const paymentAmount = state.income.salary / multiplier;
 
-        cashFlows.push({
-            cash_flow_id: cashFlowId,
-            amount: paymentAmount,
-            repeats: mapPayFrequency(state.income.payFrequency),
-            adjust_for_inflation: true,
-            direction: {
-                Income: {
-                    target_account_id: checkingAccountId,
-                    target_asset_id: checkingAssetId,
-                },
+        events.push({
+            name: "Salary",
+            description: "Primary employment income",
+            trigger: {
+                type: "Repeating",
+                interval: mapPayFrequency(state.income.payFrequency),
+                start: null,
+                end: state.retirement.targetAge ? { type: "Age", years: state.retirement.targetAge, months: null } : null,
             },
-            state: "Active",
+            effects: [{
+                type: "Income",
+                amount: paymentAmount,
+                to_account: "Checking",
+                income_type: "Taxable",
+                gross: true,
+                adjust_for_inflation: true,
+            }],
+            once: false,
         });
 
         // Add employer 401k match if applicable
         if (state.income.employer401k?.hasMatch && state.income.employer401k.matchPercentage > 0) {
-            const matchCashFlowId = nextCashFlowId++;
-            const matchAmount = Math.min(
-                state.income.salary * (state.income.employer401k.employeeContribution / 100),
-                state.income.salary * (state.income.employer401k.matchUpTo / 100)
-            ) * (state.income.employer401k.matchPercentage / 100);
-
-            // Find the 401k account to deposit match
             const account401k = state.investments.find(inv =>
                 inv.type === "Traditional401k" || inv.type === "Roth401k"
             );
 
             if (account401k) {
-                const match401kAccountId = accounts.find(acc => acc.name === account401k.type)?.account_id;
-                const match401kAssetId = accounts.find(acc => acc.name === account401k.type)?.assets[0].asset_id;
+                const matchAmount = Math.min(
+                    state.income.salary * (state.income.employer401k.employeeContribution / 100),
+                    state.income.salary * (state.income.employer401k.matchUpTo / 100)
+                ) * (state.income.employer401k.matchPercentage / 100);
 
-                if (match401kAccountId && match401kAssetId) {
-                    cashFlows.push({
-                        cash_flow_id: matchCashFlowId,
+                const accountName = sanitizeName(account401k.type);
+
+                events.push({
+                    name: "Employer401kMatch",
+                    description: "Employer 401k matching contribution",
+                    trigger: {
+                        type: "Repeating",
+                        interval: mapPayFrequency(state.income.payFrequency),
+                        start: null,
+                        end: state.retirement.targetAge ? { type: "Age", years: state.retirement.targetAge, months: null } : null,
+                    },
+                    effects: [{
+                        type: "AssetPurchase",
                         amount: matchAmount / multiplier,
-                        repeats: mapPayFrequency(state.income.payFrequency),
+                        account: accountName,
+                        asset: "Investments",
                         adjust_for_inflation: true,
-                        direction: {
-                            Income: {
-                                target_account_id: match401kAccountId,
-                                target_asset_id: match401kAssetId,
-                            },
-                        },
-                        state: "Active",
-                    });
-                }
+                    }],
+                    once: false,
+                });
             }
         }
     }
 
     // Add other income sources
-    for (const otherIncome of state.income.otherIncome) {
-        const cashFlowId = nextCashFlowId++;
-
-        cashFlows.push({
-            cash_flow_id: cashFlowId,
-            amount: otherIncome.amount,
-            repeats: mapPayFrequency(otherIncome.frequency),
-            adjust_for_inflation: true,
-            direction: {
-                Income: {
-                    target_account_id: checkingAccountId,
-                    target_asset_id: checkingAssetId,
-                },
+    for (let i = 0; i < state.income.otherIncome.length; i++) {
+        const otherIncome = state.income.otherIncome[i];
+        events.push({
+            name: `OtherIncome_${i + 1}`,
+            description: otherIncome.description || "Other income",
+            trigger: {
+                type: "Repeating",
+                interval: mapPayFrequency(otherIncome.frequency),
+                start: null,
+                end: null,
             },
-            state: "Active",
+            effects: [{
+                type: "Income",
+                amount: otherIncome.amount,
+                to_account: "Checking",
+                income_type: "Taxable",
+                gross: true,
+                adjust_for_inflation: true,
+            }],
+            once: false,
         });
     }
 
     // =========================================================================
-    // 4. Create Real Estate Assets
+    // 4. Create Real Estate Accounts & Events
     // =========================================================================
 
-    for (const property of state.realEstate) {
-        const propertyAccountId = nextAccountId++;
-        const propertyAssetId = nextAssetId++;
+    for (let i = 0; i < state.realEstate.length; i++) {
+        const property = state.realEstate[i];
+        const propertyName = `Property_${sanitizeName(property.type)}_${i + 1}`;
 
+        // Property account
         accounts.push({
-            account_id: propertyAccountId,
-            account_type: "Illiquid",
-            name: `${property.type} Property`,
-            assets: [{
-                asset_id: propertyAssetId,
-                asset_class: "RealEstate",
-                initial_value: property.value,
-                return_profile_index: HOUSING_PROFILE_INDEX,
-                name: property.type,
-            }],
+            name: propertyName,
+            description: `${property.type} Property`,
+            account_type: { type: "Custom", tax_status: "Taxable", contribution_limit: null },
+            cash: 0,
+            cash_return_profile: null,
         });
 
-        // Create mortgage liability account
+        // Property position
+        positions.push({
+            account: propertyName,
+            asset: "RealEstate",
+            units: property.value,
+            cost_basis: property.value,
+            purchase_date: null,
+        });
+
+        // Create mortgage liability and payments
         if (property.mortgage && property.mortgage.balance > 0) {
-            const mortgageAccountId = nextAccountId++;
-            const mortgageAssetId = nextAssetId++;
+            const mortgageName = `${propertyName}_Mortgage`;
 
             accounts.push({
-                account_id: mortgageAccountId,
-                account_type: "Illiquid",
-                name: `${property.type} Mortgage`,
-                assets: [{
-                    asset_id: mortgageAssetId,
-                    asset_class: "Liability",
-                    initial_value: -property.mortgage.balance,
-                    return_profile_index: CASH_PROFILE_INDEX,
-                    name: "Mortgage Debt",
-                }],
+                name: mortgageName,
+                description: `${property.type} Mortgage`,
+                account_type: { type: "Custom", tax_status: "Taxable", contribution_limit: null },
+                cash: -property.mortgage.balance,
+                cash_return_profile: null,
             });
 
-            // Create mortgage payment expense
-            const mortgageCashFlowId = nextCashFlowId++;
-            cashFlows.push({
-                cash_flow_id: mortgageCashFlowId,
-                amount: property.mortgage.monthlyPayment,
-                repeats: "Monthly",
-                adjust_for_inflation: false,
-                direction: {
-                    Expense: {
-                        source_account_id: checkingAccountId,
-                        source_asset_id: checkingAssetId,
-                    },
+            // Mortgage payment expense
+            events.push({
+                name: `${mortgageName}_Payment`,
+                description: `Monthly mortgage payment for ${property.type}`,
+                trigger: {
+                    type: "Repeating",
+                    interval: "Monthly",
+                    start: null,
+                    end: null,
                 },
-                state: "Active",
+                effects: [{
+                    type: "Expense",
+                    amount: property.mortgage.monthlyPayment,
+                    from_account: "Checking",
+                    adjust_for_inflation: false,
+                }],
+                once: false,
             });
         }
 
         // Add rental income if applicable
         if (property.rentalIncome && property.rentalIncome > 0) {
-            const rentalCashFlowId = nextCashFlowId++;
-            cashFlows.push({
-                cash_flow_id: rentalCashFlowId,
-                amount: property.rentalIncome,
-                repeats: "Monthly",
-                adjust_for_inflation: true,
-                direction: {
-                    Income: {
-                        target_account_id: checkingAccountId,
-                        target_asset_id: checkingAssetId,
-                    },
-                },
-                state: "Active",
-            });
-        }
-
-        // Add property sale event if planned
-        if (property.plannedSale) {
-            const saleEventId = nextEventId++;
-            let trigger: EventTrigger;
-
-            if (property.plannedSale.trigger === "Retirement" && state.retirement.targetAge) {
-                trigger = { Age: { years: state.retirement.targetAge } };
-            } else if (property.plannedSale.trigger === "SpecificAge" && property.plannedSale.age) {
-                trigger = { Age: { years: property.plannedSale.age } };
-            } else {
-                continue; // Skip if trigger not properly set
-            }
-
             events.push({
-                event_id: saleEventId,
-                trigger,
+                name: `${propertyName}_Rental`,
+                description: `Rental income from ${property.type}`,
+                trigger: {
+                    type: "Repeating",
+                    interval: "Monthly",
+                    start: null,
+                    end: null,
+                },
                 effects: [{
-                    DeleteAccount: propertyAccountId,
+                    type: "Income",
+                    amount: property.rentalIncome,
+                    to_account: "Checking",
+                    income_type: "Taxable",
+                    gross: true,
+                    adjust_for_inflation: true,
                 }],
-                once: true,
+                once: false,
             });
         }
     }
 
     // =========================================================================
-    // 5. Create Debt Accounts
+    // 5. Create Debt Accounts & Payment Events
     // =========================================================================
 
-    for (const debt of state.debts) {
-        const debtAccountId = nextAccountId++;
-        const debtAssetId = nextAssetId++;
+    for (let i = 0; i < state.debts.length; i++) {
+        const debt = state.debts[i];
+        const debtName = `Debt_${sanitizeName(debt.type)}_${i + 1}`;
 
         accounts.push({
-            account_id: debtAccountId,
-            account_type: "Illiquid",
-            name: `${debt.type} Debt`,
-            assets: [{
-                asset_id: debtAssetId,
-                asset_class: "Liability",
-                initial_value: -debt.balance,
-                return_profile_index: CASH_PROFILE_INDEX,
-                name: debt.description || debt.type,
-            }],
+            name: debtName,
+            description: debt.description || `${debt.type} Debt`,
+            account_type: { type: "Custom", tax_status: "Taxable", contribution_limit: null },
+            cash: -debt.balance,
+            cash_return_profile: null,
         });
 
-        // Create debt payment expense
-        const debtCashFlowId = nextCashFlowId++;
-        cashFlows.push({
-            cash_flow_id: debtCashFlowId,
-            amount: debt.monthlyPayment,
-            repeats: "Monthly",
-            adjust_for_inflation: false,
-            direction: {
-                Expense: {
-                    source_account_id: checkingAccountId,
-                    source_asset_id: checkingAssetId,
-                },
+        // Debt payment expense
+        events.push({
+            name: `${debtName}_Payment`,
+            description: `Monthly payment for ${debt.type}`,
+            trigger: {
+                type: "Repeating",
+                interval: "Monthly",
+                start: null,
+                end: null,
             },
-            state: "Active",
+            effects: [{
+                type: "Expense",
+                amount: debt.monthlyPayment,
+                from_account: "Checking",
+                adjust_for_inflation: false,
+            }],
+            once: false,
         });
     }
 
     // =========================================================================
-    // 6. Create Retirement Spending Target
+    // 6. Create Retirement Spending Event
     // =========================================================================
 
     if (state.retirement.targetAge && state.retirement.targetIncome) {
-        const spendingTargetId = nextSpendingTargetId++;
-        const retirementEventId = nextEventId++;
-
-        // Convert annual income to monthly
         const monthlyIncome = state.retirement.targetIncome / 12;
 
-        spendingTargets.push({
-            spending_target_id: spendingTargetId,
-            amount: monthlyIncome,
-            net_amount_mode: false,
-            repeats: "Monthly",
-            adjust_for_inflation: true,
-            withdrawal_strategy: "TaxOptimized",
-            exclude_accounts: [],
-            state: "Pending",
-        });
-
-        // Create event to activate spending target at retirement age
         events.push({
-            event_id: retirementEventId,
-            trigger: { Age: { years: state.retirement.targetAge } },
+            name: "RetirementSpending",
+            description: "Monthly retirement spending",
+            trigger: {
+                type: "Repeating",
+                interval: "Monthly",
+                start: { type: "Age", years: state.retirement.targetAge, months: null },
+                end: null,
+            },
             effects: [{
-                ActivateSpendingTarget: spendingTargetId,
+                type: "Withdrawal",
+                amount: { type: "Fixed", value: monthlyIncome },
+                to_account: "Checking",
+                source: { type: "Strategy", order: "TaxEfficientEarly", exclude: [] },
+                gross: false,
+                lot_method: "Fifo",
             }],
-            once: true,
+            once: false,
         });
-
-        // Terminate work income at retirement
-        const workIncomeCashFlows = cashFlows.filter(cf =>
-            'Income' in cf.direction &&
-            cf.direction.Income.target_account_id === checkingAccountId
-        );
-
-        if (workIncomeCashFlows.length > 0) {
-            events.push({
-                event_id: nextEventId++,
-                trigger: { Age: { years: state.retirement.targetAge } },
-                effects: workIncomeCashFlows.map(cf => ({
-                    TerminateCashFlow: cf.cash_flow_id,
-                })),
-                once: true,
-            });
-        }
     }
 
     // =========================================================================
@@ -424,30 +391,24 @@ export function buildSimulationParameters(state: WizardState): SimulationParamet
         state.retirement.socialSecurity.estimatedBenefit &&
         state.retirement.socialSecurity.claimingAge) {
 
-        const ssEventId = nextEventId++;
-        const ssCashFlowId = nextCashFlowId++;
-
-        cashFlows.push({
-            cash_flow_id: ssCashFlowId,
-            amount: state.retirement.socialSecurity.estimatedBenefit,
-            repeats: "Monthly",
-            adjust_for_inflation: true,
-            direction: {
-                Income: {
-                    target_account_id: checkingAccountId,
-                    target_asset_id: checkingAssetId,
-                },
-            },
-            state: "Pending",
-        });
-
         events.push({
-            event_id: ssEventId,
-            trigger: { Age: { years: state.retirement.socialSecurity.claimingAge } },
+            name: "SocialSecurity",
+            description: "Social Security benefits",
+            trigger: {
+                type: "Repeating",
+                interval: "Monthly",
+                start: { type: "Age", years: state.retirement.socialSecurity.claimingAge, months: null },
+                end: null,
+            },
             effects: [{
-                ActivateCashFlow: ssCashFlowId,
+                type: "Income",
+                amount: state.retirement.socialSecurity.estimatedBenefit,
+                to_account: "Checking",
+                income_type: "Taxable",
+                gross: true,
+                adjust_for_inflation: true,
             }],
-            once: true,
+            once: false,
         });
     }
 
@@ -459,30 +420,24 @@ export function buildSimulationParameters(state: WizardState): SimulationParamet
         state.retirement.pension.monthlyAmount &&
         state.retirement.pension.startAge) {
 
-        const pensionEventId = nextEventId++;
-        const pensionCashFlowId = nextCashFlowId++;
-
-        cashFlows.push({
-            cash_flow_id: pensionCashFlowId,
-            amount: state.retirement.pension.monthlyAmount,
-            repeats: "Monthly",
-            adjust_for_inflation: true,
-            direction: {
-                Income: {
-                    target_account_id: checkingAccountId,
-                    target_asset_id: checkingAssetId,
-                },
-            },
-            state: "Pending",
-        });
-
         events.push({
-            event_id: pensionEventId,
-            trigger: { Age: { years: state.retirement.pension.startAge } },
+            name: "Pension",
+            description: "Pension income",
+            trigger: {
+                type: "Repeating",
+                interval: "Monthly",
+                start: { type: "Age", years: state.retirement.pension.startAge, months: null },
+                end: null,
+            },
             effects: [{
-                ActivateCashFlow: pensionCashFlowId,
+                type: "Income",
+                amount: state.retirement.pension.monthlyAmount,
+                to_account: "Checking",
+                income_type: "Taxable",
+                gross: true,
+                adjust_for_inflation: true,
             }],
-            once: true,
+            once: false,
         });
     }
 
@@ -490,80 +445,63 @@ export function buildSimulationParameters(state: WizardState): SimulationParamet
     // 9. Add Life Events
     // =========================================================================
 
-    for (const lifeEvent of state.lifeEvents) {
-        const eventId = nextEventId++;
+    for (let i = 0; i < state.lifeEvents.length; i++) {
+        const lifeEvent = state.lifeEvents[i];
         const eventAge = currentAge + lifeEvent.yearsFromNow;
+        const eventName = `LifeEvent_${sanitizeName(lifeEvent.type)}_${i + 1}`;
+        const isIncome = lifeEvent.type === "Inheritance";
 
         if (lifeEvent.recurring) {
-            // Create recurring expense
-            const eventCashFlowId = nextCashFlowId++;
-
-            cashFlows.push({
-                cash_flow_id: eventCashFlowId,
-                amount: lifeEvent.amount,
-                repeats: "Yearly",
+            // Recurring expense/income
+            const effect: EffectDef = isIncome ? {
+                type: "Income",
+                amount: Math.abs(lifeEvent.amount),
+                to_account: "Checking",
+                income_type: "TaxFree",
+                gross: false,
                 adjust_for_inflation: lifeEvent.recurring.inflationAdjusted,
-                direction: {
-                    Expense: {
-                        source_account_id: checkingAccountId,
-                        source_asset_id: checkingAssetId,
-                    },
-                },
-                state: "Pending",
-            });
+            } : {
+                type: "Expense",
+                amount: Math.abs(lifeEvent.amount),
+                from_account: "Checking",
+                adjust_for_inflation: lifeEvent.recurring.inflationAdjusted,
+            };
 
-            // Activate at event age
             events.push({
-                event_id: eventId,
-                trigger: { Age: { years: eventAge } },
-                effects: [{
-                    ActivateCashFlow: eventCashFlowId,
-                }],
-                once: true,
+                name: eventName,
+                description: lifeEvent.description,
+                trigger: {
+                    type: "Repeating",
+                    interval: "Yearly",
+                    start: { type: "Age", years: eventAge, months: null },
+                    end: lifeEvent.recurring.duration > 0
+                        ? { type: "Age", years: eventAge + lifeEvent.recurring.duration, months: null }
+                        : null,
+                },
+                effects: [effect],
+                once: false,
             });
-
-            // Terminate after duration
-            if (lifeEvent.recurring.duration > 0) {
-                const endEventId = nextEventId++;
-                events.push({
-                    event_id: endEventId,
-                    trigger: { Age: { years: eventAge + lifeEvent.recurring.duration } },
-                    effects: [{
-                        TerminateCashFlow: eventCashFlowId,
-                    }],
-                    once: true,
-                });
-            }
         } else {
             // One-time expense or income
-            const isIncome = lifeEvent.type === "Inheritance";
-            const eventCashFlowId = nextCashFlowId++;
-
-            cashFlows.push({
-                cash_flow_id: eventCashFlowId,
+            const effect: EffectDef = isIncome ? {
+                type: "Income",
                 amount: Math.abs(lifeEvent.amount),
-                repeats: "Never",
+                to_account: "Checking",
+                income_type: "TaxFree",
+                gross: false,
                 adjust_for_inflation: false,
-                direction: isIncome ? {
-                    Income: {
-                        target_account_id: checkingAccountId,
-                        target_asset_id: checkingAssetId,
-                    },
-                } : {
-                    Expense: {
-                        source_account_id: checkingAccountId,
-                        source_asset_id: checkingAssetId,
-                    },
-                },
-                state: "Pending",
-            });
+            } : {
+                type: "Expense",
+                amount: Math.abs(lifeEvent.amount),
+                from_account: "Checking",
+                adjust_for_inflation: false,
+            };
 
             events.push({
-                event_id: eventId,
-                trigger: { Age: { years: eventAge } },
-                effects: [{
-                    ActivateCashFlow: eventCashFlowId,
-                }],
+                name: eventName,
+                description: lifeEvent.description,
+                trigger: { type: "Age", years: eventAge, months: null },
+                effects: [effect],
                 once: true,
             });
         }
@@ -573,67 +511,37 @@ export function buildSimulationParameters(state: WizardState): SimulationParamet
     // 10. Build Tax Config
     // =========================================================================
 
-    const taxConfig: TaxConfig = {
-        federal_brackets: [
-            { threshold: 0, rate: 0.10 },
-            { threshold: 11000, rate: 0.12 },
-            { threshold: 44725, rate: 0.22 },
-            { threshold: 95375, rate: 0.24 },
-            { threshold: 182100, rate: 0.32 },
-            { threshold: 231250, rate: 0.35 },
-            { threshold: 578125, rate: 0.37 },
-        ],
-        state_rate: getStateRate(state.personalInfo.state),
+    const taxConfig: TaxConfigDef = {
+        standard_deduction: state.personalInfo.filingStatus === "MarriedFilingJointly" ? 29200 : 14600,
         capital_gains_rate: 0.15,
-        taxable_gains_percentage: 0.5,
     };
 
     // =========================================================================
-    // 11. Build Return Profiles
+    // 11. Build Inflation Profile
     // =========================================================================
 
-    const returnProfiles: ReturnProfile[] = [
-        { Fixed: 0.03 }, // Cash (index 0)
-        { Normal: { mean: 0.08, std_dev: 0.15 } }, // Stocks/Bonds (index 1)
-        { Normal: { mean: 0.04, std_dev: 0.035 } }, // Housing (index 2)
-    ];
+    const inflationProfile: InflationProfile = { Normal: { mean: 0.03, std_dev: 0.02 } };
 
     // =========================================================================
-    // 12. Assemble Final Parameters
+    // 12. Assemble Final Request
     // =========================================================================
 
-    const birthDate = state.personalInfo.birthDate?.toISOString().split('T')[0];
+    const birthDate = state.personalInfo.birthDate?.toISOString().split('T')[0] || null;
 
     return {
+        name: state.simulationName || "My Simulation",
+        description: `${state.goal || "Financial planning"} simulation`,
         start_date: new Date().toISOString().split('T')[0],
         duration_years: state.retirement.targetAge
             ? (state.retirement.targetAge - currentAge + 30) // Run 30 years past retirement
             : 50,
         birth_date: birthDate,
-        retirement_age: state.retirement.targetAge || undefined,
-        inflation_profile: { Normal: { mean: 0.03, std_dev: 0.02 } },
-        return_profiles: returnProfiles,
-        events,
-        accounts,
-        cash_flows: cashFlows,
-        spending_targets: spendingTargets,
+        return_profiles: RETURN_PROFILES,
+        inflation_profile: inflationProfile,
         tax_config: taxConfig,
+        accounts,
+        assets,
+        positions,
+        events,
     };
-}
-
-/**
- * Get state tax rate based on state code
- */
-function getStateRate(state: string | null): number {
-    const stateRates: Record<string, number> = {
-        CA: 0.093, NY: 0.0882, NJ: 0.1075, HI: 0.11,
-        OR: 0.099, MN: 0.0985, DC: 0.0895, IA: 0.0853,
-        WI: 0.0765, VT: 0.0875, ME: 0.0715, SC: 0.07,
-        CT: 0.0699, ID: 0.058, NE: 0.0684, MT: 0.0675,
-        WV: 0.065, KS: 0.057, AK: 0.0, FL: 0.0,
-        NV: 0.0, SD: 0.0, TN: 0.0, TX: 0.0,
-        WA: 0.0, WY: 0.0,
-    };
-
-    return state ? (stateRates[state] || 0.05) : 0.05;
 }

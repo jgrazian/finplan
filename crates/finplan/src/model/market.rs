@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use jiff::civil::Date;
 use rand::{Rng, distr::Distribution};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::model::{AssetId, ReturnProfileId};
 
@@ -198,6 +199,7 @@ impl Market {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum InflationProfile {
     #[default]
     None,
@@ -241,6 +243,7 @@ impl InflationProfile {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum ReturnProfile {
     None,
     Fixed(f64),

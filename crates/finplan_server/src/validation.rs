@@ -1,5 +1,5 @@
 use crate::error::{ApiError, ApiResult};
-use finplan::SimulationParameters;
+use finplan::config::SimulationConfig;
 
 /// Validate portfolio creation request
 pub fn validate_portfolio_name(name: &str) -> ApiResult<()> {
@@ -51,7 +51,7 @@ pub fn validate_simulation_name(name: &str) -> ApiResult<()> {
 }
 
 /// Validate simulation parameters
-pub fn validate_simulation_params(params: &SimulationParameters) -> ApiResult<()> {
+pub fn validate_simulation_params(params: &SimulationConfig) -> ApiResult<()> {
     // Validate start_date is present
     let start_date = params.start_date.ok_or_else(|| ApiError::ValidationError {
         field: "start_date".to_string(),
@@ -146,16 +146,16 @@ mod tests {
     fn test_validate_simulation_dates() {
         use jiff::civil::date;
 
-        let mut params = SimulationParameters {
+        let mut params = SimulationConfig {
             start_date: Some(date(2025, 1, 1)),
             duration_years: 25,
             birth_date: None,
             accounts: vec![],
             inflation_profile: Default::default(),
-            return_profiles: vec![],
-            cash_flows: vec![],
+            return_profiles: Default::default(),
+            asset_returns: Default::default(),
+            asset_prices: Default::default(),
             events: vec![],
-            spending_targets: vec![],
             tax_config: Default::default(),
         };
 

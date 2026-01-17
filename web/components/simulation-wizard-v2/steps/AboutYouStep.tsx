@@ -78,6 +78,7 @@ export function AboutYouStep() {
                                     captionLayout="dropdown"
                                     startMonth={new Date(1940, 0)}
                                     endMonth={new Date()}
+                                    defaultMonth={new Date(2000, 0)}
                                 />
                             </PopoverContent>
                         </Popover>

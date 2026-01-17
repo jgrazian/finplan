@@ -15,11 +15,9 @@ use crate::models::{
     SimulationRunRecord, UpdateSimulationRequest,
 };
 use crate::validation;
+use finplan::config::SimulationConfig;
+use finplan::model::{AccountId, MonteCarloResult, SimulationResult, StateEvent};
 use finplan::simulation::monte_carlo_simulate;
-use finplan::{
-    SimulationParameters,
-    model::{AccountId, MonteCarloResult, RecordKind, SimulationResult},
-};
 use jiff::civil::Date;
 
 // Database connection wrapper
@@ -93,7 +91,7 @@ pub async fn get_simulation(
     let simulation = stmt
         .query_row([&id], |row| {
             let params_json: String = row.get(3)?;
-            let parameters: SimulationParameters =
+            let parameters: SimulationConfig =
                 serde_json::from_str(&params_json).map_err(|_| rusqlite::Error::InvalidQuery)?;
             Ok(SavedSimulation {
                 id: row.get(0)?,
@@ -228,7 +226,7 @@ pub async fn run_saved_simulation(
                 _ => ApiError::from(e),
             })?;
 
-        serde_json::from_str::<SimulationParameters>(&params_json)?
+        serde_json::from_str::<SimulationConfig>(&params_json)?
     };
 
     let iterations = req.iterations;
@@ -255,7 +253,7 @@ pub async fn run_saved_simulation(
 }
 
 pub async fn run_simulation(
-    Json(params): Json<SimulationParameters>,
+    Json(params): Json<SimulationConfig>,
 ) -> ApiResult<Json<AggregatedResult>> {
     // Validate parameters
     validation::validate_simulation_params(&params)?;
@@ -318,7 +316,7 @@ pub async fn get_simulation_run(
 pub struct AggregatedResult {
     pub accounts: HashMap<AccountId, Vec<TimePointStats>>,
     pub total_portfolio: Vec<TimePointStats>,
-    /// Growth components broken down by year (aggregated from transaction logs)
+    /// Growth components broken down by year (aggregated from ledger entries)
     pub growth_components: Vec<YearlyGrowthComponents>,
 }
 
@@ -333,25 +331,25 @@ pub struct TimePointStats {
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct YearlyGrowthComponents {
     pub year: i32,
-    /// Positive investment returns
+    /// Positive investment returns (cash appreciation)
     pub investment_returns: f64,
-    /// Negative returns (losses and debt interest)
+    /// Negative returns (losses)
     pub losses: f64,
-    /// Cash inflows (income via CashFlow)
+    /// Cash inflows (credits)
     pub contributions: f64,
-    /// Cash outflows via CashFlow (expenses, NOT spending targets)
+    /// Cash outflows (debits)
     pub cash_flow_expenses: f64,
-    /// Withdrawals via SpendingTarget
+    /// Asset sales
     pub withdrawals: f64,
 }
 
-/// Calculate the balance of an account at a specific date by replaying transactions
+/// Calculate the balance of an account at a specific date by replaying ledger entries
 fn calculate_balance_at_date(
     result: &SimulationResult,
     account_id: AccountId,
     target_date: Date,
 ) -> f64 {
-    // Start with initial value
+    // Start with initial value from account snapshot
     let mut balance = result
         .accounts
         .iter()
@@ -359,62 +357,43 @@ fn calculate_balance_at_date(
         .map(|a| a.starting_balance())
         .unwrap_or(0.0);
 
-    // Replay all records up to target date
-    for record in &result.records {
-        if record.date > target_date {
+    // Replay all ledger entries up to target date
+    for entry in &result.ledger {
+        if entry.date > target_date {
             continue;
         }
 
-        match &record.kind {
-            RecordKind::CashFlow {
-                account_id: acc_id,
-                amount,
-                ..
-            } if *acc_id == account_id => {
+        match &entry.event {
+            StateEvent::CashCredit { to, amount } if *to == account_id => {
                 balance += amount;
             }
-            RecordKind::Return {
+            StateEvent::CashDebit { from, amount } if *from == account_id => {
+                balance -= amount;
+            }
+            StateEvent::CashAppreciation {
                 account_id: acc_id,
-                return_amount,
+                new_value,
+                previous_value,
                 ..
             } if *acc_id == account_id => {
-                balance += return_amount;
+                balance += new_value - previous_value;
             }
-            RecordKind::Transfer {
-                from_account_id,
-                to_account_id,
-                amount,
-                ..
-            } => {
-                if *from_account_id == account_id {
-                    balance -= amount;
-                }
-                if *to_account_id == account_id {
-                    balance += amount;
-                }
-            }
-            RecordKind::Withdrawal {
+            StateEvent::AssetPurchase {
                 account_id: acc_id,
-                gross_amount,
+                cost_basis,
                 ..
             } if *acc_id == account_id => {
-                balance -= gross_amount;
+                // Asset purchase uses cash to buy assets (cash goes down, asset value added)
+                // The cost_basis represents what was spent
+                balance -= cost_basis;
             }
-            RecordKind::Liquidation {
-                from_account_id,
-                to_account_id,
-                gross_amount,
-                net_proceeds,
+            StateEvent::AssetSale {
+                account_id: acc_id,
+                proceeds,
                 ..
-            } => {
-                // Source account loses gross amount
-                if *from_account_id == account_id {
-                    balance -= gross_amount;
-                }
-                // Target account gains net proceeds (after taxes)
-                if *to_account_id == account_id {
-                    balance += net_proceeds;
-                }
+            } if *acc_id == account_id => {
+                // Asset sale adds proceeds to account
+                balance += proceeds;
             }
             _ => {}
         }
@@ -434,10 +413,10 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
     for sim_result in mc_result.iterations {
         let mut iteration_portfolio: HashMap<Date, f64> = HashMap::new();
 
-        // Build time series by replaying transactions for each date
+        // Build time series by replaying ledger entries for each date
         for account in &sim_result.accounts {
             for date in &sim_result.dates {
-                // Calculate balance at this date by replaying transactions up to this date
+                // Calculate balance at this date by replaying ledger entries up to this date
                 let balance = calculate_balance_at_date(&sim_result, account.account_id, *date);
 
                 // Account aggregation
@@ -458,33 +437,37 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
             portfolio_values.entry(date).or_default().push(total);
         }
 
-        // Aggregate records by type
-        for record in &sim_result.records {
-            let year = record.date.year() as i32;
-            let entry = growth_by_year
+        // Aggregate ledger entries by type
+        for entry in &sim_result.ledger {
+            let year = entry.date.year() as i32;
+            let growth_entry = growth_by_year
                 .entry(year)
                 .or_insert_with(|| YearlyGrowthComponents {
                     year,
                     ..Default::default()
                 });
 
-            match &record.kind {
-                RecordKind::Return { return_amount, .. } => {
-                    if *return_amount >= 0.0 {
-                        entry.investment_returns += return_amount / num_iterations;
+            match &entry.event {
+                StateEvent::CashAppreciation {
+                    new_value,
+                    previous_value,
+                    ..
+                } => {
+                    let return_amount = new_value - previous_value;
+                    if return_amount >= 0.0 {
+                        growth_entry.investment_returns += return_amount / num_iterations;
                     } else {
-                        entry.losses += return_amount / num_iterations; // Already negative
+                        growth_entry.losses += return_amount / num_iterations;
                     }
                 }
-                RecordKind::CashFlow { amount, .. } => {
-                    if *amount >= 0.0 {
-                        entry.contributions += amount / num_iterations;
-                    } else {
-                        entry.cash_flow_expenses += amount / num_iterations; // Already negative
-                    }
+                StateEvent::CashCredit { amount, .. } => {
+                    growth_entry.contributions += amount / num_iterations;
                 }
-                RecordKind::Withdrawal { gross_amount, .. } => {
-                    entry.withdrawals -= gross_amount / num_iterations; // Negative (outflow)
+                StateEvent::CashDebit { amount, .. } => {
+                    growth_entry.cash_flow_expenses -= amount / num_iterations;
+                }
+                StateEvent::AssetSale { proceeds, .. } => {
+                    growth_entry.withdrawals += proceeds / num_iterations;
                 }
                 _ => {}
             }
@@ -534,4 +517,48 @@ fn aggregate_results(mc_result: MonteCarloResult) -> AggregatedResult {
         total_portfolio: process_stats(portfolio_values),
         growth_components,
     }
+}
+
+// ============================================================================
+// Builder-Style Simulation Creation
+// ============================================================================
+
+/// Create simulation from builder-style request (name-based, no IDs)
+pub async fn create_simulation_from_request(
+    State(db): State<DbConn>,
+    Json(req): Json<crate::api_types::SimulationRequest>,
+) -> ApiResult<Json<SavedSimulation>> {
+    // Validate name
+    validation::validate_simulation_name(&req.name)?;
+
+    // Extract fields before consuming req
+    let name = req.name.clone();
+    let description = req.description.clone();
+
+    // Convert to SimulationConfig using the builder
+    let (config, metadata) = req.build()?;
+
+    // Convert to SimulationConfig for storage
+    let parameters = crate::api_conversion::config_to_parameters(&config, &metadata)?;
+
+    // Store using existing logic
+    let id = Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let params_json = serde_json::to_string(&parameters)?;
+
+    let conn = db.lock()?;
+    conn.execute(
+        "INSERT INTO simulations (id, name, description, parameters, portfolio_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![id, &name, description, params_json, Option::<String>::None, &now, &now],
+    )?;
+
+    Ok(Json(SavedSimulation {
+        id,
+        name,
+        description,
+        parameters,
+        portfolio_id: None,
+        created_at: now.clone(),
+        updated_at: now,
+    }))
 }

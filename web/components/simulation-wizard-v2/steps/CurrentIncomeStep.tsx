@@ -41,7 +41,9 @@ export function CurrentIncomeStep() {
         new Intl.NumberFormat("en-US", {
             style: "currency",
             currency: "USD",
+            useGrouping: true,
             maximumFractionDigits: 0,
+
         }).format(amount);
 
     return (

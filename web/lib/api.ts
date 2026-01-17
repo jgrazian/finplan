@@ -1,3 +1,4 @@
+import { SimulationRequest } from "./api-types";
 import {
     SimulationParameters,
     SavedSimulation,
@@ -118,6 +119,17 @@ export async function updateSimulation(
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
+    });
+    return handleResponse(response);
+}
+
+export async function postSimulationRequest(request: SimulationRequest): Promise<SavedSimulation> {
+    const response = await fetch(`${API_BASE}/api/simulations/build`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(request),
     });
     return handleResponse(response);
 }

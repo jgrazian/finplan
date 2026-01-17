@@ -10,6 +10,11 @@ pub fn simulation_routes() -> Router<DbConn> {
         // Simulation CRUD
         .route("/api/simulations", get(handlers::list_simulations))
         .route("/api/simulations", post(handlers::create_simulation))
+        // Builder-style simulation creation
+        .route(
+            "/api/simulations/build",
+            post(handlers::create_simulation_from_request),
+        )
         .route("/api/simulations/{id}", get(handlers::get_simulation))
         .route("/api/simulations/{id}", put(handlers::update_simulation))
         .route("/api/simulations/{id}", delete(handlers::delete_simulation))

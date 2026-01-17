@@ -8,9 +8,11 @@ use crate::model::Market;
 use super::ids::{AccountId, AssetId, ReturnProfileId};
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Period type for contribution limits
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum ContributionLimitPeriod {
     Monthly,
     Yearly,
@@ -18,6 +20,7 @@ pub enum ContributionLimitPeriod {
 
 /// Contribution limit configuration for an account
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub struct ContributionLimit {
     /// Maximum contribution per period
     pub amount: f64,
@@ -56,6 +59,7 @@ pub struct AssetLot {
 
 /// Tax treatment for an account
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum TaxStatus {
     /// Regular brokerage - capital gains taxed
     Taxable,

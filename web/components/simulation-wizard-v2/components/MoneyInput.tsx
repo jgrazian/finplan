@@ -29,9 +29,15 @@ export function MoneyInput({
         if (value === 0) {
             setDisplayValue("");
         } else {
-            setDisplayValue(value.toString());
+            setDisplayValue(formatCurrencyNoDollar(value));
         }
     }, [value]);
+
+    const formatCurrencyNoDollar = (amount: number) =>
+        new Intl.NumberFormat("en-US", {
+            useGrouping: true,
+            maximumFractionDigits: 0,
+        }).format(amount);
 
     const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const input = e.target.value.replace(/[^0-9.]/g, "");
@@ -43,7 +49,7 @@ export function MoneyInput({
 
     const handleBlur = () => {
         if (value > 0) {
-            setDisplayValue(value.toString());
+            setDisplayValue(formatCurrencyNoDollar(value));
         }
     };
 
@@ -51,6 +57,7 @@ export function MoneyInput({
         new Intl.NumberFormat("en-US", {
             style: "currency",
             currency: "USD",
+            useGrouping: true,
             maximumFractionDigits: 0,
         }).format(amount);
 
@@ -80,7 +87,7 @@ export function MoneyInput({
                     value={displayValue}
                     onChange={handleChange}
                     onBlur={handleBlur}
-                    placeholder={placeholder}
+                    placeholder={formatCurrencyNoDollar(Number(placeholder))}
                     disabled={disabled}
                     className={cn("pl-7", className)}
                 />

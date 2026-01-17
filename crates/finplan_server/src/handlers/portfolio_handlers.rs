@@ -198,11 +198,11 @@ pub async fn get_portfolio_networth(
     let mut by_asset_class: HashMap<String, f64> = HashMap::new();
 
     for account in &accounts {
-        let account_type = format!("{:?}", account.account_type);
+        let account_type = format!("{:?}", account.tax_status);
         for asset in &account.assets {
             total_value += asset.initial_value;
             *by_account_type.entry(account_type.clone()).or_insert(0.0) += asset.initial_value;
-            let asset_class = format!("{:?}", asset.asset_class);
+            let asset_class = asset.asset_class.clone().unwrap_or_else(|| "Unknown".to_string());
             *by_asset_class.entry(asset_class).or_insert(0.0) += asset.initial_value;
         }
     }
