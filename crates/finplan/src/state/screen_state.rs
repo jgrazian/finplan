@@ -1,5 +1,5 @@
 /// Per-screen state structs.
-use super::panels::{EventsPanel, PortfolioProfilesPanel};
+use super::panels::{EventsPanel, PortfolioProfilesPanel, ResultsPanel};
 
 #[derive(Debug)]
 pub struct PortfolioProfilesState {
@@ -42,7 +42,61 @@ pub struct ScenarioState {
     pub focused_field: usize,
 }
 
-#[derive(Debug, Default)]
+/// Filter for the ledger view in Results tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LedgerFilter {
+    #[default]
+    All,
+    CashOnly,
+    AssetsOnly,
+    TaxesOnly,
+    EventsOnly,
+}
+
+impl LedgerFilter {
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::CashOnly,
+            Self::CashOnly => Self::AssetsOnly,
+            Self::AssetsOnly => Self::TaxesOnly,
+            Self::TaxesOnly => Self::EventsOnly,
+            Self::EventsOnly => Self::All,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::CashOnly => "Cash",
+            Self::AssetsOnly => "Assets",
+            Self::TaxesOnly => "Taxes",
+            Self::EventsOnly => "Events",
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ResultsState {
+    /// Scroll offset for yearly breakdown panel
     pub scroll_offset: usize,
+    /// Currently focused panel
+    pub focused_panel: ResultsPanel,
+    /// Selected year index for account chart
+    pub selected_year_index: usize,
+    /// Scroll offset for ledger view
+    pub ledger_scroll_offset: usize,
+    /// Filter for ledger entries
+    pub ledger_filter: LedgerFilter,
+}
+
+impl Default for ResultsState {
+    fn default() -> Self {
+        Self {
+            scroll_offset: 0,
+            focused_panel: ResultsPanel::default(),
+            selected_year_index: 0,
+            ledger_scroll_offset: 0,
+            ledger_filter: LedgerFilter::default(),
+        }
+    }
 }

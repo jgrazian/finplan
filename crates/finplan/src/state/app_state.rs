@@ -45,6 +45,8 @@ pub struct AppState {
     /// Cached simulation config (rebuilt when running simulation)
     cached_config: Option<SimulationConfig>,
     pub simulation_result: Option<SimulationResult>,
+    /// Core simulation result (needed for ledger and wealth snapshots)
+    pub core_simulation_result: Option<finplan_core::model::SimulationResult>,
 
     // Per-screen state
     pub portfolio_profiles_state: PortfolioProfilesState,
@@ -72,6 +74,7 @@ impl Default for AppState {
             config_path: None,
             cached_config: None,
             simulation_result: None,
+            core_simulation_result: None,
             portfolio_profiles_state: PortfolioProfilesState::default(),
             events_state: EventsState::default(),
             scenario_state: ScenarioState::default(),
@@ -116,6 +119,7 @@ impl AppState {
         if self.app_data.simulations.contains_key(name) {
             self.current_scenario = name.to_string();
             self.simulation_result = None;
+            self.core_simulation_result = None;
             self.invalidate_config_cache();
         }
     }
@@ -134,6 +138,7 @@ impl AppState {
             .insert(name.to_string(), SimulationData::default());
         self.current_scenario = name.to_string();
         self.simulation_result = None;
+        self.core_simulation_result = None;
         self.invalidate_config_cache();
     }
 
@@ -273,6 +278,11 @@ impl AppState {
         .map_err(|e| SimulationError::Conversion(e.to_string()))?;
 
         self.simulation_result = Some(tui_result);
+        self.core_simulation_result = Some(core_result);
+
+        // Reset results state when new simulation runs
+        self.results_state = ResultsState::default();
+
         Ok(())
     }
 }

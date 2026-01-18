@@ -60,3 +60,33 @@ impl EventsPanel {
         }
     }
 }
+
+/// Focused panel for the Results tab (2x2 grid layout)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResultsPanel {
+    #[default]
+    NetWorthChart,
+    YearlyBreakdown,
+    AccountChart,
+    Ledger,
+}
+
+impl ResultsPanel {
+    pub fn next(self) -> Self {
+        match self {
+            Self::NetWorthChart => Self::AccountChart,
+            Self::AccountChart => Self::YearlyBreakdown,
+            Self::YearlyBreakdown => Self::Ledger,
+            Self::Ledger => Self::NetWorthChart,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::NetWorthChart => Self::Ledger,
+            Self::AccountChart => Self::NetWorthChart,
+            Self::YearlyBreakdown => Self::AccountChart,
+            Self::Ledger => Self::YearlyBreakdown,
+        }
+    }
+}
