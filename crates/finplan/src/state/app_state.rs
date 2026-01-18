@@ -91,6 +91,7 @@ pub struct PortfolioProfilesState {
     pub selected_account_index: usize,
     pub selected_profile_index: usize,
     pub selected_mapping_index: usize,
+    pub selected_config_index: usize,
     pub focused_panel: PortfolioProfilesPanel,
 }
 
@@ -100,6 +101,7 @@ impl Default for PortfolioProfilesState {
             selected_account_index: 0,
             selected_profile_index: 0,
             selected_mapping_index: 0,
+            selected_config_index: 0,
             focused_panel: PortfolioProfilesPanel::Accounts,
         }
     }
@@ -136,13 +138,39 @@ pub enum ModalState {
     TextInput(TextInputModal),
     Message(MessageModal),
     ScenarioPicker(ScenarioPickerModal),
+    Picker(PickerModal),
+    Form(FormModal),
+    Confirm(ConfirmModal),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalAction {
+    // Scenario management
     SaveAs,
     Load,
     SwitchTo,
+    // Account CRUD
+    CreateAccount,
+    EditAccount,
+    DeleteAccount,
+    // Profile CRUD
+    CreateProfile,
+    EditProfile,
+    DeleteProfile,
+    // Holding CRUD
+    AddHolding,
+    EditHolding,
+    DeleteHolding,
+    // Config
+    EditTaxConfig,
+    EditInflation,
+    // Pickers (intermediate steps)
+    PickAccountCategory,
+    PickAccountType,
+    PickProfileType,
+    PickInflationType,
+    PickFederalBrackets,
+    PickReturnProfile,
 }
 
 #[derive(Debug)]
@@ -293,6 +321,147 @@ impl MessageModal {
             message: message.to_string(),
             is_error: true,
         }
+    }
+}
+
+// ========== PickerModal ==========
+
+#[derive(Debug)]
+pub struct PickerModal {
+    pub title: String,
+    pub options: Vec<String>,
+    pub selected_index: usize,
+    pub action: ModalAction,
+}
+
+impl PickerModal {
+    pub fn new(title: &str, options: Vec<String>, action: ModalAction) -> Self {
+        Self {
+            title: title.to_string(),
+            options,
+            selected_index: 0,
+            action,
+        }
+    }
+}
+
+// ========== FormModal ==========
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldType {
+    Text,
+    Currency,
+    Percentage,
+    ReadOnly,
+}
+
+#[derive(Debug, Clone)]
+pub struct FormField {
+    pub label: String,
+    pub field_type: FieldType,
+    pub value: String,
+    pub cursor_pos: usize,
+}
+
+impl FormField {
+    pub fn new(label: &str, field_type: FieldType, value: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            field_type,
+            value: value.to_string(),
+            cursor_pos: 0,
+        }
+    }
+
+    pub fn text(label: &str, value: &str) -> Self {
+        Self::new(label, FieldType::Text, value)
+    }
+
+    pub fn currency(label: &str, value: f64) -> Self {
+        Self::new(label, FieldType::Currency, &format!("{:.2}", value))
+    }
+
+    pub fn percentage(label: &str, rate: f64) -> Self {
+        // Store as display value (e.g., 5.0 for 5%)
+        Self::new(label, FieldType::Percentage, &format!("{:.2}", rate * 100.0))
+    }
+
+    pub fn read_only(label: &str, value: &str) -> Self {
+        Self::new(label, FieldType::ReadOnly, value)
+    }
+}
+
+#[derive(Debug)]
+pub struct FormModal {
+    pub title: String,
+    pub fields: Vec<FormField>,
+    pub focused_field: usize,
+    pub editing: bool,
+    pub action: ModalAction,
+    /// Context data for the form (e.g., account index being edited)
+    pub context: Option<String>,
+}
+
+impl FormModal {
+    pub fn new(title: &str, fields: Vec<FormField>, action: ModalAction) -> Self {
+        // Find first editable field
+        let first_editable = fields
+            .iter()
+            .position(|f| f.field_type != FieldType::ReadOnly)
+            .unwrap_or(0);
+
+        Self {
+            title: title.to_string(),
+            fields,
+            focused_field: first_editable,
+            editing: false,
+            action,
+            context: None,
+        }
+    }
+
+    pub fn with_context(mut self, context: &str) -> Self {
+        self.context = Some(context.to_string());
+        self
+    }
+
+    /// Start in editing mode (for better UX)
+    pub fn start_editing(mut self) -> Self {
+        if !self.fields.is_empty()
+            && self.fields[self.focused_field].field_type != FieldType::ReadOnly
+        {
+            self.editing = true;
+            self.fields[self.focused_field].cursor_pos =
+                self.fields[self.focused_field].value.len();
+        }
+        self
+    }
+}
+
+// ========== ConfirmModal ==========
+
+#[derive(Debug)]
+pub struct ConfirmModal {
+    pub title: String,
+    pub message: String,
+    pub action: ModalAction,
+    /// Context data for the confirmation (e.g., index of item to delete)
+    pub context: Option<String>,
+}
+
+impl ConfirmModal {
+    pub fn new(title: &str, message: &str, action: ModalAction) -> Self {
+        Self {
+            title: title.to_string(),
+            message: message.to_string(),
+            action,
+            context: None,
+        }
+    }
+
+    pub fn with_context(mut self, context: &str) -> Self {
+        self.context = Some(context.to_string());
+        self
     }
 }
 

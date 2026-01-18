@@ -2,11 +2,11 @@ use super::{Component, EventResult};
 use crate::state::AppState;
 use crossterm::event::KeyEvent;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 pub struct StatusBar;
@@ -20,7 +20,7 @@ impl StatusBar {
         // Return help text based on active tab
         match state.active_tab {
             crate::state::TabId::PortfolioProfiles => {
-                "1-4: tabs | j/k: nav | Tab: panel | 1-4: presets (profiles) | m: map asset | q: quit"
+                "j/k: nav | Tab: panel | a: add | e: edit | d: delete | h: holdings | m: map | q: quit"
             }
             crate::state::TabId::Scenario => {
                 "1-4: switch tabs | r: run simulation | m: monte carlo | s/l: save/load | q: quit"

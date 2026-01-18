@@ -3,8 +3,11 @@ use std::collections::HashSet;
 use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
-use crate::data::profiles_data::ReturnProfileData;
-use crate::state::{AppState, PortfolioProfilesPanel};
+use crate::data::profiles_data::{ProfileData, ReturnProfileData};
+use crate::state::{
+    AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal,
+    PortfolioProfilesPanel,
+};
 use crate::util::format::{format_currency, format_percentage};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -350,16 +353,17 @@ impl PortfolioProfilesScreen {
     fn render_tax_inflation_config(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Config;
+        let selected_idx = state.portfolio_profiles_state.selected_config_index;
 
         let tax_config = &state.data().parameters.tax_config;
         let federal_desc = match &tax_config.federal_brackets {
-            FederalBracketsPreset::Single2024 => "2024 Single",
-            FederalBracketsPreset::MarriedJoint2024 => "2024 Married Joint",
+            FederalBracketsPreset::Single2024 => "2024 Single".to_string(),
+            FederalBracketsPreset::MarriedJoint2024 => "2024 Married Joint".to_string(),
             FederalBracketsPreset::Custom { brackets } => {
                 if brackets.is_empty() {
-                    "Custom (empty)"
+                    "Custom (empty)".to_string()
                 } else {
-                    "Custom"
+                    "Custom".to_string()
                 }
             }
         };
@@ -374,23 +378,43 @@ impl PortfolioProfilesScreen {
             }
         };
 
+        let state_rate_str = format_percentage(tax_config.state_rate);
+        let cap_gains_str = format_percentage(tax_config.capital_gains_rate);
+
+        // Helper to create styled config lines
+        fn style_config_line<'a>(
+            is_focused: bool,
+            selected_idx: usize,
+            idx: usize,
+            label: &'a str,
+            value: String,
+        ) -> Line<'a> {
+            let is_selected = is_focused && selected_idx == idx;
+            let label_style = if is_selected {
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Yellow)
+            } else {
+                Style::default().add_modifier(Modifier::BOLD)
+            };
+            let value_style = if is_selected {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+            let prefix = if is_selected { "> " } else { "  " };
+            Line::from(vec![
+                Span::raw(prefix),
+                Span::styled(label, label_style),
+                Span::styled(value, value_style),
+            ])
+        }
+
         let lines = vec![
-            Line::from(vec![
-                Span::styled("Federal: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(federal_desc),
-            ]),
-            Line::from(vec![
-                Span::styled("State: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format_percentage(tax_config.state_rate)),
-            ]),
-            Line::from(vec![
-                Span::styled("Cap Gains: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format_percentage(tax_config.capital_gains_rate)),
-            ]),
-            Line::from(vec![
-                Span::styled("Inflation: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(inflation_desc),
-            ]),
+            style_config_line(is_focused, selected_idx, 0, "Federal: ", federal_desc),
+            style_config_line(is_focused, selected_idx, 1, "State: ", state_rate_str),
+            style_config_line(is_focused, selected_idx, 2, "Cap Gains: ", cap_gains_str),
+            style_config_line(is_focused, selected_idx, 3, "Inflation: ", inflation_desc),
         ];
 
         let title = " TAX & INFLATION ";
@@ -401,12 +425,16 @@ impl PortfolioProfilesScreen {
             Style::default()
         };
 
-        let paragraph = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        );
+        let mut block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style);
+
+        if is_focused {
+            block = block.title_bottom(Line::from(" [e] Edit ").fg(Color::DarkGray));
+        }
+
+        let paragraph = Paragraph::new(lines).block(block);
 
         frame.render_widget(paragraph, area);
     }
@@ -479,7 +507,170 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
+            KeyCode::Char('a') => {
+                // Add new account - show category picker
+                let categories = vec![
+                    "Investment".to_string(),
+                    "Cash".to_string(),
+                    "Property".to_string(),
+                    "Debt".to_string(),
+                ];
+                state.modal = ModalState::Picker(PickerModal::new(
+                    "Select Account Category",
+                    categories,
+                    ModalAction::PickAccountCategory,
+                ));
+                EventResult::Handled
+            }
+            KeyCode::Char('e') => {
+                // Edit selected account
+                if let Some(account) = state
+                    .data()
+                    .portfolios
+                    .accounts
+                    .get(state.portfolio_profiles_state.selected_account_index)
+                {
+                    let form = Self::create_account_edit_form(account, state);
+                    state.modal = ModalState::Form(
+                        form.with_context(
+                            &state
+                                .portfolio_profiles_state
+                                .selected_account_index
+                                .to_string(),
+                        ),
+                    );
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('d') => {
+                // Delete selected account with confirmation
+                if let Some(account) = state
+                    .data()
+                    .portfolios
+                    .accounts
+                    .get(state.portfolio_profiles_state.selected_account_index)
+                {
+                    state.modal = ModalState::Confirm(
+                        ConfirmModal::new(
+                            "Delete Account",
+                            &format!("Delete account '{}'?", account.name),
+                            ModalAction::DeleteAccount,
+                        )
+                        .with_context(
+                            &state
+                                .portfolio_profiles_state
+                                .selected_account_index
+                                .to_string(),
+                        ),
+                    );
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('h') => {
+                // Manage holdings for investment accounts
+                if let Some(account) = state
+                    .data()
+                    .portfolios
+                    .accounts
+                    .get(state.portfolio_profiles_state.selected_account_index)
+                {
+                    match &account.account_type {
+                        AccountType::Brokerage(_)
+                        | AccountType::Traditional401k(_)
+                        | AccountType::Roth401k(_)
+                        | AccountType::TraditionalIRA(_)
+                        | AccountType::RothIRA(_) => {
+                            // Show form to add a new holding
+                            let form = FormModal::new(
+                                "Add Holding",
+                                vec![
+                                    FormField::text("Asset Name", ""),
+                                    FormField::currency("Value", 0.0),
+                                ],
+                                ModalAction::AddHolding,
+                            )
+                            .with_context(
+                                &state
+                                    .portfolio_profiles_state
+                                    .selected_account_index
+                                    .to_string(),
+                            );
+                            state.modal = ModalState::Form(form);
+                        }
+                        _ => {
+                            state.set_error(
+                                "Holdings are only available for investment accounts".to_string(),
+                            );
+                        }
+                    }
+                }
+                EventResult::Handled
+            }
             _ => EventResult::NotHandled,
+        }
+    }
+
+    fn create_account_edit_form(account: &AccountData, _state: &AppState) -> FormModal {
+        let type_name = format_account_type(&account.account_type);
+
+        match &account.account_type {
+            AccountType::Checking(prop)
+            | AccountType::Savings(prop)
+            | AccountType::HSA(prop)
+            | AccountType::Property(prop)
+            | AccountType::Collectible(prop) => {
+                let profile_str = prop
+                    .return_profile
+                    .as_ref()
+                    .map(|p| p.0.clone())
+                    .unwrap_or_default();
+                FormModal::new(
+                    "Edit Account",
+                    vec![
+                        FormField::read_only("Type", type_name),
+                        FormField::text("Name", &account.name),
+                        FormField::text(
+                            "Description",
+                            account.description.as_deref().unwrap_or(""),
+                        ),
+                        FormField::currency("Value", prop.value),
+                        FormField::text("Return Profile", &profile_str),
+                    ],
+                    ModalAction::EditAccount,
+                )
+            }
+            AccountType::Mortgage(debt)
+            | AccountType::LoanDebt(debt)
+            | AccountType::StudentLoanDebt(debt) => FormModal::new(
+                "Edit Account",
+                vec![
+                    FormField::read_only("Type", type_name),
+                    FormField::text("Name", &account.name),
+                    FormField::text("Description", account.description.as_deref().unwrap_or("")),
+                    FormField::currency("Balance", debt.balance),
+                    FormField::percentage("Interest Rate", debt.interest_rate),
+                ],
+                ModalAction::EditAccount,
+            ),
+            AccountType::Brokerage(_)
+            | AccountType::Traditional401k(_)
+            | AccountType::Roth401k(_)
+            | AccountType::TraditionalIRA(_)
+            | AccountType::RothIRA(_) => {
+                // Investment accounts - just edit name/description
+                FormModal::new(
+                    "Edit Account",
+                    vec![
+                        FormField::read_only("Type", type_name),
+                        FormField::text("Name", &account.name),
+                        FormField::text(
+                            "Description",
+                            account.description.as_deref().unwrap_or(""),
+                        ),
+                    ],
+                    ModalAction::EditAccount,
+                )
+            }
         }
     }
 
@@ -501,6 +692,63 @@ impl PortfolioProfilesScreen {
                     } else {
                         state.portfolio_profiles_state.selected_profile_index -= 1;
                     }
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('a') => {
+                // Add new profile - show type picker
+                let types = vec![
+                    "None".to_string(),
+                    "Fixed Rate".to_string(),
+                    "Normal Distribution".to_string(),
+                    "Log-Normal Distribution".to_string(),
+                ];
+                state.modal = ModalState::Picker(PickerModal::new(
+                    "Select Profile Type",
+                    types,
+                    ModalAction::PickProfileType,
+                ));
+                EventResult::Handled
+            }
+            KeyCode::Char('e') => {
+                // Edit selected profile
+                if let Some(profile_data) = state
+                    .data()
+                    .profiles
+                    .get(state.portfolio_profiles_state.selected_profile_index)
+                {
+                    let form = Self::create_profile_edit_form(profile_data);
+                    state.modal = ModalState::Form(
+                        form.with_context(
+                            &state
+                                .portfolio_profiles_state
+                                .selected_profile_index
+                                .to_string(),
+                        ),
+                    );
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('d') => {
+                // Delete selected profile with confirmation
+                if let Some(profile_data) = state
+                    .data()
+                    .profiles
+                    .get(state.portfolio_profiles_state.selected_profile_index)
+                {
+                    state.modal = ModalState::Confirm(
+                        ConfirmModal::new(
+                            "Delete Profile",
+                            &format!("Delete profile '{}'?", profile_data.name.0),
+                            ModalAction::DeleteProfile,
+                        )
+                        .with_context(
+                            &state
+                                .portfolio_profiles_state
+                                .selected_profile_index
+                                .to_string(),
+                        ),
+                    );
                 }
                 EventResult::Handled
             }
@@ -544,6 +792,52 @@ impl PortfolioProfilesScreen {
                 EventResult::Handled
             }
             _ => EventResult::NotHandled,
+        }
+    }
+
+    fn create_profile_edit_form(profile_data: &ProfileData) -> FormModal {
+        let type_name = Self::format_profile_type(&profile_data.profile);
+        match &profile_data.profile {
+            ReturnProfileData::None => FormModal::new(
+                "Edit Profile",
+                vec![
+                    FormField::text("Name", &profile_data.name.0),
+                    FormField::text(
+                        "Description",
+                        profile_data.description.as_deref().unwrap_or(""),
+                    ),
+                    FormField::read_only("Type", &type_name),
+                ],
+                ModalAction::EditProfile,
+            ),
+            ReturnProfileData::Fixed { rate } => FormModal::new(
+                "Edit Profile",
+                vec![
+                    FormField::text("Name", &profile_data.name.0),
+                    FormField::text(
+                        "Description",
+                        profile_data.description.as_deref().unwrap_or(""),
+                    ),
+                    FormField::read_only("Type", &type_name),
+                    FormField::percentage("Rate", *rate),
+                ],
+                ModalAction::EditProfile,
+            ),
+            ReturnProfileData::Normal { mean, std_dev }
+            | ReturnProfileData::LogNormal { mean, std_dev } => FormModal::new(
+                "Edit Profile",
+                vec![
+                    FormField::text("Name", &profile_data.name.0),
+                    FormField::text(
+                        "Description",
+                        profile_data.description.as_deref().unwrap_or(""),
+                    ),
+                    FormField::read_only("Type", &type_name),
+                    FormField::percentage("Mean", *mean),
+                    FormField::percentage("Std Dev", *std_dev),
+                ],
+                ModalAction::EditProfile,
+            ),
         }
     }
 
@@ -604,10 +898,76 @@ impl PortfolioProfilesScreen {
         }
     }
 
-    fn handle_config_keys(&self, key: KeyEvent, _state: &mut AppState) -> EventResult {
+    fn handle_config_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
+        const CONFIG_ITEMS: usize = 4; // Federal, State, Cap Gains, Inflation
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down | KeyCode::Char('k') | KeyCode::Up => {
-                // Config panel doesn't have selectable items yet
+            KeyCode::Char('j') | KeyCode::Down => {
+                state.portfolio_profiles_state.selected_config_index =
+                    (state.portfolio_profiles_state.selected_config_index + 1) % CONFIG_ITEMS;
+                EventResult::Handled
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if state.portfolio_profiles_state.selected_config_index == 0 {
+                    state.portfolio_profiles_state.selected_config_index = CONFIG_ITEMS - 1;
+                } else {
+                    state.portfolio_profiles_state.selected_config_index -= 1;
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('e') | KeyCode::Enter => {
+                // Edit the selected config item
+                match state.portfolio_profiles_state.selected_config_index {
+                    0 => {
+                        // Federal Brackets - picker
+                        let options =
+                            vec!["2024 Single".to_string(), "2024 Married Joint".to_string()];
+                        state.modal = ModalState::Picker(PickerModal::new(
+                            "Federal Tax Brackets",
+                            options,
+                            ModalAction::PickFederalBrackets,
+                        ));
+                    }
+                    1 => {
+                        // State Rate - form
+                        let rate = state.data().parameters.tax_config.state_rate;
+                        state.modal = ModalState::Form(
+                            FormModal::new(
+                                "Edit State Tax Rate",
+                                vec![FormField::percentage("State Rate", rate)],
+                                ModalAction::EditTaxConfig,
+                            )
+                            .with_context("state_rate"),
+                        );
+                    }
+                    2 => {
+                        // Capital Gains Rate - form
+                        let rate = state.data().parameters.tax_config.capital_gains_rate;
+                        state.modal = ModalState::Form(
+                            FormModal::new(
+                                "Edit Capital Gains Rate",
+                                vec![FormField::percentage("Capital Gains Rate", rate)],
+                                ModalAction::EditTaxConfig,
+                            )
+                            .with_context("cap_gains_rate"),
+                        );
+                    }
+                    3 => {
+                        // Inflation - picker for type
+                        let options = vec![
+                            "None".to_string(),
+                            "Fixed".to_string(),
+                            "Normal".to_string(),
+                            "Log-Normal".to_string(),
+                            "US Historical".to_string(),
+                        ];
+                        state.modal = ModalState::Picker(PickerModal::new(
+                            "Inflation Type",
+                            options,
+                            ModalAction::PickInflationType,
+                        ));
+                    }
+                    _ => {}
+                }
                 EventResult::Handled
             }
             _ => EventResult::NotHandled,
