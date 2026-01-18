@@ -9,17 +9,20 @@ pub enum FocusedPanel {
 /// Focused panel for the consolidated Portfolio & Profiles tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortfolioProfilesPanel {
-    Accounts,      // Left column
-    Profiles,      // Right top
-    AssetMappings, // Right middle
-    Config,        // Right bottom
+    Accounts,      // Unified left panel (list + details)
+    Profiles,      // Unified right panel (list + distribution)
+    AssetMappings, // Secondary panel (collapsed by default)
+    Config,        // Secondary panel (collapsed by default)
 }
 
 impl PortfolioProfilesPanel {
+    /// Cycle through main panels: Accounts <-> Profiles
+    /// Secondary panels accessed via Space when collapsed
     pub fn next(self) -> Self {
         match self {
             Self::Accounts => Self::Profiles,
-            Self::Profiles => Self::AssetMappings,
+            Self::Profiles => Self::Accounts,
+            // Secondary panels cycle back to main
             Self::AssetMappings => Self::Config,
             Self::Config => Self::Accounts,
         }
@@ -27,11 +30,16 @@ impl PortfolioProfilesPanel {
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Accounts => Self::Config,
+            Self::Accounts => Self::Profiles,
             Self::Profiles => Self::Accounts,
-            Self::AssetMappings => Self::Profiles,
+            // Secondary panels cycle back to main
+            Self::AssetMappings => Self::Accounts,
             Self::Config => Self::AssetMappings,
         }
+    }
+
+    pub fn is_secondary(self) -> bool {
+        matches!(self, Self::AssetMappings | Self::Config)
     }
 }
 

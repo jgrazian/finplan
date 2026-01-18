@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use crate::components::collapsible::CollapsiblePanel;
 use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
@@ -50,62 +49,223 @@ impl PortfolioProfilesScreen {
         sorted
     }
 
-    // ========== Left Column: Accounts List ==========
+    // ========== Unified Panel Renderers ==========
 
-    fn render_account_list(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+    /// Render portfolio overview (always visible at top)
+    fn render_portfolio_overview(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" PORTFOLIO OVERVIEW ");
+        let inner_area = block.inner(area);
+        frame.render_widget(block, area);
+
+        let accounts = &state.data().portfolios.accounts;
+        if accounts.is_empty() {
+            let msg =
+                Paragraph::new("No accounts defined").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, inner_area);
+            return;
+        }
+
+        // Calculate total positive value (exclude debts from percentage base)
+        let total_positive: f64 = accounts
+            .iter()
+            .map(get_account_value)
+            .filter(|v| *v > 0.0)
+            .sum();
+
+        if total_positive == 0.0 {
+            let msg =
+                Paragraph::new("No positive value").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, inner_area);
+            return;
+        }
+
+        // Render horizontal bars
+        let available_height = inner_area.height as usize;
+        let max_bars = available_height.saturating_sub(1);
+
+        let mut y_offset = 0;
+        for account in accounts.iter().take(max_bars) {
+            let value = get_account_value(account);
+            let color = Self::account_type_color(&account.account_type);
+
+            // Truncate name if needed
+            let name = if account.name.len() > 12 {
+                format!("{}...", &account.name[..9])
+            } else {
+                account.name.clone()
+            };
+
+            // For debts, show as negative but calculate percentage of positive portfolio
+            let percentage = if value >= 0.0 {
+                (value / total_positive * 100.0).round() as i16
+            } else {
+                -((value.abs() / total_positive * 100.0).round() as i16)
+            };
+
+            // Create bar line
+            let bar_width = inner_area.width.saturating_sub(32) as usize;
+            let filled = if value >= 0.0 {
+                (bar_width as f64 * value / total_positive).round() as usize
+            } else {
+                (bar_width as f64 * value.abs() / total_positive)
+                    .round()
+                    .min(bar_width as f64) as usize
+            };
+            let empty = bar_width.saturating_sub(filled);
+
+            let (bar_char, bar_empty_char) = if value >= 0.0 {
+                ("█", "░")
+            } else {
+                ("▓", "░")
+            };
+
+            let bar_filled: String = bar_char.repeat(filled);
+            let bar_empty: String = bar_empty_char.repeat(empty);
+
+            let line = Line::from(vec![
+                Span::styled(format!("{:<12} ", name), Style::default().fg(color)),
+                Span::styled(bar_filled, Style::default().fg(color)),
+                Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
+                Span::raw(format!(" {:>4}% ", percentage)),
+                Span::styled(
+                    format_currency(value),
+                    Style::default().fg(if value >= 0.0 {
+                        Color::DarkGray
+                    } else {
+                        Color::Red
+                    }),
+                ),
+            ]);
+
+            let bar_area = Rect::new(
+                inner_area.x,
+                inner_area.y + y_offset as u16,
+                inner_area.width,
+                1,
+            );
+            frame.render_widget(Paragraph::new(line), bar_area);
+            y_offset += 1;
+        }
+    }
+
+    /// Render unified accounts panel (top: list | details, bottom: centered holdings chart)
+    fn render_unified_accounts(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Accounts;
 
-        let items: Vec<ListItem> = state
-            .data()
-            .portfolios
-            .accounts
-            .iter()
-            .enumerate()
-            .map(|(idx, account)| {
-                let value = get_account_value(account);
-                let content = format!("{:<16} {:>10}", account.name, format_currency(value));
-
-                let style = if idx == state.portfolio_profiles_state.selected_account_index {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-
-                ListItem::new(Line::from(Span::styled(content, style)))
-            })
-            .collect();
-
-        let title = " ACCOUNTS ";
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default()
         };
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
+        let mut block = Block::default()
+            .borders(Borders::ALL)
+            .title(" ACCOUNTS ")
+            .border_style(border_style);
+
+        if is_focused {
+            block = block.title_bottom(
+                Line::from(" [a] Add  [e] Edit  [d] Delete  [h] Holdings  [Space] Toggle ")
+                    .fg(Color::DarkGray),
+            );
+        }
+
+        let inner_area = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Split vertically: ~50% top (list|details), ~50% bottom (chart)
+        let top_height = (inner_area.height as f32 * 0.45).max(5.0) as u16;
+        let bottom_height = inner_area.height.saturating_sub(top_height + 1); // 1 for separator
+
+        let top_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, top_height);
+        let hsep_area = Rect::new(inner_area.x, inner_area.y + top_height, inner_area.width, 1);
+        let bottom_area = Rect::new(
+            inner_area.x,
+            inner_area.y + top_height + 1,
+            inner_area.width,
+            bottom_height,
         );
 
-        frame.render_widget(list, area);
-    }
+        // Top section: split horizontally into list (40%) | details (60%)
+        let list_width = (top_area.width as f32 * 0.40) as u16;
+        let details_width = top_area.width.saturating_sub(list_width + 1); // 1 for separator
 
-    // ========== Middle Column: Account Details & Profile Details ==========
+        let list_area = Rect::new(top_area.x, top_area.y, list_width, top_area.height);
+        let vsep_area = Rect::new(top_area.x + list_width, top_area.y, 1, top_area.height);
+        let details_area = Rect::new(
+            top_area.x + list_width + 1,
+            top_area.y,
+            details_width,
+            top_area.height,
+        );
 
-    fn render_account_details(&self, frame: &mut Frame, area: Rect, state: &AppState) {
-        let is_focused =
-            state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Accounts;
+        // Render account list
+        let accounts = &state.data().portfolios.accounts;
+        let mut lines = Vec::new();
+        for (idx, account) in accounts.iter().enumerate() {
+            let value = get_account_value(account);
+            let prefix = if idx == state.portfolio_profiles_state.selected_account_index {
+                "> "
+            } else {
+                "  "
+            };
+            // Truncate name if needed to fit
+            let max_name_len = list_width.saturating_sub(15) as usize;
+            let name = if account.name.len() > max_name_len && max_name_len > 3 {
+                format!("{}...", &account.name[..max_name_len.saturating_sub(3)])
+            } else {
+                account.name.clone()
+            };
+            let content = format!(
+                "{}{:<width$} {:>10}",
+                prefix,
+                name,
+                format_currency(value),
+                width = max_name_len.max(1)
+            );
 
-        let content = if let Some(account) = state
-            .data()
-            .portfolios
-            .accounts
-            .get(state.portfolio_profiles_state.selected_account_index)
+            let style = if idx == state.portfolio_profiles_state.selected_account_index {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(Span::styled(content, style)));
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No accounts.",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Press 'a' to add.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        let list_para = Paragraph::new(lines);
+        frame.render_widget(list_para, list_area);
+
+        // Render vertical separator
+        let mut vsep_lines = Vec::new();
+        for _ in 0..top_area.height {
+            vsep_lines.push(Line::from(Span::styled(
+                "│",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        let vsep = Paragraph::new(vsep_lines);
+        frame.render_widget(vsep, vsep_area);
+
+        // Render account details
+        let detail_lines = if let Some(account) =
+            accounts.get(state.portfolio_profiles_state.selected_account_index)
         {
             let mut lines = vec![
                 Line::from(vec![
@@ -124,8 +284,6 @@ impl PortfolioProfilesScreen {
                     Span::raw(desc),
                 ]));
             }
-
-            lines.push(Line::from(""));
 
             match &account.account_type {
                 AccountType::Checking(prop)
@@ -152,21 +310,11 @@ impl PortfolioProfilesScreen {
                 | AccountType::Roth401k(inv)
                 | AccountType::TraditionalIRA(inv)
                 | AccountType::RothIRA(inv) => {
-                    lines.push(Line::from(Span::styled(
-                        "Holdings:",
-                        Style::default().add_modifier(Modifier::BOLD),
-                    )));
-                    if inv.assets.is_empty() {
-                        lines.push(Line::from("  (none)"));
-                    } else {
-                        for asset_val in &inv.assets {
-                            lines.push(Line::from(format!(
-                                "  {}: {}",
-                                asset_val.asset.0,
-                                format_currency(asset_val.value)
-                            )));
-                        }
-                    }
+                    let total: f64 = inv.assets.iter().map(|a| a.value).sum();
+                    lines.push(Line::from(vec![
+                        Span::styled("Total: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(format_currency(total)),
+                    ]));
                 }
                 AccountType::Mortgage(debt)
                 | AccountType::LoanDebt(debt)
@@ -184,43 +332,296 @@ impl PortfolioProfilesScreen {
 
             lines
         } else {
-            vec![Line::from("No account selected")]
+            vec![Line::from(Span::styled(
+                "No account selected",
+                Style::default().fg(Color::DarkGray),
+            ))]
         };
 
-        let border_style = if is_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
+        let details_para = Paragraph::new(detail_lines).wrap(Wrap { trim: true });
+        frame.render_widget(details_para, details_area);
 
-        let paragraph = Paragraph::new(content)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" ACCOUNT DETAILS ")
-                    .border_style(border_style),
-            )
-            .wrap(Wrap { trim: true });
+        // Render horizontal separator with "HOLDINGS" label
+        let sep_width = inner_area.width as usize;
+        let label = " HOLDINGS ";
+        let label_len = label.len();
+        let left_dashes = (sep_width.saturating_sub(label_len)) / 2;
+        let right_dashes = sep_width.saturating_sub(label_len + left_dashes);
+        let separator_text = format!(
+            "{}{}{}",
+            "─".repeat(left_dashes),
+            label,
+            "─".repeat(right_dashes)
+        );
+        let hsep = Paragraph::new(Line::from(Span::styled(
+            separator_text,
+            Style::default().fg(Color::DarkGray),
+        )));
+        frame.render_widget(hsep, hsep_area);
 
-        frame.render_widget(paragraph, area);
+        // Bottom section: centered chart with ~20% padding on each side
+        let padding = (bottom_area.width as f32 * 0.20) as u16;
+        let chart_width = bottom_area.width.saturating_sub(padding * 2);
+        let chart_area = Rect::new(
+            bottom_area.x + padding,
+            bottom_area.y,
+            chart_width,
+            bottom_area.height,
+        );
+
+        // Render asset allocation chart for selected account
+        self.render_account_asset_chart(frame, chart_area, state);
     }
 
-    fn render_profile_details(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+    /// Render asset allocation chart for the selected account
+    fn render_account_asset_chart(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+        let account = match state
+            .data()
+            .portfolios
+            .accounts
+            .get(state.portfolio_profiles_state.selected_account_index)
+        {
+            Some(acc) => acc,
+            None => {
+                let msg = Paragraph::new("No account selected")
+                    .style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(msg, area);
+                return;
+            }
+        };
+
+        // Check if it's an investment account
+        let assets = match &account.account_type {
+            AccountType::Brokerage(inv)
+            | AccountType::Traditional401k(inv)
+            | AccountType::Roth401k(inv)
+            | AccountType::TraditionalIRA(inv)
+            | AccountType::RothIRA(inv) => &inv.assets,
+            AccountType::Checking(prop)
+            | AccountType::Savings(prop)
+            | AccountType::HSA(prop)
+            | AccountType::Property(prop)
+            | AccountType::Collectible(prop) => {
+                let profile_str = prop
+                    .return_profile
+                    .as_ref()
+                    .map(|p| format!("Profile: {}", p.0))
+                    .unwrap_or_else(|| "No return profile".to_string());
+                let lines = vec![
+                    Line::from(Span::styled(
+                        format!("Value: {}", format_currency(prop.value)),
+                        Style::default().fg(Color::Cyan),
+                    )),
+                    Line::from(Span::styled(
+                        profile_str,
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ];
+                let msg = Paragraph::new(lines);
+                frame.render_widget(msg, area);
+                return;
+            }
+            AccountType::Mortgage(debt)
+            | AccountType::LoanDebt(debt)
+            | AccountType::StudentLoanDebt(debt) => {
+                let lines = vec![
+                    Line::from(Span::styled(
+                        format!("Balance: {}", format_currency(debt.balance)),
+                        Style::default().fg(Color::Red),
+                    )),
+                    Line::from(Span::styled(
+                        format!("Interest: {:.2}%", debt.interest_rate * 100.0),
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                ];
+                let msg = Paragraph::new(lines);
+                frame.render_widget(msg, area);
+                return;
+            }
+        };
+
+        if assets.is_empty() {
+            let msg = Paragraph::new("No holdings. Press 'h' to add.")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        // Calculate total value
+        let total_value: f64 = assets.iter().map(|a| a.value).sum();
+        if total_value == 0.0 {
+            let msg = Paragraph::new("No value").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        // Render horizontal bars for each asset
+        let available_height = area.height as usize;
+        let max_bars = available_height;
+
+        let mut y_offset = 0;
+        for asset_val in assets.iter().take(max_bars) {
+            let percentage = (asset_val.value / total_value * 100.0).round() as u16;
+            let color = Self::asset_color_from_name(&asset_val.asset.0);
+
+            // Truncate asset name if needed
+            let max_name = 10;
+            let name = if asset_val.asset.0.len() > max_name {
+                format!("{}...", &asset_val.asset.0[..max_name - 3])
+            } else {
+                asset_val.asset.0.clone()
+            };
+
+            // Create bar line
+            let bar_width = area.width.saturating_sub(26) as usize;
+            let filled = (bar_width as f64 * asset_val.value / total_value).round() as usize;
+            let empty = bar_width.saturating_sub(filled);
+
+            let bar_filled: String = "█".repeat(filled);
+            let bar_empty: String = "░".repeat(empty);
+
+            let line = Line::from(vec![
+                Span::styled(format!("{:<10} ", name), Style::default().fg(color)),
+                Span::styled(bar_filled, Style::default().fg(color)),
+                Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
+                Span::raw(format!(" {:>3}%", percentage)),
+                Span::styled(
+                    format!(" {}", format_currency(asset_val.value)),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+
+            let bar_area = Rect::new(area.x, area.y + y_offset as u16, area.width, 1);
+            frame.render_widget(Paragraph::new(line), bar_area);
+            y_offset += 1;
+        }
+    }
+
+    /// Get a consistent color for an asset based on its name
+    fn asset_color_from_name(name: &str) -> Color {
+        let hash = name.bytes().fold(0u8, |acc, b| acc.wrapping_add(b));
+        match hash % 6 {
+            0 => Color::Cyan,
+            1 => Color::Magenta,
+            2 => Color::Green,
+            3 => Color::Yellow,
+            4 => Color::Blue,
+            _ => Color::LightRed,
+        }
+    }
+
+    /// Render unified profiles panel (top: list | details, bottom: centered distribution chart)
+    fn render_unified_profiles(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Profiles;
 
-        let title = " PROFILE DETAILS ";
-
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default()
         };
 
-        let content = if let Some(profile_data) = state
-            .data()
-            .profiles
-            .get(state.portfolio_profiles_state.selected_profile_index)
+        let mut block = Block::default()
+            .borders(Borders::ALL)
+            .title(" RETURN PROFILES ")
+            .border_style(border_style);
+
+        if is_focused {
+            block = block.title_bottom(
+                Line::from(" [a] Add  [e] Edit  [d] Delete  [1-4] Preset  [Space] Toggle ")
+                    .fg(Color::DarkGray),
+            );
+        }
+
+        let inner_area = block.inner(area);
+        frame.render_widget(block, area);
+
+        // Split vertically: ~45% top (list|details), ~55% bottom (chart)
+        let top_height = (inner_area.height as f32 * 0.45).max(5.0) as u16;
+        let bottom_height = inner_area.height.saturating_sub(top_height + 1); // 1 for separator
+
+        let top_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, top_height);
+        let hsep_area = Rect::new(inner_area.x, inner_area.y + top_height, inner_area.width, 1);
+        let bottom_area = Rect::new(
+            inner_area.x,
+            inner_area.y + top_height + 1,
+            inner_area.width,
+            bottom_height,
+        );
+
+        // Top section: split horizontally into list (40%) | details (60%)
+        let list_width = (top_area.width as f32 * 0.40) as u16;
+        let details_width = top_area.width.saturating_sub(list_width + 1); // 1 for separator
+
+        let list_area = Rect::new(top_area.x, top_area.y, list_width, top_area.height);
+        let vsep_area = Rect::new(top_area.x + list_width, top_area.y, 1, top_area.height);
+        let details_area = Rect::new(
+            top_area.x + list_width + 1,
+            top_area.y,
+            details_width,
+            top_area.height,
+        );
+
+        // Render profile list
+        let profiles = &state.data().profiles;
+        let mut lines = Vec::new();
+        for (idx, profile_data) in profiles.iter().enumerate() {
+            let prefix = if idx == state.portfolio_profiles_state.selected_profile_index {
+                "> "
+            } else {
+                "  "
+            };
+            // Truncate name if needed
+            let max_name_len = list_width.saturating_sub(4) as usize;
+            let name = if profile_data.name.0.len() > max_name_len && max_name_len > 3 {
+                format!(
+                    "{}...",
+                    &profile_data.name.0[..max_name_len.saturating_sub(3)]
+                )
+            } else {
+                profile_data.name.0.clone()
+            };
+            let content = format!("{}{}", prefix, name);
+
+            let style = if idx == state.portfolio_profiles_state.selected_profile_index {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            lines.push(Line::from(Span::styled(content, style)));
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "  No profiles.",
+                Style::default().fg(Color::DarkGray),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Press 'a' to add.",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        let list_para = Paragraph::new(lines);
+        frame.render_widget(list_para, list_area);
+
+        // Render vertical separator
+        let mut vsep_lines = Vec::new();
+        for _ in 0..top_area.height {
+            vsep_lines.push(Line::from(Span::styled(
+                "│",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        let vsep = Paragraph::new(vsep_lines);
+        frame.render_widget(vsep, vsep_area);
+
+        // Render profile details
+        let detail_lines = if let Some(profile_data) =
+            profiles.get(state.portfolio_profiles_state.selected_profile_index)
         {
             let mut lines = vec![
                 Line::from(vec![
@@ -231,58 +632,175 @@ impl PortfolioProfilesScreen {
                     Span::styled("Type: ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::raw(Self::format_profile_type(&profile_data.profile)),
                 ]),
-                Line::from(Self::format_profile_params(&profile_data.profile)),
             ];
 
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                "[1-4] Apply preset",
-                Style::default().fg(Color::DarkGray),
-            )));
+            match &profile_data.profile {
+                ReturnProfileData::None => {
+                    lines.push(Line::from(vec![
+                        Span::styled("Return: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw("0%"),
+                    ]));
+                }
+                ReturnProfileData::Fixed { rate } => {
+                    lines.push(Line::from(vec![
+                        Span::styled("Rate: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(format_percentage(*rate), Style::default().fg(Color::Cyan)),
+                    ]));
+                }
+                ReturnProfileData::Normal { mean, std_dev }
+                | ReturnProfileData::LogNormal { mean, std_dev } => {
+                    lines.push(Line::from(vec![
+                        Span::styled("Mean: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(format_percentage(*mean), Style::default().fg(Color::Yellow)),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("Std Dev: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(format_percentage(*std_dev)),
+                    ]));
+                }
+            }
 
             lines
         } else {
-            vec![Line::from("No profile selected")]
+            vec![Line::from(Span::styled(
+                "No profile selected",
+                Style::default().fg(Color::DarkGray),
+            ))]
         };
 
-        let paragraph = Paragraph::new(content).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
+        let details_para = Paragraph::new(detail_lines).wrap(Wrap { trim: true });
+        frame.render_widget(details_para, details_area);
+
+        // Render horizontal separator with "DISTRIBUTION" label
+        let sep_width = inner_area.width as usize;
+        let label = " DISTRIBUTION ";
+        let label_len = label.len();
+        let left_dashes = (sep_width.saturating_sub(label_len)) / 2;
+        let right_dashes = sep_width.saturating_sub(label_len + left_dashes);
+        let separator_text = format!(
+            "{}{}{}",
+            "─".repeat(left_dashes),
+            label,
+            "─".repeat(right_dashes)
+        );
+        let hsep = Paragraph::new(Line::from(Span::styled(
+            separator_text,
+            Style::default().fg(Color::DarkGray),
+        )));
+        frame.render_widget(hsep, hsep_area);
+
+        // Bottom section: centered chart with ~20% padding on each side
+        let padding = (bottom_area.width as f32 * 0.20) as u16;
+        let chart_width = bottom_area.width.saturating_sub(padding * 2);
+        let chart_area = Rect::new(
+            bottom_area.x + padding,
+            bottom_area.y,
+            chart_width,
+            bottom_area.height,
         );
 
-        frame.render_widget(paragraph, area);
+        // Render distribution chart for selected profile
+        if let Some(profile_data) =
+            profiles.get(state.portfolio_profiles_state.selected_profile_index)
+        {
+            self.render_distribution_inline(frame, chart_area, &profile_data.profile);
+        } else {
+            let msg =
+                Paragraph::new("No profile selected").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, chart_area);
+        }
     }
 
-    // ========== Right Column: Profiles, Mappings, Config ==========
+    /// Render distribution chart inline (without border)
+    fn render_distribution_inline(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        profile: &ReturnProfileData,
+    ) {
+        match profile {
+            ReturnProfileData::None => {
+                let msg =
+                    Paragraph::new("No return (0%)").style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(msg, area);
+            }
+            ReturnProfileData::Fixed { rate } => {
+                let lines = vec![
+                    Line::from(vec![
+                        Span::styled(
+                            "Fixed Rate: ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(format_percentage(*rate), Style::default().fg(Color::Cyan)),
+                    ]),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled("━━━━━━━━━━━━━━━━━━━━", Style::default().fg(Color::Cyan)),
+                        Span::styled(" ▲", Style::default().fg(Color::Yellow)),
+                    ]),
+                ];
+                let paragraph = Paragraph::new(lines);
+                frame.render_widget(paragraph, area);
+            }
+            ReturnProfileData::Normal { mean, std_dev } => {
+                self.render_normal_distribution(frame, area, *mean, *std_dev, false);
+            }
+            ReturnProfileData::LogNormal { mean, std_dev } => {
+                self.render_normal_distribution(frame, area, *mean, *std_dev, true);
+            }
+        }
+    }
 
-    fn render_profile_list(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+    /// Render secondary panels (Asset Mappings and Tax & Inflation) at the bottom
+    fn render_secondary_panels(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+        let mappings_collapsed = state.portfolio_profiles_state.mappings_collapsed;
+        let config_collapsed = state.portfolio_profiles_state.config_collapsed;
+
+        // Horizontal layout for secondary panels
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(area);
+
+        // Render Asset Mappings (collapsed or expanded)
+        if mappings_collapsed {
+            self.render_mappings_collapsed(frame, cols[0], state);
+        } else {
+            self.render_asset_mappings(frame, cols[0], state);
+        }
+
+        // Render Tax & Inflation Config (collapsed or expanded)
+        if config_collapsed {
+            self.render_config_collapsed(frame, cols[1], state);
+        } else {
+            self.render_tax_inflation_config(frame, cols[1], state);
+        }
+    }
+
+    /// Render collapsed asset mappings summary
+    fn render_mappings_collapsed(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
-            state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Profiles;
+            state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::AssetMappings;
 
-        let items: Vec<ListItem> = state
-            .data()
-            .profiles
-            .iter()
-            .enumerate()
-            .map(|(idx, profile_data)| {
-                let profile_desc = Self::format_profile(&profile_data.profile);
-                let content = format!("{}: {}", profile_data.name.0, profile_desc);
+        let unique_assets = Self::get_unique_assets(state);
+        let mappings = &state.data().assets;
 
-                let style = if idx == state.portfolio_profiles_state.selected_profile_index {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-
-                ListItem::new(Line::from(Span::styled(content, style)))
-            })
-            .collect();
-
-        let title = " RETURN PROFILES ";
+        // Build inline summary: "VFIAX->S&P 500, VTSAX->S&P 500"
+        let mut summary_parts: Vec<String> = Vec::new();
+        for asset in unique_assets.iter().take(3) {
+            let mapping = mappings.get(asset);
+            let mapping_str = mapping.map(|p| p.0.as_str()).unwrap_or("?");
+            summary_parts.push(format!("{}->{}", asset.0, mapping_str));
+        }
+        if unique_assets.len() > 3 {
+            summary_parts.push(format!("+{}", unique_assets.len() - 3));
+        }
+        let summary = if summary_parts.is_empty() {
+            "No assets".to_string()
+        } else {
+            summary_parts.join(", ")
+        };
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -290,27 +808,60 @@ impl PortfolioProfilesScreen {
             Style::default()
         };
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        );
+        let title = format!(" [+] ASSET MAPPINGS  {} ", summary);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style);
 
-        frame.render_widget(list, area);
+        frame.render_widget(block, area);
     }
 
+    /// Render collapsed tax & inflation config summary
+    fn render_config_collapsed(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+        let is_focused =
+            state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Config;
+
+        let tax_config = &state.data().parameters.tax_config;
+        let federal_short = match &tax_config.federal_brackets {
+            FederalBracketsPreset::Single2024 => "2024 Single",
+            FederalBracketsPreset::MarriedJoint2024 => "2024 MJ",
+            FederalBracketsPreset::Custom { .. } => "Custom",
+        };
+
+        let inflation_short = match &state.data().parameters.inflation {
+            InflationData::None => "None",
+            InflationData::Fixed { .. } => "Fixed",
+            InflationData::Normal { .. } => "Normal",
+            InflationData::LogNormal { .. } => "LogN",
+            InflationData::USHistorical { .. } => "US Hist",
+        };
+
+        let state_str = format_percentage(tax_config.state_rate);
+        let summary = format!(
+            "Federal: {} | State: {} | Inf: {}",
+            federal_short, state_str, inflation_short
+        );
+
+        let border_style = if is_focused {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+
+        let title = format!(" [+] TAX & INFLATION  {} ", summary);
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style);
+
+        frame.render_widget(block, area);
+    }
+
+    /// Render expanded asset mappings panel
     fn render_asset_mappings(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::AssetMappings;
-        let is_collapsed = state.portfolio_profiles_state.mappings_collapsed;
-
-        // Handle collapsed state
-        if is_collapsed {
-            let panel = CollapsiblePanel::new("ASSET MAPPINGS", false).focused(is_focused);
-            panel.render_collapsed(frame, area);
-            return;
-        }
 
         let unique_assets = Self::get_unique_assets(state);
         let mappings = &state.data().assets;
@@ -337,8 +888,7 @@ impl PortfolioProfilesScreen {
             })
             .collect();
 
-        let indicator = "[-]";
-        let title = format!(" {} ASSET MAPPINGS ", indicator);
+        let title = " [-] ASSET MAPPINGS ";
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -352,7 +902,8 @@ impl PortfolioProfilesScreen {
             .border_style(border_style);
 
         if is_focused && !unique_assets.is_empty() {
-            block = block.title_bottom(Line::from(" [m] Map  [Space] Toggle ").fg(Color::DarkGray));
+            block =
+                block.title_bottom(Line::from(" [m] Map  [Space] Collapse ").fg(Color::DarkGray));
         }
 
         let list = List::new(items).block(block);
@@ -360,17 +911,10 @@ impl PortfolioProfilesScreen {
         frame.render_widget(list, area);
     }
 
+    /// Render expanded tax & inflation config panel
     fn render_tax_inflation_config(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Config;
-        let is_collapsed = state.portfolio_profiles_state.config_collapsed;
-
-        // Handle collapsed state
-        if is_collapsed {
-            let panel = CollapsiblePanel::new("TAX & INFLATION", false).focused(is_focused);
-            panel.render_collapsed(frame, area);
-            return;
-        }
 
         let selected_idx = state.portfolio_profiles_state.selected_config_index;
 
@@ -436,8 +980,7 @@ impl PortfolioProfilesScreen {
             style_config_line(is_focused, selected_idx, 3, "Inflation: ", inflation_desc),
         ];
 
-        let indicator = "[-]";
-        let title = format!(" {} TAX & INFLATION ", indicator);
+        let title = " [-] TAX & INFLATION ";
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -451,7 +994,8 @@ impl PortfolioProfilesScreen {
             .border_style(border_style);
 
         if is_focused {
-            block = block.title_bottom(Line::from(" [e] Edit  [Space] Toggle ").fg(Color::DarkGray));
+            block =
+                block.title_bottom(Line::from(" [e] Edit  [Space] Collapse ").fg(Color::DarkGray));
         }
 
         let paragraph = Paragraph::new(lines).block(block);
@@ -460,19 +1004,6 @@ impl PortfolioProfilesScreen {
     }
 
     // ========== Formatters ==========
-
-    fn format_profile(profile: &ReturnProfileData) -> String {
-        match profile {
-            ReturnProfileData::None => "None".to_string(),
-            ReturnProfileData::Fixed { rate } => format!("Fixed {}", format_percentage(*rate)),
-            ReturnProfileData::Normal { mean, .. } => {
-                format!("Normal {}", format_percentage(*mean))
-            }
-            ReturnProfileData::LogNormal { mean, .. } => {
-                format!("LogNormal {}", format_percentage(*mean))
-            }
-        }
-    }
 
     fn format_profile_type(profile: &ReturnProfileData) -> String {
         match profile {
@@ -483,25 +1014,173 @@ impl PortfolioProfilesScreen {
         }
     }
 
-    fn format_profile_params(profile: &ReturnProfileData) -> String {
-        match profile {
-            ReturnProfileData::None => "Return: 0%".to_string(),
-            ReturnProfileData::Fixed { rate } => format!("Rate: {}", format_percentage(*rate)),
-            ReturnProfileData::Normal { mean, std_dev } => {
-                format!(
-                    "μ={}, σ={}",
-                    format_percentage(*mean),
-                    format_percentage(*std_dev)
-                )
-            }
-            ReturnProfileData::LogNormal { mean, std_dev } => {
-                format!(
-                    "μ={}, σ={}",
-                    format_percentage(*mean),
-                    format_percentage(*std_dev)
-                )
-            }
+    // ========== Chart Rendering ==========
+
+    /// Color based on account type
+    fn account_type_color(account_type: &AccountType) -> Color {
+        match account_type {
+            // Investment types
+            AccountType::Brokerage(_)
+            | AccountType::Traditional401k(_)
+            | AccountType::Roth401k(_)
+            | AccountType::TraditionalIRA(_)
+            | AccountType::RothIRA(_) => Color::Green,
+            // Cash types
+            AccountType::Checking(_) | AccountType::Savings(_) | AccountType::HSA(_) => Color::Cyan,
+            // Property
+            AccountType::Property(_) | AccountType::Collectible(_) => Color::Yellow,
+            // Debt
+            AccountType::Mortgage(_)
+            | AccountType::LoanDebt(_)
+            | AccountType::StudentLoanDebt(_) => Color::Red,
         }
+    }
+
+    /// Render a normal or lognormal distribution histogram
+    fn render_normal_distribution(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        mean: f64,
+        std_dev: f64,
+        is_lognormal: bool,
+    ) {
+        let bar_width = 2; // Fixed bar width of 2 characters
+        let num_bins = ((area.width as usize).saturating_sub(4) / bar_width)
+            .min(35)
+            .max(10);
+        let height = area.height.saturating_sub(2) as usize; // Leave room for labels
+
+        if height < 3 || area.width < 20 {
+            let msg = Paragraph::new("Area too small").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        // Calculate bin boundaries
+        let (min_val, max_val) = if is_lognormal {
+            // For lognormal, use appropriate range
+            let log_mean = (1.0 + mean).ln() - std_dev * std_dev / 2.0;
+            let log_std = std_dev;
+            let lower = (log_mean - 3.0 * log_std).exp() - 1.0;
+            let upper = (log_mean + 3.0 * log_std).exp() - 1.0;
+            (lower.max(-0.5), upper.min(1.0))
+        } else {
+            // For normal, use ±3σ range
+            (mean - 3.0 * std_dev, mean + 3.0 * std_dev)
+        };
+
+        let bin_size = (max_val - min_val) / num_bins as f64;
+
+        // Calculate PDF values for each bin
+        let pi = std::f64::consts::PI;
+        let mut pdf_values = Vec::with_capacity(num_bins);
+
+        for i in 0..num_bins {
+            let x = min_val + (i as f64 + 0.5) * bin_size;
+
+            let pdf = if is_lognormal {
+                // LogNormal PDF (convert return to growth factor)
+                let growth = 1.0 + x;
+                if growth > 0.0 {
+                    let log_mean = (1.0 + mean).ln() - std_dev * std_dev / 2.0;
+                    let log_x = growth.ln();
+                    let exponent = -(log_x - log_mean).powi(2) / (2.0 * std_dev * std_dev);
+                    (1.0 / (growth * std_dev * (2.0 * pi).sqrt())) * exponent.exp()
+                } else {
+                    0.0
+                }
+            } else {
+                // Normal PDF
+                let exponent = -(x - mean).powi(2) / (2.0 * std_dev * std_dev);
+                (1.0 / (std_dev * (2.0 * pi).sqrt())) * exponent.exp()
+            };
+
+            pdf_values.push(pdf);
+        }
+
+        // Normalize to height
+        let max_pdf = pdf_values.iter().cloned().fold(0.0_f64, f64::max);
+        if max_pdf == 0.0 {
+            let msg =
+                Paragraph::new("Invalid distribution").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        let bar_heights: Vec<usize> = pdf_values
+            .iter()
+            .map(|&pdf| ((pdf / max_pdf) * height as f64).round() as usize)
+            .collect();
+
+        // Calculate centering offset
+        let total_chart_width = num_bins * bar_width;
+        let x_offset = (area.width as usize).saturating_sub(total_chart_width) / 2;
+
+        // Render vertical bars from bottom up
+        let bin_chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+        for row in 0..height {
+            let y_level = height - 1 - row;
+            let mut spans = Vec::new();
+
+            // Add left padding
+            if x_offset > 0 {
+                spans.push(Span::raw(" ".repeat(x_offset)));
+            }
+
+            for (i, &bar_h) in bar_heights.iter().enumerate() {
+                let x = min_val + (i as f64 + 0.5) * bin_size;
+
+                // Determine color based on position relative to mean
+                let color = if x < mean - std_dev {
+                    Color::Red
+                } else if x > mean + std_dev {
+                    Color::Green
+                } else {
+                    Color::Yellow
+                };
+
+                let char_to_use = if bar_h > y_level {
+                    "█"
+                } else if bar_h == y_level && bar_h > 0 {
+                    // Partial fill
+                    let partial = ((pdf_values[i] / max_pdf) * height as f64).fract();
+                    let idx = (partial * 7.0).round() as usize;
+                    bin_chars[idx.min(7)]
+                } else {
+                    " "
+                };
+
+                let bar_str = char_to_use.repeat(bar_width);
+                spans.push(Span::styled(bar_str, Style::default().fg(color)));
+            }
+
+            let line = Line::from(spans);
+            let row_area = Rect::new(area.x, area.y + row as u16, area.width, 1);
+            frame.render_widget(Paragraph::new(line), row_area);
+        }
+
+        // Render x-axis labels
+        let label_y = area.y + height as u16;
+        let label_line = Line::from(vec![
+            Span::styled(
+                format!("{:>6}", format_percentage(min_val)),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(" ".repeat((area.width as usize).saturating_sub(20) / 2)),
+            Span::styled(
+                format!("μ={}", format_percentage(mean)),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw(" ".repeat((area.width as usize).saturating_sub(20) / 2)),
+            Span::styled(
+                format!("{:<6}", format_percentage(max_val)),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+        let label_area = Rect::new(area.x, label_y, area.width, 1);
+        frame.render_widget(Paragraph::new(label_line), label_area);
     }
 
     // ========== Key Handlers ==========
@@ -623,6 +1302,17 @@ impl PortfolioProfilesScreen {
                             );
                         }
                     }
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char(' ') => {
+                // Space: toggle both secondary panels and focus Asset Mappings
+                let expanding = state.portfolio_profiles_state.mappings_collapsed;
+                state.portfolio_profiles_state.mappings_collapsed = !expanding;
+                state.portfolio_profiles_state.config_collapsed = !expanding;
+                if expanding {
+                    state.portfolio_profiles_state.focused_panel =
+                        PortfolioProfilesPanel::AssetMappings;
                 }
                 EventResult::Handled
             }
@@ -811,6 +1501,16 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
+            KeyCode::Char(' ') => {
+                // Space: toggle both secondary panels and focus Config
+                let expanding = state.portfolio_profiles_state.config_collapsed;
+                state.portfolio_profiles_state.mappings_collapsed = !expanding;
+                state.portfolio_profiles_state.config_collapsed = !expanding;
+                if expanding {
+                    state.portfolio_profiles_state.focused_panel = PortfolioProfilesPanel::Config;
+                }
+                EventResult::Handled
+            }
             _ => EventResult::NotHandled,
         }
     }
@@ -865,13 +1565,14 @@ impl PortfolioProfilesScreen {
         let unique_assets = Self::get_unique_assets(state);
         match key.code {
             KeyCode::Char(' ') => {
-                // Toggle collapse state
-                state.portfolio_profiles_state.mappings_collapsed =
-                    !state.portfolio_profiles_state.mappings_collapsed;
+                // Collapse both secondary panels and return to main panel
+                state.portfolio_profiles_state.mappings_collapsed = true;
+                state.portfolio_profiles_state.config_collapsed = true;
+                state.portfolio_profiles_state.focused_panel = PortfolioProfilesPanel::Accounts;
                 EventResult::Handled
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                if !state.portfolio_profiles_state.mappings_collapsed && !unique_assets.is_empty() {
+                if !unique_assets.is_empty() {
                     state.portfolio_profiles_state.selected_mapping_index =
                         (state.portfolio_profiles_state.selected_mapping_index + 1)
                             % unique_assets.len();
@@ -879,7 +1580,7 @@ impl PortfolioProfilesScreen {
                 EventResult::Handled
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if !state.portfolio_profiles_state.mappings_collapsed && !unique_assets.is_empty() {
+                if !unique_assets.is_empty() {
                     if state.portfolio_profiles_state.selected_mapping_index == 0 {
                         state.portfolio_profiles_state.selected_mapping_index =
                             unique_assets.len() - 1;
@@ -928,25 +1629,22 @@ impl PortfolioProfilesScreen {
         const CONFIG_ITEMS: usize = 4; // Federal, State, Cap Gains, Inflation
         match key.code {
             KeyCode::Char(' ') => {
-                // Toggle collapse state
-                state.portfolio_profiles_state.config_collapsed =
-                    !state.portfolio_profiles_state.config_collapsed;
+                // Collapse both secondary panels and return to main panel
+                state.portfolio_profiles_state.mappings_collapsed = true;
+                state.portfolio_profiles_state.config_collapsed = true;
+                state.portfolio_profiles_state.focused_panel = PortfolioProfilesPanel::Profiles;
                 EventResult::Handled
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                if !state.portfolio_profiles_state.config_collapsed {
-                    state.portfolio_profiles_state.selected_config_index =
-                        (state.portfolio_profiles_state.selected_config_index + 1) % CONFIG_ITEMS;
-                }
+                state.portfolio_profiles_state.selected_config_index =
+                    (state.portfolio_profiles_state.selected_config_index + 1) % CONFIG_ITEMS;
                 EventResult::Handled
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if !state.portfolio_profiles_state.config_collapsed {
-                    if state.portfolio_profiles_state.selected_config_index == 0 {
-                        state.portfolio_profiles_state.selected_config_index = CONFIG_ITEMS - 1;
-                    } else {
-                        state.portfolio_profiles_state.selected_config_index -= 1;
-                    }
+                if state.portfolio_profiles_state.selected_config_index == 0 {
+                    state.portfolio_profiles_state.selected_config_index = CONFIG_ITEMS - 1;
+                } else {
+                    state.portfolio_profiles_state.selected_config_index -= 1;
                 }
                 EventResult::Handled
             }
@@ -1050,7 +1748,7 @@ fn format_account_type(account_type: &AccountType) -> &'static str {
 impl Component for PortfolioProfilesScreen {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         match key.code {
-            // Tab cycling through panels
+            // Tab cycling through main panels: Accounts <-> Profiles
             KeyCode::Tab if key.modifiers.is_empty() => {
                 state.portfolio_profiles_state.focused_panel =
                     state.portfolio_profiles_state.focused_panel.next();
@@ -1074,52 +1772,41 @@ impl Component for PortfolioProfilesScreen {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
-        // Create 3-column layout: 25% | 40% | 35%
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(25),
-                Constraint::Percentage(40),
-                Constraint::Percentage(35),
-            ])
-            .split(area);
-
-        // Left column: Accounts list (55%) + Profiles list (45%)
-        let left_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(columns[0]);
-
-        self.render_account_list(frame, left_chunks[0], state);
-        self.render_profile_list(frame, left_chunks[1], state);
-
-        // Middle column: Account Details (55%) + Profile Details (45%)
-        let middle_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(columns[1]);
-
-        self.render_account_details(frame, middle_chunks[0], state);
-        self.render_profile_details(frame, middle_chunks[1], state);
-
-        // Right column: Asset Mappings + Tax & Inflation Config (with collapsible support)
+        // Calculate secondary panel heights based on collapse state
         let mappings_collapsed = state.portfolio_profiles_state.mappings_collapsed;
         let config_collapsed = state.portfolio_profiles_state.config_collapsed;
 
-        let right_constraints = match (mappings_collapsed, config_collapsed) {
-            (false, false) => vec![Constraint::Percentage(50), Constraint::Percentage(50)],
-            (true, false) => vec![Constraint::Length(3), Constraint::Min(5)],
-            (false, true) => vec![Constraint::Min(5), Constraint::Length(3)],
-            (true, true) => vec![Constraint::Length(3), Constraint::Length(3)],
+        let secondary_height = match (mappings_collapsed, config_collapsed) {
+            (true, true) => 2,    // Two collapsed lines (1 line each)
+            (true, false) => 8,   // One collapsed, one expanded
+            (false, true) => 8,   // One collapsed, one expanded
+            (false, false) => 14, // Both expanded
         };
 
-        let right_chunks = Layout::default()
+        // Main vertical layout
+        let main_layout = Layout::default()
             .direction(Direction::Vertical)
-            .constraints(right_constraints)
-            .split(columns[2]);
+            .constraints([
+                Constraint::Length(10),               // Portfolio Overview (fixed)
+                Constraint::Min(15),                  // Main content (flexible)
+                Constraint::Length(secondary_height), // Secondary panels
+            ])
+            .split(area);
 
-        self.render_asset_mappings(frame, right_chunks[0], state);
-        self.render_tax_inflation_config(frame, right_chunks[1], state);
+        // Portfolio Overview - always visible at top
+        self.render_portfolio_overview(frame, main_layout[0], state);
+
+        // Main content: 2 columns (50/50)
+        let content_cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_layout[1]);
+
+        self.render_unified_accounts(frame, content_cols[0], state);
+        self.render_unified_profiles(frame, content_cols[1], state);
+
+        // Secondary panels at bottom
+        self.render_secondary_panels(frame, main_layout[2], state);
     }
 }
 

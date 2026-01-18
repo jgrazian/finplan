@@ -22,8 +22,8 @@ impl Default for PortfolioProfilesState {
             selected_mapping_index: 0,
             selected_config_index: 0,
             focused_panel: PortfolioProfilesPanel::Accounts,
-            mappings_collapsed: false,
-            config_collapsed: false,
+            mappings_collapsed: true,
+            config_collapsed: true,
         }
     }
 }
