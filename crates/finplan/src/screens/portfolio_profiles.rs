@@ -1705,8 +1705,12 @@ impl PortfolioProfilesScreen {
         }
     }
 
-    fn create_account_edit_form(account: &AccountData, _state: &AppState) -> FormModal {
+    fn create_account_edit_form(account: &AccountData, state: &AppState) -> FormModal {
         let type_name = format_account_type(&account.account_type);
+
+        // Build list of available return profiles for Select fields
+        let mut profile_options: Vec<String> = vec!["".to_string()]; // Empty option for "none"
+        profile_options.extend(state.data().profiles.iter().map(|p| p.name.0.clone()));
 
         match &account.account_type {
             AccountType::Checking(prop)
@@ -1729,7 +1733,7 @@ impl PortfolioProfilesScreen {
                             account.description.as_deref().unwrap_or(""),
                         ),
                         FormField::currency("Value", prop.value),
-                        FormField::text("Return Profile", &profile_str),
+                        FormField::select("Return Profile", profile_options, &profile_str),
                     ],
                     ModalAction::EDIT_ACCOUNT,
                 )
@@ -2138,7 +2142,7 @@ impl Component for PortfolioProfilesScreen {
         }
 
         match key.code {
-            // Tab cycling through main panels: Accounts <-> Profiles
+            // Tab cycling through all panels
             KeyCode::Tab if key.modifiers.is_empty() => {
                 state.portfolio_profiles_state.focused_panel =
                     state.portfolio_profiles_state.focused_panel.next();

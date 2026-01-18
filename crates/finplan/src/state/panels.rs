@@ -11,18 +11,16 @@ pub enum FocusedPanel {
 pub enum PortfolioProfilesPanel {
     Accounts,      // Unified left panel (list + details)
     Profiles,      // Unified right panel (list + distribution)
-    AssetMappings, // Secondary panel (collapsed by default)
-    Config,        // Secondary panel (collapsed by default)
+    AssetMappings, // Bottom panel (expanded by default)
+    Config,        // Bottom panel (expanded by default)
 }
 
 impl PortfolioProfilesPanel {
-    /// Cycle through main panels: Accounts <-> Profiles
-    /// Secondary panels accessed via Space when collapsed
+    /// Cycle through all panels: Accounts -> Profiles -> AssetMappings -> Config -> Accounts
     pub fn next(self) -> Self {
         match self {
             Self::Accounts => Self::Profiles,
-            Self::Profiles => Self::Accounts,
-            // Secondary panels cycle back to main
+            Self::Profiles => Self::AssetMappings,
             Self::AssetMappings => Self::Config,
             Self::Config => Self::Accounts,
         }
@@ -30,10 +28,9 @@ impl PortfolioProfilesPanel {
 
     pub fn prev(self) -> Self {
         match self {
-            Self::Accounts => Self::Profiles,
+            Self::Accounts => Self::Config,
             Self::Profiles => Self::Accounts,
-            // Secondary panels cycle back to main
-            Self::AssetMappings => Self::Accounts,
+            Self::AssetMappings => Self::Profiles,
             Self::Config => Self::AssetMappings,
         }
     }

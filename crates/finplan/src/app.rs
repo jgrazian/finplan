@@ -249,7 +249,9 @@ impl App {
             ModalAction::Account(AccountAction::PickCategory) => {
                 actions::handle_category_pick(&value)
             }
-            ModalAction::Account(AccountAction::PickType) => actions::handle_type_pick(&value),
+            ModalAction::Account(AccountAction::PickType) => {
+                actions::handle_type_pick(&value, &self.state)
+            }
             ModalAction::Account(AccountAction::Create) => {
                 actions::handle_create_account(&mut self.state, ctx)
             }

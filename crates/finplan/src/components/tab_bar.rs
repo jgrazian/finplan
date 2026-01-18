@@ -32,11 +32,11 @@ impl Component for TabBar {
                 EventResult::Handled
             }
             KeyCode::Char('2') => {
-                state.switch_tab(TabId::Scenario);
+                state.switch_tab(TabId::Events);
                 EventResult::Handled
             }
             KeyCode::Char('3') => {
-                state.switch_tab(TabId::Events);
+                state.switch_tab(TabId::Scenario);
                 EventResult::Handled
             }
             KeyCode::Char('4') => {

@@ -192,6 +192,8 @@ pub enum FieldType {
     Currency,
     Percentage,
     ReadOnly,
+    /// Select from a list of options (options stored in FormField.options)
+    Select,
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +202,8 @@ pub struct FormField {
     pub field_type: FieldType,
     pub value: String,
     pub cursor_pos: usize,
+    /// Options for Select field type
+    pub options: Vec<String>,
 }
 
 impl FormField {
@@ -209,6 +213,7 @@ impl FormField {
             field_type,
             value: value.to_string(),
             cursor_pos: 0,
+            options: Vec::new(),
         }
     }
 
@@ -231,6 +236,53 @@ impl FormField {
 
     pub fn read_only(label: &str, value: &str) -> Self {
         Self::new(label, FieldType::ReadOnly, value)
+    }
+
+    /// Create a select field with options. The first option matching `selected` will be selected,
+    /// or the first option if no match. Pass empty string for `selected` to select first option.
+    pub fn select(label: &str, options: Vec<String>, selected: &str) -> Self {
+        let value = if options.iter().any(|o| o == selected) {
+            selected.to_string()
+        } else {
+            options.first().cloned().unwrap_or_default()
+        };
+        Self {
+            label: label.to_string(),
+            field_type: FieldType::Select,
+            value,
+            cursor_pos: 0,
+            options,
+        }
+    }
+
+    /// Get the index of the currently selected option (for Select fields)
+    pub fn selected_index(&self) -> usize {
+        self.options
+            .iter()
+            .position(|o| o == &self.value)
+            .unwrap_or(0)
+    }
+
+    /// Select the next option (for Select fields)
+    pub fn select_next(&mut self) {
+        if self.options.is_empty() {
+            return;
+        }
+        let idx = (self.selected_index() + 1) % self.options.len();
+        self.value = self.options[idx].clone();
+    }
+
+    /// Select the previous option (for Select fields)
+    pub fn select_prev(&mut self) {
+        if self.options.is_empty() {
+            return;
+        }
+        let idx = if self.selected_index() == 0 {
+            self.options.len() - 1
+        } else {
+            self.selected_index() - 1
+        };
+        self.value = self.options[idx].clone();
     }
 }
 

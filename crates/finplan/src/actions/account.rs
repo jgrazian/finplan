@@ -48,7 +48,11 @@ pub fn handle_category_pick(category: &str) -> ActionResult {
 }
 
 /// Handle account type selection - shows creation form
-pub fn handle_type_pick(account_type: &str) -> ActionResult {
+pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
+    // Build list of available return profiles for Select fields
+    let mut profile_options: Vec<String> = vec!["".to_string()]; // Empty option for "none"
+    profile_options.extend(state.data().profiles.iter().map(|p| p.name.0.clone()));
+
     let (title, fields, context) = match account_type {
         "Brokerage" | "401(k)" | "Roth 401(k)" | "Traditional IRA" | "Roth IRA" => (
             "New Investment Account",
@@ -64,7 +68,7 @@ pub fn handle_type_pick(account_type: &str) -> ActionResult {
                 FormField::text("Name", ""),
                 FormField::text("Description", ""),
                 FormField::currency("Value", 0.0),
-                FormField::text("Return Profile", ""),
+                FormField::select("Return Profile", profile_options, ""),
             ],
             account_type.to_string(),
         ),

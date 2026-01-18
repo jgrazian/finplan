@@ -129,7 +129,15 @@ impl Account {
                 // Cash is compounded incrementally during simulation
                 inv.cash.value + assets_val
             }
-            AccountFlavor::Property(assets) => assets.iter().map(|a| a.value).sum(),
+            AccountFlavor::Property(assets) => assets
+                .iter()
+                .map(|a| {
+                    // Use Market to get current value if asset is registered, otherwise use static value
+                    market
+                        .get_asset_value(start_date, current_date, a.asset_id)
+                        .unwrap_or(a.value)
+                })
+                .sum(),
             AccountFlavor::Liability(loan) => -loan.principal,
         }
     }
@@ -181,7 +189,15 @@ impl Account {
                 }
             }
             AccountFlavor::Property(assets) => {
-                let total_value: f64 = assets.iter().map(|a| a.value).sum();
+                let total_value: f64 = assets
+                    .iter()
+                    .map(|a| {
+                        // Use Market to get current value if asset is registered, otherwise use static value
+                        market
+                            .get_asset_value(start_date, current_date, a.asset_id)
+                            .unwrap_or(a.value)
+                    })
+                    .sum();
                 AccountSnapshotFlavor::Property(total_value)
             }
             AccountFlavor::Liability(loan) => AccountSnapshotFlavor::Liability(-loan.principal),

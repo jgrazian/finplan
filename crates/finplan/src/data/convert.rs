@@ -52,6 +52,8 @@ struct ResolveContext {
     asset_ids: HashMap<(String, String), (AccountId, AssetId)>, // (account_name, asset_name) -> (AccountId, AssetId)
     event_ids: HashMap<String, EventId>,
     profile_ids: HashMap<String, ReturnProfileId>,
+    /// Property/Collectible assets with their return profiles: account_name -> (AssetId, ReturnProfileTag)
+    property_assets: HashMap<String, (AssetId, Option<String>)>,
 }
 
 /// Convert SimulationData (human-readable YAML) to SimulationConfig (engine format)
@@ -84,6 +86,10 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
     let mut asset_ids = HashMap::new();
     let mut event_ids = HashMap::new();
     let mut profile_ids = HashMap::new();
+    let mut property_assets = HashMap::new();
+
+    // Track the next available asset ID (start high to avoid collision with investment assets)
+    let mut next_property_asset_id: u16 = 1000;
 
     // Assign account IDs
     for (idx, account) in data.portfolios.accounts.iter().enumerate() {
@@ -104,6 +110,15 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
                         (id, asset_id),
                     );
                 }
+            }
+            // Track Property/Collectible assets with their return profiles
+            AccountType::Property(prop) | AccountType::Collectible(prop) => {
+                let asset_id = AssetId(next_property_asset_id);
+                next_property_asset_id += 1;
+                property_assets.insert(
+                    account.name.clone(),
+                    (asset_id, prop.return_profile.as_ref().map(|rp| rp.0.clone())),
+                );
             }
             _ => {}
         }
@@ -126,6 +141,7 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
         asset_ids,
         event_ids,
         profile_ids,
+        property_assets,
     }
 }
 
@@ -197,9 +213,14 @@ fn convert_account_flavor(
         }
 
         AccountType::Property(prop) | AccountType::Collectible(prop) => {
-            // For simplicity, use a single fixed asset
+            // Use the AssetId assigned in build_resolve_context
+            let asset_id = ctx
+                .property_assets
+                .get(&account_data.name)
+                .map(|(id, _)| *id)
+                .unwrap_or(AssetId(0));
             Ok(AccountFlavor::Property(vec![FixedAsset {
-                asset_id: AssetId(0),
+                asset_id,
                 value: prop.value,
             }]))
         }
@@ -292,6 +313,21 @@ fn build_asset_mappings(
             }
         }
     }
+
+    // Register Property/Collectible assets with their return profiles
+    for account in &data.portfolios.accounts {
+        if let AccountType::Property(prop) | AccountType::Collectible(prop) = &account.account_type
+        {
+            if let Some((asset_id, Some(profile_name))) = ctx.property_assets.get(&account.name) {
+                if let Some(&profile_id) = ctx.profile_ids.get(profile_name) {
+                    config.asset_returns.insert(*asset_id, profile_id);
+                    // Use the property's value as the initial price
+                    config.asset_prices.insert(*asset_id, prop.value);
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

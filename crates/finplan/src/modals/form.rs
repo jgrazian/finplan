@@ -116,6 +116,7 @@ fn render_field(
     // Render input field
     let (border_color, fg_color) = match field.field_type {
         FieldType::ReadOnly => (Color::DarkGray, Color::DarkGray),
+        FieldType::Select if is_focused => (Color::Yellow, Color::Cyan),
         _ if is_focused && is_editing => (Color::Cyan, Color::White),
         _ if is_focused => (Color::Yellow, Color::White),
         _ => (Color::DarkGray, Color::White),
@@ -128,8 +129,10 @@ fn render_field(
     let input_inner = input_block.inner(chunks[1]);
     frame.render_widget(input_block, chunks[1]);
 
-    // Render value with cursor if editing
-    if is_focused && is_editing && field.field_type != FieldType::ReadOnly {
+    // Render value based on field type
+    if field.field_type == FieldType::Select {
+        render_select_value(frame, input_inner, field, is_focused, fg_color);
+    } else if is_focused && is_editing && field.field_type != FieldType::ReadOnly {
         render_editing_value(frame, input_inner, field);
     } else {
         let display_value = format_display_value(field);
@@ -139,6 +142,36 @@ fn render_field(
         )));
         frame.render_widget(value, input_inner);
     }
+}
+
+fn render_select_value(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    field: &FormField,
+    is_focused: bool,
+    fg_color: Color,
+) {
+    let idx = field.selected_index();
+    let total = field.options.len();
+
+    let line = if is_focused && total > 0 {
+        // Show navigation hints when focused
+        Line::from(vec![
+            Span::styled("◀ ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&field.value, Style::default().fg(fg_color)),
+            Span::styled(" ▶", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("  ({}/{})", idx + 1, total),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ])
+    } else if field.value.is_empty() {
+        Line::from(Span::styled("(none)", Style::default().fg(Color::DarkGray)))
+    } else {
+        Line::from(Span::styled(&field.value, Style::default().fg(fg_color)))
+    };
+
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 fn render_editing_value(frame: &mut Frame, area: ratatui::layout::Rect, field: &FormField) {
@@ -248,7 +281,7 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
                     c.is_ascii_digit() || c == '.' || c == '-'
                 }
                 FieldType::Text => true,
-                FieldType::ReadOnly => false,
+                FieldType::ReadOnly | FieldType::Select => false,
             };
 
             if valid {
@@ -272,10 +305,29 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
         return ModalResult::Confirmed(modal.action, serialize_form(modal));
     }
 
+    let current_field_type = modal.fields[modal.focused_field].field_type;
+
+    // Handle Select field navigation with left/right
+    if current_field_type == FieldType::Select {
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => {
+                modal.fields[modal.focused_field].select_prev();
+                return ModalResult::Continue;
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                modal.fields[modal.focused_field].select_next();
+                return ModalResult::Continue;
+            }
+            _ => {}
+        }
+    }
+
     match key.code {
         KeyCode::Enter | KeyCode::Char('e') => {
-            // Enter edit mode for current field if not read-only
-            if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly {
+            // Enter edit mode for current field if not read-only and not a Select
+            if current_field_type != FieldType::ReadOnly
+                && current_field_type != FieldType::Select
+            {
                 modal.editing = true;
                 // Move cursor to end of value
                 let field = &mut modal.fields[modal.focused_field];
