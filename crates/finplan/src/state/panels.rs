@@ -1,5 +1,4 @@
 /// Panel focus enums for different screens.
-
 /// Generic left/right focus for two-panel layouts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusedPanel {

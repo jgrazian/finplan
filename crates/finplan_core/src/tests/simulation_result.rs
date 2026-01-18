@@ -38,7 +38,7 @@ fn test_simulation_dates() {
 
     // First date should be start date
     assert_eq!(
-        result.dates.first().copied(),
+        result.wealth_snapshots.first().map(|snap| snap.date),
         Some(start_date),
         "First date should be start date"
     );
@@ -46,7 +46,7 @@ fn test_simulation_dates() {
     // Last date should be start + duration
     let expected_end = jiff::civil::date(2025, 6, 15);
     assert_eq!(
-        result.dates.last().copied(),
+        result.wealth_snapshots.last().map(|snap| snap.date),
         Some(expected_end),
         "Last date should be start + {} years",
         years
@@ -101,21 +101,17 @@ fn test_final_balances_stored() {
 
     // Verify final_balances HashMap is populated
     assert!(
-        result.final_balances.contains_key(&AccountId(1)),
+        result.final_account_balance(AccountId(1)).is_some(),
         "final_balances should contain account 1"
     );
     assert!(
-        result.final_balances.contains_key(&AccountId(2)),
+        result.final_account_balance(AccountId(2)).is_some(),
         "final_balances should contain account 2"
     );
 
     // Verify values are correct
     let expected_investment = 10_000.0 * (1.10_f64).powi(5);
-    let actual_investment = result
-        .final_balances
-        .get(&AccountId(1))
-        .copied()
-        .unwrap_or(0.0);
+    let actual_investment = result.final_account_balance(AccountId(1)).unwrap();
     assert!(
         (actual_investment - expected_investment).abs() < 1.0,
         "Investment balance expected ${:.2}, got ${:.2}",
@@ -123,11 +119,7 @@ fn test_final_balances_stored() {
         actual_investment
     );
 
-    let actual_bank = result
-        .final_balances
-        .get(&AccountId(2))
-        .copied()
-        .unwrap_or(0.0);
+    let actual_bank = result.final_account_balance(AccountId(2)).unwrap();
     assert!(
         (actual_bank - 5_000.0).abs() < 0.01,
         "Bank balance expected $5000, got ${:.2}",
@@ -187,21 +179,17 @@ fn test_final_asset_balances_stored() {
 
     // Check that both assets are in final_asset_balances
     assert!(
-        result
-            .final_asset_balances
-            .contains_key(&(AccountId(1), stock_id)),
+        result.final_asset_balance(AccountId(1), stock_id).is_some(),
         "Should contain stock balance"
     );
     assert!(
-        result
-            .final_asset_balances
-            .contains_key(&(AccountId(1), bond_id)),
+        result.final_asset_balance(AccountId(1), bond_id).is_some(),
         "Should contain bond balance"
     );
 
     // Verify values
     let expected_stock = 20_000.0 * (1.08_f64).powi(3);
-    let actual_stock = result.final_asset_balance(AccountId(1), stock_id);
+    let actual_stock = result.final_asset_balance(AccountId(1), stock_id).unwrap();
     assert!(
         (actual_stock - expected_stock).abs() < 1.0,
         "Stock expected ${:.2}, got ${:.2}",
@@ -210,70 +198,12 @@ fn test_final_asset_balances_stored() {
     );
 
     let expected_bond = 10_000.0 * (1.04_f64).powi(3);
-    let actual_bond = result.final_asset_balance(AccountId(1), bond_id);
+    let actual_bond = result.final_asset_balance(AccountId(1), bond_id).unwrap();
     assert!(
         (actual_bond - expected_bond).abs() < 1.0,
         "Bond expected ${:.2}, got ${:.2}",
         expected_bond,
         actual_bond
-    );
-}
-
-/// Test account snapshots capture starting state
-#[test]
-fn test_account_snapshots() {
-    let start_date = jiff::civil::date(2020, 1, 1);
-    let asset_id = AssetId(1);
-    let return_profile_id = ReturnProfileId(0);
-    let initial_value = 25_000.0;
-
-    let params = SimulationConfig {
-        start_date: Some(start_date),
-        duration_years: 5,
-        birth_date: None,
-        inflation_profile: InflationProfile::None,
-        return_profiles: HashMap::from([(return_profile_id, ReturnProfile::Fixed(0.05))]),
-        asset_returns: HashMap::from([(asset_id, return_profile_id)]),
-        accounts: vec![Account {
-            account_id: AccountId(1),
-            flavor: AccountFlavor::Investment(InvestmentContainer {
-                tax_status: TaxStatus::Taxable,
-                cash: Cash {
-                    value: 0.0,
-                    return_profile_id: ReturnProfileId(999),
-                },
-                positions: vec![AssetLot {
-                    asset_id,
-                    purchase_date: start_date,
-                    units: initial_value,
-                    cost_basis: initial_value,
-                }],
-                contribution_limit: None,
-            }),
-        }],
-        events: vec![],
-        ..Default::default()
-    };
-
-    let result = simulate(&params, 42);
-
-    // Should have one account snapshot
-    assert_eq!(result.accounts.len(), 1, "Should have 1 account snapshot");
-
-    let snapshot = &result.accounts[0];
-    assert_eq!(
-        snapshot.account_id,
-        AccountId(1),
-        "Snapshot should be for account 1"
-    );
-
-    // Starting balance should be cost basis (initial value)
-    let starting = snapshot.starting_balance();
-    assert!(
-        (starting - initial_value).abs() < 0.01,
-        "Starting balance should be ${:.2}, got ${:.2}",
-        initial_value,
-        starting
     );
 }
 
@@ -319,7 +249,7 @@ fn test_income_records_generated() {
     );
 
     // Check the final balance reflects the income
-    let final_balance = result.final_account_balance(AccountId(1));
+    let final_balance = result.final_account_balance(AccountId(1)).unwrap();
     assert!(
         (final_balance - 10_000.0).abs() < 0.01,
         "Final balance should be $10,000 from income, got ${:.2}",
@@ -824,7 +754,7 @@ fn test_ledger_income_and_expense_events() {
 
     // Verify final balance: 5000 + net_income - 1500
     // Net income is less than $3,000 due to taxes, so final balance < $6,500
-    let final_balance = result.final_account_balance(checking_account);
+    let final_balance = result.final_account_balance(checking_account).unwrap();
     assert!(
         final_balance > 5_000.0 && final_balance < 6_500.0,
         "Final balance should be between $5,000 and $6,500 (taxes reduce income), got ${:.2}",
@@ -898,7 +828,6 @@ fn test_ledger_asset_purchase_and_sale_events() {
     };
 
     let result = simulate(&params, 42);
-    dbg!(&result.ledger);
 
     // Verify both events were triggered
     assert!(
@@ -1017,7 +946,7 @@ fn test_ledger_asset_purchase_and_sale_events() {
     // Bought $5,000 of stock -> $5,000 cash
     // Stock appreciated 10%+ over time
     // Sold $2,000 worth -> cash increased
-    let final_balance = result.final_account_balance(brokerage_account);
+    let final_balance = result.final_account_balance(brokerage_account).unwrap();
     assert!(
         final_balance > 10_000.0,
         "Should have gained value overall, got ${:.2}",

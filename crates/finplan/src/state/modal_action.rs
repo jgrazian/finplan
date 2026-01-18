@@ -2,7 +2,6 @@
 ///
 /// This replaces the flat 34-variant ModalAction enum with domain-specific
 /// enums that delegate through a top-level ModalAction.
-
 /// Top-level action enum with domain delegation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModalAction {
@@ -137,9 +136,18 @@ mod tests {
 
     #[test]
     fn test_action_shortcuts() {
-        assert_eq!(ModalAction::SAVE_AS, ModalAction::Scenario(ScenarioAction::SaveAs));
-        assert_eq!(ModalAction::CREATE_ACCOUNT, ModalAction::Account(AccountAction::Create));
-        assert_eq!(ModalAction::ADD_EFFECT, ModalAction::Effect(EffectAction::Add));
+        assert_eq!(
+            ModalAction::SAVE_AS,
+            ModalAction::Scenario(ScenarioAction::SaveAs)
+        );
+        assert_eq!(
+            ModalAction::CREATE_ACCOUNT,
+            ModalAction::Account(AccountAction::Create)
+        );
+        assert_eq!(
+            ModalAction::ADD_EFFECT,
+            ModalAction::Effect(EffectAction::Add)
+        );
     }
 
     #[test]

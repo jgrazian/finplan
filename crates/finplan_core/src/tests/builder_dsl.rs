@@ -15,16 +15,10 @@ fn test_simulation_builder_basic() {
         .birth_date(1980, 6, 15)
         .build();
 
-    assert_eq!(
-        config.start_date,
-        Some(jiff::civil::date(2025, 1, 1))
-    );
+    assert_eq!(config.start_date, Some(jiff::civil::date(2025, 1, 1)));
     assert_eq!(config.duration_years, 5);
-    assert_eq!(
-        config.birth_date,
-        Some(jiff::civil::date(1980, 6, 15))
-    );
-    
+    assert_eq!(config.birth_date, Some(jiff::civil::date(1980, 6, 15)));
+
     // Metadata should be empty since we didn't add any entities
     assert!(metadata.accounts.is_empty());
     assert!(metadata.assets.is_empty());
@@ -55,11 +49,19 @@ fn test_account_builder_presets() {
 
     // Verify account types
     let checking_id = metadata.account_id("Checking").unwrap();
-    let checking = config.accounts.iter().find(|a| a.account_id == checking_id).unwrap();
+    let checking = config
+        .accounts
+        .iter()
+        .find(|a| a.account_id == checking_id)
+        .unwrap();
     assert!(matches!(checking.flavor, AccountFlavor::Bank(_)));
 
     let brokerage_id = metadata.account_id("Brokerage").unwrap();
-    let brokerage = config.accounts.iter().find(|a| a.account_id == brokerage_id).unwrap();
+    let brokerage = config
+        .accounts
+        .iter()
+        .find(|a| a.account_id == brokerage_id)
+        .unwrap();
     if let AccountFlavor::Investment(inv) = &brokerage.flavor {
         assert!(matches!(inv.tax_status, TaxStatus::Taxable));
     } else {
@@ -67,7 +69,11 @@ fn test_account_builder_presets() {
     }
 
     let trad_401k_id = metadata.account_id("Work 401k").unwrap();
-    let trad_401k = config.accounts.iter().find(|a| a.account_id == trad_401k_id).unwrap();
+    let trad_401k = config
+        .accounts
+        .iter()
+        .find(|a| a.account_id == trad_401k_id)
+        .unwrap();
     if let AccountFlavor::Investment(inv) = &trad_401k.flavor {
         assert!(matches!(inv.tax_status, TaxStatus::TaxDeferred));
     } else {
@@ -75,7 +81,11 @@ fn test_account_builder_presets() {
     }
 
     let roth_id = metadata.account_id("Roth IRA").unwrap();
-    let roth = config.accounts.iter().find(|a| a.account_id == roth_id).unwrap();
+    let roth = config
+        .accounts
+        .iter()
+        .find(|a| a.account_id == roth_id)
+        .unwrap();
     if let AccountFlavor::Investment(inv) = &roth.flavor {
         assert!(matches!(inv.tax_status, TaxStatus::TaxFree));
     } else {
@@ -129,8 +139,12 @@ fn test_positions() {
         .build();
 
     let brokerage_id = metadata.account_id("Brokerage").unwrap();
-    let brokerage = config.accounts.iter().find(|a| a.account_id == brokerage_id).unwrap();
-    
+    let brokerage = config
+        .accounts
+        .iter()
+        .find(|a| a.account_id == brokerage_id)
+        .unwrap();
+
     if let AccountFlavor::Investment(inv) = &brokerage.flavor {
         assert_eq!(inv.positions.len(), 2);
         assert_eq!(inv.cash.value, 5_000.0);
@@ -139,8 +153,12 @@ fn test_positions() {
     }
 
     let _401k_id = metadata.account_id("401k").unwrap();
-    let _401k = config.accounts.iter().find(|a| a.account_id == _401k_id).unwrap();
-    
+    let _401k = config
+        .accounts
+        .iter()
+        .find(|a| a.account_id == _401k_id)
+        .unwrap();
+
     if let AccountFlavor::Investment(inv) = &_401k.flavor {
         assert_eq!(inv.positions.len(), 1);
         assert_eq!(inv.positions[0].units, 1000.0);
@@ -169,9 +187,13 @@ fn test_income_event_builder() {
 
     assert_eq!(config.events.len(), 1);
     assert!(metadata.event_id("Salary").is_some());
-    
+
     let salary_id = metadata.event_id("Salary").unwrap();
-    let salary_event = config.events.iter().find(|e| e.event_id == salary_id).unwrap();
+    let salary_event = config
+        .events
+        .iter()
+        .find(|e| e.event_id == salary_id)
+        .unwrap();
     assert_eq!(salary_event.effects.len(), 1);
 }
 
@@ -229,10 +251,13 @@ fn test_full_simulation_with_builder() {
 
     // Run simulation
     let result = simulate(&config, 42);
-    
+
     // Basic validation
-    assert!(!result.dates.is_empty());
-    assert_eq!(result.dates.first().copied(), Some(jiff::civil::date(2025, 1, 1)));
+    assert!(!result.wealth_snapshots.is_empty());
+    assert_eq!(
+        result.wealth_snapshots.first().map(|snap| snap.date),
+        Some(jiff::civil::date(2025, 1, 1))
+    );
 }
 
 /// Test quick builder methods
@@ -252,7 +277,7 @@ fn test_quick_builder_methods() {
 
     assert_eq!(config.accounts.len(), 4);
     assert_eq!(config.events.len(), 2);
-    
+
     assert!(metadata.account_id("Checking").is_some());
     assert!(metadata.account_id("Brokerage").is_some());
     assert!(metadata.account_id("401k").is_some());
@@ -301,14 +326,22 @@ fn test_liability_account() {
         .start(2025, 1, 1)
         .years(30)
         .account(AccountBuilder::mortgage("Home Mortgage", 300_000.0, 0.065))
-        .account(AccountBuilder::student_loan("Student Loans", 50_000.0, 0.05))
+        .account(AccountBuilder::student_loan(
+            "Student Loans",
+            50_000.0,
+            0.05,
+        ))
         .build();
 
     assert_eq!(config.accounts.len(), 2);
-    
+
     let mortgage_id = metadata.account_id("Home Mortgage").unwrap();
-    let mortgage = config.accounts.iter().find(|a| a.account_id == mortgage_id).unwrap();
-    
+    let mortgage = config
+        .accounts
+        .iter()
+        .find(|a| a.account_id == mortgage_id)
+        .unwrap();
+
     if let AccountFlavor::Liability(loan) = &mortgage.flavor {
         assert_eq!(loan.principal, 300_000.0);
         assert_eq!(loan.interest_rate, 0.065);

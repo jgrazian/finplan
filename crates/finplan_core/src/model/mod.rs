@@ -9,8 +9,9 @@ mod state_event;
 mod tax_config;
 
 pub use accounts::{
-    Account, AccountFlavor, AssetLot, Cash, ContributionLimit, ContributionLimitPeriod, FixedAsset,
-    InvestmentContainer, LoanDetail, TaxStatus,
+    Account, AccountFlavor, AccountSnapshot, AccountSnapshotFlavor, AssetLot, Cash,
+    ContributionLimit, ContributionLimitPeriod, FixedAsset, InvestmentContainer, LoanDetail,
+    TaxStatus,
 };
 pub use events::{
     AmountMode, BalanceThreshold, Event, EventEffect, EventTrigger, FlowLimits, IncomeType,
@@ -20,7 +21,7 @@ pub use events::{
 pub use ids::{AccountId, AssetCoord, AssetId, EventId, ReturnProfileId};
 pub use market::{InflationProfile, Market, ReturnProfile, n_day_rate};
 pub use records::{Record, RecordKind, TaxInfo, TransactionSource};
-pub use results::{AccountSnapshot, AssetSnapshot, MonteCarloResult, SimulationResult};
+pub use results::{MonteCarloResult, SimulationResult, WealthSnapshot};
 pub use rmd::{RmdTable, RmdTableEntry};
 pub use state_event::{LedgerEntry, StateEvent};
 pub use tax_config::{TaxBracket, TaxConfig, TaxSummary};

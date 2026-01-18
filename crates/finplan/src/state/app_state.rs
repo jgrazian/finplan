@@ -11,54 +11,6 @@ use super::modal::ModalState;
 use super::screen_state::{EventsState, PortfolioProfilesState, ResultsState, ScenarioState};
 use super::tabs::TabId;
 
-// ========== ModalAction (legacy, flat enum) ==========
-// This will eventually be migrated to modal_action.rs domain-scoped version
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModalAction {
-    // Scenario management
-    SaveAs,
-    Load,
-    SwitchTo,
-    // Account CRUD
-    CreateAccount,
-    EditAccount,
-    DeleteAccount,
-    // Profile CRUD
-    CreateProfile,
-    EditProfile,
-    DeleteProfile,
-    // Holding CRUD
-    AddHolding,
-    EditHolding,
-    DeleteHolding,
-    // Config
-    EditTaxConfig,
-    EditInflation,
-    // Pickers (intermediate steps)
-    PickAccountCategory,
-    PickAccountType,
-    PickProfileType,
-    PickInflationType,
-    PickFederalBrackets,
-    PickReturnProfile,
-    // Event CRUD
-    CreateEvent,
-    EditEvent,
-    DeleteEvent,
-    // Event pickers (intermediate steps)
-    PickTriggerType,
-    PickEffectType,
-    PickAccountForEffect,
-    PickEventReference,
-    PickInterval,
-    // Effect management
-    ManageEffects,
-    PickEffectTypeForAdd,
-    AddEffect,
-    DeleteEffect,
-}
-
 // ========== SimulationResult ==========
 // Simplified result structure for TUI display
 

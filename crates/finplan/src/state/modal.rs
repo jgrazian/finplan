@@ -1,5 +1,4 @@
 /// Modal types for forms, pickers, and confirmations.
-
 use super::ModalAction;
 
 #[derive(Debug)]
@@ -31,7 +30,7 @@ impl ScenarioPickerModal {
             scenarios,
             selected_index: 0,
             action,
-            new_name: if action == ModalAction::SaveAs {
+            new_name: if action == ModalAction::SAVE_AS {
                 Some(String::new())
             } else {
                 None
@@ -54,7 +53,7 @@ impl ScenarioPickerModal {
             return;
         }
         // +1 for "New scenario" option when saving
-        let max_index = if self.action == ModalAction::SaveAs {
+        let max_index = if self.action == ModalAction::SAVE_AS {
             self.scenarios.len()
         } else {
             self.scenarios.len().saturating_sub(1)
@@ -65,7 +64,7 @@ impl ScenarioPickerModal {
     }
 
     pub fn selected_name(&self) -> Option<String> {
-        if self.action == ModalAction::SaveAs && self.selected_index == self.scenarios.len() {
+        if self.action == ModalAction::SAVE_AS && self.selected_index == self.scenarios.len() {
             // "New scenario" selected
             self.new_name.clone()
         } else {
@@ -74,7 +73,7 @@ impl ScenarioPickerModal {
     }
 
     pub fn is_new_scenario_selected(&self) -> bool {
-        self.action == ModalAction::SaveAs && self.selected_index == self.scenarios.len()
+        self.action == ModalAction::SAVE_AS && self.selected_index == self.scenarios.len()
     }
 }
 
@@ -223,7 +222,11 @@ impl FormField {
 
     pub fn percentage(label: &str, rate: f64) -> Self {
         // Store as display value (e.g., 5.0 for 5%)
-        Self::new(label, FieldType::Percentage, &format!("{:.2}", rate * 100.0))
+        Self::new(
+            label,
+            FieldType::Percentage,
+            &format!("{:.2}", rate * 100.0),
+        )
     }
 
     pub fn read_only(label: &str, value: &str) -> Self {
@@ -276,6 +279,120 @@ impl FormModal {
         }
         self
     }
+
+    // ========== Typed Field Extraction ==========
+
+    /// Get a string value from a field by index
+    pub fn get_str(&self, index: usize) -> Option<&str> {
+        self.fields.get(index).map(|f| f.value.as_str())
+    }
+
+    /// Get a non-empty string value from a field by index
+    pub fn get_str_non_empty(&self, index: usize) -> Option<&str> {
+        self.fields
+            .get(index)
+            .map(|f| f.value.as_str())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Get an optional string (returns Some only if non-empty)
+    pub fn get_optional_str(&self, index: usize) -> Option<String> {
+        self.get_str_non_empty(index).map(|s| s.to_string())
+    }
+
+    /// Get a currency value (f64) from a field by index
+    /// Handles $ prefix and commas
+    pub fn get_currency(&self, index: usize) -> Option<f64> {
+        self.fields.get(index).and_then(|f| {
+            let s = f.value.trim().trim_start_matches('$').replace(',', "");
+            s.parse().ok()
+        })
+    }
+
+    /// Get a currency value with a default if parsing fails
+    pub fn get_currency_or(&self, index: usize, default: f64) -> f64 {
+        self.get_currency(index).unwrap_or(default)
+    }
+
+    /// Get a percentage value as a decimal (e.g., "5.0" -> 0.05)
+    pub fn get_percentage(&self, index: usize) -> Option<f64> {
+        self.fields.get(index).and_then(|f| {
+            let s = f.value.trim().trim_end_matches('%');
+            s.parse::<f64>().ok().map(|v| v / 100.0)
+        })
+    }
+
+    /// Get a percentage value with a default if parsing fails
+    pub fn get_percentage_or(&self, index: usize, default: f64) -> f64 {
+        self.get_percentage(index).unwrap_or(default)
+    }
+
+    /// Get a boolean value (Y/N, Yes/No, true/false)
+    pub fn get_bool(&self, index: usize) -> Option<bool> {
+        self.fields.get(index).map(|f| {
+            let s = f.value.to_uppercase();
+            s.starts_with('Y') || s == "TRUE" || s == "1"
+        })
+    }
+
+    /// Get a boolean value with a default
+    pub fn get_bool_or(&self, index: usize, default: bool) -> bool {
+        self.get_bool(index).unwrap_or(default)
+    }
+
+    /// Get an integer value
+    pub fn get_int<T: std::str::FromStr>(&self, index: usize) -> Option<T> {
+        self.fields
+            .get(index)
+            .and_then(|f| f.value.trim().parse().ok())
+    }
+
+    /// Get an integer value with a default
+    pub fn get_int_or<T: std::str::FromStr>(&self, index: usize, default: T) -> T {
+        self.get_int(index).unwrap_or(default)
+    }
+
+    /// Get all field values as a FormValues helper for convenient access
+    pub fn values(&self) -> FormValues<'_> {
+        FormValues { form: self }
+    }
+}
+
+/// Helper struct for convenient typed access to form values
+pub struct FormValues<'a> {
+    form: &'a FormModal,
+}
+
+impl<'a> FormValues<'a> {
+    /// Get string at index
+    pub fn str(&self, index: usize) -> &str {
+        self.form.get_str(index).unwrap_or("")
+    }
+
+    /// Get non-empty string at index as Option
+    pub fn optional_str(&self, index: usize) -> Option<String> {
+        self.form.get_optional_str(index)
+    }
+
+    /// Get currency at index with default
+    pub fn currency(&self, index: usize, default: f64) -> f64 {
+        self.form.get_currency_or(index, default)
+    }
+
+    /// Get percentage at index with default (as decimal)
+    pub fn percentage(&self, index: usize, default: f64) -> f64 {
+        self.form.get_percentage_or(index, default)
+    }
+
+    /// Get boolean at index with default
+    pub fn bool(&self, index: usize, default: bool) -> bool {
+        self.form.get_bool_or(index, default)
+    }
+
+    /// Get integer at index with default
+    pub fn int<T: std::str::FromStr>(&self, index: usize, default: T) -> T {
+        self.form.get_int_or(index, default)
+    }
 }
 
 // ========== ConfirmModal ==========
@@ -302,5 +419,72 @@ impl ConfirmModal {
     pub fn with_context(mut self, context: &str) -> Self {
         self.context = Some(context.to_string());
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_form_modal_typed_extraction() {
+        let form = FormModal::new(
+            "Test",
+            vec![
+                FormField::text("Name", "John Doe"),
+                FormField::text("Description", ""),
+                FormField::currency("Amount", 1234.56),
+                FormField::percentage("Rate", 0.075),
+                FormField::text("Active (Y/N)", "Y"),
+                FormField::text("Age", "25"),
+            ],
+            ModalAction::CREATE_ACCOUNT,
+        );
+
+        // Test string extraction
+        assert_eq!(form.get_str(0), Some("John Doe"));
+        assert_eq!(form.get_str_non_empty(0), Some("John Doe"));
+        assert_eq!(form.get_str_non_empty(1), None); // Empty string
+        assert_eq!(form.get_optional_str(0), Some("John Doe".to_string()));
+        assert_eq!(form.get_optional_str(1), None);
+
+        // Test currency extraction
+        assert_eq!(form.get_currency(2), Some(1234.56));
+        assert_eq!(form.get_currency_or(2, 0.0), 1234.56);
+        assert_eq!(form.get_currency_or(99, 100.0), 100.0); // Out of bounds
+
+        // Test percentage extraction (stored as display value, converted to decimal)
+        assert!((form.get_percentage(3).unwrap() - 0.075).abs() < 0.0001);
+        assert!((form.get_percentage_or(3, 0.0) - 0.075).abs() < 0.0001);
+
+        // Test boolean extraction
+        assert_eq!(form.get_bool(4), Some(true));
+        assert!(form.get_bool_or(4, false));
+
+        // Test integer extraction
+        assert_eq!(form.get_int::<u32>(5), Some(25));
+        assert_eq!(form.get_int_or::<u32>(5, 0), 25);
+        assert_eq!(form.get_int_or::<u32>(99, 0), 0); // Out of bounds
+    }
+
+    #[test]
+    fn test_form_values_helper() {
+        let form = FormModal::new(
+            "Test",
+            vec![
+                FormField::text("Name", "Test Name"),
+                FormField::currency("Amount", 500.0),
+                FormField::percentage("Rate", 0.05),
+                FormField::text("Enabled", "N"),
+            ],
+            ModalAction::CREATE_ACCOUNT,
+        );
+
+        let values = form.values();
+
+        assert_eq!(values.str(0), "Test Name");
+        assert_eq!(values.currency(1, 0.0), 500.0);
+        assert!((values.percentage(2, 0.0) - 0.05).abs() < 0.0001);
+        assert!(!values.bool(3, true));
     }
 }

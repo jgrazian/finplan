@@ -20,16 +20,16 @@ impl StatusBar {
         // Return help text based on active tab
         match state.active_tab {
             crate::state::TabId::PortfolioProfiles => {
-                "j/k: nav | Tab: panel | a: add | e: edit | d: delete | h: holdings | m: map | q: quit"
+                "j/k: scroll | Tab: panel | a: add | e: edit | d: delete | h: holdings | m: map | q: quit"
             }
             crate::state::TabId::Scenario => {
-                "1-4: switch tabs | r: run simulation | m: monte carlo | s/l: save/load | q: quit"
+                "r: run simulation | m: monte carlo | s/l: save/load | q: quit"
             }
             crate::state::TabId::Events => {
-                "j/k: nav | Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects | q: quit"
+                "j/k: scroll | Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects | q: quit"
             }
             crate::state::TabId::Results => {
-                "1-4: switch tabs | j/k: scroll | q: quit"
+                "j/k: scroll | q: quit"
             }
         }
         .to_string()

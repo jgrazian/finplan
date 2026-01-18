@@ -58,7 +58,7 @@ fn test_single_asset_fixed_return() {
 
     // Expected: $10,000 * (1.10)^5 = $16,105.10
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
         (actual - expected).abs() < 1.0,
@@ -93,7 +93,7 @@ fn test_bank_cash_no_appreciation() {
     };
 
     let result = simulate(&params, 42);
-    let final_balance = result.final_account_balance(AccountId(1));
+    let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Bank cash should stay the same when return profile doesn't exist
     assert!(
@@ -135,7 +135,7 @@ fn test_bank_cash_with_return_profile() {
     };
 
     let result = simulate(&params, 42);
-    let final_balance = result.final_account_balance(AccountId(1));
+    let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Expected: $50,000 * (1.045)^5 = $62,308.67 for yearly compounding
     // Our simulation compounds at each time step (quarterly heartbeats), so actual
@@ -197,7 +197,7 @@ fn test_investment_cash_appreciation() {
     };
 
     let result = simulate(&params, 42);
-    let final_balance = result.final_account_balance(AccountId(1));
+    let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Cash grows at 5%: $10,000 * (1.05)^5 = $12,762.82
     let expected_cash = cash_amount * (1.0 + cash_return).powi(years as i32);
@@ -277,9 +277,9 @@ fn test_multiple_assets_different_returns() {
     let expected_bond = bond_initial * (1.0 + bond_return).powi(years as i32);
     let expected_total = expected_stock + expected_bond;
 
-    let actual_total = result.final_account_balance(AccountId(1));
-    let actual_stock = result.final_asset_balance(AccountId(1), stock_id);
-    let actual_bond = result.final_asset_balance(AccountId(1), bond_id);
+    let actual_total = result.final_account_balance(AccountId(1)).unwrap();
+    let actual_stock = result.final_asset_balance(AccountId(1), stock_id).unwrap();
+    let actual_bond = result.final_asset_balance(AccountId(1), bond_id).unwrap();
 
     // Check individual assets
     assert!(
@@ -347,7 +347,7 @@ fn test_negative_returns() {
 
     // Expected: $100,000 * (0.90)^3 = $72,900
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
         (actual - expected).abs() < 1.0,
@@ -394,7 +394,7 @@ fn test_zero_return() {
     };
 
     let result = simulate(&params, 42);
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
         (actual - initial_value).abs() < 0.01,
@@ -470,8 +470,8 @@ fn test_same_asset_multiple_accounts() {
     let expected_taxable = taxable_initial * multiplier;
     let expected_ira = ira_initial * multiplier;
 
-    let actual_taxable = result.final_account_balance(AccountId(1));
-    let actual_ira = result.final_account_balance(AccountId(2));
+    let actual_taxable = result.final_account_balance(AccountId(1)).unwrap();
+    let actual_ira = result.final_account_balance(AccountId(2)).unwrap();
 
     assert!(
         (actual_taxable - expected_taxable).abs() < 1.0,
@@ -530,7 +530,7 @@ fn test_short_duration_returns() {
 
     // Expected: $10,000 * 1.12 = $11,200
     let expected = initial_value * (1.0 + annual_return);
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
         (actual - expected).abs() < 0.1,
@@ -582,7 +582,7 @@ fn test_long_duration_returns() {
 
     // Expected: $100,000 * (1.07)^30 = $761,225.50
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     // Allow larger tolerance for long duration
     assert!(
@@ -644,7 +644,7 @@ fn test_mid_simulation_cash_deposit() {
     };
 
     let result = simulate(&params, 42);
-    let final_balance = result.final_account_balance(AccountId(1));
+    let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Initial $10,000 earns returns for 4 full years
     // Expected: $10,000 * (1.05)^4 = $12,155.06

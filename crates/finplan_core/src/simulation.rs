@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::apply::process_events;
 use crate::config::SimulationConfig;
 use crate::model::{
-    AccountFlavor, AccountId, AssetCoord, EventTrigger, LedgerEntry, MonteCarloResult,
-    SimulationResult, StateEvent, TaxStatus, TriggerOffset,
+    AccountFlavor, AccountId, EventTrigger, LedgerEntry, MonteCarloResult, SimulationResult,
+    StateEvent, TaxStatus, TriggerOffset,
 };
 use crate::simulation_state::SimulationState;
 
@@ -17,6 +17,7 @@ pub use crate::model::n_day_rate;
 
 pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     let mut state = SimulationState::from_parameters(params, seed);
+    state.snapshot_wealth();
 
     while state.timeline.current_date < state.timeline.end_date {
         let mut something_happened = true;
@@ -33,77 +34,14 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     }
 
     // Finalize last year's taxes
+    state.snapshot_wealth();
     state.finalize_year_taxes();
 
-    // Compute final balances for all accounts and assets
-    let (final_balances, final_asset_balances) = compute_final_balances(&state);
-
-    // Capture final year's net worth if not already captured at year-end
-    let final_year = state.timeline.current_date.year();
-    let mut yearly_net_worth = state.portfolio.year_end_net_worth.clone();
-    yearly_net_worth
-        .entry(final_year)
-        .or_insert_with(|| state.net_worth());
-
     SimulationResult {
-        dates: state.history.dates.clone(),
-        accounts: state.build_account_snapshots(params),
+        wealth_snapshots: state.portfolio.wealth_snapshots.clone(),
         yearly_taxes: state.taxes.yearly_taxes.clone(),
         ledger: state.history.ledger.clone(),
-        final_balances,
-        final_asset_balances,
-        yearly_net_worth,
     }
-}
-
-/// Compute final balances for all accounts and assets using the Market
-fn compute_final_balances(
-    state: &SimulationState,
-) -> (
-    HashMap<crate::model::AccountId, f64>,
-    HashMap<(crate::model::AccountId, crate::model::AssetId), f64>,
-) {
-    let mut account_balances = HashMap::new();
-    let mut asset_balances = HashMap::new();
-
-    for (account_id, account) in &state.portfolio.accounts {
-        // Calculate total account balance
-        let balance = state.account_balance(*account_id).unwrap_or(0.0);
-        account_balances.insert(*account_id, balance);
-
-        // Calculate individual asset balances
-        match &account.flavor {
-            AccountFlavor::Investment(inv) => {
-                // Track unique assets
-                let mut seen_assets = std::collections::HashSet::new();
-                for lot in &inv.positions {
-                    if seen_assets.insert(lot.asset_id) {
-                        let asset_coord = AssetCoord {
-                            account_id: *account_id,
-                            asset_id: lot.asset_id,
-                        };
-                        if let Ok(asset_balance) = state.asset_balance(asset_coord) {
-                            asset_balances.insert((*account_id, lot.asset_id), asset_balance);
-                        }
-                    }
-                }
-            }
-            AccountFlavor::Property(assets) => {
-                for asset in assets {
-                    let asset_coord = AssetCoord {
-                        account_id: *account_id,
-                        asset_id: asset.asset_id,
-                    };
-                    if let Ok(asset_balance) = state.asset_balance(asset_coord) {
-                        asset_balances.insert((*account_id, asset.asset_id), asset_balance);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    (account_balances, asset_balances)
 }
 
 fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
@@ -250,9 +188,6 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
                 days_elapsed: days_passed,
             },
         ));
-
-        // Record date checkpoint
-        state.history.dates.push(next_checkpoint);
     }
 
     // Capture year-end balances for RMD calculations (December 31)
@@ -275,8 +210,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             .insert(year, year_balances);
 
         // Capture year-end net worth
-        let net_worth = state.net_worth();
-        state.portfolio.year_end_net_worth.insert(year, net_worth);
+        state.snapshot_wealth();
     }
 
     // Check if we're crossing a month boundary and reset monthly contributions

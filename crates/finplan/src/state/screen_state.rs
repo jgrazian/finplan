@@ -1,5 +1,4 @@
 /// Per-screen state structs.
-
 use super::panels::{EventsPanel, PortfolioProfilesPanel};
 
 #[derive(Debug)]

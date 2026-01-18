@@ -1,11 +1,10 @@
 use crate::config::SimulationConfig;
 use crate::error::{EngineError, Result};
 use crate::model::{
-    Account, AccountFlavor, AccountId, AccountSnapshot, AssetCoord, AssetId, AssetSnapshot, Event,
-    EventId, LedgerEntry, Market, ReturnProfileId, RmdTable, StateEvent, TaxConfig, TaxSummary,
+    Account, AccountFlavor, AccountId, AssetCoord, AssetId, Event, EventId, LedgerEntry, Market,
+    ReturnProfileId, RmdTable, StateEvent, TaxConfig, TaxSummary, WealthSnapshot,
 };
 use jiff::ToSpan;
-use jiff::civil::Date;
 use rand::SeedableRng;
 use std::collections::HashMap;
 
@@ -53,8 +52,7 @@ pub struct SimPortfolio {
     /// Current month contributions per account (for monthly limits)
     pub contributions_mtd: HashMap<AccountId, f64>,
     // === Net Worth Tracking ===
-    /// Year-end net worth (year -> net_worth)
-    pub year_end_net_worth: HashMap<i16, f64>,
+    pub wealth_snapshots: Vec<WealthSnapshot>,
 }
 
 #[derive(Debug, Clone)]
@@ -87,8 +85,6 @@ pub struct SimTaxState {
 pub struct SimHistory {
     /// Immutable ledger of all state changes
     pub ledger: Vec<LedgerEntry>,
-    /// Dates tracked in the simulation
-    pub dates: Vec<Date>,
 }
 
 impl SimulationState {
@@ -183,7 +179,7 @@ impl SimulationState {
                 active_rmd_accounts: HashMap::new(),
                 contributions_ytd: HashMap::new(),
                 contributions_mtd: HashMap::new(),
-                year_end_net_worth: HashMap::new(),
+                wealth_snapshots: Vec::new(),
             },
             event_state: SimEventState {
                 events,
@@ -202,10 +198,7 @@ impl SimulationState {
                 yearly_taxes: Vec::new(),
                 config: params.tax_config.clone(),
             },
-            history: SimHistory {
-                ledger: Vec::new(),
-                dates: vec![start_date],
-            },
+            history: SimHistory { ledger: Vec::new() },
             pending_triggers: Vec::new(),
         }
     }
@@ -386,58 +379,25 @@ impl SimulationState {
     }
 
     /// Build account snapshots with starting values from SimulationParameters
-    pub fn build_account_snapshots(&self, _params: &SimulationConfig) -> Vec<AccountSnapshot> {
+    pub fn snapshot_wealth(&mut self) {
         // Build snapshots from current state accounts
-        self.portfolio
+        let account_snapshots = self
+            .portfolio
             .accounts
             .values()
             .map(|account| {
-                let assets = match &account.flavor {
-                    AccountFlavor::Investment(inv) => {
-                        // Get unique asset_ids from positions
-                        let mut asset_ids: std::collections::HashSet<AssetId> =
-                            std::collections::HashSet::new();
-                        for lot in &inv.positions {
-                            asset_ids.insert(lot.asset_id);
-                        }
-
-                        asset_ids
-                            .iter()
-                            .map(|&asset_id| {
-                                // Sum up cost basis as starting value
-                                let starting_value: f64 = inv
-                                    .positions
-                                    .iter()
-                                    .filter(|lot| lot.asset_id == asset_id)
-                                    .map(|lot| lot.cost_basis)
-                                    .sum();
-
-                                AssetSnapshot {
-                                    asset_id,
-                                    return_profile_index: 0, // TODO: lookup from Market
-                                    starting_value,
-                                }
-                            })
-                            .collect()
-                    }
-                    AccountFlavor::Property(assets) => assets
-                        .iter()
-                        .map(|asset| AssetSnapshot {
-                            asset_id: asset.asset_id,
-                            return_profile_index: 0,
-                            starting_value: asset.value,
-                        })
-                        .collect(),
-                    _ => Vec::new(),
-                };
-
-                AccountSnapshot {
-                    account_id: account.account_id,
-                    flavor: account.flavor.clone(),
-                    assets,
-                }
+                account.snapshot(
+                    &self.portfolio.market,
+                    self.timeline.start_date,
+                    self.timeline.current_date,
+                )
             })
-            .collect()
+            .collect();
+
+        self.portfolio.wealth_snapshots.push(WealthSnapshot {
+            date: self.timeline.current_date,
+            accounts: account_snapshots,
+        })
     }
 
     // === RMD Helper Functions ===

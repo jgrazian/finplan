@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "crates/finplan",
     "crates/finplan_core",
-    "crates/finplan_server"
+    # "crates/finplan_server"
 ]
 
 [profile.release]

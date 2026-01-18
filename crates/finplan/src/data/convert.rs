@@ -4,9 +4,9 @@ use finplan_core::{
     config::SimulationConfig,
     model::{
         Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, AssetLot,
-        BalanceThreshold, Cash, Event, EventEffect, EventId, EventTrigger, FixedAsset,
-        IncomeType, InvestmentContainer, LoanDetail, LotMethod, RepeatInterval, ReturnProfileId,
-        TaxStatus, TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
+        BalanceThreshold, Cash, Event, EventEffect, EventId, EventTrigger, FixedAsset, IncomeType,
+        InvestmentContainer, LoanDetail, LotMethod, RepeatInterval, ReturnProfileId, TaxStatus,
+        TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
     },
 };
 use jiff::civil::Date;
@@ -172,10 +172,7 @@ fn convert_accounts(
 
         let flavor = convert_account_flavor(account_data, ctx, default_cash_profile)?;
 
-        config.accounts.push(Account {
-            account_id,
-            flavor,
-        });
+        config.accounts.push(Account { account_id, flavor });
     }
     Ok(())
 }
@@ -214,15 +211,13 @@ fn convert_account_flavor(
             interest_rate: debt.interest_rate,
         })),
 
-        AccountType::Brokerage(inv) => {
-            Ok(AccountFlavor::Investment(convert_investment_container(
-                inv,
-                &account_data.name,
-                ctx,
-                TaxStatus::Taxable,
-                default_cash_profile,
-            )?))
-        }
+        AccountType::Brokerage(inv) => Ok(AccountFlavor::Investment(convert_investment_container(
+            inv,
+            &account_data.name,
+            ctx,
+            TaxStatus::Taxable,
+            default_cash_profile,
+        )?)),
 
         AccountType::Traditional401k(inv) | AccountType::TraditionalIRA(inv) => {
             Ok(AccountFlavor::Investment(convert_investment_container(
@@ -618,9 +613,7 @@ fn convert_offset(offset: &OffsetData) -> TriggerOffset {
 
 fn convert_threshold(threshold: &ThresholdData) -> BalanceThreshold {
     match threshold {
-        ThresholdData::GreaterThanOrEqual { value } => {
-            BalanceThreshold::GreaterThanOrEqual(*value)
-        }
+        ThresholdData::GreaterThanOrEqual { value } => BalanceThreshold::GreaterThanOrEqual(*value),
         ThresholdData::LessThanOrEqual { value } => BalanceThreshold::LessThanOrEqual(*value),
     }
 }
@@ -692,25 +685,25 @@ pub fn to_tui_result(
         .map(|t| (t.year as i32, t.total_tax))
         .collect();
 
-    // Get yearly net worth from simulation results
-    let yearly_net_worth: BTreeMap<i32, f64> = core_result
-        .yearly_net_worth
-        .iter()
-        .map(|(&year, &net_worth)| (year as i32, net_worth))
-        .collect();
+    // Build yearly net worth from wealth snapshots
+    // Take the last snapshot of each year (snapshots are in chronological order)
+    let mut yearly_net_worth: BTreeMap<i32, f64> = BTreeMap::new();
+    let mut all_years_set: std::collections::HashSet<i32> = std::collections::HashSet::new();
 
-    // Collect all unique years from the simulation
-    let mut all_years: Vec<i32> = core_result
-        .dates
-        .iter()
-        .map(|d| d.year() as i32)
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect();
+    for snapshot in &core_result.wealth_snapshots {
+        let year = snapshot.date.year() as i32;
+        let total: f64 = snapshot.accounts.iter().map(|acc| acc.total_value()).sum();
+        yearly_net_worth.insert(year, total); // Last value for each year wins
+        all_years_set.insert(year);
+    }
+
+    let mut all_years: Vec<i32> = all_years_set.into_iter().collect();
     all_years.sort();
 
     // Calculate final net worth
-    let final_net_worth: f64 = core_result.final_balances.values().sum();
+    let final_net_worth: f64 = core_result.wealth_snapshots.last().map_or(0.0, |snap| {
+        snap.accounts.iter().map(|acc| acc.total_value()).sum()
+    });
 
     // Build year results
     let mut years = Vec::new();

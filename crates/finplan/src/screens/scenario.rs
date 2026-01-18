@@ -2,6 +2,7 @@ use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
 use crate::state::{AppState, MessageModal, ModalAction, ModalState, ScenarioPickerModal, TabId};
 use crossterm::event::{KeyCode, KeyEvent};
+use jiff::civil::Date;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -9,7 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use jiff::civil::Date;
 
 use super::Screen;
 
@@ -93,7 +93,7 @@ impl Component for ScenarioScreen {
                 state.modal = ModalState::ScenarioPicker(ScenarioPickerModal::new(
                     "Save Scenario As",
                     scenarios,
-                    ModalAction::SaveAs,
+                    ModalAction::SAVE_AS,
                 ));
                 EventResult::Handled
             }
@@ -109,7 +109,7 @@ impl Component for ScenarioScreen {
                     state.modal = ModalState::ScenarioPicker(ScenarioPickerModal::new(
                         "Load Scenario",
                         scenarios,
-                        ModalAction::Load,
+                        ModalAction::LOAD,
                     ));
                 }
                 EventResult::Handled
@@ -227,10 +227,7 @@ impl ScenarioScreen {
 
         let lines = vec![
             Line::from(vec![
-                Span::styled(
-                    "SCENARIO: ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
+                Span::styled("SCENARIO: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::styled(
                     &state.current_scenario,
                     Style::default()

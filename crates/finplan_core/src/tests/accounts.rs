@@ -61,7 +61,7 @@ fn test_investment_account_cash_and_positions() {
     let expected_position = position_amount * (1.0 + annual_return).powi(years as i32);
     let expected_total = expected_position + cash_amount;
 
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
         (actual - expected_total).abs() < 1.0,
@@ -134,7 +134,7 @@ fn test_multiple_lots_same_asset() {
     let price_growth = (1.0 + annual_return).powi(years as i32);
     let expected_value = total_units * price_growth;
 
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
         (actual - expected_value).abs() < 1.0,
@@ -190,7 +190,7 @@ fn test_property_account_appreciation() {
 
     // Note: Property assets currently don't appreciate via Market
     // This test documents current behavior
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     // Current implementation: Property values are fixed
     let expected = house_value + car_value;
@@ -230,7 +230,7 @@ fn test_liability_account_negative_balance() {
     };
 
     let result = simulate(&params, 42);
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     // Liability shows as negative in net worth calculation
     assert!(
@@ -322,10 +322,9 @@ fn test_tax_status_same_returns() {
 
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
 
-    let taxable = result.final_account_balance(AccountId(1));
-    let deferred = result.final_account_balance(AccountId(2));
-    let tax_free = result.final_account_balance(AccountId(3));
-
+    let taxable = result.final_account_balance(AccountId(1)).unwrap();
+    let deferred = result.final_account_balance(AccountId(2)).unwrap();
+    let tax_free = result.final_account_balance(AccountId(3)).unwrap();
     // All should have same ending value (tax status doesn't affect appreciation)
     assert!(
         (taxable - expected).abs() < 1.0,
@@ -376,7 +375,7 @@ fn test_empty_investment_account() {
     };
 
     let result = simulate(&params, 42);
-    let actual = result.final_account_balance(AccountId(1));
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
         actual.abs() < 0.01,
@@ -406,9 +405,5 @@ fn test_nonexistent_account_returns_zero() {
 
     // Query non-existent account should return 0
     let balance = result.final_account_balance(AccountId(999));
-    assert!(
-        balance.abs() < 0.01,
-        "Non-existent account should return 0, got {}",
-        balance
-    );
+    assert!(balance.is_none(), "Non-existent account should be None");
 }

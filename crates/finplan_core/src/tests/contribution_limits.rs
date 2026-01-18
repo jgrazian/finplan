@@ -85,7 +85,7 @@ fn test_monthly_contribution_limit() {
     let result = simulate(&params, 42);
 
     // Check final balance - should be $1000 ($500 from Jan + $500 from Feb)
-    let final_balance = result.final_account_balance(roth_ira);
+    let final_balance = result.final_account_balance(roth_ira).unwrap();
     assert!(
         (final_balance - 1000.0).abs() < 0.01,
         "Expected $1000, got ${:.2}",
@@ -176,7 +176,7 @@ fn test_yearly_contribution_limit() {
     // First year: 12 months * $2000 = $24000, but capped at $23000
     // Second year: 12 months * $2000 = $24000, but capped at $23000
     // Total: $46000
-    let final_balance = result.final_account_balance(roth_401k);
+    let final_balance = result.final_account_balance(roth_401k).unwrap();
     assert!(
         (final_balance - 46000.0).abs() < 0.01,
         "Expected $46000, got ${:.2}. Should be capped at $23k per year for 2 years.",
@@ -297,7 +297,7 @@ fn test_contribution_limit_with_asset_purchase() {
     let result = simulate(&params, 42);
 
     // Total contributions should be capped at $7000 ($3000 + $4000)
-    let final_balance = result.final_account_balance(ira);
+    let final_balance = result.final_account_balance(ira).unwrap();
     assert!(
         (final_balance - 7000.0).abs() < 0.01,
         "Expected $7000 total value, got ${:.2}",
@@ -326,11 +326,7 @@ fn test_contribution_limit_with_asset_purchase() {
     );
 
     // Check asset balance ($2000 worth / $100 per share = 20 shares)
-    let asset_balance = result
-        .final_asset_balances
-        .get(&(ira, vtsax))
-        .copied()
-        .unwrap_or(0.0);
+    let asset_balance = result.final_asset_balance(ira, vtsax).unwrap_or(0.0);
 
     assert!(
         (asset_balance - 2000.0).abs() < 0.01,

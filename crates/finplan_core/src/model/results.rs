@@ -3,74 +3,77 @@
 //! Contains the output types from running simulations, including
 //! account snapshots and the immutable ledger of state changes.
 
-use std::collections::HashMap;
-
-use crate::model::accounts::AccountFlavor;
+use crate::model::{AccountSnapshot, AccountSnapshotFlavor};
 
 use super::ids::{AccountId, AssetId, EventId};
 use super::state_event::{LedgerEntry, StateEvent};
 use super::tax_config::TaxSummary;
 use serde::{Deserialize, Serialize};
 
-/// Snapshot of an asset's starting state
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct AssetSnapshot {
-    pub asset_id: AssetId,
-    pub return_profile_index: usize,
-    pub starting_value: f64,
-}
-
-/// Snapshot of an account's starting state
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountSnapshot {
-    pub account_id: AccountId,
-    pub flavor: AccountFlavor,
-    pub assets: Vec<AssetSnapshot>,
-}
-
-impl AccountSnapshot {
-    /// Get starting balance (sum of all asset initial values)
-    pub fn starting_balance(&self) -> f64 {
-        self.assets.iter().map(|a| a.starting_value).sum()
-    }
+pub struct WealthSnapshot {
+    pub date: jiff::civil::Date,
+    pub accounts: Vec<AccountSnapshot>,
 }
 
 /// Complete results from a single simulation run
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SimulationResult {
-    pub dates: Vec<jiff::civil::Date>,
     /// Starting state of all accounts
-    pub accounts: Vec<AccountSnapshot>,
+    pub wealth_snapshots: Vec<WealthSnapshot>,
     /// Tax summaries per year
     pub yearly_taxes: Vec<TaxSummary>,
-
     /// Immutable ledger of all state changes in chronological order
     pub ledger: Vec<LedgerEntry>,
-
-    /// Final account balances at end of simulation (computed from Market prices)
-    pub final_balances: HashMap<AccountId, f64>,
-
-    /// Final asset balances at end of simulation (account_id, asset_id) -> value
-    pub final_asset_balances: HashMap<(AccountId, AssetId), f64>,
-
-    /// Net worth at end of each year (year -> net_worth)
-    pub yearly_net_worth: HashMap<i16, f64>,
 }
 
 impl SimulationResult {
     /// Get the final balance for a specific account
     /// Uses pre-computed final balances from the simulation
-    pub fn final_account_balance(&self, account_id: AccountId) -> f64 {
-        self.final_balances.get(&account_id).copied().unwrap_or(0.0)
+    pub fn final_account_balance(&self, account_id: AccountId) -> Option<f64> {
+        self.wealth_snapshots.last().and_then(|snapshot| {
+            snapshot.accounts.iter().find_map(|acc_snap| {
+                if acc_snap.account_id == account_id {
+                    Some(acc_snap.total_value())
+                } else {
+                    None
+                }
+            })
+        })
     }
 
     /// Get the final balance for a specific asset
     /// Uses pre-computed final asset balances from the simulation
-    pub fn final_asset_balance(&self, account_id: AccountId, asset_id: AssetId) -> f64 {
-        self.final_asset_balances
-            .get(&(account_id, asset_id))
-            .copied()
-            .unwrap_or(0.0)
+    pub fn final_asset_balance(&self, account_id: AccountId, asset_id: AssetId) -> Option<f64> {
+        self.wealth_snapshots.last().and_then(|snapshot| {
+            snapshot.accounts.iter().find_map(|acc_snap| {
+                if acc_snap.account_id != account_id {
+                    return None;
+                }
+
+                if let AccountSnapshotFlavor::Investment { assets, .. } = &acc_snap.flavor {
+                    assets.get(&asset_id).copied()
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    pub fn yearly_net_worth(&self) -> Vec<(jiff::civil::Date, f64)> {
+        self.wealth_snapshots
+            .iter()
+            // Get only year-end snapshots (December 31)
+            .filter(|snap| snap.date.month() == 12 && snap.date.day() == snap.date.days_in_month())
+            .map(|snapshot| {
+                let total = snapshot
+                    .accounts
+                    .iter()
+                    .map(|acc_snap| acc_snap.total_value())
+                    .sum();
+                (snapshot.date, total)
+            })
+            .collect()
     }
 
     /// Check if an event was triggered at any point

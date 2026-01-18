@@ -2,7 +2,6 @@
 ///
 /// This provides type safety and eliminates the need for string parsing
 /// in modal handlers.
-
 use crate::data::events_data::IntervalData;
 
 /// Top-level context enum for modal operations
@@ -29,7 +28,10 @@ pub enum IndexContext {
     Profile(usize),
     Event(usize),
     /// Holding within an account: (account_index, holding_index)
-    Holding { account: usize, holding: usize },
+    Holding {
+        account: usize,
+        holding: usize,
+    },
 }
 
 /// Account type context for create/edit
@@ -150,7 +152,10 @@ pub enum EffectContext {
     /// Effect within an event: (event_index, effect_index)
     Existing { event: usize, effect: usize },
     /// Adding a new effect of a specific type to an event
-    Add { event: usize, effect_type: EffectTypeContext },
+    Add {
+        event: usize,
+        effect_type: EffectTypeContext,
+    },
 }
 
 /// Effect type context for creation

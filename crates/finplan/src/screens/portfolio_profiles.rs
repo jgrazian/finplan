@@ -518,7 +518,7 @@ impl PortfolioProfilesScreen {
                 state.modal = ModalState::Picker(PickerModal::new(
                     "Select Account Category",
                     categories,
-                    ModalAction::PickAccountCategory,
+                    ModalAction::PICK_ACCOUNT_CATEGORY,
                 ));
                 EventResult::Handled
             }
@@ -554,7 +554,7 @@ impl PortfolioProfilesScreen {
                         ConfirmModal::new(
                             "Delete Account",
                             &format!("Delete account '{}'?", account.name),
-                            ModalAction::DeleteAccount,
+                            ModalAction::DELETE_ACCOUNT,
                         )
                         .with_context(
                             &state
@@ -587,7 +587,7 @@ impl PortfolioProfilesScreen {
                                     FormField::text("Asset Name", ""),
                                     FormField::currency("Value", 0.0),
                                 ],
-                                ModalAction::AddHolding,
+                                ModalAction::ADD_HOLDING,
                             )
                             .with_context(
                                 &state
@@ -636,7 +636,7 @@ impl PortfolioProfilesScreen {
                         FormField::currency("Value", prop.value),
                         FormField::text("Return Profile", &profile_str),
                     ],
-                    ModalAction::EditAccount,
+                    ModalAction::EDIT_ACCOUNT,
                 )
             }
             AccountType::Mortgage(debt)
@@ -650,7 +650,7 @@ impl PortfolioProfilesScreen {
                     FormField::currency("Balance", debt.balance),
                     FormField::percentage("Interest Rate", debt.interest_rate),
                 ],
-                ModalAction::EditAccount,
+                ModalAction::EDIT_ACCOUNT,
             ),
             AccountType::Brokerage(_)
             | AccountType::Traditional401k(_)
@@ -668,7 +668,7 @@ impl PortfolioProfilesScreen {
                             account.description.as_deref().unwrap_or(""),
                         ),
                     ],
-                    ModalAction::EditAccount,
+                    ModalAction::EDIT_ACCOUNT,
                 )
             }
         }
@@ -706,7 +706,7 @@ impl PortfolioProfilesScreen {
                 state.modal = ModalState::Picker(PickerModal::new(
                     "Select Profile Type",
                     types,
-                    ModalAction::PickProfileType,
+                    ModalAction::PICK_PROFILE_TYPE,
                 ));
                 EventResult::Handled
             }
@@ -740,7 +740,7 @@ impl PortfolioProfilesScreen {
                         ConfirmModal::new(
                             "Delete Profile",
                             &format!("Delete profile '{}'?", profile_data.name.0),
-                            ModalAction::DeleteProfile,
+                            ModalAction::DELETE_PROFILE,
                         )
                         .with_context(
                             &state
@@ -808,7 +808,7 @@ impl PortfolioProfilesScreen {
                     ),
                     FormField::read_only("Type", &type_name),
                 ],
-                ModalAction::EditProfile,
+                ModalAction::EDIT_PROFILE,
             ),
             ReturnProfileData::Fixed { rate } => FormModal::new(
                 "Edit Profile",
@@ -821,7 +821,7 @@ impl PortfolioProfilesScreen {
                     FormField::read_only("Type", &type_name),
                     FormField::percentage("Rate", *rate),
                 ],
-                ModalAction::EditProfile,
+                ModalAction::EDIT_PROFILE,
             ),
             ReturnProfileData::Normal { mean, std_dev }
             | ReturnProfileData::LogNormal { mean, std_dev } => FormModal::new(
@@ -836,7 +836,7 @@ impl PortfolioProfilesScreen {
                     FormField::percentage("Mean", *mean),
                     FormField::percentage("Std Dev", *std_dev),
                 ],
-                ModalAction::EditProfile,
+                ModalAction::EDIT_PROFILE,
             ),
         }
     }
@@ -924,7 +924,7 @@ impl PortfolioProfilesScreen {
                         state.modal = ModalState::Picker(PickerModal::new(
                             "Federal Tax Brackets",
                             options,
-                            ModalAction::PickFederalBrackets,
+                            ModalAction::PICK_FEDERAL_BRACKETS,
                         ));
                     }
                     1 => {
@@ -934,7 +934,7 @@ impl PortfolioProfilesScreen {
                             FormModal::new(
                                 "Edit State Tax Rate",
                                 vec![FormField::percentage("State Rate", rate)],
-                                ModalAction::EditTaxConfig,
+                                ModalAction::EDIT_TAX_CONFIG,
                             )
                             .with_context("state_rate"),
                         );
@@ -946,7 +946,7 @@ impl PortfolioProfilesScreen {
                             FormModal::new(
                                 "Edit Capital Gains Rate",
                                 vec![FormField::percentage("Capital Gains Rate", rate)],
-                                ModalAction::EditTaxConfig,
+                                ModalAction::EDIT_TAX_CONFIG,
                             )
                             .with_context("cap_gains_rate"),
                         );
@@ -963,7 +963,7 @@ impl PortfolioProfilesScreen {
                         state.modal = ModalState::Picker(PickerModal::new(
                             "Inflation Type",
                             options,
-                            ModalAction::PickInflationType,
+                            ModalAction::PICK_INFLATION_TYPE,
                         ));
                     }
                     _ => {}

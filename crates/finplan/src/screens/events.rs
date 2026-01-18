@@ -613,7 +613,7 @@ impl EventsScreen {
                 state.modal = ModalState::Picker(PickerModal::new(
                     "Select Trigger Type",
                     trigger_types,
-                    ModalAction::PickTriggerType,
+                    ModalAction::PICK_TRIGGER_TYPE,
                 ));
                 EventResult::Handled
             }
@@ -643,7 +643,7 @@ impl EventsScreen {
                             FormField::read_only("Trigger", &trigger_summary),
                             FormField::read_only("Effects", &effects_summary),
                         ],
-                        ModalAction::EditEvent,
+                        ModalAction::EDIT_EVENT,
                     )
                     .with_context(&state.events_state.selected_event_index.to_string());
 
@@ -662,7 +662,7 @@ impl EventsScreen {
                         ConfirmModal::new(
                             "Delete Event",
                             &format!("Delete event '{}'?", event.name.0),
-                            ModalAction::DeleteEvent,
+                            ModalAction::DELETE_EVENT,
                         )
                         .with_context(&state.events_state.selected_event_index.to_string()),
                     );
@@ -698,7 +698,7 @@ impl EventsScreen {
                     state.modal = ModalState::Picker(PickerModal::new(
                         &format!("Manage Effects - {}", event.name.0),
                         options,
-                        ModalAction::ManageEffects,
+                        ModalAction::MANAGE_EFFECTS,
                     ));
                 }
                 EventResult::Handled

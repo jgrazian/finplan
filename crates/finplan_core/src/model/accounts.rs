@@ -3,6 +3,8 @@
 //! Accounts are containers for assets with specific tax treatments.
 //! Assets represent individual investments or property within accounts.
 
+use std::collections::HashMap;
+
 use crate::model::Market;
 
 use super::ids::{AccountId, AssetId, ReturnProfileId};
@@ -147,6 +149,80 @@ impl Account {
             AccountFlavor::Investment { .. } => true,
             AccountFlavor::Property { .. } => false,
             AccountFlavor::Liability { .. } => false,
+        }
+    }
+
+    pub fn snapshot(
+        &self,
+        market: &Market,
+        start_date: Date,
+        current_date: Date,
+    ) -> AccountSnapshot {
+        let flavor = match &self.flavor {
+            AccountFlavor::Bank(cash) => AccountSnapshotFlavor::Bank(cash.value),
+            AccountFlavor::Investment(inv) => {
+                let mut assets: HashMap<AssetId, f64> = HashMap::new();
+
+                for asset in &inv.positions {
+                    let value = asset.units
+                        * market
+                            .get_asset_value(start_date, current_date, asset.asset_id)
+                            .unwrap_or(0.0);
+
+                    assets
+                        .entry(asset.asset_id)
+                        .and_modify(|v| *v += value)
+                        .or_insert(value);
+                }
+
+                AccountSnapshotFlavor::Investment {
+                    cash: inv.cash.value,
+                    assets,
+                }
+            }
+            AccountFlavor::Property(assets) => {
+                let total_value: f64 = assets.iter().map(|a| a.value).sum();
+                AccountSnapshotFlavor::Property(total_value)
+            }
+            AccountFlavor::Liability(loan) => AccountSnapshotFlavor::Liability(-loan.principal),
+        };
+
+        AccountSnapshot {
+            account_id: self.account_id,
+            flavor,
+        }
+    }
+}
+
+// Point-in-time snapshot of an account's state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AccountSnapshotFlavor {
+    Bank(f64),
+    Investment {
+        cash: f64,
+        assets: HashMap<AssetId, f64>,
+    },
+    Property(f64),
+    Liability(f64),
+}
+
+// Point-in-time snapshot of an account
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountSnapshot {
+    pub account_id: AccountId,
+    pub flavor: AccountSnapshotFlavor,
+}
+
+impl AccountSnapshot {
+    pub fn total_value(&self) -> f64 {
+        match &self.flavor {
+            AccountSnapshotFlavor::Bank(cash) => *cash,
+            AccountSnapshotFlavor::Investment { cash, assets } => {
+                let assets_val: f64 = assets.values().sum();
+                *cash + assets_val
+            }
+            AccountSnapshotFlavor::Property(value) => *value,
+            AccountSnapshotFlavor::Liability(balance) => *balance,
         }
     }
 }

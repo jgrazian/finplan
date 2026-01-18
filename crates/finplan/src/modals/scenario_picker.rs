@@ -1,15 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::Constraint,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{List, ListItem, Paragraph},
+    Frame,
 };
 
 use crate::state::{ModalAction, ScenarioPickerModal};
 
-use super::{ModalResult, centered_rect};
+use super::helpers::{render_modal_frame, HelpText};
+use super::ModalResult;
 
 const MODAL_WIDTH: u16 = 50;
 const MODAL_MIN_HEIGHT: u16 = 10;
@@ -21,7 +22,7 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
 
     // Calculate height based on number of scenarios
     let content_height = modal.scenarios.len() as u16
-        + if modal.action == ModalAction::SaveAs {
+        + if modal.action == ModalAction::SAVE_AS {
             3
         } else {
             1
@@ -30,36 +31,28 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
         .min(MODAL_MAX_HEIGHT)
         .min(area.height - 2);
 
-    let modal_area = centered_rect(MODAL_WIDTH, height, area);
+    // Calculate new name input height
+    let new_name_height =
+        if modal.action == ModalAction::SAVE_AS && modal.is_new_scenario_selected() {
+            3
+        } else {
+            1
+        };
 
-    // Clear the area behind the modal
-    frame.render_widget(Clear, modal_area);
-
-    // Create the modal block
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(format!(" {} ", modal.title));
-
-    let inner = block.inner(modal_area);
-    frame.render_widget(block, modal_area);
-
-    // Layout for modal content
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1), // Spacing
-            Constraint::Min(3),    // Scenario list
-            Constraint::Length(
-                if modal.action == ModalAction::SaveAs && modal.is_new_scenario_selected() {
-                    3
-                } else {
-                    1
-                },
-            ), // New name input (conditional)
-            Constraint::Length(2), // Help text
-        ])
-        .split(inner);
+    // Render the modal frame
+    let mf = render_modal_frame(
+        frame,
+        &modal.title,
+        MODAL_WIDTH,
+        height,
+        Color::Cyan,
+        &[
+            Constraint::Length(1),              // Spacing
+            Constraint::Min(3),                 // Scenario list
+            Constraint::Length(new_name_height), // New name input (conditional)
+            Constraint::Length(2),              // Help text
+        ],
+    );
 
     // Build list items
     let mut items: Vec<ListItem> = modal
@@ -80,7 +73,7 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
         .collect();
 
     // Add "New scenario" option for save
-    if modal.action == ModalAction::SaveAs {
+    if modal.action == ModalAction::SAVE_AS {
         let is_selected = modal.selected_index == modal.scenarios.len();
         let style = if is_selected && !modal.editing_new_name {
             Style::default()
@@ -97,10 +90,10 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
     }
 
     let list = List::new(items);
-    frame.render_widget(list, chunks[1]);
+    frame.render_widget(list, mf.chunks[1]);
 
     // Show new name input when "New scenario" is selected
-    if modal.action == ModalAction::SaveAs && modal.is_new_scenario_selected() {
+    if modal.action == ModalAction::SAVE_AS && modal.is_new_scenario_selected() {
         let input_style = if modal.editing_new_name {
             Style::default().fg(Color::Yellow)
         } else {
@@ -116,30 +109,23 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
         ]);
 
         let input = Paragraph::new(input_line);
-        frame.render_widget(input, chunks[2]);
+        frame.render_widget(input, mf.chunks[2]);
     }
 
     // Render help text
-    let help_text = if modal.editing_new_name {
-        vec![
-            Span::styled("[Enter]", Style::default().fg(Color::Green)),
-            Span::raw(" Confirm  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Back"),
-        ]
+    let help = if modal.editing_new_name {
+        HelpText::new()
+            .key("[Enter]", Color::Green, "Confirm")
+            .key("[Esc]", Color::Yellow, "Back")
+            .build()
     } else {
-        vec![
-            Span::styled("[j/k]", Style::default().fg(Color::Cyan)),
-            Span::raw(" Navigate  "),
-            Span::styled("[Enter]", Style::default().fg(Color::Green)),
-            Span::raw(" Select  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Cancel"),
-        ]
+        HelpText::new()
+            .key("[j/k]", Color::Cyan, "Navigate")
+            .key("[Enter]", Color::Green, "Select")
+            .key("[Esc]", Color::Yellow, "Cancel")
+            .build()
     };
-
-    let help = Paragraph::new(Line::from(help_text));
-    frame.render_widget(help, chunks[3]);
+    frame.render_widget(help, mf.chunks[3]);
 }
 
 /// Handle key events for scenario picker modal

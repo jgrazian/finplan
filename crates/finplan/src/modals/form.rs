@@ -1,15 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
+    Frame,
 };
 
 use crate::state::{FieldType, FormField, FormModal};
 
-use super::{ModalResult, centered_rect};
+use super::helpers::{calculate_scroll, render_cursor_line, HelpText, MultiLineHelp};
+use super::{centered_rect, ModalResult};
 
 /// Render the form modal
 pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
@@ -59,40 +60,31 @@ pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
     // Render help text at the bottom
     let help_idx = modal.fields.len() + 2;
     let help = if modal.editing {
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(
-                    "EDITING: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Type to enter text  "),
-                Span::styled("[F10/Ctrl+S]", Style::default().fg(Color::Cyan)),
-                Span::raw(" Submit"),
-            ]),
-            Line::from(vec![
-                Span::styled("[Enter]", Style::default().fg(Color::Green)),
-                Span::raw(" Done field  "),
-                Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
-                Span::raw(" Cancel"),
-            ]),
-        ])
+        MultiLineHelp::new()
+            .line(
+                HelpText::new()
+                    .key("EDITING:", Color::Cyan, "Type to enter text")
+                    .key("[F10/Ctrl+S]", Color::Cyan, "Submit"),
+            )
+            .line(
+                HelpText::new()
+                    .key("[Enter]", Color::Green, "Done field")
+                    .key("[Esc]", Color::Yellow, "Cancel"),
+            )
+            .build()
     } else {
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("[j/k/Tab]", Style::default().fg(Color::DarkGray)),
-                Span::raw(" Navigate  "),
-                Span::styled("[Enter]", Style::default().fg(Color::Green)),
-                Span::raw(" Edit field"),
-            ]),
-            Line::from(vec![
-                Span::styled("[F10/Ctrl+S]", Style::default().fg(Color::Cyan)),
-                Span::raw(" Submit  "),
-                Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
-                Span::raw(" Cancel"),
-            ]),
-        ])
+        MultiLineHelp::new()
+            .line(
+                HelpText::new()
+                    .key("[j/k/Tab]", Color::DarkGray, "Navigate")
+                    .key("[Enter]", Color::Green, "Edit field"),
+            )
+            .line(
+                HelpText::new()
+                    .key("[F10/Ctrl+S]", Color::Cyan, "Submit")
+                    .key("[Esc]", Color::Yellow, "Cancel"),
+            )
+            .build()
     };
     frame.render_widget(help, chunks[help_idx]);
 }
@@ -151,51 +143,11 @@ fn render_field(
 
 fn render_editing_value(frame: &mut Frame, area: ratatui::layout::Rect, field: &FormField) {
     let input_width = (area.width as usize).saturating_sub(1);
-    let display_value = if field.value.len() > input_width {
-        // Scroll to show cursor
-        let start = field.cursor_pos.saturating_sub(input_width / 2);
-        let end = (start + input_width).min(field.value.len());
-        let start = end.saturating_sub(input_width);
-        &field.value[start..end]
-    } else {
-        &field.value
-    };
-
-    // Calculate cursor position in display
-    let cursor_display_pos = if field.value.len() > input_width {
-        let start = field.cursor_pos.saturating_sub(input_width / 2);
-        let end = (start + input_width).min(field.value.len());
-        let start = end.saturating_sub(input_width);
-        field.cursor_pos - start
-    } else {
-        field.cursor_pos
-    };
+    let scrolled = calculate_scroll(&field.value, field.cursor_pos, input_width + 2);
 
     // Build the input line with cursor
-    let mut spans = Vec::new();
-
-    let chars: Vec<char> = display_value.chars().collect();
-    for (i, c) in chars.iter().enumerate() {
-        if i == cursor_display_pos {
-            spans.push(Span::styled(
-                c.to_string(),
-                Style::default().bg(Color::White).fg(Color::Black),
-            ));
-        } else {
-            spans.push(Span::raw(c.to_string()));
-        }
-    }
-
-    // If cursor is at the end, show a cursor block
-    if cursor_display_pos >= chars.len() {
-        spans.push(Span::styled(
-            " ",
-            Style::default().bg(Color::White).fg(Color::Black),
-        ));
-    }
-
-    let input_line = Paragraph::new(Line::from(spans));
-    frame.render_widget(input_line, area);
+    let input_line = render_cursor_line(&scrolled.display_value, scrolled.cursor_pos, "");
+    frame.render_widget(Paragraph::new(input_line), area);
 }
 
 fn format_display_value(field: &FormField) -> String {

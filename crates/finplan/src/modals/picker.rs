@@ -1,49 +1,38 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::Constraint,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{List, ListItem},
     Frame,
 };
 
 use crate::state::PickerModal;
 
-use super::{centered_rect, ModalResult};
+use super::helpers::{render_modal_frame, MultiLineHelp, HelpText};
+use super::ModalResult;
 
 /// Render the picker modal
 pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
-    let area = frame.area();
-
     // Calculate height based on number of options (min 6, max 15)
     let content_height = (modal.options.len() as u16).clamp(3, 12);
     let modal_height = content_height + 7; // title + borders + help text + padding
-    let modal_width = 60; // Wider for better readability
+    let modal_width = 60;
 
-    let modal_area = centered_rect(modal_width, modal_height, area);
-
-    // Clear the area behind the modal
-    frame.render_widget(Clear, modal_area);
-
-    // Create the modal block
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(format!(" {} ", modal.title));
-
-    let inner = block.inner(modal_area);
-    frame.render_widget(block, modal_area);
-
-    // Layout for modal content
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+    // Render the modal frame
+    let mf = render_modal_frame(
+        frame,
+        &modal.title,
+        modal_width,
+        modal_height,
+        Color::Cyan,
+        &[
             Constraint::Length(1), // Spacing
             Constraint::Min(1),    // Options list
             Constraint::Length(1), // Spacing
             Constraint::Length(2), // Help text (2 lines)
-        ])
-        .split(inner);
+        ],
+    );
 
     // Render options list
     let items: Vec<ListItem> = modal
@@ -59,7 +48,11 @@ pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
                 Style::default()
             };
 
-            let prefix = if idx == modal.selected_index { "> " } else { "  " };
+            let prefix = if idx == modal.selected_index {
+                "> "
+            } else {
+                "  "
+            };
             ListItem::new(Line::from(Span::styled(
                 format!("{}{}", prefix, option),
                 style,
@@ -68,22 +61,18 @@ pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
         .collect();
 
     let list = List::new(items);
-    frame.render_widget(list, chunks[1]);
+    frame.render_widget(list, mf.chunks[1]);
 
-    // Render help text (2 lines for clarity)
-    let help = Paragraph::new(vec![
-        Line::from(vec![
-            Span::styled("[j/k/↑/↓]", Style::default().fg(Color::DarkGray)),
-            Span::raw(" Navigate"),
-        ]),
-        Line::from(vec![
-            Span::styled("[Enter]", Style::default().fg(Color::Green)),
-            Span::raw(" Select  "),
-            Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Cancel"),
-        ]),
-    ]);
-    frame.render_widget(help, chunks[3]);
+    // Render help text (2 lines)
+    let help = MultiLineHelp::new()
+        .line(HelpText::new().key("[j/k/↑/↓]", Color::DarkGray, "Navigate"))
+        .line(
+            HelpText::new()
+                .key("[Enter]", Color::Green, "Select")
+                .key("[Esc]", Color::Yellow, "Cancel"),
+        )
+        .build();
+    frame.render_widget(help, mf.chunks[3]);
 }
 
 /// Handle key events for picker modal

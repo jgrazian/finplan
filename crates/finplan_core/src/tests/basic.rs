@@ -87,24 +87,26 @@ fn test_simulation_basic() {
     // Test returns compound correctly over 10 years
     let expected_final = 10_000.0 + 10_000.0 * ((1.05_f64).powf(10.0) - 1.0);
     assert!(
-        (result.final_account_balance(AccountId(1)) - expected_final).abs() < 100.0,
+        (result.final_account_balance(AccountId(1)).unwrap() - expected_final).abs() < 100.0,
         "Expected final balance {}, got {}",
         expected_final,
-        result.final_account_balance(AccountId(1))
+        result.final_account_balance(AccountId(1)).unwrap()
     );
     assert!(
-        result.final_account_balance(AccountId(1))
-            == result.final_asset_balance(AccountId(1), AssetId(1)),
+        result.final_account_balance(AccountId(1)).unwrap()
+            == result
+                .final_asset_balance(AccountId(1), AssetId(1))
+                .unwrap(),
         "Expected final account balance to equal asset balance"
     );
 
     // Test start date and duration
     assert_eq!(
-        result.dates.first().copied(),
+        result.wealth_snapshots.first().map(|snap| snap.date),
         Some(jiff::civil::date(2020, 2, 5))
     );
     assert_eq!(
-        result.dates.last().copied(),
+        result.wealth_snapshots.last().map(|snap| snap.date),
         Some(jiff::civil::date(2030, 2, 5))
     );
 }

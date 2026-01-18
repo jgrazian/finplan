@@ -1,31 +1,24 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    layout::Constraint,
+    style::Color,
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
 use crate::state::MessageModal;
 
-use super::{centered_rect, ModalResult};
+use super::helpers::{render_modal_frame, HelpText};
+use super::ModalResult;
 
 const MODAL_WIDTH: u16 = 50;
 const MODAL_MIN_HEIGHT: u16 = 7;
 
 /// Render the message modal
 pub fn render_message_modal(frame: &mut Frame, modal: &MessageModal) {
-    let area = frame.area();
-
     // Calculate height based on message length
     let message_lines = modal.message.len() / (MODAL_WIDTH as usize - 4) + 1;
-    let height = (MODAL_MIN_HEIGHT + message_lines as u16).min(area.height - 2);
-
-    let modal_area = centered_rect(MODAL_WIDTH, height, area);
-
-    // Clear the area behind the modal
-    frame.render_widget(Clear, modal_area);
+    let height = (MODAL_MIN_HEIGHT + message_lines as u16).min(frame.area().height - 2);
 
     // Choose border color based on error status
     let border_color = if modal.is_error {
@@ -34,39 +27,31 @@ pub fn render_message_modal(frame: &mut Frame, modal: &MessageModal) {
         Color::Green
     };
 
-    // Create the modal block
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .title(format!(" {} ", modal.title));
-
-    let inner = block.inner(modal_area);
-    frame.render_widget(block, modal_area);
-
-    // Layout for modal content
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+    // Render the modal frame
+    let mf = render_modal_frame(
+        frame,
+        &modal.title,
+        MODAL_WIDTH,
+        height,
+        border_color,
+        &[
             Constraint::Length(1), // Spacing
             Constraint::Min(1),    // Message
             Constraint::Length(1), // Spacing
             Constraint::Length(1), // Help text
-        ])
-        .split(inner);
+        ],
+    );
 
     // Render message
-    let message = Paragraph::new(modal.message.as_str())
-        .wrap(Wrap { trim: true });
-    frame.render_widget(message, chunks[1]);
+    let message = Paragraph::new(modal.message.as_str()).wrap(Wrap { trim: true });
+    frame.render_widget(message, mf.chunks[1]);
 
     // Render help text
-    let help = Paragraph::new(Line::from(vec![
-        Span::styled("[Enter]", Style::default().fg(Color::Green)),
-        Span::raw(" or "),
-        Span::styled("[Esc]", Style::default().fg(Color::Yellow)),
-        Span::raw(" to dismiss"),
-    ]));
-    frame.render_widget(help, chunks[3]);
+    let help = HelpText::new()
+        .key("[Enter]", Color::Green, "or")
+        .key("[Esc]", Color::Yellow, "to dismiss")
+        .build();
+    frame.render_widget(help, mf.chunks[3]);
 }
 
 /// Handle key events for message modal

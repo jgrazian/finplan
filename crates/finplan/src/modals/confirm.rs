@@ -1,65 +1,51 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::Constraint,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
 use crate::state::ConfirmModal;
 
-use super::{centered_rect, ModalResult};
+use super::helpers::{render_modal_frame, HelpText};
+use super::ModalResult;
 
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 10;
 
 /// Render the confirm modal
 pub fn render_confirm_modal(frame: &mut Frame, modal: &ConfirmModal) {
-    let area = frame.area();
-    let modal_area = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
-
-    // Clear the area behind the modal
-    frame.render_widget(Clear, modal_area);
-
-    // Create the modal block with warning color
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red))
-        .title(format!(" {} ", modal.title));
-
-    let inner = block.inner(modal_area);
-    frame.render_widget(block, modal_area);
-
-    // Layout for modal content
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+    // Render the modal frame with warning color
+    let mf = render_modal_frame(
+        frame,
+        &modal.title,
+        MODAL_WIDTH,
+        MODAL_HEIGHT,
+        Color::Red,
+        &[
             Constraint::Length(1), // Spacing
             Constraint::Min(2),    // Message
             Constraint::Length(1), // Spacing
             Constraint::Length(1), // Help text
-        ])
-        .split(inner);
+        ],
+    );
 
     // Render message
-    let message = Paragraph::new(Line::from(vec![
-        Span::styled(
-            &modal.message,
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ]))
+    let message = Paragraph::new(Line::from(vec![Span::styled(
+        &modal.message,
+        Style::default().add_modifier(Modifier::BOLD),
+    )]))
     .wrap(Wrap { trim: true });
-    frame.render_widget(message, chunks[1]);
+    frame.render_widget(message, mf.chunks[1]);
 
     // Render help text
-    let help = Paragraph::new(Line::from(vec![
-        Span::styled("[y]", Style::default().fg(Color::Red)),
-        Span::raw(" Confirm  "),
-        Span::styled("[n/Esc]", Style::default().fg(Color::Green)),
-        Span::raw(" Cancel"),
-    ]));
-    frame.render_widget(help, chunks[3]);
+    let help = HelpText::new()
+        .key("[y]", Color::Red, "Confirm")
+        .key("[n/Esc]", Color::Green, "Cancel")
+        .build();
+    frame.render_widget(help, mf.chunks[3]);
 }
 
 /// Handle key events for confirm modal

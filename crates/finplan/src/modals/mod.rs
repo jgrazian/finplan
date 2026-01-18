@@ -1,5 +1,6 @@
 mod confirm;
 mod form;
+pub mod helpers;
 mod message;
 mod picker;
 mod scenario_picker;
