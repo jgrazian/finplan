@@ -8,17 +8,15 @@ use crate::data::convert::{to_simulation_config, to_tui_result, ConvertError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TabId {
-    Portfolio,
-    Profiles,
+    PortfolioProfiles,
     Scenario,
     Events,
     Results,
 }
 
 impl TabId {
-    pub const ALL: [TabId; 5] = [
-        TabId::Portfolio,
-        TabId::Profiles,
+    pub const ALL: [TabId; 4] = [
+        TabId::PortfolioProfiles,
         TabId::Scenario,
         TabId::Events,
         TabId::Results,
@@ -26,8 +24,7 @@ impl TabId {
 
     pub fn name(&self) -> &'static str {
         match self {
-            TabId::Portfolio => "Portfolio",
-            TabId::Profiles => "Profiles",
+            TabId::PortfolioProfiles => "Portfolio & Profiles",
             TabId::Scenario => "Scenario",
             TabId::Events => "Events",
             TabId::Results => "Results",
@@ -36,21 +33,19 @@ impl TabId {
 
     pub fn index(&self) -> usize {
         match self {
-            TabId::Portfolio => 0,
-            TabId::Profiles => 1,
-            TabId::Scenario => 2,
-            TabId::Events => 3,
-            TabId::Results => 4,
+            TabId::PortfolioProfiles => 0,
+            TabId::Scenario => 1,
+            TabId::Events => 2,
+            TabId::Results => 3,
         }
     }
 
     pub fn from_index(index: usize) -> Option<Self> {
         match index {
-            0 => Some(TabId::Portfolio),
-            1 => Some(TabId::Profiles),
-            2 => Some(TabId::Scenario),
-            3 => Some(TabId::Events),
-            4 => Some(TabId::Results),
+            0 => Some(TabId::PortfolioProfiles),
+            1 => Some(TabId::Scenario),
+            2 => Some(TabId::Events),
+            3 => Some(TabId::Results),
             _ => None,
         }
     }
@@ -62,32 +57,50 @@ pub enum FocusedPanel {
     Right,
 }
 
-#[derive(Debug)]
-pub struct PortfolioState {
-    pub selected_account_index: usize,
-    pub focused_panel: FocusedPanel,
+/// Focused panel for the consolidated Portfolio & Profiles tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortfolioProfilesPanel {
+    Accounts,      // Left column
+    Profiles,      // Right top
+    AssetMappings, // Right middle
+    Config,        // Right bottom
 }
 
-impl Default for PortfolioState {
-    fn default() -> Self {
-        Self {
-            selected_account_index: 0,
-            focused_panel: FocusedPanel::Left,
+impl PortfolioProfilesPanel {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Accounts => Self::Profiles,
+            Self::Profiles => Self::AssetMappings,
+            Self::AssetMappings => Self::Config,
+            Self::Config => Self::Accounts,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Accounts => Self::Config,
+            Self::Profiles => Self::Accounts,
+            Self::AssetMappings => Self::Profiles,
+            Self::Config => Self::AssetMappings,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct ProfilesState {
-    pub selected_return_profile_index: usize,
-    pub focused_panel: FocusedPanel,
+pub struct PortfolioProfilesState {
+    pub selected_account_index: usize,
+    pub selected_profile_index: usize,
+    pub selected_mapping_index: usize,
+    pub focused_panel: PortfolioProfilesPanel,
 }
 
-impl Default for ProfilesState {
+impl Default for PortfolioProfilesState {
     fn default() -> Self {
         Self {
-            selected_return_profile_index: 0,
-            focused_panel: FocusedPanel::Left,
+            selected_account_index: 0,
+            selected_profile_index: 0,
+            selected_mapping_index: 0,
+            focused_panel: PortfolioProfilesPanel::Accounts,
         }
     }
 }
@@ -298,8 +311,7 @@ pub struct AppState {
     pub simulation_result: Option<SimulationResult>,
 
     // Per-screen state
-    pub portfolio_state: PortfolioState,
-    pub profiles_state: ProfilesState,
+    pub portfolio_profiles_state: PortfolioProfilesState,
     pub events_state: EventsState,
     pub scenario_state: ScenarioState,
     pub results_state: ResultsState,
@@ -386,14 +398,13 @@ impl Default for AppState {
             .insert(default_name.clone(), SimulationData::default());
 
         Self {
-            active_tab: TabId::Portfolio,
+            active_tab: TabId::PortfolioProfiles,
             app_data,
             current_scenario: default_name,
             config_path: None,
             cached_config: None,
             simulation_result: None,
-            portfolio_state: PortfolioState::default(),
-            profiles_state: ProfilesState::default(),
+            portfolio_profiles_state: PortfolioProfilesState::default(),
             events_state: EventsState::default(),
             scenario_state: ScenarioState::default(),
             results_state: ResultsState::default(),

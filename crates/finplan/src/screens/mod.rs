@@ -1,5 +1,4 @@
-pub mod portfolio;
-pub mod profiles;
+pub mod portfolio_profiles;
 pub mod scenario;
 pub mod events;
 pub mod results;

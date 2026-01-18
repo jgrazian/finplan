@@ -52,6 +52,9 @@ pub struct SimulationResult {
 
     /// Final asset balances at end of simulation (account_id, asset_id) -> value
     pub final_asset_balances: HashMap<(AccountId, AssetId), f64>,
+
+    /// Net worth at end of each year (year -> net_worth)
+    pub yearly_net_worth: HashMap<i16, f64>,
 }
 
 impl SimulationResult {

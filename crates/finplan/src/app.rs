@@ -10,7 +10,7 @@ use ratatui::{
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
 use crate::modals::{ModalResult, handle_modal_key, render_modal};
 use crate::screens::{
-    events::EventsScreen, portfolio::PortfolioScreen, profiles::ProfilesScreen,
+    events::EventsScreen, portfolio_profiles::PortfolioProfilesScreen,
     results::ResultsScreen, scenario::ScenarioScreen,
 };
 use crate::state::{AppState, ModalState, TabId};
@@ -19,8 +19,7 @@ pub struct App {
     state: AppState,
     tab_bar: TabBar,
     status_bar: StatusBar,
-    portfolio_screen: PortfolioScreen,
-    profiles_screen: ProfilesScreen,
+    portfolio_profiles_screen: PortfolioProfilesScreen,
     scenario_screen: ScenarioScreen,
     events_screen: EventsScreen,
     results_screen: ResultsScreen,
@@ -40,8 +39,7 @@ impl App {
             state,
             tab_bar: TabBar::new(),
             status_bar: StatusBar::new(),
-            portfolio_screen: PortfolioScreen::new(),
-            profiles_screen: ProfilesScreen::new(),
+            portfolio_profiles_screen: PortfolioProfilesScreen::new(),
             scenario_screen: ScenarioScreen::new(),
             events_screen: EventsScreen::new(),
             results_screen: ResultsScreen::new(),
@@ -79,8 +77,7 @@ impl App {
             state,
             tab_bar: TabBar::new(),
             status_bar: StatusBar::new(),
-            portfolio_screen: PortfolioScreen::new(),
-            profiles_screen: ProfilesScreen::new(),
+            portfolio_profiles_screen: PortfolioProfilesScreen::new(),
             scenario_screen: ScenarioScreen::new(),
             events_screen: EventsScreen::new(),
             results_screen: ResultsScreen::new(),
@@ -132,8 +129,7 @@ impl App {
 
     fn render_active_screen(&mut self, frame: &mut Frame, area: Rect) {
         match self.state.active_tab {
-            TabId::Portfolio => self.portfolio_screen.render(frame, area, &self.state),
-            TabId::Profiles => self.profiles_screen.render(frame, area, &self.state),
+            TabId::PortfolioProfiles => self.portfolio_profiles_screen.render(frame, area, &self.state),
             TabId::Scenario => self.scenario_screen.render(frame, area, &self.state),
             TabId::Events => self.events_screen.render(frame, area, &self.state),
             TabId::Results => self.results_screen.render(frame, area, &self.state),
@@ -191,8 +187,7 @@ impl App {
 
         // Then try active screen
         let result = match self.state.active_tab {
-            TabId::Portfolio => self.portfolio_screen.handle_key(key_event, &mut self.state),
-            TabId::Profiles => self.profiles_screen.handle_key(key_event, &mut self.state),
+            TabId::PortfolioProfiles => self.portfolio_profiles_screen.handle_key(key_event, &mut self.state),
             TabId::Scenario => self.scenario_screen.handle_key(key_event, &mut self.state),
             TabId::Events => self.events_screen.handle_key(key_event, &mut self.state),
             TabId::Results => self.results_screen.handle_key(key_event, &mut self.state),

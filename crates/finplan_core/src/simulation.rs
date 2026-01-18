@@ -38,6 +38,13 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     // Compute final balances for all accounts and assets
     let (final_balances, final_asset_balances) = compute_final_balances(&state);
 
+    // Capture final year's net worth if not already captured at year-end
+    let final_year = state.timeline.current_date.year();
+    let mut yearly_net_worth = state.portfolio.year_end_net_worth.clone();
+    yearly_net_worth
+        .entry(final_year)
+        .or_insert_with(|| state.net_worth());
+
     SimulationResult {
         dates: state.history.dates.clone(),
         accounts: state.build_account_snapshots(params),
@@ -45,6 +52,7 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
         ledger: state.history.ledger.clone(),
         final_balances,
         final_asset_balances,
+        yearly_net_worth,
     }
 }
 
@@ -265,6 +273,10 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             .portfolio
             .year_end_balances
             .insert(year, year_balances);
+
+        // Capture year-end net worth
+        let net_worth = state.net_worth();
+        state.portfolio.year_end_net_worth.insert(year, net_worth);
     }
 
     // Check if we're crossing a month boundary and reset monthly contributions

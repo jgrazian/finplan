@@ -665,7 +665,7 @@ pub fn to_tui_result(
     use std::collections::BTreeMap;
 
     let birth = parse_date(birth_date)?;
-    let start = parse_date(start_date)?;
+    let _start = parse_date(start_date)?;
 
     // Group ledger entries by year to compute yearly totals
     let mut yearly_income: BTreeMap<i32, f64> = BTreeMap::new();
@@ -692,8 +692,14 @@ pub fn to_tui_result(
         .map(|t| (t.year as i32, t.total_tax))
         .collect();
 
-    // Compute net worth at each year-end from final balances
-    // For simplicity, we track all unique years and compute cumulative net worth
+    // Get yearly net worth from simulation results
+    let yearly_net_worth: BTreeMap<i32, f64> = core_result
+        .yearly_net_worth
+        .iter()
+        .map(|(&year, &net_worth)| (year as i32, net_worth))
+        .collect();
+
+    // Collect all unique years from the simulation
     let mut all_years: Vec<i32> = core_result
         .dates
         .iter()
@@ -714,22 +720,11 @@ pub fn to_tui_result(
         let years_since_birth = year - birth.year() as i32;
         let age = years_since_birth.max(0) as u8;
 
-        // For net worth, we'll use a simple approach:
-        // estimate net worth based on proportion of simulation time
-        let start_year = start.year() as i32;
-        let total_years = all_years.len() as f64;
-        let year_idx = (year - start_year) as f64;
-
-        // Linear interpolation is not accurate, but for display purposes
-        // we'll use the ledger to track account changes over time
-        // For now, just use final net worth for the last year
-        let net_worth = if *year == *all_years.last().unwrap_or(&0) {
-            final_net_worth
-        } else {
-            // Rough estimate - this could be improved with proper tracking
-            let progress = (year_idx + 1.0) / total_years;
-            final_net_worth * progress
-        };
+        // Use actual year-end net worth from simulation results
+        let net_worth = yearly_net_worth
+            .get(year)
+            .copied()
+            .unwrap_or(final_net_worth);
 
         years.push(crate::state::YearResult {
             year: *year,

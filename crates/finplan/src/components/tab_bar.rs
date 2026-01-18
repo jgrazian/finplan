@@ -2,11 +2,11 @@ use super::{Component, EventResult};
 use crate::state::{AppState, TabId};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Tabs},
-    Frame,
 };
 
 pub struct TabBar;
@@ -21,31 +21,19 @@ impl Component for TabBar {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         match key.code {
             KeyCode::Char('1') => {
-                state.switch_tab(TabId::Portfolio);
+                state.switch_tab(TabId::PortfolioProfiles);
                 EventResult::Handled
             }
             KeyCode::Char('2') => {
-                state.switch_tab(TabId::Profiles);
-                EventResult::Handled
-            }
-            KeyCode::Char('3') => {
                 state.switch_tab(TabId::Scenario);
                 EventResult::Handled
             }
-            KeyCode::Char('4') => {
+            KeyCode::Char('3') => {
                 state.switch_tab(TabId::Events);
                 EventResult::Handled
             }
-            KeyCode::Char('5') => {
+            KeyCode::Char('4') => {
                 state.switch_tab(TabId::Results);
-                EventResult::Handled
-            }
-            KeyCode::Tab => {
-                state.next_tab();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.prev_tab();
                 EventResult::Handled
             }
             _ => EventResult::NotHandled,

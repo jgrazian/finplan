@@ -19,20 +19,17 @@ impl StatusBar {
     fn get_help_text(state: &AppState) -> String {
         // Return help text based on active tab
         match state.active_tab {
-            crate::state::TabId::Portfolio => {
-                "1-5: switch tabs | j/k: navigate | Tab: switch panel | q: quit | Esc: clear error"
-            }
-            crate::state::TabId::Profiles => {
-                "1-5: switch tabs | j/k: navigate | Tab: switch panel | 1-4: presets (right panel) | q: quit"
+            crate::state::TabId::PortfolioProfiles => {
+                "1-4: tabs | j/k: nav | Tab: panel | 1-4: presets (profiles) | m: map asset | q: quit"
             }
             crate::state::TabId::Scenario => {
-                "1-5: switch tabs | r: run simulation | m: monte carlo | s/l: save/load | q: quit"
+                "1-4: switch tabs | r: run simulation | m: monte carlo | s/l: save/load | q: quit"
             }
             crate::state::TabId::Events => {
-                "1-5: switch tabs | j/k: navigate | Tab: switch panel | q: quit"
+                "1-4: switch tabs | j/k: navigate | Tab: switch panel | q: quit"
             }
             crate::state::TabId::Results => {
-                "1-5: switch tabs | j/k: scroll | q: quit"
+                "1-4: switch tabs | j/k: scroll | q: quit"
             }
         }
         .to_string()

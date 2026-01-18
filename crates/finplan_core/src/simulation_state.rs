@@ -52,6 +52,9 @@ pub struct SimPortfolio {
     pub contributions_ytd: HashMap<AccountId, f64>,
     /// Current month contributions per account (for monthly limits)
     pub contributions_mtd: HashMap<AccountId, f64>,
+    // === Net Worth Tracking ===
+    /// Year-end net worth (year -> net_worth)
+    pub year_end_net_worth: HashMap<i16, f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -180,6 +183,7 @@ impl SimulationState {
                 active_rmd_accounts: HashMap::new(),
                 contributions_ytd: HashMap::new(),
                 contributions_mtd: HashMap::new(),
+                year_end_net_worth: HashMap::new(),
             },
             event_state: SimEventState {
                 events,
