@@ -1,15 +1,15 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::state::TextInputModal;
 
-use super::{centered_rect, ModalResult};
+use super::{ModalResult, centered_rect};
 
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 9;
@@ -82,9 +82,7 @@ pub fn render_text_input_modal(frame: &mut Frame, modal: &TextInputModal) {
         if i == cursor_display_pos {
             spans.push(Span::styled(
                 c.to_string(),
-                Style::default()
-                    .bg(Color::White)
-                    .fg(Color::Black),
+                Style::default().bg(Color::White).fg(Color::Black),
             ));
         } else {
             spans.push(Span::raw(c.to_string()));
@@ -95,9 +93,7 @@ pub fn render_text_input_modal(frame: &mut Frame, modal: &TextInputModal) {
     if cursor_display_pos >= chars.len() {
         spans.push(Span::styled(
             " ",
-            Style::default()
-                .bg(Color::White)
-                .fg(Color::Black),
+            Style::default().bg(Color::White).fg(Color::Black),
         ));
     }
 

@@ -254,6 +254,9 @@ pub struct EventData {
     pub effects: Vec<EffectData>,
     #[serde(default)]
     pub once: bool,
+    /// Whether this event is enabled in simulation (default true)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[cfg(test)]
@@ -280,6 +283,7 @@ mod tests {
                 taxable: true,
             }],
             once: false,
+            enabled: true,
         };
 
         let yaml = serde_saphyr::to_string(&event).unwrap();

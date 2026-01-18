@@ -107,17 +107,43 @@ impl Default for PortfolioProfilesState {
     }
 }
 
+/// Focused panel for the Events tab (3-panel layout)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventsPanel {
+    EventList,   // Left: list of events
+    Details,     // Middle: event details
+    Timeline,    // Right: timeline visualization
+}
+
+impl EventsPanel {
+    pub fn next(self) -> Self {
+        match self {
+            Self::EventList => Self::Details,
+            Self::Details => Self::Timeline,
+            Self::Timeline => Self::EventList,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::EventList => Self::Timeline,
+            Self::Details => Self::EventList,
+            Self::Timeline => Self::Details,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct EventsState {
     pub selected_event_index: usize,
-    pub focused_panel: FocusedPanel,
+    pub focused_panel: EventsPanel,
 }
 
 impl Default for EventsState {
     fn default() -> Self {
         Self {
             selected_event_index: 0,
-            focused_panel: FocusedPanel::Left,
+            focused_panel: EventsPanel::EventList,
         }
     }
 }
@@ -171,6 +197,21 @@ pub enum ModalAction {
     PickInflationType,
     PickFederalBrackets,
     PickReturnProfile,
+    // Event CRUD
+    CreateEvent,
+    EditEvent,
+    DeleteEvent,
+    // Event pickers (intermediate steps)
+    PickTriggerType,
+    PickEffectType,
+    PickAccountForEffect,
+    PickEventReference,
+    PickInterval,
+    // Effect management
+    ManageEffects,
+    PickEffectTypeForAdd,
+    AddEffect,
+    DeleteEffect,
 }
 
 #[derive(Debug)]
@@ -596,13 +637,15 @@ impl AppState {
 
         // Try to parse as AppData first, fall back to SimulationData
         let (app_data, current_scenario) = if let Ok(app_data) = AppData::from_yaml(&content) {
-            let first_scenario = app_data
-                .simulations
-                .keys()
-                .next()
-                .cloned()
+            // Use active_scenario if set, otherwise fall back to "Default" or first available
+            let scenario = app_data
+                .active_scenario
+                .clone()
+                .filter(|s| app_data.simulations.contains_key(s))
+                .or_else(|| app_data.simulations.get("Default").map(|_| "Default".to_string()))
+                .or_else(|| app_data.simulations.keys().next().cloned())
                 .unwrap_or_else(|| "Default".to_string());
-            (app_data, first_scenario)
+            (app_data, scenario)
         } else {
             // Fall back to loading as single SimulationData
             let data = SimulationData::from_yaml(&content)
@@ -626,7 +669,9 @@ impl AppState {
     }
 
     /// Save all scenarios to YAML file
-    pub fn save_to_file(&self, path: &PathBuf) -> Result<(), SaveError> {
+    pub fn save_to_file(&mut self, path: &PathBuf) -> Result<(), SaveError> {
+        // Update active_scenario before saving
+        self.app_data.active_scenario = Some(self.current_scenario.clone());
         let yaml = self.app_data.to_yaml()
             .map_err(|e| SaveError::Serialize(e.to_string()))?;
         std::fs::write(path, yaml)
@@ -635,9 +680,9 @@ impl AppState {
     }
 
     /// Save to current config path (if set)
-    pub fn save(&self) -> Result<(), SaveError> {
-        match &self.config_path {
-            Some(path) => self.save_to_file(path),
+    pub fn save(&mut self) -> Result<(), SaveError> {
+        match self.config_path.clone() {
+            Some(path) => self.save_to_file(&path),
             None => Err(SaveError::NoPath),
         }
     }

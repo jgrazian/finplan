@@ -12,6 +12,9 @@ use super::{
 /// Top-level application data containing all simulations
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppData {
+    /// The currently active scenario name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_scenario: Option<String>,
     pub simulations: HashMap<String, SimulationData>,
 }
 
@@ -167,6 +170,7 @@ mod tests {
                         taxable: true,
                     }],
                     once: false,
+                    enabled: true,
                 },
                 EventData {
                     name: EventTag("Living Expenses".to_string()),
@@ -181,6 +185,7 @@ mod tests {
                         amount: AmountData::Fixed(5000.0),
                     }],
                     once: false,
+                    enabled: true,
                 },
             ],
             parameters: ParametersData {
