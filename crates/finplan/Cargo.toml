@@ -1,0 +1,26 @@
+[package]
+name = "finplan"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+finplan_core = { path = "../finplan_core" }
+
+jiff = { workspace = true }
+serde = { workspace = true }
+serde-saphyr = "0.0.15"
+
+rand = "0.9.2"
+rand_distr = "0.5.1"
+
+clap = { version = "4.5", features = ["derive"] }
+color-eyre = "0.6.3"
+crossterm = "0.29.0"
+dirs = "6.0"
+ratatui = "0.30.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

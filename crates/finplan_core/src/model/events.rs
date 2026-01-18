@@ -10,6 +10,8 @@ use super::ids::{AccountId, AssetId, EventId};
 
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "ts")]
 use ts_rs::TS;
 
 /// How often a repeating event occurs

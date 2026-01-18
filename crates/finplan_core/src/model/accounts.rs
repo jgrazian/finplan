@@ -8,6 +8,8 @@ use crate::model::Market;
 use super::ids::{AccountId, AssetId, ReturnProfileId};
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
+
+#[cfg(feature = "ts")]
 use ts_rs::TS;
 
 /// Period type for contribution limits
