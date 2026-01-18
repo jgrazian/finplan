@@ -1,6 +1,7 @@
 use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
 use crate::state::{AppState, MessageModal, ModalAction, ModalState, ScenarioPickerModal, TabId};
+use crate::util::format::format_currency;
 use crossterm::event::{KeyCode, KeyEvent};
 use jiff::civil::Date;
 use ratatui::{
@@ -83,6 +84,13 @@ impl Component for ScenarioScreen {
                 }
                 EventResult::Handled
             }
+            KeyCode::Char('p') => {
+                // Run projection preview
+                if let Err(e) = state.run_projection_preview() {
+                    state.set_error(format!("Projection failed: {}", e));
+                }
+                EventResult::Handled
+            }
             KeyCode::Char('m') => {
                 state.set_error("Monte Carlo simulation not yet implemented".to_string());
                 EventResult::Handled
@@ -119,18 +127,38 @@ impl Component for ScenarioScreen {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
-        let chunks = Layout::default()
+        // New layout: 2 columns at top + summary bar at bottom
+        let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(12), // Parameters
-                Constraint::Length(10), // Quick actions
-                Constraint::Min(6),     // Summary
+                Constraint::Min(12),    // Top section (2 columns)
+                Constraint::Length(4),  // Summary bar
             ])
             .split(area);
 
-        self.render_parameters(frame, chunks[0], state);
-        self.render_quick_actions(frame, chunks[1], state);
-        self.render_summary(frame, chunks[2], state);
+        // Top section: 2 columns (50/50)
+        let top_columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(main_chunks[0]);
+
+        // Left column: Parameters + Quick Actions (stacked)
+        let left_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(7),  // Parameters (compact)
+                Constraint::Min(5),     // Quick Actions
+            ])
+            .split(top_columns[0]);
+
+        self.render_parameters(frame, left_chunks[0], state);
+        self.render_quick_actions(frame, left_chunks[1], state);
+
+        // Right column: Projection Preview
+        self.render_projection_preview(frame, top_columns[1], state);
+
+        // Bottom: Summary bar
+        self.render_summary(frame, main_chunks[1], state);
     }
 }
 
@@ -138,50 +166,27 @@ impl ScenarioScreen {
     fn render_parameters(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let params = &state.data().parameters;
 
-        let current_age_str = self
-            .calculate_age(state)
-            .map(|a| format!("(Current Age: {})", a))
-            .unwrap_or_default();
-
-        let end_age_str = self
-            .calculate_end_age(state)
-            .map(|a| format!("(End Age: {})", a))
-            .unwrap_or_default();
+        let current_age = self.calculate_age(state);
+        let end_age = self.calculate_end_age(state);
+        let age_str = match (current_age, end_age) {
+            (Some(start), Some(end)) => format!("{} -> {} ({} years)", start, end, params.duration_years),
+            _ => format!("{} years", params.duration_years),
+        };
 
         let lines = vec![
-            Line::from(""),
             Line::from(vec![
-                Span::styled(
-                    "  Start Date:      ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
+                Span::styled("Start: ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(&params.start_date),
             ]),
-            Line::from(""),
             Line::from(vec![
-                Span::styled(
-                    "  Birth Date:      ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!("{} {}", params.birth_date, current_age_str)),
+                Span::styled("Age:   ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(age_str),
             ]),
-            Line::from(""),
             Line::from(vec![
-                Span::styled(
-                    "  Duration:        ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!("{} years {}", params.duration_years, end_age_str)),
+                Span::styled("Monte: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("Disabled", Style::default().fg(Color::DarkGray)),
+                Span::raw(" (1000 iterations)"),
             ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled(
-                    "  Monte Carlo:     ",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("Disabled        Iterations: 1000"),
-            ]),
-            Line::from(""),
         ];
 
         let paragraph = Paragraph::new(lines).block(
@@ -195,25 +200,88 @@ impl ScenarioScreen {
 
     fn render_quick_actions(&self, frame: &mut Frame, area: Rect, _state: &AppState) {
         let lines = vec![
-            Line::from(Span::styled(
-                "QUICK ACTIONS",
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  [r] Run Single Simulation",
-                Style::default().fg(Color::Green),
-            )),
-            Line::from(Span::styled(
-                "  [m] Run Monte Carlo",
-                Style::default().fg(Color::Green),
-            )),
-            Line::from(""),
-            Line::from("  [s] Save Scenario"),
-            Line::from("  [l] Load Scenario"),
+            Line::from(vec![
+                Span::styled("[r]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(" Run  "),
+                Span::styled("[p]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw(" Preview  "),
+                Span::styled("[m]", Style::default().fg(Color::DarkGray)),
+                Span::raw(" Monte"),
+            ]),
+            Line::from(vec![
+                Span::styled("[s]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" Save  "),
+                Span::styled("[l]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" Load"),
+            ]),
         ];
 
-        let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));
+        let paragraph = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" QUICK ACTIONS "),
+        );
+
+        frame.render_widget(paragraph, area);
+    }
+
+    fn render_projection_preview(&self, frame: &mut Frame, area: Rect, state: &AppState) {
+        let lines = if let Some(preview) = &state.scenario_state.projection_preview {
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled("Final Net Worth: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format_currency(preview.final_net_worth),
+                        Style::default().fg(if preview.final_net_worth >= 0.0 { Color::Green } else { Color::Red }),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("Total Income:    ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(format_currency(preview.total_income)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Total Expenses:  ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(format_currency(preview.total_expenses)),
+                ]),
+                Line::from(vec![
+                    Span::styled("Total Taxes:     ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(format_currency(preview.total_taxes)),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Key Milestones:",
+                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+                )),
+            ];
+
+            for (year, desc) in &preview.milestones {
+                lines.push(Line::from(format!("  {} - {}", year, desc)));
+            }
+
+            lines
+        } else {
+            vec![
+                Line::from(Span::styled(
+                    "No projection data",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Press [p] to run preview",
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from(Span::styled(
+                    "or [r] to run full simulation",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ]
+        };
+
+        let paragraph = Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" PROJECTION PREVIEW "),
+        );
 
         frame.render_widget(paragraph, area);
     }
@@ -235,20 +303,14 @@ impl ScenarioScreen {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    format!("  ({} total)", scenario_count),
+                    format!(" ({} total)", scenario_count),
                     Style::default().fg(Color::DarkGray),
                 ),
+                Span::raw("  |  "),
+                Span::raw(format!("{} Accounts  |  {} Events  |  {} Profiles  |  ", num_accounts, num_events, num_profiles)),
+                Span::styled("Net Worth: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format_currency(net_worth)),
             ]),
-            Line::from(""),
-            Line::from(format!(
-                "  Accounts: {}  |  Events: {}  |  Return Profiles: {}",
-                num_accounts, num_events, num_profiles
-            )),
-            Line::from(""),
-            Line::from(format!(
-                "  Est. Net Worth at Start: {}",
-                crate::util::format::format_currency(net_worth)
-            )),
         ];
 
         let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));

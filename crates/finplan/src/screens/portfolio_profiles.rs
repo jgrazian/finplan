@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::components::collapsible::CollapsiblePanel;
 use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
@@ -302,6 +303,14 @@ impl PortfolioProfilesScreen {
     fn render_asset_mappings(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::AssetMappings;
+        let is_collapsed = state.portfolio_profiles_state.mappings_collapsed;
+
+        // Handle collapsed state
+        if is_collapsed {
+            let panel = CollapsiblePanel::new("ASSET MAPPINGS", false).focused(is_focused);
+            panel.render_collapsed(frame, area);
+            return;
+        }
 
         let unique_assets = Self::get_unique_assets(state);
         let mappings = &state.data().assets;
@@ -328,7 +337,8 @@ impl PortfolioProfilesScreen {
             })
             .collect();
 
-        let title = " ASSET MAPPINGS ";
+        let indicator = "[-]";
+        let title = format!(" {} ASSET MAPPINGS ", indicator);
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -342,7 +352,7 @@ impl PortfolioProfilesScreen {
             .border_style(border_style);
 
         if is_focused && !unique_assets.is_empty() {
-            block = block.title_bottom(Line::from(" [m] Map asset ").fg(Color::DarkGray));
+            block = block.title_bottom(Line::from(" [m] Map  [Space] Toggle ").fg(Color::DarkGray));
         }
 
         let list = List::new(items).block(block);
@@ -353,6 +363,15 @@ impl PortfolioProfilesScreen {
     fn render_tax_inflation_config(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Config;
+        let is_collapsed = state.portfolio_profiles_state.config_collapsed;
+
+        // Handle collapsed state
+        if is_collapsed {
+            let panel = CollapsiblePanel::new("TAX & INFLATION", false).focused(is_focused);
+            panel.render_collapsed(frame, area);
+            return;
+        }
+
         let selected_idx = state.portfolio_profiles_state.selected_config_index;
 
         let tax_config = &state.data().parameters.tax_config;
@@ -417,7 +436,8 @@ impl PortfolioProfilesScreen {
             style_config_line(is_focused, selected_idx, 3, "Inflation: ", inflation_desc),
         ];
 
-        let title = " TAX & INFLATION ";
+        let indicator = "[-]";
+        let title = format!(" {} TAX & INFLATION ", indicator);
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -431,7 +451,7 @@ impl PortfolioProfilesScreen {
             .border_style(border_style);
 
         if is_focused {
-            block = block.title_bottom(Line::from(" [e] Edit ").fg(Color::DarkGray));
+            block = block.title_bottom(Line::from(" [e] Edit  [Space] Toggle ").fg(Color::DarkGray));
         }
 
         let paragraph = Paragraph::new(lines).block(block);
@@ -844,8 +864,14 @@ impl PortfolioProfilesScreen {
     fn handle_mappings_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let unique_assets = Self::get_unique_assets(state);
         match key.code {
+            KeyCode::Char(' ') => {
+                // Toggle collapse state
+                state.portfolio_profiles_state.mappings_collapsed =
+                    !state.portfolio_profiles_state.mappings_collapsed;
+                EventResult::Handled
+            }
             KeyCode::Char('j') | KeyCode::Down => {
-                if !unique_assets.is_empty() {
+                if !state.portfolio_profiles_state.mappings_collapsed && !unique_assets.is_empty() {
                     state.portfolio_profiles_state.selected_mapping_index =
                         (state.portfolio_profiles_state.selected_mapping_index + 1)
                             % unique_assets.len();
@@ -853,7 +879,7 @@ impl PortfolioProfilesScreen {
                 EventResult::Handled
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if !unique_assets.is_empty() {
+                if !state.portfolio_profiles_state.mappings_collapsed && !unique_assets.is_empty() {
                     if state.portfolio_profiles_state.selected_mapping_index == 0 {
                         state.portfolio_profiles_state.selected_mapping_index =
                             unique_assets.len() - 1;
@@ -901,16 +927,26 @@ impl PortfolioProfilesScreen {
     fn handle_config_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         const CONFIG_ITEMS: usize = 4; // Federal, State, Cap Gains, Inflation
         match key.code {
+            KeyCode::Char(' ') => {
+                // Toggle collapse state
+                state.portfolio_profiles_state.config_collapsed =
+                    !state.portfolio_profiles_state.config_collapsed;
+                EventResult::Handled
+            }
             KeyCode::Char('j') | KeyCode::Down => {
-                state.portfolio_profiles_state.selected_config_index =
-                    (state.portfolio_profiles_state.selected_config_index + 1) % CONFIG_ITEMS;
+                if !state.portfolio_profiles_state.config_collapsed {
+                    state.portfolio_profiles_state.selected_config_index =
+                        (state.portfolio_profiles_state.selected_config_index + 1) % CONFIG_ITEMS;
+                }
                 EventResult::Handled
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                if state.portfolio_profiles_state.selected_config_index == 0 {
-                    state.portfolio_profiles_state.selected_config_index = CONFIG_ITEMS - 1;
-                } else {
-                    state.portfolio_profiles_state.selected_config_index -= 1;
+                if !state.portfolio_profiles_state.config_collapsed {
+                    if state.portfolio_profiles_state.selected_config_index == 0 {
+                        state.portfolio_profiles_state.selected_config_index = CONFIG_ITEMS - 1;
+                    } else {
+                        state.portfolio_profiles_state.selected_config_index -= 1;
+                    }
                 }
                 EventResult::Handled
             }
@@ -1066,10 +1102,20 @@ impl Component for PortfolioProfilesScreen {
         self.render_account_details(frame, middle_chunks[0], state);
         self.render_profile_details(frame, middle_chunks[1], state);
 
-        // Right column: Asset Mappings (60%) + Tax & Inflation Config (40%)
+        // Right column: Asset Mappings + Tax & Inflation Config (with collapsible support)
+        let mappings_collapsed = state.portfolio_profiles_state.mappings_collapsed;
+        let config_collapsed = state.portfolio_profiles_state.config_collapsed;
+
+        let right_constraints = match (mappings_collapsed, config_collapsed) {
+            (false, false) => vec![Constraint::Percentage(50), Constraint::Percentage(50)],
+            (true, false) => vec![Constraint::Length(3), Constraint::Min(5)],
+            (false, true) => vec![Constraint::Min(5), Constraint::Length(3)],
+            (true, true) => vec![Constraint::Length(3), Constraint::Length(3)],
+        };
+
         let right_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .constraints(right_constraints)
             .split(columns[2]);
 
         self.render_asset_mappings(frame, right_chunks[0], state);

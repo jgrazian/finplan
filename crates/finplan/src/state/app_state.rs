@@ -8,7 +8,7 @@ use crate::data::convert::{to_simulation_config, to_tui_result, ConvertError};
 
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::modal::ModalState;
-use super::screen_state::{EventsState, PortfolioProfilesState, ResultsState, ScenarioState};
+use super::screen_state::{EventsState, PortfolioProfilesState, ProjectionPreview, ResultsState, ScenarioState};
 use super::tabs::TabId;
 
 // ========== SimulationResult ==========
@@ -284,5 +284,71 @@ impl AppState {
         self.results_state = ResultsState::default();
 
         Ok(())
+    }
+
+    /// Run a quick projection simulation for the scenario preview
+    pub fn run_projection_preview(&mut self) -> Result<(), SimulationError> {
+        // Convert TUI data to simulation config
+        let config = self
+            .to_simulation_config()
+            .map_err(|e| SimulationError::Config(e.to_string()))?;
+
+        // Generate a random seed
+        let seed = rand::rng().next_u64();
+
+        // Run the simulation
+        let core_result = finplan_core::simulation::simulate(&config, seed);
+
+        // Convert to TUI result format
+        let tui_result = to_tui_result(
+            &core_result,
+            &self.data().parameters.birth_date,
+            &self.data().parameters.start_date,
+        )
+        .map_err(|e| SimulationError::Conversion(e.to_string()))?;
+
+        // Calculate totals and milestones
+        let total_income: f64 = tui_result.years.iter().map(|y| y.income).sum();
+        let total_expenses: f64 = tui_result.years.iter().map(|y| y.expenses).sum();
+        let total_taxes: f64 = tui_result.years.iter().map(|y| y.taxes).sum();
+
+        // Generate milestones
+        let mut milestones = Vec::new();
+        let mut hit_1m = false;
+        let mut hit_2m = false;
+
+        for year in &tui_result.years {
+            // First year hitting $1M net worth
+            if !hit_1m && year.net_worth >= 1_000_000.0 {
+                milestones.push((year.year, "$1M net worth".to_string()));
+                hit_1m = true;
+            }
+            // First year hitting $2M net worth
+            if !hit_2m && year.net_worth >= 2_000_000.0 {
+                milestones.push((year.year, "$2M net worth".to_string()));
+                hit_2m = true;
+            }
+        }
+
+        // Add final year
+        if let Some(last) = tui_result.years.last() {
+            milestones.push((last.year, format!("Simulation ends (age {})", last.age)));
+        }
+
+        self.scenario_state.projection_preview = Some(ProjectionPreview {
+            final_net_worth: tui_result.final_net_worth,
+            total_income,
+            total_expenses,
+            total_taxes,
+            milestones,
+        });
+        self.scenario_state.projection_running = false;
+
+        Ok(())
+    }
+
+    /// Invalidate the projection preview cache
+    pub fn invalidate_projection_preview(&mut self) {
+        self.scenario_state.projection_preview = None;
     }
 }

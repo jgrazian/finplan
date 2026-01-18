@@ -8,6 +8,10 @@ pub struct PortfolioProfilesState {
     pub selected_mapping_index: usize,
     pub selected_config_index: usize,
     pub focused_panel: PortfolioProfilesPanel,
+    /// Whether the asset mappings panel is collapsed
+    pub mappings_collapsed: bool,
+    /// Whether the tax/inflation config panel is collapsed
+    pub config_collapsed: bool,
 }
 
 impl Default for PortfolioProfilesState {
@@ -18,6 +22,8 @@ impl Default for PortfolioProfilesState {
             selected_mapping_index: 0,
             selected_config_index: 0,
             focused_panel: PortfolioProfilesPanel::Accounts,
+            mappings_collapsed: false,
+            config_collapsed: false,
         }
     }
 }
@@ -26,6 +32,8 @@ impl Default for PortfolioProfilesState {
 pub struct EventsState {
     pub selected_event_index: usize,
     pub focused_panel: EventsPanel,
+    /// Whether the timeline panel is collapsed
+    pub timeline_collapsed: bool,
 }
 
 impl Default for EventsState {
@@ -33,13 +41,28 @@ impl Default for EventsState {
         Self {
             selected_event_index: 0,
             focused_panel: EventsPanel::EventList,
+            timeline_collapsed: false,
         }
     }
+}
+
+/// Cached projection preview for scenario tab
+#[derive(Debug, Clone)]
+pub struct ProjectionPreview {
+    pub final_net_worth: f64,
+    pub total_income: f64,
+    pub total_expenses: f64,
+    pub total_taxes: f64,
+    pub milestones: Vec<(i32, String)>, // (year, description)
 }
 
 #[derive(Debug, Default)]
 pub struct ScenarioState {
     pub focused_field: usize,
+    /// Cached projection preview (run on tab enter)
+    pub projection_preview: Option<ProjectionPreview>,
+    /// Whether projection is currently running
+    pub projection_running: bool,
 }
 
 /// Filter for the ledger view in Results tab

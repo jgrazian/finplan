@@ -1,3 +1,4 @@
+use crate::components::collapsible::CollapsiblePanel;
 use crate::components::{Component, EventResult};
 use crate::data::events_data::{
     AmountData, EffectData, EventData, EventTag, IntervalData, SpecialAmount, TriggerData,
@@ -10,7 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
 };
@@ -39,9 +40,19 @@ impl EventsScreen {
                 .iter()
                 .enumerate()
                 .map(|(idx, event)| {
-                    let enabled_prefix = if event.enabled { "[✓]" } else { "[x]" };
-                    let event_desc = Self::format_event_summary(event);
-                    let content = format!("{} {}: {}", enabled_prefix, event.name.0, event_desc);
+                    let enabled_prefix = if event.enabled { "✓" } else { "x" };
+
+                    // Create inline effect preview
+                    let effect_preview = if event.effects.is_empty() {
+                        "(no effects)".to_string()
+                    } else {
+                        let first_effect = Self::format_effect_short(&event.effects[0]);
+                        if event.effects.len() > 1 {
+                            format!("{} +{}", first_effect, event.effects.len() - 1)
+                        } else {
+                            first_effect
+                        }
+                    };
 
                     let base_style = if !event.enabled {
                         Style::default().fg(Color::DarkGray)
@@ -55,7 +66,15 @@ impl EventsScreen {
                         base_style
                     };
 
-                    ListItem::new(Line::from(Span::styled(content, style)))
+                    // Compact format: [✓] Name: effect_preview
+                    let line = Line::from(vec![
+                        Span::styled(format!("[{}] ", enabled_prefix), style),
+                        Span::styled(&event.name.0, style.add_modifier(Modifier::BOLD)),
+                        Span::styled(": ", style),
+                        Span::styled(effect_preview, style),
+                    ]);
+
+                    ListItem::new(line)
                 })
                 .collect()
         };
@@ -80,6 +99,58 @@ impl EventsScreen {
         );
 
         frame.render_widget(list, area);
+    }
+
+    /// Format an effect in short form for inline preview
+    fn format_effect_short(effect: &EffectData) -> String {
+        match effect {
+            EffectData::Income { to, amount, .. } => {
+                format!("Income -> {}: {}", to.0, Self::format_amount_short(amount))
+            }
+            EffectData::Expense { from, amount } => {
+                format!("Expense <- {}: {}", from.0, Self::format_amount_short(amount))
+            }
+            EffectData::AssetPurchase { asset, amount, .. } => {
+                format!("Buy {}: {}", asset.0, Self::format_amount_short(amount))
+            }
+            EffectData::AssetSale { asset, amount, .. } => {
+                if let Some(a) = asset {
+                    format!("Sell {}: {}", a.0, Self::format_amount_short(amount))
+                } else {
+                    format!("Liquidate: {}", Self::format_amount_short(amount))
+                }
+            }
+            EffectData::Sweep { to, amount, .. } => {
+                format!("Sweep -> {}: {}", to.0, Self::format_amount_short(amount))
+            }
+            EffectData::TriggerEvent { event } => format!("Trigger {}", event.0),
+            EffectData::PauseEvent { event } => format!("Pause {}", event.0),
+            EffectData::ResumeEvent { event } => format!("Resume {}", event.0),
+            EffectData::TerminateEvent { event } => format!("End {}", event.0),
+            EffectData::ApplyRmd { .. } => "Apply RMD".to_string(),
+        }
+    }
+
+    /// Format amount in short form
+    fn format_amount_short(amount: &AmountData) -> String {
+        match amount {
+            AmountData::Fixed(val) => {
+                if *val >= 1_000_000.0 {
+                    format!("${:.1}M", val / 1_000_000.0)
+                } else if *val >= 1_000.0 {
+                    format!("${:.0}K", val / 1_000.0)
+                } else {
+                    format!("${:.0}", val)
+                }
+            }
+            AmountData::Special(special) => match special {
+                SpecialAmount::SourceBalance => "SrcBal".to_string(),
+                SpecialAmount::ZeroTargetBalance => "ZeroTgt".to_string(),
+                SpecialAmount::TargetToBalance { .. } => "TgtBal".to_string(),
+                SpecialAmount::AccountBalance { .. } => "AcctBal".to_string(),
+                SpecialAmount::AccountCashBalance { .. } => "CashBal".to_string(),
+            },
+        }
     }
 
     fn render_event_details(&self, frame: &mut Frame, area: Rect, state: &AppState) {
@@ -196,11 +267,20 @@ impl EventsScreen {
 
     fn render_timeline(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused = state.events_state.focused_panel == EventsPanel::Timeline;
+        let is_collapsed = state.events_state.timeline_collapsed;
 
+        // Handle collapsed state
+        if is_collapsed {
+            let panel = CollapsiblePanel::new("TIMELINE", false).focused(is_focused);
+            panel.render_collapsed(frame, area);
+            return;
+        }
+
+        let indicator = "[-]";
         let title = if is_focused {
-            " TIMELINE [FOCUSED] "
+            format!(" {} TIMELINE [FOCUSED] ", indicator)
         } else {
-            " TIMELINE "
+            format!(" {} TIMELINE ", indicator)
         };
 
         let border_style = if is_focused {
@@ -335,14 +415,16 @@ impl EventsScreen {
             )));
         }
 
-        let paragraph = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title)
-                    .border_style(border_style),
-            )
-            .wrap(Wrap { trim: false });
+        let mut block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style);
+
+        if is_focused {
+            block = block.title_bottom(Line::from(" [Space] Toggle ").fg(Color::DarkGray));
+        }
+
+        let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
 
         frame.render_widget(paragraph, area);
     }
@@ -382,28 +464,6 @@ impl EventsScreen {
                 None
             }
         }
-    }
-
-    fn format_event_summary(event: &EventData) -> String {
-        let trigger_type = match &event.trigger {
-            TriggerData::Date { .. } => "Date",
-            TriggerData::Age { .. } => "Age",
-            TriggerData::RelativeToEvent { .. } => "Relative",
-            TriggerData::AccountBalance { .. } => "AcctBal",
-            TriggerData::AssetBalance { .. } => "AssetBal",
-            TriggerData::NetWorth { .. } => "NetWorth",
-            TriggerData::And { .. } => "And",
-            TriggerData::Or { .. } => "Or",
-            TriggerData::Repeating { .. } => "Repeating",
-            TriggerData::Manual => "Manual",
-        };
-
-        let effect_count = event.effects.len();
-        format!(
-            "{} ({})",
-            trigger_type,
-            Self::plural(effect_count, "effect")
-        )
     }
 
     fn format_trigger(trigger: &TriggerData) -> String {
@@ -557,14 +617,6 @@ impl EventsScreen {
             EffectData::ApplyRmd { destination, .. } => {
                 format!("Apply RMD to \"{}\"", destination.0)
             }
-        }
-    }
-
-    fn plural(count: usize, word: &str) -> String {
-        if count == 1 {
-            format!("{} {}", count, word)
-        } else {
-            format!("{} {}s", count, word)
         }
     }
 
@@ -764,9 +816,47 @@ impl Component for EventsScreen {
                 // Delegate to focused panel handler
                 match state.events_state.focused_panel {
                     EventsPanel::EventList => self.handle_event_list_keys(key, state),
-                    EventsPanel::Details | EventsPanel::Timeline => {
-                        // Details and Timeline panels - only navigation, actions on event list
+                    EventsPanel::Details => {
+                        // Details panel - navigation and forwarding
                         match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => {
+                                let events_len = state.data().events.len();
+                                if events_len > 0 {
+                                    state.events_state.selected_event_index =
+                                        (state.events_state.selected_event_index + 1) % events_len;
+                                }
+                                EventResult::Handled
+                            }
+                            KeyCode::Char('k') | KeyCode::Up => {
+                                let events_len = state.data().events.len();
+                                if events_len > 0 {
+                                    if state.events_state.selected_event_index == 0 {
+                                        state.events_state.selected_event_index = events_len - 1;
+                                    } else {
+                                        state.events_state.selected_event_index -= 1;
+                                    }
+                                }
+                                EventResult::Handled
+                            }
+                            // Allow t/a/e/d/c/f even when not on event list
+                            KeyCode::Char('t')
+                            | KeyCode::Char('a')
+                            | KeyCode::Char('e')
+                            | KeyCode::Char('d')
+                            | KeyCode::Char('c')
+                            | KeyCode::Char('f') => self.handle_event_list_keys(key, state),
+                            _ => EventResult::NotHandled,
+                        }
+                    }
+                    EventsPanel::Timeline => {
+                        // Timeline panel - navigation and collapse toggle
+                        match key.code {
+                            KeyCode::Char(' ') => {
+                                // Toggle timeline collapse
+                                state.events_state.timeline_collapsed =
+                                    !state.events_state.timeline_collapsed;
+                                EventResult::Handled
+                            }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 let events_len = state.data().events.len();
                                 if events_len > 0 {
@@ -802,14 +892,26 @@ impl Component for EventsScreen {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
-        // Create 3-column layout: 25% | 40% | 35%
-        let columns = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
+        let timeline_collapsed = state.events_state.timeline_collapsed;
+
+        // Dynamic constraints based on timeline collapse state
+        let constraints = if timeline_collapsed {
+            vec![
+                Constraint::Percentage(30),
+                Constraint::Percentage(67),
+                Constraint::Length(3), // Collapsed timeline
+            ]
+        } else {
+            vec![
                 Constraint::Percentage(25),
                 Constraint::Percentage(40),
                 Constraint::Percentage(35),
-            ])
+            ]
+        };
+
+        let columns = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(constraints)
             .split(area);
 
         self.render_event_list(frame, columns[0], state);
