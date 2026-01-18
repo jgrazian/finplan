@@ -19,6 +19,13 @@ impl TabBar {
 
 impl Component for TabBar {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
+        // Don't intercept keys when editing holdings (value input needs digits)
+        if state.portfolio_profiles_state.editing_holding_value
+            || state.portfolio_profiles_state.adding_new_holding
+        {
+            return EventResult::NotHandled;
+        }
+
         match key.code {
             KeyCode::Char('1') => {
                 state.switch_tab(TabId::PortfolioProfiles);

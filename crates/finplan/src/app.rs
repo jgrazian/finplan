@@ -98,10 +98,19 @@ impl App {
         }
 
         // Auto-save on exit
-        if let Err(e) = self.state.save()
-            && let Some(path) = &self.state.config_path
-        {
-            eprintln!("Warning: Failed to save config to {:?}: {:?}", path, e);
+        match self.state.save() {
+            Ok(()) => {
+                if let Some(path) = &self.state.config_path {
+                    eprintln!("Saved config to {:?}", path);
+                }
+            }
+            Err(e) => {
+                if let Some(path) = &self.state.config_path {
+                    eprintln!("Warning: Failed to save config to {:?}: {:?}", path, e);
+                } else {
+                    eprintln!("Warning: No config path set, changes not saved: {:?}", e);
+                }
+            }
         }
 
         Ok(())
@@ -179,9 +188,14 @@ impl App {
                 return;
             }
             KeyCode::Esc => {
-                // Clear error message on Esc
-                self.state.clear_error();
-                return;
+                // Let holdings editing mode handle Esc first
+                if self.state.portfolio_profiles_state.editing_holdings {
+                    // Fall through to screen handler
+                } else {
+                    // Clear error message on Esc
+                    self.state.clear_error();
+                    return;
+                }
             }
             _ => {}
         }
