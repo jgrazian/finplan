@@ -28,7 +28,7 @@ pub enum ThresholdData {
 }
 
 /// Repeat interval for recurring events
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum IntervalData {
     Never,
