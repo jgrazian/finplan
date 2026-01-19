@@ -1,6 +1,6 @@
 use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
-use crate::state::{AppState, MessageModal, ModalAction, ModalState, ScenarioPickerModal, TabId};
+use crate::state::{AppState, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState, ScenarioPickerModal, TabId};
 use crate::util::format::format_currency;
 use crossterm::event::{KeyCode, KeyEvent};
 use jiff::civil::Date;
@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Bar, BarChart, BarGroup, Block, Borders, Paragraph},
 };
 
 use super::Screen;
@@ -92,7 +92,13 @@ impl Component for ScenarioScreen {
                 EventResult::Handled
             }
             KeyCode::Char('m') => {
-                state.set_error("Monte Carlo simulation not yet implemented".to_string());
+                match state.run_monte_carlo(1000) {
+                    Ok(()) => {
+                        state.switch_tab(TabId::Results);
+                        state.results_state.scroll_offset = 0;
+                    }
+                    Err(e) => state.set_error(format!("Monte Carlo simulation failed: {}", e)),
+                }
                 EventResult::Handled
             }
             KeyCode::Char('s') => {
@@ -120,6 +126,29 @@ impl Component for ScenarioScreen {
                         ModalAction::LOAD,
                     ));
                 }
+                EventResult::Handled
+            }
+            KeyCode::Char('e') => {
+                // Edit simulation parameters
+                let params = &state.data().parameters;
+
+                // Get today's date as default for start_date if it's empty
+                let start_date = if params.start_date.is_empty() {
+                    jiff::Zoned::now().date().strftime("%Y-%m-%d").to_string()
+                } else {
+                    params.start_date.clone()
+                };
+
+                let form = FormModal::new(
+                    "Edit Simulation Parameters",
+                    vec![
+                        FormField::new("Start Date (YYYY-MM-DD)", FieldType::Text, &start_date),
+                        FormField::new("Birth Date (YYYY-MM-DD)", FieldType::Text, &params.birth_date),
+                        FormField::new("Duration (years)", FieldType::Text, &params.duration_years.to_string()),
+                    ],
+                    ModalAction::EDIT_PARAMETERS,
+                );
+                state.modal = ModalState::Form(form);
                 EventResult::Handled
             }
             _ => EventResult::NotHandled,
@@ -173,6 +202,27 @@ impl ScenarioScreen {
             _ => format!("{} years", params.duration_years),
         };
 
+        // Check if Monte Carlo results exist
+        let monte_carlo_status = if let Some(mc_result) = &state.monte_carlo_result {
+            Line::from(vec![
+                Span::styled("Monte: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{} runs", mc_result.stats.num_iterations),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    format!(" ({:.0}% success)", mc_result.stats.success_rate * 100.0),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled("Monte: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled("Not run", Style::default().fg(Color::DarkGray)),
+                Span::raw(" (press [m])"),
+            ])
+        };
+
         let lines = vec![
             Line::from(vec![
                 Span::styled("Start: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -182,11 +232,7 @@ impl ScenarioScreen {
                 Span::styled("Age:   ", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(age_str),
             ]),
-            Line::from(vec![
-                Span::styled("Monte: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled("Disabled", Style::default().fg(Color::DarkGray)),
-                Span::raw(" (1000 iterations)"),
-            ]),
+            monte_carlo_status,
         ];
 
         let paragraph = Paragraph::new(lines).block(
@@ -205,14 +251,16 @@ impl ScenarioScreen {
                 Span::raw(" Run  "),
                 Span::styled("[p]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 Span::raw(" Preview  "),
-                Span::styled("[m]", Style::default().fg(Color::DarkGray)),
+                Span::styled("[m]", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
                 Span::raw(" Monte"),
             ]),
             Line::from(vec![
                 Span::styled("[s]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::raw(" Save  "),
                 Span::styled("[l]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::raw(" Load"),
+                Span::raw(" Load  "),
+                Span::styled("[e]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::raw(" Edit Params"),
             ]),
         ];
 
@@ -226,7 +274,17 @@ impl ScenarioScreen {
     }
 
     fn render_projection_preview(&self, frame: &mut Frame, area: Rect, state: &AppState) {
-        let lines = if let Some(preview) = &state.scenario_state.projection_preview {
+        if let Some(preview) = &state.scenario_state.projection_preview {
+            // Split area: top for text, bottom for bar chart
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(8),     // Text section
+                    Constraint::Length(6),  // Bar chart
+                ])
+                .split(area);
+
+            // Build text content
             let mut lines = vec![
                 Line::from(vec![
                     Span::styled("Final Net Worth: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -247,20 +305,53 @@ impl ScenarioScreen {
                     Span::styled("Total Taxes:     ", Style::default().add_modifier(Modifier::BOLD)),
                     Span::raw(format_currency(preview.total_taxes)),
                 ]),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Key Milestones:",
-                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
-                )),
             ];
 
-            for (year, desc) in &preview.milestones {
-                lines.push(Line::from(format!("  {} - {}", year, desc)));
+            // Add Monte Carlo summary if available
+            if let Some(mc) = &preview.mc_summary {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Monte Carlo: ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Magenta)),
+                    Span::styled(
+                        format!("{:.0}% success", mc.success_rate * 100.0),
+                        Style::default().fg(if mc.success_rate >= 0.9 { Color::Green } else if mc.success_rate >= 0.7 { Color::Yellow } else { Color::Red }),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("  P5:  ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format_currency(mc.p5_final)),
+                    Span::styled("  P50: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format_currency(mc.p50_final)),
+                    Span::styled("  P95: ", Style::default().fg(Color::DarkGray)),
+                    Span::raw(format_currency(mc.p95_final)),
+                ]));
+            } else {
+                // Show milestones if no MC summary
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Key Milestones:",
+                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+                )));
+                for (year, desc) in preview.milestones.iter().take(3) {
+                    lines.push(Line::from(format!("  {} - {}", year, desc)));
+                }
             }
 
-            lines
+            let paragraph = Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default())
+                    .title(" PROJECTION PREVIEW "),
+            );
+
+            frame.render_widget(paragraph, chunks[0]);
+
+            // Render bar chart of yearly net worth
+            if !preview.yearly_net_worth.is_empty() {
+                self.render_yearly_bar_chart(frame, chunks[1], &preview.yearly_net_worth);
+            }
         } else {
-            vec![
+            let lines = vec![
                 Line::from(Span::styled(
                     "No projection data",
                     Style::default().fg(Color::DarkGray),
@@ -274,16 +365,69 @@ impl ScenarioScreen {
                     "or [r] to run full simulation",
                     Style::default().fg(Color::DarkGray),
                 )),
-            ]
+            ];
+
+            let paragraph = Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" PROJECTION PREVIEW "),
+            );
+
+            frame.render_widget(paragraph, area);
+        }
+    }
+
+    fn render_yearly_bar_chart(&self, frame: &mut Frame, area: Rect, yearly_data: &[(i32, f64)]) {
+        let num_years = yearly_data.len();
+        if num_years == 0 {
+            return;
+        }
+
+        // Calculate how many bars we can fit
+        let inner_width = area.width.saturating_sub(2) as usize;
+        let bar_width = 1u16;
+        let bar_gap = 0u16;
+        let max_bars = inner_width / (bar_width as usize + bar_gap as usize).max(1);
+
+        // Sample if needed to fit
+        let step = if num_years > max_bars {
+            (num_years as f64 / max_bars as f64).ceil() as usize
+        } else {
+            1
         };
 
-        let paragraph = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" PROJECTION PREVIEW "),
-        );
+        let max_value = yearly_data.iter().map(|(_, v)| *v).fold(0.0f64, f64::max);
 
-        frame.render_widget(paragraph, area);
+        let bars: Vec<Bar> = yearly_data
+            .iter()
+            .step_by(step.max(1))
+            .map(|(year, value)| {
+                let scaled = if max_value > 0.0 {
+                    ((value / max_value) * 100.0).max(0.0) as u64
+                } else {
+                    0
+                };
+                let style = if *value >= 0.0 {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Red)
+                };
+
+                Bar::default()
+                    .value(scaled)
+                    .label(Line::from(format!("{}", year % 100)))
+                    .style(style)
+            })
+            .collect();
+
+        let chart = BarChart::default()
+            .block(Block::default().borders(Borders::TOP).title(" Net Worth "))
+            .data(BarGroup::default().bars(&bars))
+            .bar_width(bar_width)
+            .bar_gap(bar_gap)
+            .direction(Direction::Vertical);
+
+        frame.render_widget(chart, area);
     }
 
     fn render_summary(&self, frame: &mut Frame, area: Rect, state: &AppState) {

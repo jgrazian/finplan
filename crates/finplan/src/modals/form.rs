@@ -230,6 +230,52 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
 
     let field = &mut modal.fields[modal.focused_field];
 
+    // Handle Select fields specially - use Left/Right for option cycling
+    if field.field_type == FieldType::Select {
+        match key.code {
+            KeyCode::Left | KeyCode::Char('h') => {
+                field.select_prev();
+                return ModalResult::Continue;
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                field.select_next();
+                return ModalResult::Continue;
+            }
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
+                // Move to next field
+                let start = modal.focused_field;
+                loop {
+                    modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+                    if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
+                        || modal.focused_field == start
+                    {
+                        break;
+                    }
+                }
+                return ModalResult::Continue;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                // Move to previous field
+                let start = modal.focused_field;
+                loop {
+                    if modal.focused_field == 0 {
+                        modal.focused_field = modal.fields.len() - 1;
+                    } else {
+                        modal.focused_field -= 1;
+                    }
+                    if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
+                        || modal.focused_field == start
+                    {
+                        break;
+                    }
+                }
+                return ModalResult::Continue;
+            }
+            KeyCode::Esc => return ModalResult::Cancelled,
+            _ => return ModalResult::Continue,
+        }
+    }
+
     match key.code {
         KeyCode::Enter => {
             // Exit edit mode (plain Enter without Ctrl)

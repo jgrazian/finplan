@@ -305,6 +305,8 @@ pub fn apply_eval_event_with_source(
         }
 
         EvalEvent::TerminateEvent(event_id) => {
+            // Mark the event as permanently terminated so it can't start or fire again
+            state.event_state.terminated_events.insert(*event_id);
             state.event_state.repeating_event_active.remove(event_id);
             state.event_state.event_next_date.remove(event_id);
 

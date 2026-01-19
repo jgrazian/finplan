@@ -4,11 +4,11 @@ use finplan_core::config::SimulationConfig;
 use rand::RngCore;
 
 use crate::data::app_data::{AppData, SimulationData};
-use crate::data::convert::{to_simulation_config, to_tui_result, ConvertError};
+use crate::data::convert::{process_monte_carlo_results, to_simulation_config, to_tui_result, ConvertError};
 
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::modal::ModalState;
-use super::screen_state::{EventsState, PortfolioProfilesState, ProjectionPreview, ResultsState, ScenarioState};
+use super::screen_state::{EventsState, MonteCarloPreviewSummary, PercentileView, PortfolioProfilesState, ProjectionPreview, ResultsState, ScenarioState};
 use super::tabs::TabId;
 
 // ========== SimulationResult ==========
@@ -30,6 +30,44 @@ pub struct YearResult {
     pub taxes: f64,
 }
 
+// ========== Monte Carlo Results ==========
+
+/// Aggregate statistics from Monte Carlo simulation
+#[derive(Debug, Clone)]
+pub struct MonteCarloStats {
+    pub num_iterations: usize,
+    pub success_rate: f64,
+    pub mean_final_net_worth: f64,
+    pub std_dev_final_net_worth: f64,
+    pub min_final_net_worth: f64,
+    pub max_final_net_worth: f64,
+    pub p5_final_net_worth: f64,
+    pub p50_final_net_worth: f64,
+    pub p95_final_net_worth: f64,
+}
+
+/// Stored Monte Carlo result with 4 representative runs + aggregate stats
+#[derive(Debug)]
+pub struct MonteCarloStoredResult {
+    pub stats: MonteCarloStats,
+    /// TUI result for 5th percentile run
+    pub p5_result: SimulationResult,
+    /// TUI result for 50th percentile run
+    pub p50_result: SimulationResult,
+    /// TUI result for 95th percentile run
+    pub p95_result: SimulationResult,
+    /// TUI result for mean-closest run
+    pub mean_result: SimulationResult,
+    /// Core result for 5th percentile run (for ledger/snapshots)
+    pub p5_core: finplan_core::model::SimulationResult,
+    /// Core result for 50th percentile run
+    pub p50_core: finplan_core::model::SimulationResult,
+    /// Core result for 95th percentile run
+    pub p95_core: finplan_core::model::SimulationResult,
+    /// Core result for mean-closest run
+    pub mean_core: finplan_core::model::SimulationResult,
+}
+
 // ========== AppState ==========
 // Main application state
 
@@ -47,6 +85,8 @@ pub struct AppState {
     pub simulation_result: Option<SimulationResult>,
     /// Core simulation result (needed for ledger and wealth snapshots)
     pub core_simulation_result: Option<finplan_core::model::SimulationResult>,
+    /// Monte Carlo simulation result (4 representative runs + stats)
+    pub monte_carlo_result: Option<MonteCarloStoredResult>,
 
     // Per-screen state
     pub portfolio_profiles_state: PortfolioProfilesState,
@@ -75,6 +115,7 @@ impl Default for AppState {
             cached_config: None,
             simulation_result: None,
             core_simulation_result: None,
+            monte_carlo_result: None,
             portfolio_profiles_state: PortfolioProfilesState::default(),
             events_state: EventsState::default(),
             scenario_state: ScenarioState::default(),
@@ -120,6 +161,7 @@ impl AppState {
             self.current_scenario = name.to_string();
             self.simulation_result = None;
             self.core_simulation_result = None;
+            self.monte_carlo_result = None;
             self.invalidate_config_cache();
         }
     }
@@ -139,6 +181,7 @@ impl AppState {
         self.current_scenario = name.to_string();
         self.simulation_result = None;
         self.core_simulation_result = None;
+        self.monte_carlo_result = None;
         self.invalidate_config_cache();
     }
 
@@ -279,9 +322,56 @@ impl AppState {
 
         self.simulation_result = Some(tui_result);
         self.core_simulation_result = Some(core_result);
+        // Clear Monte Carlo results when running single simulation
+        self.monte_carlo_result = None;
 
         // Reset results state when new simulation runs
         self.results_state = ResultsState::default();
+        self.results_state.viewing_monte_carlo = false;
+
+        Ok(())
+    }
+
+    /// Run Monte Carlo simulation with specified number of iterations
+    pub fn run_monte_carlo(&mut self, num_iterations: usize) -> Result<(), SimulationError> {
+        // Convert TUI data to simulation config
+        let config = self
+            .to_simulation_config()
+            .map_err(|e| SimulationError::Config(e.to_string()))?;
+
+        // Run the Monte Carlo simulation
+        let mc_result = finplan_core::simulation::monte_carlo_simulate(&config, num_iterations);
+
+        // Process and store the results
+        let stored_result = process_monte_carlo_results(
+            &mc_result,
+            &self.data().parameters.birth_date,
+            &self.data().parameters.start_date,
+        )
+        .map_err(|e| SimulationError::Conversion(e.to_string()))?;
+
+        // Store the P50 run as the default simulation result
+        self.simulation_result = Some(stored_result.p50_result.clone());
+        self.core_simulation_result = Some(stored_result.p50_core.clone());
+
+        // Update scenario preview with MC summary
+        if let Some(preview) = &mut self.scenario_state.projection_preview {
+            preview.mc_summary = Some(MonteCarloPreviewSummary {
+                num_iterations: stored_result.stats.num_iterations,
+                success_rate: stored_result.stats.success_rate,
+                p5_final: stored_result.stats.p5_final_net_worth,
+                p50_final: stored_result.stats.p50_final_net_worth,
+                p95_final: stored_result.stats.p95_final_net_worth,
+            });
+        }
+
+        // Store the full MC result
+        self.monte_carlo_result = Some(stored_result);
+
+        // Reset results state for MC viewing
+        self.results_state = ResultsState::default();
+        self.results_state.viewing_monte_carlo = true;
+        self.results_state.percentile_view = PercentileView::P50;
 
         Ok(())
     }
@@ -335,12 +425,21 @@ impl AppState {
             milestones.push((last.year, format!("Simulation ends (age {})", last.age)));
         }
 
+        // Build yearly net worth data for bar chart
+        let yearly_net_worth: Vec<(i32, f64)> = tui_result
+            .years
+            .iter()
+            .map(|y| (y.year, y.net_worth))
+            .collect();
+
         self.scenario_state.projection_preview = Some(ProjectionPreview {
             final_net_worth: tui_result.final_net_worth,
             total_income,
             total_expenses,
             total_taxes,
             milestones,
+            yearly_net_worth,
+            mc_summary: None,
         });
         self.scenario_state.projection_running = false;
 

@@ -171,6 +171,8 @@ pub struct PickerModal {
     pub options: Vec<String>,
     pub selected_index: usize,
     pub action: ModalAction,
+    /// Context data for the picker (e.g., indices for subsequent actions)
+    pub context: Option<String>,
 }
 
 impl PickerModal {
@@ -180,7 +182,13 @@ impl PickerModal {
             options,
             selected_index: 0,
             action,
+            context: None,
         }
+    }
+
+    pub fn with_context(mut self, context: &str) -> Self {
+        self.context = Some(context.to_string());
+        self
     }
 }
 

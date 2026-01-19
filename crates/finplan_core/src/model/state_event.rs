@@ -86,6 +86,15 @@ pub enum StateEvent {
         days: i32,
     },
 
+    /// Interest accrual on a liability (mortgage, loan, etc.)
+    LiabilityInterestAccrual {
+        account_id: AccountId,
+        previous_principal: f64,
+        new_principal: f64,
+        interest_rate: f64,
+        days: i32,
+    },
+
     // === Asset Operations ===
     /// Add units to an asset position (purchase)
     AssetPurchase {
@@ -222,6 +231,7 @@ impl StateEvent {
             StateEvent::CashCredit { to, .. } => Some(*to),
             StateEvent::CashDebit { from, .. } => Some(*from),
             StateEvent::CashAppreciation { account_id, .. } => Some(*account_id),
+            StateEvent::LiabilityInterestAccrual { account_id, .. } => Some(*account_id),
             StateEvent::AssetPurchase { account_id, .. } => Some(*account_id),
             StateEvent::AssetSale { account_id, .. } => Some(*account_id),
             StateEvent::RmdWithdrawal { account_id, .. } => Some(*account_id),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::components::{Component, EventResult};
-use crate::state::{AppState, LedgerFilter, ResultsPanel};
+use crate::state::{AppState, LedgerFilter, PercentileView, ResultsPanel, SimulationResult};
 use crate::util::format::format_currency;
 use crossterm::event::{KeyCode, KeyEvent};
 use finplan_core::model::{
@@ -32,39 +32,6 @@ impl ResultsScreen {
             map.insert(id, account.name.clone());
         }
         map
-    }
-
-    /// Get the wealth snapshot for the selected year
-    fn get_wealth_snapshot_for_year<'a>(
-        state: &'a AppState,
-        year_index: usize,
-    ) -> Option<&'a WealthSnapshot> {
-        let core_result = state.core_simulation_result.as_ref()?;
-
-        // Use TUI years list for consistency with display
-        let years = Self::get_years(state);
-        if year_index >= years.len() {
-            return None;
-        }
-
-        let target_year = years[year_index];
-
-        // Find the last snapshot for this year (any month)
-        core_result
-            .wealth_snapshots
-            .iter()
-            .filter(|snap| snap.date.year() == target_year)
-            .next_back()
-    }
-
-    /// Get the list of unique years in the simulation
-    /// Uses TUI simulation_result.years to ensure consistency with the yearly breakdown display
-    fn get_years(state: &AppState) -> Vec<i16> {
-        state
-            .simulation_result
-            .as_ref()
-            .map(|result| result.years.iter().map(|y| y.year as i16).collect())
-            .unwrap_or_default()
     }
 
     /// Format a StateEvent for display in the ledger
@@ -125,6 +92,25 @@ impl ResultsScreen {
                     name,
                     format_currency(gain),
                     return_rate * 100.0
+                )
+            }
+            StateEvent::LiabilityInterestAccrual {
+                account_id,
+                previous_principal,
+                new_principal,
+                interest_rate,
+                ..
+            } => {
+                let name = account_names
+                    .get(account_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                let interest = new_principal - previous_principal;
+                format!(
+                    "{}: {} interest accrued ({:.2}%)",
+                    name,
+                    format_currency(interest),
+                    interest_rate * 100.0
                 )
             }
             StateEvent::AssetPurchase {
@@ -266,6 +252,71 @@ impl ResultsScreen {
         }
     }
 
+    /// Get the current TUI result based on viewing mode (Monte Carlo percentile or single run)
+    fn get_current_tui_result(state: &AppState) -> Option<&SimulationResult> {
+        if state.results_state.viewing_monte_carlo {
+            if let Some(mc) = &state.monte_carlo_result {
+                match state.results_state.percentile_view {
+                    PercentileView::P5 => Some(&mc.p5_result),
+                    PercentileView::P50 => Some(&mc.p50_result),
+                    PercentileView::P95 => Some(&mc.p95_result),
+                    PercentileView::Mean => Some(&mc.mean_result),
+                }
+            } else {
+                state.simulation_result.as_ref()
+            }
+        } else {
+            state.simulation_result.as_ref()
+        }
+    }
+
+    /// Get the current core result based on viewing mode (Monte Carlo percentile or single run)
+    fn get_current_core_result(state: &AppState) -> Option<&finplan_core::model::SimulationResult> {
+        if state.results_state.viewing_monte_carlo {
+            if let Some(mc) = &state.monte_carlo_result {
+                match state.results_state.percentile_view {
+                    PercentileView::P5 => Some(&mc.p5_core),
+                    PercentileView::P50 => Some(&mc.p50_core),
+                    PercentileView::P95 => Some(&mc.p95_core),
+                    PercentileView::Mean => Some(&mc.mean_core),
+                }
+            } else {
+                state.core_simulation_result.as_ref()
+            }
+        } else {
+            state.core_simulation_result.as_ref()
+        }
+    }
+
+    /// Get the wealth snapshot for the selected year using current result
+    fn get_wealth_snapshot_for_year_current<'a>(
+        state: &'a AppState,
+        year_index: usize,
+    ) -> Option<&'a WealthSnapshot> {
+        let core_result = Self::get_current_core_result(state)?;
+        let tui_result = Self::get_current_tui_result(state)?;
+
+        if year_index >= tui_result.years.len() {
+            return None;
+        }
+
+        let target_year = tui_result.years[year_index].year as i16;
+
+        // Find the last snapshot for this year (any month)
+        core_result
+            .wealth_snapshots
+            .iter()
+            .filter(|snap| snap.date.year() == target_year)
+            .next_back()
+    }
+
+    /// Get the list of unique years from the current simulation result
+    fn get_years_current(state: &AppState) -> Vec<i16> {
+        Self::get_current_tui_result(state)
+            .map(|result| result.years.iter().map(|y| y.year as i16).collect())
+            .unwrap_or_default()
+    }
+
     fn render_chart(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
         let border_style = if focused {
             Style::default().fg(Color::Yellow)
@@ -274,17 +325,27 @@ impl ResultsScreen {
         };
 
         // Get selected year for highlighting
-        let years = Self::get_years(state);
+        let years = Self::get_years_current(state);
         let year_index = state
             .results_state
             .selected_year_index
             .min(years.len().saturating_sub(1));
         let selected_year = years.get(year_index).copied().unwrap_or(0) as i32;
 
-        let title = if focused {
-            format!(" NET WORTH PROJECTION ({}) [h/l year] ", selected_year)
+        // Build title with percentile indicator if viewing Monte Carlo
+        let title = if state.results_state.viewing_monte_carlo {
+            let pct = state.results_state.percentile_view.short_label();
+            if focused {
+                format!(" NET WORTH PROJECTION ({}) ({}) [h/l year, v view] ", selected_year, pct)
+            } else {
+                format!(" NET WORTH PROJECTION ({}) ({}) ", selected_year, pct)
+            }
         } else {
-            format!(" NET WORTH PROJECTION ({}) ", selected_year)
+            if focused {
+                format!(" NET WORTH PROJECTION ({}) [h/l year] ", selected_year)
+            } else {
+                format!(" NET WORTH PROJECTION ({}) ", selected_year)
+            }
         };
 
         let block = Block::default()
@@ -292,7 +353,7 @@ impl ResultsScreen {
             .border_style(border_style)
             .title(title);
 
-        if let Some(result) = &state.simulation_result {
+        if let Some(result) = Self::get_current_tui_result(state) {
             if result.years.is_empty() {
                 let paragraph = Paragraph::new("No data to display").block(block);
                 frame.render_widget(paragraph, area);
@@ -445,14 +506,14 @@ impl ResultsScreen {
         };
 
         // Get selected year for highlighting
-        let years = Self::get_years(state);
+        let years = Self::get_years_current(state);
         let year_index = state
             .results_state
             .selected_year_index
             .min(years.len().saturating_sub(1));
         let selected_year = years.get(year_index).copied().unwrap_or(0) as i32;
 
-        let items: Vec<ListItem> = if let Some(result) = &state.simulation_result {
+        let items: Vec<ListItem> = if let Some(result) = Self::get_current_tui_result(state) {
             // Auto-scroll to keep selected year visible
             let visible_count = (area.height as usize).saturating_sub(5); // Account for borders, header, summary
             let start_idx = state.results_state.scroll_offset;
@@ -506,10 +567,20 @@ impl ResultsScreen {
             vec![ListItem::new(Line::from("No data"))]
         };
 
-        let title = if focused {
-            format!(" YEARLY BREAKDOWN ({}) [j/k scroll] ", selected_year)
+        // Build title with percentile indicator if viewing Monte Carlo
+        let title = if state.results_state.viewing_monte_carlo {
+            let pct = state.results_state.percentile_view.short_label();
+            if focused {
+                format!(" YEARLY BREAKDOWN ({}) ({}) [j/k scroll, v view] ", selected_year, pct)
+            } else {
+                format!(" YEARLY BREAKDOWN ({}) ({}) ", selected_year, pct)
+            }
         } else {
-            format!(" YEARLY BREAKDOWN ({}) ", selected_year)
+            if focused {
+                format!(" YEARLY BREAKDOWN ({}) [j/k scroll] ", selected_year)
+            } else {
+                format!(" YEARLY BREAKDOWN ({}) ", selected_year)
+            }
         };
 
         let list = List::new(items).block(
@@ -529,17 +600,27 @@ impl ResultsScreen {
             Style::default()
         };
 
-        let years = Self::get_years(state);
+        let years = Self::get_years_current(state);
         let year_index = state
             .results_state
             .selected_year_index
             .min(years.len().saturating_sub(1));
         let selected_year = years.get(year_index).copied().unwrap_or(0);
 
-        let title = if focused {
-            format!(" ACCOUNT BREAKDOWN ({}) [h/l year] ", selected_year)
+        // Build title with percentile indicator if viewing Monte Carlo
+        let title = if state.results_state.viewing_monte_carlo {
+            let pct = state.results_state.percentile_view.short_label();
+            if focused {
+                format!(" ACCOUNT BREAKDOWN ({}) ({}) [h/l year, v view] ", selected_year, pct)
+            } else {
+                format!(" ACCOUNT BREAKDOWN ({}) ({}) ", selected_year, pct)
+            }
         } else {
-            format!(" ACCOUNT BREAKDOWN ({}) ", selected_year)
+            if focused {
+                format!(" ACCOUNT BREAKDOWN ({}) [h/l year] ", selected_year)
+            } else {
+                format!(" ACCOUNT BREAKDOWN ({}) ", selected_year)
+            }
         };
 
         let block = Block::default()
@@ -547,7 +628,7 @@ impl ResultsScreen {
             .border_style(border_style)
             .title(title);
 
-        if let Some(snapshot) = Self::get_wealth_snapshot_for_year(state, year_index) {
+        if let Some(snapshot) = Self::get_wealth_snapshot_for_year_current(state, year_index) {
             let account_names = Self::build_account_name_map(state);
 
             if snapshot.accounts.is_empty() {
@@ -617,10 +698,21 @@ impl ResultsScreen {
         };
 
         let filter = state.results_state.ledger_filter;
-        let title = if focused {
-            format!(" LEDGER [{}] [j/k scroll, f filter] ", filter.label())
+
+        // Build title with percentile indicator if viewing Monte Carlo
+        let title = if state.results_state.viewing_monte_carlo {
+            let pct = state.results_state.percentile_view.short_label();
+            if focused {
+                format!(" LEDGER [{}] ({}) [j/k scroll, f filter, v view] ", filter.label(), pct)
+            } else {
+                format!(" LEDGER [{}] ({}) ", filter.label(), pct)
+            }
         } else {
-            format!(" LEDGER [{}] ", filter.label())
+            if focused {
+                format!(" LEDGER [{}] [j/k scroll, f filter] ", filter.label())
+            } else {
+                format!(" LEDGER [{}] ", filter.label())
+            }
         };
 
         let block = Block::default()
@@ -628,7 +720,7 @@ impl ResultsScreen {
             .border_style(border_style)
             .title(title);
 
-        if let Some(core_result) = &state.core_simulation_result {
+        if let Some(core_result) = Self::get_current_core_result(state) {
             let account_names = Self::build_account_name_map(state);
 
             // Filter entries
@@ -696,7 +788,7 @@ impl Component for ResultsScreen {
             KeyCode::Char('j') | KeyCode::Down => {
                 match panel {
                     ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years(state);
+                        let years = Self::get_years_current(state);
                         if state.results_state.selected_year_index + 1 < years.len() {
                             state.results_state.selected_year_index += 1;
                             state.results_state.scroll_offset =
@@ -704,7 +796,7 @@ impl Component for ResultsScreen {
                         }
                     }
                     ResultsPanel::Ledger => {
-                        if let Some(core_result) = &state.core_simulation_result {
+                        if let Some(core_result) = Self::get_current_core_result(state) {
                             let filter = state.results_state.ledger_filter;
                             let filtered_count = core_result
                                 .ledger
@@ -761,7 +853,7 @@ impl Component for ResultsScreen {
                     ResultsPanel::NetWorthChart
                     | ResultsPanel::AccountChart
                     | ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years(state);
+                        let years = Self::get_years_current(state);
                         if state.results_state.selected_year_index + 1 < years.len() {
                             state.results_state.selected_year_index += 1;
                             // Sync yearly breakdown scroll to selected year
@@ -792,7 +884,7 @@ impl Component for ResultsScreen {
                     ResultsPanel::NetWorthChart
                     | ResultsPanel::AccountChart
                     | ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years(state);
+                        let years = Self::get_years_current(state);
                         state.results_state.selected_year_index = years.len().saturating_sub(1);
                         state.results_state.scroll_offset = state.results_state.selected_year_index;
                     }
@@ -804,7 +896,7 @@ impl Component for ResultsScreen {
             // PageUp/PageDown for fast ledger scrolling
             KeyCode::PageDown => {
                 if panel == ResultsPanel::Ledger
-                    && let Some(core_result) = &state.core_simulation_result
+                    && let Some(core_result) = Self::get_current_core_result(state)
                 {
                     let filter = state.results_state.ledger_filter;
                     let filtered_count = core_result
@@ -831,6 +923,15 @@ impl Component for ResultsScreen {
                 if panel == ResultsPanel::Ledger {
                     state.results_state.ledger_filter = state.results_state.ledger_filter.next();
                     state.results_state.ledger_scroll_offset = 0; // Reset scroll when filter changes
+                }
+                EventResult::Handled
+            }
+
+            // v for cycling percentile view (Monte Carlo only)
+            KeyCode::Char('v') => {
+                if state.results_state.viewing_monte_carlo {
+                    state.results_state.percentile_view =
+                        state.results_state.percentile_view.next();
                 }
                 EventResult::Handled
             }

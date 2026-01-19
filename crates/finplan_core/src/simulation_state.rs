@@ -65,6 +65,9 @@ pub struct SimEventState {
     /// Whether repeating events have been activated (start_condition met)
     pub repeating_event_active: HashMap<EventId, bool>,
 
+    /// Events that have been permanently terminated (should never start or fire again)
+    pub terminated_events: std::collections::HashSet<EventId>,
+
     /// Accumulated values for event flow limits (EventId -> accumulated amount)
     pub event_flow_ytd: HashMap<EventId, f64>,
     pub event_flow_lifetime: HashMap<EventId, f64>,
@@ -186,6 +189,7 @@ impl SimulationState {
                 triggered_events: HashMap::new(),
                 event_next_date: HashMap::new(),
                 repeating_event_active: HashMap::new(),
+                terminated_events: std::collections::HashSet::new(),
                 event_flow_ytd: HashMap::new(),
                 event_flow_lifetime: HashMap::new(),
                 event_flow_last_period_key: HashMap::new(),

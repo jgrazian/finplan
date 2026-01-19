@@ -20,6 +20,7 @@ pub enum ScenarioAction {
     SaveAs,
     Load,
     SwitchTo,
+    EditParameters,
 }
 
 /// Account-specific actions
@@ -77,7 +78,9 @@ pub enum EffectAction {
     PickType,
     PickTypeForAdd,
     PickAccountForEffect,
+    PickActionForEffect,
     Add,
+    Edit,
     Delete,
 }
 
@@ -87,6 +90,7 @@ impl ModalAction {
     pub const SAVE_AS: Self = Self::Scenario(ScenarioAction::SaveAs);
     pub const LOAD: Self = Self::Scenario(ScenarioAction::Load);
     pub const SWITCH_TO: Self = Self::Scenario(ScenarioAction::SwitchTo);
+    pub const EDIT_PARAMETERS: Self = Self::Scenario(ScenarioAction::EditParameters);
 
     // Account shortcuts
     pub const PICK_ACCOUNT_CATEGORY: Self = Self::Account(AccountAction::PickCategory);
@@ -126,7 +130,9 @@ impl ModalAction {
     pub const PICK_EFFECT_TYPE: Self = Self::Effect(EffectAction::PickType);
     pub const PICK_EFFECT_TYPE_FOR_ADD: Self = Self::Effect(EffectAction::PickTypeForAdd);
     pub const PICK_ACCOUNT_FOR_EFFECT: Self = Self::Effect(EffectAction::PickAccountForEffect);
+    pub const PICK_ACTION_FOR_EFFECT: Self = Self::Effect(EffectAction::PickActionForEffect);
     pub const ADD_EFFECT: Self = Self::Effect(EffectAction::Add);
+    pub const EDIT_EFFECT: Self = Self::Effect(EffectAction::Edit);
     pub const DELETE_EFFECT: Self = Self::Effect(EffectAction::Delete);
 }
 

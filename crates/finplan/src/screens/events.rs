@@ -679,6 +679,7 @@ impl EventsScreen {
                     let trigger_summary = Self::format_trigger_short(&event.trigger);
                     let effects_summary = format!("{} effect(s)", event.effects.len());
 
+                    let yes_no = vec!["No".to_string(), "Yes".to_string()];
                     let form = FormModal::new(
                         "Edit Event",
                         vec![
@@ -687,10 +688,15 @@ impl EventsScreen {
                                 "Description",
                                 event.description.as_deref().unwrap_or(""),
                             ),
-                            FormField::text("Once Only (Y/N)", if event.once { "Y" } else { "N" }),
-                            FormField::text(
-                                "Enabled (Y/N)",
-                                if event.enabled { "Y" } else { "N" },
+                            FormField::select(
+                                "Once Only",
+                                yes_no.clone(),
+                                if event.once { "Yes" } else { "No" },
+                            ),
+                            FormField::select(
+                                "Enabled",
+                                yes_no,
+                                if event.enabled { "Yes" } else { "No" },
                             ),
                             FormField::read_only("Trigger", &trigger_summary),
                             FormField::read_only("Effects", &effects_summary),

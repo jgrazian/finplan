@@ -188,12 +188,13 @@ fn test_property_account_appreciation() {
 
     let result = simulate(&params, 42);
 
-    // Note: Property assets currently don't appreciate via Market
-    // This test documents current behavior
+    // Property assets appreciate via Market using their assigned return profiles
     let actual = result.final_account_balance(AccountId(1)).unwrap();
 
-    // Current implementation: Property values are fixed
-    let expected = house_value + car_value;
+    // Expected: house appreciates at 3%, car depreciates at -15% over 10 years
+    let expected_house = house_value * (1.0 + house_return).powi(years as i32);
+    let expected_car = car_value * (1.0 + car_return).powi(years as i32);
+    let expected = expected_house + expected_car;
 
     assert!(
         (actual - expected).abs() < 1.0,
@@ -232,11 +233,14 @@ fn test_liability_account_negative_balance() {
     let result = simulate(&params, 42);
     let actual = result.final_account_balance(AccountId(1)).unwrap();
 
-    // Liability shows as negative in net worth calculation
+    // Liability accrues interest over time, so it grows from the initial principal
+    // The simulation compounds continuously (daily rate) while this formula uses annual
+    // Expected: approximately $250,000 × (1.065)^5 ≈ $342,640 (shown as negative)
+    let expected = -loan_principal * (1.0 + loan_rate).powi(5);
     assert!(
-        (actual - (-loan_principal)).abs() < 0.01,
-        "Liability should be -${:.2}, got ${:.2}",
-        loan_principal,
+        (actual - expected).abs() < 200.0, // Allow for compounding method differences
+        "Liability should be ${:.2}, got ${:.2}",
+        expected,
         actual
     );
 }

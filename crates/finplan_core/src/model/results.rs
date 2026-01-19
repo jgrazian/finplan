@@ -17,7 +17,7 @@ pub struct WealthSnapshot {
 }
 
 /// Complete results from a single simulation run
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationResult {
     /// Starting state of all accounts
     pub wealth_snapshots: Vec<WealthSnapshot>,
@@ -172,7 +172,7 @@ impl SimulationResult {
 }
 
 /// Results from Monte Carlo simulation (multiple runs)
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloResult {
     pub iterations: Vec<SimulationResult>,
 }

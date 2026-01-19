@@ -227,6 +227,7 @@ impl App {
         let context = match &self.state.modal {
             ModalState::Form(form) => form.context.clone(),
             ModalState::Confirm(confirm) => confirm.context.clone(),
+            ModalState::Picker(picker) => picker.context.clone(),
             _ => None,
         };
 
@@ -243,6 +244,9 @@ impl App {
             }
             ModalAction::Scenario(ScenarioAction::SwitchTo) => {
                 actions::handle_switch_to(&mut self.state, &value)
+            }
+            ModalAction::Scenario(ScenarioAction::EditParameters) => {
+                actions::handle_edit_parameters(&mut self.state, ctx)
             }
 
             // Account actions
@@ -331,8 +335,14 @@ impl App {
             ModalAction::Effect(EffectAction::PickAccountForEffect) => {
                 actions::handle_account_for_effect_pick(&value)
             }
+            ModalAction::Effect(EffectAction::PickActionForEffect) => {
+                actions::handle_action_for_effect_pick(&self.state, &value, ctx)
+            }
             ModalAction::Effect(EffectAction::Add) => {
                 actions::handle_add_effect(&mut self.state, ctx)
+            }
+            ModalAction::Effect(EffectAction::Edit) => {
+                actions::handle_edit_effect(&mut self.state, ctx)
             }
             ModalAction::Effect(EffectAction::Delete) => {
                 actions::handle_delete_effect(&mut self.state, ctx)

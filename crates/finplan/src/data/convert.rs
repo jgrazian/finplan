@@ -5,11 +5,14 @@ use finplan_core::{
     model::{
         Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, AssetLot,
         BalanceThreshold, Cash, Event, EventEffect, EventId, EventTrigger, FixedAsset, IncomeType,
-        InvestmentContainer, LoanDetail, LotMethod, RepeatInterval, ReturnProfileId, TaxStatus,
-        TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
+        InvestmentContainer, LoanDetail, LotMethod, MonteCarloResult, RepeatInterval,
+        ReturnProfileId, TaxStatus, TransferAmount, TriggerOffset, WithdrawalOrder,
+        WithdrawalSources,
     },
 };
 use jiff::civil::Date;
+
+use crate::state::{MonteCarloStats, MonteCarloStoredResult};
 
 use super::{
     app_data::SimulationData,
@@ -768,5 +771,254 @@ pub fn to_tui_result(
     Ok(crate::state::SimulationResult {
         final_net_worth,
         years,
+    })
+}
+
+/// Process Monte Carlo results and extract the 4 representative runs + stats
+/// P5, P50, P95 are actual simulation runs; Mean is a synthetic result with
+/// averaged values at each year across all iterations.
+pub fn process_monte_carlo_results(
+    mc_result: &MonteCarloResult,
+    birth_date: &str,
+    start_date: &str,
+) -> Result<MonteCarloStoredResult, ConvertError> {
+    use finplan_core::model::{AccountSnapshot, AccountSnapshotFlavor, WealthSnapshot};
+
+    let num_iterations = mc_result.iterations.len();
+    if num_iterations == 0 {
+        return Err(ConvertError::InvalidDate(
+            "No iterations in Monte Carlo result".to_string(),
+        ));
+    }
+
+    // Convert all iterations to TUI format for averaging
+    let tui_results: Vec<crate::state::SimulationResult> = mc_result
+        .iterations
+        .iter()
+        .map(|core| to_tui_result(core, birth_date, start_date))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Calculate final net worth for each iteration and sort
+    let mut indexed_results: Vec<(usize, f64)> = tui_results
+        .iter()
+        .enumerate()
+        .map(|(idx, result)| (idx, result.final_net_worth))
+        .collect();
+
+    indexed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Calculate statistics
+    let final_values: Vec<f64> = indexed_results.iter().map(|(_, v)| *v).collect();
+    let mean_final_net_worth: f64 = final_values.iter().sum::<f64>() / num_iterations as f64;
+
+    let variance: f64 = final_values
+        .iter()
+        .map(|v| (v - mean_final_net_worth).powi(2))
+        .sum::<f64>()
+        / num_iterations as f64;
+    let std_dev_final_net_worth = variance.sqrt();
+
+    let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
+    let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
+
+    // Calculate percentile indices
+    let p5_idx = ((num_iterations as f64 * 0.05).floor() as usize).min(num_iterations - 1);
+    let p50_idx = ((num_iterations as f64 * 0.50).floor() as usize).min(num_iterations - 1);
+    let p95_idx = ((num_iterations as f64 * 0.95).floor() as usize).min(num_iterations - 1);
+
+    // Get the original indices for percentile runs
+    let p5_original_idx = indexed_results[p5_idx].0;
+    let p50_original_idx = indexed_results[p50_idx].0;
+    let p95_original_idx = indexed_results[p95_idx].0;
+
+    // Calculate success rate (iterations with positive final net worth)
+    let success_count = final_values.iter().filter(|v| **v > 0.0).count();
+    let success_rate = success_count as f64 / num_iterations as f64;
+
+    // Get percentile values
+    let p5_final_net_worth = indexed_results[p5_idx].1;
+    let p50_final_net_worth = indexed_results[p50_idx].1;
+    let p95_final_net_worth = indexed_results[p95_idx].1;
+
+    // Clone the representative core results for P5, P50, P95
+    let p5_core = mc_result.iterations[p5_original_idx].clone();
+    let p50_core = mc_result.iterations[p50_original_idx].clone();
+    let p95_core = mc_result.iterations[p95_original_idx].clone();
+
+    // Get TUI results for percentile runs
+    let p5_result = tui_results[p5_original_idx].clone();
+    let p50_result = tui_results[p50_original_idx].clone();
+    let p95_result = tui_results[p95_original_idx].clone();
+
+    // === Compute TRUE MEAN: average values at each year across all iterations ===
+
+    // Use the first result as a template for year structure
+    let template = &tui_results[0];
+    let num_years = template.years.len();
+
+    // Compute per-year averages
+    let mut mean_years = Vec::with_capacity(num_years);
+    for year_idx in 0..num_years {
+        let year = template.years[year_idx].year;
+        let age = template.years[year_idx].age;
+
+        // Sum values across all iterations for this year
+        let mut sum_net_worth = 0.0;
+        let mut sum_income = 0.0;
+        let mut sum_expenses = 0.0;
+        let mut sum_taxes = 0.0;
+        let mut count = 0;
+
+        for tui_result in &tui_results {
+            if let Some(yr) = tui_result.years.get(year_idx) {
+                sum_net_worth += yr.net_worth;
+                sum_income += yr.income;
+                sum_expenses += yr.expenses;
+                sum_taxes += yr.taxes;
+                count += 1;
+            }
+        }
+
+        let n = count as f64;
+        mean_years.push(crate::state::YearResult {
+            year,
+            age,
+            net_worth: sum_net_worth / n,
+            income: sum_income / n,
+            expenses: sum_expenses / n,
+            taxes: sum_taxes / n,
+        });
+    }
+
+    let mean_result = crate::state::SimulationResult {
+        final_net_worth: mean_final_net_worth,
+        years: mean_years,
+    };
+
+    // === Create synthetic core result for mean view ===
+    // Use P50's structure as template, but with averaged account values
+
+    let p50_core_ref = &mc_result.iterations[p50_original_idx];
+
+    // Average wealth snapshots: for each snapshot index, average account values
+    let mut mean_wealth_snapshots = Vec::new();
+    let num_snapshots = p50_core_ref.wealth_snapshots.len();
+
+    for snap_idx in 0..num_snapshots {
+        let template_snap = &p50_core_ref.wealth_snapshots[snap_idx];
+
+        // Average each account's value across all iterations
+        let mut mean_accounts = Vec::new();
+        for (acc_idx, template_acc) in template_snap.accounts.iter().enumerate() {
+            let mut sum_value = 0.0;
+            let mut count = 0;
+
+            for iteration in &mc_result.iterations {
+                if let Some(snap) = iteration.wealth_snapshots.get(snap_idx) {
+                    if let Some(acc) = snap.accounts.get(acc_idx) {
+                        sum_value += acc.total_value();
+                        count += 1;
+                    }
+                }
+            }
+
+            let avg_value = if count > 0 {
+                sum_value / count as f64
+            } else {
+                0.0
+            };
+
+            // Create averaged account snapshot (simplified to Bank flavor for display)
+            // This preserves the account_id but stores averaged total value
+            let mean_flavor = match &template_acc.flavor {
+                AccountSnapshotFlavor::Bank(_) => AccountSnapshotFlavor::Bank(avg_value),
+                AccountSnapshotFlavor::Investment { .. } => {
+                    // Store as bank with total value for simplicity in mean view
+                    AccountSnapshotFlavor::Bank(avg_value)
+                }
+                AccountSnapshotFlavor::Property(_) => AccountSnapshotFlavor::Property(avg_value),
+                AccountSnapshotFlavor::Liability(_) => AccountSnapshotFlavor::Liability(avg_value),
+            };
+
+            mean_accounts.push(AccountSnapshot {
+                account_id: template_acc.account_id,
+                flavor: mean_flavor,
+            });
+        }
+
+        mean_wealth_snapshots.push(WealthSnapshot {
+            date: template_snap.date,
+            accounts: mean_accounts,
+        });
+    }
+
+    // Average yearly taxes
+    let mut mean_yearly_taxes = Vec::new();
+    let num_tax_years = p50_core_ref.yearly_taxes.len();
+
+    for tax_idx in 0..num_tax_years {
+        let template_tax = &p50_core_ref.yearly_taxes[tax_idx];
+
+        let mut sum_ordinary = 0.0;
+        let mut sum_cap_gains = 0.0;
+        let mut sum_tax_free = 0.0;
+        let mut sum_federal = 0.0;
+        let mut sum_state = 0.0;
+        let mut sum_total = 0.0;
+        let mut count = 0;
+
+        for iteration in &mc_result.iterations {
+            if let Some(tax) = iteration.yearly_taxes.get(tax_idx) {
+                sum_ordinary += tax.ordinary_income;
+                sum_cap_gains += tax.capital_gains;
+                sum_tax_free += tax.tax_free_withdrawals;
+                sum_federal += tax.federal_tax;
+                sum_state += tax.state_tax;
+                sum_total += tax.total_tax;
+                count += 1;
+            }
+        }
+
+        let n = count as f64;
+        mean_yearly_taxes.push(finplan_core::model::TaxSummary {
+            year: template_tax.year,
+            ordinary_income: sum_ordinary / n,
+            capital_gains: sum_cap_gains / n,
+            tax_free_withdrawals: sum_tax_free / n,
+            federal_tax: sum_federal / n,
+            state_tax: sum_state / n,
+            total_tax: sum_total / n,
+        });
+    }
+
+    // Create synthetic mean core result (empty ledger - doesn't make sense for averages)
+    let mean_core = finplan_core::model::SimulationResult {
+        wealth_snapshots: mean_wealth_snapshots,
+        yearly_taxes: mean_yearly_taxes,
+        ledger: Vec::new(), // No meaningful ledger for averaged results
+    };
+
+    let stats = MonteCarloStats {
+        num_iterations,
+        success_rate,
+        mean_final_net_worth,
+        std_dev_final_net_worth,
+        min_final_net_worth,
+        max_final_net_worth,
+        p5_final_net_worth,
+        p50_final_net_worth,
+        p95_final_net_worth,
+    };
+
+    Ok(MonteCarloStoredResult {
+        stats,
+        p5_result,
+        p50_result,
+        p95_result,
+        mean_result,
+        p5_core,
+        p50_core,
+        p95_core,
+        mean_core,
     })
 }

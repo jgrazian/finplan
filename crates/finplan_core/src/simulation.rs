@@ -124,58 +124,86 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             let account = state.portfolio.accounts.get_mut(&account_id).unwrap();
             match &mut account.flavor {
                 AccountFlavor::Bank(cash) => {
-                    // Apply return profile to bank account cash
-                    if let Some(multiplier) = state.portfolio.market.get_period_multiplier(
-                        year_index,
-                        days_passed as i64,
-                        cash.return_profile_id,
-                    ) {
-                        let previous_value = cash.value;
-                        cash.value *= multiplier;
-                        let return_rate = multiplier - 1.0;
+                    // Only compound positive cash balances (negative = overdraft, shouldn't grow)
+                    if cash.value > 0.0 {
+                        // Apply return profile to bank account cash
+                        if let Some(multiplier) = state.portfolio.market.get_period_multiplier(
+                            year_index,
+                            days_passed as i64,
+                            cash.return_profile_id,
+                        ) {
+                            let previous_value = cash.value;
+                            cash.value *= multiplier;
+                            let return_rate = multiplier - 1.0;
 
-                        // Only record if there was actual appreciation
-                        if (cash.value - previous_value).abs() > 0.001 {
-                            state.history.ledger.push(LedgerEntry::new(
-                                next_checkpoint,
-                                StateEvent::CashAppreciation {
-                                    account_id,
-                                    previous_value,
-                                    new_value: cash.value,
-                                    return_rate,
-                                    days: days_passed,
-                                },
-                            ));
+                            // Only record if there was actual appreciation
+                            if (cash.value - previous_value).abs() > 0.001 {
+                                state.history.ledger.push(LedgerEntry::new(
+                                    next_checkpoint,
+                                    StateEvent::CashAppreciation {
+                                        account_id,
+                                        previous_value,
+                                        new_value: cash.value,
+                                        return_rate,
+                                        days: days_passed,
+                                    },
+                                ));
+                            }
                         }
                     }
                 }
                 AccountFlavor::Investment(inv) => {
-                    // Apply return profile to investment account cash (money market, etc.)
-                    if let Some(multiplier) = state.portfolio.market.get_period_multiplier(
-                        year_index,
-                        days_passed as i64,
-                        inv.cash.return_profile_id,
-                    ) {
-                        let previous_value = inv.cash.value;
-                        inv.cash.value *= multiplier;
-                        let return_rate = multiplier - 1.0;
+                    // Only compound positive cash balances (negative = overdraft, shouldn't grow)
+                    if inv.cash.value > 0.0 {
+                        // Apply return profile to investment account cash (money market, etc.)
+                        if let Some(multiplier) = state.portfolio.market.get_period_multiplier(
+                            year_index,
+                            days_passed as i64,
+                            inv.cash.return_profile_id,
+                        ) {
+                            let previous_value = inv.cash.value;
+                            inv.cash.value *= multiplier;
+                            let return_rate = multiplier - 1.0;
 
-                        // Only record if there was actual appreciation
-                        if (inv.cash.value - previous_value).abs() > 0.001 {
+                            // Only record if there was actual appreciation
+                            if (inv.cash.value - previous_value).abs() > 0.001 {
+                                state.history.ledger.push(LedgerEntry::new(
+                                    next_checkpoint,
+                                    StateEvent::CashAppreciation {
+                                        account_id,
+                                        previous_value,
+                                        new_value: inv.cash.value,
+                                        return_rate,
+                                        days: days_passed,
+                                    },
+                                ));
+                            }
+                        }
+                    }
+                }
+                AccountFlavor::Liability(loan) => {
+                    // Apply interest to liability (debt grows over time)
+                    if loan.interest_rate > 0.0 {
+                        let previous_principal = loan.principal;
+                        let multiplier = (1.0 + loan.interest_rate).powf(days_passed as f64 / 365.0);
+                        loan.principal *= multiplier;
+
+                        // Only record if there was actual interest accrual
+                        if (loan.principal - previous_principal).abs() > 0.001 {
                             state.history.ledger.push(LedgerEntry::new(
                                 next_checkpoint,
-                                StateEvent::CashAppreciation {
+                                StateEvent::LiabilityInterestAccrual {
                                     account_id,
-                                    previous_value,
-                                    new_value: inv.cash.value,
-                                    return_rate,
+                                    previous_principal,
+                                    new_principal: loan.principal,
+                                    interest_rate: loan.interest_rate,
                                     days: days_passed,
                                 },
                             ));
                         }
                     }
                 }
-                _ => {}
+                AccountFlavor::Property(_) => {}
             }
         }
 

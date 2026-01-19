@@ -1,6 +1,45 @@
 /// Per-screen state structs.
 use super::panels::{EventsPanel, PortfolioProfilesPanel, ResultsPanel};
 
+/// Percentile view for Monte Carlo results
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PercentileView {
+    P5,
+    #[default]
+    P50,
+    P95,
+    Mean,
+}
+
+impl PercentileView {
+    pub fn next(self) -> Self {
+        match self {
+            Self::P5 => Self::P50,
+            Self::P50 => Self::P95,
+            Self::P95 => Self::Mean,
+            Self::Mean => Self::P5,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::P5 => "5th Percentile (Worst Case)",
+            Self::P50 => "50th Percentile (Median)",
+            Self::P95 => "95th Percentile (Best Case)",
+            Self::Mean => "Mean (Average)",
+        }
+    }
+
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::P5 => "P5",
+            Self::P50 => "P50",
+            Self::P95 => "P95",
+            Self::Mean => "Mean",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct PortfolioProfilesState {
     pub selected_account_index: usize,
@@ -64,6 +103,16 @@ impl Default for EventsState {
     }
 }
 
+/// Summary stats for Monte Carlo preview in scenario tab
+#[derive(Debug, Clone)]
+pub struct MonteCarloPreviewSummary {
+    pub num_iterations: usize,
+    pub success_rate: f64,
+    pub p5_final: f64,
+    pub p50_final: f64,
+    pub p95_final: f64,
+}
+
 /// Cached projection preview for scenario tab
 #[derive(Debug, Clone)]
 pub struct ProjectionPreview {
@@ -72,6 +121,10 @@ pub struct ProjectionPreview {
     pub total_expenses: f64,
     pub total_taxes: f64,
     pub milestones: Vec<(i32, String)>, // (year, description)
+    /// Yearly net worth data for bar chart
+    pub yearly_net_worth: Vec<(i32, f64)>,
+    /// Monte Carlo summary (if MC was run)
+    pub mc_summary: Option<MonteCarloPreviewSummary>,
 }
 
 #[derive(Debug, Default)]
@@ -128,6 +181,10 @@ pub struct ResultsState {
     pub ledger_scroll_offset: usize,
     /// Filter for ledger entries
     pub ledger_filter: LedgerFilter,
+    /// Current percentile view for Monte Carlo results
+    pub percentile_view: PercentileView,
+    /// Whether we're viewing Monte Carlo results
+    pub viewing_monte_carlo: bool,
 }
 
 impl Default for ResultsState {
@@ -138,6 +195,8 @@ impl Default for ResultsState {
             selected_year_index: 0,
             ledger_scroll_offset: 0,
             ledger_filter: LedgerFilter::default(),
+            percentile_view: PercentileView::default(),
+            viewing_monte_carlo: false,
         }
     }
 }

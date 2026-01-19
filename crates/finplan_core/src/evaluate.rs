@@ -101,6 +101,11 @@ pub fn evaluate_trigger(
     trigger: &EventTrigger,
     state: &SimulationState,
 ) -> Result<TriggerEvent, TriggerEventError> {
+    // Check if this event has been permanently terminated
+    if state.event_state.terminated_events.contains(event_id) {
+        return Ok(TriggerEvent::NotTriggered);
+    }
+
     match trigger {
         EventTrigger::Date(date) => Ok(if state.timeline.current_date >= *date {
             TriggerEvent::Triggered
