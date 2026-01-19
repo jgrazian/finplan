@@ -1,6 +1,7 @@
 pub mod collapsible;
-pub mod tab_bar;
+pub mod portfolio_overview;
 pub mod status_bar;
+pub mod tab_bar;
 
 use crossterm::event::KeyEvent;
 use ratatui::Frame;

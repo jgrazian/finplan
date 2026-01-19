@@ -1,6 +1,9 @@
 use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
-use crate::state::{AppState, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState, ScenarioPickerModal, TabId};
+use crate::state::{
+    AppState, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState,
+    ScenarioPickerModal, TabId,
+};
 use crate::util::format::format_currency;
 use crossterm::event::{KeyCode, KeyEvent};
 use jiff::civil::Date;
@@ -143,8 +146,16 @@ impl Component for ScenarioScreen {
                     "Edit Simulation Parameters",
                     vec![
                         FormField::new("Start Date (YYYY-MM-DD)", FieldType::Text, &start_date),
-                        FormField::new("Birth Date (YYYY-MM-DD)", FieldType::Text, &params.birth_date),
-                        FormField::new("Duration (years)", FieldType::Text, &params.duration_years.to_string()),
+                        FormField::new(
+                            "Birth Date (YYYY-MM-DD)",
+                            FieldType::Text,
+                            &params.birth_date,
+                        ),
+                        FormField::new(
+                            "Duration (years)",
+                            FieldType::Text,
+                            &params.duration_years.to_string(),
+                        ),
                     ],
                     ModalAction::EDIT_PARAMETERS,
                 );
@@ -160,8 +171,8 @@ impl Component for ScenarioScreen {
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(12),    // Top section (2 columns)
-                Constraint::Length(4),  // Summary bar
+                Constraint::Min(12),   // Top section (2 columns)
+                Constraint::Length(4), // Summary bar
             ])
             .split(area);
 
@@ -175,8 +186,8 @@ impl Component for ScenarioScreen {
         let left_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(7),  // Parameters (compact)
-                Constraint::Min(5),     // Quick Actions
+                Constraint::Length(7), // Parameters (compact)
+                Constraint::Min(5),    // Quick Actions
             ])
             .split(top_columns[0]);
 
@@ -198,7 +209,9 @@ impl ScenarioScreen {
         let current_age = self.calculate_age(state);
         let end_age = self.calculate_end_age(state);
         let age_str = match (current_age, end_age) {
-            (Some(start), Some(end)) => format!("{} -> {} ({} years)", start, end, params.duration_years),
+            (Some(start), Some(end)) => {
+                format!("{} -> {} ({} years)", start, end, params.duration_years)
+            }
             _ => format!("{} years", params.duration_years),
         };
 
@@ -247,19 +260,49 @@ impl ScenarioScreen {
     fn render_quick_actions(&self, frame: &mut Frame, area: Rect, _state: &AppState) {
         let lines = vec![
             Line::from(vec![
-                Span::styled("[r]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[r]",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Run  "),
-                Span::styled("[p]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[p]",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Preview  "),
-                Span::styled("[m]", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[m]",
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Monte"),
             ]),
             Line::from(vec![
-                Span::styled("[s]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[s]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Save  "),
-                Span::styled("[l]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[l]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Load  "),
-                Span::styled("[e]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[e]",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Edit Params"),
             ]),
         ];
@@ -279,30 +322,46 @@ impl ScenarioScreen {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Min(8),     // Text section
-                    Constraint::Length(6),  // Bar chart
+                    Constraint::Min(8),    // Text section
+                    Constraint::Length(6), // Bar chart
                 ])
                 .split(area);
 
             // Build text content
             let mut lines = vec![
                 Line::from(vec![
-                    Span::styled("Final Net Worth: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Final Net Worth: ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(
                         format_currency(preview.final_net_worth),
-                        Style::default().fg(if preview.final_net_worth >= 0.0 { Color::Green } else { Color::Red }),
+                        Style::default().fg(if preview.final_net_worth >= 0.0 {
+                            Color::Green
+                        } else {
+                            Color::Red
+                        }),
                     ),
                 ]),
                 Line::from(vec![
-                    Span::styled("Total Income:    ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Total Income:    ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(format_currency(preview.total_income)),
                 ]),
                 Line::from(vec![
-                    Span::styled("Total Expenses:  ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Total Expenses:  ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(format_currency(preview.total_expenses)),
                 ]),
                 Line::from(vec![
-                    Span::styled("Total Taxes:     ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Total Taxes:     ",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
                     Span::raw(format_currency(preview.total_taxes)),
                 ]),
             ];
@@ -311,10 +370,21 @@ impl ScenarioScreen {
             if let Some(mc) = &preview.mc_summary {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Monte Carlo: ", Style::default().add_modifier(Modifier::BOLD).fg(Color::Magenta)),
+                    Span::styled(
+                        "Monte Carlo: ",
+                        Style::default()
+                            .add_modifier(Modifier::BOLD)
+                            .fg(Color::Magenta),
+                    ),
                     Span::styled(
                         format!("{:.0}% success", mc.success_rate * 100.0),
-                        Style::default().fg(if mc.success_rate >= 0.9 { Color::Green } else if mc.success_rate >= 0.7 { Color::Yellow } else { Color::Red }),
+                        Style::default().fg(if mc.success_rate >= 0.9 {
+                            Color::Green
+                        } else if mc.success_rate >= 0.7 {
+                            Color::Yellow
+                        } else {
+                            Color::Red
+                        }),
                     ),
                 ]));
                 lines.push(Line::from(vec![
@@ -330,7 +400,9 @@ impl ScenarioScreen {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "Key Milestones:",
-                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Cyan),
                 )));
                 for (year, desc) in preview.milestones.iter().take(3) {
                     lines.push(Line::from(format!("  {} - {}", year, desc)));
@@ -437,25 +509,26 @@ impl ScenarioScreen {
         let net_worth = self.calculate_net_worth(state);
         let scenario_count = state.app_data.simulations.len();
 
-        let lines = vec![
-            Line::from(vec![
-                Span::styled("SCENARIO: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    &state.current_scenario,
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!(" ({} total)", scenario_count),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::raw("  |  "),
-                Span::raw(format!("{} Accounts  |  {} Events  |  {} Profiles  |  ", num_accounts, num_events, num_profiles)),
-                Span::styled("Net Worth: ", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(format_currency(net_worth)),
-            ]),
-        ];
+        let lines = vec![Line::from(vec![
+            Span::styled("SCENARIO: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &state.current_scenario,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({} total)", scenario_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw("  |  "),
+            Span::raw(format!(
+                "{} Accounts  |  {} Events  |  {} Profiles  |  ",
+                num_accounts, num_events, num_profiles
+            )),
+            Span::styled("Net Worth: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(format_currency(net_worth)),
+        ])];
 
         let paragraph = Paragraph::new(lines).block(Block::default().borders(Borders::ALL));
 

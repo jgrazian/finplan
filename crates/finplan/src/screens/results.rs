@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
 use crate::state::{AppState, LedgerFilter, PercentileView, ResultsPanel, SimulationResult};
 use crate::util::format::format_currency;
@@ -425,12 +426,9 @@ impl ResultsScreen {
                         Style::default()
                     };
 
-                    // Only show year label if bar is wide enough
-                    let label = if bar_width >= 4 {
-                        Line::from(Span::styled(format!("{}", year.year), label_style))
-                    } else if bar_width >= 2 {
-                        // Show short year (last 2 digits)
-                        Line::from(Span::styled(format!("{:02}", year.year % 100), label_style))
+                    // Show age as label
+                    let label = if bar_width >= 2 {
+                        Line::from(Span::styled(format!("{}", year.age), label_style))
                     } else {
                         Line::from("")
                     };
@@ -464,10 +462,14 @@ impl ResultsScreen {
             let legend_paragraph =
                 Paragraph::new(legend).style(Style::default().fg(Color::DarkGray));
 
-            // Split inner area: legend row at top, chart below
+            // Split inner area: legend row at top, chart in middle, label at bottom
             let chart_layout = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .constraints([
+                    Constraint::Length(1),
+                    Constraint::Min(0),
+                    Constraint::Length(1),
+                ])
                 .split(inner_area);
 
             frame.render_widget(legend_paragraph, chart_layout[0]);
@@ -479,6 +481,12 @@ impl ResultsScreen {
                 .direction(Direction::Vertical);
 
             frame.render_widget(chart, chart_layout[1]);
+
+            // Bottom label
+            let bottom_label = Paragraph::new("Net worth by age")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(ratatui::layout::Alignment::Center);
+            frame.render_widget(bottom_label, chart_layout[2]);
         } else {
             let content = vec![
                 Line::from(""),
@@ -614,12 +622,6 @@ impl ResultsScreen {
     }
 
     fn render_account_chart(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let years = Self::get_years_current(state);
         let year_index = state
             .results_state
@@ -644,29 +646,11 @@ impl ResultsScreen {
             format!(" ACCOUNT BREAKDOWN ({}) ", selected_year)
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
-
         if let Some(snapshot) = Self::get_wealth_snapshot_for_year_current(state, year_index) {
             let account_names = Self::build_account_name_map(state);
 
-            if snapshot.accounts.is_empty() {
-                let paragraph = Paragraph::new("No accounts").block(block);
-                frame.render_widget(paragraph, area);
-                return;
-            }
-
-            // Calculate total portfolio value (sum of absolute values for percentage calculation)
-            let total_abs: f64 = snapshot
-                .accounts
-                .iter()
-                .map(|acc| acc.total_value().abs())
-                .sum();
-
-            // Create horizontal bars with percentage-based scaling
-            let bars: Vec<Bar> = snapshot
+            // Convert snapshot accounts to AccountBar instances
+            let accounts: Vec<AccountBar> = snapshot
                 .accounts
                 .iter()
                 .map(|acc| {
@@ -683,37 +667,35 @@ impl ResultsScreen {
                         _ => name.to_string(),
                     };
 
-                    // Scale to percentage of portfolio (0-100)
-                    let percentage = if total_abs > 0.0 {
-                        (value.abs() / total_abs * 100.0) as u64
+                    // Color based on account type: Gold=Yellow, negative=Red, otherwise Green
+                    let color = if value < 0.0 {
+                        Color::Red
                     } else {
-                        0
+                        Color::Green
                     };
 
-                    let style = if value >= 0.0 {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        Style::default().fg(Color::Red)
-                    };
-
-                    Bar::default()
-                        .value(percentage)
-                        .label(Line::from(label))
-                        .text_value(format_currency(value))
-                        .style(style)
-                        .value_style(style.reversed())
+                    AccountBar::new(label, value, color)
                 })
                 .collect();
 
-            let chart = BarChart::default()
-                .block(block)
-                .data(BarGroup::default().bars(&bars))
-                .bar_width(3)
-                .bar_gap(1)
-                .direction(Direction::Horizontal);
-
-            frame.render_widget(chart, area);
+            PortfolioOverviewChart::new(&accounts)
+                .title(title)
+                .focused(focused)
+                .value_overlay(true)
+                .line_spacing(1)
+                .render(frame, area);
         } else {
+            let border_style = if focused {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            };
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_style(border_style)
+                .title(title);
+
             let content = vec![
                 Line::from(""),
                 Line::from("No account data for selected year."),

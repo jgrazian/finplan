@@ -4,8 +4,7 @@ use crate::data::events_data::{
     AmountData, EffectData, EventData, EventTag, IntervalData, SpecialAmount, TriggerData,
 };
 use crate::state::{
-    AppState, ConfirmModal, EventsPanel, FormField, FormModal, ModalAction, ModalState,
-    PickerModal,
+    AppState, ConfirmModal, EventsPanel, FormField, FormModal, ModalAction, ModalState, PickerModal,
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -108,7 +107,11 @@ impl EventsScreen {
                 format!("Income -> {}: {}", to.0, Self::format_amount_short(amount))
             }
             EffectData::Expense { from, amount } => {
-                format!("Expense <- {}: {}", from.0, Self::format_amount_short(amount))
+                format!(
+                    "Expense <- {}: {}",
+                    from.0,
+                    Self::format_amount_short(amount)
+                )
             }
             EffectData::AssetPurchase { asset, amount, .. } => {
                 format!("Buy {}: {}", asset.0, Self::format_amount_short(amount))
@@ -424,7 +427,9 @@ impl EventsScreen {
             block = block.title_bottom(Line::from(" [Space] Toggle ").fg(Color::DarkGray));
         }
 
-        let paragraph = Paragraph::new(lines).block(block).wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
 
         frame.render_widget(paragraph, area);
     }

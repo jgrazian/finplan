@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
@@ -53,101 +54,21 @@ impl PortfolioProfilesScreen {
 
     /// Render portfolio overview (always visible at top)
     fn render_portfolio_overview(&self, frame: &mut Frame, area: Rect, state: &AppState) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" PORTFOLIO OVERVIEW ");
-        let inner_area = block.inner(area);
-        frame.render_widget(block, area);
-
-        let accounts = &state.data().portfolios.accounts;
-        if accounts.is_empty() {
-            let msg =
-                Paragraph::new("No accounts defined").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(msg, inner_area);
-            return;
-        }
-
-        // Calculate total positive value (exclude debts from percentage base)
-        let total_positive: f64 = accounts
+        let accounts: Vec<AccountBar> = state
+            .data()
+            .portfolios
+            .accounts
             .iter()
-            .map(get_account_value)
-            .filter(|v| *v > 0.0)
-            .sum();
+            .map(|account| {
+                AccountBar::new(
+                    account.name.clone(),
+                    get_account_value(account),
+                    Self::account_type_color(&account.account_type),
+                )
+            })
+            .collect();
 
-        if total_positive == 0.0 {
-            let msg =
-                Paragraph::new("No positive value").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(msg, inner_area);
-            return;
-        }
-
-        // Render horizontal bars
-        let available_height = inner_area.height as usize;
-        let max_bars = available_height.saturating_sub(1);
-
-        let mut y_offset = 0;
-        for account in accounts.iter().take(max_bars) {
-            let value = get_account_value(account);
-            let color = Self::account_type_color(&account.account_type);
-
-            // Truncate name if needed
-            let name = if account.name.len() > 12 {
-                format!("{}...", &account.name[..9])
-            } else {
-                account.name.clone()
-            };
-
-            // For debts, show as negative but calculate percentage of positive portfolio
-            let percentage = if value >= 0.0 {
-                (value / total_positive * 100.0).round() as i16
-            } else {
-                -((value.abs() / total_positive * 100.0).round() as i16)
-            };
-
-            // Create bar line
-            let bar_width = inner_area.width.saturating_sub(32) as usize;
-            let filled = if value >= 0.0 {
-                (bar_width as f64 * value / total_positive).round() as usize
-            } else {
-                (bar_width as f64 * value.abs() / total_positive)
-                    .round()
-                    .min(bar_width as f64) as usize
-            };
-            let empty = bar_width.saturating_sub(filled);
-
-            let (bar_char, bar_empty_char) = if value >= 0.0 {
-                ("█", "░")
-            } else {
-                ("▓", "░")
-            };
-
-            let bar_filled: String = bar_char.repeat(filled);
-            let bar_empty: String = bar_empty_char.repeat(empty);
-
-            let line = Line::from(vec![
-                Span::styled(format!("{:<12} ", name), Style::default().fg(color)),
-                Span::styled(bar_filled, Style::default().fg(color)),
-                Span::styled(bar_empty, Style::default().fg(Color::DarkGray)),
-                Span::raw(format!(" {:>4}% ", percentage)),
-                Span::styled(
-                    format_currency(value),
-                    Style::default().fg(if value >= 0.0 {
-                        Color::DarkGray
-                    } else {
-                        Color::Red
-                    }),
-                ),
-            ]);
-
-            let bar_area = Rect::new(
-                inner_area.x,
-                inner_area.y + y_offset as u16,
-                inner_area.width,
-                1,
-            );
-            frame.render_widget(Paragraph::new(line), bar_area);
-            y_offset += 1;
-        }
+        PortfolioOverviewChart::new(&accounts).render(frame, area);
     }
 
     /// Render unified accounts panel (top: list | details, bottom: centered holdings chart)
@@ -1145,9 +1066,7 @@ impl PortfolioProfilesScreen {
         is_lognormal: bool,
     ) {
         let bar_width = 2; // Fixed bar width of 2 characters
-        let num_bins = ((area.width as usize).saturating_sub(4) / bar_width)
-            .min(35)
-            .max(10);
+        let num_bins = ((area.width as usize).saturating_sub(4) / bar_width).clamp(10, 35);
         let height = area.height.saturating_sub(2) as usize; // Leave room for labels
 
         if height < 3 || area.width < 20 {
