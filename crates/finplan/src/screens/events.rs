@@ -238,7 +238,7 @@ impl EventsScreen {
                     .add_modifier(Modifier::BOLD)
                     .fg(Color::Cyan),
             )));
-            lines.push(Line::from(Self::format_trigger(&event.trigger)));
+            Self::append_trigger_details(&event.trigger, &mut lines, 1);
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "EFFECTS",
@@ -479,56 +479,146 @@ impl EventsScreen {
         }
     }
 
-    fn format_trigger(trigger: &TriggerData) -> String {
+    /// Append detailed trigger information to lines for the details panel
+    fn append_trigger_details(trigger: &TriggerData, lines: &mut Vec<Line<'_>>, indent: usize) {
+        let prefix = "  ".repeat(indent);
         match trigger {
-            TriggerData::Date { date } => format!("  Date: {}", date),
+            TriggerData::Date { date } => {
+                lines.push(Line::from(format!("{}Type: Date", prefix)));
+                lines.push(Line::from(format!("{}Date: {}", prefix, date)));
+            }
             TriggerData::Age { years, months } => {
+                lines.push(Line::from(format!("{}Type: Age", prefix)));
                 if let Some(m) = months {
-                    format!("  Age: {} years, {} months", years, m)
+                    lines.push(Line::from(format!(
+                        "{}Age: {} years, {} months",
+                        prefix, years, m
+                    )));
                 } else {
-                    format!("  Age: {} years", years)
+                    lines.push(Line::from(format!("{}Age: {} years", prefix, years)));
                 }
             }
             TriggerData::RelativeToEvent { event, offset } => {
-                format!("  Relative to \"{}\": {:?}", event.0, offset)
+                lines.push(Line::from(format!("{}Type: Relative to Event", prefix)));
+                lines.push(Line::from(format!("{}Event: \"{}\"", prefix, event.0)));
+                lines.push(Line::from(format!("{}Offset: {:?}", prefix, offset)));
             }
             TriggerData::AccountBalance { account, threshold } => {
-                format!("  Account \"{}\" balance {:?}", account.0, threshold)
+                lines.push(Line::from(format!("{}Type: Account Balance", prefix)));
+                lines.push(Line::from(format!("{}Account: \"{}\"", prefix, account.0)));
+                lines.push(Line::from(format!("{}Threshold: {:?}", prefix, threshold)));
             }
             TriggerData::AssetBalance {
                 account,
                 asset,
                 threshold,
             } => {
-                format!(
-                    "  Asset \"{}\" in \"{}\" {:?}",
-                    asset.0, account.0, threshold
-                )
+                lines.push(Line::from(format!("{}Type: Asset Balance", prefix)));
+                lines.push(Line::from(format!("{}Account: \"{}\"", prefix, account.0)));
+                lines.push(Line::from(format!("{}Asset: \"{}\"", prefix, asset.0)));
+                lines.push(Line::from(format!("{}Threshold: {:?}", prefix, threshold)));
             }
             TriggerData::NetWorth { threshold } => {
-                format!("  Net worth {:?}", threshold)
+                lines.push(Line::from(format!("{}Type: Net Worth", prefix)));
+                lines.push(Line::from(format!("{}Threshold: {:?}", prefix, threshold)));
             }
             TriggerData::And { conditions } => {
-                format!("  AND ({} conditions)", conditions.len())
+                lines.push(Line::from(format!(
+                    "{}Type: AND ({} conditions)",
+                    prefix,
+                    conditions.len()
+                )));
+                for (i, cond) in conditions.iter().enumerate() {
+                    lines.push(Line::from(format!("{}Condition {}:", prefix, i + 1)));
+                    Self::append_trigger_details(cond, lines, indent + 1);
+                }
             }
             TriggerData::Or { conditions } => {
-                format!("  OR ({} conditions)", conditions.len())
+                lines.push(Line::from(format!(
+                    "{}Type: OR ({} conditions)",
+                    prefix,
+                    conditions.len()
+                )));
+                for (i, cond) in conditions.iter().enumerate() {
+                    lines.push(Line::from(format!("{}Condition {}:", prefix, i + 1)));
+                    Self::append_trigger_details(cond, lines, indent + 1);
+                }
             }
             TriggerData::Repeating {
                 interval,
                 start,
                 end,
             } => {
-                let mut desc = format!("  Repeating: {}", Self::format_interval(interval));
-                if start.is_some() {
-                    desc.push_str(" (with start condition)");
+                lines.push(Line::from(format!("{}Type: Repeating", prefix)));
+                lines.push(Line::from(format!(
+                    "{}Interval: {}",
+                    prefix,
+                    Self::format_interval(interval)
+                )));
+                if let Some(start_trigger) = start {
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("{}Start: ", prefix)),
+                        Span::styled(
+                            Self::format_trigger_inline(start_trigger),
+                            Style::default().fg(Color::Green),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(format!("{}Start: Immediately", prefix)));
                 }
-                if end.is_some() {
-                    desc.push_str(" (with end condition)");
+                if let Some(end_trigger) = end {
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("{}End: ", prefix)),
+                        Span::styled(
+                            Self::format_trigger_inline(end_trigger),
+                            Style::default().fg(Color::Red),
+                        ),
+                    ]));
+                } else {
+                    lines.push(Line::from(format!("{}End: Never", prefix)));
                 }
-                desc
             }
-            TriggerData::Manual => "  Manual (triggered by other events)".to_string(),
+            TriggerData::Manual => {
+                lines.push(Line::from(format!("{}Type: Manual", prefix)));
+                lines.push(Line::from(format!(
+                    "{}(Triggered by other events)",
+                    prefix
+                )));
+            }
+        }
+    }
+
+    /// Format a trigger in a single line for inline display
+    fn format_trigger_inline(trigger: &TriggerData) -> String {
+        match trigger {
+            TriggerData::Date { date } => format!("Date {}", date),
+            TriggerData::Age { years, months } => {
+                if let Some(m) = months {
+                    format!("Age {} years, {} months", years, m)
+                } else {
+                    format!("Age {} years", years)
+                }
+            }
+            TriggerData::RelativeToEvent { event, offset } => {
+                format!("Relative to \"{}\" ({:?})", event.0, offset)
+            }
+            TriggerData::AccountBalance { account, threshold } => {
+                format!("Account \"{}\" {:?}", account.0, threshold)
+            }
+            TriggerData::AssetBalance {
+                account,
+                asset,
+                threshold,
+            } => {
+                format!("Asset \"{}/{}\" {:?}", account.0, asset.0, threshold)
+            }
+            TriggerData::NetWorth { threshold } => format!("Net Worth {:?}", threshold),
+            TriggerData::And { conditions } => format!("AND ({} conditions)", conditions.len()),
+            TriggerData::Or { conditions } => format!("OR ({} conditions)", conditions.len()),
+            TriggerData::Repeating { interval, .. } => {
+                format!("Repeating {}", Self::format_interval(interval))
+            }
+            TriggerData::Manual => "Manual".to_string(),
         }
     }
 
