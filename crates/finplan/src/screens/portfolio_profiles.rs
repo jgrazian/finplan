@@ -1065,8 +1065,8 @@ impl PortfolioProfilesScreen {
         std_dev: f64,
         is_lognormal: bool,
     ) {
-        let bar_width = 2; // Fixed bar width of 2 characters
-        let num_bins = ((area.width as usize).saturating_sub(4) / bar_width).clamp(10, 35);
+        let bar_width = 1;
+        let num_bins = (area.width as usize).saturating_sub(4).max(10);
         let height = area.height.saturating_sub(2) as usize; // Leave room for labels
 
         if height < 3 || area.width < 20 {
@@ -1117,7 +1117,7 @@ impl PortfolioProfilesScreen {
             pdf_values.push(pdf);
         }
 
-        // Normalize to height
+        // Normalize to height (use 8x sub-character resolution for smoother curves)
         let max_pdf = pdf_values.iter().cloned().fold(0.0_f64, f64::max);
         if max_pdf == 0.0 {
             let msg =
@@ -1126,20 +1126,23 @@ impl PortfolioProfilesScreen {
             return;
         }
 
+        // Calculate bar heights with sub-character precision (8 levels per character)
+        let height_units = height * 8; // Total sub-character units
         let bar_heights: Vec<usize> = pdf_values
             .iter()
-            .map(|&pdf| ((pdf / max_pdf) * height as f64).round() as usize)
+            .map(|&pdf| ((pdf / max_pdf) * height_units as f64).round() as usize)
             .collect();
 
         // Calculate centering offset
-        let total_chart_width = num_bins * bar_width;
-        let x_offset = (area.width as usize).saturating_sub(total_chart_width) / 2;
+        let x_offset = (area.width as usize).saturating_sub(num_bins) / 2;
 
-        // Render vertical bars from bottom up
-        let bin_chars = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+        // Block characters for sub-character precision (from empty to full)
+        let bin_chars = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 
         for row in 0..height {
-            let y_level = height - 1 - row;
+            // row_base is the base unit level for this row (in 1/8ths)
+            let row_base = (height - 1 - row) * 8;
+            let row_top = row_base + 8;
             let mut spans = Vec::new();
 
             // Add left padding
@@ -1159,19 +1162,20 @@ impl PortfolioProfilesScreen {
                     Color::Yellow
                 };
 
-                let char_to_use = if bar_h > y_level {
+                // Determine which character to use based on how much the bar fills this row
+                let char_to_use = if bar_h >= row_top {
+                    // Bar is at or above this row - full block
                     "█"
-                } else if bar_h == y_level && bar_h > 0 {
-                    // Partial fill
-                    let partial = ((pdf_values[i] / max_pdf) * height as f64).fract();
-                    let idx = (partial * 7.0).round() as usize;
-                    bin_chars[idx.min(7)]
+                } else if bar_h > row_base {
+                    // Bar is partially in this row - use partial block
+                    let fill_level = bar_h - row_base; // 1-7
+                    bin_chars[fill_level.min(8)]
                 } else {
+                    // Bar is below this row - empty
                     " "
                 };
 
-                let bar_str = char_to_use.repeat(bar_width);
-                spans.push(Span::styled(bar_str, Style::default().fg(color)));
+                spans.push(Span::styled(char_to_use, Style::default().fg(color)));
             }
 
             let line = Line::from(spans);
