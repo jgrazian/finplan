@@ -11,7 +11,7 @@ use crate::state::{
     PortfolioProfilesPanel,
 };
 use crate::util::format::{format_currency, format_percentage};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -95,10 +95,10 @@ impl PortfolioProfilesScreen {
                 {
                     " [Enter] Save  [Esc] Cancel "
                 } else {
-                    " [j/k] Navigate  [Enter] Edit  [d] Delete  [Esc] Exit "
+                    " [j/k] Nav [Shift+J/K] Reorder [Enter] Edit [d] Del [Esc] Exit "
                 }
             } else {
-                " [a] Add  [e] Edit  [d] Delete  [Enter] Holdings  [Space] Toggle "
+                " [a]dd [e]dit [d]el [Shift+J/K] Reorder [Enter] Holdings "
             };
             block = block.title_bottom(Line::from(help_text).fg(Color::DarkGray));
         }
@@ -549,7 +549,7 @@ impl PortfolioProfilesScreen {
 
         if is_focused {
             block = block.title_bottom(
-                Line::from(" [a] Add  [e] Edit  [d] Delete  [1-4] Preset  [Space] Toggle ")
+                Line::from(" [a]dd [e]dit [d]el [Shift+J/K] Reorder [1-4] Preset ")
                     .fg(Color::DarkGray),
             );
         }
@@ -1205,9 +1205,49 @@ impl PortfolioProfilesScreen {
     // ========== Key Handlers ==========
 
     fn handle_accounts_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
-        let accounts = &state.data().portfolios.accounts;
+        let accounts_len = state.data().portfolios.accounts.len();
+        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
+            // Move down (Shift+J or Shift+Down)
+            KeyCode::Char('J') if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_account_index;
+                if accounts_len >= 2 && idx < accounts_len - 1 {
+                    state.data_mut().portfolios.accounts.swap(idx, idx + 1);
+                    state.portfolio_profiles_state.selected_account_index = idx + 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            KeyCode::Down if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_account_index;
+                if accounts_len >= 2 && idx < accounts_len - 1 {
+                    state.data_mut().portfolios.accounts.swap(idx, idx + 1);
+                    state.portfolio_profiles_state.selected_account_index = idx + 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            // Move up (Shift+K or Shift+Up)
+            KeyCode::Char('K') if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_account_index;
+                if accounts_len >= 2 && idx > 0 {
+                    state.data_mut().portfolios.accounts.swap(idx, idx - 1);
+                    state.portfolio_profiles_state.selected_account_index = idx - 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            KeyCode::Up if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_account_index;
+                if accounts_len >= 2 && idx > 0 {
+                    state.data_mut().portfolios.accounts.swap(idx, idx - 1);
+                    state.portfolio_profiles_state.selected_account_index = idx - 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
             KeyCode::Char('j') | KeyCode::Down => {
+                let accounts = &state.data().portfolios.accounts;
                 if !accounts.is_empty() {
                     state.portfolio_profiles_state.selected_account_index =
                         (state.portfolio_profiles_state.selected_account_index + 1)
@@ -1216,6 +1256,7 @@ impl PortfolioProfilesScreen {
                 EventResult::Handled
             }
             KeyCode::Char('k') | KeyCode::Up => {
+                let accounts = &state.data().portfolios.accounts;
                 if !accounts.is_empty() {
                     if state.portfolio_profiles_state.selected_account_index == 0 {
                         state.portfolio_profiles_state.selected_account_index = accounts.len() - 1;
@@ -1227,6 +1268,7 @@ impl PortfolioProfilesScreen {
             }
             KeyCode::Enter => {
                 // Enter holdings editing mode for investment accounts
+                let accounts = &state.data().portfolios.accounts;
                 if let Some(account) =
                     accounts.get(state.portfolio_profiles_state.selected_account_index)
                 {
@@ -1513,11 +1555,103 @@ impl PortfolioProfilesScreen {
         } else {
             // Normal navigation mode within holdings
             let num_items = num_assets + 1; // +1 for "Add new" option
+            let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
             match key.code {
                 KeyCode::Esc => {
                     // Exit holdings editing mode
                     state.portfolio_profiles_state.editing_holdings = false;
                     state.portfolio_profiles_state.selected_holding_index = 0;
+                    EventResult::Handled
+                }
+                // Move down (Shift+J or Shift+Down) - only for actual holdings, not "Add new"
+                KeyCode::Char('J') if has_shift => {
+                    let idx = state.portfolio_profiles_state.selected_holding_index;
+                    // Only reorder if we have real assets and not on "Add new" option
+                    if num_assets >= 2 && idx < num_assets - 1 {
+                        if let Some(account) =
+                            state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(idx, idx + 1);
+                                    state.portfolio_profiles_state.selected_holding_index = idx + 1;
+                                    state.mark_modified();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    EventResult::Handled
+                }
+                KeyCode::Down if has_shift => {
+                    let idx = state.portfolio_profiles_state.selected_holding_index;
+                    if num_assets >= 2 && idx < num_assets - 1 {
+                        if let Some(account) =
+                            state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(idx, idx + 1);
+                                    state.portfolio_profiles_state.selected_holding_index = idx + 1;
+                                    state.mark_modified();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    EventResult::Handled
+                }
+                // Move up (Shift+K or Shift+Up)
+                KeyCode::Char('K') if has_shift => {
+                    let idx = state.portfolio_profiles_state.selected_holding_index;
+                    if num_assets >= 2 && idx > 0 && idx < num_assets {
+                        if let Some(account) =
+                            state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(idx, idx - 1);
+                                    state.portfolio_profiles_state.selected_holding_index = idx - 1;
+                                    state.mark_modified();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    EventResult::Handled
+                }
+                KeyCode::Up if has_shift => {
+                    let idx = state.portfolio_profiles_state.selected_holding_index;
+                    if num_assets >= 2 && idx > 0 && idx < num_assets {
+                        if let Some(account) =
+                            state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(idx, idx - 1);
+                                    state.portfolio_profiles_state.selected_holding_index = idx - 1;
+                                    state.mark_modified();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                     EventResult::Handled
                 }
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -1686,9 +1820,49 @@ impl PortfolioProfilesScreen {
     }
 
     fn handle_profiles_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
-        let profiles = &state.data().profiles;
+        let profiles_len = state.data().profiles.len();
+        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
+            // Move down (Shift+J or Shift+Down)
+            KeyCode::Char('J') if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_profile_index;
+                if profiles_len >= 2 && idx < profiles_len - 1 {
+                    state.data_mut().profiles.swap(idx, idx + 1);
+                    state.portfolio_profiles_state.selected_profile_index = idx + 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            KeyCode::Down if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_profile_index;
+                if profiles_len >= 2 && idx < profiles_len - 1 {
+                    state.data_mut().profiles.swap(idx, idx + 1);
+                    state.portfolio_profiles_state.selected_profile_index = idx + 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            // Move up (Shift+K or Shift+Up)
+            KeyCode::Char('K') if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_profile_index;
+                if profiles_len >= 2 && idx > 0 {
+                    state.data_mut().profiles.swap(idx, idx - 1);
+                    state.portfolio_profiles_state.selected_profile_index = idx - 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            KeyCode::Up if has_shift => {
+                let idx = state.portfolio_profiles_state.selected_profile_index;
+                if profiles_len >= 2 && idx > 0 {
+                    state.data_mut().profiles.swap(idx, idx - 1);
+                    state.portfolio_profiles_state.selected_profile_index = idx - 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
             KeyCode::Char('j') | KeyCode::Down => {
+                let profiles = &state.data().profiles;
                 if !profiles.is_empty() {
                     state.portfolio_profiles_state.selected_profile_index =
                         (state.portfolio_profiles_state.selected_profile_index + 1)
@@ -1697,6 +1871,7 @@ impl PortfolioProfilesScreen {
                 EventResult::Handled
             }
             KeyCode::Char('k') | KeyCode::Up => {
+                let profiles = &state.data().profiles;
                 if !profiles.is_empty() {
                     if state.portfolio_profiles_state.selected_profile_index == 0 {
                         state.portfolio_profiles_state.selected_profile_index = profiles.len() - 1;

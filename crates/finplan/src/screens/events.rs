@@ -7,7 +7,7 @@ use crate::state::context::ModalContext;
 use crate::state::{
     AppState, ConfirmModal, EventsPanel, FormField, FormModal, ModalAction, ModalState, PickerModal,
 };
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -91,12 +91,19 @@ impl EventsScreen {
             Style::default()
         };
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(border_style),
-        );
+        let mut block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .border_style(border_style);
+
+        if is_focused {
+            block = block.title_bottom(
+                Line::from(" [j/k] Nav [Shift+J/K] Reorder [a]dd [e]dit [d]el [c]opy [f]x [t]oggle ")
+                    .fg(Color::DarkGray),
+            );
+        }
+
+        let list = List::new(items).block(block);
 
         frame.render_widget(list, area);
     }
@@ -630,7 +637,46 @@ impl EventsScreen {
 
     fn handle_event_list_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let events_len = state.data().events.len();
+        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
         match key.code {
+            // Move down (Shift+J or Shift+Down)
+            KeyCode::Char('J') if has_shift => {
+                let idx = state.events_state.selected_event_index;
+                if events_len >= 2 && idx < events_len - 1 {
+                    state.data_mut().events.swap(idx, idx + 1);
+                    state.events_state.selected_event_index = idx + 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            KeyCode::Down if has_shift => {
+                let idx = state.events_state.selected_event_index;
+                if events_len >= 2 && idx < events_len - 1 {
+                    state.data_mut().events.swap(idx, idx + 1);
+                    state.events_state.selected_event_index = idx + 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            // Move up (Shift+K or Shift+Up)
+            KeyCode::Char('K') if has_shift => {
+                let idx = state.events_state.selected_event_index;
+                if events_len >= 2 && idx > 0 {
+                    state.data_mut().events.swap(idx, idx - 1);
+                    state.events_state.selected_event_index = idx - 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            KeyCode::Up if has_shift => {
+                let idx = state.events_state.selected_event_index;
+                if events_len >= 2 && idx > 0 {
+                    state.data_mut().events.swap(idx, idx - 1);
+                    state.events_state.selected_event_index = idx - 1;
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 if events_len > 0 {
                     state.events_state.selected_event_index =
