@@ -97,7 +97,7 @@ fn test_monthly_contribution_limit() {
         .ledger
         .iter()
         .filter_map(|entry| match &entry.event {
-            crate::model::StateEvent::CashCredit { to, amount } if *to == roth_ira => {
+            crate::model::StateEvent::CashCredit { to, amount, .. } if *to == roth_ira => {
                 Some((*to, *amount))
             }
             _ => None,
@@ -188,7 +188,7 @@ fn test_yearly_contribution_limit() {
     let mut year_2025_total = 0.0;
 
     for entry in &result.ledger {
-        if let crate::model::StateEvent::CashCredit { to, amount } = &entry.event
+        if let crate::model::StateEvent::CashCredit { to, amount, .. } = &entry.event
             && *to == roth_401k
         {
             if entry.date.year() == 2024 {
@@ -309,10 +309,10 @@ fn test_contribution_limit_with_asset_purchase() {
     let mut ira_cash = 0.0;
     for entry in &result.ledger {
         match &entry.event {
-            crate::model::StateEvent::CashCredit { to, amount } if *to == ira => {
+            crate::model::StateEvent::CashCredit { to, amount, .. } if *to == ira => {
                 ira_cash += amount;
             }
-            crate::model::StateEvent::CashDebit { from, amount } if *from == ira => {
+            crate::model::StateEvent::CashDebit { from, amount, .. } if *from == ira => {
                 ira_cash -= amount;
             }
             _ => {}

@@ -24,8 +24,8 @@ pub use records::{Record, RecordKind, TaxInfo, TransactionSource};
 pub use results::{
     final_net_worth, MeanAccumulators, MonteCarloConfig, MonteCarloResult, MonteCarloStats,
     MonteCarloSummary, SimulationResult, SnapshotMeanAccumulator, TaxMeanAccumulator,
-    WealthSnapshot,
+    WealthSnapshot, YearlyCashFlowSummary,
 };
 pub use rmd::{RmdTable, RmdTableEntry};
-pub use state_event::{LedgerEntry, StateEvent};
+pub use state_event::{CashFlowKind, LedgerEntry, StateEvent};
 pub use tax_config::{TaxBracket, TaxConfig, TaxSummary};

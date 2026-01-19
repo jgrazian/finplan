@@ -583,6 +583,24 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
                 lot_method: convert_lot_method(lot_method),
             })
         }
+
+        EffectData::AdjustBalance { account, amount } => {
+            let account_id = resolve_account(account, ctx)?;
+            Ok(EventEffect::AdjustBalance {
+                account: account_id,
+                amount: convert_amount(amount),
+            })
+        }
+
+        EffectData::CashTransfer { from, to, amount } => {
+            let from_id = resolve_account(from, ctx)?;
+            let to_id = resolve_account(to, ctx)?;
+            Ok(EventEffect::CashTransfer {
+                from: from_id,
+                to: to_id,
+                amount: convert_amount(amount),
+            })
+        }
     }
 }
 
@@ -686,34 +704,43 @@ fn convert_withdrawal_strategy(strategy: &WithdrawalStrategyData) -> WithdrawalO
 }
 
 /// Convert core SimulationResult to TUI SimulationResult
+///
+/// Uses the pre-computed yearly_cash_flows from the core simulation which
+/// properly categorizes income, expenses, and withdrawals using CashFlowKind.
 pub fn to_tui_result(
     core_result: &finplan_core::model::SimulationResult,
     birth_date: &str,
     start_date: &str,
 ) -> Result<crate::state::SimulationResult, ConvertError> {
-    use finplan_core::model::StateEvent;
     use std::collections::BTreeMap;
 
     let birth = parse_date(birth_date)?;
     let _start = parse_date(start_date)?;
 
-    // Group ledger entries by year to compute yearly totals
-    let mut yearly_income: BTreeMap<i32, f64> = BTreeMap::new();
-    let mut yearly_expenses: BTreeMap<i32, f64> = BTreeMap::new();
+    // Use pre-computed yearly cash flows from core simulation
+    let yearly_income: BTreeMap<i32, f64> = core_result
+        .yearly_cash_flows
+        .iter()
+        .map(|cf| (cf.year as i32, cf.income))
+        .collect();
 
-    for entry in &core_result.ledger {
-        let year = entry.date.year() as i32;
+    let yearly_expenses: BTreeMap<i32, f64> = core_result
+        .yearly_cash_flows
+        .iter()
+        .map(|cf| (cf.year as i32, cf.expenses))
+        .collect();
 
-        match &entry.event {
-            StateEvent::CashCredit { amount, .. } => {
-                *yearly_income.entry(year).or_default() += amount;
-            }
-            StateEvent::CashDebit { amount, .. } => {
-                *yearly_expenses.entry(year).or_default() += amount;
-            }
-            _ => {}
-        }
-    }
+    let yearly_withdrawals: BTreeMap<i32, f64> = core_result
+        .yearly_cash_flows
+        .iter()
+        .map(|cf| (cf.year as i32, cf.withdrawals))
+        .collect();
+
+    let yearly_contributions: BTreeMap<i32, f64> = core_result
+        .yearly_cash_flows
+        .iter()
+        .map(|cf| (cf.year as i32, cf.contributions))
+        .collect();
 
     // Get yearly taxes
     let yearly_taxes: BTreeMap<i32, f64> = core_result
@@ -762,6 +789,8 @@ pub fn to_tui_result(
             net_worth,
             income: *yearly_income.get(year).unwrap_or(&0.0),
             expenses: *yearly_expenses.get(year).unwrap_or(&0.0),
+            withdrawals: *yearly_withdrawals.get(year).unwrap_or(&0.0),
+            contributions: *yearly_contributions.get(year).unwrap_or(&0.0),
             taxes: *yearly_taxes.get(year).unwrap_or(&0.0),
         });
     }

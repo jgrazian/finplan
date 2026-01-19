@@ -16,6 +16,27 @@ pub struct WealthSnapshot {
     pub accounts: Vec<AccountSnapshot>,
 }
 
+/// Yearly summary of cash flows by category
+///
+/// This pre-aggregates cash flows by their semantic purpose, so consumers
+/// don't need to trace ledger entries back to their source events.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct YearlyCashFlowSummary {
+    pub year: i16,
+    /// True income (salary, dividends, rental income, etc.)
+    pub income: f64,
+    /// True expenses (bills, purchases, etc.)
+    pub expenses: f64,
+    /// Contributions to investment accounts (401k, IRA deposits)
+    pub contributions: f64,
+    /// Withdrawals from investments (Sweep, liquidations)
+    pub withdrawals: f64,
+    /// Interest/appreciation on cash balances
+    pub appreciation: f64,
+    /// Net cash flow (income - expenses + appreciation)
+    pub net_cash_flow: f64,
+}
+
 /// Complete results from a single simulation run
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationResult {
@@ -23,6 +44,9 @@ pub struct SimulationResult {
     pub wealth_snapshots: Vec<WealthSnapshot>,
     /// Tax summaries per year
     pub yearly_taxes: Vec<TaxSummary>,
+    /// Cash flow summaries per year
+    #[serde(default)]
+    pub yearly_cash_flows: Vec<YearlyCashFlowSummary>,
     /// Immutable ledger of all state changes in chronological order
     pub ledger: Vec<LedgerEntry>,
 }
@@ -346,11 +370,64 @@ impl TaxMeanAccumulator {
     }
 }
 
+/// Accumulator for computing mean cash flow summaries across iterations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CashFlowMeanAccumulator {
+    /// For each year: (year, income, expenses, contributions, withdrawals, appreciation, net)
+    pub sums: Vec<(i16, f64, f64, f64, f64, f64, f64)>,
+    pub count: usize,
+}
+
+impl CashFlowMeanAccumulator {
+    /// Create a new accumulator using the first result as a template
+    pub fn new(template: &SimulationResult) -> Self {
+        let sums = template
+            .yearly_cash_flows
+            .iter()
+            .map(|cf| (cf.year, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            .collect();
+        Self { sums, count: 0 }
+    }
+
+    /// Add a result to the accumulator
+    pub fn accumulate(&mut self, result: &SimulationResult) {
+        for (idx, cf) in result.yearly_cash_flows.iter().enumerate() {
+            if let Some(sums) = self.sums.get_mut(idx) {
+                sums.1 += cf.income;
+                sums.2 += cf.expenses;
+                sums.3 += cf.contributions;
+                sums.4 += cf.withdrawals;
+                sums.5 += cf.appreciation;
+                sums.6 += cf.net_cash_flow;
+            }
+        }
+        self.count += 1;
+    }
+
+    /// Build the mean cash flow summaries
+    pub fn build_mean_cash_flows(&self) -> Vec<YearlyCashFlowSummary> {
+        let n = self.count as f64;
+        self.sums
+            .iter()
+            .map(|(year, inc, exp, cont, wd, appr, net)| YearlyCashFlowSummary {
+                year: *year,
+                income: inc / n,
+                expenses: exp / n,
+                contributions: cont / n,
+                withdrawals: wd / n,
+                appreciation: appr / n,
+                net_cash_flow: net / n,
+            })
+            .collect()
+    }
+}
+
 /// Accumulators for computing mean values (used to build synthetic mean result)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeanAccumulators {
     pub snapshots: SnapshotMeanAccumulator,
     pub taxes: TaxMeanAccumulator,
+    pub cash_flows: CashFlowMeanAccumulator,
 }
 
 impl MeanAccumulators {
@@ -358,12 +435,14 @@ impl MeanAccumulators {
         Self {
             snapshots: SnapshotMeanAccumulator::new(template),
             taxes: TaxMeanAccumulator::new(template),
+            cash_flows: CashFlowMeanAccumulator::new(template),
         }
     }
 
     pub fn accumulate(&mut self, result: &SimulationResult) {
         self.snapshots.accumulate(result);
         self.taxes.accumulate(result);
+        self.cash_flows.accumulate(result);
     }
 
     /// Build a synthetic SimulationResult with mean values
@@ -371,6 +450,7 @@ impl MeanAccumulators {
         SimulationResult {
             wealth_snapshots: self.snapshots.build_mean_snapshots(),
             yearly_taxes: self.taxes.build_mean_taxes(),
+            yearly_cash_flows: self.cash_flows.build_mean_cash_flows(),
             ledger: Vec::new(), // No meaningful ledger for averaged results
         }
     }

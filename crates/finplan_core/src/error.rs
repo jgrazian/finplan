@@ -68,6 +68,7 @@ pub enum ApplyError {
     AccountNotFound(AccountId),
     NotACashAccount(AccountId),
     NotAnInvestmentAccount(AccountId),
+    InvalidAccountType(AccountId),
 }
 
 impl From<EngineError> for ApplyError {

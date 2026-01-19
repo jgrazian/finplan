@@ -389,6 +389,29 @@ pub enum EventEffect {
         income_type: IncomeType,
     },
 
+    // === Balance & Transfer Operations ===
+    /// Adjust an account's balance directly
+    /// For liabilities: positive = increase debt, negative = decrease debt
+    /// For cash accounts: positive = add cash, negative = remove cash
+    AdjustBalance {
+        /// The account to modify
+        account: AccountId,
+        /// Amount to add (negative to subtract)
+        amount: TransferAmount,
+    },
+
+    /// Transfer cash between accounts
+    /// Debits from source, credits to destination
+    /// If destination is a liability, reduces the principal instead
+    CashTransfer {
+        /// Source cash account
+        from: AccountId,
+        /// Destination account (cash or liability)
+        to: AccountId,
+        /// Amount to transfer
+        amount: TransferAmount,
+    },
+
     // === Event Control ===
     /// Trigger another event immediately
     TriggerEvent(EventId),

@@ -30,6 +30,8 @@ pub fn handle_manage_effects(state: &AppState, selected: &str) -> ActionResult {
             "Resume Event".to_string(),
             "Terminate Event".to_string(),
             "Apply RMD".to_string(),
+            "Adjust Balance".to_string(),
+            "Cash Transfer".to_string(),
         ];
         return ActionResult::modal(ModalState::Picker(PickerModal::new(
             "Select Effect Type",
@@ -350,6 +352,41 @@ fn build_edit_form_for_effect(
             ))
             .start_editing(),
         )),
+
+        EffectData::AdjustBalance { account, amount } => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Edit Adjust Balance",
+                vec![
+                    FormField::select("Account", accounts, &account.0),
+                    FormField::currency("Amount (+/- to adjust)", amount_to_f64(amount)),
+                ],
+                ModalAction::EDIT_EFFECT,
+            )
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::AdjustBalance,
+            ))
+            .start_editing(),
+        )),
+
+        EffectData::CashTransfer { from, to, amount } => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Edit Cash Transfer",
+                vec![
+                    FormField::select("From Account", accounts.clone(), &from.0),
+                    FormField::select("To Account", accounts, &to.0),
+                    FormField::currency("Amount", amount_to_f64(amount)),
+                ],
+                ModalAction::EDIT_EFFECT,
+            )
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::CashTransfer,
+            ))
+            .start_editing(),
+        )),
     }
 }
 
@@ -543,7 +580,11 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
             ActionResult::modal(ModalState::Form(
                 FormModal::new(
                     "New Terminate Effect",
-                    vec![FormField::select("Event to Terminate", events, &first_event)],
+                    vec![FormField::select(
+                        "Event to Terminate",
+                        events,
+                        &first_event,
+                    )],
                     ModalAction::ADD_EFFECT,
                 )
                 .with_typed_context(ModalContext::effect_add(
@@ -615,7 +656,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     ],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_typed_context(ModalContext::effect_add(event_idx, EffectTypeContext::Sweep))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::Sweep,
+                ))
                 .start_editing(),
             ))
         }
@@ -635,6 +679,47 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                 .with_typed_context(ModalContext::effect_add(
                     event_idx,
                     EffectTypeContext::ApplyRmd,
+                ))
+                .start_editing(),
+            ))
+        }
+        "Adjust Balance" => {
+            if accounts.is_empty() {
+                return ActionResult::error("No accounts available. Create an account first.");
+            }
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "New Adjust Balance",
+                    vec![
+                        FormField::select("Account", accounts, &first_account),
+                        FormField::currency("Amount (+/- to adjust)", 0.0),
+                    ],
+                    ModalAction::ADD_EFFECT,
+                )
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::AdjustBalance,
+                ))
+                .start_editing(),
+            ))
+        }
+        "Cash Transfer" => {
+            if accounts.is_empty() {
+                return ActionResult::error("No accounts available. Create an account first.");
+            }
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "New Cash Transfer",
+                    vec![
+                        FormField::select("From Account", accounts.clone(), &first_account),
+                        FormField::select("To Account", accounts, &first_account),
+                        FormField::currency("Amount", 0.0),
+                    ],
+                    ModalAction::ADD_EFFECT,
+                )
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::CashTransfer,
                 ))
                 .start_editing(),
             ))
@@ -785,6 +870,32 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             EffectData::ApplyRmd {
                 destination: AccountTag(destination),
                 lot_method,
+            }
+        }
+        EffectTypeContext::AdjustBalance => {
+            let account = form_parts.first().unwrap_or(&"").to_string();
+            let amount = form_parts
+                .get(1)
+                .and_then(|s| parse_currency(s).ok())
+                .unwrap_or(0.0);
+
+            EffectData::AdjustBalance {
+                account: AccountTag(account),
+                amount: AmountData::Fixed(amount),
+            }
+        }
+        EffectTypeContext::CashTransfer => {
+            let from_account = form_parts.first().unwrap_or(&"").to_string();
+            let to_account = form_parts.get(1).unwrap_or(&"").to_string();
+            let amount = form_parts
+                .get(2)
+                .and_then(|s| parse_currency(s).ok())
+                .unwrap_or(0.0);
+
+            EffectData::CashTransfer {
+                from: AccountTag(from_account),
+                to: AccountTag(to_account),
+                amount: AmountData::Fixed(amount),
             }
         }
     };
@@ -962,6 +1073,32 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             Some(EffectData::ApplyRmd {
                 destination: AccountTag(destination),
                 lot_method,
+            })
+        }
+        EffectTypeContext::AdjustBalance => {
+            let account = form_parts.first().unwrap_or(&"").to_string();
+            let amount = form_parts
+                .get(1)
+                .and_then(|s| parse_currency(s).ok())
+                .unwrap_or(0.0);
+
+            Some(EffectData::AdjustBalance {
+                account: AccountTag(account),
+                amount: AmountData::Fixed(amount),
+            })
+        }
+        EffectTypeContext::CashTransfer => {
+            let from_account = form_parts.first().unwrap_or(&"").to_string();
+            let to_account = form_parts.get(1).unwrap_or(&"").to_string();
+            let amount = form_parts
+                .get(2)
+                .and_then(|s| parse_currency(s).ok())
+                .unwrap_or(0.0);
+
+            Some(EffectData::CashTransfer {
+                from: AccountTag(from_account),
+                to: AccountTag(to_account),
+                amount: AmountData::Fixed(amount),
             })
         }
     };

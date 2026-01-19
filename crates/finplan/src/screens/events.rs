@@ -139,6 +139,17 @@ impl EventsScreen {
             EffectData::ResumeEvent { event } => format!("Resume {}", event.0),
             EffectData::TerminateEvent { event } => format!("End {}", event.0),
             EffectData::ApplyRmd { .. } => "Apply RMD".to_string(),
+            EffectData::AdjustBalance { account, amount } => {
+                format!("Adjust {}: {}", account.0, Self::format_amount_short(amount))
+            }
+            EffectData::CashTransfer { from, to, amount } => {
+                format!(
+                    "Transfer {} -> {}: {}",
+                    from.0,
+                    to.0,
+                    Self::format_amount_short(amount)
+                )
+            }
         }
     }
 
@@ -719,6 +730,21 @@ impl EventsScreen {
             EffectData::TerminateEvent { event } => format!("Terminate \"{}\"", event.0),
             EffectData::ApplyRmd { destination, .. } => {
                 format!("Apply RMD to \"{}\"", destination.0)
+            }
+            EffectData::AdjustBalance { account, amount } => {
+                format!(
+                    "Adjust \"{}\" balance: {}",
+                    account.0,
+                    Self::format_amount(amount)
+                )
+            }
+            EffectData::CashTransfer { from, to, amount } => {
+                format!(
+                    "Transfer from \"{}\" to \"{}\": {}",
+                    from.0,
+                    to.0,
+                    Self::format_amount(amount)
+                )
             }
         }
     }

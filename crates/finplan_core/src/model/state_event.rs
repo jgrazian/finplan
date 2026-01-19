@@ -12,6 +12,34 @@ use super::ids::{AccountId, AssetId, EventId};
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
+/// The semantic purpose of a cash flow operation
+///
+/// This provides context about why money moved, allowing consumers
+/// to properly categorize income vs withdrawals vs transfers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CashFlowKind {
+    /// True income (salary, dividends, rental income, etc.)
+    Income,
+    /// True expense (bills, purchases, etc.)
+    Expense,
+    /// Proceeds from liquidating investments (Sweep, AssetSale)
+    LiquidationProceeds,
+    /// Cash used to purchase investments
+    InvestmentPurchase,
+    /// Internal transfer between accounts
+    Transfer,
+    /// Investment account contribution (401k, IRA deposits)
+    Contribution,
+    /// Interest or appreciation on cash balances
+    Appreciation,
+    /// RMD withdrawal from tax-deferred account
+    RmdWithdrawal,
+    /// Unknown or legacy (for backward compatibility)
+    #[default]
+    Other,
+}
+
 /// A ledger entry recording a state change with its context
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LedgerEntry {
@@ -66,10 +94,22 @@ pub enum StateEvent {
 
     // === Cash Operations ===
     /// Add cash to an account (income, transfer in, etc.)
-    CashCredit { to: AccountId, amount: f64 },
+    CashCredit {
+        to: AccountId,
+        amount: f64,
+        /// The semantic purpose of this credit
+        #[serde(default)]
+        kind: CashFlowKind,
+    },
 
     /// Remove cash from an account (expense, transfer out, etc.)
-    CashDebit { from: AccountId, amount: f64 },
+    CashDebit {
+        from: AccountId,
+        amount: f64,
+        /// The semantic purpose of this debit
+        #[serde(default)]
+        kind: CashFlowKind,
+    },
 
     /// Cash appreciation from interest/returns (HYSA, money market, etc.)
     CashAppreciation {
@@ -159,6 +199,15 @@ pub enum StateEvent {
         required_amount: f64,
         actual_amount: f64,
     },
+
+    // === Balance Operations ===
+    /// Direct balance adjustment (for liabilities, cash accounts, etc.)
+    BalanceAdjusted {
+        account: AccountId,
+        previous_balance: f64,
+        new_balance: f64,
+        delta: f64,
+    },
 }
 
 impl StateEvent {
@@ -221,6 +270,7 @@ impl StateEvent {
             StateEvent::AssetPurchase { account_id, .. } => Some(*account_id),
             StateEvent::AssetSale { account_id, .. } => Some(*account_id),
             StateEvent::RmdWithdrawal { account_id, .. } => Some(*account_id),
+            StateEvent::BalanceAdjusted { account, .. } => Some(*account),
             _ => None,
         }
     }

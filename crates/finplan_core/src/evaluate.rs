@@ -4,9 +4,9 @@ use jiff::civil::Date;
 use crate::error::{EngineError, StateEventError, TransferEvaluationError, TriggerEventError};
 use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment};
 use crate::model::{
-    Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, EventEffect, EventId,
-    EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TransferAmount, TransferEndpoint,
-    TriggerOffset, WithdrawalOrder, WithdrawalSources,
+    Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
+    EventId, EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TransferAmount,
+    TransferEndpoint, TriggerOffset, WithdrawalOrder, WithdrawalSources,
 };
 use crate::simulation_state::SimulationState;
 use crate::taxes::{calculate_federal_marginal_tax, calculate_gross_from_net};
@@ -287,11 +287,13 @@ pub enum EvalEvent {
     CashCredit {
         to: AccountId,
         net_amount: f64,
+        kind: CashFlowKind,
     },
 
     CashDebit {
         from: AccountId,
         net_amount: f64,
+        kind: CashFlowKind,
     },
 
     RecordContribution {
@@ -331,6 +333,12 @@ pub enum EvalEvent {
         proceeds: f64,
         short_term_gain: f64,
         long_term_gain: f64,
+    },
+
+    // === Balance Operations ===
+    AdjustBalance {
+        account: AccountId,
+        delta: f64, // Positive = increase, negative = decrease
     },
 
     // === Event Management ===
@@ -390,6 +398,7 @@ pub fn evaluate_effect(
                     effects.push(EvalEvent::CashCredit {
                         to: *to,
                         net_amount: allowed_amount,
+                        kind: CashFlowKind::Income,
                     });
                     Ok(effects)
                 }
@@ -407,6 +416,7 @@ pub fn evaluate_effect(
                         EvalEvent::CashCredit {
                             to: *to,
                             net_amount,
+                            kind: CashFlowKind::Income,
                         },
                         EvalEvent::IncomeTax {
                             gross_income_amount: allowed_amount,
@@ -433,6 +443,7 @@ pub fn evaluate_effect(
                         EvalEvent::CashCredit {
                             to: *to,
                             net_amount: allowed_amount,
+                            kind: CashFlowKind::Income,
                         },
                         EvalEvent::IncomeTax {
                             gross_income_amount: gross_amount,
@@ -455,6 +466,7 @@ pub fn evaluate_effect(
             Ok(vec![EvalEvent::CashDebit {
                 from: *from,
                 net_amount: calculated_amount,
+                kind: CashFlowKind::Expense,
             }])
         }
         EventEffect::AssetPurchase { from, to, amount } => {
@@ -484,9 +496,17 @@ pub fn evaluate_effect(
                 return Ok(vec![]);
             }
 
+            // Determine the appropriate kind based on whether this is cross-account
+            let debit_kind = if is_cross_account {
+                CashFlowKind::Contribution
+            } else {
+                CashFlowKind::InvestmentPurchase
+            };
+
             let mut effects = vec![EvalEvent::CashDebit {
                 from: *from,
                 net_amount: allowed_amount,
+                kind: debit_kind,
             }];
 
             // Track contribution only if this is cross-account (new money entering)
@@ -650,7 +670,7 @@ pub fn evaluate_effect(
             amount,
             amount_mode,
             lot_method,
-            income_type,
+            income_type: _, // No longer used - taxation happens during liquidation
         } => {
             // Step 1: Determine source account(s) to liquidate from
             let source_accounts: Vec<AccountId> = match sources {
@@ -723,34 +743,42 @@ pub fn evaluate_effect(
             }
 
             // Step 3: Transfer the liquidated cash to destination
-            // Note: For multi-account sources, we transfer from each source to destination
-            // This is handled by creating Income effects from each source account
+            // AssetSale credits cash to the source investment accounts. If the destination
+            // is different, we need to transfer that cash to the destination account.
             if total_liquidated > 0.01 {
-                // Collect all source accounts that received cash
-                let source_accounts: std::collections::HashSet<AccountId> = all_effects
+                // Build map of source account -> amount credited during liquidation
+                let source_amounts: std::collections::HashMap<AccountId, f64> = all_effects
                     .iter()
                     .filter_map(|ev| {
-                        if let EvalEvent::CashCredit { to, .. } = ev {
-                            Some(*to)
+                        if let EvalEvent::CashCredit { to, net_amount, .. } = ev {
+                            Some((*to, *net_amount))
                         } else {
                             None
                         }
                     })
-                    .collect();
+                    .fold(std::collections::HashMap::new(), |mut acc, (id, amount)| {
+                        *acc.entry(id).or_insert(0.0) += amount;
+                        acc
+                    });
 
-                // For simplicity, if destination is one of the source accounts, we're done
-                // Otherwise, transfer all cash to destination
-                if !source_accounts.contains(to) && !source_accounts.is_empty() {
-                    let transfer_effects = evaluate_effect(
-                        &EventEffect::Income {
-                            to: *to,
-                            amount: TransferAmount::Fixed(total_liquidated),
-                            amount_mode: AmountMode::Gross, // Already net from liquidation
-                            income_type: income_type.clone(),
-                        },
-                        state,
-                    )?;
-                    all_effects.extend(transfer_effects);
+                // If destination is one of the source accounts, we're done
+                // Otherwise, transfer cash from source accounts to destination
+                if !source_amounts.contains_key(to) && !source_amounts.is_empty() {
+                    // Debit from each source account what was credited to it
+                    for (source_account, amount) in &source_amounts {
+                        all_effects.push(EvalEvent::CashDebit {
+                            from: *source_account,
+                            net_amount: *amount,
+                            kind: CashFlowKind::Transfer,
+                        });
+                    }
+
+                    // Credit the destination with the total liquidated amount
+                    all_effects.push(EvalEvent::CashCredit {
+                        to: *to,
+                        net_amount: total_liquidated,
+                        kind: CashFlowKind::Transfer,
+                    });
                 }
             }
 
@@ -817,6 +845,68 @@ pub fn evaluate_effect(
         EventEffect::PauseEvent(event_id) => Ok(vec![EvalEvent::PauseEvent(*event_id)]),
         EventEffect::ResumeEvent(event_id) => Ok(vec![EvalEvent::ResumeEvent(*event_id)]),
         EventEffect::TerminateEvent(event_id) => Ok(vec![EvalEvent::TerminateEvent(*event_id)]),
+
+        EventEffect::AdjustBalance { account, amount } => {
+            let delta = evaluate_transfer_amount(
+                amount,
+                &TransferEndpoint::External,
+                &TransferEndpoint::External,
+                state,
+            )?;
+
+            Ok(vec![EvalEvent::AdjustBalance {
+                account: *account,
+                delta,
+            }])
+        }
+
+        EventEffect::CashTransfer { from, to, amount } => {
+            let transfer_amount = evaluate_transfer_amount(
+                amount,
+                &TransferEndpoint::Cash { account_id: *from },
+                &TransferEndpoint::External,
+                state,
+            )?;
+
+            if transfer_amount < 0.01 {
+                return Ok(vec![]);
+            }
+
+            // Check destination account type
+            let dest_account = state
+                .portfolio
+                .accounts
+                .get(to)
+                .ok_or(EngineError::AccountNotFound(*to))?;
+
+            match &dest_account.flavor {
+                // If destination is a liability, this is a loan payment
+                AccountFlavor::Liability(_) => Ok(vec![
+                    EvalEvent::CashDebit {
+                        from: *from,
+                        net_amount: transfer_amount,
+                        kind: CashFlowKind::Expense,
+                    },
+                    EvalEvent::AdjustBalance {
+                        account: *to,
+                        delta: -transfer_amount, // Negative = reduce debt
+                    },
+                ]),
+                // Otherwise, regular cash transfer
+                _ => Ok(vec![
+                    EvalEvent::CashDebit {
+                        from: *from,
+                        net_amount: transfer_amount,
+                        kind: CashFlowKind::Transfer,
+                    },
+                    EvalEvent::CashCredit {
+                        to: *to,
+                        net_amount: transfer_amount,
+                        kind: CashFlowKind::Transfer,
+                    },
+                ]),
+            }
+        }
     }
 }
 

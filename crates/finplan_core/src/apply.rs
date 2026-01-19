@@ -53,7 +53,11 @@ pub fn apply_eval_event_with_source(
             Ok(())
         }
 
-        EvalEvent::CashCredit { to, net_amount } => {
+        EvalEvent::CashCredit {
+            to,
+            net_amount,
+            kind,
+        } => {
             let account = state
                 .portfolio
                 .accounts
@@ -74,6 +78,7 @@ pub fn apply_eval_event_with_source(
             let ledger_event = StateEvent::CashCredit {
                 to: *to,
                 amount: *net_amount,
+                kind: *kind,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
 
@@ -87,7 +92,11 @@ pub fn apply_eval_event_with_source(
             Ok(())
         }
 
-        EvalEvent::CashDebit { from, net_amount } => {
+        EvalEvent::CashDebit {
+            from,
+            net_amount,
+            kind,
+        } => {
             let account = state
                 .portfolio
                 .accounts
@@ -108,6 +117,7 @@ pub fn apply_eval_event_with_source(
             let ledger_event = StateEvent::CashDebit {
                 from: *from,
                 amount: *net_amount,
+                kind: *kind,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
 
@@ -317,6 +327,68 @@ pub fn apply_eval_event_with_source(
             record_ledger_entry(state, current_date, source_event, ledger_event);
 
             Ok(())
+        }
+
+        EvalEvent::AdjustBalance { account, delta } => {
+            let acc = state
+                .portfolio
+                .accounts
+                .get_mut(account)
+                .ok_or(ApplyError::AccountNotFound(*account))?;
+
+            match &mut acc.flavor {
+                AccountFlavor::Liability(loan) => {
+                    let previous = loan.principal;
+                    loan.principal += delta;
+                    // Ensure principal doesn't go negative (can't have negative debt)
+                    if loan.principal < 0.0 {
+                        loan.principal = 0.0;
+                    }
+
+                    // Record to ledger
+                    let ledger_event = StateEvent::BalanceAdjusted {
+                        account: *account,
+                        previous_balance: previous,
+                        new_balance: loan.principal,
+                        delta: *delta,
+                    };
+                    record_ledger_entry(state, current_date, source_event, ledger_event);
+
+                    Ok(())
+                }
+                AccountFlavor::Bank(cash) => {
+                    let previous = cash.value;
+                    cash.value += delta;
+
+                    let ledger_event = StateEvent::BalanceAdjusted {
+                        account: *account,
+                        previous_balance: previous,
+                        new_balance: cash.value,
+                        delta: *delta,
+                    };
+                    record_ledger_entry(state, current_date, source_event, ledger_event);
+
+                    Ok(())
+                }
+                AccountFlavor::Investment(inv) => {
+                    let previous = inv.cash.value;
+                    inv.cash.value += delta;
+
+                    let ledger_event = StateEvent::BalanceAdjusted {
+                        account: *account,
+                        previous_balance: previous,
+                        new_balance: inv.cash.value,
+                        delta: *delta,
+                    };
+                    record_ledger_entry(state, current_date, source_event, ledger_event);
+
+                    Ok(())
+                }
+                AccountFlavor::Property(_) => {
+                    // Property accounts can't be adjusted this way
+                    Err(ApplyError::InvalidAccountType(*account))
+                }
+            }
         }
     }
 }

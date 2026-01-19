@@ -27,6 +27,8 @@ pub struct YearResult {
     pub net_worth: f64,
     pub income: f64,
     pub expenses: f64,
+    pub withdrawals: f64,
+    pub contributions: f64,
     pub taxes: f64,
 }
 
@@ -310,7 +312,7 @@ impl AppState {
         // Run the simulation
         let core_result = finplan_core::simulation::simulate(&config, seed);
 
-        // Convert to TUI result format
+        // Convert to TUI result format (uses pre-computed cash flow summaries from core)
         let tui_result = to_tui_result(
             &core_result,
             &self.data().parameters.birth_date,
@@ -427,7 +429,7 @@ impl AppState {
         // Run the simulation
         let core_result = finplan_core::simulation::simulate(&config, seed);
 
-        // Convert to TUI result format
+        // Convert to TUI result format (uses pre-computed cash flow summaries from core)
         let tui_result = to_tui_result(
             &core_result,
             &self.data().parameters.birth_date,

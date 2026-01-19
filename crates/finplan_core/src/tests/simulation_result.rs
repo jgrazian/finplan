@@ -739,7 +739,7 @@ fn test_ledger_income_and_expense_events() {
     // Find the CashDebit from expense
     let debit_entries: Vec<_> = result.cash_debit_entries().collect();
     let expense_debit = debit_entries.iter().find(|e| {
-        if let StateEvent::CashDebit { from, amount } = &e.event {
+        if let StateEvent::CashDebit { from, amount, .. } = &e.event {
             *from == checking_account && (*amount - 1_500.0).abs() < 0.01
         } else {
             false

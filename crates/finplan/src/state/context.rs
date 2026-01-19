@@ -369,6 +369,8 @@ pub enum EffectTypeContext {
     ResumeEvent,
     TerminateEvent,
     ApplyRmd,
+    AdjustBalance,
+    CashTransfer,
 }
 
 impl EffectTypeContext {
@@ -384,6 +386,8 @@ impl EffectTypeContext {
             "ResumeEvent" | "Resume Event" => Some(Self::ResumeEvent),
             "TerminateEvent" | "Terminate Event" => Some(Self::TerminateEvent),
             "ApplyRmd" | "Apply RMD" => Some(Self::ApplyRmd),
+            "AdjustBalance" | "Adjust Balance" => Some(Self::AdjustBalance),
+            "CashTransfer" | "Cash Transfer" => Some(Self::CashTransfer),
             _ => None,
         }
     }
@@ -400,6 +404,8 @@ impl EffectTypeContext {
             Self::ResumeEvent => "Resume Event",
             Self::TerminateEvent => "Terminate Event",
             Self::ApplyRmd => "Apply RMD",
+            Self::AdjustBalance => "Adjust Balance",
+            Self::CashTransfer => "Cash Transfer",
         }
     }
 }

@@ -8,8 +8,8 @@ use jiff::civil::Date;
 use crate::{
     evaluate::EvalEvent,
     model::{
-        AccountId, AssetCoord, AssetId, AssetLot, InvestmentContainer, LotMethod, Market,
-        TaxConfig, TaxStatus,
+        AccountId, AssetCoord, AssetId, AssetLot, CashFlowKind, InvestmentContainer, LotMethod,
+        Market, TaxConfig, TaxStatus,
     },
     taxes::calculate_federal_marginal_tax,
 };
@@ -147,6 +147,7 @@ fn liquidate_taxable(
     effects.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
+        kind: CashFlowKind::LiquidationProceeds,
     });
 
     (
@@ -194,6 +195,7 @@ fn liquidate_tax_deferred(
     effects.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
+        kind: CashFlowKind::LiquidationProceeds,
     });
 
     (
@@ -227,6 +229,7 @@ fn liquidate_tax_free(
     effects.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
+        kind: CashFlowKind::LiquidationProceeds,
     });
 
     (

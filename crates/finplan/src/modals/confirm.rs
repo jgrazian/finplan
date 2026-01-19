@@ -1,16 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Paragraph, Wrap},
-    Frame,
 };
 
 use crate::state::ConfirmModal;
 
-use super::helpers::{render_modal_frame, HelpText};
 use super::ModalResult;
+use super::helpers::{HelpText, render_modal_frame};
 
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 10;

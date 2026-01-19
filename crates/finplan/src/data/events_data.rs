@@ -237,6 +237,22 @@ pub enum EffectData {
         #[serde(default)]
         lot_method: LotMethodData,
     },
+
+    /// Directly adjust an account's balance
+    /// For liabilities: positive = increase debt, negative = decrease debt
+    /// For cash accounts: positive = add cash, negative = remove cash
+    AdjustBalance {
+        account: AccountTag,
+        amount: AmountData,
+    },
+
+    /// Transfer cash between accounts
+    /// If destination is a liability, reduces the principal
+    CashTransfer {
+        from: AccountTag,
+        to: AccountTag,
+        amount: AmountData,
+    },
 }
 
 fn default_true() -> bool {

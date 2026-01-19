@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
 use crate::state::{AppState, LedgerFilter, PercentileView, ResultsPanel, SimulationResult};
-use crate::util::format::format_currency;
+use crate::util::format::{format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
 use finplan_core::model::{
     AccountId, AccountSnapshotFlavor, LedgerEntry, StateEvent, WealthSnapshot,
@@ -62,19 +62,34 @@ impl ResultsScreen {
                     .unwrap_or("Unknown");
                 format!("Delete account: {}", name)
             }
-            StateEvent::CashCredit { to, amount } => {
+            StateEvent::CashCredit { to, amount, kind } => {
                 let name = account_names
                     .get(to)
                     .map(|s| s.as_str())
                     .unwrap_or("Unknown");
-                format!("Credit {} to {}", format_currency(*amount), name)
+                let kind_str = match kind {
+                    finplan_core::model::CashFlowKind::Income => "Income",
+                    finplan_core::model::CashFlowKind::LiquidationProceeds => "Withdrawal",
+                    finplan_core::model::CashFlowKind::Appreciation => "Interest",
+                    finplan_core::model::CashFlowKind::RmdWithdrawal => "RMD",
+                    finplan_core::model::CashFlowKind::Transfer => "Transfer",
+                    _ => "Credit",
+                };
+                format!("{}: {} to {}", kind_str, format_currency(*amount), name)
             }
-            StateEvent::CashDebit { from, amount } => {
+            StateEvent::CashDebit { from, amount, kind } => {
                 let name = account_names
                     .get(from)
                     .map(|s| s.as_str())
                     .unwrap_or("Unknown");
-                format!("Debit {} from {}", format_currency(*amount), name)
+                let kind_str = match kind {
+                    finplan_core::model::CashFlowKind::Expense => "Expense",
+                    finplan_core::model::CashFlowKind::Contribution => "Contribution",
+                    finplan_core::model::CashFlowKind::InvestmentPurchase => "Purchase",
+                    finplan_core::model::CashFlowKind::Transfer => "Transfer",
+                    _ => "Debit",
+                };
+                format!("{}: {} from {}", kind_str, format_currency(*amount), name)
             }
             StateEvent::CashAppreciation {
                 account_id,
@@ -222,6 +237,26 @@ impl ResultsScreen {
                     age,
                     format_currency(*required_amount),
                     format_currency(*actual_amount)
+                )
+            }
+            StateEvent::BalanceAdjusted {
+                account,
+                previous_balance,
+                new_balance,
+                delta,
+            } => {
+                let name = account_names
+                    .get(account)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                let direction = if *delta >= 0.0 { "increased" } else { "decreased" };
+                format!(
+                    "{}: Balance {} by {} ({} -> {})",
+                    name,
+                    direction,
+                    format_currency(delta.abs()),
+                    format_currency(*previous_balance),
+                    format_currency(*new_balance)
                 )
             }
         }
@@ -558,8 +593,15 @@ impl ResultsScreen {
                 ListItem::new(Line::from("")),
                 ListItem::new(Line::from(vec![Span::styled(
                     format!(
-                        "{:>6} {:>5} {:>12} {:>12} {:>12} {:>12}",
-                        "Year", "Age", "Income", "Expense", "Taxes", "Net Worth"
+                        "{:>5} {:>4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>12}",
+                        "Year",
+                        "Age",
+                        "Income",
+                        "Withdraw",
+                        "Contrib",
+                        "Expense",
+                        "Taxes",
+                        "Net Worth"
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
                 )])),
@@ -569,13 +611,15 @@ impl ResultsScreen {
             for year in result.years.iter().skip(start_idx).take(visible_count) {
                 let is_selected = year.year == selected_year;
                 let row_text = format!(
-                    "{:>6} {:>5} {:>12} {:>12} {:>12} {:>12}",
+                    "{:>5} {:>4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>12}",
                     year.year,
                     year.age,
-                    format_currency(year.income),
-                    format_currency(year.expenses),
-                    format_currency(year.taxes),
-                    format_currency(year.net_worth)
+                    format_currency_short(year.income),
+                    format_currency_short(year.withdrawals),
+                    format_currency_short(year.contributions),
+                    format_currency_short(year.expenses),
+                    format_currency_short(year.taxes),
+                    format_currency_short(year.net_worth)
                 );
 
                 let style = if is_selected {

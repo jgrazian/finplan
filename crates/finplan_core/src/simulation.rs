@@ -5,9 +5,9 @@ use crate::apply::process_events;
 use crate::config::SimulationConfig;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
-    AccountFlavor, AccountId, EventTrigger, LedgerEntry, MeanAccumulators, MonteCarloConfig,
-    MonteCarloResult, MonteCarloStats, MonteCarloSummary, SimulationResult, StateEvent, TaxStatus,
-    TriggerOffset, final_net_worth,
+    AccountFlavor, AccountId, CashFlowKind, EventTrigger, LedgerEntry, MeanAccumulators,
+    MonteCarloConfig, MonteCarloResult, MonteCarloStats, MonteCarloSummary, SimulationResult,
+    StateEvent, TaxStatus, TriggerOffset, YearlyCashFlowSummary, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 
@@ -17,6 +17,52 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 // Re-export for backwards compatibility
 pub use crate::model::n_day_rate;
+
+/// Build yearly cash flow summaries from ledger entries
+fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary> {
+    use std::collections::BTreeMap;
+
+    let mut yearly: BTreeMap<i16, YearlyCashFlowSummary> = BTreeMap::new();
+
+    for entry in ledger {
+        let year = entry.date.year();
+        let summary = yearly.entry(year).or_insert_with(|| YearlyCashFlowSummary {
+            year,
+            ..Default::default()
+        });
+
+        match &entry.event {
+            StateEvent::CashCredit { amount, kind, .. } => match kind {
+                CashFlowKind::Income => summary.income += amount,
+                CashFlowKind::LiquidationProceeds => summary.withdrawals += amount,
+                CashFlowKind::Appreciation => summary.appreciation += amount,
+                CashFlowKind::RmdWithdrawal => summary.withdrawals += amount,
+                _ => {} // Other types don't affect these totals directly
+            },
+            StateEvent::CashDebit { amount, kind, .. } => match kind {
+                CashFlowKind::Expense => summary.expenses += amount,
+                CashFlowKind::Contribution => summary.contributions += amount,
+                CashFlowKind::InvestmentPurchase => {} // Internal reallocation
+                _ => {}
+            },
+            StateEvent::CashAppreciation {
+                previous_value,
+                new_value,
+                ..
+            } => {
+                summary.appreciation += new_value - previous_value;
+            }
+            _ => {}
+        }
+    }
+
+    // Calculate net cash flow for each year
+    for summary in yearly.values_mut() {
+        summary.net_cash_flow = summary.income - summary.expenses + summary.appreciation;
+    }
+
+    yearly.into_values().collect()
+}
 
 pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     const MAX_SAME_DATE_ITERATIONS: u64 = 1000;
@@ -51,9 +97,13 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     state.snapshot_wealth();
     state.finalize_year_taxes();
 
+    // Build yearly cash flow summaries from ledger
+    let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
+
     SimulationResult {
         wealth_snapshots: state.portfolio.wealth_snapshots.clone(),
         yearly_taxes: state.taxes.yearly_taxes.clone(),
+        yearly_cash_flows,
         ledger: state.history.ledger.clone(),
     }
 }
@@ -126,9 +176,13 @@ pub fn simulate_with_metrics(
     state.snapshot_wealth();
     state.finalize_year_taxes();
 
+    // Build yearly cash flow summaries from ledger
+    let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
+
     let result = SimulationResult {
         wealth_snapshots: state.portfolio.wealth_snapshots.clone(),
         yearly_taxes: state.taxes.yearly_taxes.clone(),
+        yearly_cash_flows,
         ledger: state.history.ledger.clone(),
     };
 
