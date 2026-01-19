@@ -184,6 +184,24 @@ pub fn apply_eval_event_with_source(
             Ok(())
         }
 
+        EvalEvent::EarlyWithdrawalPenalty {
+            gross_amount,
+            penalty_amount,
+            penalty_rate,
+        } => {
+            state.taxes.ytd_tax.early_withdrawal_penalties += penalty_amount;
+
+            // Record to ledger
+            let ledger_event = StateEvent::EarlyWithdrawalPenalty {
+                gross_amount: *gross_amount,
+                penalty_amount: *penalty_amount,
+                penalty_rate: *penalty_rate,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+
+            Ok(())
+        }
+
         EvalEvent::AddAssetLot {
             to,
             units,

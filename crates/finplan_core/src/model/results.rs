@@ -321,8 +321,8 @@ impl SnapshotMeanAccumulator {
 /// Accumulator for computing mean tax summaries across iterations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaxMeanAccumulator {
-    /// For each tax year: (year, sum_ordinary, sum_cap_gains, sum_tax_free, sum_federal, sum_state, sum_total)
-    pub sums: Vec<(i16, f64, f64, f64, f64, f64, f64)>,
+    /// For each tax year: (year, sum_ordinary, sum_cap_gains, sum_tax_free, sum_federal, sum_state, sum_total, sum_early_penalties)
+    pub sums: Vec<(i16, f64, f64, f64, f64, f64, f64, f64)>,
     pub count: usize,
 }
 
@@ -332,7 +332,7 @@ impl TaxMeanAccumulator {
         let sums = template
             .yearly_taxes
             .iter()
-            .map(|t| (t.year, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            .map(|t| (t.year, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
             .collect();
         Self { sums, count: 0 }
     }
@@ -347,6 +347,7 @@ impl TaxMeanAccumulator {
                 sums.4 += tax.federal_tax;
                 sums.5 += tax.state_tax;
                 sums.6 += tax.total_tax;
+                sums.7 += tax.early_withdrawal_penalties;
             }
         }
         self.count += 1;
@@ -357,7 +358,7 @@ impl TaxMeanAccumulator {
         let n = self.count as f64;
         self.sums
             .iter()
-            .map(|(year, ord, cap, tf, fed, state, total)| TaxSummary {
+            .map(|(year, ord, cap, tf, fed, state, total, early_penalties)| TaxSummary {
                 year: *year,
                 ordinary_income: ord / n,
                 capital_gains: cap / n,
@@ -365,6 +366,7 @@ impl TaxMeanAccumulator {
                 federal_tax: fed / n,
                 state_tax: state / n,
                 total_tax: total / n,
+                early_withdrawal_penalties: early_penalties / n,
             })
             .collect()
     }

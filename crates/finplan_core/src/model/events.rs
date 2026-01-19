@@ -181,6 +181,11 @@ pub enum WithdrawalOrder {
     /// Pro-rata from all accounts proportionally
     /// Maintains consistent tax treatment over time
     ProRata,
+
+    /// Penalty-aware: avoids early withdrawal penalties
+    /// Before age 59.5: Taxable → TaxFree → TaxDeferred (avoid 10% penalty)
+    /// After age 59.5: Falls back to TaxEfficientEarly behavior
+    PenaltyAware,
 }
 
 /// Source configuration for Sweep withdrawals

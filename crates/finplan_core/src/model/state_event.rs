@@ -173,6 +173,16 @@ pub enum StateEvent {
         state_tax: f64,
     },
 
+    /// Early withdrawal penalty from retirement account (before age 59.5)
+    EarlyWithdrawalPenalty {
+        /// Gross amount withdrawn that incurred the penalty
+        gross_amount: f64,
+        /// Penalty amount (typically 10% of gross)
+        penalty_amount: f64,
+        /// Penalty rate applied (e.g., 0.10 for 10%)
+        penalty_rate: f64,
+    },
+
     // === Event Management ===
     /// A user-defined event was triggered
     EventTriggered { event_id: EventId },
@@ -244,6 +254,7 @@ impl StateEvent {
             StateEvent::IncomeTax { .. }
                 | StateEvent::ShortTermCapitalGainsTax { .. }
                 | StateEvent::LongTermCapitalGainsTax { .. }
+                | StateEvent::EarlyWithdrawalPenalty { .. }
         )
     }
 

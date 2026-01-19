@@ -187,6 +187,7 @@ impl TaxConfigData {
             federal_brackets,
             state_rate: self.state_rate,
             capital_gains_rate: self.capital_gains_rate,
+            early_withdrawal_penalty_rate: 0.10,
         }
     }
 }

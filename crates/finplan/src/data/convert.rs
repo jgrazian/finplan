@@ -338,6 +338,11 @@ fn convert_events(
     config: &mut SimulationConfig,
 ) -> Result<(), ConvertError> {
     for event_data in &data.events {
+        // Skip disabled events
+        if !event_data.enabled {
+            continue;
+        }
+
         let event_id = *ctx
             .event_ids
             .get(&event_data.name.0)
@@ -700,6 +705,7 @@ fn convert_withdrawal_strategy(strategy: &WithdrawalStrategyData) -> WithdrawalO
         WithdrawalStrategyData::TaxDeferredFirst => WithdrawalOrder::TaxDeferredFirst,
         WithdrawalStrategyData::TaxFreeFirst => WithdrawalOrder::TaxFreeFirst,
         WithdrawalStrategyData::ProRata => WithdrawalOrder::ProRata,
+        WithdrawalStrategyData::PenaltyAware => WithdrawalOrder::PenaltyAware,
     }
 }
 

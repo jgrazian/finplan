@@ -416,6 +416,7 @@ fn strategy_to_display(strategy: WithdrawalStrategyData) -> &'static str {
         WithdrawalStrategyData::TaxDeferredFirst => "Tax-Deferred First",
         WithdrawalStrategyData::TaxFreeFirst => "Tax-Free First",
         WithdrawalStrategyData::ProRata => "Pro Rata",
+        WithdrawalStrategyData::PenaltyAware => "Penalty Aware",
     }
 }
 
@@ -438,6 +439,7 @@ fn parse_strategy(s: &str) -> WithdrawalStrategyData {
         }
         "tff" | "taxfreefirst" | "tax-free first" => WithdrawalStrategyData::TaxFreeFirst,
         "pr" | "prorata" | "pro rata" => WithdrawalStrategyData::ProRata,
+        "pa" | "penaltyaware" | "penalty aware" => WithdrawalStrategyData::PenaltyAware,
         _ => WithdrawalStrategyData::TaxEfficient, // Default to TaxEfficient
     }
 }
@@ -467,6 +469,7 @@ fn strategy_options() -> Vec<String> {
         "Tax-Deferred First".to_string(),
         "Tax-Free First".to_string(),
         "Pro Rata".to_string(),
+        "Penalty Aware".to_string(),
     ]
 }
 

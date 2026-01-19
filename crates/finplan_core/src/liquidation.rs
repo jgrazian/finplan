@@ -29,8 +29,10 @@ pub fn get_current_price(
 pub struct LiquidationResult {
     /// Total gross proceeds from the sale
     pub gross_amount: f64,
-    /// Net proceeds after taxes
+    /// Net proceeds after taxes and penalties
     pub net_proceeds: f64,
+    /// Early withdrawal penalty applied (if applicable)
+    pub early_withdrawal_penalty: f64,
 }
 
 /// Parameters for liquidating assets from an investment container
@@ -54,6 +56,8 @@ pub struct LiquidationParams<'a> {
     pub tax_config: &'a TaxConfig,
     /// Year-to-date ordinary income for marginal tax calculation
     pub ytd_ordinary_income: f64,
+    /// Whether early withdrawal penalty applies (person below age 59.5)
+    pub early_withdrawal_penalty_applies: bool,
 }
 
 /// Liquidate assets from an investment container.
@@ -154,6 +158,7 @@ fn liquidate_taxable(
         LiquidationResult {
             gross_amount,
             net_proceeds: net_amount,
+            early_withdrawal_penalty: 0.0, // No penalty for taxable accounts
         },
         effects,
     )
@@ -161,6 +166,7 @@ fn liquidate_taxable(
 
 /// Liquidate from a tax-deferred account (Traditional IRA, 401k)
 /// All withdrawals are taxed as ordinary income
+/// Early withdrawal penalty applies if person is below age 59.5
 fn liquidate_tax_deferred(
     lots: &[AssetLot],
     amount: f64,
@@ -184,13 +190,27 @@ fn liquidate_tax_deferred(
         &params.tax_config.federal_brackets,
     );
     let state_tax = gross_amount * params.tax_config.state_rate;
-    let net_amount = gross_amount - federal_tax - state_tax;
+    let mut net_amount = gross_amount - federal_tax - state_tax;
 
     effects.push(EvalEvent::IncomeTax {
         gross_income_amount: gross_amount,
         federal_tax,
         state_tax,
     });
+
+    // Apply early withdrawal penalty if applicable (before age 59.5)
+    let early_withdrawal_penalty = if params.early_withdrawal_penalty_applies {
+        let penalty = gross_amount * params.tax_config.early_withdrawal_penalty_rate;
+        net_amount -= penalty;
+        effects.push(EvalEvent::EarlyWithdrawalPenalty {
+            gross_amount,
+            penalty_amount: penalty,
+            penalty_rate: params.tax_config.early_withdrawal_penalty_rate,
+        });
+        penalty
+    } else {
+        0.0
+    };
 
     effects.push(EvalEvent::CashCredit {
         to: params.to_account,
@@ -202,6 +222,7 @@ fn liquidate_tax_deferred(
         LiquidationResult {
             gross_amount,
             net_proceeds: net_amount,
+            early_withdrawal_penalty,
         },
         effects,
     )
@@ -236,6 +257,7 @@ fn liquidate_tax_free(
         LiquidationResult {
             gross_amount,
             net_proceeds: net_amount,
+            early_withdrawal_penalty: 0.0, // No penalty for tax-free accounts (simplified MVP)
         },
         effects,
     )
@@ -647,5 +669,171 @@ mod tests {
         assert_eq!(result.lot_subtractions.len(), 1);
         assert!((result.lot_subtractions[0].units - 50.0).abs() < 0.01);
         assert!((result.lot_subtractions[0].cost_basis - 40.0).abs() < 0.01);
+    }
+
+    // ========================================================================
+    // Early Withdrawal Penalty Tests
+    // ========================================================================
+
+    fn make_tax_deferred_investment(asset_id: AssetId, units: f64, cost_basis: f64, purchase_date: Date) -> InvestmentContainer {
+        use crate::model::ReturnProfileId;
+        InvestmentContainer {
+            tax_status: TaxStatus::TaxDeferred,
+            cash: crate::model::Cash {
+                value: 0.0,
+                return_profile_id: ReturnProfileId(0),
+            },
+            positions: vec![AssetLot {
+                asset_id,
+                purchase_date,
+                units,
+                cost_basis,
+            }],
+            contribution_limit: None,
+        }
+    }
+
+    fn make_taxable_investment(asset_id: AssetId, units: f64, cost_basis: f64, purchase_date: Date) -> InvestmentContainer {
+        use crate::model::ReturnProfileId;
+        InvestmentContainer {
+            tax_status: TaxStatus::Taxable,
+            cash: crate::model::Cash {
+                value: 0.0,
+                return_profile_id: ReturnProfileId(0),
+            },
+            positions: vec![AssetLot {
+                asset_id,
+                purchase_date,
+                units,
+                cost_basis,
+            }],
+            contribution_limit: None,
+        }
+    }
+
+    #[test]
+    fn test_early_withdrawal_penalty_applied_before_59_5() {
+        // Person age 55 withdraws from 401k → 10% penalty applied
+        let today = jiff::civil::date(2025, 6, 15);
+        let asset_id = AssetId(1);
+        let account_id = AccountId(1);
+
+        let investment = make_tax_deferred_investment(asset_id, 100.0, 100.0, today);
+        let tax_config = TaxConfig::default();
+
+        let params = LiquidationParams {
+            investment: &investment,
+            asset_coord: AssetCoord { account_id, asset_id },
+            to_account: account_id,
+            amount: 100.0,
+            current_price: 1.0,
+            lot_method: LotMethod::Fifo,
+            current_date: today,
+            tax_config: &tax_config,
+            ytd_ordinary_income: 0.0,
+            early_withdrawal_penalty_applies: true, // Below age 59.5
+        };
+
+        let (result, effects) = liquidate_investment(&params);
+
+        // Should have 10% penalty on $100 = $10
+        assert!(
+            (result.early_withdrawal_penalty - 10.0).abs() < 0.01,
+            "Expected $10 penalty, got {}",
+            result.early_withdrawal_penalty
+        );
+
+        // Verify net proceeds reduced by penalty
+        // Gross: $100, Income tax + state tax + 10% penalty should reduce net
+        assert!(
+            result.net_proceeds < result.gross_amount - 10.0 + 0.01,
+            "Net proceeds {} should be less than gross {} minus penalty $10",
+            result.net_proceeds,
+            result.gross_amount
+        );
+
+        // Verify EarlyWithdrawalPenalty event is in effects
+        let penalty_event = effects.iter().find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
+        assert!(penalty_event.is_some(), "Should have EarlyWithdrawalPenalty event");
+
+        if let Some(EvalEvent::EarlyWithdrawalPenalty { gross_amount, penalty_amount, penalty_rate }) = penalty_event {
+            assert!((gross_amount - 100.0).abs() < 0.01);
+            assert!((penalty_amount - 10.0).abs() < 0.01);
+            assert!((penalty_rate - 0.10).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn test_no_penalty_after_59_5() {
+        // Person age 60 withdraws from 401k → no penalty
+        let today = jiff::civil::date(2025, 6, 15);
+        let asset_id = AssetId(1);
+        let account_id = AccountId(1);
+
+        let investment = make_tax_deferred_investment(asset_id, 100.0, 100.0, today);
+        let tax_config = TaxConfig::default();
+
+        let params = LiquidationParams {
+            investment: &investment,
+            asset_coord: AssetCoord { account_id, asset_id },
+            to_account: account_id,
+            amount: 100.0,
+            current_price: 1.0,
+            lot_method: LotMethod::Fifo,
+            current_date: today,
+            tax_config: &tax_config,
+            ytd_ordinary_income: 0.0,
+            early_withdrawal_penalty_applies: false, // Age 60, no penalty
+        };
+
+        let (result, effects) = liquidate_investment(&params);
+
+        // Should have no penalty
+        assert!(
+            result.early_withdrawal_penalty.abs() < 0.01,
+            "Expected no penalty, got {}",
+            result.early_withdrawal_penalty
+        );
+
+        // Verify no EarlyWithdrawalPenalty event
+        let penalty_event = effects.iter().find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
+        assert!(penalty_event.is_none(), "Should not have EarlyWithdrawalPenalty event after age 59.5");
+    }
+
+    #[test]
+    fn test_taxable_accounts_never_have_penalty() {
+        // Taxable accounts → never have penalty regardless of age
+        let today = jiff::civil::date(2025, 6, 15);
+        let asset_id = AssetId(1);
+        let account_id = AccountId(1);
+
+        let investment = make_taxable_investment(asset_id, 100.0, 100.0, today);
+        let tax_config = TaxConfig::default();
+
+        let params = LiquidationParams {
+            investment: &investment,
+            asset_coord: AssetCoord { account_id, asset_id },
+            to_account: account_id,
+            amount: 100.0,
+            current_price: 1.0,
+            lot_method: LotMethod::Fifo,
+            current_date: today,
+            tax_config: &tax_config,
+            ytd_ordinary_income: 0.0,
+            early_withdrawal_penalty_applies: true, // Even with flag set, taxable should not have penalty
+        };
+
+        let (result, effects) = liquidate_investment(&params);
+
+        // Taxable accounts don't incur early withdrawal penalty (handled by tax_status routing)
+        assert!(
+            result.early_withdrawal_penalty.abs() < 0.01,
+            "Expected no penalty for taxable account, got {}",
+            result.early_withdrawal_penalty
+        );
+
+        // Verify no EarlyWithdrawalPenalty event
+        let penalty_event = effects.iter().find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
+        assert!(penalty_event.is_none(), "Should not have EarlyWithdrawalPenalty event for taxable accounts");
     }
 }

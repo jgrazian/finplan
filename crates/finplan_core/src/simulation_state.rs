@@ -35,6 +35,33 @@ pub struct SimTimeline {
     pub current_date: jiff::civil::Date,
 }
 
+impl SimTimeline {
+    /// Check if the person is below the early withdrawal age (59.5 years)
+    /// Returns true if age < 59 years OR (age == 59 years AND months < 6)
+    pub fn is_below_early_withdrawal_age(&self) -> bool {
+        // Calculate age manually since jiff::Span from until() is in days only
+        let mut years = self.current_date.year() - self.birth_date.year();
+        let mut months = self.current_date.month() as i32 - self.birth_date.month() as i32;
+
+        // Adjust for birthday not yet reached in current year
+        if self.current_date.month() < self.birth_date.month()
+            || (self.current_date.month() == self.birth_date.month()
+                && self.current_date.day() < self.birth_date.day())
+        {
+            years -= 1;
+            months += 12;
+        }
+
+        // Normalize months (should be 0-11)
+        if months < 0 {
+            months += 12;
+        }
+
+        // Below 59.5 means: years < 59 OR (years == 59 AND months < 6)
+        years < 59 || (years == 59 && months < 6)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SimPortfolio {
     /// All accounts (keyed for fast lookup)
@@ -348,6 +375,7 @@ impl SimulationState {
         if self.taxes.ytd_tax.ordinary_income > 0.0
             || self.taxes.ytd_tax.capital_gains > 0.0
             || self.taxes.ytd_tax.tax_free_withdrawals > 0.0
+            || self.taxes.ytd_tax.early_withdrawal_penalties > 0.0
         {
             let tax_summary = TaxSummary {
                 year: self.taxes.ytd_tax.year,
@@ -357,6 +385,7 @@ impl SimulationState {
                 federal_tax: self.taxes.ytd_tax.federal_tax,
                 state_tax: self.taxes.ytd_tax.state_tax,
                 total_tax: self.taxes.ytd_tax.federal_tax + self.taxes.ytd_tax.state_tax,
+                early_withdrawal_penalties: self.taxes.ytd_tax.early_withdrawal_penalties,
             };
             self.taxes.yearly_taxes.push(tax_summary);
         }
@@ -516,5 +545,79 @@ impl SimulationState {
     /// Reset monthly contribution trackers (call on month boundary)
     pub fn reset_monthly_contributions(&mut self) {
         self.portfolio.contributions_mtd.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_timeline(birth_date: jiff::civil::Date, current_date: jiff::civil::Date) -> SimTimeline {
+        SimTimeline {
+            start_date: current_date,
+            end_date: current_date,
+            birth_date,
+            current_date,
+        }
+    }
+
+    #[test]
+    fn test_below_early_withdrawal_age_at_55() {
+        // Person born 1970-01-01, current date 2025-06-15 = age 55y 5m
+        let timeline = make_timeline(
+            jiff::civil::date(1970, 1, 1),
+            jiff::civil::date(2025, 6, 15),
+        );
+        assert!(timeline.is_below_early_withdrawal_age(), "Age 55 should be below 59.5");
+    }
+
+    #[test]
+    fn test_below_early_withdrawal_age_at_59_years_0_months() {
+        // Person born 1966-01-01, current date 2025-01-01 = age 59y 0m
+        let timeline = make_timeline(
+            jiff::civil::date(1966, 1, 1),
+            jiff::civil::date(2025, 1, 1),
+        );
+        assert!(timeline.is_below_early_withdrawal_age(), "Age 59y 0m should be below 59.5");
+    }
+
+    #[test]
+    fn test_below_early_withdrawal_age_at_59_years_5_months() {
+        // Person born 1966-01-01, current date 2025-06-01 = age 59y 5m
+        let timeline = make_timeline(
+            jiff::civil::date(1966, 1, 1),
+            jiff::civil::date(2025, 6, 1),
+        );
+        assert!(timeline.is_below_early_withdrawal_age(), "Age 59y 5m should be below 59.5");
+    }
+
+    #[test]
+    fn test_not_below_early_withdrawal_age_at_59_years_6_months() {
+        // Person born 1966-01-01, current date 2025-07-01 = age 59y 6m (threshold reached)
+        let timeline = make_timeline(
+            jiff::civil::date(1966, 1, 1),
+            jiff::civil::date(2025, 7, 1),
+        );
+        assert!(!timeline.is_below_early_withdrawal_age(), "Age 59y 6m should NOT be below 59.5");
+    }
+
+    #[test]
+    fn test_not_below_early_withdrawal_age_at_60() {
+        // Person born 1965-01-01, current date 2025-06-15 = age 60y 5m
+        let timeline = make_timeline(
+            jiff::civil::date(1965, 1, 1),
+            jiff::civil::date(2025, 6, 15),
+        );
+        assert!(!timeline.is_below_early_withdrawal_age(), "Age 60 should NOT be below 59.5");
+    }
+
+    #[test]
+    fn test_not_below_early_withdrawal_age_at_73() {
+        // Person born 1952-01-01, current date 2025-06-15 = age 73y 5m
+        let timeline = make_timeline(
+            jiff::civil::date(1952, 1, 1),
+            jiff::civil::date(2025, 6, 15),
+        );
+        assert!(!timeline.is_below_early_withdrawal_age(), "Age 73 should NOT be below 59.5");
     }
 }

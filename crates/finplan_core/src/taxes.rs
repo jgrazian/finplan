@@ -232,6 +232,7 @@ mod tests {
             ],
             state_rate: 0.05,
             capital_gains_rate: 0.15,
+            early_withdrawal_penalty_rate: 0.10,
         }
     }
 

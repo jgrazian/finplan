@@ -23,6 +23,14 @@ pub struct TaxConfig {
     pub state_rate: f64,
     /// Long-term capital gains tax rate (e.g., 0.15 for 15%)
     pub capital_gains_rate: f64,
+    /// Early withdrawal penalty rate for retirement accounts (default 0.10 for 10%)
+    /// Applies to withdrawals from TaxDeferred accounts before age 59.5
+    #[serde(default = "default_early_withdrawal_penalty_rate")]
+    pub early_withdrawal_penalty_rate: f64,
+}
+
+fn default_early_withdrawal_penalty_rate() -> f64 {
+    0.10
 }
 
 impl Default for TaxConfig {
@@ -61,6 +69,7 @@ impl Default for TaxConfig {
             ],
             state_rate: 0.05,
             capital_gains_rate: 0.15,
+            early_withdrawal_penalty_rate: 0.10,
         }
     }
 }
@@ -81,4 +90,6 @@ pub struct TaxSummary {
     pub state_tax: f64,
     /// Total tax owed (federal + state + capital gains)
     pub total_tax: f64,
+    /// Early withdrawal penalties from retirement accounts (before age 59.5)
+    pub early_withdrawal_penalties: f64,
 }

@@ -205,6 +205,18 @@ impl ResultsScreen {
                     format_currency(total)
                 )
             }
+            StateEvent::EarlyWithdrawalPenalty {
+                gross_amount,
+                penalty_amount,
+                penalty_rate,
+            } => {
+                format!(
+                    "Early withdrawal penalty on {}: {} ({:.0}%)",
+                    format_currency(*gross_amount),
+                    format_currency(*penalty_amount),
+                    penalty_rate * 100.0
+                )
+            }
             StateEvent::EventTriggered { event_id } => {
                 format!("Event triggered: #{}", event_id.0)
             }

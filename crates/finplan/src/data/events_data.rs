@@ -141,6 +141,10 @@ pub enum WithdrawalStrategyData {
     TaxFreeFirst,
     /// Pro-rata from all accounts
     ProRata,
+    /// Penalty-aware: avoids early withdrawal penalties before age 59.5
+    /// Before 59.5: Taxable → TaxFree → TaxDeferred
+    /// After 59.5: Same as TaxEfficient
+    PenaltyAware,
 }
 
 /// Lot selection method for asset sales
