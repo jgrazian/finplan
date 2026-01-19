@@ -3,6 +3,7 @@ use std::sync::Mutex;
 
 use crate::apply::process_events;
 use crate::config::SimulationConfig;
+use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
     AccountFlavor, AccountId, EventTrigger, LedgerEntry, MeanAccumulators, MonteCarloConfig,
     MonteCarloResult, MonteCarloStats, MonteCarloSummary, SimulationResult, StateEvent, TaxStatus,
@@ -18,13 +19,24 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 pub use crate::model::n_day_rate;
 
 pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
+    const MAX_SAME_DATE_ITERATIONS: u64 = 1000;
+
     let mut state = SimulationState::from_parameters(params, seed);
     state.snapshot_wealth();
 
     while state.timeline.current_date < state.timeline.end_date {
         let mut something_happened = true;
+        let mut iteration_count: u64 = 0;
+
         while something_happened {
             something_happened = false;
+            iteration_count += 1;
+
+            // Safety limit to prevent infinite loops (e.g., AccountBalance triggers with once: false
+            // when sweep cannot fulfill the request due to depleted accounts)
+            if iteration_count > MAX_SAME_DATE_ITERATIONS {
+                break;
+            }
 
             // Process events - now handles ALL money movement
             if !process_events(&mut state).is_empty() {
@@ -44,6 +56,83 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
         yearly_taxes: state.taxes.yearly_taxes.clone(),
         ledger: state.history.ledger.clone(),
     }
+}
+
+/// Instrumented simulation that collects metrics and enforces iteration limits
+///
+/// This function is useful for:
+/// - Profiling simulation performance
+/// - Detecting potential infinite loops (AccountBalance triggers with once: false)
+/// - Debugging event-heavy simulations
+///
+/// Returns both the simulation result and collected metrics.
+pub fn simulate_with_metrics(
+    params: &SimulationConfig,
+    seed: u64,
+    config: &InstrumentationConfig,
+) -> (SimulationResult, SimulationMetrics) {
+    let mut state = SimulationState::from_parameters(params, seed);
+    let mut metrics = SimulationMetrics::new();
+
+    state.snapshot_wealth();
+
+    while state.timeline.current_date < state.timeline.end_date {
+        let mut something_happened = true;
+        let mut iteration_count: u64 = 0;
+
+        while something_happened {
+            something_happened = false;
+            iteration_count += 1;
+
+            // Safety limit check
+            if iteration_count > config.max_same_date_iterations {
+                if config.collect_metrics {
+                    metrics.record_limit_hit(state.timeline.current_date);
+                }
+                // Break out of the inner loop to prevent infinite loops
+                eprintln!(
+                    "WARNING: Iteration limit ({}) reached at date {}. Breaking to prevent infinite loop.",
+                    config.max_same_date_iterations, state.timeline.current_date
+                );
+                break;
+            }
+
+            // Process events - now handles ALL money movement
+            let triggered = process_events(&mut state);
+            if !triggered.is_empty() {
+                something_happened = true;
+
+                // Record event metrics
+                if config.collect_metrics {
+                    for event_id in &triggered {
+                        metrics.record_event_triggered(*event_id);
+                    }
+                }
+            }
+
+            if config.collect_metrics {
+                metrics.record_iteration(state.timeline.current_date, iteration_count);
+            }
+        }
+
+        if config.collect_metrics {
+            metrics.record_time_step();
+        }
+
+        advance_time(&mut state, params);
+    }
+
+    // Finalize last year's taxes
+    state.snapshot_wealth();
+    state.finalize_year_taxes();
+
+    let result = SimulationResult {
+        wealth_snapshots: state.portfolio.wealth_snapshots.clone(),
+        yearly_taxes: state.taxes.yearly_taxes.clone(),
+        ledger: state.history.ledger.clone(),
+    };
+
+    (result, metrics)
 }
 
 fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {

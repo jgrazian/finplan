@@ -38,6 +38,7 @@ pub mod apply;
 pub mod error;
 pub mod evaluate;
 pub mod liquidation;
+pub mod metrics;
 pub mod simulation;
 pub mod simulation_state;
 pub mod taxes;

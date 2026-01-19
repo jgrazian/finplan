@@ -9,6 +9,24 @@ use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, Pick
 
 use super::{ActionContext, ActionResult};
 
+// Common select options for event forms
+fn yes_no_options() -> Vec<String> {
+    vec!["Yes".to_string(), "No".to_string()]
+}
+
+fn balance_comparison_options() -> Vec<String> {
+    vec![
+        "Balance drops to or below".to_string(),
+        "Balance rises to or above".to_string(),
+    ]
+}
+
+/// Parse "Yes"/"No" strings to bool, with fallback for legacy "Y"/"N" format
+fn parse_yes_no(s: &str) -> bool {
+    let upper = s.to_uppercase();
+    upper.starts_with('Y') || upper == "TRUE"
+}
+
 /// Handle trigger type selection - shows appropriate form or picker
 pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionResult {
     let (title, fields, context) = match trigger_type {
@@ -18,7 +36,7 @@ pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionR
                 FormField::text("Event Name", ""),
                 FormField::text("Description", ""),
                 FormField::text("Date (YYYY-MM-DD)", "2025-01-01"),
-                FormField::text("Once Only (Y/N)", "N"),
+                FormField::select("Once Only", yes_no_options(), "No"),
             ],
             "Date".to_string(),
         ),
@@ -28,7 +46,7 @@ pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionR
                 FormField::text("Event Name", ""),
                 FormField::text("Description", ""),
                 FormField::text("Age (years)", "65"),
-                FormField::text("Once Only (Y/N)", "Y"),
+                FormField::select("Once Only", yes_no_options(), "Yes"),
             ],
             "Age".to_string(),
         ),
@@ -52,7 +70,7 @@ pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionR
             vec![
                 FormField::text("Event Name", ""),
                 FormField::text("Description", ""),
-                FormField::text("Once Only (Y/N)", "N"),
+                FormField::select("Once Only", yes_no_options(), "No"),
             ],
             "Manual".to_string(),
         ),
@@ -74,8 +92,8 @@ pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionR
                 FormField::text("Event Name", ""),
                 FormField::text("Description", ""),
                 FormField::currency("Threshold", 1000000.0),
-                FormField::text("Comparison (>=/<= )", ">="),
-                FormField::text("Once Only (Y/N)", "Y"),
+                FormField::select("Trigger When", balance_comparison_options(), "Balance rises to or above"),
+                FormField::select("Once Only", yes_no_options(), "Yes"),
             ],
             "NetWorth".to_string(),
         ),
@@ -131,8 +149,8 @@ pub fn handle_account_for_effect_pick(account: &str) -> ActionResult {
                 FormField::text("Description", ""),
                 FormField::read_only("Account", account),
                 FormField::currency("Threshold", 100000.0),
-                FormField::text("Comparison (>=/<= )", ">="),
-                FormField::text("Once Only (Y/N)", "Y"),
+                FormField::select("Trigger When", balance_comparison_options(), "Balance drops to or below"),
+                FormField::select("Once Only", yes_no_options(), "Yes"),
             ],
             ModalAction::CREATE_EVENT,
         )
@@ -152,7 +170,7 @@ pub fn handle_event_reference_pick(event_ref: &str) -> ActionResult {
                 FormField::read_only("Reference Event", event_ref),
                 FormField::text("Offset Years", "0"),
                 FormField::text("Offset Months", "0"),
-                FormField::text("Once Only (Y/N)", "Y"),
+                FormField::select("Once Only", yes_no_options(), "Yes"),
             ],
             ModalAction::CREATE_EVENT,
         )
@@ -218,10 +236,10 @@ pub fn handle_edit_event(state: &mut AppState, ctx: ActionContext) -> ActionResu
             .map(|s| s.to_string())
             .filter(|s| !s.is_empty());
         if let Some(once_str) = parts.get(2) {
-            event.once = once_str.to_uppercase().starts_with('Y');
+            event.once = parse_yes_no(once_str);
         }
         if let Some(enabled_str) = parts.get(3) {
-            event.enabled = enabled_str.to_uppercase().starts_with('Y');
+            event.enabled = parse_yes_no(enabled_str);
         }
         ActionResult::modified()
     } else {
@@ -255,10 +273,7 @@ fn parse_date_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>, b
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
     let date = parts.get(2).unwrap_or(&"2025-01-01").to_string();
-    let once = parts
-        .get(3)
-        .map(|s| s.to_uppercase().starts_with('Y'))
-        .unwrap_or(false);
+    let once = parse_yes_no(parts.get(3).unwrap_or(&"No"));
 
     (TriggerData::Date { date }, name, desc, once)
 }
@@ -270,10 +285,7 @@ fn parse_age_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>, bo
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
     let years: u8 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(65);
-    let once = parts
-        .get(3)
-        .map(|s| s.to_uppercase().starts_with('Y'))
-        .unwrap_or(true);
+    let once = parse_yes_no(parts.get(3).unwrap_or(&"Yes"));
 
     (
         TriggerData::Age {
@@ -292,10 +304,7 @@ fn parse_manual_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>,
         .get(1)
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
-    let once = parts
-        .get(2)
-        .map(|s| s.to_uppercase().starts_with('Y'))
-        .unwrap_or(false);
+    let once = parse_yes_no(parts.get(2).unwrap_or(&"No"));
 
     (TriggerData::Manual, name, desc, once)
 }
@@ -310,13 +319,12 @@ fn parse_net_worth_trigger(parts: &[&str]) -> (TriggerData, String, Option<Strin
         .get(2)
         .and_then(|s| parse_currency(s).ok())
         .unwrap_or(1000000.0);
-    let comparison = parts.get(3).unwrap_or(&">=");
-    let once = parts
-        .get(4)
-        .map(|s| s.to_uppercase().starts_with('Y'))
-        .unwrap_or(true);
+    let comparison = parts.get(3).unwrap_or(&"Balance rises to or above");
+    let once = parse_yes_no(parts.get(4).unwrap_or(&"Yes"));
 
-    let threshold = if comparison.contains("<=") {
+    // "Balance drops to or below" → LessThanOrEqual
+    // "Balance rises to or above" → GreaterThanOrEqual
+    let threshold = if comparison.contains("drops") || comparison.contains("<=") {
         ThresholdData::LessThanOrEqual {
             value: threshold_val,
         }
@@ -391,13 +399,12 @@ fn parse_account_balance_trigger(
         .get(3)
         .and_then(|s| parse_currency(s).ok())
         .unwrap_or(100000.0);
-    let comparison = parts.get(4).unwrap_or(&">=");
-    let once = parts
-        .get(5)
-        .map(|s| s.to_uppercase().starts_with('Y'))
-        .unwrap_or(true);
+    let comparison = parts.get(4).unwrap_or(&"Balance drops to or below");
+    let once = parse_yes_no(parts.get(5).unwrap_or(&"Yes"));
 
-    let threshold = if comparison.contains("<=") {
+    // "Balance drops to or below" → LessThanOrEqual
+    // "Balance rises to or above" → GreaterThanOrEqual
+    let threshold = if comparison.contains("drops") || comparison.contains("<=") {
         ThresholdData::LessThanOrEqual {
             value: threshold_val,
         }
@@ -431,10 +438,7 @@ fn parse_relative_trigger(
     // parts[2] is the read-only event ref field
     let offset_years: i32 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
     let offset_months: i32 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let once = parts
-        .get(5)
-        .map(|s| s.to_uppercase().starts_with('Y'))
-        .unwrap_or(true);
+    let once = parse_yes_no(parts.get(5).unwrap_or(&"Yes"));
 
     let offset = if offset_years != 0 {
         OffsetData::Years {
