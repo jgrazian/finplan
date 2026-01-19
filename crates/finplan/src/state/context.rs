@@ -121,17 +121,194 @@ impl ProfileTypeContext {
     }
 }
 
+/// Phase tracking for repeating trigger builder - which slot are we building?
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TriggerChildSlot {
+    Start,
+    End,
+}
+
+/// Partial trigger being built (any type)
+#[derive(Debug, Clone, PartialEq)]
+pub enum PartialTrigger {
+    /// Explicitly no trigger (start immediately / run forever)
+    None,
+    /// Date-based trigger
+    Date { date: Option<String> },
+    /// Age-based trigger
+    Age { years: Option<u8>, months: Option<u8> },
+    /// Manual trigger
+    Manual,
+    /// Net worth threshold trigger
+    NetWorth {
+        threshold: Option<f64>,
+        comparison: Option<String>,
+    },
+    /// Account balance threshold trigger
+    AccountBalance {
+        account: String,
+        threshold: Option<f64>,
+        comparison: Option<String>,
+    },
+    /// Relative to another event
+    RelativeToEvent {
+        event: String,
+        offset_years: Option<i32>,
+        offset_months: Option<i32>,
+    },
+    /// Repeating trigger (can contain nested triggers)
+    Repeating {
+        interval: IntervalData,
+        start: Option<Box<PartialTrigger>>,
+        end: Option<Box<PartialTrigger>>,
+    },
+}
+
+impl PartialTrigger {
+    /// Check if this partial trigger is complete and can be converted
+    pub fn is_complete(&self) -> bool {
+        match self {
+            PartialTrigger::None => true,
+            PartialTrigger::Date { date } => date.is_some(),
+            PartialTrigger::Age { years, .. } => years.is_some(),
+            PartialTrigger::Manual => true,
+            PartialTrigger::NetWorth { threshold, comparison } => {
+                threshold.is_some() && comparison.is_some()
+            }
+            PartialTrigger::AccountBalance { threshold, comparison, .. } => {
+                threshold.is_some() && comparison.is_some()
+            }
+            PartialTrigger::RelativeToEvent { offset_years, offset_months, .. } => {
+                offset_years.is_some() || offset_months.is_some()
+            }
+            PartialTrigger::Repeating { .. } => true, // Always complete at the repeating level
+        }
+    }
+
+    /// Get a display name for the trigger type
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            PartialTrigger::None => "None",
+            PartialTrigger::Date { .. } => "Date",
+            PartialTrigger::Age { .. } => "Age",
+            PartialTrigger::Manual => "Manual",
+            PartialTrigger::NetWorth { .. } => "Net Worth",
+            PartialTrigger::AccountBalance { .. } => "Account Balance",
+            PartialTrigger::RelativeToEvent { .. } => "Relative to Event",
+            PartialTrigger::Repeating { .. } => "Repeating",
+        }
+    }
+}
+
+/// Builder state for constructing triggers recursively
+#[derive(Debug, Clone, PartialEq)]
+pub struct TriggerBuilderState {
+    /// Current trigger being built
+    pub current: PartialTrigger,
+    /// Stack of parents for nested building: (parent, which_slot)
+    pub parent_stack: Vec<(PartialTrigger, TriggerChildSlot)>,
+    /// Event metadata
+    pub event_name: Option<String>,
+    pub event_description: Option<String>,
+}
+
+impl TriggerBuilderState {
+    /// Create a new builder for a repeating trigger
+    pub fn new_repeating(interval: IntervalData) -> Self {
+        Self {
+            current: PartialTrigger::Repeating {
+                interval,
+                start: None,
+                end: None,
+            },
+            parent_stack: Vec::new(),
+            event_name: None,
+            event_description: None,
+        }
+    }
+
+    /// Push into a child slot (start building nested trigger)
+    pub fn push_child(&mut self, slot: TriggerChildSlot, child: PartialTrigger) {
+        let parent = std::mem::replace(&mut self.current, child);
+        self.parent_stack.push((parent, slot));
+    }
+
+    /// Pop back to parent after completing nested trigger
+    /// Returns true if pop was successful, false if already at root
+    pub fn pop_to_parent(&mut self) -> bool {
+        if let Some((mut parent, slot)) = self.parent_stack.pop() {
+            let completed_child = std::mem::replace(&mut self.current, PartialTrigger::None);
+
+            // Insert completed child into parent's appropriate slot
+            if let PartialTrigger::Repeating { start, end, .. } = &mut parent {
+                let boxed = if matches!(completed_child, PartialTrigger::None) {
+                    None
+                } else {
+                    Some(Box::new(completed_child))
+                };
+                match slot {
+                    TriggerChildSlot::Start => *start = boxed,
+                    TriggerChildSlot::End => *end = boxed,
+                }
+            }
+
+            self.current = parent;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Check if we're at the root level (not building a nested trigger)
+    pub fn is_at_root(&self) -> bool {
+        self.parent_stack.is_empty()
+    }
+
+    /// Get the current nesting depth
+    pub fn depth(&self) -> usize {
+        self.parent_stack.len()
+    }
+
+    /// Get the current phase based on what's been built
+    /// Returns Start if start hasn't been set, End if start is set but end isn't
+    pub fn current_phase(&self) -> Option<TriggerChildSlot> {
+        if !self.is_at_root() {
+            return None; // We're building a nested trigger
+        }
+
+        if let PartialTrigger::Repeating { start, end, .. } = &self.current {
+            if start.is_none() {
+                Some(TriggerChildSlot::Start)
+            } else if end.is_none() {
+                Some(TriggerChildSlot::End)
+            } else {
+                None // Both are set
+            }
+        } else {
+            None
+        }
+    }
+}
+
 /// Event trigger context for create/edit
 #[derive(Debug, Clone, PartialEq)]
 pub enum TriggerContext {
     /// Date-based trigger (no additional context needed)
     Date,
-    /// Repeating trigger with interval
+    /// Age-based trigger (no additional context needed)
+    Age,
+    /// Manual trigger (no additional context needed)
+    Manual,
+    /// Net worth trigger (no additional context needed)
+    NetWorth,
+    /// Repeating trigger with interval (simple mode)
     Repeating(IntervalData),
     /// Account balance trigger with account name
     AccountBalance(String),
     /// Relative to event trigger with event name reference
     RelativeToEvent(String),
+    /// Full builder state for recursive trigger construction
+    RepeatingBuilder(TriggerBuilderState),
 }
 
 impl TriggerContext {
@@ -139,9 +316,13 @@ impl TriggerContext {
     pub fn type_name(&self) -> &'static str {
         match self {
             Self::Date => "Date",
+            Self::Age => "Age",
+            Self::Manual => "Manual",
+            Self::NetWorth => "Net Worth",
             Self::Repeating(_) => "Repeating",
             Self::AccountBalance(_) => "Account Balance",
             Self::RelativeToEvent(_) => "Relative to Event",
+            Self::RepeatingBuilder(_) => "Repeating",
         }
     }
 }

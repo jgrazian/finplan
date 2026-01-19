@@ -223,7 +223,7 @@ impl App {
 
     fn handle_modal_result(&mut self, action: ModalAction, value: String) {
         // Extract context from the modal before we clear it
-        let context = match &self.state.modal {
+        let context: Option<crate::state::ModalContextValue> = match &self.state.modal {
             ModalState::Form(form) => form.context.clone(),
             ModalState::Confirm(confirm) => confirm.context.clone(),
             ModalState::Picker(picker) => picker.context.clone(),
@@ -321,6 +321,19 @@ impl App {
             }
             ModalAction::Event(EventAction::Delete) => {
                 actions::handle_delete_event(&mut self.state, ctx)
+            }
+            // Trigger builder actions for recursive trigger construction
+            ModalAction::Event(EventAction::PickChildTriggerType) => {
+                actions::handle_pick_child_trigger_type(&self.state, &value, ctx)
+            }
+            ModalAction::Event(EventAction::BuildChildTrigger) => {
+                actions::handle_build_child_trigger(&self.state, &value, ctx)
+            }
+            ModalAction::Event(EventAction::CompleteChildTrigger) => {
+                actions::handle_complete_child_trigger(&mut self.state, ctx)
+            }
+            ModalAction::Event(EventAction::FinalizeRepeating) => {
+                actions::handle_finalize_repeating(&mut self.state, ctx)
             }
 
             // Effect actions

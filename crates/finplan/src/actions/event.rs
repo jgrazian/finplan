@@ -5,6 +5,9 @@ use crate::data::events_data::{
 };
 use crate::modals::parse_currency;
 use crate::screens::events::EventsScreen;
+use crate::state::context::{
+    ModalContext, PartialTrigger, TriggerBuilderState, TriggerChildSlot, TriggerContext,
+};
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
 
 use super::{ActionContext, ActionResult};
@@ -120,22 +123,49 @@ pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionR
 }
 
 /// Handle interval selection for repeating events
+/// Creates a TriggerBuilderState and shows the start condition type picker
 pub fn handle_interval_pick(interval: &str) -> ActionResult {
-    let interval_str = interval.to_string();
-    ActionResult::modal(ModalState::Form(
-        FormModal::new(
-            &format!("New Event - {} Repeating", interval),
-            vec![
-                FormField::text("Event Name", ""),
-                FormField::text("Description", ""),
-                FormField::read_only("Interval", &interval_str),
-                FormField::text("Start Date (YYYY-MM-DD, optional)", ""),
-                FormField::text("End Age (years, optional)", ""),
-            ],
-            ModalAction::CREATE_EVENT,
-        )
-        .with_context(&format!("Repeating|{}", interval))
-        .start_editing(),
+    let interval_data = match interval {
+        "Weekly" => IntervalData::Weekly,
+        "Bi-Weekly" => IntervalData::BiWeekly,
+        "Monthly" => IntervalData::Monthly,
+        "Quarterly" => IntervalData::Quarterly,
+        "Yearly" => IntervalData::Yearly,
+        _ => IntervalData::Monthly,
+    };
+
+    let builder = TriggerBuilderState::new_repeating(interval_data);
+
+    // Show start condition type picker
+    show_child_trigger_type_picker(builder, TriggerChildSlot::Start)
+}
+
+/// Show the picker for selecting a child trigger type (start or end condition)
+fn show_child_trigger_type_picker(builder: TriggerBuilderState, slot: TriggerChildSlot) -> ActionResult {
+    let title = match slot {
+        TriggerChildSlot::Start => "Select Start Condition",
+        TriggerChildSlot::End => "Select End Condition",
+    };
+
+    let none_option = match slot {
+        TriggerChildSlot::Start => "None (Start Immediately)",
+        TriggerChildSlot::End => "None (Run Forever)",
+    };
+
+    let options = vec![
+        none_option.to_string(),
+        "Date".to_string(),
+        "Age".to_string(),
+        "Account Balance".to_string(),
+        "Net Worth".to_string(),
+        "Relative to Event".to_string(),
+    ];
+
+    ActionResult::modal(ModalState::Picker(
+        PickerModal::new(title, options, ModalAction::PICK_CHILD_TRIGGER_TYPE)
+            .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                builder,
+            ))),
     ))
 }
 
@@ -459,4 +489,450 @@ fn parse_relative_trigger(
         desc,
         once,
     )
+}
+
+// ========== Trigger Builder Handlers ==========
+
+/// Handle child trigger type selection for repeating events
+pub fn handle_pick_child_trigger_type(
+    state: &AppState,
+    trigger_type: &str,
+    ctx: ActionContext,
+) -> ActionResult {
+    let builder = match ctx.trigger_builder() {
+        Some(b) => b.clone(),
+        None => return ActionResult::error("Missing trigger builder context"),
+    };
+
+    // Determine which slot we're building based on builder state
+    let slot = builder.current_phase().unwrap_or(TriggerChildSlot::Start);
+
+    match trigger_type {
+        "None (Start Immediately)" | "None (Run Forever)" => {
+            // Skip this condition, move to next phase
+            handle_none_trigger(builder, slot)
+        }
+        "Date" => show_child_trigger_form(state, builder, slot, PartialTrigger::Date { date: None }),
+        "Age" => show_child_trigger_form(
+            state,
+            builder,
+            slot,
+            PartialTrigger::Age {
+                years: None,
+                months: None,
+            },
+        ),
+        "Account Balance" => {
+            // Need to pick account first
+            let accounts = EventsScreen::get_account_names(state);
+            if accounts.is_empty() {
+                return ActionResult::error("No accounts available. Create an account first.");
+            }
+            // Store the builder and slot info for the next step
+            let mut new_builder = builder;
+            new_builder.push_child(slot, PartialTrigger::AccountBalance {
+                account: String::new(),
+                threshold: None,
+                comparison: None,
+            });
+            ActionResult::modal(ModalState::Picker(
+                PickerModal::new("Select Account", accounts, ModalAction::BUILD_CHILD_TRIGGER)
+                    .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                        new_builder,
+                    ))),
+            ))
+        }
+        "Net Worth" => show_child_trigger_form(
+            state,
+            builder,
+            slot,
+            PartialTrigger::NetWorth {
+                threshold: None,
+                comparison: None,
+            },
+        ),
+        "Relative to Event" => {
+            // Need to pick event first
+            let events = EventsScreen::get_event_names(state);
+            if events.is_empty() {
+                return ActionResult::error("No events available. Create an event first.");
+            }
+            let mut new_builder = builder;
+            new_builder.push_child(slot, PartialTrigger::RelativeToEvent {
+                event: String::new(),
+                offset_years: None,
+                offset_months: None,
+            });
+            ActionResult::modal(ModalState::Picker(
+                PickerModal::new("Select Event", events, ModalAction::BUILD_CHILD_TRIGGER)
+                    .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                        new_builder,
+                    ))),
+            ))
+        }
+        _ => ActionResult::close(),
+    }
+}
+
+/// Handle "None" selection for start/end condition
+fn handle_none_trigger(mut builder: TriggerBuilderState, slot: TriggerChildSlot) -> ActionResult {
+    // Set the slot to None explicitly in the current trigger
+    if let PartialTrigger::Repeating { start, end, .. } = &mut builder.current {
+        match slot {
+            TriggerChildSlot::Start => *start = Some(Box::new(PartialTrigger::None)),
+            TriggerChildSlot::End => *end = Some(Box::new(PartialTrigger::None)),
+        }
+    }
+
+    match slot {
+        TriggerChildSlot::Start => {
+            // Move to end condition picker
+            show_child_trigger_type_picker(builder, TriggerChildSlot::End)
+        }
+        TriggerChildSlot::End => {
+            // Move to finalize form
+            show_finalize_form(builder)
+        }
+    }
+}
+
+/// Show the appropriate form for a child trigger type
+fn show_child_trigger_form(
+    _state: &AppState,
+    mut builder: TriggerBuilderState,
+    slot: TriggerChildSlot,
+    partial: PartialTrigger,
+) -> ActionResult {
+    // Push the partial trigger as the current context
+    builder.push_child(slot, partial.clone());
+
+    let (title, fields) = match &partial {
+        PartialTrigger::Date { .. } => {
+            let title = match slot {
+                TriggerChildSlot::Start => "Start Condition - Date",
+                TriggerChildSlot::End => "End Condition - Date",
+            };
+            let fields = vec![FormField::text("Date (YYYY-MM-DD)", "2025-01-01")];
+            (title, fields)
+        }
+        PartialTrigger::Age { .. } => {
+            let title = match slot {
+                TriggerChildSlot::Start => "Start Condition - Age",
+                TriggerChildSlot::End => "End Condition - Age",
+            };
+            let fields = vec![
+                FormField::text("Age (years)", "65"),
+                FormField::text("Months (optional)", ""),
+            ];
+            (title, fields)
+        }
+        PartialTrigger::NetWorth { .. } => {
+            let title = match slot {
+                TriggerChildSlot::Start => "Start Condition - Net Worth",
+                TriggerChildSlot::End => "End Condition - Net Worth",
+            };
+            let fields = vec![
+                FormField::currency("Threshold", 1000000.0),
+                FormField::select(
+                    "Trigger When",
+                    balance_comparison_options(),
+                    "Balance rises to or above",
+                ),
+            ];
+            (title, fields)
+        }
+        _ => return ActionResult::error("Unsupported trigger type for form"),
+    };
+
+    ActionResult::modal(ModalState::Form(
+        FormModal::new(title, fields, ModalAction::COMPLETE_CHILD_TRIGGER)
+            .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                builder,
+            )))
+            .start_editing(),
+    ))
+}
+
+/// Handle building child trigger after selecting account or event
+pub fn handle_build_child_trigger(
+    _state: &AppState,
+    selected: &str,
+    ctx: ActionContext,
+) -> ActionResult {
+    let mut builder = match ctx.trigger_builder() {
+        Some(b) => b.clone(),
+        None => return ActionResult::error("Missing trigger builder context"),
+    };
+
+    // Update the current partial trigger with the selected value
+    match &mut builder.current {
+        PartialTrigger::AccountBalance { account, .. } => {
+            *account = selected.to_string();
+            // Now show the threshold form
+            let fields = vec![
+                FormField::read_only("Account", selected),
+                FormField::currency("Threshold", 100000.0),
+                FormField::select(
+                    "Trigger When",
+                    balance_comparison_options(),
+                    "Balance drops to or below",
+                ),
+            ];
+            ActionResult::modal(ModalState::Form(
+                FormModal::new("Balance Trigger", fields, ModalAction::COMPLETE_CHILD_TRIGGER)
+                    .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                        builder,
+                    )))
+                    .start_editing(),
+            ))
+        }
+        PartialTrigger::RelativeToEvent { event, .. } => {
+            *event = selected.to_string();
+            // Now show the offset form
+            let fields = vec![
+                FormField::read_only("Reference Event", selected),
+                FormField::text("Offset Years", "0"),
+                FormField::text("Offset Months", "0"),
+            ];
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "Relative to Event",
+                    fields,
+                    ModalAction::COMPLETE_CHILD_TRIGGER,
+                )
+                .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                    builder,
+                )))
+                .start_editing(),
+            ))
+        }
+        _ => ActionResult::error("Unexpected trigger type in build_child_trigger"),
+    }
+}
+
+/// Handle completing a child trigger (form submission)
+pub fn handle_complete_child_trigger(_state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    let mut builder = match ctx.trigger_builder() {
+        Some(b) => b.clone(),
+        None => return ActionResult::error("Missing trigger builder context"),
+    };
+
+    let parts = ctx.value_parts();
+
+    // Determine which slot we were building
+    let was_start = builder
+        .parent_stack
+        .last()
+        .map(|(_, slot)| *slot == TriggerChildSlot::Start)
+        .unwrap_or(false);
+
+    // Update the current partial trigger with form values
+    match &mut builder.current {
+        PartialTrigger::Date { date } => {
+            *date = parts.first().map(|s| s.to_string());
+        }
+        PartialTrigger::Age { years, months } => {
+            *years = parts.first().and_then(|s| s.parse().ok());
+            *months = parts.get(1).and_then(|s| s.parse().ok());
+        }
+        PartialTrigger::NetWorth {
+            threshold,
+            comparison,
+        } => {
+            *threshold = parts.first().and_then(|s| parse_currency(s).ok());
+            *comparison = parts.get(1).map(|s| s.to_string());
+        }
+        PartialTrigger::AccountBalance {
+            threshold,
+            comparison,
+            ..
+        } => {
+            // Skip field 0 (read-only account name)
+            *threshold = parts.get(1).and_then(|s| parse_currency(s).ok());
+            *comparison = parts.get(2).map(|s| s.to_string());
+        }
+        PartialTrigger::RelativeToEvent {
+            offset_years,
+            offset_months,
+            ..
+        } => {
+            // Skip field 0 (read-only event name)
+            *offset_years = parts.get(1).and_then(|s| s.parse().ok());
+            *offset_months = parts.get(2).and_then(|s| s.parse().ok());
+        }
+        _ => {}
+    }
+
+    // Pop back to parent
+    builder.pop_to_parent();
+
+    if was_start {
+        // Move to end condition picker
+        show_child_trigger_type_picker(builder, TriggerChildSlot::End)
+    } else {
+        // Move to finalize form
+        show_finalize_form(builder)
+    }
+}
+
+/// Show the final form for entering event name and description
+fn show_finalize_form(builder: TriggerBuilderState) -> ActionResult {
+    // Get interval display name
+    let interval_name = if let PartialTrigger::Repeating { interval, .. } = &builder.current {
+        match interval {
+            IntervalData::Never => "Never",
+            IntervalData::Weekly => "Weekly",
+            IntervalData::BiWeekly => "Bi-Weekly",
+            IntervalData::Monthly => "Monthly",
+            IntervalData::Quarterly => "Quarterly",
+            IntervalData::Yearly => "Yearly",
+        }
+    } else {
+        "Repeating"
+    };
+
+    let title = format!("New {} Repeating Event", interval_name);
+    let fields = vec![
+        FormField::text("Event Name", ""),
+        FormField::text("Description", ""),
+    ];
+
+    ActionResult::modal(ModalState::Form(
+        FormModal::new(&title, fields, ModalAction::FINALIZE_REPEATING)
+            .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                builder,
+            )))
+            .start_editing(),
+    ))
+}
+
+/// Handle finalizing a repeating event (create the actual event)
+pub fn handle_finalize_repeating(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    let builder = match ctx.trigger_builder() {
+        Some(b) => b.clone(),
+        None => return ActionResult::error("Missing trigger builder context"),
+    };
+
+    let parts = ctx.value_parts();
+    let name = parts.first().unwrap_or(&"").to_string();
+    let description = parts
+        .get(1)
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty());
+
+    if name.is_empty() {
+        return ActionResult::error("Event name cannot be empty");
+    }
+
+    // Convert the builder state to TriggerData
+    let trigger = match convert_partial_to_trigger(&builder.current) {
+        Some(t) => t,
+        None => return ActionResult::error("Failed to build trigger"),
+    };
+
+    let event = EventData {
+        name: EventTag(name),
+        description,
+        trigger,
+        effects: vec![],
+        once: false,
+        enabled: true,
+    };
+
+    state.data_mut().events.push(event);
+    state.events_state.selected_event_index = state.data().events.len() - 1;
+    ActionResult::modified()
+}
+
+/// Convert a PartialTrigger to TriggerData
+fn convert_partial_to_trigger(partial: &PartialTrigger) -> Option<TriggerData> {
+    match partial {
+        PartialTrigger::None => None,
+        PartialTrigger::Date { date } => Some(TriggerData::Date {
+            date: date.clone().unwrap_or_else(|| "2025-01-01".to_string()),
+        }),
+        PartialTrigger::Age { years, months } => Some(TriggerData::Age {
+            years: years.unwrap_or(65),
+            months: *months,
+        }),
+        PartialTrigger::Manual => Some(TriggerData::Manual),
+        PartialTrigger::NetWorth {
+            threshold,
+            comparison,
+        } => {
+            let threshold_val = threshold.unwrap_or(1000000.0);
+            let comp = comparison.as_deref().unwrap_or("");
+            let threshold_data = if comp.contains("drops") || comp.contains("<=") {
+                ThresholdData::LessThanOrEqual {
+                    value: threshold_val,
+                }
+            } else {
+                ThresholdData::GreaterThanOrEqual {
+                    value: threshold_val,
+                }
+            };
+            Some(TriggerData::NetWorth {
+                threshold: threshold_data,
+            })
+        }
+        PartialTrigger::AccountBalance {
+            account,
+            threshold,
+            comparison,
+        } => {
+            let threshold_val = threshold.unwrap_or(100000.0);
+            let comp = comparison.as_deref().unwrap_or("");
+            let threshold_data = if comp.contains("drops") || comp.contains("<=") {
+                ThresholdData::LessThanOrEqual {
+                    value: threshold_val,
+                }
+            } else {
+                ThresholdData::GreaterThanOrEqual {
+                    value: threshold_val,
+                }
+            };
+            Some(TriggerData::AccountBalance {
+                account: AccountTag(account.clone()),
+                threshold: threshold_data,
+            })
+        }
+        PartialTrigger::RelativeToEvent {
+            event,
+            offset_years,
+            offset_months,
+        } => {
+            let offset = if offset_years.unwrap_or(0) != 0 {
+                OffsetData::Years {
+                    value: offset_years.unwrap_or(0),
+                }
+            } else {
+                OffsetData::Months {
+                    value: offset_months.unwrap_or(0),
+                }
+            };
+            Some(TriggerData::RelativeToEvent {
+                event: EventTag(event.clone()),
+                offset,
+            })
+        }
+        PartialTrigger::Repeating {
+            interval,
+            start,
+            end,
+        } => {
+            let start_trigger = start
+                .as_ref()
+                .and_then(|p| convert_partial_to_trigger(p))
+                .map(Box::new);
+            let end_trigger = end
+                .as_ref()
+                .and_then(|p| convert_partial_to_trigger(p))
+                .map(Box::new);
+            Some(TriggerData::Repeating {
+                interval: *interval,
+                start: start_trigger,
+                end: end_trigger,
+            })
+        }
+    }
 }

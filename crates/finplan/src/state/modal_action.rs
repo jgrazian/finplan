@@ -69,6 +69,15 @@ pub enum EventAction {
     Create,
     Edit,
     Delete,
+    // Trigger builder actions for recursive trigger construction
+    /// Pick type for start or end condition in repeating trigger
+    PickChildTriggerType,
+    /// Form/picker for child trigger details
+    BuildChildTrigger,
+    /// Finish child trigger, return to parent
+    CompleteChildTrigger,
+    /// Final form for repeating event (name, description)
+    FinalizeRepeating,
 }
 
 /// Effect-specific actions (effects within events)
@@ -124,6 +133,11 @@ impl ModalAction {
     pub const CREATE_EVENT: Self = Self::Event(EventAction::Create);
     pub const EDIT_EVENT: Self = Self::Event(EventAction::Edit);
     pub const DELETE_EVENT: Self = Self::Event(EventAction::Delete);
+    // Trigger builder shortcuts
+    pub const PICK_CHILD_TRIGGER_TYPE: Self = Self::Event(EventAction::PickChildTriggerType);
+    pub const BUILD_CHILD_TRIGGER: Self = Self::Event(EventAction::BuildChildTrigger);
+    pub const COMPLETE_CHILD_TRIGGER: Self = Self::Event(EventAction::CompleteChildTrigger);
+    pub const FINALIZE_REPEATING: Self = Self::Event(EventAction::FinalizeRepeating);
 
     // Effect shortcuts
     pub const MANAGE_EFFECTS: Self = Self::Effect(EffectAction::Manage);

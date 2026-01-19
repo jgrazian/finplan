@@ -20,7 +20,8 @@ pub use holding::*;
 pub use profile::*;
 pub use scenario::*;
 
-use crate::state::ModalState;
+use crate::state::context::{ModalContext, TriggerBuilderState, TriggerContext};
+use crate::state::{ModalContextValue, ModalState};
 
 /// Result of an action handler
 ///
@@ -66,14 +67,22 @@ impl ActionResult {
 pub struct ActionContext<'a> {
     /// The string context from the modal (often contains indices or type info)
     pub modal_context: Option<&'a str>,
+    /// The typed context from the modal (when using ModalContextValue::Typed)
+    pub typed_modal_context: Option<&'a ModalContext>,
     /// The value submitted from the modal (pipe-delimited form fields)
     pub value: &'a str,
 }
 
 impl<'a> ActionContext<'a> {
-    pub fn new(modal_context: Option<&'a String>, value: &'a str) -> Self {
+    pub fn new(modal_context: Option<&'a ModalContextValue>, value: &'a str) -> Self {
+        let (legacy_str, typed) = match modal_context {
+            Some(ModalContextValue::Legacy(s)) => (Some(s.as_str()), None),
+            Some(ModalContextValue::Typed(ctx)) => (None, Some(ctx)),
+            None => (None, None),
+        };
         Self {
-            modal_context: modal_context.as_ref().map(|s| s.as_str()),
+            modal_context: legacy_str,
+            typed_modal_context: typed,
             value,
         }
     }
@@ -93,6 +102,22 @@ impl<'a> ActionContext<'a> {
     /// Get the context string or empty string
     pub fn context_str(&self) -> &str {
         self.modal_context.unwrap_or("")
+    }
+
+    /// Get the typed modal context
+    pub fn typed_context(&self) -> Option<&ModalContext> {
+        self.typed_modal_context
+    }
+
+    /// Get the trigger builder state from a typed context
+    pub fn trigger_builder(&self) -> Option<&TriggerBuilderState> {
+        self.typed_context().and_then(|ctx| {
+            if let ModalContext::Trigger(TriggerContext::RepeatingBuilder(state)) = ctx {
+                Some(state)
+            } else {
+                None
+            }
+        })
     }
 
     /// Split the value by pipe delimiter

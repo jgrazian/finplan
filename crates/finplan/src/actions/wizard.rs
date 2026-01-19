@@ -178,7 +178,7 @@ mod tests {
             ModalState::Form(form) => {
                 assert_eq!(form.title, "Test Form");
                 assert_eq!(form.fields.len(), 2);
-                assert_eq!(form.context, Some("test_context".to_string()));
+                assert_eq!(form.context_str(), Some("test_context".to_string()));
                 assert!(form.editing);
             }
             _ => panic!("Expected Form modal"),

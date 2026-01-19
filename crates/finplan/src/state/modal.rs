@@ -1,5 +1,53 @@
 /// Modal types for forms, pickers, and confirmations.
 use super::ModalAction;
+use super::context::ModalContext;
+
+/// Context that supports both legacy string and typed ModalContext
+#[derive(Debug, Clone)]
+pub enum ModalContextValue {
+    /// Legacy string-based context for backward compatibility
+    Legacy(String),
+    /// Typed context using ModalContext enum
+    Typed(ModalContext),
+}
+
+impl ModalContextValue {
+    /// Get the context as a string (for legacy handlers)
+    /// Returns None for typed contexts that don't have a natural string representation
+    pub fn as_string(&self) -> Option<String> {
+        match self {
+            ModalContextValue::Legacy(s) => Some(s.clone()),
+            ModalContextValue::Typed(_) => None,
+        }
+    }
+
+    /// Get the context as a legacy string reference
+    /// Returns empty string for typed contexts
+    pub fn as_legacy_str(&self) -> &str {
+        match self {
+            ModalContextValue::Legacy(s) => s,
+            ModalContextValue::Typed(_) => "",
+        }
+    }
+
+    /// Get the typed context
+    pub fn as_typed(&self) -> Option<&ModalContext> {
+        match self {
+            ModalContextValue::Legacy(_) => None,
+            ModalContextValue::Typed(ctx) => Some(ctx),
+        }
+    }
+
+    /// Check if this is a legacy context
+    pub fn is_legacy(&self) -> bool {
+        matches!(self, ModalContextValue::Legacy(_))
+    }
+
+    /// Check if this is a typed context
+    pub fn is_typed(&self) -> bool {
+        matches!(self, ModalContextValue::Typed(_))
+    }
+}
 
 #[derive(Debug)]
 pub enum ModalState {
@@ -172,7 +220,7 @@ pub struct PickerModal {
     pub selected_index: usize,
     pub action: ModalAction,
     /// Context data for the picker (e.g., indices for subsequent actions)
-    pub context: Option<String>,
+    pub context: Option<ModalContextValue>,
 }
 
 impl PickerModal {
@@ -186,9 +234,21 @@ impl PickerModal {
         }
     }
 
+    /// Set legacy string context (for backward compatibility)
     pub fn with_context(mut self, context: &str) -> Self {
-        self.context = Some(context.to_string());
+        self.context = Some(ModalContextValue::Legacy(context.to_string()));
         self
+    }
+
+    /// Set typed context
+    pub fn with_typed_context(mut self, context: ModalContext) -> Self {
+        self.context = Some(ModalContextValue::Typed(context));
+        self
+    }
+
+    /// Get context as legacy string (for backward compatibility)
+    pub fn context_str(&self) -> Option<String> {
+        self.context.as_ref().and_then(|c| c.as_string())
     }
 }
 
@@ -302,7 +362,7 @@ pub struct FormModal {
     pub editing: bool,
     pub action: ModalAction,
     /// Context data for the form (e.g., account index being edited)
-    pub context: Option<String>,
+    pub context: Option<ModalContextValue>,
 }
 
 impl FormModal {
@@ -323,9 +383,21 @@ impl FormModal {
         }
     }
 
+    /// Set legacy string context (for backward compatibility)
     pub fn with_context(mut self, context: &str) -> Self {
-        self.context = Some(context.to_string());
+        self.context = Some(ModalContextValue::Legacy(context.to_string()));
         self
+    }
+
+    /// Set typed context
+    pub fn with_typed_context(mut self, context: ModalContext) -> Self {
+        self.context = Some(ModalContextValue::Typed(context));
+        self
+    }
+
+    /// Get context as legacy string (for backward compatibility)
+    pub fn context_str(&self) -> Option<String> {
+        self.context.as_ref().and_then(|c| c.as_string())
     }
 
     /// Start in editing mode (for better UX)
@@ -463,7 +535,7 @@ pub struct ConfirmModal {
     pub message: String,
     pub action: ModalAction,
     /// Context data for the confirmation (e.g., index of item to delete)
-    pub context: Option<String>,
+    pub context: Option<ModalContextValue>,
 }
 
 impl ConfirmModal {
@@ -476,9 +548,21 @@ impl ConfirmModal {
         }
     }
 
+    /// Set legacy string context (for backward compatibility)
     pub fn with_context(mut self, context: &str) -> Self {
-        self.context = Some(context.to_string());
+        self.context = Some(ModalContextValue::Legacy(context.to_string()));
         self
+    }
+
+    /// Set typed context
+    pub fn with_typed_context(mut self, context: ModalContext) -> Self {
+        self.context = Some(ModalContextValue::Typed(context));
+        self
+    }
+
+    /// Get context as legacy string (for backward compatibility)
+    pub fn context_str(&self) -> Option<String> {
+        self.context.as_ref().and_then(|c| c.as_string())
     }
 }
 
