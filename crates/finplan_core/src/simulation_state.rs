@@ -384,11 +384,15 @@ impl SimulationState {
 
     /// Build account snapshots with starting values from SimulationParameters
     pub fn snapshot_wealth(&mut self) {
-        // Build snapshots from current state accounts
-        let account_snapshots = self
-            .portfolio
-            .accounts
-            .values()
+        // Collect account IDs and sort for deterministic ordering
+        // This is critical for mean accumulator to work correctly across parallel iterations
+        let mut account_ids: Vec<AccountId> = self.portfolio.accounts.keys().copied().collect();
+        account_ids.sort_by_key(|id| id.0);
+
+        // Build snapshots in sorted order
+        let account_snapshots = account_ids
+            .iter()
+            .filter_map(|id| self.portfolio.accounts.get(id))
             .map(|account| {
                 account.snapshot(
                     &self.portfolio.market,

@@ -4,7 +4,7 @@ use finplan_core::config::SimulationConfig;
 use rand::RngCore;
 
 use crate::data::app_data::{AppData, SimulationData};
-use crate::data::convert::{process_monte_carlo_results, to_simulation_config, to_tui_result, ConvertError};
+use crate::data::convert::{to_simulation_config, to_tui_result, ConvertError};
 
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::modal::ModalState;
@@ -32,40 +32,38 @@ pub struct YearResult {
 
 // ========== Monte Carlo Results ==========
 
-/// Aggregate statistics from Monte Carlo simulation
-#[derive(Debug, Clone)]
-pub struct MonteCarloStats {
-    pub num_iterations: usize,
-    pub success_rate: f64,
-    pub mean_final_net_worth: f64,
-    pub std_dev_final_net_worth: f64,
-    pub min_final_net_worth: f64,
-    pub max_final_net_worth: f64,
-    pub p5_final_net_worth: f64,
-    pub p50_final_net_worth: f64,
-    pub p95_final_net_worth: f64,
-}
+// Re-export MonteCarloStats from core
+pub use finplan_core::model::MonteCarloStats;
 
-/// Stored Monte Carlo result with 4 representative runs + aggregate stats
+/// Stored Monte Carlo result with percentile runs + mean
 #[derive(Debug)]
 pub struct MonteCarloStoredResult {
-    pub stats: MonteCarloStats,
-    /// TUI result for 5th percentile run
-    pub p5_result: SimulationResult,
-    /// TUI result for 50th percentile run
-    pub p50_result: SimulationResult,
-    /// TUI result for 95th percentile run
-    pub p95_result: SimulationResult,
-    /// TUI result for mean-closest run
-    pub mean_result: SimulationResult,
-    /// Core result for 5th percentile run (for ledger/snapshots)
-    pub p5_core: finplan_core::model::SimulationResult,
-    /// Core result for 50th percentile run
-    pub p50_core: finplan_core::model::SimulationResult,
-    /// Core result for 95th percentile run
-    pub p95_core: finplan_core::model::SimulationResult,
-    /// Core result for mean-closest run
-    pub mean_core: finplan_core::model::SimulationResult,
+    /// Aggregate statistics from core
+    pub stats: finplan_core::model::MonteCarloStats,
+    /// TUI results for each percentile: (percentile, tui_result, core_result)
+    pub percentile_results: Vec<(f64, SimulationResult, finplan_core::model::SimulationResult)>,
+    /// Synthetic mean TUI result
+    pub mean_tui_result: Option<SimulationResult>,
+    /// Synthetic mean core result
+    pub mean_core_result: Option<finplan_core::model::SimulationResult>,
+}
+
+impl MonteCarloStoredResult {
+    /// Get the TUI result for a specific percentile
+    pub fn get_percentile_tui(&self, percentile: f64) -> Option<&SimulationResult> {
+        self.percentile_results
+            .iter()
+            .find(|(p, _, _)| (*p - percentile).abs() < 0.001)
+            .map(|(_, tui, _)| tui)
+    }
+
+    /// Get the core result for a specific percentile
+    pub fn get_percentile_core(&self, percentile: f64) -> Option<&finplan_core::model::SimulationResult> {
+        self.percentile_results
+            .iter()
+            .find(|(p, _, _)| (*p - percentile).abs() < 0.001)
+            .map(|(_, _, core)| core)
+    }
 }
 
 // ========== AppState ==========
@@ -335,37 +333,77 @@ impl AppState {
     /// Run Monte Carlo simulation with specified number of iterations
     pub fn run_monte_carlo(&mut self, num_iterations: usize) -> Result<(), SimulationError> {
         // Convert TUI data to simulation config
-        let config = self
+        let sim_config = self
             .to_simulation_config()
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
-        // Run the Monte Carlo simulation
-        let mc_result = finplan_core::simulation::monte_carlo_simulate(&config, num_iterations);
+        // Configure Monte Carlo simulation
+        let mc_config = finplan_core::model::MonteCarloConfig {
+            iterations: num_iterations,
+            percentiles: vec![0.05, 0.50, 0.95],
+            compute_mean: true,
+        };
 
-        // Process and store the results
-        let stored_result = process_monte_carlo_results(
-            &mc_result,
-            &self.data().parameters.birth_date,
-            &self.data().parameters.start_date,
-        )
-        .map_err(|e| SimulationError::Conversion(e.to_string()))?;
+        // Run the Monte Carlo simulation using memory-efficient API
+        let mc_summary = finplan_core::simulation::monte_carlo_simulate_with_config(&sim_config, &mc_config);
+
+        // Convert percentile runs to TUI format
+        let birth_date = &self.data().parameters.birth_date;
+        let start_date = &self.data().parameters.start_date;
+
+        let mut percentile_results = Vec::new();
+        for (p, core_result) in &mc_summary.percentile_runs {
+            let tui_result = to_tui_result(core_result, birth_date, start_date)
+                .map_err(|e| SimulationError::Conversion(e.to_string()))?;
+            percentile_results.push((*p, tui_result, core_result.clone()));
+        }
+
+        // Build mean results from accumulators
+        let (mean_tui_result, mean_core_result) = if let Some(mean_core) = mc_summary.get_mean_result() {
+            let mean_tui = to_tui_result(&mean_core, birth_date, start_date)
+                .map_err(|e| SimulationError::Conversion(e.to_string()))?;
+            (Some(mean_tui), Some(mean_core))
+        } else {
+            (None, None)
+        };
 
         // Store the P50 run as the default simulation result
-        self.simulation_result = Some(stored_result.p50_result.clone());
-        self.core_simulation_result = Some(stored_result.p50_core.clone());
+        if let Some((_, tui, core)) = percentile_results.iter().find(|(p, _, _)| (*p - 0.50).abs() < 0.001) {
+            self.simulation_result = Some(tui.clone());
+            self.core_simulation_result = Some(core.clone());
+        }
 
         // Update scenario preview with MC summary
         if let Some(preview) = &mut self.scenario_state.projection_preview {
+            let p5_final = mc_summary.stats.percentile_values.iter()
+                .find(|(p, _)| (*p - 0.05).abs() < 0.001)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+            let p50_final = mc_summary.stats.percentile_values.iter()
+                .find(|(p, _)| (*p - 0.50).abs() < 0.001)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+            let p95_final = mc_summary.stats.percentile_values.iter()
+                .find(|(p, _)| (*p - 0.95).abs() < 0.001)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+
             preview.mc_summary = Some(MonteCarloPreviewSummary {
-                num_iterations: stored_result.stats.num_iterations,
-                success_rate: stored_result.stats.success_rate,
-                p5_final: stored_result.stats.p5_final_net_worth,
-                p50_final: stored_result.stats.p50_final_net_worth,
-                p95_final: stored_result.stats.p95_final_net_worth,
+                num_iterations: mc_summary.stats.num_iterations,
+                success_rate: mc_summary.stats.success_rate,
+                p5_final,
+                p50_final,
+                p95_final,
             });
         }
 
         // Store the full MC result
+        let stored_result = MonteCarloStoredResult {
+            stats: mc_summary.stats,
+            percentile_results,
+            mean_tui_result,
+            mean_core_result,
+        };
         self.monte_carlo_result = Some(stored_result);
 
         // Reset results state for MC viewing

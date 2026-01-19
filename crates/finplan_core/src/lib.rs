@@ -60,4 +60,6 @@ mod tests;
 // Public re-exports for convenience
 // ============================================================================
 
-pub use config::{AccountBuilder, AssetBuilder, EventBuilder, SimulationBuilder, SimulationMetadata};
+pub use config::{
+    AccountBuilder, AssetBuilder, EventBuilder, SimulationBuilder, SimulationMetadata,
+};

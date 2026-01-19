@@ -257,10 +257,10 @@ impl ResultsScreen {
         if state.results_state.viewing_monte_carlo {
             if let Some(mc) = &state.monte_carlo_result {
                 match state.results_state.percentile_view {
-                    PercentileView::P5 => Some(&mc.p5_result),
-                    PercentileView::P50 => Some(&mc.p50_result),
-                    PercentileView::P95 => Some(&mc.p95_result),
-                    PercentileView::Mean => Some(&mc.mean_result),
+                    PercentileView::P5 => mc.get_percentile_tui(0.05),
+                    PercentileView::P50 => mc.get_percentile_tui(0.50),
+                    PercentileView::P95 => mc.get_percentile_tui(0.95),
+                    PercentileView::Mean => mc.mean_tui_result.as_ref(),
                 }
             } else {
                 state.simulation_result.as_ref()
@@ -275,10 +275,10 @@ impl ResultsScreen {
         if state.results_state.viewing_monte_carlo {
             if let Some(mc) = &state.monte_carlo_result {
                 match state.results_state.percentile_view {
-                    PercentileView::P5 => Some(&mc.p5_core),
-                    PercentileView::P50 => Some(&mc.p50_core),
-                    PercentileView::P95 => Some(&mc.p95_core),
-                    PercentileView::Mean => Some(&mc.mean_core),
+                    PercentileView::P5 => mc.get_percentile_core(0.05),
+                    PercentileView::P50 => mc.get_percentile_core(0.50),
+                    PercentileView::P95 => mc.get_percentile_core(0.95),
+                    PercentileView::Mean => mc.mean_core_result.as_ref(),
                 }
             } else {
                 state.core_simulation_result.as_ref()
@@ -289,10 +289,10 @@ impl ResultsScreen {
     }
 
     /// Get the wealth snapshot for the selected year using current result
-    fn get_wealth_snapshot_for_year_current<'a>(
-        state: &'a AppState,
+    fn get_wealth_snapshot_for_year_current(
+        state: &AppState,
         year_index: usize,
-    ) -> Option<&'a WealthSnapshot> {
+    ) -> Option<&WealthSnapshot> {
         let core_result = Self::get_current_core_result(state)?;
         let tui_result = Self::get_current_tui_result(state)?;
 
@@ -306,8 +306,7 @@ impl ResultsScreen {
         core_result
             .wealth_snapshots
             .iter()
-            .filter(|snap| snap.date.year() == target_year)
-            .next_back()
+            .rfind(|snap| snap.date.year() == target_year)
     }
 
     /// Get the list of unique years from the current simulation result
@@ -336,16 +335,17 @@ impl ResultsScreen {
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
-                format!(" NET WORTH PROJECTION ({}) ({}) [h/l year, v view] ", selected_year, pct)
+                format!(
+                    " NET WORTH PROJECTION ({}) ({}) [h/l year, v view] ",
+                    selected_year, pct
+                )
             } else {
                 format!(" NET WORTH PROJECTION ({}) ({}) ", selected_year, pct)
             }
+        } else if focused {
+            format!(" NET WORTH PROJECTION ({}) [h/l year] ", selected_year)
         } else {
-            if focused {
-                format!(" NET WORTH PROJECTION ({}) [h/l year] ", selected_year)
-            } else {
-                format!(" NET WORTH PROJECTION ({}) ", selected_year)
-            }
+            format!(" NET WORTH PROJECTION ({}) ", selected_year)
         };
 
         let block = Block::default()
@@ -455,8 +455,8 @@ impl ResultsScreen {
             let chart = BarChart::default()
                 .block(block)
                 .data(BarGroup::default().bars(&bars))
-                .bar_width(bar_width)
-                .bar_gap(bar_gap)
+                .bar_width(3)
+                .bar_gap(1)
                 .direction(Direction::Vertical);
 
             frame.render_widget(chart, area);
@@ -571,16 +571,17 @@ impl ResultsScreen {
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
-                format!(" YEARLY BREAKDOWN ({}) ({}) [j/k scroll, v view] ", selected_year, pct)
+                format!(
+                    " YEARLY BREAKDOWN ({}) ({}) [j/k scroll, v view] ",
+                    selected_year, pct
+                )
             } else {
                 format!(" YEARLY BREAKDOWN ({}) ({}) ", selected_year, pct)
             }
+        } else if focused {
+            format!(" YEARLY BREAKDOWN ({}) [j/k scroll] ", selected_year)
         } else {
-            if focused {
-                format!(" YEARLY BREAKDOWN ({}) [j/k scroll] ", selected_year)
-            } else {
-                format!(" YEARLY BREAKDOWN ({}) ", selected_year)
-            }
+            format!(" YEARLY BREAKDOWN ({}) ", selected_year)
         };
 
         let list = List::new(items).block(
@@ -611,16 +612,17 @@ impl ResultsScreen {
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
-                format!(" ACCOUNT BREAKDOWN ({}) ({}) [h/l year, v view] ", selected_year, pct)
+                format!(
+                    " ACCOUNT BREAKDOWN ({}) ({}) [h/l year, v view] ",
+                    selected_year, pct
+                )
             } else {
                 format!(" ACCOUNT BREAKDOWN ({}) ({}) ", selected_year, pct)
             }
+        } else if focused {
+            format!(" ACCOUNT BREAKDOWN ({}) [h/l year] ", selected_year)
         } else {
-            if focused {
-                format!(" ACCOUNT BREAKDOWN ({}) [h/l year] ", selected_year)
-            } else {
-                format!(" ACCOUNT BREAKDOWN ({}) ", selected_year)
-            }
+            format!(" ACCOUNT BREAKDOWN ({}) ", selected_year)
         };
 
         let block = Block::default()
@@ -703,16 +705,18 @@ impl ResultsScreen {
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
-                format!(" LEDGER [{}] ({}) [j/k scroll, f filter, v view] ", filter.label(), pct)
+                format!(
+                    " LEDGER [{}] ({}) [j/k scroll, f filter, v view] ",
+                    filter.label(),
+                    pct
+                )
             } else {
                 format!(" LEDGER [{}] ({}) ", filter.label(), pct)
             }
+        } else if focused {
+            format!(" LEDGER [{}] [j/k scroll, f filter] ", filter.label())
         } else {
-            if focused {
-                format!(" LEDGER [{}] [j/k scroll, f filter] ", filter.label())
-            } else {
-                format!(" LEDGER [{}] ", filter.label())
-            }
+            format!(" LEDGER [{}] ", filter.label())
         };
 
         let block = Block::default()

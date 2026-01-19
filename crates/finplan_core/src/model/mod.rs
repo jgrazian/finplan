@@ -21,7 +21,11 @@ pub use events::{
 pub use ids::{AccountId, AssetCoord, AssetId, EventId, ReturnProfileId};
 pub use market::{InflationProfile, Market, ReturnProfile, n_day_rate};
 pub use records::{Record, RecordKind, TaxInfo, TransactionSource};
-pub use results::{MonteCarloResult, SimulationResult, WealthSnapshot};
+pub use results::{
+    final_net_worth, MeanAccumulators, MonteCarloConfig, MonteCarloResult, MonteCarloStats,
+    MonteCarloSummary, SimulationResult, SnapshotMeanAccumulator, TaxMeanAccumulator,
+    WealthSnapshot,
+};
 pub use rmd::{RmdTable, RmdTableEntry};
 pub use state_event::{LedgerEntry, StateEvent};
 pub use tax_config::{TaxBracket, TaxConfig, TaxSummary};

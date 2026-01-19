@@ -66,16 +66,10 @@ pub enum StateEvent {
 
     // === Cash Operations ===
     /// Add cash to an account (income, transfer in, etc.)
-    CashCredit {
-        to: AccountId,
-        amount: f64,
-    },
+    CashCredit { to: AccountId, amount: f64 },
 
     /// Remove cash from an account (expense, transfer out, etc.)
-    CashDebit {
-        from: AccountId,
-        amount: f64,
-    },
+    CashDebit { from: AccountId, amount: f64 },
 
     /// Cash appreciation from interest/returns (HYSA, money market, etc.)
     CashAppreciation {
@@ -141,31 +135,20 @@ pub enum StateEvent {
 
     // === Event Management ===
     /// A user-defined event was triggered
-    EventTriggered {
-        event_id: EventId,
-    },
+    EventTriggered { event_id: EventId },
 
     /// A repeating event was paused
-    EventPaused {
-        event_id: EventId,
-    },
+    EventPaused { event_id: EventId },
 
     /// A paused event was resumed
-    EventResumed {
-        event_id: EventId,
-    },
+    EventResumed { event_id: EventId },
 
     /// An event was permanently terminated
-    EventTerminated {
-        event_id: EventId,
-    },
+    EventTerminated { event_id: EventId },
 
     // === Year-End Events ===
     /// Year rollover for tax purposes
-    YearRollover {
-        from_year: i16,
-        to_year: i16,
-    },
+    YearRollover { from_year: i16, to_year: i16 },
 
     /// RMD calculation and withdrawal
     RmdWithdrawal {
@@ -181,7 +164,10 @@ pub enum StateEvent {
 impl StateEvent {
     /// Check if this is a time-related event
     pub fn is_time_event(&self) -> bool {
-        matches!(self, StateEvent::TimeAdvance { .. } | StateEvent::YearRollover { .. })
+        matches!(
+            self,
+            StateEvent::TimeAdvance { .. } | StateEvent::YearRollover { .. }
+        )
     }
 
     /// Check if this is a cash operation

@@ -494,9 +494,9 @@ impl PortfolioProfilesScreen {
             };
 
             // Reserve space for: prefix(2) + name(9) + " XXX%"(5) + " $X,XXX,XXX.XX"(15) = 31
-            let bar_width = area
-                .width
-                .saturating_sub(if editing_mode { 36 } else { 34 }) as usize;
+            let bar_width =
+                area.width
+                    .saturating_sub(if editing_mode { 36 } else { 34 }) as usize;
             let filled = if total_value > 0.0 {
                 (bar_width as f64 * asset_val.value / total_value).round() as usize
             } else {

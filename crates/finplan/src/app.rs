@@ -216,9 +216,8 @@ impl App {
             TabId::Results => self.results_screen.handle_key(key_event, &mut self.state),
         };
 
-        match result {
-            EventResult::Exit => self.state.exit = true,
-            _ => {}
+        if result == EventResult::Exit {
+            self.state.exit = true
         }
     }
 

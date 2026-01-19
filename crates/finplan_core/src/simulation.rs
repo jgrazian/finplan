@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use crate::apply::process_events;
 use crate::config::SimulationConfig;
 use crate::model::{
-    AccountFlavor, AccountId, EventTrigger, LedgerEntry, MonteCarloResult, SimulationResult,
-    StateEvent, TaxStatus, TriggerOffset,
+    AccountFlavor, AccountId, EventTrigger, LedgerEntry, MeanAccumulators, MonteCarloConfig,
+    MonteCarloResult, MonteCarloStats, MonteCarloSummary, SimulationResult, StateEvent, TaxStatus,
+    TriggerOffset, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 
@@ -185,7 +187,8 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
                     // Apply interest to liability (debt grows over time)
                     if loan.interest_rate > 0.0 {
                         let previous_principal = loan.principal;
-                        let multiplier = (1.0 + loan.interest_rate).powf(days_passed as f64 / 365.0);
+                        let multiplier =
+                            (1.0 + loan.interest_rate).powf(days_passed as f64 / 365.0);
                         loan.principal *= multiplier;
 
                         // Only record if there was actual interest accrual
@@ -259,6 +262,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     state.timeline.current_date = next_checkpoint;
 }
 
+/// DEPRECATED: Use monte_carlo_simulate_with_config for memory efficiency
 pub fn monte_carlo_simulate(params: &SimulationConfig, num_iterations: usize) -> MonteCarloResult {
     const MAX_BATCH_SIZE: usize = 100;
     let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
@@ -284,4 +288,124 @@ pub fn monte_carlo_simulate(params: &SimulationConfig, num_iterations: usize) ->
         .collect();
 
     MonteCarloResult { iterations }
+}
+
+/// Memory-efficient Monte Carlo simulation
+///
+/// This function runs simulations in two phases:
+/// 1. First pass: Run all iterations, keeping only (seed, final_net_worth) and accumulating mean sums
+/// 2. Second pass: Re-run only the specific seeds needed for percentile runs
+///
+/// This approach uses O(N) memory for seeds/values instead of O(N * result_size)
+pub fn monte_carlo_simulate_with_config(
+    params: &SimulationConfig,
+    config: &MonteCarloConfig,
+) -> MonteCarloSummary {
+    let num_iterations = config.iterations;
+    const MAX_BATCH_SIZE: usize = 100;
+    let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
+
+    // Phase 1: Run all iterations, collecting seeds and final net worth
+    // Also accumulate mean sums if requested
+    let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
+        Some(Mutex::new(None))
+    } else {
+        None
+    };
+
+    // Collect (seed, final_net_worth) for all iterations
+    let mut seed_results: Vec<(u64, f64)> = (0..num_batches)
+        .into_par_iter()
+        .flat_map(|batch_idx| {
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
+
+            let batch_size = if batch_idx == num_batches - 1 {
+                num_iterations - batch_idx * MAX_BATCH_SIZE
+            } else {
+                MAX_BATCH_SIZE
+            };
+
+            (0..batch_size)
+                .map(|_| {
+                    let seed = rng.next_u64();
+                    let result = simulate(params, seed);
+                    let fnw = final_net_worth(&result);
+
+                    // Accumulate mean sums if requested
+                    if let Some(ref acc_mutex) = mean_accumulator {
+                        let mut acc_guard = acc_mutex.lock().unwrap();
+                        match acc_guard.as_mut() {
+                            Some(acc) => acc.accumulate(&result),
+                            None => {
+                                let mut new_acc = MeanAccumulators::new(&result);
+                                new_acc.accumulate(&result);
+                                *acc_guard = Some(new_acc);
+                            }
+                        }
+                    }
+
+                    (seed, fnw)
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    // Sort by final net worth (ascending)
+    seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Calculate statistics
+    let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
+    let mean_final_net_worth: f64 = final_values.iter().sum::<f64>() / num_iterations as f64;
+
+    let variance: f64 = final_values
+        .iter()
+        .map(|v| (v - mean_final_net_worth).powi(2))
+        .sum::<f64>()
+        / num_iterations as f64;
+    let std_dev_final_net_worth = variance.sqrt();
+
+    let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
+    let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
+
+    let success_count = final_values.iter().filter(|v| **v > 0.0).count();
+    let success_rate = success_count as f64 / num_iterations as f64;
+
+    // Calculate percentile indices and values
+    let mut percentile_values = Vec::new();
+    let mut percentile_seeds = Vec::new();
+
+    for &p in &config.percentiles {
+        let idx = ((num_iterations as f64 * p).floor() as usize).min(num_iterations - 1);
+        let (seed, value) = seed_results[idx];
+        percentile_values.push((p, value));
+        percentile_seeds.push((p, seed));
+    }
+
+    // Phase 2: Re-run simulations for percentile seeds to get full results
+    let percentile_runs: Vec<(f64, SimulationResult)> = percentile_seeds
+        .into_iter()
+        .map(|(p, seed)| {
+            let result = simulate(params, seed);
+            (p, result)
+        })
+        .collect();
+
+    // Extract mean accumulators
+    let mean_accumulators = mean_accumulator.and_then(|m| m.into_inner().ok().flatten());
+
+    let stats = MonteCarloStats {
+        num_iterations,
+        success_rate,
+        mean_final_net_worth,
+        std_dev_final_net_worth,
+        min_final_net_worth,
+        max_final_net_worth,
+        percentile_values,
+    };
+
+    MonteCarloSummary {
+        stats,
+        percentile_runs,
+        mean_accumulators,
+    }
 }
