@@ -3,6 +3,7 @@ use crate::components::{Component, EventResult};
 use crate::data::events_data::{
     AmountData, EffectData, EventData, EventTag, IntervalData, SpecialAmount, TriggerData,
 };
+use crate::state::context::ModalContext;
 use crate::state::{
     AppState, ConfirmModal, EventsPanel, FormField, FormModal, ModalAction, ModalState, PickerModal,
 };
@@ -708,7 +709,9 @@ impl EventsScreen {
                         ],
                         ModalAction::EDIT_EVENT,
                     )
-                    .with_context(&state.events_state.selected_event_index.to_string());
+                    .with_typed_context(ModalContext::event_index(
+                        state.events_state.selected_event_index,
+                    ));
 
                     state.modal = ModalState::Form(form);
                 }
@@ -727,7 +730,9 @@ impl EventsScreen {
                             &format!("Delete event '{}'?", event.name.0),
                             ModalAction::DELETE_EVENT,
                         )
-                        .with_context(&state.events_state.selected_event_index.to_string()),
+                        .with_typed_context(ModalContext::event_index(
+                            state.events_state.selected_event_index,
+                        )),
                     );
                 }
                 EventResult::Handled

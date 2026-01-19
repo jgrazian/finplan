@@ -16,7 +16,7 @@ use crate::screens::{
 };
 use crate::state::{
     AccountAction, AppState, ConfigAction, EffectAction, EventAction, HoldingAction, ModalAction,
-    ModalState, ProfileAction, ScenarioAction, TabId,
+    ModalState, ProfileAction, ScenarioAction, TabId, context::ModalContext,
 };
 
 pub struct App {
@@ -223,7 +223,7 @@ impl App {
 
     fn handle_modal_result(&mut self, action: ModalAction, value: String) {
         // Extract context from the modal before we clear it
-        let context: Option<crate::state::ModalContextValue> = match &self.state.modal {
+        let context: Option<ModalContext> = match &self.state.modal {
             ModalState::Form(form) => form.context.clone(),
             ModalState::Confirm(confirm) => confirm.context.clone(),
             ModalState::Picker(picker) => picker.context.clone(),

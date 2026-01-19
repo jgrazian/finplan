@@ -59,10 +59,10 @@ impl AccountTypeContext {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "Brokerage" => Some(Self::Brokerage),
-            "Traditional401k" | "Traditional 401k" => Some(Self::Traditional401k),
-            "Roth401k" | "Roth 401k" => Some(Self::Roth401k),
-            "TraditionalIRA" | "Traditional IRA" => Some(Self::TraditionalIRA),
-            "RothIRA" | "Roth IRA" => Some(Self::RothIRA),
+            "401(k)" | "Traditional401k" | "Traditional 401k" => Some(Self::Traditional401k),
+            "Roth 401(k)" | "Roth401k" | "Roth 401k" => Some(Self::Roth401k),
+            "Traditional IRA" | "TraditionalIRA" => Some(Self::TraditionalIRA),
+            "Roth IRA" | "RothIRA" => Some(Self::RothIRA),
             "Checking" => Some(Self::Checking),
             "Savings" => Some(Self::Savings),
             "HSA" => Some(Self::HSA),
@@ -70,7 +70,7 @@ impl AccountTypeContext {
             "Collectible" => Some(Self::Collectible),
             "Mortgage" => Some(Self::Mortgage),
             "Loan" => Some(Self::Loan),
-            "StudentLoan" | "Student Loan" => Some(Self::StudentLoan),
+            "Student Loan" | "StudentLoan" => Some(Self::StudentLoan),
             _ => None,
         }
     }
@@ -97,6 +97,7 @@ impl AccountTypeContext {
 /// Profile type context for create/edit
 #[derive(Debug, Clone, PartialEq)]
 pub enum ProfileTypeContext {
+    None,
     Fixed,
     Normal,
     LogNormal,
@@ -105,15 +106,17 @@ pub enum ProfileTypeContext {
 impl ProfileTypeContext {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "Fixed" => Some(Self::Fixed),
-            "Normal" => Some(Self::Normal),
-            "LogNormal" | "Log-Normal" => Some(Self::LogNormal),
-            _ => None,
+            "None" => Some(Self::None),
+            "Fixed" | "Fixed Rate" => Some(Self::Fixed),
+            "Normal" | "Normal Distribution" => Some(Self::Normal),
+            "LogNormal" | "Log-Normal" | "Log-Normal Distribution" => Some(Self::LogNormal),
+            _ => Option::None,
         }
     }
 
     pub fn display_name(&self) -> &'static str {
         match self {
+            Self::None => "None",
             Self::Fixed => "Fixed",
             Self::Normal => "Normal",
             Self::LogNormal => "Log-Normal",
@@ -136,7 +139,10 @@ pub enum PartialTrigger {
     /// Date-based trigger
     Date { date: Option<String> },
     /// Age-based trigger
-    Age { years: Option<u8>, months: Option<u8> },
+    Age {
+        years: Option<u8>,
+        months: Option<u8>,
+    },
     /// Manual trigger
     Manual,
     /// Net worth threshold trigger
@@ -172,15 +178,20 @@ impl PartialTrigger {
             PartialTrigger::Date { date } => date.is_some(),
             PartialTrigger::Age { years, .. } => years.is_some(),
             PartialTrigger::Manual => true,
-            PartialTrigger::NetWorth { threshold, comparison } => {
-                threshold.is_some() && comparison.is_some()
-            }
-            PartialTrigger::AccountBalance { threshold, comparison, .. } => {
-                threshold.is_some() && comparison.is_some()
-            }
-            PartialTrigger::RelativeToEvent { offset_years, offset_months, .. } => {
-                offset_years.is_some() || offset_months.is_some()
-            }
+            PartialTrigger::NetWorth {
+                threshold,
+                comparison,
+            } => threshold.is_some() && comparison.is_some(),
+            PartialTrigger::AccountBalance {
+                threshold,
+                comparison,
+                ..
+            } => threshold.is_some() && comparison.is_some(),
+            PartialTrigger::RelativeToEvent {
+                offset_years,
+                offset_months,
+                ..
+            } => offset_years.is_some() || offset_months.is_some(),
             PartialTrigger::Repeating { .. } => true, // Always complete at the repeating level
         }
     }
@@ -330,28 +341,34 @@ impl TriggerContext {
 /// Effect context for add/edit/delete operations
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectContext {
-    /// Effect within an event: (event_index, effect_index)
+    /// Effect within an event: (event_index, effect_index) - for delete/select
     Existing { event: usize, effect: usize },
     /// Adding a new effect of a specific type to an event
     Add {
         event: usize,
         effect_type: EffectTypeContext,
     },
+    /// Editing an existing effect
+    Edit {
+        event: usize,
+        effect: usize,
+        effect_type: EffectTypeContext,
+    },
 }
 
-/// Effect type context for creation
+/// Effect type context for creation/editing
 #[derive(Debug, Clone, PartialEq)]
 pub enum EffectTypeContext {
     Income,
     Expense,
+    AssetPurchase,
+    AssetSale,
+    Sweep,
     TriggerEvent,
     PauseEvent,
     ResumeEvent,
     TerminateEvent,
-    Transfer,
-    AssetAllocation,
-    Withdrawal,
-    Contribution,
+    ApplyRmd,
 }
 
 impl EffectTypeContext {
@@ -359,14 +376,14 @@ impl EffectTypeContext {
         match s {
             "Income" => Some(Self::Income),
             "Expense" => Some(Self::Expense),
+            "AssetPurchase" | "Asset Purchase" => Some(Self::AssetPurchase),
+            "AssetSale" | "Asset Sale" => Some(Self::AssetSale),
+            "Sweep" => Some(Self::Sweep),
             "TriggerEvent" | "Trigger Event" => Some(Self::TriggerEvent),
             "PauseEvent" | "Pause Event" => Some(Self::PauseEvent),
             "ResumeEvent" | "Resume Event" => Some(Self::ResumeEvent),
             "TerminateEvent" | "Terminate Event" => Some(Self::TerminateEvent),
-            "Transfer" => Some(Self::Transfer),
-            "AssetAllocation" | "Asset Allocation" => Some(Self::AssetAllocation),
-            "Withdrawal" => Some(Self::Withdrawal),
-            "Contribution" => Some(Self::Contribution),
+            "ApplyRmd" | "Apply RMD" => Some(Self::ApplyRmd),
             _ => None,
         }
     }
@@ -375,14 +392,14 @@ impl EffectTypeContext {
         match self {
             Self::Income => "Income",
             Self::Expense => "Expense",
+            Self::AssetPurchase => "Asset Purchase",
+            Self::AssetSale => "Asset Sale",
+            Self::Sweep => "Sweep",
             Self::TriggerEvent => "Trigger Event",
             Self::PauseEvent => "Pause Event",
             Self::ResumeEvent => "Resume Event",
             Self::TerminateEvent => "Terminate Event",
-            Self::Transfer => "Transfer",
-            Self::AssetAllocation => "Asset Allocation",
-            Self::Withdrawal => "Withdrawal",
-            Self::Contribution => "Contribution",
+            Self::ApplyRmd => "Apply RMD",
         }
     }
 }
@@ -397,6 +414,7 @@ pub enum ConfigContext {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaxConfigContext {
     StateRate,
+    CapGainsRate,
     FederalBrackets,
 }
 
@@ -442,6 +460,14 @@ impl ModalContext {
 
     pub fn effect_add(event: usize, effect_type: EffectTypeContext) -> Self {
         Self::Effect(EffectContext::Add { event, effect_type })
+    }
+
+    pub fn effect_edit(event: usize, effect: usize, effect_type: EffectTypeContext) -> Self {
+        Self::Effect(EffectContext::Edit {
+            event,
+            effect,
+            effect_type,
+        })
     }
 }
 

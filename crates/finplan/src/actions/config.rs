@@ -2,6 +2,7 @@
 
 use crate::data::parameters_data::{DistributionType, FederalBracketsPreset, InflationData};
 use crate::modals::parse_percentage;
+use crate::state::context::{ConfigContext, InflationConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
 
 use super::{ActionContext, ActionResult};
@@ -21,16 +22,27 @@ pub fn handle_federal_brackets_pick(state: &mut AppState, value: &str) -> Action
 /// Handle tax config editing (state rate, cap gains rate)
 pub fn handle_edit_tax_config(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let parts = ctx.value_parts();
-    let config_type = ctx.context_str();
 
-    match config_type {
-        "state_rate" => {
+    // Get typed config context
+    let config_ctx = ctx
+        .typed_context()
+        .and_then(|c| c.as_config())
+        .and_then(|c| {
+            if let ConfigContext::Tax(tax) = c {
+                Some(tax)
+            } else {
+                None
+            }
+        });
+
+    match config_ctx {
+        Some(TaxConfigContext::StateRate) => {
             if let Some(rate) = parts.first().and_then(|s| parse_percentage(s).ok()) {
                 state.data_mut().parameters.tax_config.state_rate = rate;
                 return ActionResult::modified();
             }
         }
-        "cap_gains_rate" => {
+        Some(TaxConfigContext::CapGainsRate) => {
             if let Some(rate) = parts.first().and_then(|s| parse_percentage(s).ok()) {
                 state
                     .data_mut()
@@ -40,7 +52,7 @@ pub fn handle_edit_tax_config(state: &mut AppState, ctx: ActionContext) -> Actio
                 return ActionResult::modified();
             }
         }
-        _ => {}
+        Some(TaxConfigContext::FederalBrackets) | None => {}
     }
 
     ActionResult::close()
@@ -61,7 +73,9 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
                     vec![FormField::percentage("Rate", 0.03)],
                     ModalAction::EDIT_INFLATION,
                 )
-                .with_context("Fixed"),
+                .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
+                    InflationConfigContext::Fixed,
+                ))),
             ))
         }
         "Normal" => {
@@ -74,7 +88,9 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
                     ],
                     ModalAction::EDIT_INFLATION,
                 )
-                .with_context("Normal"),
+                .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
+                    InflationConfigContext::Normal,
+                ))),
             ))
         }
         "Log-Normal" => {
@@ -87,7 +103,9 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
                     ],
                     ModalAction::EDIT_INFLATION,
                 )
-                .with_context("LogNormal"),
+                .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
+                    InflationConfigContext::LogNormal,
+                ))),
             ))
         }
         "US Historical" => {
@@ -117,11 +135,22 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
 /// Handle inflation editing
 pub fn handle_edit_inflation(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let parts = ctx.value_parts();
-    let inflation_type = ctx.context_str();
     let value = ctx.value;
 
-    match inflation_type {
-        "Fixed" => {
+    // Get typed config context
+    let inflation_ctx = ctx
+        .typed_context()
+        .and_then(|c| c.as_config())
+        .and_then(|c| {
+            if let ConfigContext::Inflation(inf) = c {
+                Some(inf)
+            } else {
+                None
+            }
+        });
+
+    match inflation_ctx {
+        Some(InflationConfigContext::Fixed) => {
             let rate = parts
                 .first()
                 .and_then(|s| parse_percentage(s).ok())
@@ -129,7 +158,7 @@ pub fn handle_edit_inflation(state: &mut AppState, ctx: ActionContext) -> Action
             state.data_mut().parameters.inflation = InflationData::Fixed { rate };
             ActionResult::modified()
         }
-        "Normal" => {
+        Some(InflationConfigContext::Normal) => {
             let mean = parts
                 .first()
                 .and_then(|s| parse_percentage(s).ok())
@@ -141,7 +170,7 @@ pub fn handle_edit_inflation(state: &mut AppState, ctx: ActionContext) -> Action
             state.data_mut().parameters.inflation = InflationData::Normal { mean, std_dev };
             ActionResult::modified()
         }
-        "LogNormal" => {
+        Some(InflationConfigContext::LogNormal) => {
             let mean = parts
                 .first()
                 .and_then(|s| parse_percentage(s).ok())
@@ -153,25 +182,25 @@ pub fn handle_edit_inflation(state: &mut AppState, ctx: ActionContext) -> Action
             state.data_mut().parameters.inflation = InflationData::LogNormal { mean, std_dev };
             ActionResult::modified()
         }
-        // Handle US Historical sub-picker selection
-        _ if value == "Normal" => {
+        // Handle US Historical sub-picker selection (no typed context)
+        None if value == "Normal" => {
             state.data_mut().parameters.inflation = InflationData::USHistorical {
                 distribution: DistributionType::Normal,
             };
             ActionResult::modified()
         }
-        _ if value == "Log-Normal" => {
+        None if value == "Log-Normal" => {
             state.data_mut().parameters.inflation = InflationData::USHistorical {
                 distribution: DistributionType::LogNormal,
             };
             ActionResult::modified()
         }
-        _ if value == "Fixed (Mean)" => {
+        None if value == "Fixed (Mean)" => {
             state.data_mut().parameters.inflation = InflationData::USHistorical {
                 distribution: DistributionType::Fixed,
             };
             ActionResult::modified()
         }
-        _ => ActionResult::close(),
+        None => ActionResult::close(),
     }
 }

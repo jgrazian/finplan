@@ -12,14 +12,16 @@
 // Effect Addition:
 //   ManageEffects → PickEffectTypeForAdd → AddEffect
 
-use crate::state::{FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::state::{
+    FormField, FormModal, ModalAction, ModalState, PickerModal, context::ModalContext,
+};
 
 /// A wizard step builder for creating form modals
 pub struct FormWizard {
     title: String,
     fields: Vec<FormField>,
     action: ModalAction,
-    context: Option<String>,
+    context: Option<ModalContext>,
     start_editing: bool,
 }
 
@@ -60,8 +62,8 @@ impl FormWizard {
     }
 
     /// Set the context for this form
-    pub fn context(mut self, ctx: impl Into<String>) -> Self {
-        self.context = Some(ctx.into());
+    pub fn context(mut self, ctx: ModalContext) -> Self {
+        self.context = Some(ctx);
         self
     }
 
@@ -75,7 +77,7 @@ impl FormWizard {
     pub fn build(self) -> ModalState {
         let mut form = FormModal::new(&self.title, self.fields, self.action);
         if let Some(ctx) = self.context {
-            form = form.with_context(&ctx);
+            form = form.with_typed_context(ctx);
         }
         if self.start_editing {
             form = form.start_editing();
@@ -124,12 +126,7 @@ pub mod shortcuts {
     use super::*;
 
     /// Create a simple text input form
-    pub fn text_form(
-        title: &str,
-        label: &str,
-        default: &str,
-        action: ModalAction,
-    ) -> ModalState {
+    pub fn text_form(title: &str, label: &str, default: &str, action: ModalAction) -> ModalState {
         FormWizard::new(title, action)
             .text(label, default)
             .editing()
@@ -140,7 +137,7 @@ pub mod shortcuts {
     pub fn name_desc_form(
         title: &str,
         action: ModalAction,
-        context: Option<&str>,
+        context: Option<ModalContext>,
     ) -> ModalState {
         let mut wizard = FormWizard::new(title, action)
             .text("Name", "")
@@ -170,7 +167,9 @@ mod tests {
         let modal = FormWizard::new("Test Form", ModalAction::CREATE_ACCOUNT)
             .text("Name", "Default")
             .currency("Amount", 100.0)
-            .context("test_context")
+            .context(ModalContext::AccountType(
+                crate::state::context::AccountTypeContext::Brokerage,
+            ))
             .editing()
             .build();
 
@@ -178,7 +177,6 @@ mod tests {
             ModalState::Form(form) => {
                 assert_eq!(form.title, "Test Form");
                 assert_eq!(form.fields.len(), 2);
-                assert_eq!(form.context_str(), Some("test_context".to_string()));
                 assert!(form.editing);
             }
             _ => panic!("Expected Form modal"),

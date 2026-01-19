@@ -3,6 +3,7 @@
 use crate::data::portfolio_data::{AccountData, AccountType, AssetAccount, Debt, Property};
 use crate::data::profiles_data::ReturnProfileTag;
 use crate::modals::{parse_currency, parse_percentage};
+use crate::state::context::{AccountTypeContext, ModalContext};
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
 
 use super::{ActionContext, ActionResult};
@@ -53,16 +54,29 @@ pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
     let mut profile_options: Vec<String> = vec!["".to_string()]; // Empty option for "none"
     profile_options.extend(state.data().profiles.iter().map(|p| p.name.0.clone()));
 
-    let (title, fields, context) = match account_type {
-        "Brokerage" | "401(k)" | "Roth 401(k)" | "Traditional IRA" | "Roth IRA" => (
+    // Parse the account type string to typed context
+    let account_type_ctx = match AccountTypeContext::from_str(account_type) {
+        Some(ctx) => ctx,
+        None => return ActionResult::close(),
+    };
+
+    let (title, fields) = match &account_type_ctx {
+        AccountTypeContext::Brokerage
+        | AccountTypeContext::Traditional401k
+        | AccountTypeContext::Roth401k
+        | AccountTypeContext::TraditionalIRA
+        | AccountTypeContext::RothIRA => (
             "New Investment Account",
             vec![
                 FormField::text("Name", ""),
                 FormField::text("Description", ""),
             ],
-            account_type.to_string(),
         ),
-        "Checking" | "Savings" | "HSA" | "Property" | "Collectible" => (
+        AccountTypeContext::Checking
+        | AccountTypeContext::Savings
+        | AccountTypeContext::HSA
+        | AccountTypeContext::Property
+        | AccountTypeContext::Collectible => (
             "New Cash/Property Account",
             vec![
                 FormField::text("Name", ""),
@@ -70,9 +84,10 @@ pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
                 FormField::currency("Value", 0.0),
                 FormField::select("Return Profile", profile_options, ""),
             ],
-            account_type.to_string(),
         ),
-        "Mortgage" | "Loan" | "Student Loan" => (
+        AccountTypeContext::Mortgage
+        | AccountTypeContext::Loan
+        | AccountTypeContext::StudentLoan => (
             "New Debt Account",
             vec![
                 FormField::text("Name", ""),
@@ -80,36 +95,62 @@ pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
                 FormField::currency("Balance", 0.0),
                 FormField::percentage("Interest Rate", 0.0),
             ],
-            account_type.to_string(),
         ),
-        _ => return ActionResult::close(),
     };
 
     ActionResult::modal(ModalState::Form(
-        FormModal::new(title, fields, ModalAction::CREATE_ACCOUNT).with_context(&context),
+        FormModal::new(title, fields, ModalAction::CREATE_ACCOUNT)
+            .with_typed_context(ModalContext::AccountType(account_type_ctx)),
     ))
 }
 
 /// Handle account creation
 pub fn handle_create_account(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let parts = ctx.value_parts();
-    let account_type_str = ctx.context_str();
 
-    let account = match account_type_str {
-        "Brokerage" => create_investment_account(&parts, AccountType::Brokerage),
-        "401(k)" => create_investment_account(&parts, AccountType::Traditional401k),
-        "Roth 401(k)" => create_investment_account(&parts, AccountType::Roth401k),
-        "Traditional IRA" => create_investment_account(&parts, AccountType::TraditionalIRA),
-        "Roth IRA" => create_investment_account(&parts, AccountType::RothIRA),
-        "Checking" => create_property_account(&parts, AccountType::Checking),
-        "Savings" => create_property_account(&parts, AccountType::Savings),
-        "HSA" => create_property_account(&parts, AccountType::HSA),
-        "Property" => create_property_account(&parts, AccountType::Property),
-        "Collectible" => create_property_account(&parts, AccountType::Collectible),
-        "Mortgage" => create_debt_account(&parts, AccountType::Mortgage),
-        "Loan" => create_debt_account(&parts, AccountType::LoanDebt),
-        "Student Loan" => create_debt_account(&parts, AccountType::StudentLoanDebt),
-        _ => None,
+    // Get typed account type context
+    let account_type_ctx = ctx
+        .typed_context()
+        .and_then(|c| c.as_account_type())
+        .cloned();
+
+    let account = match account_type_ctx {
+        Some(AccountTypeContext::Brokerage) => {
+            create_investment_account(&parts, AccountType::Brokerage)
+        }
+        Some(AccountTypeContext::Traditional401k) => {
+            create_investment_account(&parts, AccountType::Traditional401k)
+        }
+        Some(AccountTypeContext::Roth401k) => {
+            create_investment_account(&parts, AccountType::Roth401k)
+        }
+        Some(AccountTypeContext::TraditionalIRA) => {
+            create_investment_account(&parts, AccountType::TraditionalIRA)
+        }
+        Some(AccountTypeContext::RothIRA) => {
+            create_investment_account(&parts, AccountType::RothIRA)
+        }
+        Some(AccountTypeContext::Checking) => {
+            create_property_account(&parts, AccountType::Checking)
+        }
+        Some(AccountTypeContext::Savings) => {
+            create_property_account(&parts, AccountType::Savings)
+        }
+        Some(AccountTypeContext::HSA) => create_property_account(&parts, AccountType::HSA),
+        Some(AccountTypeContext::Property) => {
+            create_property_account(&parts, AccountType::Property)
+        }
+        Some(AccountTypeContext::Collectible) => {
+            create_property_account(&parts, AccountType::Collectible)
+        }
+        Some(AccountTypeContext::Mortgage) => {
+            create_debt_account(&parts, AccountType::Mortgage)
+        }
+        Some(AccountTypeContext::Loan) => create_debt_account(&parts, AccountType::LoanDebt),
+        Some(AccountTypeContext::StudentLoan) => {
+            create_debt_account(&parts, AccountType::StudentLoanDebt)
+        }
+        None => None,
     };
 
     if let Some(acc) = account {

@@ -32,27 +32,35 @@ fn parse_yes_no(s: &str) -> bool {
 
 /// Handle trigger type selection - shows appropriate form or picker
 pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionResult {
-    let (title, fields, context) = match trigger_type {
-        "Date" => (
-            "New Event - Date Trigger",
-            vec![
-                FormField::text("Event Name", ""),
-                FormField::text("Description", ""),
-                FormField::text("Date (YYYY-MM-DD)", "2025-01-01"),
-                FormField::select("Once Only", yes_no_options(), "No"),
-            ],
-            "Date".to_string(),
-        ),
-        "Age" => (
-            "New Event - Age Trigger",
-            vec![
-                FormField::text("Event Name", ""),
-                FormField::text("Description", ""),
-                FormField::text("Age (years)", "65"),
-                FormField::select("Once Only", yes_no_options(), "Yes"),
-            ],
-            "Age".to_string(),
-        ),
+    match trigger_type {
+        "Date" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "New Event - Date Trigger",
+                vec![
+                    FormField::text("Event Name", ""),
+                    FormField::text("Description", ""),
+                    FormField::text("Date (YYYY-MM-DD)", "2025-01-01"),
+                    FormField::select("Once Only", yes_no_options(), "No"),
+                ],
+                ModalAction::CREATE_EVENT,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::Date))
+            .start_editing(),
+        )),
+        "Age" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "New Event - Age Trigger",
+                vec![
+                    FormField::text("Event Name", ""),
+                    FormField::text("Description", ""),
+                    FormField::text("Age (years)", "65"),
+                    FormField::select("Once Only", yes_no_options(), "Yes"),
+                ],
+                ModalAction::CREATE_EVENT,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::Age))
+            .start_editing(),
+        )),
         "Repeating" => {
             // Show interval picker first
             let intervals = vec![
@@ -62,64 +70,70 @@ pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionR
                 "Quarterly".to_string(),
                 "Yearly".to_string(),
             ];
-            return ActionResult::modal(ModalState::Picker(PickerModal::new(
+            ActionResult::modal(ModalState::Picker(PickerModal::new(
                 "Select Repeat Interval",
                 intervals,
                 ModalAction::PICK_INTERVAL,
-            )));
+            )))
         }
-        "Manual" => (
-            "New Event - Manual Trigger",
-            vec![
-                FormField::text("Event Name", ""),
-                FormField::text("Description", ""),
-                FormField::select("Once Only", yes_no_options(), "No"),
-            ],
-            "Manual".to_string(),
-        ),
+        "Manual" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "New Event - Manual Trigger",
+                vec![
+                    FormField::text("Event Name", ""),
+                    FormField::text("Description", ""),
+                    FormField::select("Once Only", yes_no_options(), "No"),
+                ],
+                ModalAction::CREATE_EVENT,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::Manual))
+            .start_editing(),
+        )),
         "Account Balance" => {
             // Get account list
             let accounts = EventsScreen::get_account_names(state);
             if accounts.is_empty() {
                 return ActionResult::error("No accounts available. Create an account first.");
             }
-            return ActionResult::modal(ModalState::Picker(PickerModal::new(
+            ActionResult::modal(ModalState::Picker(PickerModal::new(
                 "Select Account for Balance Trigger",
                 accounts,
                 ModalAction::PICK_ACCOUNT_FOR_EFFECT,
-            )));
+            )))
         }
-        "Net Worth" => (
-            "New Event - Net Worth Trigger",
-            vec![
-                FormField::text("Event Name", ""),
-                FormField::text("Description", ""),
-                FormField::currency("Threshold", 1000000.0),
-                FormField::select("Trigger When", balance_comparison_options(), "Balance rises to or above"),
-                FormField::select("Once Only", yes_no_options(), "Yes"),
-            ],
-            "NetWorth".to_string(),
-        ),
+        "Net Worth" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "New Event - Net Worth Trigger",
+                vec![
+                    FormField::text("Event Name", ""),
+                    FormField::text("Description", ""),
+                    FormField::currency("Threshold", 1000000.0),
+                    FormField::select(
+                        "Trigger When",
+                        balance_comparison_options(),
+                        "Balance rises to or above",
+                    ),
+                    FormField::select("Once Only", yes_no_options(), "Yes"),
+                ],
+                ModalAction::CREATE_EVENT,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::NetWorth))
+            .start_editing(),
+        )),
         "Relative to Event" => {
             // Get event list
             let events = EventsScreen::get_event_names(state);
             if events.is_empty() {
                 return ActionResult::error("No events available. Create an event first.");
             }
-            return ActionResult::modal(ModalState::Picker(PickerModal::new(
+            ActionResult::modal(ModalState::Picker(PickerModal::new(
                 "Select Reference Event",
                 events,
                 ModalAction::PICK_EVENT_REFERENCE,
-            )));
+            )))
         }
-        _ => return ActionResult::close(),
-    };
-
-    ActionResult::modal(ModalState::Form(
-        FormModal::new(title, fields, ModalAction::CREATE_EVENT)
-            .with_context(&context)
-            .start_editing(),
-    ))
+        _ => ActionResult::close(),
+    }
 }
 
 /// Handle interval selection for repeating events
@@ -179,12 +193,18 @@ pub fn handle_account_for_effect_pick(account: &str) -> ActionResult {
                 FormField::text("Description", ""),
                 FormField::read_only("Account", account),
                 FormField::currency("Threshold", 100000.0),
-                FormField::select("Trigger When", balance_comparison_options(), "Balance drops to or below"),
+                FormField::select(
+                    "Trigger When",
+                    balance_comparison_options(),
+                    "Balance drops to or below",
+                ),
                 FormField::select("Once Only", yes_no_options(), "Yes"),
             ],
             ModalAction::CREATE_EVENT,
         )
-        .with_context(&format!("AccountBalance|{}", account))
+        .with_typed_context(ModalContext::Trigger(TriggerContext::AccountBalance(
+            account.to_string(),
+        )))
         .start_editing(),
     ))
 }
@@ -204,7 +224,9 @@ pub fn handle_event_reference_pick(event_ref: &str) -> ActionResult {
             ],
             ModalAction::CREATE_EVENT,
         )
-        .with_context(&format!("RelativeToEvent|{}", event_ref))
+        .with_typed_context(ModalContext::Trigger(TriggerContext::RelativeToEvent(
+            event_ref.to_string(),
+        )))
         .start_editing(),
     ))
 }
@@ -212,18 +234,30 @@ pub fn handle_event_reference_pick(event_ref: &str) -> ActionResult {
 /// Handle event creation
 pub fn handle_create_event(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let parts = ctx.value_parts();
-    let trigger_type = ctx.context_str();
+
+    // Get typed trigger context
+    let trigger_ctx = ctx
+        .typed_context()
+        .and_then(|c| c.as_trigger())
+        .cloned();
 
     // Parse trigger type and create appropriate event
-    let (trigger, name, description, once) = match trigger_type {
-        "Date" => parse_date_trigger(&parts),
-        "Age" => parse_age_trigger(&parts),
-        "Manual" => parse_manual_trigger(&parts),
-        "NetWorth" => parse_net_worth_trigger(&parts),
-        s if s.starts_with("Repeating|") => parse_repeating_trigger(s, &parts),
-        s if s.starts_with("AccountBalance|") => parse_account_balance_trigger(s, &parts),
-        s if s.starts_with("RelativeToEvent|") => parse_relative_trigger(s, &parts),
-        _ => return ActionResult::close(),
+    let (trigger, name, description, once) = match trigger_ctx {
+        Some(TriggerContext::Date) => parse_date_trigger(&parts),
+        Some(TriggerContext::Age) => parse_age_trigger(&parts),
+        Some(TriggerContext::Manual) => parse_manual_trigger(&parts),
+        Some(TriggerContext::NetWorth) => parse_net_worth_trigger(&parts),
+        Some(TriggerContext::AccountBalance(account)) => {
+            parse_account_balance_trigger_typed(&account, &parts)
+        }
+        Some(TriggerContext::RelativeToEvent(event)) => {
+            parse_relative_trigger_typed(&event, &parts)
+        }
+        Some(TriggerContext::Repeating(_)) | Some(TriggerContext::RepeatingBuilder(_)) => {
+            // Repeating events use the separate finalize flow
+            return ActionResult::close();
+        }
+        None => return ActionResult::close(),
     };
 
     if name.is_empty() {
@@ -367,58 +401,11 @@ fn parse_net_worth_trigger(parts: &[&str]) -> (TriggerData, String, Option<Strin
     (TriggerData::NetWorth { threshold }, name, desc, once)
 }
 
-fn parse_repeating_trigger(
-    context: &str,
+/// Parse account balance trigger with typed context
+fn parse_account_balance_trigger_typed(
+    account_name: &str,
     parts: &[&str],
 ) -> (TriggerData, String, Option<String>, bool) {
-    let interval_str = context.strip_prefix("Repeating|").unwrap_or("Monthly");
-    let interval = match interval_str {
-        "Weekly" => IntervalData::Weekly,
-        "Bi-Weekly" => IntervalData::BiWeekly,
-        "Monthly" => IntervalData::Monthly,
-        "Quarterly" => IntervalData::Quarterly,
-        "Yearly" => IntervalData::Yearly,
-        _ => IntervalData::Monthly,
-    };
-
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    // parts[2] is the read-only interval field
-    let start_date = parts.get(3).filter(|s| !s.is_empty());
-    let end_age: Option<u8> = parts.get(4).and_then(|s| s.parse().ok());
-
-    let start = start_date.map(|d| {
-        Box::new(TriggerData::Date {
-            date: d.to_string(),
-        })
-    });
-    let end = end_age.map(|years| {
-        Box::new(TriggerData::Age {
-            years,
-            months: None,
-        })
-    });
-
-    (
-        TriggerData::Repeating {
-            interval,
-            start,
-            end,
-        },
-        name,
-        desc,
-        false,
-    )
-}
-
-fn parse_account_balance_trigger(
-    context: &str,
-    parts: &[&str],
-) -> (TriggerData, String, Option<String>, bool) {
-    let account_name = context.strip_prefix("AccountBalance|").unwrap_or("");
     let name = parts.first().unwrap_or(&"").to_string();
     let desc = parts
         .get(1)
@@ -432,8 +419,6 @@ fn parse_account_balance_trigger(
     let comparison = parts.get(4).unwrap_or(&"Balance drops to or below");
     let once = parse_yes_no(parts.get(5).unwrap_or(&"Yes"));
 
-    // "Balance drops to or below" → LessThanOrEqual
-    // "Balance rises to or above" → GreaterThanOrEqual
     let threshold = if comparison.contains("drops") || comparison.contains("<=") {
         ThresholdData::LessThanOrEqual {
             value: threshold_val,
@@ -455,11 +440,11 @@ fn parse_account_balance_trigger(
     )
 }
 
-fn parse_relative_trigger(
-    context: &str,
+/// Parse relative trigger with typed context
+fn parse_relative_trigger_typed(
+    event_ref: &str,
     parts: &[&str],
 ) -> (TriggerData, String, Option<String>, bool) {
-    let event_ref = context.strip_prefix("RelativeToEvent|").unwrap_or("");
     let name = parts.first().unwrap_or(&"").to_string();
     let desc = parts
         .get(1)

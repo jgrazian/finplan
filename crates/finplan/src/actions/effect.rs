@@ -6,7 +6,10 @@ use crate::data::events_data::{
 use crate::data::portfolio_data::AssetTag;
 use crate::modals::parse_currency;
 use crate::screens::events::EventsScreen;
-use crate::state::{AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::state::context::{EffectContext, EffectTypeContext, ModalContext};
+use crate::state::{
+    AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal,
+};
 
 use super::{ActionContext, ActionResult};
 
@@ -57,7 +60,7 @@ pub fn handle_manage_effects(state: &AppState, selected: &str) -> ActionResult {
                     vec!["Edit Effect".to_string(), "Delete Effect".to_string()],
                     ModalAction::PICK_ACTION_FOR_EFFECT,
                 )
-                .with_context(&format!("{}:{}", event_idx, effect_idx)),
+                .with_typed_context(ModalContext::effect_existing(event_idx, effect_idx)),
             ));
         }
     }
@@ -65,12 +68,27 @@ pub fn handle_manage_effects(state: &AppState, selected: &str) -> ActionResult {
 }
 
 /// Handle the Edit/Delete picker for effects
-pub fn handle_action_for_effect_pick(state: &AppState, selected: &str, ctx: ActionContext) -> ActionResult {
-    let indices = ctx.indices();
-    if indices.len() != 2 {
-        return ActionResult::close();
-    }
-    let (event_idx, effect_idx) = (indices[0], indices[1]);
+pub fn handle_action_for_effect_pick(
+    state: &AppState,
+    selected: &str,
+    ctx: ActionContext,
+) -> ActionResult {
+    // Get typed effect context
+    let effect_ctx = ctx
+        .typed_context()
+        .and_then(|c| c.as_effect())
+        .and_then(|e| {
+            if let EffectContext::Existing { event, effect } = e {
+                Some((*event, *effect))
+            } else {
+                None
+            }
+        });
+
+    let (event_idx, effect_idx) = match effect_ctx {
+        Some(indices) => indices,
+        None => return ActionResult::close(),
+    };
 
     let Some(event) = state.data().events.get(event_idx) else {
         return ActionResult::close();
@@ -92,7 +110,7 @@ pub fn handle_action_for_effect_pick(state: &AppState, selected: &str, ctx: Acti
                     &format!("Delete effect: {}?", effect_desc),
                     ModalAction::DELETE_EFFECT,
                 )
-                .with_context(&format!("{}:{}", event_idx, effect_idx)),
+                .with_typed_context(ModalContext::effect_existing(event_idx, effect_idx)),
             ))
         }
         _ => ActionResult::close(),
@@ -106,7 +124,6 @@ fn build_edit_form_for_effect(
     event_idx: usize,
     effect_idx: usize,
 ) -> ActionResult {
-    let context = format!("{}:{}", event_idx, effect_idx);
     let accounts = EventsScreen::get_account_names(state);
     let events = EventsScreen::get_event_names(state);
 
@@ -131,7 +148,11 @@ fn build_edit_form_for_effect(
                 ],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("Income|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::Income,
+            ))
             .start_editing(),
         )),
 
@@ -144,7 +165,11 @@ fn build_edit_form_for_effect(
                 ],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("Expense|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::Expense,
+            ))
             .start_editing(),
         )),
 
@@ -164,7 +189,11 @@ fn build_edit_form_for_effect(
                 ],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("AssetPurchase|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::AssetPurchase,
+            ))
             .start_editing(),
         )),
 
@@ -193,7 +222,11 @@ fn build_edit_form_for_effect(
                 ],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("AssetSale|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::AssetSale,
+            ))
             .start_editing(),
         )),
 
@@ -211,7 +244,11 @@ fn build_edit_form_for_effect(
                 vec![
                     FormField::select("To Account", accounts, &to.0),
                     FormField::currency("Amount", amount_to_f64(amount)),
-                    FormField::select("Strategy", strategy_options(), strategy_to_display(*strategy)),
+                    FormField::select(
+                        "Strategy",
+                        strategy_options(),
+                        strategy_to_display(*strategy),
+                    ),
                     FormField::select("Gross", yes_no_options(), if *gross { "Yes" } else { "No" }),
                     FormField::select(
                         "Taxable",
@@ -226,7 +263,11 @@ fn build_edit_form_for_effect(
                 ],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("Sweep|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::Sweep,
+            ))
             .start_editing(),
         )),
 
@@ -236,7 +277,11 @@ fn build_edit_form_for_effect(
                 vec![FormField::select("Event to Trigger", events, &event.0)],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("TriggerEvent|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::TriggerEvent,
+            ))
             .start_editing(),
         )),
 
@@ -246,7 +291,11 @@ fn build_edit_form_for_effect(
                 vec![FormField::select("Event to Pause", events, &event.0)],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("PauseEvent|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::PauseEvent,
+            ))
             .start_editing(),
         )),
 
@@ -256,7 +305,11 @@ fn build_edit_form_for_effect(
                 vec![FormField::select("Event to Resume", events, &event.0)],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("ResumeEvent|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::ResumeEvent,
+            ))
             .start_editing(),
         )),
 
@@ -266,7 +319,11 @@ fn build_edit_form_for_effect(
                 vec![FormField::select("Event to Terminate", events, &event.0)],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("TerminateEvent|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::TerminateEvent,
+            ))
             .start_editing(),
         )),
 
@@ -286,7 +343,11 @@ fn build_edit_form_for_effect(
                 ],
                 ModalAction::EDIT_EFFECT,
             )
-            .with_context(&format!("ApplyRmd|{}", context))
+            .with_typed_context(ModalContext::effect_edit(
+                event_idx,
+                effect_idx,
+                EffectTypeContext::ApplyRmd,
+            ))
             .start_editing(),
         )),
     }
@@ -397,7 +458,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     ],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("Income|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::Income,
+                ))
                 .start_editing(),
             ))
         }
@@ -414,7 +478,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     ],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("Expense|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::Expense,
+                ))
                 .start_editing(),
             ))
         }
@@ -428,7 +495,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     vec![FormField::select("Event to Trigger", events, &first_event)],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("TriggerEvent|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::TriggerEvent,
+                ))
                 .start_editing(),
             ))
         }
@@ -442,7 +512,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     vec![FormField::select("Event to Pause", events, &first_event)],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("PauseEvent|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::PauseEvent,
+                ))
                 .start_editing(),
             ))
         }
@@ -456,7 +529,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     vec![FormField::select("Event to Resume", events, &first_event)],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("ResumeEvent|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::ResumeEvent,
+                ))
                 .start_editing(),
             ))
         }
@@ -470,7 +546,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     vec![FormField::select("Event to Terminate", events, &first_event)],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("TerminateEvent|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::TerminateEvent,
+                ))
                 .start_editing(),
             ))
         }
@@ -489,7 +568,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     ],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("AssetPurchase|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::AssetPurchase,
+                ))
                 .start_editing(),
             ))
         }
@@ -509,7 +591,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     ],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("AssetSale|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::AssetSale,
+                ))
                 .start_editing(),
             ))
         }
@@ -530,7 +615,7 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     ],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("Sweep|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(event_idx, EffectTypeContext::Sweep))
                 .start_editing(),
             ))
         }
@@ -547,7 +632,10 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     ],
                     ModalAction::ADD_EFFECT,
                 )
-                .with_context(&format!("ApplyRmd|{}", event_idx))
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::ApplyRmd,
+                ))
                 .start_editing(),
             ))
         }
@@ -557,15 +645,16 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
 
 /// Handle adding an effect to an event
 pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let context_str = ctx.context_str();
-    let ctx_parts: Vec<&str> = context_str.split('|').collect();
-    let effect_type = ctx_parts.first().copied().unwrap_or("");
-    let event_idx: usize = ctx_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // Get typed effect context
+    let (event_idx, effect_type) = match ctx.typed_context().and_then(|c| c.as_effect()) {
+        Some(EffectContext::Add { event, effect_type }) => (*event, effect_type.clone()),
+        _ => return ActionResult::close(),
+    };
 
     let form_parts = ctx.value_parts();
 
     let effect = match effect_type {
-        "Income" => {
+        EffectTypeContext::Income => {
             let to_account = form_parts.first().unwrap_or(&"").to_string();
             let amount = form_parts
                 .get(1)
@@ -574,50 +663,50 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             let gross = form_parts.get(2).map(|s| parse_yes_no(s)).unwrap_or(false);
             let taxable = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(true);
 
-            Some(EffectData::Income {
+            EffectData::Income {
                 to: AccountTag(to_account),
                 amount: AmountData::Fixed(amount),
                 gross,
                 taxable,
-            })
+            }
         }
-        "Expense" => {
+        EffectTypeContext::Expense => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let amount = form_parts
                 .get(1)
                 .and_then(|s| parse_currency(s).ok())
                 .unwrap_or(0.0);
 
-            Some(EffectData::Expense {
+            EffectData::Expense {
                 from: AccountTag(from_account),
                 amount: AmountData::Fixed(amount),
-            })
+            }
         }
-        "TriggerEvent" => {
+        EffectTypeContext::TriggerEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
-            Some(EffectData::TriggerEvent {
+            EffectData::TriggerEvent {
                 event: EventTag(event_name),
-            })
+            }
         }
-        "PauseEvent" => {
+        EffectTypeContext::PauseEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
-            Some(EffectData::PauseEvent {
+            EffectData::PauseEvent {
                 event: EventTag(event_name),
-            })
+            }
         }
-        "ResumeEvent" => {
+        EffectTypeContext::ResumeEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
-            Some(EffectData::ResumeEvent {
+            EffectData::ResumeEvent {
                 event: EventTag(event_name),
-            })
+            }
         }
-        "TerminateEvent" => {
+        EffectTypeContext::TerminateEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
-            Some(EffectData::TerminateEvent {
+            EffectData::TerminateEvent {
                 event: EventTag(event_name),
-            })
+            }
         }
-        "AssetPurchase" => {
+        EffectTypeContext::AssetPurchase => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let to_account = form_parts.get(1).unwrap_or(&"").to_string();
             let asset = form_parts.get(2).unwrap_or(&"").to_string();
@@ -626,14 +715,14 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 .and_then(|s| parse_currency(s).ok())
                 .unwrap_or(0.0);
 
-            Some(EffectData::AssetPurchase {
+            EffectData::AssetPurchase {
                 from: AccountTag(from_account),
                 to_account: AccountTag(to_account),
                 asset: AssetTag(asset),
                 amount: AmountData::Fixed(amount),
-            })
+            }
         }
-        "AssetSale" => {
+        EffectTypeContext::AssetSale => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let asset_str = form_parts.get(1).unwrap_or(&"").trim();
             let asset = if asset_str.is_empty() {
@@ -651,15 +740,15 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
-            Some(EffectData::AssetSale {
+            EffectData::AssetSale {
                 from: AccountTag(from_account),
                 asset,
                 amount: AmountData::Fixed(amount),
                 gross,
                 lot_method,
-            })
+            }
         }
-        "Sweep" => {
+        EffectTypeContext::Sweep => {
             let to_account = form_parts.first().unwrap_or(&"").to_string();
             let amount = form_parts
                 .get(1)
@@ -676,7 +765,7 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
-            Some(EffectData::Sweep {
+            EffectData::Sweep {
                 to: AccountTag(to_account),
                 amount: AmountData::Fixed(amount),
                 strategy,
@@ -684,26 +773,23 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 taxable,
                 lot_method,
                 exclude_accounts: vec![],
-            })
+            }
         }
-        "ApplyRmd" => {
+        EffectTypeContext::ApplyRmd => {
             let destination = form_parts.first().unwrap_or(&"").to_string();
             let lot_method = form_parts
                 .get(1)
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
-            Some(EffectData::ApplyRmd {
+            EffectData::ApplyRmd {
                 destination: AccountTag(destination),
                 lot_method,
-            })
+            }
         }
-        _ => None,
     };
 
-    if let Some(effect) = effect
-        && let Some(event) = state.data_mut().events.get_mut(event_idx)
-    {
+    if let Some(event) = state.data_mut().events.get_mut(event_idx) {
         event.effects.push(effect);
         ActionResult::modified()
     } else {
@@ -713,14 +799,11 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
 
 /// Handle effect deletion
 pub fn handle_delete_effect(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    // Context format: "event_idx:effect_idx"
-    let indices = ctx.indices();
-
-    if indices.len() != 2 {
-        return ActionResult::close();
-    }
-
-    let (event_idx, effect_idx) = (indices[0], indices[1]);
+    // Get typed effect context
+    let (event_idx, effect_idx) = match ctx.typed_context().and_then(|c| c.as_effect()) {
+        Some(EffectContext::Existing { event, effect }) => (*event, *effect),
+        _ => return ActionResult::close(),
+    };
 
     if let Some(event) = state.data_mut().events.get_mut(event_idx)
         && effect_idx < event.effects.len()
@@ -734,27 +817,21 @@ pub fn handle_delete_effect(state: &mut AppState, ctx: ActionContext) -> ActionR
 
 /// Handle editing an effect
 pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    // Context format: "EffectType|event_idx:effect_idx"
-    let context_str = ctx.context_str();
-    let ctx_parts: Vec<&str> = context_str.split('|').collect();
-    let effect_type = ctx_parts.first().copied().unwrap_or("");
-    let indices_str = ctx_parts.get(1).copied().unwrap_or("");
+    // Get typed effect context
+    let (event_idx, effect_idx, effect_type) = match ctx.typed_context().and_then(|c| c.as_effect())
+    {
+        Some(EffectContext::Edit {
+            event,
+            effect,
+            effect_type,
+        }) => (*event, *effect, effect_type.clone()),
+        _ => return ActionResult::close(),
+    };
 
-    // Parse event_idx:effect_idx
-    let indices: Vec<usize> = indices_str
-        .split(':')
-        .filter_map(|s| s.parse().ok())
-        .collect();
-
-    if indices.len() != 2 {
-        return ActionResult::close();
-    }
-
-    let (event_idx, effect_idx) = (indices[0], indices[1]);
     let form_parts = ctx.value_parts();
 
     let new_effect = match effect_type {
-        "Income" => {
+        EffectTypeContext::Income => {
             let to_account = form_parts.first().unwrap_or(&"").to_string();
             let amount = form_parts
                 .get(1)
@@ -770,7 +847,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 taxable,
             })
         }
-        "Expense" => {
+        EffectTypeContext::Expense => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let amount = form_parts
                 .get(1)
@@ -782,7 +859,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 amount: AmountData::Fixed(amount),
             })
         }
-        "AssetPurchase" => {
+        EffectTypeContext::AssetPurchase => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let to_account = form_parts.get(1).unwrap_or(&"").to_string();
             let asset = form_parts.get(2).unwrap_or(&"").to_string();
@@ -798,7 +875,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 amount: AmountData::Fixed(amount),
             })
         }
-        "AssetSale" => {
+        EffectTypeContext::AssetSale => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let asset_str = form_parts.get(1).unwrap_or(&"").trim();
             let asset = if asset_str.is_empty() {
@@ -824,7 +901,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 lot_method,
             })
         }
-        "Sweep" => {
+        EffectTypeContext::Sweep => {
             let to_account = form_parts.first().unwrap_or(&"").to_string();
             let amount = form_parts
                 .get(1)
@@ -851,31 +928,31 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 exclude_accounts: vec![],
             })
         }
-        "TriggerEvent" => {
+        EffectTypeContext::TriggerEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
             Some(EffectData::TriggerEvent {
                 event: EventTag(event_name),
             })
         }
-        "PauseEvent" => {
+        EffectTypeContext::PauseEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
             Some(EffectData::PauseEvent {
                 event: EventTag(event_name),
             })
         }
-        "ResumeEvent" => {
+        EffectTypeContext::ResumeEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
             Some(EffectData::ResumeEvent {
                 event: EventTag(event_name),
             })
         }
-        "TerminateEvent" => {
+        EffectTypeContext::TerminateEvent => {
             let event_name = form_parts.first().unwrap_or(&"").to_string();
             Some(EffectData::TerminateEvent {
                 event: EventTag(event_name),
             })
         }
-        "ApplyRmd" => {
+        EffectTypeContext::ApplyRmd => {
             let destination = form_parts.first().unwrap_or(&"").to_string();
             let lot_method = form_parts
                 .get(1)
@@ -887,7 +964,6 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 lot_method,
             })
         }
-        _ => None,
     };
 
     if let Some(effect) = new_effect

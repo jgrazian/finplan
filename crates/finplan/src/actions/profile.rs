@@ -2,31 +2,35 @@
 
 use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
 use crate::modals::parse_percentage;
+use crate::state::context::{ModalContext, ProfileTypeContext};
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState};
 
 use super::{ActionContext, ActionResult};
 
 /// Handle profile type selection - shows creation form
 pub fn handle_profile_type_pick(profile_type: &str) -> ActionResult {
-    let (title, fields, context) = match profile_type {
-        "None" => (
+    let profile_type_ctx = match ProfileTypeContext::from_str(profile_type) {
+        Some(ctx) => ctx,
+        None => return ActionResult::close(),
+    };
+
+    let (title, fields) = match &profile_type_ctx {
+        ProfileTypeContext::None => (
             "New Profile (None)",
             vec![
                 FormField::text("Name", ""),
                 FormField::text("Description", ""),
             ],
-            "None".to_string(),
         ),
-        "Fixed Rate" => (
+        ProfileTypeContext::Fixed => (
             "New Profile (Fixed)",
             vec![
                 FormField::text("Name", ""),
                 FormField::text("Description", ""),
                 FormField::percentage("Rate", 0.07),
             ],
-            "Fixed".to_string(),
         ),
-        "Normal Distribution" => (
+        ProfileTypeContext::Normal => (
             "New Profile (Normal)",
             vec![
                 FormField::text("Name", ""),
@@ -34,9 +38,8 @@ pub fn handle_profile_type_pick(profile_type: &str) -> ActionResult {
                 FormField::percentage("Mean", 0.07),
                 FormField::percentage("Std Dev", 0.15),
             ],
-            "Normal".to_string(),
         ),
-        "Log-Normal Distribution" => (
+        ProfileTypeContext::LogNormal => (
             "New Profile (Log-Normal)",
             vec![
                 FormField::text("Name", ""),
@@ -44,20 +47,24 @@ pub fn handle_profile_type_pick(profile_type: &str) -> ActionResult {
                 FormField::percentage("Mean", 0.07),
                 FormField::percentage("Std Dev", 0.15),
             ],
-            "LogNormal".to_string(),
         ),
-        _ => return ActionResult::close(),
     };
 
     ActionResult::modal(ModalState::Form(
-        FormModal::new(title, fields, ModalAction::CREATE_PROFILE).with_context(&context),
+        FormModal::new(title, fields, ModalAction::CREATE_PROFILE)
+            .with_typed_context(ModalContext::ProfileType(profile_type_ctx)),
     ))
 }
 
 /// Handle profile creation
 pub fn handle_create_profile(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let parts = ctx.value_parts();
-    let profile_type = ctx.context_str();
+
+    // Get typed profile type context
+    let profile_type_ctx = ctx
+        .typed_context()
+        .and_then(|c| c.as_profile_type())
+        .cloned();
 
     let name = parts.first().unwrap_or(&"").to_string();
     if name.is_empty() {
@@ -69,16 +76,16 @@ pub fn handle_create_profile(state: &mut AppState, ctx: ActionContext) -> Action
         .map(|s| s.to_string())
         .filter(|s| !s.is_empty());
 
-    let profile = match profile_type {
-        "None" => ReturnProfileData::None,
-        "Fixed" => {
+    let profile = match profile_type_ctx {
+        Some(ProfileTypeContext::None) | None => ReturnProfileData::None,
+        Some(ProfileTypeContext::Fixed) => {
             let rate = parts
                 .get(2)
                 .and_then(|s| parse_percentage(s).ok())
                 .unwrap_or(0.07);
             ReturnProfileData::Fixed { rate }
         }
-        "Normal" => {
+        Some(ProfileTypeContext::Normal) => {
             let mean = parts
                 .get(2)
                 .and_then(|s| parse_percentage(s).ok())
@@ -89,7 +96,7 @@ pub fn handle_create_profile(state: &mut AppState, ctx: ActionContext) -> Action
                 .unwrap_or(0.15);
             ReturnProfileData::Normal { mean, std_dev }
         }
-        "LogNormal" => {
+        Some(ProfileTypeContext::LogNormal) => {
             let mean = parts
                 .get(2)
                 .and_then(|s| parse_percentage(s).ok())
@@ -100,7 +107,6 @@ pub fn handle_create_profile(state: &mut AppState, ctx: ActionContext) -> Action
                 .unwrap_or(0.15);
             ReturnProfileData::LogNormal { mean, std_dev }
         }
-        _ => ReturnProfileData::None,
     };
 
     let profile_data = ProfileData {

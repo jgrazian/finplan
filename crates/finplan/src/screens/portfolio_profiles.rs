@@ -5,6 +5,7 @@ use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileData};
+use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
     AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal,
     PortfolioProfilesPanel,
@@ -1278,14 +1279,10 @@ impl PortfolioProfilesScreen {
                     .get(state.portfolio_profiles_state.selected_account_index)
                 {
                     let form = Self::create_account_edit_form(account, state);
-                    state.modal = ModalState::Form(
-                        form.with_context(
-                            &state
-                                .portfolio_profiles_state
-                                .selected_account_index
-                                .to_string(),
-                        ),
-                    );
+                    state.modal =
+                        ModalState::Form(form.with_typed_context(ModalContext::account_index(
+                            state.portfolio_profiles_state.selected_account_index,
+                        )));
                 }
                 EventResult::Handled
             }
@@ -1303,12 +1300,9 @@ impl PortfolioProfilesScreen {
                             &format!("Delete account '{}'?", account.name),
                             ModalAction::DELETE_ACCOUNT,
                         )
-                        .with_context(
-                            &state
-                                .portfolio_profiles_state
-                                .selected_account_index
-                                .to_string(),
-                        ),
+                        .with_typed_context(ModalContext::account_index(
+                            state.portfolio_profiles_state.selected_account_index,
+                        )),
                     );
                 }
                 EventResult::Handled
@@ -1336,11 +1330,10 @@ impl PortfolioProfilesScreen {
                                 ],
                                 ModalAction::ADD_HOLDING,
                             )
-                            .with_context(
-                                &state
-                                    .portfolio_profiles_state
-                                    .selected_account_index
-                                    .to_string(),
+                            .with_typed_context(
+                                ModalContext::account_index(
+                                    state.portfolio_profiles_state.selected_account_index,
+                                ),
                             );
                             state.modal = ModalState::Form(form);
                         }
@@ -1605,15 +1598,15 @@ impl PortfolioProfilesScreen {
                         };
 
                         if let Some(name) = asset_name {
-                            // Store context as "account_idx:holding_idx"
-                            let context = format!("{}:{}", account_idx, selected);
                             state.modal = ModalState::Confirm(
                                 ConfirmModal::new(
                                     "Delete Holding",
                                     &format!("Delete holding '{}'?", name),
                                     ModalAction::DELETE_HOLDING,
                                 )
-                                .with_context(&context),
+                                .with_typed_context(
+                                    ModalContext::holding_index(account_idx, selected),
+                                ),
                             );
                         }
                     }
@@ -1736,14 +1729,10 @@ impl PortfolioProfilesScreen {
                     .get(state.portfolio_profiles_state.selected_profile_index)
                 {
                     let form = Self::create_profile_edit_form(profile_data);
-                    state.modal = ModalState::Form(
-                        form.with_context(
-                            &state
-                                .portfolio_profiles_state
-                                .selected_profile_index
-                                .to_string(),
-                        ),
-                    );
+                    state.modal =
+                        ModalState::Form(form.with_typed_context(ModalContext::profile_index(
+                            state.portfolio_profiles_state.selected_profile_index,
+                        )));
                 }
                 EventResult::Handled
             }
@@ -1760,12 +1749,9 @@ impl PortfolioProfilesScreen {
                             &format!("Delete profile '{}'?", profile_data.name.0),
                             ModalAction::DELETE_PROFILE,
                         )
-                        .with_context(
-                            &state
-                                .portfolio_profiles_state
-                                .selected_profile_index
-                                .to_string(),
-                        ),
+                        .with_typed_context(ModalContext::profile_index(
+                            state.portfolio_profiles_state.selected_profile_index,
+                        )),
                     );
                 }
                 EventResult::Handled
@@ -1978,7 +1964,9 @@ impl PortfolioProfilesScreen {
                                 vec![FormField::percentage("State Rate", rate)],
                                 ModalAction::EDIT_TAX_CONFIG,
                             )
-                            .with_context("state_rate"),
+                            .with_typed_context(ModalContext::Config(
+                                ConfigContext::Tax(TaxConfigContext::StateRate),
+                            )),
                         );
                     }
                     2 => {
@@ -1990,7 +1978,9 @@ impl PortfolioProfilesScreen {
                                 vec![FormField::percentage("Capital Gains Rate", rate)],
                                 ModalAction::EDIT_TAX_CONFIG,
                             )
-                            .with_context("cap_gains_rate"),
+                            .with_typed_context(ModalContext::Config(
+                                ConfigContext::Tax(TaxConfigContext::CapGainsRate),
+                            )),
                         );
                     }
                     3 => {

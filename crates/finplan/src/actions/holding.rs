@@ -48,14 +48,10 @@ pub fn handle_add_holding(state: &mut AppState, ctx: ActionContext) -> ActionRes
 
 /// Handle editing a holding
 pub fn handle_edit_holding(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    // Context format: "account_idx:holding_idx"
-    let indices = ctx.indices();
-
-    if indices.len() != 2 {
-        return ActionResult::close();
-    }
-
-    let (account_idx, holding_idx) = (indices[0], indices[1]);
+    let (account_idx, holding_idx) = match ctx.holding_indices() {
+        Some(indices) => indices,
+        None => return ActionResult::close(),
+    };
     let parts = ctx.value_parts();
 
     if let Some(account) = state
@@ -91,14 +87,10 @@ pub fn handle_edit_holding(state: &mut AppState, ctx: ActionContext) -> ActionRe
 
 /// Handle deleting a holding
 pub fn handle_delete_holding(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    // Context format: "account_idx:holding_idx"
-    let indices = ctx.indices();
-
-    if indices.len() != 2 {
-        return ActionResult::close();
-    }
-
-    let (account_idx, holding_idx) = (indices[0], indices[1]);
+    let (account_idx, holding_idx) = match ctx.holding_indices() {
+        Some(indices) => indices,
+        None => return ActionResult::close(),
+    };
 
     if let Some(account) = state
         .data_mut()

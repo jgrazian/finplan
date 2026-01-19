@@ -20,8 +20,8 @@ pub use holding::*;
 pub use profile::*;
 pub use scenario::*;
 
+use crate::state::ModalState;
 use crate::state::context::{ModalContext, TriggerBuilderState, TriggerContext};
-use crate::state::{ModalContextValue, ModalState};
 
 /// Result of an action handler
 ///
@@ -65,8 +65,6 @@ impl ActionResult {
 
 /// Context passed to action handlers
 pub struct ActionContext<'a> {
-    /// The string context from the modal (often contains indices or type info)
-    pub modal_context: Option<&'a str>,
     /// The typed context from the modal (when using ModalContextValue::Typed)
     pub typed_modal_context: Option<&'a ModalContext>,
     /// The value submitted from the modal (pipe-delimited form fields)
@@ -74,34 +72,44 @@ pub struct ActionContext<'a> {
 }
 
 impl<'a> ActionContext<'a> {
-    pub fn new(modal_context: Option<&'a ModalContextValue>, value: &'a str) -> Self {
-        let (legacy_str, typed) = match modal_context {
-            Some(ModalContextValue::Legacy(s)) => (Some(s.as_str()), None),
-            Some(ModalContextValue::Typed(ctx)) => (None, Some(ctx)),
-            None => (None, None),
-        };
+    pub fn new(modal_context: Option<&'a ModalContext>, value: &'a str) -> Self {
+        let typed = modal_context;
         Self {
-            modal_context: legacy_str,
             typed_modal_context: typed,
             value,
         }
     }
 
-    /// Parse the context as an index
+    /// Parse the context as an index (from typed or legacy context)
+    /// Tries event, account, and profile indices in that order
     pub fn index(&self) -> Option<usize> {
-        self.modal_context?.parse().ok()
+        // Try typed context first
+        if let Some(typed) = self.typed_modal_context {
+            // Try extracting event index
+            if let Some(idx) = typed.as_event_index() {
+                return Some(idx);
+            }
+            // Try account index
+            if let Some(idx) = typed.as_account_index() {
+                return Some(idx);
+            }
+            // Try profile index
+            if let Some(idx) = typed.as_profile_index() {
+                return Some(idx);
+            }
+        }
+        None
     }
 
-    /// Parse the context as colon-separated indices
-    pub fn indices(&self) -> Vec<usize> {
-        self.modal_context
-            .map(|s| s.split(':').filter_map(|p| p.parse().ok()).collect())
-            .unwrap_or_default()
-    }
-
-    /// Get the context string or empty string
-    pub fn context_str(&self) -> &str {
-        self.modal_context.unwrap_or("")
+    /// Parse the context as holding indices (account_idx, holding_idx)
+    pub fn holding_indices(&self) -> Option<(usize, usize)> {
+        // Try typed context first
+        if let Some(typed) = self.typed_modal_context
+            && let Some(indices) = typed.as_holding_index()
+        {
+            return Some(indices);
+        }
+        None
     }
 
     /// Get the typed modal context
