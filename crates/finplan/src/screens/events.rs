@@ -98,7 +98,7 @@ impl EventsScreen {
 
         if is_focused {
             block = block.title_bottom(
-                Line::from(" [j/k] Nav [Shift+J/K] Reorder [a]dd [e]dit [d]el [c]opy [f]x [t]oggle ")
+                Line::from(" [a]dd [e]dit [d]el [c]opy [Shift+J/K] Reorder [t]oggle ")
                     .fg(Color::DarkGray),
             );
         }
@@ -961,13 +961,13 @@ impl Component for EventsScreen {
             vec![
                 Constraint::Percentage(30),
                 Constraint::Percentage(67),
-                Constraint::Length(3), // Collapsed timeline
+                Constraint::Length(5), // Collapsed timeline
             ]
         } else {
             vec![
-                Constraint::Percentage(25),
-                Constraint::Percentage(40),
                 Constraint::Percentage(35),
+                Constraint::Percentage(35),
+                Constraint::Percentage(30),
             ]
         };
 

@@ -95,10 +95,10 @@ impl PortfolioProfilesScreen {
                 {
                     " [Enter] Save  [Esc] Cancel "
                 } else {
-                    " [j/k] Nav [Shift+J/K] Reorder [Enter] Edit [d] Del [Esc] Exit "
+                    " [Enter] Edit [d] Del [Shift+J/K] Reorder [Esc] Exit "
                 }
             } else {
-                " [a]dd [e]dit [d]el [Shift+J/K] Reorder [Enter] Holdings "
+                " [a]dd [e]dit [d]el [Enter] Holdings [Shift+J/K] Reorder "
             };
             block = block.title_bottom(Line::from(help_text).fg(Color::DarkGray));
         }
@@ -549,8 +549,7 @@ impl PortfolioProfilesScreen {
 
         if is_focused {
             block = block.title_bottom(
-                Line::from(" [a]dd [e]dit [d]el [Shift+J/K] Reorder [1-4] Preset ")
-                    .fg(Color::DarkGray),
+                Line::from(" [a]dd [e]dit [d]el [Shift+J/K] Reorder ").fg(Color::DarkGray),
             );
         }
 
