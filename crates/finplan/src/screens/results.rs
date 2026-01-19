@@ -316,6 +316,28 @@ impl ResultsScreen {
             .unwrap_or_default()
     }
 
+    /// Calculate optimal bar width and gap for net worth chart
+    /// Returns (bar_width, bar_gap, total_width_needed)
+    fn calculate_chart_sizing(num_years: usize, available_width: usize) -> (u16, u16, usize) {
+        if num_years == 0 {
+            return (3, 1, 0);
+        }
+
+        // Try widths 3, 2, 1 with gap of 1, then gap of 0
+        for &bw in &[3u16, 2, 1] {
+            for &bg in &[1u16, 0] {
+                let total = num_years * (bw as usize) + num_years.saturating_sub(1) * (bg as usize);
+                if total <= available_width {
+                    return (bw, bg, total);
+                }
+            }
+        }
+
+        // Minimum case: width 1, gap 0
+        let total = num_years;
+        (1, 0, total)
+    }
+
     fn render_chart(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
         let border_style = if focused {
             Style::default().fg(Color::Yellow)
@@ -364,43 +386,13 @@ impl ResultsScreen {
             // Available width inside borders
             let inner_width = area.width.saturating_sub(2) as usize;
 
-            // Calculate optimal bar_width and bar_gap to fit all years
-            // Formula: num_years * bar_width + (num_years - 1) * bar_gap <= inner_width
-            // We want bar_width >= 1 and bar_gap >= 0
-            let (bar_width, bar_gap) = if num_years == 0 {
-                (1, 1)
-            } else {
-                // Try different combinations to fit all bars
-                // Start with preferred widths and reduce if needed
-                let mut bw = 4u16;
-                let mut bg = 1u16;
-
-                loop {
-                    let total_width =
-                        num_years * (bw as usize) + (num_years.saturating_sub(1)) * (bg as usize);
-                    if total_width <= inner_width {
-                        break;
-                    }
-                    // Reduce gap first
-                    if bg > 0 {
-                        bg = 0;
-                    } else if bw > 1 {
-                        // Then reduce bar width
-                        bw -= 1;
-                        bg = 0; // Reset gap when reducing width
-                    } else {
-                        // Can't fit, will need to sample
-                        break;
-                    }
-                }
-                (bw, bg)
-            };
+            // Calculate optimal bar sizing (prefer 3/2/1 width with gap 1)
+            let (bar_width, bar_gap, _) = Self::calculate_chart_sizing(num_years, inner_width);
 
             // Check if we can fit all bars, otherwise sample
-            let total_needed = num_years * (bar_width as usize)
-                + (num_years.saturating_sub(1)) * (bar_gap as usize);
+            let total_needed =
+                num_years * (bar_width as usize) + num_years.saturating_sub(1) * (bar_gap as usize);
             let step = if total_needed > inner_width && inner_width > 0 {
-                // Calculate step to sample years
                 let max_bars = inner_width / (bar_width as usize + bar_gap as usize).max(1);
                 (num_years as f64 / max_bars as f64).ceil() as usize
             } else {
@@ -452,14 +444,41 @@ impl ResultsScreen {
                 })
                 .collect();
 
+            // Render legend in top-left corner (inside the block area)
+            let inner_area = block.inner(area);
+            frame.render_widget(block.clone(), area);
+
+            // Legend text
+            let legend = vec![Line::from(vec![
+                Span::styled("\u{2588}", Style::default().fg(Color::Red)),
+                Span::raw(" <0  "),
+                Span::styled("\u{2588}", Style::default().fg(Color::Yellow)),
+                Span::raw(" <25%  "),
+                Span::styled("\u{2588}", Style::default().fg(Color::LightYellow)),
+                Span::raw(" <50%  "),
+                Span::styled("\u{2588}", Style::default().fg(Color::LightGreen)),
+                Span::raw(" <75%  "),
+                Span::styled("\u{2588}", Style::default().fg(Color::Green)),
+                Span::raw(" >75%"),
+            ])];
+            let legend_paragraph =
+                Paragraph::new(legend).style(Style::default().fg(Color::DarkGray));
+
+            // Split inner area: legend row at top, chart below
+            let chart_layout = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(inner_area);
+
+            frame.render_widget(legend_paragraph, chart_layout[0]);
+
             let chart = BarChart::default()
-                .block(block)
                 .data(BarGroup::default().bars(&bars))
-                .bar_width(3)
-                .bar_gap(1)
+                .bar_width(bar_width)
+                .bar_gap(bar_gap)
                 .direction(Direction::Vertical);
 
-            frame.render_widget(chart, area);
+            frame.render_widget(chart, chart_layout[1]);
         } else {
             let content = vec![
                 Line::from(""),
@@ -639,7 +658,14 @@ impl ResultsScreen {
                 return;
             }
 
-            // Create horizontal bars
+            // Calculate total portfolio value (sum of absolute values for percentage calculation)
+            let total_abs: f64 = snapshot
+                .accounts
+                .iter()
+                .map(|acc| acc.total_value().abs())
+                .sum();
+
+            // Create horizontal bars with percentage-based scaling
             let bars: Vec<Bar> = snapshot
                 .accounts
                 .iter()
@@ -657,8 +683,13 @@ impl ResultsScreen {
                         _ => name.to_string(),
                     };
 
-                    // Scale to u64 for bar chart (in thousands)
-                    let scaled = (value.abs() / 1000.0) as u64;
+                    // Scale to percentage of portfolio (0-100)
+                    let percentage = if total_abs > 0.0 {
+                        (value.abs() / total_abs * 100.0) as u64
+                    } else {
+                        0
+                    };
+
                     let style = if value >= 0.0 {
                         Style::default().fg(Color::Green)
                     } else {
@@ -666,7 +697,7 @@ impl ResultsScreen {
                     };
 
                     Bar::default()
-                        .value(scaled)
+                        .value(percentage)
                         .label(Line::from(label))
                         .text_value(format_currency(value))
                         .style(style)
@@ -966,11 +997,40 @@ impl Component for ResultsScreen {
             ])
             .split(area);
 
+        // Calculate exact width needed for net worth chart
+        let num_years = Self::get_current_tui_result(state)
+            .map(|r| r.years.len())
+            .unwrap_or(0);
+
+        // Available width for top row
+        let top_row_width = rows[0].width as usize;
+
+        // Minimum width for account breakdown to show names + values properly
+        const MIN_ACCOUNT_WIDTH: usize = 35;
+
+        // Calculate maximum available space for chart content (inside borders)
+        // Must leave room for MIN_ACCOUNT_WIDTH for the account panel
+        let max_chart_content_width = top_row_width
+            .saturating_sub(MIN_ACCOUNT_WIDTH)
+            .saturating_sub(2); // 2 for chart borders
+
+        // Calculate bar sizing that fits within the available space
+        let (_, _, chart_content_width) =
+            Self::calculate_chart_sizing(num_years, max_chart_content_width);
+
+        // Chart width = content + borders
+        let chart_width = if num_years > 0 {
+            (chart_content_width + 2) as u16
+        } else {
+            // No data, use reasonable default (leave room for account view)
+            top_row_width.saturating_sub(MIN_ACCOUNT_WIDTH) as u16
+        };
+
         let top_cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(70), // Net Worth Chart
-                Constraint::Percentage(30), // Account Breakdown
+                Constraint::Length(chart_width), // Net Worth Chart - exact fit
+                Constraint::Min(MIN_ACCOUNT_WIDTH as u16), // Account Breakdown - minimum width
             ])
             .split(rows[0]);
 
