@@ -6,11 +6,11 @@
 use serde::{Deserialize, Serialize};
 
 /// Unique identifier for an Account within a simulation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AccountId(pub u16);
 
 /// Unique identifier for an Asset within a simulation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AssetId(pub u16);
 
 /// Unique identifier for an Asset within a simulation

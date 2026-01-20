@@ -1,5 +1,6 @@
-use std::collections::HashMap;
 use std::sync::Mutex;
+
+use rustc_hash::FxHashMap;
 
 use crate::apply::process_events;
 use crate::config::SimulationConfig;
@@ -101,10 +102,10 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
 
     SimulationResult {
-        wealth_snapshots: state.portfolio.wealth_snapshots.clone(),
-        yearly_taxes: state.taxes.yearly_taxes.clone(),
+        wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
+        yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
-        ledger: state.history.ledger.clone(),
+        ledger: std::mem::take(&mut state.history.ledger),
     }
 }
 
@@ -180,10 +181,10 @@ pub fn simulate_with_metrics(
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
 
     let result = SimulationResult {
-        wealth_snapshots: state.portfolio.wealth_snapshots.clone(),
-        yearly_taxes: state.taxes.yearly_taxes.clone(),
+        wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
+        yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
-        ledger: state.history.ledger.clone(),
+        ledger: std::mem::take(&mut state.history.ledger),
     };
 
     (result, metrics)
@@ -367,7 +368,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     // Capture year-end balances for RMD calculations (December 31)
     if next_checkpoint == dec_31 {
         let year = next_checkpoint.year();
-        let mut year_balances = HashMap::new();
+        let mut year_balances = FxHashMap::default();
 
         for (account_id, account) in &state.portfolio.accounts {
             if let AccountFlavor::Investment(inv) = &account.flavor

@@ -6,7 +6,7 @@ use crate::model::{
 };
 use jiff::ToSpan;
 use rand::SeedableRng;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 #[derive(Debug, Clone, Copy)]
 pub struct AssetPrice {
@@ -65,19 +65,19 @@ impl SimTimeline {
 #[derive(Debug, Clone)]
 pub struct SimPortfolio {
     /// All accounts (keyed for fast lookup)
-    pub accounts: HashMap<AccountId, Account>,
+    pub accounts: FxHashMap<AccountId, Account>,
     /// Market containing asset prices and returns
     pub market: Market,
     // === RMD Tracking ===
     /// Year-end account balances for RMD calculation (year -> account_id -> balance)
-    pub year_end_balances: HashMap<i16, HashMap<AccountId, f64>>,
+    pub year_end_balances: FxHashMap<i16, FxHashMap<AccountId, f64>>,
     /// Active RMD accounts (account_id -> starting_age)
-    pub active_rmd_accounts: HashMap<AccountId, u8>,
+    pub active_rmd_accounts: FxHashMap<AccountId, u8>,
     // === Contribution Tracking ===
     /// YTD contributions per account (for yearly limits)
-    pub contributions_ytd: HashMap<AccountId, f64>,
+    pub contributions_ytd: FxHashMap<AccountId, f64>,
     /// Current month contributions per account (for monthly limits)
-    pub contributions_mtd: HashMap<AccountId, f64>,
+    pub contributions_mtd: FxHashMap<AccountId, f64>,
     // === Net Worth Tracking ===
     pub wealth_snapshots: Vec<WealthSnapshot>,
 }
@@ -85,20 +85,20 @@ pub struct SimPortfolio {
 #[derive(Debug, Clone)]
 pub struct SimEventState {
     /// Events that have already triggered (for `once: true` checks)
-    pub events: HashMap<EventId, Event>,
-    pub triggered_events: HashMap<EventId, jiff::civil::Date>,
-    pub event_next_date: HashMap<EventId, jiff::civil::Date>,
+    pub events: FxHashMap<EventId, Event>,
+    pub triggered_events: FxHashMap<EventId, jiff::civil::Date>,
+    pub event_next_date: FxHashMap<EventId, jiff::civil::Date>,
 
     /// Whether repeating events have been activated (start_condition met)
-    pub repeating_event_active: HashMap<EventId, bool>,
+    pub repeating_event_active: FxHashMap<EventId, bool>,
 
     /// Events that have been permanently terminated (should never start or fire again)
-    pub terminated_events: std::collections::HashSet<EventId>,
+    pub terminated_events: FxHashSet<EventId>,
 
     /// Accumulated values for event flow limits (EventId -> accumulated amount)
-    pub event_flow_ytd: HashMap<EventId, f64>,
-    pub event_flow_lifetime: HashMap<EventId, f64>,
-    pub event_flow_last_period_key: HashMap<EventId, i16>,
+    pub event_flow_ytd: FxHashMap<EventId, f64>,
+    pub event_flow_lifetime: FxHashMap<EventId, f64>,
+    pub event_flow_last_period_key: FxHashMap<EventId, i16>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,7 +130,7 @@ impl SimulationState {
 
         // Extract assets from accounts and map to return profiles
         // Use configured asset_prices if available, otherwise default to $1.00 per unit
-        let mut assets: HashMap<AssetId, (f64, ReturnProfileId)> = HashMap::new();
+        let mut assets: FxHashMap<AssetId, (f64, ReturnProfileId)> = FxHashMap::default();
         for account in &params.accounts {
             match &account.flavor {
                 AccountFlavor::Investment(inv) => {
@@ -180,13 +180,13 @@ impl SimulationState {
             &assets,
         );
 
-        let mut accounts = HashMap::new();
+        let mut accounts = FxHashMap::default();
         // Load initial accounts
         for account in &params.accounts {
             accounts.insert(account.account_id, account.clone());
         }
 
-        let mut events = HashMap::new();
+        let mut events = FxHashMap::default();
         // Load events
         for event in &params.events {
             events.insert(event.event_id, event.clone());
@@ -202,21 +202,21 @@ impl SimulationState {
             portfolio: SimPortfolio {
                 accounts,
                 market,
-                year_end_balances: HashMap::new(),
-                active_rmd_accounts: HashMap::new(),
-                contributions_ytd: HashMap::new(),
-                contributions_mtd: HashMap::new(),
+                year_end_balances: FxHashMap::default(),
+                active_rmd_accounts: FxHashMap::default(),
+                contributions_ytd: FxHashMap::default(),
+                contributions_mtd: FxHashMap::default(),
                 wealth_snapshots: Vec::new(),
             },
             event_state: SimEventState {
                 events,
-                triggered_events: HashMap::new(),
-                event_next_date: HashMap::new(),
-                repeating_event_active: HashMap::new(),
-                terminated_events: std::collections::HashSet::new(),
-                event_flow_ytd: HashMap::new(),
-                event_flow_lifetime: HashMap::new(),
-                event_flow_last_period_key: HashMap::new(),
+                triggered_events: FxHashMap::default(),
+                event_next_date: FxHashMap::default(),
+                repeating_event_active: FxHashMap::default(),
+                terminated_events: FxHashSet::default(),
+                event_flow_ytd: FxHashMap::default(),
+                event_flow_lifetime: FxHashMap::default(),
+                event_flow_last_period_key: FxHashMap::default(),
             },
             taxes: SimTaxState {
                 ytd_tax: TaxSummary {

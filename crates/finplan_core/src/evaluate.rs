@@ -1,5 +1,6 @@
 use jiff::ToSpan;
 use jiff::civil::Date;
+use rustc_hash::FxHashMap;
 
 use crate::error::{EngineError, StateEventError, TransferEvaluationError, TriggerEventError};
 use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment};
@@ -564,13 +565,13 @@ pub fn evaluate_effect(
             // Get assets to liquidate (specific asset or all assets in account)
             let assets_to_liquidate: Vec<AssetId> = match asset_id {
                 Some(id) => vec![*id],
-                None => investment
-                    .positions
-                    .iter()
-                    .map(|lot| lot.asset_id)
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect(),
+                None => {
+                    let mut assets: Vec<AssetId> =
+                        investment.positions.iter().map(|lot| lot.asset_id).collect();
+                    assets.sort_unstable();
+                    assets.dedup();
+                    assets
+                }
             };
 
             let mut remaining = target_amount;
@@ -683,12 +684,13 @@ pub fn evaluate_effect(
             let source_accounts: Vec<AccountId> = match sources {
                 WithdrawalSources::SingleAsset(coord) => vec![coord.account_id],
                 WithdrawalSources::SingleAccount(id) => vec![*id],
-                WithdrawalSources::Custom(list) => list
-                    .iter()
-                    .map(|coord| coord.account_id)
-                    .collect::<std::collections::HashSet<_>>()
-                    .into_iter()
-                    .collect(),
+                WithdrawalSources::Custom(list) => {
+                    let mut accounts: Vec<AccountId> =
+                        list.iter().map(|coord| coord.account_id).collect();
+                    accounts.sort_unstable();
+                    accounts.dedup();
+                    accounts
+                }
                 WithdrawalSources::Strategy {
                     exclude_accounts, ..
                 } => state
@@ -754,7 +756,7 @@ pub fn evaluate_effect(
             // is different, we need to transfer that cash to the destination account.
             if total_liquidated > 0.01 {
                 // Build map of source account -> amount credited during liquidation
-                let source_amounts: std::collections::HashMap<AccountId, f64> = all_effects
+                let source_amounts: FxHashMap<AccountId, f64> = all_effects
                     .iter()
                     .filter_map(|ev| {
                         if let EvalEvent::CashCredit { to, net_amount, .. } = ev {
@@ -763,7 +765,7 @@ pub fn evaluate_effect(
                             None
                         }
                     })
-                    .fold(std::collections::HashMap::new(), |mut acc, (id, amount)| {
+                    .fold(FxHashMap::default(), |mut acc, (id, amount)| {
                         *acc.entry(id).or_insert(0.0) += amount;
                         acc
                     });

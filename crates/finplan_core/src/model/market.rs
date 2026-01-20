@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use jiff::civil::Date;
 use rand::{Rng, distr::Distribution};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
+
+// Note: std::collections::HashMap is used in from_profiles for return_profiles parameter
 
 #[cfg(feature = "ts")]
 use ts_rs::TS;
@@ -17,6 +20,7 @@ struct Rate {
 
 /// Helper to apply a series of rates to a value over a date range.
 /// Uses pre-computed cumulative rates for efficiency.
+#[inline]
 fn apply_rates_to_value(
     rates: &[Rate],
     start_date: Date,
@@ -31,18 +35,26 @@ fn apply_rates_to_value(
         return Some(initial_value);
     }
 
-    // Count complete years and track current date
-    let mut complete_years = 0usize;
-    let mut current_date = start_date;
+    // Calculate complete years directly (O(1) instead of O(years) loop)
+    let year_diff = eval_date.year() - start_date.year();
 
-    loop {
-        let next_year = current_date.saturating_add(jiff::Span::new().years(1));
-        if next_year > eval_date {
-            break;
+    // Determine complete years by checking if we've passed the anniversary
+    let complete_years = if year_diff <= 0 {
+        0usize
+    } else {
+        // Check if eval_date has passed the Nth anniversary of start_date
+        // Compare (month, day) to determine if anniversary has passed
+        let start_month = start_date.month() as u8;
+        let start_day = start_date.day();
+        let eval_month = eval_date.month() as u8;
+        let eval_day = eval_date.day();
+
+        if (eval_month, eval_day) >= (start_month, start_day) {
+            year_diff as usize
+        } else {
+            (year_diff - 1).max(0) as usize
         }
-        complete_years += 1;
-        current_date = next_year;
-    }
+    };
 
     // Apply complete years using cumulative rate
     let value = if complete_years == 0 {
@@ -59,12 +71,21 @@ fn apply_rates_to_value(
         return None;
     };
 
-    // Handle partial year
-    let remaining_days = (eval_date - current_date).get_days();
+    // Calculate remaining days for partial year using one date arithmetic op
+    if complete_years >= rates.len() {
+        // No partial year rate available
+        return if complete_years == rates.len() {
+            Some(value)
+        } else {
+            None
+        };
+    }
+
+    // Get the anniversary date (start_date + complete_years)
+    let anniversary = start_date.saturating_add(jiff::Span::new().years(complete_years as i64));
+    let remaining_days = (eval_date - anniversary).get_days();
+
     if remaining_days > 0 {
-        if complete_years >= rates.len() {
-            return None;
-        }
         let yearly_rate = rates[complete_years].incremental;
         let partial_rate = n_day_rate(yearly_rate, remaining_days as f64);
         Some(value * (1.0 + partial_rate))
@@ -81,15 +102,15 @@ pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
 #[derive(Debug, Clone)]
 pub struct Market {
     inflation_values: Vec<Rate>,
-    returns: HashMap<ReturnProfileId, Vec<Rate>>,
-    assets: HashMap<AssetId, (f64, ReturnProfileId)>,
+    returns: FxHashMap<ReturnProfileId, Vec<Rate>>,
+    assets: FxHashMap<AssetId, (f64, ReturnProfileId)>,
 }
 
 impl Market {
     pub fn new(
         inflation_values: Vec<f64>,
-        returns: HashMap<ReturnProfileId, Vec<f64>>,
-        assets: HashMap<AssetId, (f64, ReturnProfileId)>,
+        returns: FxHashMap<ReturnProfileId, Vec<f64>>,
+        assets: FxHashMap<AssetId, (f64, ReturnProfileId)>,
     ) -> Self {
         let mut inflation_rates = Vec::with_capacity(inflation_values.len());
         let mut cumulative = 1.0;
@@ -102,7 +123,7 @@ impl Market {
             cumulative *= 1.0 + r;
         }
 
-        let mut returns_ = HashMap::with_capacity(returns.len());
+        let mut returns_ = FxHashMap::default();
         for (rp_id, rp_values) in returns {
             let mut returns_rates = Vec::with_capacity(rp_values.len());
             let mut cumulative = 1.0;
@@ -130,13 +151,13 @@ impl Market {
         num_years: usize,
         inflation_profile: &InflationProfile,
         return_profiles: &HashMap<ReturnProfileId, ReturnProfile>,
-        assets: &HashMap<AssetId, (f64, ReturnProfileId)>,
+        assets: &FxHashMap<AssetId, (f64, ReturnProfileId)>,
     ) -> Self {
         let inflation_values: Vec<f64> = (0..num_years)
             .map(|_| inflation_profile.sample(rng))
             .collect();
 
-        let mut returns: HashMap<ReturnProfileId, Vec<f64>> = HashMap::new();
+        let mut returns: FxHashMap<ReturnProfileId, Vec<f64>> = FxHashMap::default();
         for (rp_id, rp) in return_profiles.iter() {
             let rp_returns: Vec<f64> = (0..num_years).map(|_| rp.sample(rng)).collect();
             returns.insert(*rp_id, rp_returns);
@@ -288,15 +309,14 @@ mod tests {
     use super::*;
     use crate::model::{AssetId, ReturnProfileId};
     use jiff::civil::date;
-    use std::collections::HashMap;
 
     #[test]
     fn test_get_asset_value() {
         let asset_id = AssetId(1);
         let rp_id = ReturnProfileId(1);
 
-        let assets = HashMap::from([(asset_id, (1000.0, rp_id))]);
-        let returns = HashMap::from([(rp_id, vec![0.10, 0.05])]);
+        let assets = FxHashMap::from_iter([(asset_id, (1000.0, rp_id))]);
+        let returns = FxHashMap::from_iter([(rp_id, vec![0.10, 0.05])]);
         let inflation = vec![0.02, 0.02];
 
         let market = Market::new(inflation, returns, assets);

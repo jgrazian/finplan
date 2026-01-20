@@ -6,7 +6,7 @@
 use crate::{
     error::ApplyError,
     evaluate::{EvalEvent, TriggerEvent, evaluate_effect, evaluate_trigger},
-    model::{AccountFlavor, AssetLot, Event, EventId, EventTrigger, LedgerEntry, StateEvent},
+    model::{AccountFlavor, AssetLot, EventId, EventTrigger, LedgerEntry, StateEvent},
     simulation_state::SimulationState,
 };
 
@@ -444,8 +444,8 @@ fn record_ledger_entry(
 pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
     let mut triggered = Vec::new();
 
-    // Collect events to evaluate (avoid borrow issues)
-    let events_to_check: Vec<(EventId, Event)> = state
+    // Collect only event IDs to evaluate (avoid cloning entire Event structures)
+    let event_ids_to_check: Vec<EventId> = state
         .event_state
         .events
         .iter()
@@ -459,12 +459,18 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
             }
             true
         })
-        .map(|(id, e)| (*id, e.clone()))
+        .map(|(id, _)| *id)
         .collect();
 
     // Evaluate each event
-    for (event_id, event) in events_to_check {
-        let trigger_result = match evaluate_trigger(&event_id, &event.trigger, state) {
+    for event_id in event_ids_to_check {
+        // Get trigger info - clone only the trigger (smaller than full Event)
+        let trigger = match state.event_state.events.get(&event_id) {
+            Some(event) => event.trigger.clone(),
+            None => continue,
+        };
+
+        let trigger_result = match evaluate_trigger(&event_id, &trigger, state) {
             Ok(result) => result,
             Err(_) => continue, // Skip events that fail to evaluate
         };
@@ -516,8 +522,14 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
 
             triggered.push(event_id);
 
+            // Get effects to apply - clone only when event actually triggers
+            let effects = match state.event_state.events.get(&event_id) {
+                Some(event) => event.effects.clone(),
+                None => continue,
+            };
+
             // Evaluate and apply effects
-            for effect in &event.effects {
+            for effect in &effects {
                 match evaluate_effect(effect, state) {
                     Ok(eval_events) => {
                         for ee in eval_events {
