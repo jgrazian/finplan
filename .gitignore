@@ -30,4 +30,4 @@ build
 *.db
 next-env.d.ts
 flamegraph.svg
-perf.data
+perf.data*
