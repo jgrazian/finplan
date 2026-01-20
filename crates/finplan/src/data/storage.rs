@@ -3,6 +3,7 @@
 // Directory structure:
 // ~/.finplan/
 //   config.yaml          # Active scenario, preferences
+//   summaries.yaml       # Cached scenario summaries (MC results)
 //   scenarios/
 //     retirement.yaml
 //     aggressive.yaml
@@ -11,6 +12,8 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::state::ScenarioSummary;
 
 use super::app_data::{AppData, SimulationData};
 
@@ -46,6 +49,7 @@ impl std::error::Error for StorageError {}
 pub struct LoadResult {
     pub app_data: AppData,
     pub current_scenario: String,
+    pub scenario_summaries: HashMap<String, ScenarioSummary>,
 }
 
 /// Manages the data directory for per-scenario file storage
@@ -74,6 +78,11 @@ impl DataDirectory {
     /// Get the path to the scenarios directory
     fn scenarios_dir(&self) -> PathBuf {
         self.root.join("scenarios")
+    }
+
+    /// Get the path to summaries.yaml
+    fn summaries_path(&self) -> PathBuf {
+        self.root.join("summaries.yaml")
     }
 
     /// Get the path to a specific scenario file
@@ -118,6 +127,33 @@ impl DataDirectory {
 
         fs::write(self.config_path(), yaml)
             .map_err(|e| StorageError::Io(format!("Failed to write config: {}", e)))
+    }
+
+    /// Load scenario summaries from summaries.yaml
+    pub fn load_summaries(&self) -> Result<HashMap<String, ScenarioSummary>, StorageError> {
+        let summaries_path = self.summaries_path();
+        if !summaries_path.exists() {
+            return Ok(HashMap::new());
+        }
+
+        let content = fs::read_to_string(&summaries_path)
+            .map_err(|e| StorageError::Io(format!("Failed to read summaries: {}", e)))?;
+
+        serde_saphyr::from_str(&content)
+            .map_err(|e| StorageError::Parse(format!("Failed to parse summaries: {}", e)))
+    }
+
+    /// Save scenario summaries to summaries.yaml
+    pub fn save_summaries(&self, summaries: &HashMap<String, ScenarioSummary>) -> Result<(), StorageError> {
+        if !self.exists() {
+            self.init()?;
+        }
+
+        let yaml = serde_saphyr::to_string(summaries)
+            .map_err(|e| StorageError::Serialize(format!("Failed to serialize summaries: {}", e)))?;
+
+        fs::write(self.summaries_path(), yaml)
+            .map_err(|e| StorageError::Io(format!("Failed to write summaries: {}", e)))
     }
 
     /// Load all scenarios from the scenarios directory
@@ -173,9 +209,13 @@ impl DataDirectory {
             simulations,
         };
 
+        // Load cached summaries
+        let scenario_summaries = self.load_summaries().unwrap_or_default();
+
         Ok(LoadResult {
             app_data,
             current_scenario,
+            scenario_summaries,
         })
     }
 

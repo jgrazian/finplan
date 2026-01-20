@@ -125,3 +125,83 @@ pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
         Err(e) => ActionResult::Error(format!("Export failed: {}", e)),
     }
 }
+
+/// Handle creating a new empty scenario
+pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    let name = ctx.value.trim();
+    if name.is_empty() {
+        return ActionResult::Error("Scenario name cannot be empty".to_string());
+    }
+
+    // Check if name already exists
+    if state.app_data.simulations.contains_key(name) {
+        return ActionResult::Error(format!("Scenario '{}' already exists", name));
+    }
+
+    state.new_scenario(name);
+    state.dirty_scenarios.insert(name.to_string());
+
+    ActionResult::Modified(Some(ModalState::Message(MessageModal::info(
+        "Created",
+        &format!("Created new scenario '{}'", name),
+    ))))
+}
+
+/// Handle duplicating an existing scenario
+pub fn handle_duplicate_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    let new_name = ctx.value.trim();
+    if new_name.is_empty() {
+        return ActionResult::Error("Scenario name cannot be empty".to_string());
+    }
+
+    // Check if name already exists
+    if state.app_data.simulations.contains_key(new_name) {
+        return ActionResult::Error(format!("Scenario '{}' already exists", new_name));
+    }
+
+    // Get the currently selected scenario name from the sorted list
+    let scenarios = state.get_scenario_list_with_summaries();
+    let source_name = scenarios
+        .get(state.scenario_state.selected_index)
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| state.current_scenario.clone());
+
+    if state.duplicate_scenario(&source_name, new_name) {
+        // Switch to the new scenario
+        state.switch_scenario(new_name);
+        ActionResult::Modified(Some(ModalState::Message(MessageModal::info(
+            "Duplicated",
+            &format!("Duplicated '{}' as '{}'", source_name, new_name),
+        ))))
+    } else {
+        ActionResult::Error(format!("Failed to duplicate scenario '{}'", source_name))
+    }
+}
+
+/// Handle deleting a scenario (confirm dialog already shown)
+pub fn handle_delete_scenario(state: &mut AppState) -> ActionResult {
+    // Get the selected scenario name
+    let scenarios = state.get_scenario_list_with_summaries();
+    let selected_name = scenarios
+        .get(state.scenario_state.selected_index)
+        .map(|(name, _)| name.clone());
+
+    if let Some(name) = selected_name {
+        // Try to delete from disk first
+        if let Err(e) = state.delete_scenario_file(&name) {
+            // Log but continue - file might not exist
+            eprintln!("Warning: Could not delete scenario file: {}", e);
+        }
+
+        if state.delete_scenario(&name) {
+            ActionResult::Modified(Some(ModalState::Message(MessageModal::info(
+                "Deleted",
+                &format!("Deleted scenario '{}'", name),
+            ))))
+        } else {
+            ActionResult::Error("Cannot delete the last scenario".to_string())
+        }
+    } else {
+        ActionResult::Error("No scenario selected".to_string())
+    }
+}

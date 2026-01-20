@@ -1,5 +1,7 @@
 /// Per-screen state structs.
-use super::panels::{EventsPanel, PortfolioProfilesPanel, ResultsPanel};
+use std::collections::HashMap;
+
+use super::panels::{EventsPanel, PortfolioProfilesPanel, ResultsPanel, ScenarioPanel};
 
 /// Percentile view for Monte Carlo results
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -127,6 +129,17 @@ pub struct ProjectionPreview {
     pub mc_summary: Option<MonteCarloPreviewSummary>,
 }
 
+/// Summary of a scenario's simulation results (cached per-scenario)
+/// This is persisted to disk so summaries are available on app restart.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScenarioSummary {
+    pub name: String,
+    pub final_net_worth: Option<f64>,
+    pub success_rate: Option<f64>,
+    pub percentiles: Option<(f64, f64, f64)>, // P5, P50, P95
+    pub yearly_net_worth: Option<Vec<(i32, f64)>>, // For overlay chart
+}
+
 #[derive(Debug, Default)]
 pub struct ScenarioState {
     pub focused_field: usize,
@@ -134,6 +147,16 @@ pub struct ScenarioState {
     pub projection_preview: Option<ProjectionPreview>,
     /// Whether projection is currently running
     pub projection_running: bool,
+    /// Focused panel in the scenario comparison view
+    pub focused_panel: ScenarioPanel,
+    /// Selected scenario index in the list
+    pub selected_index: usize,
+    /// Cached summaries per-scenario (populated after batch/individual runs)
+    pub scenario_summaries: HashMap<String, ScenarioSummary>,
+    /// Whether batch run is in progress
+    pub batch_running: bool,
+    /// Selected scenarios for comparison (by name)
+    pub comparison_scenarios: Vec<String>,
 }
 
 /// Filter for the ledger view in Results tab

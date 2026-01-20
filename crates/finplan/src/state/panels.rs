@@ -66,6 +66,40 @@ impl EventsPanel {
     }
 }
 
+/// Focused panel for the Scenario Comparison tab
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScenarioPanel {
+    #[default]
+    ScenarioList,     // Left panel: list of scenarios
+    ScenarioDetails,  // Left panel: selected scenario details
+    ComparisonTable,  // Right panel: comparison table
+    OverlayChart,     // Right panel: net worth overlay chart
+}
+
+impl ScenarioPanel {
+    pub fn next(self) -> Self {
+        match self {
+            Self::ScenarioList => Self::ScenarioDetails,
+            Self::ScenarioDetails => Self::ComparisonTable,
+            Self::ComparisonTable => Self::OverlayChart,
+            Self::OverlayChart => Self::ScenarioList,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::ScenarioList => Self::OverlayChart,
+            Self::ScenarioDetails => Self::ScenarioList,
+            Self::ComparisonTable => Self::ScenarioDetails,
+            Self::OverlayChart => Self::ComparisonTable,
+        }
+    }
+
+    pub fn is_left_panel(self) -> bool {
+        matches!(self, Self::ScenarioList | Self::ScenarioDetails)
+    }
+}
+
 /// Focused panel for the Results tab (2x2 grid layout)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResultsPanel {

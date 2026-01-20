@@ -23,6 +23,9 @@ pub enum ScenarioAction {
     EditParameters,
     Import,
     Export,
+    New,
+    Duplicate,
+    Delete,
 }
 
 /// Account-specific actions
@@ -104,6 +107,9 @@ impl ModalAction {
     pub const EDIT_PARAMETERS: Self = Self::Scenario(ScenarioAction::EditParameters);
     pub const IMPORT: Self = Self::Scenario(ScenarioAction::Import);
     pub const EXPORT: Self = Self::Scenario(ScenarioAction::Export);
+    pub const NEW_SCENARIO: Self = Self::Scenario(ScenarioAction::New);
+    pub const DUPLICATE_SCENARIO: Self = Self::Scenario(ScenarioAction::Duplicate);
+    pub const DELETE_SCENARIO: Self = Self::Scenario(ScenarioAction::Delete);
 
     // Account shortcuts
     pub const PICK_ACCOUNT_CATEGORY: Self = Self::Account(AccountAction::PickCategory);

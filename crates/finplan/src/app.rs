@@ -299,6 +299,15 @@ impl App {
             ModalAction::Scenario(ScenarioAction::Export) => {
                 actions::handle_export(&self.state, ctx)
             }
+            ModalAction::Scenario(ScenarioAction::New) => {
+                actions::handle_new_scenario(&mut self.state, ctx)
+            }
+            ModalAction::Scenario(ScenarioAction::Duplicate) => {
+                actions::handle_duplicate_scenario(&mut self.state, ctx)
+            }
+            ModalAction::Scenario(ScenarioAction::Delete) => {
+                actions::handle_delete_scenario(&mut self.state)
+            }
 
             // Account actions
             ModalAction::Account(AccountAction::PickCategory) => {

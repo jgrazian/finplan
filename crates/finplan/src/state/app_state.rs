@@ -9,7 +9,7 @@ use crate::data::convert::{to_simulation_config, to_tui_result, ConvertError};
 
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::modal::ModalState;
-use super::screen_state::{EventsState, MonteCarloPreviewSummary, PercentileView, PortfolioProfilesState, ProjectionPreview, ResultsState, ScenarioState};
+use super::screen_state::{EventsState, MonteCarloPreviewSummary, PercentileView, PortfolioProfilesState, ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary};
 use super::tabs::TabId;
 
 // ========== SimulationResult ==========
@@ -197,12 +197,17 @@ impl AppState {
         let storage = DataDirectory::new(data_dir.clone());
         let result = storage.load().map_err(|e| LoadError::Io(e.to_string()))?;
 
-        Ok(Self {
+        let mut state = Self {
             app_data: result.app_data,
             current_scenario: result.current_scenario,
             data_dir: Some(data_dir),
             ..Default::default()
-        })
+        };
+
+        // Load cached scenario summaries
+        state.scenario_state.scenario_summaries = result.scenario_summaries;
+
+        Ok(state)
     }
 
     /// Get the DataDirectory if configured
@@ -493,6 +498,9 @@ impl AppState {
         self.results_state.viewing_monte_carlo = true;
         self.results_state.percentile_view = PercentileView::P50;
 
+        // Update scenario summary cache
+        self.update_current_scenario_summary();
+
         Ok(())
     }
 
@@ -569,5 +577,191 @@ impl AppState {
     /// Invalidate the projection preview cache
     pub fn invalidate_projection_preview(&mut self) {
         self.scenario_state.projection_preview = None;
+    }
+
+    /// Update scenario summary for the current scenario after a Monte Carlo run
+    pub fn update_current_scenario_summary(&mut self) {
+        if let Some(mc) = &self.monte_carlo_result {
+            let p5 = mc.stats.percentile_values.iter()
+                .find(|(p, _)| (*p - 0.05).abs() < 0.001)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+            let p50 = mc.stats.percentile_values.iter()
+                .find(|(p, _)| (*p - 0.50).abs() < 0.001)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+            let p95 = mc.stats.percentile_values.iter()
+                .find(|(p, _)| (*p - 0.95).abs() < 0.001)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+
+            // Get yearly net worth from P50 run
+            let yearly_nw = mc.get_percentile_tui(0.50)
+                .map(|tui| tui.years.iter().map(|y| (y.year, y.net_worth)).collect());
+
+            let summary = ScenarioSummary {
+                name: self.current_scenario.clone(),
+                final_net_worth: Some(p50),
+                success_rate: Some(mc.stats.success_rate),
+                percentiles: Some((p5, p50, p95)),
+                yearly_net_worth: yearly_nw,
+            };
+
+            self.scenario_state.scenario_summaries.insert(self.current_scenario.clone(), summary);
+
+            // Persist summaries to disk
+            self.save_scenario_summaries();
+        }
+    }
+
+    /// Save scenario summaries to disk
+    pub fn save_scenario_summaries(&self) {
+        if let Some(storage) = self.get_storage() {
+            if let Err(e) = storage.save_summaries(&self.scenario_state.scenario_summaries) {
+                eprintln!("Warning: Failed to save scenario summaries: {}", e);
+            }
+        }
+    }
+
+    /// Run Monte Carlo simulation on a specific scenario (by name) and cache results
+    pub fn run_monte_carlo_for_scenario(&mut self, scenario_name: &str, num_iterations: usize) -> Result<(), SimulationError> {
+        // Get the scenario data
+        let scenario_data = self.app_data.simulations.get(scenario_name)
+            .ok_or_else(|| SimulationError::Config(format!("Scenario '{}' not found", scenario_name)))?
+            .clone();
+
+        // Convert to simulation config
+        let sim_config = to_simulation_config(&scenario_data)
+            .map_err(|e| SimulationError::Config(e.to_string()))?;
+
+        // Configure Monte Carlo simulation
+        let mc_config = finplan_core::model::MonteCarloConfig {
+            iterations: num_iterations,
+            percentiles: vec![0.05, 0.50, 0.95],
+            compute_mean: false, // Don't need mean for summary
+        };
+
+        // Run the Monte Carlo simulation
+        let mc_summary = finplan_core::simulation::monte_carlo_simulate_with_config(&sim_config, &mc_config);
+
+        // Extract summary data
+        let p5 = mc_summary.stats.percentile_values.iter()
+            .find(|(p, _)| (*p - 0.05).abs() < 0.001)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+        let p50 = mc_summary.stats.percentile_values.iter()
+            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+        let p95 = mc_summary.stats.percentile_values.iter()
+            .find(|(p, _)| (*p - 0.95).abs() < 0.001)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+
+        // Get yearly net worth from P50 run
+        let birth_date = &scenario_data.parameters.birth_date;
+        let start_date = &scenario_data.parameters.start_date;
+        let yearly_nw = mc_summary.percentile_runs.iter()
+            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
+            .and_then(|(_, core_result)| {
+                to_tui_result(core_result, birth_date, start_date).ok()
+            })
+            .map(|tui| tui.years.iter().map(|y| (y.year, y.net_worth)).collect());
+
+        let summary = ScenarioSummary {
+            name: scenario_name.to_string(),
+            final_net_worth: Some(p50),
+            success_rate: Some(mc_summary.stats.success_rate),
+            percentiles: Some((p5, p50, p95)),
+            yearly_net_worth: yearly_nw,
+        };
+
+        self.scenario_state.scenario_summaries.insert(scenario_name.to_string(), summary);
+
+        Ok(())
+    }
+
+    /// Run Monte Carlo on all scenarios (batch run)
+    pub fn run_monte_carlo_all(&mut self, num_iterations: usize) -> Result<usize, SimulationError> {
+        self.scenario_state.batch_running = true;
+        let scenarios: Vec<String> = self.app_data.simulations.keys().cloned().collect();
+        let mut count = 0;
+
+        for scenario_name in scenarios {
+            if let Err(e) = self.run_monte_carlo_for_scenario(&scenario_name, num_iterations) {
+                // Log error but continue with other scenarios
+                eprintln!("Warning: Failed to run Monte Carlo for '{}': {}", scenario_name, e);
+            } else {
+                count += 1;
+            }
+        }
+
+        self.scenario_state.batch_running = false;
+
+        // Persist all summaries after batch run
+        self.save_scenario_summaries();
+
+        Ok(count)
+    }
+
+    /// Get a sorted list of scenario names with their summaries
+    pub fn get_scenario_list_with_summaries(&self) -> Vec<(String, Option<&ScenarioSummary>)> {
+        let mut scenarios: Vec<_> = self.app_data.simulations.keys()
+            .map(|name| {
+                let summary = self.scenario_state.scenario_summaries.get(name);
+                (name.clone(), summary)
+            })
+            .collect();
+        scenarios.sort_by(|a, b| a.0.cmp(&b.0));
+        scenarios
+    }
+
+    /// Delete a scenario (does not delete from disk)
+    pub fn delete_scenario(&mut self, name: &str) -> bool {
+        // Don't allow deleting the last scenario
+        if self.app_data.simulations.len() <= 1 {
+            return false;
+        }
+
+        // Don't allow deleting if it doesn't exist
+        if !self.app_data.simulations.contains_key(name) {
+            return false;
+        }
+
+        // Remove from simulations
+        self.app_data.simulations.remove(name);
+        self.scenario_state.scenario_summaries.remove(name);
+        self.dirty_scenarios.remove(name);
+
+        // If we deleted the current scenario, switch to another one
+        if self.current_scenario == name {
+            if let Some(new_current) = self.app_data.simulations.keys().next() {
+                self.current_scenario = new_current.clone();
+                self.simulation_result = None;
+                self.core_simulation_result = None;
+                self.monte_carlo_result = None;
+                self.invalidate_config_cache();
+            }
+        }
+
+        // Adjust selected index if needed
+        let num_scenarios = self.app_data.simulations.len();
+        if self.scenario_state.selected_index >= num_scenarios {
+            self.scenario_state.selected_index = num_scenarios.saturating_sub(1);
+        }
+
+        true
+    }
+
+    /// Duplicate a scenario
+    pub fn duplicate_scenario(&mut self, source_name: &str, new_name: &str) -> bool {
+        if let Some(source_data) = self.app_data.simulations.get(source_name) {
+            let data = source_data.clone();
+            self.app_data.simulations.insert(new_name.to_string(), data);
+            self.dirty_scenarios.insert(new_name.to_string());
+            true
+        } else {
+            false
+        }
     }
 }
