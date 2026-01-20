@@ -1,4 +1,6 @@
-// Scenario actions - save, load, switch scenarios
+// Scenario actions - save, load, switch scenarios, import, export
+
+use std::path::Path;
 
 use crate::state::{AppState, MessageModal, ModalState};
 
@@ -79,4 +81,47 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
         "Success",
         "Simulation parameters updated",
     ))))
+}
+
+/// Handle importing a scenario from an external file
+pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    let path_str = ctx.value.trim();
+    if path_str.is_empty() {
+        return ActionResult::Error("File path cannot be empty".to_string());
+    }
+
+    let path = Path::new(path_str);
+    if !path.exists() {
+        return ActionResult::Error(format!("File not found: {}", path_str));
+    }
+
+    match state.import_scenario(path) {
+        Ok(name) => {
+            // Switch to the imported scenario
+            state.switch_scenario(&name);
+            ActionResult::Modified(Some(ModalState::Message(MessageModal::info(
+                "Imported",
+                &format!("Imported scenario as '{}'", name),
+            ))))
+        }
+        Err(e) => ActionResult::Error(format!("Import failed: {}", e)),
+    }
+}
+
+/// Handle exporting the current scenario to an external file
+pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
+    let path_str = ctx.value.trim();
+    if path_str.is_empty() {
+        return ActionResult::Error("File path cannot be empty".to_string());
+    }
+
+    let path = Path::new(path_str);
+
+    match state.export_scenario(path) {
+        Ok(()) => ActionResult::Done(Some(ModalState::Message(MessageModal::info(
+            "Exported",
+            &format!("Scenario exported to {}", path_str),
+        )))),
+        Err(e) => ActionResult::Error(format!("Export failed: {}", e)),
+    }
 }

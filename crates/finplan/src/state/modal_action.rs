@@ -21,6 +21,8 @@ pub enum ScenarioAction {
     Load,
     SwitchTo,
     EditParameters,
+    Import,
+    Export,
 }
 
 /// Account-specific actions
@@ -100,6 +102,8 @@ impl ModalAction {
     pub const LOAD: Self = Self::Scenario(ScenarioAction::Load);
     pub const SWITCH_TO: Self = Self::Scenario(ScenarioAction::SwitchTo);
     pub const EDIT_PARAMETERS: Self = Self::Scenario(ScenarioAction::EditParameters);
+    pub const IMPORT: Self = Self::Scenario(ScenarioAction::Import);
+    pub const EXPORT: Self = Self::Scenario(ScenarioAction::Export);
 
     // Account shortcuts
     pub const PICK_ACCOUNT_CATEGORY: Self = Self::Account(AccountAction::PickCategory);

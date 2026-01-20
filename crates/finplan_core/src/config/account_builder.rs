@@ -50,7 +50,7 @@ enum AccountFlavorBuilder {
         positions: Vec<AssetLot>,
     },
     Property {
-        assets: Vec<FixedAsset>,
+        asset: Option<FixedAsset>,
     },
     Liability {
         principal: f64,
@@ -208,7 +208,7 @@ impl AccountBuilder {
         Self {
             name: Some(name.into()),
             description: None,
-            flavor: AccountFlavorBuilder::Property { assets: Vec::new() },
+            flavor: AccountFlavorBuilder::Property { asset: None },
         }
     }
 
@@ -324,10 +324,10 @@ impl AccountBuilder {
         self
     }
 
-    /// Add a fixed asset to a Property account
+    /// Set the fixed asset for a Property account
     pub fn fixed_asset(mut self, asset_id: AssetId, value: f64) -> Self {
-        if let AccountFlavorBuilder::Property { assets } = &mut self.flavor {
-            assets.push(FixedAsset { asset_id, value });
+        if let AccountFlavorBuilder::Property { asset } = &mut self.flavor {
+            *asset = Some(FixedAsset { asset_id, value });
         }
         self
     }
@@ -356,7 +356,12 @@ impl AccountBuilder {
                 positions,
                 contribution_limit: None,
             }),
-            AccountFlavorBuilder::Property { assets } => AccountFlavor::Property(assets),
+            AccountFlavorBuilder::Property { asset } => AccountFlavor::Property(
+                asset.unwrap_or(FixedAsset {
+                    asset_id: AssetId(0),
+                    value: 0.0,
+                }),
+            ),
             AccountFlavorBuilder::Liability {
                 principal,
                 interest_rate,

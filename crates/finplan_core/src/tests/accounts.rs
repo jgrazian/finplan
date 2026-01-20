@@ -144,7 +144,7 @@ fn test_multiple_lots_same_asset() {
     );
 }
 
-/// Test property account with fixed assets
+/// Test property accounts with fixed assets (separate accounts for house and car)
 #[test]
 fn test_property_account_appreciation() {
     let start_date = jiff::civil::date(2020, 1, 1);
@@ -169,19 +169,22 @@ fn test_property_account_appreciation() {
             (car_profile, ReturnProfile::Fixed(car_return)),
         ]),
         asset_returns: HashMap::from([(house_id, house_profile), (car_id, car_profile)]),
-        accounts: vec![Account {
-            account_id: AccountId(1),
-            flavor: AccountFlavor::Property(vec![
-                FixedAsset {
+        accounts: vec![
+            Account {
+                account_id: AccountId(1),
+                flavor: AccountFlavor::Property(FixedAsset {
                     asset_id: house_id,
                     value: house_value,
-                },
-                FixedAsset {
+                }),
+            },
+            Account {
+                account_id: AccountId(2),
+                flavor: AccountFlavor::Property(FixedAsset {
                     asset_id: car_id,
                     value: car_value,
-                },
-            ]),
-        }],
+                }),
+            },
+        ],
         events: vec![],
         ..Default::default()
     };
@@ -189,18 +192,24 @@ fn test_property_account_appreciation() {
     let result = simulate(&params, 42);
 
     // Property assets appreciate via Market using their assigned return profiles
-    let actual = result.final_account_balance(AccountId(1)).unwrap();
+    let house_actual = result.final_account_balance(AccountId(1)).unwrap();
+    let car_actual = result.final_account_balance(AccountId(2)).unwrap();
 
     // Expected: house appreciates at 3%, car depreciates at -15% over 10 years
     let expected_house = house_value * (1.0 + house_return).powi(years as i32);
     let expected_car = car_value * (1.0 + car_return).powi(years as i32);
-    let expected = expected_house + expected_car;
 
     assert!(
-        (actual - expected).abs() < 1.0,
-        "Property total expected ${:.2}, got ${:.2}",
-        expected,
-        actual
+        (house_actual - expected_house).abs() < 1.0,
+        "House expected ${:.2}, got ${:.2}",
+        expected_house,
+        house_actual
+    );
+    assert!(
+        (car_actual - expected_car).abs() < 1.0,
+        "Car expected ${:.2}, got ${:.2}",
+        expected_car,
+        car_actual
     );
 }
 

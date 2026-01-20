@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use finplan_core::config::SimulationConfig;
@@ -78,8 +79,8 @@ pub struct AppState {
     pub app_data: AppData,
     /// Current scenario name being edited
     pub current_scenario: String,
-    /// Path to the config file (if loaded from file)
-    pub config_path: Option<PathBuf>,
+    /// Path to the data directory (for per-scenario file storage)
+    pub data_dir: Option<PathBuf>,
     /// Cached simulation config (rebuilt when running simulation)
     cached_config: Option<SimulationConfig>,
     pub simulation_result: Option<SimulationResult>,
@@ -87,6 +88,9 @@ pub struct AppState {
     pub core_simulation_result: Option<finplan_core::model::SimulationResult>,
     /// Monte Carlo simulation result (4 representative runs + stats)
     pub monte_carlo_result: Option<MonteCarloStoredResult>,
+
+    /// Set of scenario names with unsaved changes
+    pub dirty_scenarios: HashSet<String>,
 
     // Per-screen state
     pub portfolio_profiles_state: PortfolioProfilesState,
@@ -111,11 +115,12 @@ impl Default for AppState {
             active_tab: TabId::PortfolioProfiles,
             app_data,
             current_scenario: default_name,
-            config_path: None,
+            data_dir: None,
             cached_config: None,
             simulation_result: None,
             core_simulation_result: None,
             monte_carlo_result: None,
+            dirty_scenarios: HashSet::new(),
             portfolio_profiles_state: PortfolioProfilesState::default(),
             events_state: EventsState::default(),
             scenario_state: ScenarioState::default(),
@@ -185,67 +190,121 @@ impl AppState {
         self.invalidate_config_cache();
     }
 
-    /// Load AppData from a YAML file
-    pub fn load_from_file(path: PathBuf) -> Result<Self, LoadError> {
-        let content =
-            std::fs::read_to_string(&path).map_err(|e| LoadError::Io(e.to_string()))?;
+    /// Load from the data directory (new per-scenario storage)
+    pub fn load_from_data_dir(data_dir: PathBuf) -> Result<Self, LoadError> {
+        use crate::data::storage::DataDirectory;
 
-        // Try to parse as AppData first, fall back to SimulationData
-        let (app_data, current_scenario) = if let Ok(app_data) = AppData::from_yaml(&content) {
-            // Use active_scenario if set, otherwise fall back to "Default" or first available
-            let scenario = app_data
-                .active_scenario
-                .clone()
-                .filter(|s| app_data.simulations.contains_key(s))
-                .or_else(|| {
-                    app_data
-                        .simulations
-                        .get("Default")
-                        .map(|_| "Default".to_string())
-                })
-                .or_else(|| app_data.simulations.keys().next().cloned())
-                .unwrap_or_else(|| "Default".to_string());
-            (app_data, scenario)
-        } else {
-            // Fall back to loading as single SimulationData
-            let data = SimulationData::from_yaml(&content)
-                .map_err(|e| LoadError::Parse(e.to_string()))?;
-            let name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("Imported")
-                .to_string();
-            let mut app_data = AppData::new();
-            app_data.simulations.insert(name.clone(), data);
-            (app_data, name)
-        };
+        let storage = DataDirectory::new(data_dir.clone());
+        let result = storage.load().map_err(|e| LoadError::Io(e.to_string()))?;
 
         Ok(Self {
-            app_data,
-            current_scenario,
-            config_path: Some(path),
+            app_data: result.app_data,
+            current_scenario: result.current_scenario,
+            data_dir: Some(data_dir),
             ..Default::default()
         })
     }
 
-    /// Save all scenarios to YAML file
-    pub fn save_to_file(&mut self, path: &PathBuf) -> Result<(), SaveError> {
-        // Update active_scenario before saving
-        self.app_data.active_scenario = Some(self.current_scenario.clone());
-        let yaml = self
-            .app_data
-            .to_yaml()
-            .map_err(|e| SaveError::Serialize(e.to_string()))?;
-        std::fs::write(path, yaml).map_err(|e| SaveError::Io(e.to_string()))?;
+    /// Get the DataDirectory if configured
+    fn get_storage(&self) -> Option<crate::data::storage::DataDirectory> {
+        self.data_dir.as_ref().map(|p| crate::data::storage::DataDirectory::new(p.clone()))
+    }
+
+    /// Save the current scenario to its file
+    pub fn save_current_scenario(&mut self) -> Result<(), SaveError> {
+        let storage = self.get_storage().ok_or(SaveError::NoPath)?;
+        let data = self.data().clone();
+
+        storage
+            .save_scenario(&self.current_scenario, &data)
+            .map_err(|e| SaveError::Io(e.to_string()))?;
+
+        // Also update the active scenario in config
+        storage
+            .save_active_scenario(&self.current_scenario)
+            .map_err(|e| SaveError::Io(e.to_string()))?;
+
+        self.mark_scenario_clean(&self.current_scenario.clone());
         Ok(())
     }
 
-    /// Save to current config path (if set)
-    pub fn save(&mut self) -> Result<(), SaveError> {
-        match self.config_path.clone() {
-            Some(path) => self.save_to_file(&path),
-            None => Err(SaveError::NoPath),
+    /// Save a specific scenario to its file
+    pub fn save_scenario(&mut self, name: &str) -> Result<(), SaveError> {
+        let storage = self.get_storage().ok_or(SaveError::NoPath)?;
+        let data = self.app_data.simulations.get(name)
+            .ok_or_else(|| SaveError::Io(format!("Scenario '{}' not found", name)))?
+            .clone();
+
+        storage
+            .save_scenario(name, &data)
+            .map_err(|e| SaveError::Io(e.to_string()))?;
+
+        self.mark_scenario_clean(name);
+        Ok(())
+    }
+
+    /// Save all dirty scenarios
+    pub fn save_all_dirty(&mut self) -> Result<usize, SaveError> {
+        let dirty: Vec<String> = self.dirty_scenarios.iter().cloned().collect();
+        let mut saved = 0;
+
+        for name in dirty {
+            self.save_scenario(&name)?;
+            saved += 1;
         }
+
+        // Also update the active scenario in config
+        if let Some(storage) = self.get_storage() {
+            storage
+                .save_active_scenario(&self.current_scenario)
+                .map_err(|e| SaveError::Io(e.to_string()))?;
+        }
+
+        Ok(saved)
+    }
+
+    /// Delete a scenario file from storage
+    pub fn delete_scenario_file(&self, name: &str) -> Result<(), SaveError> {
+        let storage = self.get_storage().ok_or(SaveError::NoPath)?;
+        storage
+            .delete_scenario(name)
+            .map_err(|e| SaveError::Io(e.to_string()))
+    }
+
+    /// Export current scenario to an external file
+    pub fn export_scenario(&self, dest: &std::path::Path) -> Result<(), SaveError> {
+        let data = self.data();
+        let yaml = data.to_yaml().map_err(|e| SaveError::Serialize(e.to_string()))?;
+        std::fs::write(dest, yaml).map_err(|e| SaveError::Io(e.to_string()))
+    }
+
+    /// Import a scenario from an external file
+    pub fn import_scenario(&mut self, source: &std::path::Path) -> Result<String, LoadError> {
+        let content = std::fs::read_to_string(source)
+            .map_err(|e| LoadError::Io(e.to_string()))?;
+
+        let data = SimulationData::from_yaml(&content)
+            .map_err(|e| LoadError::Parse(e.to_string()))?;
+
+        // Use the filename (without extension) as the scenario name
+        let mut name = source
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("Imported")
+            .to_string();
+
+        // Ensure unique name
+        let mut counter = 1;
+        let base_name = name.clone();
+        while self.app_data.simulations.contains_key(&name) {
+            name = format!("{} ({})", base_name, counter);
+            counter += 1;
+        }
+
+        self.app_data.simulations.insert(name.clone(), data);
+        self.dirty_scenarios.insert(name.clone());
+
+        Ok(name)
     }
 
     /// Convert current data to SimulationConfig for running simulation
@@ -266,9 +325,30 @@ impl AppState {
         self.cached_config = None;
     }
 
-    /// Mark data as modified (invalidates cache)
+    /// Mark current scenario as modified (invalidates cache and marks dirty)
     pub fn mark_modified(&mut self) {
         self.invalidate_config_cache();
+        self.dirty_scenarios.insert(self.current_scenario.clone());
+    }
+
+    /// Mark a specific scenario as clean (after saving)
+    pub fn mark_scenario_clean(&mut self, name: &str) {
+        self.dirty_scenarios.remove(name);
+    }
+
+    /// Mark all scenarios as clean
+    pub fn mark_all_clean(&mut self) {
+        self.dirty_scenarios.clear();
+    }
+
+    /// Check if the current scenario has unsaved changes
+    pub fn is_current_dirty(&self) -> bool {
+        self.dirty_scenarios.contains(&self.current_scenario)
+    }
+
+    /// Check if any scenario has unsaved changes
+    pub fn has_unsaved_changes(&self) -> bool {
+        !self.dirty_scenarios.is_empty()
     }
 
     pub fn switch_tab(&mut self, tab: TabId) {

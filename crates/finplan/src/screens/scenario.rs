@@ -162,6 +162,40 @@ impl Component for ScenarioScreen {
                 state.modal = ModalState::Form(form);
                 EventResult::Handled
             }
+            KeyCode::Char('i') => {
+                // Import scenario from external file
+                let default_path = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("scenario.yaml")
+                    .to_string_lossy()
+                    .to_string();
+
+                let form = FormModal::new(
+                    "Import Scenario",
+                    vec![FormField::new("File path", FieldType::Text, &default_path)],
+                    ModalAction::IMPORT,
+                )
+                .start_editing();
+                state.modal = ModalState::Form(form);
+                EventResult::Handled
+            }
+            KeyCode::Char('x') => {
+                // Export current scenario to external file
+                let default_path = dirs::home_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join(format!("{}.yaml", state.current_scenario))
+                    .to_string_lossy()
+                    .to_string();
+
+                let form = FormModal::new(
+                    "Export Scenario",
+                    vec![FormField::new("File path", FieldType::Text, &default_path)],
+                    ModalAction::EXPORT,
+                )
+                .start_editing();
+                state.modal = ModalState::Form(form);
+                EventResult::Handled
+            }
             _ => EventResult::NotHandled,
         }
     }
@@ -509,10 +543,17 @@ impl ScenarioScreen {
         let net_worth = self.calculate_net_worth(state);
         let scenario_count = state.app_data.simulations.len();
 
+        // Show asterisk if current scenario has unsaved changes
+        let scenario_name = if state.is_current_dirty() {
+            format!("{}*", state.current_scenario)
+        } else {
+            state.current_scenario.clone()
+        };
+
         let lines = vec![Line::from(vec![
             Span::styled("SCENARIO: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(
-                &state.current_scenario,
+                scenario_name,
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),

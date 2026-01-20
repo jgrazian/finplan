@@ -222,10 +222,10 @@ fn convert_account_flavor(
                 .get(&account_data.name)
                 .map(|(id, _)| *id)
                 .unwrap_or(AssetId(0));
-            Ok(AccountFlavor::Property(vec![FixedAsset {
+            Ok(AccountFlavor::Property(FixedAsset {
                 asset_id,
                 value: prop.value,
-            }]))
+            }))
         }
 
         AccountType::Mortgage(debt)

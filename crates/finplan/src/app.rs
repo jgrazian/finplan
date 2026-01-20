@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::actions::{self, ActionContext, ActionResult};
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
+use crate::data::storage::DataDirectory;
 use crate::modals::{ModalResult, handle_modal_key, render_modal};
 use crate::screens::{
     events::EventsScreen, portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen,
@@ -50,32 +51,10 @@ impl App {
         }
     }
 
-    /// Create app with a specific config file path
-    /// Loads existing data if the file exists, otherwise creates default with sample data
-    pub fn with_config_path(config_path: PathBuf) -> Self {
-        let state = if config_path.exists() {
-            match AppState::load_from_file(config_path.clone()) {
-                Ok(mut state) => {
-                    state.config_path = Some(config_path);
-                    state
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to load config from {:?}: {:?}",
-                        config_path, e
-                    );
-                    eprintln!("Starting with default configuration.");
-                    let mut state = AppState::default();
-                    state.config_path = Some(config_path);
-                    state
-                }
-            }
-        } else {
-            // File doesn't exist, create default with sample data
-            let mut state = AppState::default();
-            state.config_path = Some(config_path);
-            state
-        };
+    /// Create app with a data directory path
+    /// Handles migration from old single-file format if needed
+    pub fn with_data_dir(data_dir: PathBuf) -> Self {
+        let state = Self::load_or_migrate(data_dir);
 
         Self {
             state,
@@ -85,6 +64,49 @@ impl App {
             scenario_screen: ScenarioScreen::new(),
             events_screen: EventsScreen::new(),
             results_screen: ResultsScreen::new(),
+        }
+    }
+
+    /// Load from data directory, migrating from old format if needed
+    fn load_or_migrate(data_dir: PathBuf) -> AppState {
+        let storage = DataDirectory::new(data_dir.clone());
+
+        // Check if we need to migrate from old format
+        let old_config_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".finplan.yaml");
+
+        if !storage.exists() && old_config_path.exists() {
+            // Migrate from old format
+            match storage.migrate_from_single_file(&old_config_path) {
+                Ok(true) => {
+                    eprintln!(
+                        "Migrated data from {:?} to {:?}",
+                        old_config_path, data_dir
+                    );
+                    eprintln!("Old config backed up to {:?}", old_config_path.with_extension("yaml.backup"));
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("Warning: Migration failed: {:?}", e);
+                    eprintln!("Starting with default configuration.");
+                    let mut state = AppState::default();
+                    state.data_dir = Some(data_dir);
+                    return state;
+                }
+            }
+        }
+
+        // Load from data directory
+        match AppState::load_from_data_dir(data_dir.clone()) {
+            Ok(state) => state,
+            Err(e) => {
+                eprintln!("Warning: Failed to load from {:?}: {:?}", data_dir, e);
+                eprintln!("Starting with default configuration.");
+                let mut state = AppState::default();
+                state.data_dir = Some(data_dir);
+                state
+            }
         }
     }
 }
@@ -97,23 +119,42 @@ impl App {
             self.handle_events()?;
         }
 
-        // Auto-save on exit
-        match self.state.save() {
-            Ok(()) => {
-                if let Some(path) = &self.state.config_path {
-                    eprintln!("Saved config to {:?}", path);
-                }
-            }
-            Err(e) => {
-                if let Some(path) = &self.state.config_path {
-                    eprintln!("Warning: Failed to save config to {:?}: {:?}", path, e);
-                } else {
-                    eprintln!("Warning: No config path set, changes not saved: {:?}", e);
-                }
-            }
+        // No auto-save on exit - user must explicitly save with Ctrl+S
+        if self.state.has_unsaved_changes() {
+            eprintln!(
+                "Exiting with unsaved changes in: {}",
+                self.state
+                    .dirty_scenarios
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
 
         Ok(())
+    }
+
+    /// Save all dirty scenarios
+    fn save_all(&mut self) {
+        match self.state.save_all_dirty() {
+            Ok(count) => {
+                if count > 0 {
+                    self.state.modal = ModalState::Message(crate::state::MessageModal::info(
+                        "Saved",
+                        &format!("Saved {} scenario(s)", count),
+                    ));
+                } else {
+                    self.state.modal = ModalState::Message(crate::state::MessageModal::info(
+                        "No Changes",
+                        "No unsaved changes to save",
+                    ));
+                }
+            }
+            Err(e) => {
+                self.state.set_error(format!("Failed to save: {}", e));
+            }
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -187,6 +228,11 @@ impl App {
                 self.state.exit = true;
                 return;
             }
+            KeyCode::Char('s') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Ctrl+S: Save all dirty scenarios
+                self.save_all();
+                return;
+            }
             KeyCode::Esc => {
                 // Let holdings editing mode handle Esc first
                 if self.state.portfolio_profiles_state.editing_holdings {
@@ -246,6 +292,12 @@ impl App {
             }
             ModalAction::Scenario(ScenarioAction::EditParameters) => {
                 actions::handle_edit_parameters(&mut self.state, ctx)
+            }
+            ModalAction::Scenario(ScenarioAction::Import) => {
+                actions::handle_import(&mut self.state, ctx)
+            }
+            ModalAction::Scenario(ScenarioAction::Export) => {
+                actions::handle_export(&self.state, ctx)
             }
 
             // Account actions

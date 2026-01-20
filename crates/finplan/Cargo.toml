@@ -19,6 +19,9 @@ crossterm = "0.29.0"
 dirs = "6.0"
 ratatui = "0.30.0"
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 codegen-units = 1
 lto = true

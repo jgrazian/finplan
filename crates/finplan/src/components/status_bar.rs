@@ -18,21 +18,29 @@ impl StatusBar {
 
     fn get_help_text(state: &AppState) -> String {
         // Return help text based on active tab
-        match state.active_tab {
+        let base = match state.active_tab {
             crate::state::TabId::PortfolioProfiles => {
-                "j/k: scroll | Tab: panel | a: add | e: edit | d: delete | h: holdings | m: map | q: quit"
+                "j/k: scroll | Tab: panel | a: add | e: edit | d: delete | h: holdings | m: map"
             }
             crate::state::TabId::Scenario => {
-                "r: run simulation | m: monte carlo | s/l: save/load | q: quit"
+                "r: run | m: monte carlo | s/l: save/load scenario | i/x: import/export"
             }
             crate::state::TabId::Events => {
-                "j/k: scroll | Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects | q: quit"
+                "j/k: scroll | Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
             }
             crate::state::TabId::Results => {
-                "j/k: scroll | q: quit"
+                "j/k: scroll"
             }
+        };
+        format!("{} | ^S: save | q: quit", base)
+    }
+
+    fn get_dirty_indicator(state: &AppState) -> Option<&'static str> {
+        if state.has_unsaved_changes() {
+            Some("[*]")
+        } else {
+            None
         }
-        .to_string()
     }
 }
 
@@ -48,10 +56,23 @@ impl Component for StatusBar {
                 Span::raw(error),
             ])
         } else {
-            Line::from(Span::styled(
+            let mut spans = vec![];
+
+            // Add dirty indicator if there are unsaved changes
+            if let Some(indicator) = Self::get_dirty_indicator(state) {
+                spans.push(Span::styled(
+                    indicator,
+                    Style::default().fg(Color::Yellow),
+                ));
+                spans.push(Span::raw(" "));
+            }
+
+            spans.push(Span::styled(
                 Self::get_help_text(state),
                 Style::default().fg(Color::DarkGray),
-            ))
+            ));
+
+            Line::from(spans)
         };
 
         let paragraph = Paragraph::new(content).block(Block::default().borders(Borders::TOP));

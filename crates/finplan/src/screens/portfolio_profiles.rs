@@ -1065,7 +1065,7 @@ impl PortfolioProfilesScreen {
         std_dev: f64,
         is_lognormal: bool,
     ) {
-        let bar_width = 1;
+        // Use as many bins as we have columns (minus padding for labels)
         let num_bins = (area.width as usize).saturating_sub(4).max(10);
         let height = area.height.saturating_sub(2) as usize; // Leave room for labels
 

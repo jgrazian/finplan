@@ -149,15 +149,12 @@ impl SimulationState {
                         }
                     }
                 }
-                AccountFlavor::Property(fixed_assets) => {
-                    for asset in fixed_assets {
-                        if let Some(&return_profile_id) = params.asset_returns.get(&asset.asset_id)
-                        {
-                            // Property uses asset.value as the initial price
-                            assets
-                                .entry(asset.asset_id)
-                                .or_insert((asset.value, return_profile_id));
-                        }
+                AccountFlavor::Property(asset) => {
+                    if let Some(&return_profile_id) = params.asset_returns.get(&asset.asset_id) {
+                        // Property uses asset.value as the initial price
+                        assets
+                            .entry(asset.asset_id)
+                            .or_insert((asset.value, return_profile_id));
                     }
                 }
                 _ => {}
@@ -300,19 +297,21 @@ impl SimulationState {
 
                 Ok(total_units * current_price)
             }
-            AccountFlavor::Property(assets) => {
-                let value = assets
-                    .iter()
-                    .find(|a| a.asset_id == asset_coord.asset_id)
-                    .and_then(|a| {
-                        self.portfolio.market.get_asset_value(
+            AccountFlavor::Property(asset) => {
+                if asset.asset_id == asset_coord.asset_id {
+                    let value = self
+                        .portfolio
+                        .market
+                        .get_asset_value(
                             self.timeline.start_date,
                             self.timeline.current_date,
-                            a.asset_id,
+                            asset.asset_id,
                         )
-                    })
-                    .unwrap_or(0.0);
-                Ok(value)
+                        .unwrap_or(asset.value);
+                    Ok(value)
+                } else {
+                    Err(EngineError::AssetNotFound(asset_coord))
+                }
             }
             _ => Err(EngineError::AssetNotFound(asset_coord)),
         }

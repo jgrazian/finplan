@@ -94,8 +94,8 @@ pub enum AccountFlavor {
 
     /// FIXED ASSETS (Positive Value)
     /// Real Estate, Vehicles, Art, Business Equity
-    /// Renamed from "Illiquid" to be more precise
-    Property(Vec<FixedAsset>),
+    /// Each property account holds a single fixed asset
+    Property(FixedAsset),
 
     /// LIABILITIES (Negative Value)
     /// Mortgages, Student Loans, Auto Loans, Credit Card Debt
@@ -129,15 +129,12 @@ impl Account {
                 // Cash is compounded incrementally during simulation
                 inv.cash.value + assets_val
             }
-            AccountFlavor::Property(assets) => assets
-                .iter()
-                .map(|a| {
-                    // Use Market to get current value if asset is registered, otherwise use static value
-                    market
-                        .get_asset_value(start_date, current_date, a.asset_id)
-                        .unwrap_or(a.value)
-                })
-                .sum(),
+            AccountFlavor::Property(asset) => {
+                // Use Market to get current value if asset is registered, otherwise use static value
+                market
+                    .get_asset_value(start_date, current_date, asset.asset_id)
+                    .unwrap_or(asset.value)
+            }
             AccountFlavor::Liability(loan) => -loan.principal,
         }
     }
@@ -188,17 +185,12 @@ impl Account {
                     assets,
                 }
             }
-            AccountFlavor::Property(assets) => {
-                let total_value: f64 = assets
-                    .iter()
-                    .map(|a| {
-                        // Use Market to get current value if asset is registered, otherwise use static value
-                        market
-                            .get_asset_value(start_date, current_date, a.asset_id)
-                            .unwrap_or(a.value)
-                    })
-                    .sum();
-                AccountSnapshotFlavor::Property(total_value)
+            AccountFlavor::Property(asset) => {
+                // Use Market to get current value if asset is registered, otherwise use static value
+                let value = market
+                    .get_asset_value(start_date, current_date, asset.asset_id)
+                    .unwrap_or(asset.value);
+                AccountSnapshotFlavor::Property(value)
             }
             AccountFlavor::Liability(loan) => AccountSnapshotFlavor::Liability(-loan.principal),
         };

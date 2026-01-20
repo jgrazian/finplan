@@ -402,9 +402,23 @@ pub fn apply_eval_event_with_source(
 
                     Ok(())
                 }
-                AccountFlavor::Property(_) => {
-                    // Property accounts can't be adjusted this way
-                    Err(ApplyError::InvalidAccountType(*account))
+                AccountFlavor::Property(asset) => {
+                    let previous = asset.value;
+                    asset.value += delta;
+                    // Ensure value doesn't go negative
+                    if asset.value < 0.0 {
+                        asset.value = 0.0;
+                    }
+
+                    let ledger_event = StateEvent::BalanceAdjusted {
+                        account: *account,
+                        previous_balance: previous,
+                        new_balance: asset.value,
+                        delta: *delta,
+                    };
+                    record_ledger_entry(state, current_date, source_event, ledger_event);
+
+                    Ok(())
                 }
             }
         }
