@@ -12,6 +12,7 @@ pub enum ModalAction {
     Config(ConfigAction),
     Event(EventAction),
     Effect(EffectAction),
+    Optimize(OptimizeAction),
 }
 
 /// Scenario-specific actions
@@ -98,6 +99,17 @@ pub enum EffectAction {
     Delete,
 }
 
+/// Optimization-specific actions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OptimizeAction {
+    AddParameter,
+    ConfigureParameter { index: usize },
+    DeleteParameter { index: usize },
+    SelectObjective,
+    ConfigureSettings,
+    RunOptimization,
+}
+
 // Convenience constructors for common actions
 impl ModalAction {
     // Scenario shortcuts
@@ -158,6 +170,12 @@ impl ModalAction {
     pub const ADD_EFFECT: Self = Self::Effect(EffectAction::Add);
     pub const EDIT_EFFECT: Self = Self::Effect(EffectAction::Edit);
     pub const DELETE_EFFECT: Self = Self::Effect(EffectAction::Delete);
+
+    // Optimize shortcuts
+    pub const ADD_OPTIMIZE_PARAMETER: Self = Self::Optimize(OptimizeAction::AddParameter);
+    pub const SELECT_OBJECTIVE: Self = Self::Optimize(OptimizeAction::SelectObjective);
+    pub const CONFIGURE_OPTIMIZE_SETTINGS: Self = Self::Optimize(OptimizeAction::ConfigureSettings);
+    pub const RUN_OPTIMIZATION: Self = Self::Optimize(OptimizeAction::RunOptimization);
 }
 
 #[cfg(test)]

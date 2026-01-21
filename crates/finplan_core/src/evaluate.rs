@@ -565,16 +565,17 @@ pub fn evaluate_effect(
             };
 
             // Get assets to liquidate (specific asset or all assets in account)
+            // Use inline dedup to avoid sort overhead for small collections
             let assets_to_liquidate: Vec<AssetId> = match asset_id {
                 Some(id) => vec![*id],
                 None => {
-                    let mut assets: Vec<AssetId> = investment
-                        .positions
-                        .iter()
-                        .map(|lot| lot.asset_id)
-                        .collect();
-                    assets.sort_unstable();
-                    assets.dedup();
+                    // Inline dedup: for small N, linear search is faster than sort+dedup
+                    let mut assets: Vec<AssetId> = Vec::with_capacity(investment.positions.len());
+                    for lot in &investment.positions {
+                        if !assets.contains(&lot.asset_id) {
+                            assets.push(lot.asset_id);
+                        }
+                    }
                     assets
                 }
             };
@@ -692,10 +693,13 @@ pub fn evaluate_effect(
                 WithdrawalSources::SingleAsset(coord) => vec![coord.account_id],
                 WithdrawalSources::SingleAccount(id) => vec![*id],
                 WithdrawalSources::Custom(list) => {
-                    let mut accounts: Vec<AccountId> =
-                        list.iter().map(|coord| coord.account_id).collect();
-                    accounts.sort_unstable();
-                    accounts.dedup();
+                    // Inline dedup: for small N, linear search is faster than sort+dedup
+                    let mut accounts: Vec<AccountId> = Vec::with_capacity(list.len());
+                    for coord in list {
+                        if !accounts.contains(&coord.account_id) {
+                            accounts.push(coord.account_id);
+                        }
+                    }
                     accounts
                 }
                 WithdrawalSources::Strategy {

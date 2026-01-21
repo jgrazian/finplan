@@ -6,14 +6,16 @@ pub enum TabId {
     Scenario,
     Events,
     Results,
+    Optimize,
 }
 
 impl TabId {
-    pub const ALL: [TabId; 4] = [
+    pub const ALL: [TabId; 5] = [
         TabId::PortfolioProfiles,
         TabId::Events,
         TabId::Scenario,
         TabId::Results,
+        TabId::Optimize,
     ];
 
     pub fn name(&self) -> &'static str {
@@ -22,6 +24,7 @@ impl TabId {
             TabId::Events => "Events",
             TabId::Scenario => "Scenario",
             TabId::Results => "Results",
+            TabId::Optimize => "Optimize",
         }
     }
 
@@ -31,6 +34,7 @@ impl TabId {
             TabId::Events => 1,
             TabId::Scenario => 2,
             TabId::Results => 3,
+            TabId::Optimize => 4,
         }
     }
 
@@ -40,6 +44,7 @@ impl TabId {
             1 => Some(TabId::Events),
             2 => Some(TabId::Scenario),
             3 => Some(TabId::Results),
+            4 => Some(TabId::Optimize),
             _ => None,
         }
     }

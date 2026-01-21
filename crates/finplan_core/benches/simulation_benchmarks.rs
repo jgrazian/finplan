@@ -13,6 +13,7 @@ use finplan_core::model::{
     MonteCarloConfig, RepeatInterval, ReturnProfile, ReturnProfileId, TaxStatus, TransferAmount,
 };
 use finplan_core::simulation::{monte_carlo_simulate_with_config, simulate, simulate_with_metrics};
+use finplan_core::{AccountBuilder, AssetBuilder, EventBuilder, SimulationBuilder};
 
 fn create_basic_config(duration_years: usize) -> SimulationConfig {
     SimulationConfig {
@@ -179,6 +180,39 @@ fn bench_account_balance_trigger(c: &mut Criterion) {
     });
 }
 
+fn bench_liquidation_heavy(c: &mut Criterion) {
+    // Test with lots of liquidation events to stress the optimization
+    let (config, _metadata) = SimulationBuilder::new()
+        .start(2025, 1, 1)
+        .years(20)
+        .birth_date(1960, 1, 1) // Retired age
+        .account(AccountBuilder::bank_account("Checking").cash(10_000.0))
+        .account(AccountBuilder::taxable_brokerage("Brokerage").cash(0.0))
+        .asset(AssetBuilder::new("STOCK").price(50.0).fixed_return(0.06))
+        // Create many lots to stress test lot handling
+        .position("Brokerage", "STOCK", 100.0, 4_000.0)
+        .position("Brokerage", "STOCK", 100.0, 4_500.0)
+        .position("Brokerage", "STOCK", 100.0, 5_000.0)
+        .position("Brokerage", "STOCK", 100.0, 5_500.0)
+        .position("Brokerage", "STOCK", 100.0, 6_000.0)
+        .position("Brokerage", "STOCK", 100.0, 4_200.0)
+        .position("Brokerage", "STOCK", 100.0, 4_800.0)
+        .position("Brokerage", "STOCK", 100.0, 5_200.0)
+        // Monthly withdrawals to trigger many liquidations
+        .event(
+            EventBuilder::withdrawal("Monthly Withdrawal")
+                .from_account("Brokerage")
+                .to_account("Checking")
+                .amount(2_000.0)
+                .monthly(),
+        )
+        .build();
+
+    c.bench_function("liquidation_heavy", |b| {
+        b.iter(|| simulate(black_box(&config), black_box(42)))
+    });
+}
+
 fn bench_monte_carlo(c: &mut Criterion) {
     let mut group = c.benchmark_group("monte_carlo");
     let config = create_basic_config(30);
@@ -204,39 +238,12 @@ fn bench_monte_carlo(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_instrumented_vs_normal(c: &mut Criterion) {
-    let mut group = c.benchmark_group("instrumented_comparison");
-    let config = create_monthly_events_config();
-
-    group.bench_function("normal_simulate", |b| {
-        b.iter(|| simulate(black_box(&config), black_box(42)))
-    });
-
-    let instrumentation = InstrumentationConfig::default();
-    group.bench_function("instrumented_simulate", |b| {
-        b.iter(|| {
-            simulate_with_metrics(
-                black_box(&config),
-                black_box(42),
-                black_box(&instrumentation),
-            )
-        })
-    });
-
-    let disabled = InstrumentationConfig::disabled();
-    group.bench_function("instrumented_disabled", |b| {
-        b.iter(|| simulate_with_metrics(black_box(&config), black_box(42), black_box(&disabled)))
-    });
-
-    group.finish();
-}
-
 criterion_group!(
     benches,
     bench_basic_simulation,
     bench_monthly_events,
     bench_account_balance_trigger,
+    bench_liquidation_heavy,
     bench_monte_carlo,
-    bench_instrumented_vs_normal,
 );
 criterion_main!(benches);

@@ -129,3 +129,32 @@ impl ResultsPanel {
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OptimizePanel {
+    #[default]
+    Parameters,
+    Objective,
+    Progress,
+    Results,
+}
+
+impl OptimizePanel {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Parameters => Self::Objective,
+            Self::Objective => Self::Progress,
+            Self::Progress => Self::Results,
+            Self::Results => Self::Parameters,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Parameters => Self::Results,
+            Self::Objective => Self::Parameters,
+            Self::Progress => Self::Objective,
+            Self::Results => Self::Progress,
+        }
+    }
+}

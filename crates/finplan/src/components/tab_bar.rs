@@ -37,6 +37,10 @@ impl Component for TabBar {
                 state.switch_tab(TabId::Results);
                 EventResult::Handled
             }
+            KeyCode::Char('5') => {
+                state.switch_tab(TabId::Optimize);
+                EventResult::Handled
+            }
             _ => EventResult::NotHandled,
         }
     }

@@ -25,6 +25,9 @@ impl StatusBar {
                 "j/k: scroll | Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
             }
             crate::state::TabId::Results => "j/k: scroll",
+            crate::state::TabId::Optimize => {
+                "Tab: panel | j/k: nav | r: run | a: add param | d: delete"
+            }
         };
         format!("{} | ^S: save | q: quit", base)
     }

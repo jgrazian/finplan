@@ -10,7 +10,7 @@ use crate::data::convert::{ConvertError, to_simulation_config, to_tui_result};
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::modal::ModalState;
 use super::screen_state::{
-    EventsState, MonteCarloPreviewSummary, PercentileView, PortfolioProfilesState,
+    EventsState, MonteCarloPreviewSummary, OptimizeState, PercentileView, PortfolioProfilesState,
     ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
 };
 use super::tabs::TabId;
@@ -103,6 +103,7 @@ pub struct AppState {
     pub events_state: EventsState,
     pub scenario_state: ScenarioState,
     pub results_state: ResultsState,
+    pub optimize_state: OptimizeState,
 
     pub modal: ModalState,
     pub error_message: Option<String>,
@@ -131,6 +132,7 @@ impl Default for AppState {
             events_state: EventsState::default(),
             scenario_state: ScenarioState::default(),
             results_state: ResultsState::default(),
+            optimize_state: OptimizeState::new(),
             modal: ModalState::None,
             error_message: None,
             exit: false,

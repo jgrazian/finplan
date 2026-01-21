@@ -8,6 +8,7 @@ mod config;
 mod effect;
 mod event;
 mod holding;
+pub mod optimize;
 mod profile;
 mod scenario;
 pub mod wizard;

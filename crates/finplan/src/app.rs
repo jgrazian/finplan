@@ -12,8 +12,8 @@ use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::
 use crate::data::storage::DataDirectory;
 use crate::modals::{ModalResult, handle_modal_key, render_modal};
 use crate::screens::{
-    events::EventsScreen, portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen,
-    scenario::ScenarioScreen,
+    events::EventsScreen, optimize::OptimizeScreen, portfolio_profiles::PortfolioProfilesScreen,
+    results::ResultsScreen, scenario::ScenarioScreen,
 };
 use crate::state::{
     AccountAction, AppState, ConfigAction, EffectAction, EventAction, HoldingAction, ModalAction,
@@ -28,6 +28,7 @@ pub struct App {
     scenario_screen: ScenarioScreen,
     events_screen: EventsScreen,
     results_screen: ResultsScreen,
+    optimize_screen: OptimizeScreen,
 }
 
 impl Default for App {
@@ -48,6 +49,7 @@ impl App {
             scenario_screen: ScenarioScreen,
             events_screen: EventsScreen,
             results_screen: ResultsScreen,
+            optimize_screen: OptimizeScreen,
         }
     }
 
@@ -64,6 +66,7 @@ impl App {
             scenario_screen: ScenarioScreen,
             events_screen: EventsScreen,
             results_screen: ResultsScreen,
+            optimize_screen: OptimizeScreen,
         }
     }
 
@@ -190,6 +193,7 @@ impl App {
             TabId::Scenario => self.scenario_screen.render(frame, area, &self.state),
             TabId::Events => self.events_screen.render(frame, area, &self.state),
             TabId::Results => self.results_screen.render(frame, area, &self.state),
+            TabId::Optimize => self.optimize_screen.render(frame, area, &self.state),
         }
     }
 
@@ -260,6 +264,7 @@ impl App {
             TabId::Scenario => self.scenario_screen.handle_key(key_event, &mut self.state),
             TabId::Events => self.events_screen.handle_key(key_event, &mut self.state),
             TabId::Results => self.results_screen.handle_key(key_event, &mut self.state),
+            TabId::Optimize => self.optimize_screen.handle_key(key_event, &mut self.state),
         };
 
         if result == EventResult::Exit {
@@ -419,6 +424,11 @@ impl App {
             }
             ModalAction::Effect(EffectAction::Delete) => {
                 actions::handle_delete_effect(&mut self.state, ctx)
+            }
+
+            // Optimize actions
+            ModalAction::Optimize(action) => {
+                actions::optimize::handle_optimize_action(&mut self.state, action, &value)
             }
         };
 

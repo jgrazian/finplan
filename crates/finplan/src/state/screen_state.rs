@@ -1,7 +1,11 @@
 /// Per-screen state structs.
 use std::collections::HashMap;
 
-use super::panels::{EventsPanel, PortfolioProfilesPanel, ResultsPanel, ScenarioPanel};
+use finplan_core::model::{AccountId, EventId};
+
+use super::panels::{
+    EventsPanel, OptimizePanel, PortfolioProfilesPanel, ResultsPanel, ScenarioPanel,
+};
 
 /// Percentile view for Monte Carlo results
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -208,4 +212,69 @@ pub struct ResultsState {
     pub percentile_view: PercentileView,
     /// Whether we're viewing Monte Carlo results
     pub viewing_monte_carlo: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParameterType {
+    #[default]
+    RetirementAge,
+    ContributionRate,
+    WithdrawalAmount,
+    AssetAllocation,
+}
+
+#[derive(Debug, Clone)]
+pub struct SelectedParameter {
+    pub param_type: ParameterType,
+    pub event_id: Option<EventId>,
+    pub account_id: Option<AccountId>,
+    pub min_value: f64,
+    pub max_value: f64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum OptimizationObjectiveSelection {
+    #[default]
+    MaxWealthAtDeath,
+    MaxWealthAtRetirement {
+        event_id: Option<EventId>,
+    },
+    MaxSustainableWithdrawal {
+        event_id: Option<EventId>,
+        success_rate: f64,
+    },
+    MinLifetimeTax,
+}
+
+#[derive(Debug, Clone)]
+pub struct OptimizationResultDisplay {
+    pub optimal_values: Vec<(String, f64)>,
+    pub objective_value: f64,
+    pub success_rate: f64,
+    pub converged: bool,
+    pub iterations: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct OptimizeState {
+    pub focused_panel: OptimizePanel,
+    pub selected_param_index: usize,
+    pub selected_parameters: Vec<SelectedParameter>,
+    pub objective: OptimizationObjectiveSelection,
+    pub mc_iterations: usize,
+    pub max_iterations: usize,
+    pub running: bool,
+    pub current_iteration: usize,
+    pub result: Option<OptimizationResultDisplay>,
+    pub convergence_data: Vec<(usize, f64)>,
+}
+
+impl OptimizeState {
+    pub fn new() -> Self {
+        Self {
+            mc_iterations: 500,
+            max_iterations: 100,
+            ..Default::default()
+        }
+    }
 }
