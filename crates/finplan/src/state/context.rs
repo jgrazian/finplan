@@ -2,6 +2,8 @@
 ///
 /// This provides type safety and eliminates the need for string parsing
 /// in modal handlers.
+use std::str::FromStr;
+
 use crate::data::events_data::IntervalData;
 
 /// Top-level context enum for modal operations
@@ -55,26 +57,30 @@ pub enum AccountTypeContext {
     StudentLoan,
 }
 
-impl AccountTypeContext {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for AccountTypeContext {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Brokerage" => Some(Self::Brokerage),
-            "401(k)" | "Traditional401k" | "Traditional 401k" => Some(Self::Traditional401k),
-            "Roth 401(k)" | "Roth401k" | "Roth 401k" => Some(Self::Roth401k),
-            "Traditional IRA" | "TraditionalIRA" => Some(Self::TraditionalIRA),
-            "Roth IRA" | "RothIRA" => Some(Self::RothIRA),
-            "Checking" => Some(Self::Checking),
-            "Savings" => Some(Self::Savings),
-            "HSA" => Some(Self::HSA),
-            "Property" => Some(Self::Property),
-            "Collectible" => Some(Self::Collectible),
-            "Mortgage" => Some(Self::Mortgage),
-            "Loan" => Some(Self::Loan),
-            "Student Loan" | "StudentLoan" => Some(Self::StudentLoan),
-            _ => None,
+            "Brokerage" => Ok(Self::Brokerage),
+            "401(k)" | "Traditional401k" | "Traditional 401k" => Ok(Self::Traditional401k),
+            "Roth 401(k)" | "Roth401k" | "Roth 401k" => Ok(Self::Roth401k),
+            "Traditional IRA" | "TraditionalIRA" => Ok(Self::TraditionalIRA),
+            "Roth IRA" | "RothIRA" => Ok(Self::RothIRA),
+            "Checking" => Ok(Self::Checking),
+            "Savings" => Ok(Self::Savings),
+            "HSA" => Ok(Self::HSA),
+            "Property" => Ok(Self::Property),
+            "Collectible" => Ok(Self::Collectible),
+            "Mortgage" => Ok(Self::Mortgage),
+            "Loan" => Ok(Self::Loan),
+            "Student Loan" | "StudentLoan" => Ok(Self::StudentLoan),
+            _ => Err(()),
         }
     }
+}
 
+impl AccountTypeContext {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Brokerage => "Brokerage",
@@ -103,17 +109,21 @@ pub enum ProfileTypeContext {
     LogNormal,
 }
 
-impl ProfileTypeContext {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for ProfileTypeContext {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "None" => Some(Self::None),
-            "Fixed" | "Fixed Rate" => Some(Self::Fixed),
-            "Normal" | "Normal Distribution" => Some(Self::Normal),
-            "LogNormal" | "Log-Normal" | "Log-Normal Distribution" => Some(Self::LogNormal),
-            _ => Option::None,
+            "None" => Ok(Self::None),
+            "Fixed" | "Fixed Rate" => Ok(Self::Fixed),
+            "Normal" | "Normal Distribution" => Ok(Self::Normal),
+            "LogNormal" | "Log-Normal" | "Log-Normal Distribution" => Ok(Self::LogNormal),
+            _ => Err(()),
         }
     }
+}
 
+impl ProfileTypeContext {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::None => "None",
@@ -373,25 +383,29 @@ pub enum EffectTypeContext {
     CashTransfer,
 }
 
-impl EffectTypeContext {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for EffectTypeContext {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Income" => Some(Self::Income),
-            "Expense" => Some(Self::Expense),
-            "AssetPurchase" | "Asset Purchase" => Some(Self::AssetPurchase),
-            "AssetSale" | "Asset Sale" => Some(Self::AssetSale),
-            "Sweep" => Some(Self::Sweep),
-            "TriggerEvent" | "Trigger Event" => Some(Self::TriggerEvent),
-            "PauseEvent" | "Pause Event" => Some(Self::PauseEvent),
-            "ResumeEvent" | "Resume Event" => Some(Self::ResumeEvent),
-            "TerminateEvent" | "Terminate Event" => Some(Self::TerminateEvent),
-            "ApplyRmd" | "Apply RMD" => Some(Self::ApplyRmd),
-            "AdjustBalance" | "Adjust Balance" => Some(Self::AdjustBalance),
-            "CashTransfer" | "Cash Transfer" => Some(Self::CashTransfer),
-            _ => None,
+            "Income" => Ok(Self::Income),
+            "Expense" => Ok(Self::Expense),
+            "AssetPurchase" | "Asset Purchase" => Ok(Self::AssetPurchase),
+            "AssetSale" | "Asset Sale" => Ok(Self::AssetSale),
+            "Sweep" => Ok(Self::Sweep),
+            "TriggerEvent" | "Trigger Event" => Ok(Self::TriggerEvent),
+            "PauseEvent" | "Pause Event" => Ok(Self::PauseEvent),
+            "ResumeEvent" | "Resume Event" => Ok(Self::ResumeEvent),
+            "TerminateEvent" | "Terminate Event" => Ok(Self::TerminateEvent),
+            "ApplyRmd" | "Apply RMD" => Ok(Self::ApplyRmd),
+            "AdjustBalance" | "Adjust Balance" => Ok(Self::AdjustBalance),
+            "CashTransfer" | "Cash Transfer" => Ok(Self::CashTransfer),
+            _ => Err(()),
         }
     }
+}
 
+impl EffectTypeContext {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Income => "Income",
@@ -431,13 +445,15 @@ pub enum InflationConfigContext {
     LogNormal,
 }
 
-impl InflationConfigContext {
-    pub fn from_str(s: &str) -> Option<Self> {
+impl FromStr for InflationConfigContext {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Fixed" => Some(Self::Fixed),
-            "Normal" => Some(Self::Normal),
-            "LogNormal" | "Log-Normal" => Some(Self::LogNormal),
-            _ => None,
+            "Fixed" => Ok(Self::Fixed),
+            "Normal" => Ok(Self::Normal),
+            "LogNormal" | "Log-Normal" => Ok(Self::LogNormal),
+            _ => Err(()),
         }
     }
 }
@@ -559,14 +575,14 @@ mod tests {
     #[test]
     fn test_account_type_from_str() {
         assert_eq!(
-            AccountTypeContext::from_str("Brokerage"),
-            Some(AccountTypeContext::Brokerage)
+            "Brokerage".parse::<AccountTypeContext>(),
+            Ok(AccountTypeContext::Brokerage)
         );
         assert_eq!(
-            AccountTypeContext::from_str("Traditional 401k"),
-            Some(AccountTypeContext::Traditional401k)
+            "Traditional 401k".parse::<AccountTypeContext>(),
+            Ok(AccountTypeContext::Traditional401k)
         );
-        assert_eq!(AccountTypeContext::from_str("invalid"), None);
+        assert!("invalid".parse::<AccountTypeContext>().is_err());
     }
 
     #[test]

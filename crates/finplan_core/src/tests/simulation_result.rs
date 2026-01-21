@@ -34,7 +34,7 @@ fn test_simulation_dates() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // First date should be start date
     assert_eq!(
@@ -97,7 +97,7 @@ fn test_final_balances_stored() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Verify final_balances HashMap is populated
     assert!(
@@ -175,7 +175,7 @@ fn test_final_asset_balances_stored() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Check that both assets are in final_asset_balances
     assert!(
@@ -240,7 +240,7 @@ fn test_income_records_generated() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // The event should have triggered
     assert!(
@@ -288,7 +288,7 @@ fn test_event_records_generated() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Check event was triggered
     assert!(
@@ -330,7 +330,7 @@ fn test_untriggered_event() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     assert!(
         !result.event_was_triggered(event_id),
@@ -360,7 +360,7 @@ fn test_yearly_tax_summaries() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Should have tax summaries (possibly empty) for each year
     // Note: Implementation may vary on exactly how many summaries are generated
@@ -428,7 +428,7 @@ fn test_record_filtering_methods() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Test event_triggered_entries filter
     let event_entries: Vec<_> = result.event_triggered_entries().collect();
@@ -487,7 +487,7 @@ fn test_ledger_captures_state_changes() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Verify ledger is not empty
     assert!(!result.ledger.is_empty(), "Ledger should contain entries");
@@ -612,7 +612,7 @@ fn test_ledger_filter_by_account() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Filter entries for account 1
     let account1_entries: Vec<_> = result.entries_for_account(account1).collect();
@@ -693,7 +693,7 @@ fn test_ledger_income_and_expense_events() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Verify both events were triggered
     assert!(
@@ -827,7 +827,7 @@ fn test_ledger_asset_purchase_and_sale_events() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Verify both events were triggered
     assert!(

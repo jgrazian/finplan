@@ -25,10 +25,6 @@ use super::Screen;
 pub struct PortfolioProfilesScreen;
 
 impl PortfolioProfilesScreen {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Extract all unique assets from investment accounts
     fn get_unique_assets(state: &AppState) -> Vec<AssetTag> {
         let mut assets = HashSet::new();
@@ -1570,44 +1566,44 @@ impl PortfolioProfilesScreen {
                 KeyCode::Char('J') if has_shift => {
                     let idx = state.portfolio_profiles_state.selected_holding_index;
                     // Only reorder if we have real assets and not on "Add new" option
-                    if num_assets >= 2 && idx < num_assets - 1 {
-                        if let Some(account) =
+                    if num_assets >= 2
+                        && idx < num_assets - 1
+                        && let Some(account) =
                             state.data_mut().portfolios.accounts.get_mut(account_idx)
-                        {
-                            match &mut account.account_type {
-                                AccountType::Brokerage(inv)
-                                | AccountType::Traditional401k(inv)
-                                | AccountType::Roth401k(inv)
-                                | AccountType::TraditionalIRA(inv)
-                                | AccountType::RothIRA(inv) => {
-                                    inv.assets.swap(idx, idx + 1);
-                                    state.portfolio_profiles_state.selected_holding_index = idx + 1;
-                                    state.mark_modified();
-                                }
-                                _ => {}
+                    {
+                        match &mut account.account_type {
+                            AccountType::Brokerage(inv)
+                            | AccountType::Traditional401k(inv)
+                            | AccountType::Roth401k(inv)
+                            | AccountType::TraditionalIRA(inv)
+                            | AccountType::RothIRA(inv) => {
+                                inv.assets.swap(idx, idx + 1);
+                                state.portfolio_profiles_state.selected_holding_index = idx + 1;
+                                state.mark_modified();
                             }
+                            _ => {}
                         }
                     }
                     EventResult::Handled
                 }
                 KeyCode::Down if has_shift => {
                     let idx = state.portfolio_profiles_state.selected_holding_index;
-                    if num_assets >= 2 && idx < num_assets - 1 {
-                        if let Some(account) =
+                    if num_assets >= 2
+                        && idx < num_assets - 1
+                        && let Some(account) =
                             state.data_mut().portfolios.accounts.get_mut(account_idx)
-                        {
-                            match &mut account.account_type {
-                                AccountType::Brokerage(inv)
-                                | AccountType::Traditional401k(inv)
-                                | AccountType::Roth401k(inv)
-                                | AccountType::TraditionalIRA(inv)
-                                | AccountType::RothIRA(inv) => {
-                                    inv.assets.swap(idx, idx + 1);
-                                    state.portfolio_profiles_state.selected_holding_index = idx + 1;
-                                    state.mark_modified();
-                                }
-                                _ => {}
+                    {
+                        match &mut account.account_type {
+                            AccountType::Brokerage(inv)
+                            | AccountType::Traditional401k(inv)
+                            | AccountType::Roth401k(inv)
+                            | AccountType::TraditionalIRA(inv)
+                            | AccountType::RothIRA(inv) => {
+                                inv.assets.swap(idx, idx + 1);
+                                state.portfolio_profiles_state.selected_holding_index = idx + 1;
+                                state.mark_modified();
                             }
+                            _ => {}
                         }
                     }
                     EventResult::Handled
@@ -1615,44 +1611,46 @@ impl PortfolioProfilesScreen {
                 // Move up (Shift+K or Shift+Up)
                 KeyCode::Char('K') if has_shift => {
                     let idx = state.portfolio_profiles_state.selected_holding_index;
-                    if num_assets >= 2 && idx > 0 && idx < num_assets {
-                        if let Some(account) =
+                    if num_assets >= 2
+                        && idx > 0
+                        && idx < num_assets
+                        && let Some(account) =
                             state.data_mut().portfolios.accounts.get_mut(account_idx)
-                        {
-                            match &mut account.account_type {
-                                AccountType::Brokerage(inv)
-                                | AccountType::Traditional401k(inv)
-                                | AccountType::Roth401k(inv)
-                                | AccountType::TraditionalIRA(inv)
-                                | AccountType::RothIRA(inv) => {
-                                    inv.assets.swap(idx, idx - 1);
-                                    state.portfolio_profiles_state.selected_holding_index = idx - 1;
-                                    state.mark_modified();
-                                }
-                                _ => {}
+                    {
+                        match &mut account.account_type {
+                            AccountType::Brokerage(inv)
+                            | AccountType::Traditional401k(inv)
+                            | AccountType::Roth401k(inv)
+                            | AccountType::TraditionalIRA(inv)
+                            | AccountType::RothIRA(inv) => {
+                                inv.assets.swap(idx, idx - 1);
+                                state.portfolio_profiles_state.selected_holding_index = idx - 1;
+                                state.mark_modified();
                             }
+                            _ => {}
                         }
                     }
                     EventResult::Handled
                 }
                 KeyCode::Up if has_shift => {
                     let idx = state.portfolio_profiles_state.selected_holding_index;
-                    if num_assets >= 2 && idx > 0 && idx < num_assets {
-                        if let Some(account) =
+                    if num_assets >= 2
+                        && idx > 0
+                        && idx < num_assets
+                        && let Some(account) =
                             state.data_mut().portfolios.accounts.get_mut(account_idx)
-                        {
-                            match &mut account.account_type {
-                                AccountType::Brokerage(inv)
-                                | AccountType::Traditional401k(inv)
-                                | AccountType::Roth401k(inv)
-                                | AccountType::TraditionalIRA(inv)
-                                | AccountType::RothIRA(inv) => {
-                                    inv.assets.swap(idx, idx - 1);
-                                    state.portfolio_profiles_state.selected_holding_index = idx - 1;
-                                    state.mark_modified();
-                                }
-                                _ => {}
+                    {
+                        match &mut account.account_type {
+                            AccountType::Brokerage(inv)
+                            | AccountType::Traditional401k(inv)
+                            | AccountType::Roth401k(inv)
+                            | AccountType::TraditionalIRA(inv)
+                            | AccountType::RothIRA(inv) => {
+                                inv.assets.swap(idx, idx - 1);
+                                state.portfolio_profiles_state.selected_holding_index = idx - 1;
+                                state.mark_modified();
                             }
+                            _ => {}
                         }
                     }
                     EventResult::Handled

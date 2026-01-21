@@ -55,9 +55,9 @@ pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
     profile_options.extend(state.data().profiles.iter().map(|p| p.name.0.clone()));
 
     // Parse the account type string to typed context
-    let account_type_ctx = match AccountTypeContext::from_str(account_type) {
-        Some(ctx) => ctx,
-        None => return ActionResult::close(),
+    let account_type_ctx = match account_type.parse::<AccountTypeContext>() {
+        Ok(ctx) => ctx,
+        Err(_) => return ActionResult::close(),
     };
 
     let (title, fields) = match &account_type_ctx {
@@ -133,9 +133,7 @@ pub fn handle_create_account(state: &mut AppState, ctx: ActionContext) -> Action
         Some(AccountTypeContext::Checking) => {
             create_property_account(&parts, AccountType::Checking)
         }
-        Some(AccountTypeContext::Savings) => {
-            create_property_account(&parts, AccountType::Savings)
-        }
+        Some(AccountTypeContext::Savings) => create_property_account(&parts, AccountType::Savings),
         Some(AccountTypeContext::HSA) => create_property_account(&parts, AccountType::HSA),
         Some(AccountTypeContext::Property) => {
             create_property_account(&parts, AccountType::Property)
@@ -143,9 +141,7 @@ pub fn handle_create_account(state: &mut AppState, ctx: ActionContext) -> Action
         Some(AccountTypeContext::Collectible) => {
             create_property_account(&parts, AccountType::Collectible)
         }
-        Some(AccountTypeContext::Mortgage) => {
-            create_debt_account(&parts, AccountType::Mortgage)
-        }
+        Some(AccountTypeContext::Mortgage) => create_debt_account(&parts, AccountType::Mortgage),
         Some(AccountTypeContext::Loan) => create_debt_account(&parts, AccountType::LoanDebt),
         Some(AccountTypeContext::StudentLoan) => {
             create_debt_account(&parts, AccountType::StudentLoanDebt)

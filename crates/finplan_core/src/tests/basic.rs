@@ -42,7 +42,7 @@ fn test_monte_carlo_simulation() {
     };
 
     const NUM_ITERATIONS: usize = 100;
-    let result = monte_carlo_simulate(&params, NUM_ITERATIONS);
+    let result = monte_carlo_simulate(&params, NUM_ITERATIONS).unwrap();
     assert_eq!(result.iterations.len(), NUM_ITERATIONS);
 
     // Check that results are different (due to random seed)
@@ -82,7 +82,7 @@ fn test_simulation_basic() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Test returns compound correctly over 10 years
     let expected_final = 10_000.0 + 10_000.0 * ((1.05_f64).powf(10.0) - 1.0);

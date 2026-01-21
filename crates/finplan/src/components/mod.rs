@@ -3,9 +3,9 @@ pub mod portfolio_overview;
 pub mod status_bar;
 pub mod tab_bar;
 
+use crate::state::AppState;
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
-use crate::state::AppState;
 
 /// Result of handling an event
 #[derive(Debug, Clone, PartialEq)]

@@ -2,7 +2,9 @@
 
 use crate::data::parameters_data::{DistributionType, FederalBracketsPreset, InflationData};
 use crate::modals::parse_percentage;
-use crate::state::context::{ConfigContext, InflationConfigContext, ModalContext, TaxConfigContext};
+use crate::state::context::{
+    ConfigContext, InflationConfigContext, ModalContext, TaxConfigContext,
+};
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
 
 use super::{ActionContext, ActionResult};
@@ -44,11 +46,7 @@ pub fn handle_edit_tax_config(state: &mut AppState, ctx: ActionContext) -> Actio
         }
         Some(TaxConfigContext::CapGainsRate) => {
             if let Some(rate) = parts.first().and_then(|s| parse_percentage(s).ok()) {
-                state
-                    .data_mut()
-                    .parameters
-                    .tax_config
-                    .capital_gains_rate = rate;
+                state.data_mut().parameters.tax_config.capital_gains_rate = rate;
                 return ActionResult::modified();
             }
         }
@@ -73,41 +71,37 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
                     vec![FormField::percentage("Rate", 0.03)],
                     ModalAction::EDIT_INFLATION,
                 )
-                .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
-                    InflationConfigContext::Fixed,
-                ))),
+                .with_typed_context(ModalContext::Config(
+                    ConfigContext::Inflation(InflationConfigContext::Fixed),
+                )),
             ))
         }
-        "Normal" => {
-            ActionResult::modal(ModalState::Form(
-                FormModal::new(
-                    "Normal Inflation",
-                    vec![
-                        FormField::percentage("Mean", 0.03),
-                        FormField::percentage("Std Dev", 0.02),
-                    ],
-                    ModalAction::EDIT_INFLATION,
-                )
-                .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
-                    InflationConfigContext::Normal,
-                ))),
-            ))
-        }
-        "Log-Normal" => {
-            ActionResult::modal(ModalState::Form(
-                FormModal::new(
-                    "Log-Normal Inflation",
-                    vec![
-                        FormField::percentage("Mean", 0.03),
-                        FormField::percentage("Std Dev", 0.02),
-                    ],
-                    ModalAction::EDIT_INFLATION,
-                )
-                .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
-                    InflationConfigContext::LogNormal,
-                ))),
-            ))
-        }
+        "Normal" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Normal Inflation",
+                vec![
+                    FormField::percentage("Mean", 0.03),
+                    FormField::percentage("Std Dev", 0.02),
+                ],
+                ModalAction::EDIT_INFLATION,
+            )
+            .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
+                InflationConfigContext::Normal,
+            ))),
+        )),
+        "Log-Normal" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Log-Normal Inflation",
+                vec![
+                    FormField::percentage("Mean", 0.03),
+                    FormField::percentage("Std Dev", 0.02),
+                ],
+                ModalAction::EDIT_INFLATION,
+            )
+            .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
+                InflationConfigContext::LogNormal,
+            ))),
+        )),
         "US Historical" => {
             // Show picker for distribution type
             let options = vec![

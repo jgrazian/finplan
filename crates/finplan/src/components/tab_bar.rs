@@ -11,12 +11,6 @@ use ratatui::{
 
 pub struct TabBar;
 
-impl TabBar {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl Component for TabBar {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         // Don't intercept keys when editing holdings (value input needs digits)

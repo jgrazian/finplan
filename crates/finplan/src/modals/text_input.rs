@@ -1,16 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 
 use crate::state::TextInputModal;
 
-use super::helpers::{calculate_scroll, render_cursor_line, render_modal_frame, HelpText};
 use super::ModalResult;
+use super::helpers::{HelpText, calculate_scroll, render_cursor_line, render_modal_frame};
 
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 9;

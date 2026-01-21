@@ -70,10 +70,10 @@ impl EventsPanel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScenarioPanel {
     #[default]
-    ScenarioList,     // Left panel: list of scenarios
-    ScenarioDetails,  // Left panel: selected scenario details
-    ComparisonTable,  // Right panel: comparison table
-    OverlayChart,     // Right panel: net worth overlay chart
+    ScenarioList, // Left panel: list of scenarios
+    ScenarioDetails, // Left panel: selected scenario details
+    ComparisonTable, // Right panel: comparison table
+    OverlayChart,    // Right panel: net worth overlay chart
 }
 
 impl ScenarioPanel {

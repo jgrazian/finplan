@@ -250,7 +250,7 @@ fn test_full_simulation_with_builder() {
         .build();
 
     // Run simulation
-    let result = simulate(&config, 42);
+    let result = simulate(&config, 42).unwrap();
 
     // Basic validation
     assert!(!result.wealth_snapshots.is_empty());

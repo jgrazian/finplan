@@ -10,6 +10,40 @@ use super::state_event::{LedgerEntry, StateEvent};
 use super::tax_config::TaxSummary;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "ts")]
+use ts_rs::TS;
+
+/// A warning generated during simulation execution
+///
+/// Warnings are non-fatal issues that occurred during simulation but did not
+/// prevent the simulation from completing. Consumers should inspect warnings
+/// to understand if any events were skipped or other issues occurred.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "ts", derive(TS), ts(export))]
+pub struct SimulationWarning {
+    /// Date when the warning occurred
+    pub date: jiff::civil::Date,
+    /// Event that was being processed when the warning occurred (if any)
+    pub event_id: Option<EventId>,
+    /// Human-readable description of the warning
+    pub message: String,
+    /// Category of the warning
+    pub kind: WarningKind,
+}
+
+/// Categories of simulation warnings
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "ts", derive(TS), ts(export))]
+pub enum WarningKind {
+    /// An effect was skipped due to an error during application
+    #[default]
+    EffectSkipped,
+    /// An effect evaluation failed
+    EvaluationFailed,
+    /// Iteration limit was hit, indicating a possible infinite loop
+    IterationLimitHit,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WealthSnapshot {
     pub date: jiff::civil::Date,
@@ -49,6 +83,9 @@ pub struct SimulationResult {
     pub yearly_cash_flows: Vec<YearlyCashFlowSummary>,
     /// Immutable ledger of all state changes in chronological order
     pub ledger: Vec<LedgerEntry>,
+    /// Non-fatal warnings encountered during simulation
+    #[serde(default)]
+    pub warnings: Vec<SimulationWarning>,
 }
 
 impl SimulationResult {
@@ -318,11 +355,23 @@ impl SnapshotMeanAccumulator {
     }
 }
 
+/// Running sums for tax accumulation
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct TaxSums {
+    year: i16,
+    ordinary_income: f64,
+    capital_gains: f64,
+    tax_free_withdrawals: f64,
+    federal_tax: f64,
+    state_tax: f64,
+    total_tax: f64,
+    early_withdrawal_penalties: f64,
+}
+
 /// Accumulator for computing mean tax summaries across iterations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaxMeanAccumulator {
-    /// For each tax year: (year, sum_ordinary, sum_cap_gains, sum_tax_free, sum_federal, sum_state, sum_total, sum_early_penalties)
-    pub sums: Vec<(i16, f64, f64, f64, f64, f64, f64, f64)>,
+    sums: Vec<TaxSums>,
     pub count: usize,
 }
 
@@ -332,7 +381,10 @@ impl TaxMeanAccumulator {
         let sums = template
             .yearly_taxes
             .iter()
-            .map(|t| (t.year, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            .map(|t| TaxSums {
+                year: t.year,
+                ..Default::default()
+            })
             .collect();
         Self { sums, count: 0 }
     }
@@ -341,13 +393,13 @@ impl TaxMeanAccumulator {
     pub fn accumulate(&mut self, result: &SimulationResult) {
         for (idx, tax) in result.yearly_taxes.iter().enumerate() {
             if let Some(sums) = self.sums.get_mut(idx) {
-                sums.1 += tax.ordinary_income;
-                sums.2 += tax.capital_gains;
-                sums.3 += tax.tax_free_withdrawals;
-                sums.4 += tax.federal_tax;
-                sums.5 += tax.state_tax;
-                sums.6 += tax.total_tax;
-                sums.7 += tax.early_withdrawal_penalties;
+                sums.ordinary_income += tax.ordinary_income;
+                sums.capital_gains += tax.capital_gains;
+                sums.tax_free_withdrawals += tax.tax_free_withdrawals;
+                sums.federal_tax += tax.federal_tax;
+                sums.state_tax += tax.state_tax;
+                sums.total_tax += tax.total_tax;
+                sums.early_withdrawal_penalties += tax.early_withdrawal_penalties;
             }
         }
         self.count += 1;
@@ -358,25 +410,36 @@ impl TaxMeanAccumulator {
         let n = self.count as f64;
         self.sums
             .iter()
-            .map(|(year, ord, cap, tf, fed, state, total, early_penalties)| TaxSummary {
-                year: *year,
-                ordinary_income: ord / n,
-                capital_gains: cap / n,
-                tax_free_withdrawals: tf / n,
-                federal_tax: fed / n,
-                state_tax: state / n,
-                total_tax: total / n,
-                early_withdrawal_penalties: early_penalties / n,
+            .map(|sums| TaxSummary {
+                year: sums.year,
+                ordinary_income: sums.ordinary_income / n,
+                capital_gains: sums.capital_gains / n,
+                tax_free_withdrawals: sums.tax_free_withdrawals / n,
+                federal_tax: sums.federal_tax / n,
+                state_tax: sums.state_tax / n,
+                total_tax: sums.total_tax / n,
+                early_withdrawal_penalties: sums.early_withdrawal_penalties / n,
             })
             .collect()
     }
 }
 
+/// Running sums for cash flow accumulation
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct CashFlowSums {
+    year: i16,
+    income: f64,
+    expenses: f64,
+    contributions: f64,
+    withdrawals: f64,
+    appreciation: f64,
+    net_cash_flow: f64,
+}
+
 /// Accumulator for computing mean cash flow summaries across iterations
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CashFlowMeanAccumulator {
-    /// For each year: (year, income, expenses, contributions, withdrawals, appreciation, net)
-    pub sums: Vec<(i16, f64, f64, f64, f64, f64, f64)>,
+    sums: Vec<CashFlowSums>,
     pub count: usize,
 }
 
@@ -386,7 +449,10 @@ impl CashFlowMeanAccumulator {
         let sums = template
             .yearly_cash_flows
             .iter()
-            .map(|cf| (cf.year, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+            .map(|cf| CashFlowSums {
+                year: cf.year,
+                ..Default::default()
+            })
             .collect();
         Self { sums, count: 0 }
     }
@@ -395,12 +461,12 @@ impl CashFlowMeanAccumulator {
     pub fn accumulate(&mut self, result: &SimulationResult) {
         for (idx, cf) in result.yearly_cash_flows.iter().enumerate() {
             if let Some(sums) = self.sums.get_mut(idx) {
-                sums.1 += cf.income;
-                sums.2 += cf.expenses;
-                sums.3 += cf.contributions;
-                sums.4 += cf.withdrawals;
-                sums.5 += cf.appreciation;
-                sums.6 += cf.net_cash_flow;
+                sums.income += cf.income;
+                sums.expenses += cf.expenses;
+                sums.contributions += cf.contributions;
+                sums.withdrawals += cf.withdrawals;
+                sums.appreciation += cf.appreciation;
+                sums.net_cash_flow += cf.net_cash_flow;
             }
         }
         self.count += 1;
@@ -411,14 +477,14 @@ impl CashFlowMeanAccumulator {
         let n = self.count as f64;
         self.sums
             .iter()
-            .map(|(year, inc, exp, cont, wd, appr, net)| YearlyCashFlowSummary {
-                year: *year,
-                income: inc / n,
-                expenses: exp / n,
-                contributions: cont / n,
-                withdrawals: wd / n,
-                appreciation: appr / n,
-                net_cash_flow: net / n,
+            .map(|sums| YearlyCashFlowSummary {
+                year: sums.year,
+                income: sums.income / n,
+                expenses: sums.expenses / n,
+                contributions: sums.contributions / n,
+                withdrawals: sums.withdrawals / n,
+                appreciation: sums.appreciation / n,
+                net_cash_flow: sums.net_cash_flow / n,
             })
             .collect()
     }
@@ -453,7 +519,8 @@ impl MeanAccumulators {
             wealth_snapshots: self.snapshots.build_mean_snapshots(),
             yearly_taxes: self.taxes.build_mean_taxes(),
             yearly_cash_flows: self.cash_flows.build_mean_cash_flows(),
-            ledger: Vec::new(), // No meaningful ledger for averaged results
+            ledger: Vec::new(),   // No meaningful ledger for averaged results
+            warnings: Vec::new(), // No warnings for averaged results
         }
     }
 }
@@ -481,7 +548,9 @@ impl MonteCarloSummary {
 
     /// Get the mean result (built from accumulators)
     pub fn get_mean_result(&self) -> Option<SimulationResult> {
-        self.mean_accumulators.as_ref().map(|acc| acc.build_mean_result())
+        self.mean_accumulators
+            .as_ref()
+            .map(|acc| acc.build_mean_result())
     }
 }
 

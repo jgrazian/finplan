@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ts")]
 use ts_rs::TS;
 
+use crate::error::MarketError;
 use crate::model::{AssetId, ReturnProfileId};
 
 #[derive(Debug, Clone, Copy)]
@@ -152,18 +153,22 @@ impl Market {
         inflation_profile: &InflationProfile,
         return_profiles: &HashMap<ReturnProfileId, ReturnProfile>,
         assets: &FxHashMap<AssetId, (f64, ReturnProfileId)>,
-    ) -> Self {
-        let inflation_values: Vec<f64> = (0..num_years)
-            .map(|_| inflation_profile.sample(rng))
-            .collect();
+    ) -> Result<Self, MarketError> {
+        let mut inflation_values = Vec::with_capacity(num_years);
+        for _ in 0..num_years {
+            inflation_values.push(inflation_profile.sample(rng)?);
+        }
 
         let mut returns: FxHashMap<ReturnProfileId, Vec<f64>> = FxHashMap::default();
         for (rp_id, rp) in return_profiles.iter() {
-            let rp_returns: Vec<f64> = (0..num_years).map(|_| rp.sample(rng)).collect();
+            let mut rp_returns = Vec::with_capacity(num_years);
+            for _ in 0..num_years {
+                rp_returns.push(rp.sample(rng)?);
+            }
             returns.insert(*rp_id, rp_returns);
         }
 
-        Self::new(inflation_values, returns, assets.clone())
+        Ok(Self::new(inflation_values, returns, assets.clone()))
     }
 
     pub fn get_asset_value(
@@ -249,18 +254,27 @@ impl InflationProfile {
         std_dev: 0.026317,
     };
 
-    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {
+    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<f64, MarketError> {
         match self {
-            InflationProfile::None => 0.0,
-            InflationProfile::Fixed(rate) => *rate,
+            InflationProfile::None => Ok(0.0),
+            InflationProfile::Fixed(rate) => Ok(*rate),
             InflationProfile::Normal { mean, std_dev } => rand_distr::Normal::new(*mean, *std_dev)
-                .unwrap()
-                .sample(rng),
+                .map(|d| d.sample(rng))
+                .map_err(|_| MarketError::InvalidDistributionParameters {
+                    profile_type: "Normal inflation",
+                    mean: *mean,
+                    std_dev: *std_dev,
+                    reason: "std_dev must be non-negative and finite",
+                }),
             InflationProfile::LogNormal { mean, std_dev } => {
                 rand_distr::LogNormal::new(*mean, *std_dev)
-                    .unwrap()
-                    .sample(rng)
-                    - 1.0
+                    .map(|d| d.sample(rng) - 1.0)
+                    .map_err(|_| MarketError::InvalidDistributionParameters {
+                        profile_type: "LogNormal inflation",
+                        mean: *mean,
+                        std_dev: *std_dev,
+                        reason: "std_dev must be positive and finite",
+                    })
             }
         }
     }
@@ -287,18 +301,27 @@ impl ReturnProfile {
         std_dev: 0.161832,
     };
 
-    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> f64 {
+    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<f64, MarketError> {
         match self {
-            ReturnProfile::None => 0.0,
-            ReturnProfile::Fixed(rate) => *rate,
+            ReturnProfile::None => Ok(0.0),
+            ReturnProfile::Fixed(rate) => Ok(*rate),
             ReturnProfile::Normal { mean, std_dev } => rand_distr::Normal::new(*mean, *std_dev)
-                .unwrap()
-                .sample(rng),
+                .map(|d| d.sample(rng))
+                .map_err(|_| MarketError::InvalidDistributionParameters {
+                    profile_type: "Normal return",
+                    mean: *mean,
+                    std_dev: *std_dev,
+                    reason: "std_dev must be non-negative and finite",
+                }),
             ReturnProfile::LogNormal { mean, std_dev } => {
                 rand_distr::LogNormal::new(*mean, *std_dev)
-                    .unwrap()
-                    .sample(rng)
-                    - 1.0
+                    .map(|d| d.sample(rng) - 1.0)
+                    .map_err(|_| MarketError::InvalidDistributionParameters {
+                        profile_type: "LogNormal return",
+                        mean: *mean,
+                        std_dev: *std_dev,
+                        reason: "std_dev must be positive and finite",
+                    })
             }
         }
     }

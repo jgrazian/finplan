@@ -82,7 +82,7 @@ fn test_monthly_contribution_limit() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Check final balance - should be $1000 ($500 from Jan + $500 from Feb)
     let final_balance = result.final_account_balance(roth_ira).unwrap();
@@ -170,7 +170,7 @@ fn test_yearly_contribution_limit() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Check final balance
     // First year: 12 months * $2000 = $24000, but capped at $23000
@@ -294,7 +294,7 @@ fn test_contribution_limit_with_asset_purchase() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Total contributions should be capped at $7000 ($3000 + $4000)
     let final_balance = result.final_account_balance(ira).unwrap();

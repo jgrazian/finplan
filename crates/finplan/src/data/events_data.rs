@@ -57,10 +57,7 @@ pub enum TriggerData {
     },
 
     /// Trigger relative to another event
-    RelativeToEvent {
-        event: EventTag,
-        offset: OffsetData,
-    },
+    RelativeToEvent { event: EventTag, offset: OffsetData },
 
     /// Trigger when account balance crosses threshold
     AccountBalance {
@@ -76,19 +73,13 @@ pub enum TriggerData {
     },
 
     /// Trigger when total net worth crosses threshold
-    NetWorth {
-        threshold: ThresholdData,
-    },
+    NetWorth { threshold: ThresholdData },
 
     /// All conditions must be true
-    And {
-        conditions: Vec<TriggerData>,
-    },
+    And { conditions: Vec<TriggerData> },
 
     /// Any condition can be true
-    Or {
-        conditions: Vec<TriggerData>,
-    },
+    Or { conditions: Vec<TriggerData> },
 
     /// Repeating schedule
     Repeating {
@@ -216,24 +207,16 @@ pub enum EffectData {
     },
 
     /// Trigger another event
-    TriggerEvent {
-        event: EventTag,
-    },
+    TriggerEvent { event: EventTag },
 
     /// Pause a repeating event
-    PauseEvent {
-        event: EventTag,
-    },
+    PauseEvent { event: EventTag },
 
     /// Resume a paused event
-    ResumeEvent {
-        event: EventTag,
-    },
+    ResumeEvent { event: EventTag },
 
     /// Terminate an event permanently
-    TerminateEvent {
-        event: EventTag,
-    },
+    TerminateEvent { event: EventTag },
 
     /// Apply Required Minimum Distributions
     ApplyRmd {

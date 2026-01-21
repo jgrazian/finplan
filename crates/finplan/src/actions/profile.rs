@@ -9,9 +9,9 @@ use super::{ActionContext, ActionResult};
 
 /// Handle profile type selection - shows creation form
 pub fn handle_profile_type_pick(profile_type: &str) -> ActionResult {
-    let profile_type_ctx = match ProfileTypeContext::from_str(profile_type) {
-        Some(ctx) => ctx,
-        None => return ActionResult::close(),
+    let profile_type_ctx = match profile_type.parse::<ProfileTypeContext>() {
+        Ok(ctx) => ctx,
+        Err(_) => return ActionResult::close(),
     };
 
     let (title, fields) = match &profile_type_ctx {

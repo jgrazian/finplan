@@ -56,7 +56,7 @@ fn test_normal_iteration_count() {
     let config = create_basic_config(10);
     let instrumentation = InstrumentationConfig::default();
 
-    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation);
+    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation).unwrap();
 
     // Verify simulation completed
     assert!(!result.wealth_snapshots.is_empty());
@@ -134,7 +134,7 @@ fn test_account_balance_trigger_safe() {
     });
 
     let instrumentation = InstrumentationConfig::default();
-    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation);
+    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation).unwrap();
 
     // Simulation should complete normally
     assert!(!result.wealth_snapshots.is_empty());
@@ -211,7 +211,7 @@ fn test_account_balance_trigger_dangerous() {
 
     // Use a low iteration limit to catch the infinite loop quickly
     let instrumentation = InstrumentationConfig::with_limit(50);
-    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation);
+    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation).unwrap();
 
     // Simulation should still complete (due to iteration limit breaking the loop)
     assert!(!result.wealth_snapshots.is_empty());
@@ -311,8 +311,8 @@ fn test_event_count_scaling() {
         c
     };
 
-    let (_, metrics_5yr) = simulate_with_metrics(&config_5yr, 42, &instrumentation);
-    let (_, metrics_10yr) = simulate_with_metrics(&config_10yr, 42, &instrumentation);
+    let (_, metrics_5yr) = simulate_with_metrics(&config_5yr, 42, &instrumentation).unwrap();
+    let (_, metrics_10yr) = simulate_with_metrics(&config_10yr, 42, &instrumentation).unwrap();
 
     // Events should roughly double for 2x duration (allowing some tolerance)
     let events_5yr = metrics_5yr.total_events_triggered;
@@ -342,7 +342,7 @@ fn test_monte_carlo_memory_efficiency() {
     };
 
     let start = std::time::Instant::now();
-    let result = monte_carlo_simulate_with_config(&config, &mc_config);
+    let result = monte_carlo_simulate_with_config(&config, &mc_config).unwrap();
     let elapsed = start.elapsed();
 
     println!("Monte Carlo (100 iterations, 30yr):");
@@ -376,8 +376,9 @@ fn test_metrics_disabled_performance() {
     let enabled = InstrumentationConfig::default();
     let disabled = InstrumentationConfig::disabled();
 
-    let (result_enabled, metrics_enabled) = simulate_with_metrics(&config, 42, &enabled);
-    let (result_disabled, metrics_disabled) = simulate_with_metrics(&config, 42, &disabled);
+    let (result_enabled, metrics_enabled) = simulate_with_metrics(&config, 42, &enabled).unwrap();
+    let (result_disabled, metrics_disabled) =
+        simulate_with_metrics(&config, 42, &disabled).unwrap();
 
     // Results should be identical
     assert_eq!(
@@ -431,7 +432,7 @@ fn test_high_frequency_events() {
     }
 
     let instrumentation = InstrumentationConfig::default();
-    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation);
+    let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation).unwrap();
 
     assert!(!result.wealth_snapshots.is_empty());
     assert!(

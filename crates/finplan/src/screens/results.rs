@@ -21,10 +21,6 @@ use super::Screen;
 pub struct ResultsScreen;
 
 impl ResultsScreen {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Build a map of AccountId to account names from the current simulation data
     fn build_account_name_map(state: &AppState) -> HashMap<AccountId, String> {
         let mut map = HashMap::new();
@@ -261,7 +257,11 @@ impl ResultsScreen {
                     .get(account)
                     .map(|s| s.as_str())
                     .unwrap_or("Unknown");
-                let direction = if *delta >= 0.0 { "increased" } else { "decreased" };
+                let direction = if *delta >= 0.0 {
+                    "increased"
+                } else {
+                    "decreased"
+                };
                 format!(
                     "{}: Balance {} by {} ({} -> {})",
                     name,

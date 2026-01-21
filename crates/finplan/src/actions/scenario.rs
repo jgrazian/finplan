@@ -54,18 +54,29 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
 
     // Validate start_date format (YYYY-MM-DD)
     if !start_date.is_empty() && start_date.parse::<jiff::civil::Date>().is_err() {
-        return ActionResult::Error(format!("Invalid start date format: '{}'. Use YYYY-MM-DD", start_date));
+        return ActionResult::Error(format!(
+            "Invalid start date format: '{}'. Use YYYY-MM-DD",
+            start_date
+        ));
     }
 
     // Validate birth_date format (YYYY-MM-DD)
     if !birth_date.is_empty() && birth_date.parse::<jiff::civil::Date>().is_err() {
-        return ActionResult::Error(format!("Invalid birth date format: '{}'. Use YYYY-MM-DD", birth_date));
+        return ActionResult::Error(format!(
+            "Invalid birth date format: '{}'. Use YYYY-MM-DD",
+            birth_date
+        ));
     }
 
     // Validate duration is a positive integer
     let duration: usize = match duration_str.parse() {
         Ok(d) if d > 0 => d,
-        _ => return ActionResult::Error(format!("Invalid duration: '{}'. Must be a positive number", duration_str)),
+        _ => {
+            return ActionResult::Error(format!(
+                "Invalid duration: '{}'. Must be a positive number",
+                duration_str
+            ));
+        }
     };
 
     // Update the parameters

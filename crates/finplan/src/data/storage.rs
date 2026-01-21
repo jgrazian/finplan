@@ -144,13 +144,17 @@ impl DataDirectory {
     }
 
     /// Save scenario summaries to summaries.yaml
-    pub fn save_summaries(&self, summaries: &HashMap<String, ScenarioSummary>) -> Result<(), StorageError> {
+    pub fn save_summaries(
+        &self,
+        summaries: &HashMap<String, ScenarioSummary>,
+    ) -> Result<(), StorageError> {
         if !self.exists() {
             self.init()?;
         }
 
-        let yaml = serde_saphyr::to_string(summaries)
-            .map_err(|e| StorageError::Serialize(format!("Failed to serialize summaries: {}", e)))?;
+        let yaml = serde_saphyr::to_string(summaries).map_err(|e| {
+            StorageError::Serialize(format!("Failed to serialize summaries: {}", e))
+        })?;
 
         fs::write(self.summaries_path(), yaml)
             .map_err(|e| StorageError::Io(format!("Failed to write summaries: {}", e)))

@@ -20,8 +20,3 @@ mod contribution_limits;
 mod profiling;
 mod returns;
 mod simulation_result;
-
-// Legacy tests - disabled due to API changes
-// mod comprehensive;
-// mod event_effects;
-// mod rmd;

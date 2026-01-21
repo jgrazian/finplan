@@ -1,8 +1,9 @@
 use crate::config::SimulationConfig;
-use crate::error::{EngineError, Result};
+use crate::error::{EngineError, MarketError, Result};
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetCoord, AssetId, Event, EventId, LedgerEntry, Market,
-    ReturnProfileId, RmdTable, StateEvent, TaxConfig, TaxSummary, WealthSnapshot,
+    ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxConfig, TaxSummary,
+    WealthSnapshot,
 };
 use jiff::ToSpan;
 use rand::SeedableRng;
@@ -25,6 +26,9 @@ pub struct SimulationState {
 
     /// Events pending immediate triggering (from TriggerEvent effect)
     pub pending_triggers: Vec<EventId>,
+
+    /// Non-fatal warnings collected during simulation
+    pub warnings: Vec<SimulationWarning>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +122,10 @@ pub struct SimHistory {
 }
 
 impl SimulationState {
-    pub fn from_parameters(params: &SimulationConfig, seed: u64) -> Self {
+    pub fn from_parameters(
+        params: &SimulationConfig,
+        seed: u64,
+    ) -> std::result::Result<Self, MarketError> {
         let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
         let start_date = params
             .start_date
@@ -178,7 +185,7 @@ impl SimulationState {
             &params.inflation_profile,
             &return_profiles,
             &assets,
-        );
+        )?;
 
         let mut accounts = FxHashMap::default();
         // Load initial accounts
@@ -192,7 +199,7 @@ impl SimulationState {
             events.insert(event.event_id, event.clone());
         }
 
-        Self {
+        Ok(Self {
             timeline: SimTimeline {
                 current_date: start_date,
                 start_date,
@@ -228,7 +235,8 @@ impl SimulationState {
             },
             history: SimHistory { ledger: Vec::new() },
             pending_triggers: Vec::new(),
-        }
+            warnings: Vec::new(),
+        })
     }
 
     /// Calculate total net worth across all accounts
@@ -551,7 +559,10 @@ impl SimulationState {
 mod tests {
     use super::*;
 
-    fn make_timeline(birth_date: jiff::civil::Date, current_date: jiff::civil::Date) -> SimTimeline {
+    fn make_timeline(
+        birth_date: jiff::civil::Date,
+        current_date: jiff::civil::Date,
+    ) -> SimTimeline {
         SimTimeline {
             start_date: current_date,
             end_date: current_date,
@@ -567,37 +578,40 @@ mod tests {
             jiff::civil::date(1970, 1, 1),
             jiff::civil::date(2025, 6, 15),
         );
-        assert!(timeline.is_below_early_withdrawal_age(), "Age 55 should be below 59.5");
+        assert!(
+            timeline.is_below_early_withdrawal_age(),
+            "Age 55 should be below 59.5"
+        );
     }
 
     #[test]
     fn test_below_early_withdrawal_age_at_59_years_0_months() {
         // Person born 1966-01-01, current date 2025-01-01 = age 59y 0m
-        let timeline = make_timeline(
-            jiff::civil::date(1966, 1, 1),
-            jiff::civil::date(2025, 1, 1),
+        let timeline = make_timeline(jiff::civil::date(1966, 1, 1), jiff::civil::date(2025, 1, 1));
+        assert!(
+            timeline.is_below_early_withdrawal_age(),
+            "Age 59y 0m should be below 59.5"
         );
-        assert!(timeline.is_below_early_withdrawal_age(), "Age 59y 0m should be below 59.5");
     }
 
     #[test]
     fn test_below_early_withdrawal_age_at_59_years_5_months() {
         // Person born 1966-01-01, current date 2025-06-01 = age 59y 5m
-        let timeline = make_timeline(
-            jiff::civil::date(1966, 1, 1),
-            jiff::civil::date(2025, 6, 1),
+        let timeline = make_timeline(jiff::civil::date(1966, 1, 1), jiff::civil::date(2025, 6, 1));
+        assert!(
+            timeline.is_below_early_withdrawal_age(),
+            "Age 59y 5m should be below 59.5"
         );
-        assert!(timeline.is_below_early_withdrawal_age(), "Age 59y 5m should be below 59.5");
     }
 
     #[test]
     fn test_not_below_early_withdrawal_age_at_59_years_6_months() {
         // Person born 1966-01-01, current date 2025-07-01 = age 59y 6m (threshold reached)
-        let timeline = make_timeline(
-            jiff::civil::date(1966, 1, 1),
-            jiff::civil::date(2025, 7, 1),
+        let timeline = make_timeline(jiff::civil::date(1966, 1, 1), jiff::civil::date(2025, 7, 1));
+        assert!(
+            !timeline.is_below_early_withdrawal_age(),
+            "Age 59y 6m should NOT be below 59.5"
         );
-        assert!(!timeline.is_below_early_withdrawal_age(), "Age 59y 6m should NOT be below 59.5");
     }
 
     #[test]
@@ -607,7 +621,10 @@ mod tests {
             jiff::civil::date(1965, 1, 1),
             jiff::civil::date(2025, 6, 15),
         );
-        assert!(!timeline.is_below_early_withdrawal_age(), "Age 60 should NOT be below 59.5");
+        assert!(
+            !timeline.is_below_early_withdrawal_age(),
+            "Age 60 should NOT be below 59.5"
+        );
     }
 
     #[test]
@@ -617,6 +634,9 @@ mod tests {
             jiff::civil::date(1952, 1, 1),
             jiff::civil::date(2025, 6, 15),
         );
-        assert!(!timeline.is_below_early_withdrawal_age(), "Age 73 should NOT be below 59.5");
+        assert!(
+            !timeline.is_below_early_withdrawal_age(),
+            "Age 73 should NOT be below 59.5"
+        );
     }
 }

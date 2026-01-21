@@ -20,10 +20,6 @@ use super::Screen;
 pub struct ScenarioScreen;
 
 impl ScenarioScreen {
-    pub fn new() -> Self {
-        Self
-    }
-
     fn parse_date(date_str: &str) -> Option<Date> {
         date_str.parse().ok()
     }
@@ -119,10 +115,10 @@ impl Component for ScenarioScreen {
 
             // Enter to switch to selected scenario
             KeyCode::Enter => {
-                if panel.is_left_panel() {
-                    if let Some(selected_name) = self.get_selected_scenario_name(state) {
-                        state.switch_scenario(&selected_name);
-                    }
+                if panel.is_left_panel()
+                    && let Some(selected_name) = self.get_selected_scenario_name(state)
+                {
+                    state.switch_scenario(&selected_name);
                 }
                 EventResult::Handled
             }
@@ -410,7 +406,7 @@ impl ScenarioScreen {
                 let (final_nw, success) = if let Some(s) = summary {
                     (
                         s.final_net_worth
-                            .map(|v| format_currency_short(v))
+                            .map(format_currency_short)
                             .unwrap_or_else(|| "--".to_string()),
                         s.success_rate
                             .map(|r| format!("{:.0}%", r * 100.0))
@@ -842,9 +838,7 @@ impl ScenarioScreen {
             })
             .collect();
 
-        let bar_width = (chart_chunks[1].width as usize / bars.len().max(1))
-            .min(10)
-            .max(3) as u16;
+        let bar_width = (chart_chunks[1].width as usize / bars.len().max(1)).clamp(3, 10) as u16;
 
         let chart = BarChart::default()
             .data(BarGroup::default().bars(&bars))

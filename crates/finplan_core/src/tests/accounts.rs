@@ -55,7 +55,7 @@ fn test_investment_account_cash_and_positions() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Position grows, cash stays the same
     let expected_position = position_amount * (1.0 + annual_return).powi(years as i32);
@@ -126,7 +126,7 @@ fn test_multiple_lots_same_asset() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Both lots track units; final value = total_units * current_price
     // Current price starts at 1.0 and grows at 10% annually
@@ -189,7 +189,7 @@ fn test_property_account_appreciation() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Property assets appreciate via Market using their assigned return profiles
     let house_actual = result.final_account_balance(AccountId(1)).unwrap();
@@ -239,7 +239,7 @@ fn test_liability_account_negative_balance() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
     let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     // Liability accrues interest over time, so it grows from the initial principal
@@ -331,7 +331,7 @@ fn test_tax_status_same_returns() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
 
@@ -387,7 +387,7 @@ fn test_empty_investment_account() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
     let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
@@ -414,7 +414,7 @@ fn test_nonexistent_account_returns_zero() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Query non-existent account should return 0
     let balance = result.final_account_balance(AccountId(999));

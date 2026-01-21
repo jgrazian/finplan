@@ -4,9 +4,12 @@
 //! to mutate the SimulationState, recording state changes to the ledger.
 
 use crate::{
-    error::ApplyError,
+    error::{AccountTypeError, ApplyError, LookupError},
     evaluate::{EvalEvent, TriggerEvent, evaluate_effect, evaluate_trigger},
-    model::{AccountFlavor, AssetLot, EventId, EventTrigger, LedgerEntry, StateEvent},
+    model::{
+        AccountFlavor, AssetLot, EventId, EventTrigger, LedgerEntry, SimulationWarning, StateEvent,
+        WarningKind,
+    },
     simulation_state::SimulationState,
 };
 
@@ -62,7 +65,7 @@ pub fn apply_eval_event_with_source(
                 .portfolio
                 .accounts
                 .get_mut(to)
-                .ok_or(ApplyError::AccountNotFound(*to))?;
+                .ok_or(ApplyError::Lookup(LookupError::AccountNotFound(*to)))?;
 
             match &mut account.flavor {
                 AccountFlavor::Bank(cash) => {
@@ -71,7 +74,11 @@ pub fn apply_eval_event_with_source(
                 AccountFlavor::Investment(inv) => {
                     inv.cash.value += net_amount;
                 }
-                _ => return Err(ApplyError::NotACashAccount(*to)),
+                _ => {
+                    return Err(ApplyError::AccountType(AccountTypeError::NotACashAccount(
+                        *to,
+                    )));
+                }
             }
 
             // Record to ledger
@@ -101,7 +108,7 @@ pub fn apply_eval_event_with_source(
                 .portfolio
                 .accounts
                 .get_mut(from)
-                .ok_or(ApplyError::AccountNotFound(*from))?;
+                .ok_or(ApplyError::Lookup(LookupError::AccountNotFound(*from)))?;
 
             match &mut account.flavor {
                 AccountFlavor::Bank(cash) => {
@@ -110,7 +117,11 @@ pub fn apply_eval_event_with_source(
                 AccountFlavor::Investment(inv) => {
                     inv.cash.value -= net_amount;
                 }
-                _ => return Err(ApplyError::NotACashAccount(*from)),
+                _ => {
+                    return Err(ApplyError::AccountType(AccountTypeError::NotACashAccount(
+                        *from,
+                    )));
+                }
             }
 
             // Record to ledger
@@ -207,11 +218,14 @@ pub fn apply_eval_event_with_source(
             units,
             cost_basis,
         } => {
-            let account = state
-                .portfolio
-                .accounts
-                .get_mut(&to.account_id)
-                .ok_or(ApplyError::AccountNotFound(to.account_id))?;
+            let account =
+                state
+                    .portfolio
+                    .accounts
+                    .get_mut(&to.account_id)
+                    .ok_or(ApplyError::Lookup(LookupError::AccountNotFound(
+                        to.account_id,
+                    )))?;
 
             let price_per_unit = if *units > 0.0 {
                 cost_basis / units
@@ -239,7 +253,9 @@ pub fn apply_eval_event_with_source(
 
                 Ok(())
             } else {
-                Err(ApplyError::NotAnInvestmentAccount(to.account_id))
+                Err(ApplyError::AccountType(
+                    AccountTypeError::NotAnInvestmentAccount(to.account_id),
+                ))
             }
         }
 
@@ -252,11 +268,14 @@ pub fn apply_eval_event_with_source(
             short_term_gain,
             long_term_gain,
         } => {
-            let account = state
-                .portfolio
-                .accounts
-                .get_mut(&from.account_id)
-                .ok_or(ApplyError::AccountNotFound(from.account_id))?;
+            let account =
+                state
+                    .portfolio
+                    .accounts
+                    .get_mut(&from.account_id)
+                    .ok_or(ApplyError::Lookup(LookupError::AccountNotFound(
+                        from.account_id,
+                    )))?;
 
             if let AccountFlavor::Investment(inv) = &mut account.flavor {
                 // Find and reduce the matching lot
@@ -291,7 +310,9 @@ pub fn apply_eval_event_with_source(
 
                 Ok(())
             } else {
-                Err(ApplyError::NotAnInvestmentAccount(from.account_id))
+                Err(ApplyError::AccountType(
+                    AccountTypeError::NotAnInvestmentAccount(from.account_id),
+                ))
             }
         }
 
@@ -352,7 +373,7 @@ pub fn apply_eval_event_with_source(
                 .portfolio
                 .accounts
                 .get_mut(account)
-                .ok_or(ApplyError::AccountNotFound(*account))?;
+                .ok_or(ApplyError::Lookup(LookupError::AccountNotFound(*account)))?;
 
             match &mut acc.flavor {
                 AccountFlavor::Liability(loan) => {
@@ -535,13 +556,23 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                         for ee in eval_events {
                             if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id))
                             {
-                                // Log error but continue processing
-                                eprintln!("Error applying eval event: {:?}", e);
+                                // Record warning but continue processing
+                                state.warnings.push(SimulationWarning {
+                                    date: state.timeline.current_date,
+                                    event_id: Some(event_id),
+                                    message: format!("failed to apply effect: {}", e),
+                                    kind: WarningKind::EffectSkipped,
+                                });
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("Error evaluating effect: {:?}", e);
+                        state.warnings.push(SimulationWarning {
+                            date: state.timeline.current_date,
+                            event_id: Some(event_id),
+                            message: format!("failed to evaluate effect: {}", e),
+                            kind: WarningKind::EvaluationFailed,
+                        });
                     }
                 }
             }

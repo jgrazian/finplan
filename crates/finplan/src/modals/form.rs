@@ -1,16 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::state::{FieldType, FormField, FormModal};
 
-use super::helpers::{calculate_scroll, render_cursor_line, HelpText, MultiLineHelp};
-use super::{centered_rect, ModalResult};
+use super::helpers::{HelpText, MultiLineHelp, calculate_scroll, render_cursor_line};
+use super::{ModalResult, centered_rect};
 
 /// Render the form modal
 pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
@@ -371,8 +371,7 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     match key.code {
         KeyCode::Enter | KeyCode::Char('e') => {
             // Enter edit mode for current field if not read-only and not a Select
-            if current_field_type != FieldType::ReadOnly
-                && current_field_type != FieldType::Select
+            if current_field_type != FieldType::ReadOnly && current_field_type != FieldType::Select
             {
                 modal.editing = true;
                 // Move cursor to end of value

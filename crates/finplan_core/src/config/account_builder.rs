@@ -356,12 +356,12 @@ impl AccountBuilder {
                 positions,
                 contribution_limit: None,
             }),
-            AccountFlavorBuilder::Property { asset } => AccountFlavor::Property(
-                asset.unwrap_or(FixedAsset {
+            AccountFlavorBuilder::Property { asset } => {
+                AccountFlavor::Property(asset.unwrap_or(FixedAsset {
                     asset_id: AssetId(0),
                     value: 0.0,
-                }),
-            ),
+                }))
+            }
             AccountFlavorBuilder::Liability {
                 principal,
                 interest_rate,

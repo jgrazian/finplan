@@ -4,11 +4,13 @@ use rustc_hash::FxHashMap;
 
 use crate::apply::process_events;
 use crate::config::SimulationConfig;
+use crate::error::MarketError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
     AccountFlavor, AccountId, CashFlowKind, EventTrigger, LedgerEntry, MeanAccumulators,
     MonteCarloConfig, MonteCarloResult, MonteCarloStats, MonteCarloSummary, SimulationResult,
-    StateEvent, TaxStatus, TriggerOffset, YearlyCashFlowSummary, final_net_worth,
+    SimulationWarning, StateEvent, TaxStatus, TriggerOffset, WarningKind, YearlyCashFlowSummary,
+    final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 
@@ -65,10 +67,10 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
     yearly.into_values().collect()
 }
 
-pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
+pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult, MarketError> {
     const MAX_SAME_DATE_ITERATIONS: u64 = 1000;
 
-    let mut state = SimulationState::from_parameters(params, seed);
+    let mut state = SimulationState::from_parameters(params, seed)?;
     state.snapshot_wealth();
 
     while state.timeline.current_date < state.timeline.end_date {
@@ -82,6 +84,15 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
             // Safety limit to prevent infinite loops (e.g., AccountBalance triggers with once: false
             // when sweep cannot fulfill the request due to depleted accounts)
             if iteration_count > MAX_SAME_DATE_ITERATIONS {
+                state.warnings.push(SimulationWarning {
+                    date: state.timeline.current_date,
+                    event_id: None,
+                    message: format!(
+                        "iteration limit ({}) reached, possible infinite loop",
+                        MAX_SAME_DATE_ITERATIONS
+                    ),
+                    kind: WarningKind::IterationLimitHit,
+                });
                 break;
             }
 
@@ -101,12 +112,13 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> SimulationResult {
     // Build yearly cash flow summaries from ledger
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
 
-    SimulationResult {
+    Ok(SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
         yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
         ledger: std::mem::take(&mut state.history.ledger),
-    }
+        warnings: std::mem::take(&mut state.warnings),
+    })
 }
 
 /// Instrumented simulation that collects metrics and enforces iteration limits
@@ -121,8 +133,8 @@ pub fn simulate_with_metrics(
     params: &SimulationConfig,
     seed: u64,
     config: &InstrumentationConfig,
-) -> (SimulationResult, SimulationMetrics) {
-    let mut state = SimulationState::from_parameters(params, seed);
+) -> Result<(SimulationResult, SimulationMetrics), MarketError> {
+    let mut state = SimulationState::from_parameters(params, seed)?;
     let mut metrics = SimulationMetrics::new();
 
     state.snapshot_wealth();
@@ -140,11 +152,16 @@ pub fn simulate_with_metrics(
                 if config.collect_metrics {
                     metrics.record_limit_hit(state.timeline.current_date);
                 }
-                // Break out of the inner loop to prevent infinite loops
-                eprintln!(
-                    "WARNING: Iteration limit ({}) reached at date {}. Breaking to prevent infinite loop.",
-                    config.max_same_date_iterations, state.timeline.current_date
-                );
+                // Add warning instead of eprintln - the caller can check SimulationResult.warnings
+                state.warnings.push(SimulationWarning {
+                    date: state.timeline.current_date,
+                    event_id: None,
+                    message: format!(
+                        "iteration limit ({}) reached, possible infinite loop",
+                        config.max_same_date_iterations
+                    ),
+                    kind: WarningKind::IterationLimitHit,
+                });
                 break;
             }
 
@@ -185,9 +202,10 @@ pub fn simulate_with_metrics(
         yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
         ledger: std::mem::take(&mut state.history.ledger),
+        warnings: std::mem::take(&mut state.warnings),
     };
 
-    (result, metrics)
+    Ok((result, metrics))
 }
 
 fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
@@ -267,7 +285,11 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
 
         // Compound cash balances for all accounts and record appreciation events
         for account_id in account_ids {
-            let account = state.portfolio.accounts.get_mut(&account_id).unwrap();
+            // Account should exist since we just collected the keys, but handle gracefully
+            // in case it was somehow removed during iteration
+            let Some(account) = state.portfolio.accounts.get_mut(&account_id) else {
+                continue;
+            };
             match &mut account.flavor {
                 AccountFlavor::Bank(cash) => {
                     // Only compound positive cash balances (negative = overdraft, shouldn't grow)
@@ -407,11 +429,18 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
 }
 
 /// DEPRECATED: Use monte_carlo_simulate_with_config for memory efficiency
-pub fn monte_carlo_simulate(params: &SimulationConfig, num_iterations: usize) -> MonteCarloResult {
+pub fn monte_carlo_simulate(
+    params: &SimulationConfig,
+    num_iterations: usize,
+) -> Result<MonteCarloResult, MarketError> {
     const MAX_BATCH_SIZE: usize = 100;
     let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
 
-    let iterations = (0..num_batches)
+    // First validate by running one simulation to check for market errors
+    // This prevents us from running many iterations only to fail at the end
+    let _ = simulate(params, 0)?;
+
+    let iterations: Vec<SimulationResult> = (0..num_batches)
         .into_par_iter()
         .flat_map(|i| {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(i as u64);
@@ -423,15 +452,16 @@ pub fn monte_carlo_simulate(params: &SimulationConfig, num_iterations: usize) ->
             };
 
             (0..batch_size)
-                .map(|_| {
+                .filter_map(|_| {
                     let seed = rng.next_u64();
-                    simulate(params, seed)
+                    // Skip failed simulations (should be rare after initial validation)
+                    simulate(params, seed).ok()
                 })
                 .collect::<Vec<_>>()
         })
         .collect();
 
-    MonteCarloResult { iterations }
+    Ok(MonteCarloResult { iterations })
 }
 
 /// Memory-efficient Monte Carlo simulation
@@ -444,10 +474,14 @@ pub fn monte_carlo_simulate(params: &SimulationConfig, num_iterations: usize) ->
 pub fn monte_carlo_simulate_with_config(
     params: &SimulationConfig,
     config: &MonteCarloConfig,
-) -> MonteCarloSummary {
+) -> Result<MonteCarloSummary, MarketError> {
     let num_iterations = config.iterations;
     const MAX_BATCH_SIZE: usize = 100;
     let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
+
+    // First validate by running one simulation to check for market errors
+    // This prevents us from running many iterations only to fail
+    let _ = simulate(params, 0)?;
 
     // Phase 1: Run all iterations, collecting seeds and final net worth
     // Also accumulate mean sums if requested
@@ -470,14 +504,20 @@ pub fn monte_carlo_simulate_with_config(
             };
 
             (0..batch_size)
-                .map(|_| {
+                .filter_map(|_| {
                     let seed = rng.next_u64();
-                    let result = simulate(params, seed);
+                    // Skip failed simulations (should be rare after initial validation)
+                    let result = simulate(params, seed).ok()?;
                     let fnw = final_net_worth(&result);
 
                     // Accumulate mean sums if requested
                     if let Some(ref acc_mutex) = mean_accumulator {
-                        let mut acc_guard = acc_mutex.lock().unwrap();
+                        // Recover from poisoned mutex - another thread may have panicked
+                        // but we still want to continue accumulating
+                        let mut acc_guard = match acc_mutex.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
                         match acc_guard.as_mut() {
                             Some(acc) => acc.accumulate(&result),
                             None => {
@@ -488,7 +528,7 @@ pub fn monte_carlo_simulate_with_config(
                         }
                     }
 
-                    (seed, fnw)
+                    Some((seed, fnw))
                 })
                 .collect::<Vec<_>>()
         })
@@ -498,47 +538,65 @@ pub fn monte_carlo_simulate_with_config(
     seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // Calculate statistics
+    let actual_iterations = seed_results.len();
     let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
-    let mean_final_net_worth: f64 = final_values.iter().sum::<f64>() / num_iterations as f64;
+    let mean_final_net_worth: f64 = if actual_iterations > 0 {
+        final_values.iter().sum::<f64>() / actual_iterations as f64
+    } else {
+        0.0
+    };
 
-    let variance: f64 = final_values
-        .iter()
-        .map(|v| (v - mean_final_net_worth).powi(2))
-        .sum::<f64>()
-        / num_iterations as f64;
+    let variance: f64 = if actual_iterations > 0 {
+        final_values
+            .iter()
+            .map(|v| (v - mean_final_net_worth).powi(2))
+            .sum::<f64>()
+            / actual_iterations as f64
+    } else {
+        0.0
+    };
     let std_dev_final_net_worth = variance.sqrt();
 
     let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
     let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
 
     let success_count = final_values.iter().filter(|v| **v > 0.0).count();
-    let success_rate = success_count as f64 / num_iterations as f64;
+    let success_rate = if actual_iterations > 0 {
+        success_count as f64 / actual_iterations as f64
+    } else {
+        0.0
+    };
 
     // Calculate percentile indices and values
     let mut percentile_values = Vec::new();
     let mut percentile_seeds = Vec::new();
 
-    for &p in &config.percentiles {
-        let idx = ((num_iterations as f64 * p).floor() as usize).min(num_iterations - 1);
-        let (seed, value) = seed_results[idx];
-        percentile_values.push((p, value));
-        percentile_seeds.push((p, seed));
+    if actual_iterations > 0 {
+        for &p in &config.percentiles {
+            let idx = ((actual_iterations as f64 * p).floor() as usize).min(actual_iterations - 1);
+            let (seed, value) = seed_results[idx];
+            percentile_values.push((p, value));
+            percentile_seeds.push((p, seed));
+        }
     }
 
     // Phase 2: Re-run simulations for percentile seeds to get full results
     let percentile_runs: Vec<(f64, SimulationResult)> = percentile_seeds
         .into_iter()
-        .map(|(p, seed)| {
-            let result = simulate(params, seed);
-            (p, result)
+        .filter_map(|(p, seed)| {
+            // Skip failed re-runs (should match initial run)
+            simulate(params, seed).ok().map(|result| (p, result))
         })
         .collect();
 
     // Extract mean accumulators
-    let mean_accumulators = mean_accumulator.and_then(|m| m.into_inner().ok().flatten());
+    let mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
+        Ok(opt) => opt,
+        Err(poisoned) => poisoned.into_inner(),
+    });
 
     let stats = MonteCarloStats {
-        num_iterations,
+        num_iterations: actual_iterations,
         success_rate,
         mean_final_net_worth,
         std_dev_final_net_worth,
@@ -547,9 +605,9 @@ pub fn monte_carlo_simulate_with_config(
         percentile_values,
     };
 
-    MonteCarloSummary {
+    Ok(MonteCarloSummary {
         stats,
         percentile_runs,
         mean_accumulators,
-    }
+    })
 }

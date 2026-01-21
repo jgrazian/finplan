@@ -1,41 +1,180 @@
-use crate::model::{AccountId, AssetCoord};
+use std::fmt;
 
-pub type Result<T> = std::result::Result<T, EngineError>;
+use crate::model::{AccountId, AssetCoord, ReturnProfileId};
 
-#[derive(Debug)]
-pub enum EngineError {
+/// Errors related to resource lookups
+#[derive(Debug, Clone)]
+pub enum LookupError {
     AccountNotFound(AccountId),
     AssetNotFound(AssetCoord),
     AssetPriceNotFound(AssetCoord),
-    NotAnInvestmentAccount(AccountId),
+    ReturnProfileNotFound(ReturnProfileId),
 }
 
-#[derive(Debug)]
+impl fmt::Display for LookupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LookupError::AccountNotFound(id) => write!(f, "account {:?} not found", id),
+            LookupError::AssetNotFound(coord) => write!(f, "asset {:?} not found", coord),
+            LookupError::AssetPriceNotFound(coord) => {
+                write!(f, "price not available for asset {:?}", coord)
+            }
+            LookupError::ReturnProfileNotFound(id) => {
+                write!(f, "return profile {:?} not found", id)
+            }
+        }
+    }
+}
+
+impl std::error::Error for LookupError {}
+
+/// Errors related to account type mismatches
+#[derive(Debug, Clone)]
+pub enum AccountTypeError {
+    NotACashAccount(AccountId),
+    NotAnInvestmentAccount(AccountId),
+    InvalidAccountType(AccountId),
+}
+
+impl fmt::Display for AccountTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AccountTypeError::NotACashAccount(id) => {
+                write!(f, "account {:?} is not a cash account", id)
+            }
+            AccountTypeError::NotAnInvestmentAccount(id) => {
+                write!(f, "account {:?} is not an investment account", id)
+            }
+            AccountTypeError::InvalidAccountType(id) => {
+                write!(f, "invalid account type for account {:?}", id)
+            }
+        }
+    }
+}
+
+impl std::error::Error for AccountTypeError {}
+
+/// Errors related to market/distribution operations
+#[derive(Debug, Clone)]
+pub enum MarketError {
+    InvalidDistributionParameters {
+        profile_type: &'static str,
+        mean: f64,
+        std_dev: f64,
+        reason: &'static str,
+    },
+    Lookup(LookupError),
+}
+
+impl fmt::Display for MarketError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MarketError::InvalidDistributionParameters {
+                profile_type,
+                mean,
+                std_dev,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "invalid {} parameters (mean={}, std_dev={}): {}",
+                    profile_type, mean, std_dev, reason
+                )
+            }
+            MarketError::Lookup(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for MarketError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            MarketError::Lookup(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<LookupError> for MarketError {
+    fn from(e: LookupError) -> Self {
+        MarketError::Lookup(e)
+    }
+}
+
+// Keep EngineError as an alias for backwards compatibility
+pub type EngineError = LookupError;
+
+pub type Result<T> = std::result::Result<T, LookupError>;
+
+#[derive(Debug, Clone)]
 pub enum TransferEvaluationError {
-    EngineError(EngineError),
+    Lookup(LookupError),
     ExternalBalanceReference,
 }
 
-impl From<EngineError> for TransferEvaluationError {
-    fn from(err: EngineError) -> Self {
-        TransferEvaluationError::EngineError(err)
+impl fmt::Display for TransferEvaluationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TransferEvaluationError::Lookup(e) => write!(f, "{}", e),
+            TransferEvaluationError::ExternalBalanceReference => {
+                write!(f, "cannot reference balance of external endpoint")
+            }
+        }
     }
 }
+
+impl std::error::Error for TransferEvaluationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TransferEvaluationError::Lookup(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<LookupError> for TransferEvaluationError {
+    fn from(err: LookupError) -> Self {
+        TransferEvaluationError::Lookup(err)
+    }
+}
+// Note: EngineError is now a type alias for LookupError, so From<LookupError> covers it
+
+#[derive(Debug)]
 pub enum TriggerEventError {
-    EngineError(EngineError),
-    TransferEvaluationError(TransferEvaluationError),
+    Lookup(LookupError),
+    TransferEvaluation(TransferEvaluationError),
     DateError(jiff::Error),
 }
 
-impl From<EngineError> for TriggerEventError {
-    fn from(err: EngineError) -> Self {
-        TriggerEventError::EngineError(err)
+impl fmt::Display for TriggerEventError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TriggerEventError::Lookup(e) => write!(f, "{}", e),
+            TriggerEventError::TransferEvaluation(e) => write!(f, "{}", e),
+            TriggerEventError::DateError(e) => write!(f, "date calculation error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for TriggerEventError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            TriggerEventError::Lookup(e) => Some(e),
+            TriggerEventError::TransferEvaluation(e) => Some(e),
+            TriggerEventError::DateError(e) => Some(e),
+        }
+    }
+}
+
+impl From<LookupError> for TriggerEventError {
+    fn from(err: LookupError) -> Self {
+        TriggerEventError::Lookup(err)
     }
 }
 
 impl From<TransferEvaluationError> for TriggerEventError {
     fn from(err: TransferEvaluationError) -> Self {
-        TriggerEventError::TransferEvaluationError(err)
+        TriggerEventError::TransferEvaluation(err)
     }
 }
 
@@ -45,38 +184,83 @@ impl From<jiff::Error> for TriggerEventError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StateEventError {
-    EngineError(EngineError),
-    TransferEvaluationError(TransferEvaluationError),
+    Lookup(LookupError),
+    AccountType(AccountTypeError),
+    TransferEvaluation(TransferEvaluationError),
 }
 
-impl From<EngineError> for StateEventError {
-    fn from(err: EngineError) -> Self {
-        StateEventError::EngineError(err)
+impl fmt::Display for StateEventError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StateEventError::Lookup(e) => write!(f, "{}", e),
+            StateEventError::AccountType(e) => write!(f, "{}", e),
+            StateEventError::TransferEvaluation(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for StateEventError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            StateEventError::Lookup(e) => Some(e),
+            StateEventError::AccountType(e) => Some(e),
+            StateEventError::TransferEvaluation(e) => Some(e),
+        }
+    }
+}
+
+impl From<LookupError> for StateEventError {
+    fn from(err: LookupError) -> Self {
+        StateEventError::Lookup(err)
+    }
+}
+
+impl From<AccountTypeError> for StateEventError {
+    fn from(err: AccountTypeError) -> Self {
+        StateEventError::AccountType(err)
     }
 }
 
 impl From<TransferEvaluationError> for StateEventError {
     fn from(err: TransferEvaluationError) -> Self {
-        StateEventError::TransferEvaluationError(err)
+        StateEventError::TransferEvaluation(err)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ApplyError {
-    AccountNotFound(AccountId),
-    NotACashAccount(AccountId),
-    NotAnInvestmentAccount(AccountId),
-    InvalidAccountType(AccountId),
+    Lookup(LookupError),
+    AccountType(AccountTypeError),
 }
 
-impl From<EngineError> for ApplyError {
-    fn from(err: EngineError) -> Self {
-        match err {
-            EngineError::AccountNotFound(id) => ApplyError::AccountNotFound(id),
-            EngineError::NotAnInvestmentAccount(id) => ApplyError::NotAnInvestmentAccount(id),
-            _ => ApplyError::AccountNotFound(AccountId(0)), // Fallback for other errors
+impl fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ApplyError::Lookup(e) => write!(f, "{}", e),
+            ApplyError::AccountType(e) => write!(f, "{}", e),
         }
+    }
+}
+
+impl std::error::Error for ApplyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ApplyError::Lookup(e) => Some(e),
+            ApplyError::AccountType(e) => Some(e),
+        }
+    }
+}
+
+impl From<LookupError> for ApplyError {
+    fn from(err: LookupError) -> Self {
+        ApplyError::Lookup(err)
+    }
+}
+
+impl From<AccountTypeError> for ApplyError {
+    fn from(err: AccountTypeError) -> Self {
+        ApplyError::AccountType(err)
     }
 }

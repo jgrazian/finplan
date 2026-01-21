@@ -155,7 +155,10 @@ pub fn handle_interval_pick(interval: &str) -> ActionResult {
 }
 
 /// Show the picker for selecting a child trigger type (start or end condition)
-fn show_child_trigger_type_picker(builder: TriggerBuilderState, slot: TriggerChildSlot) -> ActionResult {
+fn show_child_trigger_type_picker(
+    builder: TriggerBuilderState,
+    slot: TriggerChildSlot,
+) -> ActionResult {
     let title = match slot {
         TriggerChildSlot::Start => "Select Start Condition",
         TriggerChildSlot::End => "Select End Condition",
@@ -176,10 +179,9 @@ fn show_child_trigger_type_picker(builder: TriggerBuilderState, slot: TriggerChi
     ];
 
     ActionResult::modal(ModalState::Picker(
-        PickerModal::new(title, options, ModalAction::PICK_CHILD_TRIGGER_TYPE)
-            .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
-                builder,
-            ))),
+        PickerModal::new(title, options, ModalAction::PICK_CHILD_TRIGGER_TYPE).with_typed_context(
+            ModalContext::Trigger(TriggerContext::RepeatingBuilder(builder)),
+        ),
     ))
 }
 
@@ -236,10 +238,7 @@ pub fn handle_create_event(state: &mut AppState, ctx: ActionContext) -> ActionRe
     let parts = ctx.value_parts();
 
     // Get typed trigger context
-    let trigger_ctx = ctx
-        .typed_context()
-        .and_then(|c| c.as_trigger())
-        .cloned();
+    let trigger_ctx = ctx.typed_context().and_then(|c| c.as_trigger()).cloned();
 
     // Parse trigger type and create appropriate event
     let (trigger, name, description, once) = match trigger_ctx {
@@ -497,7 +496,9 @@ pub fn handle_pick_child_trigger_type(
             // Skip this condition, move to next phase
             handle_none_trigger(builder, slot)
         }
-        "Date" => show_child_trigger_form(state, builder, slot, PartialTrigger::Date { date: None }),
+        "Date" => {
+            show_child_trigger_form(state, builder, slot, PartialTrigger::Date { date: None })
+        }
         "Age" => show_child_trigger_form(
             state,
             builder,
@@ -515,11 +516,14 @@ pub fn handle_pick_child_trigger_type(
             }
             // Store the builder and slot info for the next step
             let mut new_builder = builder;
-            new_builder.push_child(slot, PartialTrigger::AccountBalance {
-                account: String::new(),
-                threshold: None,
-                comparison: None,
-            });
+            new_builder.push_child(
+                slot,
+                PartialTrigger::AccountBalance {
+                    account: String::new(),
+                    threshold: None,
+                    comparison: None,
+                },
+            );
             ActionResult::modal(ModalState::Picker(
                 PickerModal::new("Select Account", accounts, ModalAction::BUILD_CHILD_TRIGGER)
                     .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
@@ -543,11 +547,14 @@ pub fn handle_pick_child_trigger_type(
                 return ActionResult::error("No events available. Create an event first.");
             }
             let mut new_builder = builder;
-            new_builder.push_child(slot, PartialTrigger::RelativeToEvent {
-                event: String::new(),
-                offset_years: None,
-                offset_months: None,
-            });
+            new_builder.push_child(
+                slot,
+                PartialTrigger::RelativeToEvent {
+                    event: String::new(),
+                    offset_years: None,
+                    offset_months: None,
+                },
+            );
             ActionResult::modal(ModalState::Picker(
                 PickerModal::new("Select Event", events, ModalAction::BUILD_CHILD_TRIGGER)
                     .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
@@ -664,11 +671,15 @@ pub fn handle_build_child_trigger(
                 ),
             ];
             ActionResult::modal(ModalState::Form(
-                FormModal::new("Balance Trigger", fields, ModalAction::COMPLETE_CHILD_TRIGGER)
-                    .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
-                        builder,
-                    )))
-                    .start_editing(),
+                FormModal::new(
+                    "Balance Trigger",
+                    fields,
+                    ModalAction::COMPLETE_CHILD_TRIGGER,
+                )
+                .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
+                    builder,
+                )))
+                .start_editing(),
             ))
         }
         PartialTrigger::RelativeToEvent { event, .. } => {

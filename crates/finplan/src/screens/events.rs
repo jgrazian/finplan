@@ -21,10 +21,6 @@ use super::Screen;
 pub struct EventsScreen;
 
 impl EventsScreen {
-    pub fn new() -> Self {
-        Self
-    }
-
     fn render_event_list(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused = state.events_state.focused_panel == EventsPanel::EventList;
 
@@ -140,7 +136,11 @@ impl EventsScreen {
             EffectData::TerminateEvent { event } => format!("End {}", event.0),
             EffectData::ApplyRmd { .. } => "Apply RMD".to_string(),
             EffectData::AdjustBalance { account, amount } => {
-                format!("Adjust {}: {}", account.0, Self::format_amount_short(amount))
+                format!(
+                    "Adjust {}: {}",
+                    account.0,
+                    Self::format_amount_short(amount)
+                )
             }
             EffectData::CashTransfer { from, to, amount } => {
                 format!(
@@ -591,10 +591,7 @@ impl EventsScreen {
             }
             TriggerData::Manual => {
                 lines.push(Line::from(format!("{}Type: Manual", prefix)));
-                lines.push(Line::from(format!(
-                    "{}(Triggered by other events)",
-                    prefix
-                )));
+                lines.push(Line::from(format!("{}(Triggered by other events)", prefix)));
             }
         }
     }

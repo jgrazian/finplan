@@ -1,15 +1,15 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::Color,
     widgets::{Paragraph, Wrap},
-    Frame,
 };
 
 use crate::state::MessageModal;
 
-use super::helpers::{render_modal_frame, HelpText};
 use super::ModalResult;
+use super::helpers::{HelpText, render_modal_frame};
 
 const MODAL_WIDTH: u16 = 50;
 const MODAL_MIN_HEIGHT: u16 = 7;

@@ -12,10 +12,6 @@ use ratatui::{
 pub struct StatusBar;
 
 impl StatusBar {
-    pub fn new() -> Self {
-        Self
-    }
-
     fn get_help_text(state: &AppState) -> String {
         // Return help text based on active tab
         let base = match state.active_tab {
@@ -28,9 +24,7 @@ impl StatusBar {
             crate::state::TabId::Events => {
                 "j/k: scroll | Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
             }
-            crate::state::TabId::Results => {
-                "j/k: scroll"
-            }
+            crate::state::TabId::Results => "j/k: scroll",
         };
         format!("{} | ^S: save | q: quit", base)
     }
@@ -60,10 +54,7 @@ impl Component for StatusBar {
 
             // Add dirty indicator if there are unsaved changes
             if let Some(indicator) = Self::get_dirty_indicator(state) {
-                spans.push(Span::styled(
-                    indicator,
-                    Style::default().fg(Color::Yellow),
-                ));
+                spans.push(Span::styled(indicator, Style::default().fg(Color::Yellow)));
                 spans.push(Span::raw(" "));
             }
 

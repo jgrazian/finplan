@@ -1,16 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{List, ListItem, Paragraph},
-    Frame,
 };
 
 use crate::state::{ModalAction, ScenarioPickerModal};
 
-use super::helpers::{render_modal_frame, HelpText};
 use super::ModalResult;
+use super::helpers::{HelpText, render_modal_frame};
 
 const MODAL_WIDTH: u16 = 50;
 const MODAL_MIN_HEIGHT: u16 = 10;
@@ -47,10 +47,10 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
         height,
         Color::Cyan,
         &[
-            Constraint::Length(1),              // Spacing
-            Constraint::Min(3),                 // Scenario list
+            Constraint::Length(1),               // Spacing
+            Constraint::Min(3),                  // Scenario list
             Constraint::Length(new_name_height), // New name input (conditional)
-            Constraint::Length(2),              // Help text
+            Constraint::Length(2),               // Help text
         ],
     );
 

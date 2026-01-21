@@ -1,16 +1,16 @@
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::Constraint,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{List, ListItem},
-    Frame,
 };
 
 use crate::state::PickerModal;
 
-use super::helpers::{render_modal_frame, MultiLineHelp, HelpText};
 use super::ModalResult;
+use super::helpers::{HelpText, MultiLineHelp, render_modal_frame};
 
 /// Render the picker modal
 pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
@@ -66,11 +66,11 @@ pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
     // Render help text (2 lines)
     let help = MultiLineHelp::new()
         .line(HelpText::new().key("[j/k/↑/↓]", Color::DarkGray, "Navigate"))
-        .line(
-            HelpText::new()
-                .key("[Enter]", Color::Green, "Select")
-                .key("[Esc]", Color::Yellow, "Cancel"),
-        )
+        .line(HelpText::new().key("[Enter]", Color::Green, "Select").key(
+            "[Esc]",
+            Color::Yellow,
+            "Cancel",
+        ))
         .build();
     frame.render_widget(help, mf.chunks[3]);
 }

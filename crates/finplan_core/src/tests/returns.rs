@@ -54,7 +54,7 @@ fn test_single_asset_fixed_return() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Expected: $10,000 * (1.10)^5 = $16,105.10
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
@@ -92,7 +92,7 @@ fn test_bank_cash_no_appreciation() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
     let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Bank cash should stay the same when return profile doesn't exist
@@ -134,7 +134,7 @@ fn test_bank_cash_with_return_profile() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
     let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Expected: $50,000 * (1.045)^5 = $62,308.67 for yearly compounding
@@ -196,7 +196,7 @@ fn test_investment_cash_appreciation() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
     let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Cash grows at 5%: $10,000 * (1.05)^5 = $12,762.82
@@ -270,7 +270,7 @@ fn test_multiple_assets_different_returns() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Calculate expected values
     let expected_stock = stock_initial * (1.0 + stock_return).powi(years as i32);
@@ -343,7 +343,7 @@ fn test_negative_returns() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Expected: $100,000 * (0.90)^3 = $72,900
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
@@ -393,7 +393,7 @@ fn test_zero_return() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
     let actual = result.final_account_balance(AccountId(1)).unwrap();
 
     assert!(
@@ -464,7 +464,7 @@ fn test_same_asset_multiple_accounts() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     let multiplier = (1.0 + annual_return).powi(years as i32);
     let expected_taxable = taxable_initial * multiplier;
@@ -526,7 +526,7 @@ fn test_short_duration_returns() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Expected: $10,000 * 1.12 = $11,200
     let expected = initial_value * (1.0 + annual_return);
@@ -578,7 +578,7 @@ fn test_long_duration_returns() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
 
     // Expected: $100,000 * (1.07)^30 = $761,225.50
     let expected = initial_value * (1.0 + annual_return).powi(years as i32);
@@ -643,7 +643,7 @@ fn test_mid_simulation_cash_deposit() {
         ..Default::default()
     };
 
-    let result = simulate(&params, 42);
+    let result = simulate(&params, 42).unwrap();
     let final_balance = result.final_account_balance(AccountId(1)).unwrap();
 
     // Initial $10,000 earns returns for 4 full years

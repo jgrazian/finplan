@@ -126,9 +126,7 @@ pub enum FederalBracketsPreset {
     /// 2024 Married filing jointly brackets
     MarriedJoint2024,
     /// Custom brackets
-    Custom {
-        brackets: Vec<TaxBracketData>,
-    },
+    Custom { brackets: Vec<TaxBracketData> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

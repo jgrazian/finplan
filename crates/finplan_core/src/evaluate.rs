@@ -2,7 +2,9 @@ use jiff::ToSpan;
 use jiff::civil::Date;
 use rustc_hash::FxHashMap;
 
-use crate::error::{EngineError, StateEventError, TransferEvaluationError, TriggerEventError};
+use crate::error::{
+    AccountTypeError, EngineError, StateEventError, TransferEvaluationError, TriggerEventError,
+};
 use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment};
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
@@ -559,15 +561,18 @@ pub fn evaluate_effect(
 
             let investment = match &account.flavor {
                 AccountFlavor::Investment(inv) => inv,
-                _ => return Err(EngineError::NotAnInvestmentAccount(*from).into()),
+                _ => return Err(AccountTypeError::NotAnInvestmentAccount(*from).into()),
             };
 
             // Get assets to liquidate (specific asset or all assets in account)
             let assets_to_liquidate: Vec<AssetId> = match asset_id {
                 Some(id) => vec![*id],
                 None => {
-                    let mut assets: Vec<AssetId> =
-                        investment.positions.iter().map(|lot| lot.asset_id).collect();
+                    let mut assets: Vec<AssetId> = investment
+                        .positions
+                        .iter()
+                        .map(|lot| lot.asset_id)
+                        .collect();
                     assets.sort_unstable();
                     assets.dedup();
                     assets
@@ -659,7 +664,9 @@ pub fn evaluate_effect(
                     current_date: state.timeline.current_date,
                     tax_config: &state.taxes.config,
                     ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income,
-                    early_withdrawal_penalty_applies: state.timeline.is_below_early_withdrawal_age(),
+                    early_withdrawal_penalty_applies: state
+                        .timeline
+                        .is_below_early_withdrawal_age(),
                 });
 
                 remaining -= match amount_mode {

@@ -12,9 +12,7 @@ use finplan_core::model::{
     EventEffect, EventId, EventTrigger, IncomeType, InflationProfile, InvestmentContainer,
     MonteCarloConfig, RepeatInterval, ReturnProfile, ReturnProfileId, TaxStatus, TransferAmount,
 };
-use finplan_core::simulation::{
-    monte_carlo_simulate_with_config, simulate, simulate_with_metrics,
-};
+use finplan_core::simulation::{monte_carlo_simulate_with_config, simulate, simulate_with_metrics};
 
 fn create_basic_config(duration_years: usize) -> SimulationConfig {
     SimulationConfig {
@@ -172,7 +170,11 @@ fn bench_account_balance_trigger(c: &mut Criterion) {
 
     c.bench_function("account_balance_safe_10yr", |b| {
         b.iter(|| {
-            simulate_with_metrics(black_box(&safe_config), black_box(42), black_box(&instrumentation))
+            simulate_with_metrics(
+                black_box(&safe_config),
+                black_box(42),
+                black_box(&instrumentation),
+            )
         })
     });
 }
@@ -213,15 +215,17 @@ fn bench_instrumented_vs_normal(c: &mut Criterion) {
     let instrumentation = InstrumentationConfig::default();
     group.bench_function("instrumented_simulate", |b| {
         b.iter(|| {
-            simulate_with_metrics(black_box(&config), black_box(42), black_box(&instrumentation))
+            simulate_with_metrics(
+                black_box(&config),
+                black_box(42),
+                black_box(&instrumentation),
+            )
         })
     });
 
     let disabled = InstrumentationConfig::disabled();
     group.bench_function("instrumented_disabled", |b| {
-        b.iter(|| {
-            simulate_with_metrics(black_box(&config), black_box(42), black_box(&disabled))
-        })
+        b.iter(|| simulate_with_metrics(black_box(&config), black_box(42), black_box(&disabled)))
     });
 
     group.finish();

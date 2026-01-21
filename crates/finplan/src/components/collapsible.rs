@@ -4,11 +4,11 @@
 //! with keyboard shortcuts.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders},
-    Frame,
 };
 
 /// State for a collapsible panel
@@ -101,14 +101,8 @@ impl<'a> CollapsiblePanel<'a> {
                 format!("{} ", indicator),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(
-                self.title,
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                " (collapsed)",
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(self.title, Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(" (collapsed)", Style::default().fg(Color::DarkGray)),
         ]);
 
         let block = Block::default()

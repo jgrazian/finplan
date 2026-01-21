@@ -675,7 +675,12 @@ mod tests {
     // Early Withdrawal Penalty Tests
     // ========================================================================
 
-    fn make_tax_deferred_investment(asset_id: AssetId, units: f64, cost_basis: f64, purchase_date: Date) -> InvestmentContainer {
+    fn make_tax_deferred_investment(
+        asset_id: AssetId,
+        units: f64,
+        cost_basis: f64,
+        purchase_date: Date,
+    ) -> InvestmentContainer {
         use crate::model::ReturnProfileId;
         InvestmentContainer {
             tax_status: TaxStatus::TaxDeferred,
@@ -693,7 +698,12 @@ mod tests {
         }
     }
 
-    fn make_taxable_investment(asset_id: AssetId, units: f64, cost_basis: f64, purchase_date: Date) -> InvestmentContainer {
+    fn make_taxable_investment(
+        asset_id: AssetId,
+        units: f64,
+        cost_basis: f64,
+        purchase_date: Date,
+    ) -> InvestmentContainer {
         use crate::model::ReturnProfileId;
         InvestmentContainer {
             tax_status: TaxStatus::Taxable,
@@ -723,7 +733,10 @@ mod tests {
 
         let params = LiquidationParams {
             investment: &investment,
-            asset_coord: AssetCoord { account_id, asset_id },
+            asset_coord: AssetCoord {
+                account_id,
+                asset_id,
+            },
             to_account: account_id,
             amount: 100.0,
             current_price: 1.0,
@@ -753,10 +766,20 @@ mod tests {
         );
 
         // Verify EarlyWithdrawalPenalty event is in effects
-        let penalty_event = effects.iter().find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
-        assert!(penalty_event.is_some(), "Should have EarlyWithdrawalPenalty event");
+        let penalty_event = effects
+            .iter()
+            .find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
+        assert!(
+            penalty_event.is_some(),
+            "Should have EarlyWithdrawalPenalty event"
+        );
 
-        if let Some(EvalEvent::EarlyWithdrawalPenalty { gross_amount, penalty_amount, penalty_rate }) = penalty_event {
+        if let Some(EvalEvent::EarlyWithdrawalPenalty {
+            gross_amount,
+            penalty_amount,
+            penalty_rate,
+        }) = penalty_event
+        {
             assert!((gross_amount - 100.0).abs() < 0.01);
             assert!((penalty_amount - 10.0).abs() < 0.01);
             assert!((penalty_rate - 0.10).abs() < 0.001);
@@ -775,7 +798,10 @@ mod tests {
 
         let params = LiquidationParams {
             investment: &investment,
-            asset_coord: AssetCoord { account_id, asset_id },
+            asset_coord: AssetCoord {
+                account_id,
+                asset_id,
+            },
             to_account: account_id,
             amount: 100.0,
             current_price: 1.0,
@@ -796,8 +822,13 @@ mod tests {
         );
 
         // Verify no EarlyWithdrawalPenalty event
-        let penalty_event = effects.iter().find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
-        assert!(penalty_event.is_none(), "Should not have EarlyWithdrawalPenalty event after age 59.5");
+        let penalty_event = effects
+            .iter()
+            .find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
+        assert!(
+            penalty_event.is_none(),
+            "Should not have EarlyWithdrawalPenalty event after age 59.5"
+        );
     }
 
     #[test]
@@ -812,7 +843,10 @@ mod tests {
 
         let params = LiquidationParams {
             investment: &investment,
-            asset_coord: AssetCoord { account_id, asset_id },
+            asset_coord: AssetCoord {
+                account_id,
+                asset_id,
+            },
             to_account: account_id,
             amount: 100.0,
             current_price: 1.0,
@@ -833,7 +867,12 @@ mod tests {
         );
 
         // Verify no EarlyWithdrawalPenalty event
-        let penalty_event = effects.iter().find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
-        assert!(penalty_event.is_none(), "Should not have EarlyWithdrawalPenalty event for taxable accounts");
+        let penalty_event = effects
+            .iter()
+            .find(|e| matches!(e, EvalEvent::EarlyWithdrawalPenalty { .. }));
+        assert!(
+            penalty_event.is_none(),
+            "Should not have EarlyWithdrawalPenalty event for taxable accounts"
+        );
     }
 }

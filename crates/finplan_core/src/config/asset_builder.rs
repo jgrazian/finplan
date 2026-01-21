@@ -175,7 +175,9 @@ mod tests {
 
         assert_eq!(asset.name, "VTSAX");
         assert_eq!(asset.initial_price, 100.0);
-        assert!(matches!(asset.return_profile, ReturnProfile::Fixed(r) if (r - 0.10).abs() < 0.001));
+        assert!(
+            matches!(asset.return_profile, ReturnProfile::Fixed(r) if (r - 0.10).abs() < 0.001)
+        );
     }
 
     #[test]
@@ -192,6 +194,8 @@ mod tests {
         let asset = AssetBuilder::total_bond("BND").build();
 
         assert_eq!(asset.name, "BND");
-        assert!(matches!(asset.return_profile, ReturnProfile::Fixed(r) if (r - 0.04).abs() < 0.001));
+        assert!(
+            matches!(asset.return_profile, ReturnProfile::Fixed(r) if (r - 0.04).abs() < 0.001)
+        );
     }
 }

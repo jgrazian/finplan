@@ -42,12 +42,12 @@ impl App {
 
         Self {
             state,
-            tab_bar: TabBar::new(),
-            status_bar: StatusBar::new(),
-            portfolio_profiles_screen: PortfolioProfilesScreen::new(),
-            scenario_screen: ScenarioScreen::new(),
-            events_screen: EventsScreen::new(),
-            results_screen: ResultsScreen::new(),
+            tab_bar: TabBar,
+            status_bar: StatusBar,
+            portfolio_profiles_screen: PortfolioProfilesScreen,
+            scenario_screen: ScenarioScreen,
+            events_screen: EventsScreen,
+            results_screen: ResultsScreen,
         }
     }
 
@@ -58,12 +58,12 @@ impl App {
 
         Self {
             state,
-            tab_bar: TabBar::new(),
-            status_bar: StatusBar::new(),
-            portfolio_profiles_screen: PortfolioProfilesScreen::new(),
-            scenario_screen: ScenarioScreen::new(),
-            events_screen: EventsScreen::new(),
-            results_screen: ResultsScreen::new(),
+            tab_bar: TabBar,
+            status_bar: StatusBar,
+            portfolio_profiles_screen: PortfolioProfilesScreen,
+            scenario_screen: ScenarioScreen,
+            events_screen: EventsScreen,
+            results_screen: ResultsScreen,
         }
     }
 
@@ -80,11 +80,11 @@ impl App {
             // Migrate from old format
             match storage.migrate_from_single_file(&old_config_path) {
                 Ok(true) => {
+                    eprintln!("Migrated data from {:?} to {:?}", old_config_path, data_dir);
                     eprintln!(
-                        "Migrated data from {:?} to {:?}",
-                        old_config_path, data_dir
+                        "Old config backed up to {:?}",
+                        old_config_path.with_extension("yaml.backup")
                     );
-                    eprintln!("Old config backed up to {:?}", old_config_path.with_extension("yaml.backup"));
                 }
                 Ok(false) => {}
                 Err(e) => {

@@ -54,12 +54,7 @@ pub fn handle_edit_holding(state: &mut AppState, ctx: ActionContext) -> ActionRe
     };
     let parts = ctx.value_parts();
 
-    if let Some(account) = state
-        .data_mut()
-        .portfolios
-        .accounts
-        .get_mut(account_idx)
-    {
+    if let Some(account) = state.data_mut().portfolios.accounts.get_mut(account_idx) {
         let assets = match &mut account.account_type {
             AccountType::Brokerage(inv)
             | AccountType::Traditional401k(inv)
@@ -92,12 +87,7 @@ pub fn handle_delete_holding(state: &mut AppState, ctx: ActionContext) -> Action
         None => return ActionResult::close(),
     };
 
-    if let Some(account) = state
-        .data_mut()
-        .portfolios
-        .accounts
-        .get_mut(account_idx)
-    {
+    if let Some(account) = state.data_mut().portfolios.accounts.get_mut(account_idx) {
         let assets = match &mut account.account_type {
             AccountType::Brokerage(inv)
             | AccountType::Traditional401k(inv)

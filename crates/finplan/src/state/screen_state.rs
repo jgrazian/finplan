@@ -192,7 +192,7 @@ impl LedgerFilter {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ResultsState {
     /// Scroll offset for yearly breakdown panel
     pub scroll_offset: usize,
@@ -208,18 +208,4 @@ pub struct ResultsState {
     pub percentile_view: PercentileView,
     /// Whether we're viewing Monte Carlo results
     pub viewing_monte_carlo: bool,
-}
-
-impl Default for ResultsState {
-    fn default() -> Self {
-        Self {
-            scroll_offset: 0,
-            focused_panel: ResultsPanel::default(),
-            selected_year_index: 0,
-            ledger_scroll_offset: 0,
-            ledger_filter: LedgerFilter::default(),
-            percentile_view: PercentileView::default(),
-            viewing_monte_carlo: false,
-        }
-    }
 }
