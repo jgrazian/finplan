@@ -544,15 +544,28 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
 
             triggered.push(event_id);
 
-            // Get effects to apply - clone only when event actually triggers
-            let effects = match state.event_state.events.get(&event_id) {
-                Some(event) => event.effects.clone(),
-                None => continue,
-            };
+            // Get effects length to iterate by index, avoiding clone of effects vector
+            let effects_len = state
+                .event_state
+                .events
+                .get(&event_id)
+                .map(|e| e.effects.len())
+                .unwrap_or(0);
 
-            // Evaluate and apply effects
-            for effect in &effects {
-                match evaluate_effect(effect, state) {
+            // Evaluate and apply effects by index to avoid holding borrow across apply calls
+            for effect_idx in 0..effects_len {
+                // Re-borrow to get each effect - borrow ends before apply_eval_event_with_source
+                let effect = match state
+                    .event_state
+                    .events
+                    .get(&event_id)
+                    .and_then(|e| e.effects.get(effect_idx))
+                {
+                    Some(effect) => effect.clone(),
+                    None => break,
+                };
+
+                match evaluate_effect(&effect, state) {
                     Ok(eval_events) => {
                         for ee in eval_events {
                             if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id))
@@ -587,27 +600,57 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
         let triggers = std::mem::take(&mut state.pending_triggers);
 
         for event_id in triggers {
-            if let Some(event) = state.event_state.events.get(&event_id).cloned() {
-                // Skip if already triggered and once=true
-                if event.once && state.event_state.triggered_events.contains_key(&event_id) {
-                    continue;
-                }
+            // Check if event exists and get `once` flag without cloning
+            let (event_exists, is_once) = state
+                .event_state
+                .events
+                .get(&event_id)
+                .map(|e| (true, e.once))
+                .unwrap_or((false, false));
 
-                state
+            if !event_exists {
+                continue;
+            }
+
+            // Skip if already triggered and once=true
+            if is_once && state.event_state.triggered_events.contains_key(&event_id) {
+                continue;
+            }
+
+            state
+                .event_state
+                .triggered_events
+                .insert(event_id, state.timeline.current_date);
+            state.history.ledger.push(LedgerEntry::new(
+                state.timeline.current_date,
+                StateEvent::EventTriggered { event_id },
+            ));
+            triggered.push(event_id);
+
+            // Get effects length to iterate by index, avoiding clone of entire Event
+            let effects_len = state
+                .event_state
+                .events
+                .get(&event_id)
+                .map(|e| e.effects.len())
+                .unwrap_or(0);
+
+            // Evaluate and apply effects by index to avoid holding borrow across apply calls
+            for effect_idx in 0..effects_len {
+                // Re-borrow to get each effect - borrow ends before apply_eval_event_with_source
+                let effect = match state
                     .event_state
-                    .triggered_events
-                    .insert(event_id, state.timeline.current_date);
-                state.history.ledger.push(LedgerEntry::new(
-                    state.timeline.current_date,
-                    StateEvent::EventTriggered { event_id },
-                ));
-                triggered.push(event_id);
+                    .events
+                    .get(&event_id)
+                    .and_then(|e| e.effects.get(effect_idx))
+                {
+                    Some(effect) => effect.clone(),
+                    None => break,
+                };
 
-                for effect in &event.effects {
-                    if let Ok(eval_events) = evaluate_effect(effect, state) {
-                        for ee in eval_events {
-                            let _ = apply_eval_event_with_source(state, &ee, Some(event_id));
-                        }
+                if let Ok(eval_events) = evaluate_effect(&effect, state) {
+                    for ee in eval_events {
+                        let _ = apply_eval_event_with_source(state, &ee, Some(event_id));
                     }
                 }
             }
