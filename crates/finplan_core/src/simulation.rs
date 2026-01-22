@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use rustc_hash::FxHashMap;
 
-use crate::apply::process_events;
+use crate::apply::process_events_into;
 use crate::config::SimulationConfig;
 use crate::error::MarketError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
@@ -71,6 +71,8 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult
     const MAX_SAME_DATE_ITERATIONS: u64 = 1000;
 
     let mut state = SimulationState::from_parameters(params, seed)?;
+    // Scratch buffer for triggered event IDs - reused across all process_events calls
+    let mut triggered_scratch = Vec::with_capacity(16);
     state.snapshot_wealth();
 
     while state.timeline.current_date < state.timeline.end_date {
@@ -97,7 +99,8 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult
             }
 
             // Process events - now handles ALL money movement
-            if !process_events(&mut state).is_empty() {
+            process_events_into(&mut state, &mut triggered_scratch);
+            if !triggered_scratch.is_empty() {
                 something_happened = true;
             }
         }
@@ -136,6 +139,8 @@ pub fn simulate_with_metrics(
 ) -> Result<(SimulationResult, SimulationMetrics), MarketError> {
     let mut state = SimulationState::from_parameters(params, seed)?;
     let mut metrics = SimulationMetrics::new();
+    // Scratch buffer for triggered event IDs - reused across all process_events calls
+    let mut triggered_scratch = Vec::with_capacity(16);
 
     state.snapshot_wealth();
 
@@ -166,13 +171,13 @@ pub fn simulate_with_metrics(
             }
 
             // Process events - now handles ALL money movement
-            let triggered = process_events(&mut state);
-            if !triggered.is_empty() {
+            process_events_into(&mut state, &mut triggered_scratch);
+            if !triggered_scratch.is_empty() {
                 something_happened = true;
 
                 // Record event metrics
                 if config.collect_metrics {
-                    for event_id in &triggered {
+                    for event_id in &triggered_scratch {
                         metrics.record_event_triggered(*event_id);
                     }
                 }
@@ -280,8 +285,11 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
         let year_index =
             (state.timeline.current_date.year() - state.timeline.start_date.year()) as usize;
 
-        // Collect appreciation events to record (need to collect IDs first due to borrow)
-        let account_ids: Vec<AccountId> = state.portfolio.accounts.keys().copied().collect();
+        // Collect account IDs first to avoid borrow conflicts when mutating
+        // Pre-allocate with known capacity
+        let num_accounts = state.portfolio.accounts.len();
+        let mut account_ids: Vec<AccountId> = Vec::with_capacity(num_accounts);
+        account_ids.extend(state.portfolio.accounts.keys().copied());
 
         // Compound cash balances for all accounts and record appreciation events
         for account_id in account_ids {

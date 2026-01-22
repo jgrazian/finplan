@@ -5,7 +5,7 @@
 
 use crate::{
     error::{AccountTypeError, ApplyError, LookupError},
-    evaluate::{EvalEvent, TriggerEvent, evaluate_effect, evaluate_trigger},
+    evaluate::{EvalEvent, TriggerEvent, evaluate_effect_into, evaluate_trigger},
     model::{
         AccountFlavor, AssetLot, EventId, EventTrigger, LedgerEntry, SimulationWarning, StateEvent,
         WarningKind,
@@ -464,24 +464,38 @@ fn record_ledger_entry(
 /// Returns list of event IDs that were triggered
 pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
     let mut triggered = Vec::new();
+    process_events_into(state, &mut triggered);
+    triggered
+}
+
+/// Process all pending events for the current date, appending triggered IDs to the provided buffer
+/// This avoids allocations when called in a loop with a reused buffer
+pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<EventId>) {
+    triggered.clear();
+    // Scratch buffer for evaluate_effect_into - reused across all effect evaluations
+    let mut eval_scratch = Vec::with_capacity(8);
 
     // Collect only event IDs to evaluate (avoid cloning entire Event structures)
-    let event_ids_to_check: Vec<EventId> = state
-        .event_state
-        .events
-        .iter()
-        .filter(|(id, event)| {
-            // Skip if already triggered and once=true (but not for Repeating)
-            if event.once
-                && state.event_state.triggered_events.contains_key(id)
-                && !matches!(event.trigger, EventTrigger::Repeating { .. })
-            {
-                return false;
-            }
-            true
-        })
-        .map(|(id, _)| *id)
-        .collect();
+    // Pre-allocate with known capacity to avoid reallocations
+    let num_events = state.event_state.events.len();
+    let mut event_ids_to_check: Vec<EventId> = Vec::with_capacity(num_events);
+    event_ids_to_check.extend(
+        state
+            .event_state
+            .events
+            .iter()
+            .filter(|(id, event)| {
+                // Skip if already triggered and once=true (but not for Repeating)
+                if event.once
+                    && state.event_state.triggered_events.contains_key(id)
+                    && !matches!(event.trigger, EventTrigger::Repeating { .. })
+                {
+                    return false;
+                }
+                true
+            })
+            .map(|(id, _)| *id),
+    );
 
     // Evaluate each event
     for event_id in event_ids_to_check {
@@ -565,9 +579,11 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                     None => break,
                 };
 
-                match evaluate_effect(&effect, state) {
-                    Ok(eval_events) => {
-                        for ee in eval_events {
+                // Clear and reuse scratch buffer
+                eval_scratch.clear();
+                match evaluate_effect_into(&effect, state, &mut eval_scratch) {
+                    Ok(()) => {
+                        for ee in eval_scratch.drain(..) {
                             if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id))
                             {
                                 // Record warning but continue processing
@@ -648,14 +664,14 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
                     None => break,
                 };
 
-                if let Ok(eval_events) = evaluate_effect(&effect, state) {
-                    for ee in eval_events {
+                // Clear and reuse scratch buffer
+                eval_scratch.clear();
+                if evaluate_effect_into(&effect, state, &mut eval_scratch).is_ok() {
+                    for ee in eval_scratch.drain(..) {
                         let _ = apply_eval_event_with_source(state, &ee, Some(event_id));
                     }
                 }
             }
         }
     }
-
-    triggered
 }

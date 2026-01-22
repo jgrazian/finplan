@@ -354,13 +354,32 @@ pub enum EvalEvent {
 }
 
 /// Apply a single effect to the simulation state
+/// Allocates and returns a new Vec (convenience wrapper around evaluate_effect_into)
 pub fn evaluate_effect(
     effect: &EventEffect,
     state: &SimulationState,
 ) -> Result<Vec<EvalEvent>, StateEventError> {
+    let mut out = Vec::new();
+    evaluate_effect_into(effect, state, &mut out)?;
+    Ok(out)
+}
+
+/// Apply a single effect to the simulation state, appending results to the provided buffer
+/// This avoids allocations when called in a loop with a reused buffer
+pub fn evaluate_effect_into(
+    effect: &EventEffect,
+    state: &SimulationState,
+    out: &mut Vec<EvalEvent>,
+) -> Result<(), StateEventError> {
     match effect {
-        EventEffect::CreateAccount(account) => Ok(vec![EvalEvent::CreateAccount(account.clone())]),
-        EventEffect::DeleteAccount(account_id) => Ok(vec![EvalEvent::DeleteAccount(*account_id)]),
+        EventEffect::CreateAccount(account) => {
+            out.push(EvalEvent::CreateAccount(account.clone()));
+            Ok(())
+        }
+        EventEffect::DeleteAccount(account_id) => {
+            out.push(EvalEvent::DeleteAccount(*account_id));
+            Ok(())
+        }
         EventEffect::Income {
             to,
             amount,
@@ -383,14 +402,12 @@ pub fn evaluate_effect(
 
             // If contribution limit blocks the income, skip it
             if allowed_amount < 0.01 {
-                return Ok(vec![]);
+                return Ok(());
             }
-
-            let mut effects = vec![];
 
             // Track contribution if to an investment account
             if state.contribution_room(*to)?.is_some() {
-                effects.push(EvalEvent::RecordContribution {
+                out.push(EvalEvent::RecordContribution {
                     account_id: *to,
                     amount: allowed_amount,
                 });
@@ -398,12 +415,12 @@ pub fn evaluate_effect(
 
             match (income_type, amount_mode) {
                 (IncomeType::TaxFree, _) => {
-                    effects.push(EvalEvent::CashCredit {
+                    out.push(EvalEvent::CashCredit {
                         to: *to,
                         net_amount: allowed_amount,
                         kind: CashFlowKind::Income,
                     });
-                    Ok(effects)
+                    Ok(())
                 }
                 (IncomeType::Taxable, AmountMode::Gross) => {
                     let ytd_income = state.taxes.ytd_tax.ordinary_income;
@@ -415,19 +432,17 @@ pub fn evaluate_effect(
                     let state_tax = allowed_amount * state_rate;
                     let net_amount = allowed_amount - federal_tax - state_tax;
 
-                    effects.extend(vec![
-                        EvalEvent::CashCredit {
-                            to: *to,
-                            net_amount,
-                            kind: CashFlowKind::Income,
-                        },
-                        EvalEvent::IncomeTax {
-                            gross_income_amount: allowed_amount,
-                            federal_tax,
-                            state_tax,
-                        },
-                    ]);
-                    Ok(effects)
+                    out.push(EvalEvent::CashCredit {
+                        to: *to,
+                        net_amount,
+                        kind: CashFlowKind::Income,
+                    });
+                    out.push(EvalEvent::IncomeTax {
+                        gross_income_amount: allowed_amount,
+                        federal_tax,
+                        state_tax,
+                    });
+                    Ok(())
                 }
                 (IncomeType::Taxable, AmountMode::Net) => {
                     let ytd_income = state.taxes.ytd_tax.ordinary_income;
@@ -442,19 +457,17 @@ pub fn evaluate_effect(
                         calculate_federal_marginal_tax(gross_amount, ytd_income, brackets);
                     let state_tax = gross_amount * state_rate;
 
-                    effects.extend(vec![
-                        EvalEvent::CashCredit {
-                            to: *to,
-                            net_amount: allowed_amount,
-                            kind: CashFlowKind::Income,
-                        },
-                        EvalEvent::IncomeTax {
-                            gross_income_amount: gross_amount,
-                            federal_tax,
-                            state_tax,
-                        },
-                    ]);
-                    Ok(effects)
+                    out.push(EvalEvent::CashCredit {
+                        to: *to,
+                        net_amount: allowed_amount,
+                        kind: CashFlowKind::Income,
+                    });
+                    out.push(EvalEvent::IncomeTax {
+                        gross_income_amount: gross_amount,
+                        federal_tax,
+                        state_tax,
+                    });
+                    Ok(())
                 }
             }
         }
@@ -466,11 +479,12 @@ pub fn evaluate_effect(
                 state,
             )?;
 
-            Ok(vec![EvalEvent::CashDebit {
+            out.push(EvalEvent::CashDebit {
                 from: *from,
                 net_amount: calculated_amount,
                 kind: CashFlowKind::Expense,
-            }])
+            });
+            Ok(())
         }
         EventEffect::AssetPurchase { from, to, amount } => {
             let calculated_amount = evaluate_transfer_amount(
@@ -496,7 +510,7 @@ pub fn evaluate_effect(
 
             // If contribution limit blocks the purchase, skip it
             if allowed_amount < 0.01 {
-                return Ok(vec![]);
+                return Ok(());
             }
 
             // Determine the appropriate kind based on whether this is cross-account
@@ -506,27 +520,27 @@ pub fn evaluate_effect(
                 CashFlowKind::InvestmentPurchase
             };
 
-            let mut effects = vec![EvalEvent::CashDebit {
+            out.push(EvalEvent::CashDebit {
                 from: *from,
                 net_amount: allowed_amount,
                 kind: debit_kind,
-            }];
+            });
 
             // Track contribution only if this is cross-account (new money entering)
             if is_cross_account && state.contribution_room(to.account_id)?.is_some() {
-                effects.push(EvalEvent::RecordContribution {
+                out.push(EvalEvent::RecordContribution {
                     account_id: to.account_id,
                     amount: allowed_amount,
                 });
             }
 
-            effects.push(EvalEvent::AddAssetLot {
+            out.push(EvalEvent::AddAssetLot {
                 to: *to,
                 units: allowed_amount / state.current_asset_price(*to)?,
                 cost_basis: allowed_amount,
             });
 
-            Ok(effects)
+            Ok(())
         }
         EventEffect::AssetSale {
             from,
@@ -543,7 +557,7 @@ pub fn evaluate_effect(
             )?;
 
             if target_amount <= 0.0 {
-                return Ok(vec![]);
+                return Ok(());
             }
 
             // Get the investment account
@@ -575,7 +589,6 @@ pub fn evaluate_effect(
             };
 
             let mut remaining = target_amount;
-            let mut all_effects = vec![];
 
             // Liquidate assets in order until target is met
             for asset_id in assets_to_liquidate {
@@ -669,10 +682,10 @@ pub fn evaluate_effect(
                     AmountMode::Net => result.net_proceeds,
                 };
 
-                all_effects.extend(effects);
+                out.extend(effects);
             }
 
-            Ok(all_effects)
+            Ok(())
         }
         EventEffect::Sweep {
             sources,
@@ -713,7 +726,8 @@ pub fn evaluate_effect(
                     .collect(),
             };
 
-            let mut all_effects = vec![];
+            // Track start index so we can analyze only the new effects for Sweep logic
+            let start_idx = out.len();
             let mut total_liquidated = 0.0;
             let mut remaining = evaluate_transfer_amount(
                 amount,
@@ -728,7 +742,8 @@ pub fn evaluate_effect(
                     break;
                 }
 
-                let liquidation_effects = evaluate_effect(
+                let before_len = out.len();
+                evaluate_effect_into(
                     &EventEffect::AssetSale {
                         from: from_account,
                         asset_id: None, // Liquidate all assets in account
@@ -737,10 +752,11 @@ pub fn evaluate_effect(
                         lot_method: *lot_method,
                     },
                     state,
+                    out,
                 )?;
 
-                // Sum up what was liquidated from this account
-                let liquidated_from_account: f64 = liquidation_effects
+                // Sum up what was liquidated from this account (only new effects)
+                let liquidated_from_account: f64 = out[before_len..]
                     .iter()
                     .filter_map(|ev| {
                         if let EvalEvent::CashCredit { net_amount, .. } = ev {
@@ -753,7 +769,6 @@ pub fn evaluate_effect(
 
                 total_liquidated += liquidated_from_account;
                 remaining -= liquidated_from_account;
-                all_effects.extend(liquidation_effects);
             }
 
             // Step 3: Transfer the liquidated cash to destination
@@ -761,7 +776,7 @@ pub fn evaluate_effect(
             // is different, we need to transfer that cash to the destination account.
             if total_liquidated > 0.01 {
                 // Build map of source account -> amount credited during liquidation
-                let source_amounts: FxHashMap<AccountId, f64> = all_effects
+                let source_amounts: FxHashMap<AccountId, f64> = out[start_idx..]
                     .iter()
                     .filter_map(|ev| {
                         if let EvalEvent::CashCredit { to, net_amount, .. } = ev {
@@ -780,7 +795,7 @@ pub fn evaluate_effect(
                 if !source_amounts.contains_key(to) && !source_amounts.is_empty() {
                     // Debit from each source account what was credited to it
                     for (source_account, amount) in &source_amounts {
-                        all_effects.push(EvalEvent::CashDebit {
+                        out.push(EvalEvent::CashDebit {
                             from: *source_account,
                             net_amount: *amount,
                             kind: CashFlowKind::Transfer,
@@ -788,7 +803,7 @@ pub fn evaluate_effect(
                     }
 
                     // Credit the destination with the total liquidated amount
-                    all_effects.push(EvalEvent::CashCredit {
+                    out.push(EvalEvent::CashCredit {
                         to: *to,
                         net_amount: total_liquidated,
                         kind: CashFlowKind::Transfer,
@@ -796,7 +811,7 @@ pub fn evaluate_effect(
                 }
             }
 
-            Ok(all_effects)
+            Ok(())
         }
         EventEffect::ApplyRmd {
             destination,
@@ -807,10 +822,9 @@ pub fn evaluate_effect(
             let (age, _) = state.current_age();
             let Some(rmd_divisor) = rmd_table.divisor_for_age(age) else {
                 // TODO: Better handling for ages beyond table
-                return Ok(vec![]); // No RMD required for this age
+                return Ok(()); // No RMD required for this age
             };
 
-            let mut effects = vec![];
             for acc in state.portfolio.accounts.values() {
                 // Only process Investment accounts with Tax-Deferred status
                 let _investment = match &acc.flavor {
@@ -836,29 +850,51 @@ pub fn evaluate_effect(
                     income_type: IncomeType::Taxable, // RMDs are taxable income
                 };
 
-                let results = evaluate_effect(&sweep, state)?;
+                // Track where sweep results start so we can calculate actual_amount
+                let sweep_start = out.len();
+                evaluate_effect_into(&sweep, state, out)?;
 
-                // Push a RMD marker and then the actual transaction effects
-                effects.push(EvalEvent::StateEvent(StateEvent::RmdWithdrawal {
-                    account_id: acc.account_id,
-                    age,
-                    prior_year_balance: prior_balance,
-                    divisor: rmd_divisor,
-                    required_amount: required_value,
-                    actual_amount: results.iter().fold(0.0, |sum, ev| match ev {
-                        EvalEvent::CashCredit { net_amount, .. } => sum + *net_amount,
-                        _ => sum,
+                // Calculate actual amount from CashCredits in the sweep results
+                let actual_amount = out[sweep_start..]
+                    .iter()
+                    .filter_map(|ev| match ev {
+                        EvalEvent::CashCredit { net_amount, .. } => Some(*net_amount),
+                        _ => None,
+                    })
+                    .sum();
+
+                // Insert RMD marker before the sweep effects
+                out.insert(
+                    sweep_start,
+                    EvalEvent::StateEvent(StateEvent::RmdWithdrawal {
+                        account_id: acc.account_id,
+                        age,
+                        prior_year_balance: prior_balance,
+                        divisor: rmd_divisor,
+                        required_amount: required_value,
+                        actual_amount,
                     }),
-                }));
-                effects.extend(results);
+                );
             }
 
-            Ok(effects)
+            Ok(())
         }
-        EventEffect::TriggerEvent(event_id) => Ok(vec![EvalEvent::TriggerEvent(*event_id)]),
-        EventEffect::PauseEvent(event_id) => Ok(vec![EvalEvent::PauseEvent(*event_id)]),
-        EventEffect::ResumeEvent(event_id) => Ok(vec![EvalEvent::ResumeEvent(*event_id)]),
-        EventEffect::TerminateEvent(event_id) => Ok(vec![EvalEvent::TerminateEvent(*event_id)]),
+        EventEffect::TriggerEvent(event_id) => {
+            out.push(EvalEvent::TriggerEvent(*event_id));
+            Ok(())
+        }
+        EventEffect::PauseEvent(event_id) => {
+            out.push(EvalEvent::PauseEvent(*event_id));
+            Ok(())
+        }
+        EventEffect::ResumeEvent(event_id) => {
+            out.push(EvalEvent::ResumeEvent(*event_id));
+            Ok(())
+        }
+        EventEffect::TerminateEvent(event_id) => {
+            out.push(EvalEvent::TerminateEvent(*event_id));
+            Ok(())
+        }
 
         EventEffect::AdjustBalance { account, amount } => {
             let delta = evaluate_transfer_amount(
@@ -868,10 +904,11 @@ pub fn evaluate_effect(
                 state,
             )?;
 
-            Ok(vec![EvalEvent::AdjustBalance {
+            out.push(EvalEvent::AdjustBalance {
                 account: *account,
                 delta,
-            }])
+            });
+            Ok(())
         }
 
         EventEffect::CashTransfer { from, to, amount } => {
@@ -883,7 +920,7 @@ pub fn evaluate_effect(
             )?;
 
             if transfer_amount < 0.01 {
-                return Ok(vec![]);
+                return Ok(());
             }
 
             // Check destination account type
@@ -895,30 +932,32 @@ pub fn evaluate_effect(
 
             match &dest_account.flavor {
                 // If destination is a liability, this is a loan payment
-                AccountFlavor::Liability(_) => Ok(vec![
-                    EvalEvent::CashDebit {
+                AccountFlavor::Liability(_) => {
+                    out.push(EvalEvent::CashDebit {
                         from: *from,
                         net_amount: transfer_amount,
                         kind: CashFlowKind::Expense,
-                    },
-                    EvalEvent::AdjustBalance {
+                    });
+                    out.push(EvalEvent::AdjustBalance {
                         account: *to,
                         delta: -transfer_amount, // Negative = reduce debt
-                    },
-                ]),
+                    });
+                    Ok(())
+                }
                 // Otherwise, regular cash transfer
-                _ => Ok(vec![
-                    EvalEvent::CashDebit {
+                _ => {
+                    out.push(EvalEvent::CashDebit {
                         from: *from,
                         net_amount: transfer_amount,
                         kind: CashFlowKind::Transfer,
-                    },
-                    EvalEvent::CashCredit {
+                    });
+                    out.push(EvalEvent::CashCredit {
                         to: *to,
                         net_amount: transfer_amount,
                         kind: CashFlowKind::Transfer,
-                    },
-                ]),
+                    });
+                    Ok(())
+                }
             }
         }
     }
