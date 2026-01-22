@@ -485,15 +485,16 @@ pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
 
     // Evaluate each event
     for event_id in event_ids_to_check {
-        // Get trigger info - clone only the trigger (smaller than full Event)
-        let trigger = match state.event_state.events.get(&event_id) {
-            Some(event) => event.trigger.clone(),
-            None => continue,
-        };
-
-        let trigger_result = match evaluate_trigger(&event_id, &trigger, state) {
-            Ok(result) => result,
-            Err(_) => continue, // Skip events that fail to evaluate
+        // Get trigger reference without cloning - borrow ends when evaluate_trigger returns
+        let trigger_result = {
+            let trigger = match state.event_state.events.get(&event_id) {
+                Some(event) => &event.trigger,
+                None => continue,
+            };
+            match evaluate_trigger(&event_id, trigger, state) {
+                Ok(result) => result,
+                Err(_) => continue, // Skip events that fail to evaluate
+            }
         };
 
         let should_trigger = match trigger_result {
