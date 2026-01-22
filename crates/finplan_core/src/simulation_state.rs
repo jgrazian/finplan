@@ -1,9 +1,9 @@
 use crate::config::SimulationConfig;
 use crate::error::{EngineError, MarketError, Result};
 use crate::model::{
-    Account, AccountFlavor, AccountId, AssetCoord, AssetId, Event, EventId, LedgerEntry, Market,
-    ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxConfig, TaxSummary,
-    WealthSnapshot,
+    Account, AccountFlavor, AccountId, AssetCoord, AssetId, Event, EventId, EventTrigger,
+    LedgerEntry, Market, ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxConfig,
+    TaxSummary, WealthSnapshot,
 };
 use jiff::ToSpan;
 use rand::SeedableRng;
@@ -103,6 +103,10 @@ pub struct SimEventState {
     pub event_flow_ytd: FxHashMap<EventId, f64>,
     pub event_flow_lifetime: FxHashMap<EventId, f64>,
     pub event_flow_last_period_key: FxHashMap<EventId, i16>,
+
+    /// Cached interval spans for repeating events (EventId -> pre-computed Span)
+    /// Avoids repeated calls to RepeatInterval::span() during trigger evaluation
+    pub repeating_event_spans: FxHashMap<EventId, jiff::Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,8 +198,13 @@ impl SimulationState {
         }
 
         let mut events = FxHashMap::default();
-        // Load events
+        let mut repeating_event_spans = FxHashMap::default();
+        // Load events and pre-cache interval spans for repeating events
         for event in &params.events {
+            // Cache the interval span if this is a repeating event
+            if let EventTrigger::Repeating { interval, .. } = &event.trigger {
+                repeating_event_spans.insert(event.event_id, interval.span());
+            }
             events.insert(event.event_id, event.clone());
         }
 
@@ -224,6 +233,7 @@ impl SimulationState {
                 event_flow_ytd: FxHashMap::default(),
                 event_flow_lifetime: FxHashMap::default(),
                 event_flow_last_period_key: FxHashMap::default(),
+                repeating_event_spans,
             },
             taxes: SimTaxState {
                 ytd_tax: TaxSummary {
