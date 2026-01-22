@@ -13,6 +13,42 @@ use crate::{
     simulation_state::SimulationState,
 };
 
+/// Pre-allocated scratch buffers for simulation hot paths.
+/// Allocated once per thread and reused across Monte Carlo iterations.
+#[derive(Debug)]
+pub struct SimulationScratch {
+    /// Scratch for triggered event IDs (process_events_into)
+    pub triggered: Vec<EventId>,
+    /// Scratch for evaluate_effect results
+    pub eval_events: Vec<EvalEvent>,
+    /// Scratch for event IDs to check
+    pub event_ids_to_check: Vec<EventId>,
+}
+
+impl SimulationScratch {
+    /// Create a new SimulationScratch with pre-allocated capacity
+    pub fn new() -> Self {
+        Self {
+            triggered: Vec::with_capacity(16),
+            eval_events: Vec::with_capacity(8),
+            event_ids_to_check: Vec::with_capacity(32),
+        }
+    }
+
+    /// Clear all scratch buffers for reuse
+    pub fn clear(&mut self) {
+        self.triggered.clear();
+        self.eval_events.clear();
+        self.event_ids_to_check.clear();
+    }
+}
+
+impl Default for SimulationScratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Apply an EvalEvent to mutate the SimulationState and record to ledger
 pub fn apply_eval_event(state: &mut SimulationState, event: &EvalEvent) -> Result<(), ApplyError> {
     apply_eval_event_with_source(state, event, None)
@@ -463,23 +499,32 @@ fn record_ledger_entry(
 /// Process all pending events for the current date
 /// Returns list of event IDs that were triggered
 pub fn process_events(state: &mut SimulationState) -> Vec<EventId> {
-    let mut triggered = Vec::new();
-    process_events_into(state, &mut triggered);
-    triggered
+    let mut scratch = SimulationScratch::new();
+    process_events_with_scratch(state, &mut scratch);
+    std::mem::take(&mut scratch.triggered)
 }
 
 /// Process all pending events for the current date, appending triggered IDs to the provided buffer
 /// This avoids allocations when called in a loop with a reused buffer
 pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<EventId>) {
-    triggered.clear();
-    // Scratch buffer for evaluate_effect_into - reused across all effect evaluations
-    let mut eval_scratch = Vec::with_capacity(8);
+    let mut scratch = SimulationScratch {
+        triggered: std::mem::take(triggered),
+        eval_events: Vec::with_capacity(8),
+        event_ids_to_check: Vec::with_capacity(32),
+    };
+    process_events_with_scratch(state, &mut scratch);
+    *triggered = std::mem::take(&mut scratch.triggered);
+}
+
+/// Process all pending events for the current date using pre-allocated scratch buffers.
+/// This is the most efficient variant - reuses all scratch buffers across calls.
+pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut SimulationScratch) {
+    scratch.triggered.clear();
+    scratch.eval_events.clear();
+    scratch.event_ids_to_check.clear();
 
     // Collect only event IDs to evaluate (avoid cloning entire Event structures)
-    // Pre-allocate with known capacity to avoid reallocations
-    let num_events = state.event_state.events.len();
-    let mut event_ids_to_check: Vec<EventId> = Vec::with_capacity(num_events);
-    event_ids_to_check.extend(
+    scratch.event_ids_to_check.extend(
         state
             .event_state
             .events
@@ -497,8 +542,9 @@ pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<Even
             .map(|(id, _)| *id),
     );
 
-    // Evaluate each event
-    for event_id in event_ids_to_check {
+    // Evaluate each event - iterate by index to avoid moving out of scratch
+    for i in 0..scratch.event_ids_to_check.len() {
+        let event_id = scratch.event_ids_to_check[i];
         // Get trigger reference without cloning - borrow ends when evaluate_trigger returns
         let trigger_result = {
             let trigger = match state.event_state.events.get(&event_id) {
@@ -556,7 +602,7 @@ pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<Even
                 StateEvent::EventTriggered { event_id },
             ));
 
-            triggered.push(event_id);
+            scratch.triggered.push(event_id);
 
             // Get effects length to iterate by index, avoiding clone of effects vector
             let effects_len = state
@@ -580,10 +626,10 @@ pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<Even
                 };
 
                 // Clear and reuse scratch buffer
-                eval_scratch.clear();
-                match evaluate_effect_into(&effect, state, &mut eval_scratch) {
+                scratch.eval_events.clear();
+                match evaluate_effect_into(&effect, state, &mut scratch.eval_events) {
                     Ok(()) => {
-                        for ee in eval_scratch.drain(..) {
+                        for ee in scratch.eval_events.drain(..) {
                             if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id))
                             {
                                 // Record warning but continue processing
@@ -641,7 +687,7 @@ pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<Even
                 state.timeline.current_date,
                 StateEvent::EventTriggered { event_id },
             ));
-            triggered.push(event_id);
+            scratch.triggered.push(event_id);
 
             // Get effects length to iterate by index, avoiding clone of entire Event
             let effects_len = state
@@ -665,9 +711,9 @@ pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<Even
                 };
 
                 // Clear and reuse scratch buffer
-                eval_scratch.clear();
-                if evaluate_effect_into(&effect, state, &mut eval_scratch).is_ok() {
-                    for ee in eval_scratch.drain(..) {
+                scratch.eval_events.clear();
+                if evaluate_effect_into(&effect, state, &mut scratch.eval_events).is_ok() {
+                    for ee in scratch.eval_events.drain(..) {
                         let _ = apply_eval_event_with_source(state, &ee, Some(event_id));
                     }
                 }

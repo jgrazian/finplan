@@ -435,9 +435,9 @@ This means `process_events_into` only runs at dates where at least one event mig
 
 ---
 
-## Summary
+## Summary of Phase 1 Optimizations
 
-All phases of the performance optimization plan have been addressed:
+All phases of the initial optimization plan have been addressed:
 
 ### Implemented (Phases 1-3)
 - **Phase 1**: Eliminated unnecessary cloning of triggers, effects, and events
@@ -448,8 +448,307 @@ All phases of the performance optimization plan have been addressed:
 - **Phase 4.1**: Balance cache - complexity of cache invalidation outweighs benefit
 - **Phase 5.1**: Event date indexing - `advance_time()` already provides similar optimization
 
-The implemented optimizations target the original profiling hotspots:
-- ~35% of runtime from cloning/allocation → addressed by Phases 1 and 3
-- Short-circuit And/Or evaluation → addressed by Phase 2
+---
 
-Further optimization should be guided by new profiling data to identify remaining bottlenecks.
+# Phase 2 Performance Optimization Plan
+
+## New Performance Profile (2026-01-21)
+
+Fresh profiling data from `perf.data` (61K samples, ~278B cycles) reveals remaining hotspots:
+
+| Function | % Time | Root Cause |
+|----------|--------|------------|
+| `evaluate_effect_into` | 15.00% | Large match statement, nested calls |
+| `evaluate_trigger` | 14.14% | Date arithmetic (5.50% in saturating_add) |
+| `Vec::extend_desugared` | 12.10% | Extending scratch buffers from liquidation |
+| `EventEffect::clone` | 11.20% | Cloning effects in process_events loop |
+| `process_events_into` | 10.28% | Main event loop overhead |
+| `simulate` | 6.64% | Outer simulation loop |
+| `DateArithmetic::checked_add` | 4.38% | Date calculations for triggers |
+| `account_balance` | 3.41% | Balance lookups |
+| `get_asset_value` | 1.71% | Market price lookups |
+| `malloc` | 1.50% | Remaining allocations |
+
+**Key Insight:** ~23% of runtime is now in effect/trigger cloning and Vec operations. Date arithmetic is a significant contributor (~10% combined).
+
+---
+
+## Phase 2 Optimization Plan
+
+### P2.1: Eliminate EventEffect cloning (Target: 8-10% improvement)
+
+**Current code (apply.rs:572-580, 656-665):**
+```rust
+let effect = match state.event_state.events.get(&event_id)
+    .and_then(|e| e.effects.get(effect_idx))
+{
+    Some(effect) => effect.clone(),  // CLONE HERE
+    None => break,
+};
+```
+
+**Problem:** EventEffect is cloned for every effect evaluation, but the clone is only needed to break the borrow before calling `evaluate_effect_into`.
+
+**Proposed fix:** Store effect index and defer evaluation:
+```rust
+// Collect (event_id, effect_idx) pairs first
+let mut effects_to_apply: Vec<(EventId, usize)> = Vec::with_capacity(16);
+
+for event_id in event_ids_to_check {
+    // ... trigger evaluation ...
+    if should_trigger {
+        let effects_len = state.event_state.events.get(&event_id)
+            .map(|e| e.effects.len()).unwrap_or(0);
+        for effect_idx in 0..effects_len {
+            effects_to_apply.push((event_id, effect_idx));
+        }
+    }
+}
+
+// Now evaluate effects - can clone just the individual effect
+for (event_id, effect_idx) in effects_to_apply {
+    let effect = state.event_state.events.get(&event_id)
+        .and_then(|e| e.effects.get(effect_idx))
+        .cloned();
+    // ... evaluate ...
+}
+```
+
+**Alternative:** Use Rc<EventEffect> or indices into a separate effects vec to avoid cloning entirely.
+
+**Files to modify:**
+- `crates/finplan_core/src/apply.rs`
+
+---
+
+### P2.2: Pre-allocate scratch buffers per-thread for Monte Carlo (Target: 8-12% improvement)
+
+**Current code:**
+- `process_events_into` (apply.rs:476) allocates `eval_scratch` every call
+- `liquidate_investment` (liquidation.rs:70) allocates and returns new Vec
+- `simulate()` is called many times per Monte Carlo batch
+
+**Problem:** Scratch buffers are allocated inside functions, causing repeated allocations across Monte Carlo iterations. Each thread processes ~100 iterations but allocates fresh buffers each time.
+
+**Proposed fix:** Create a `SimulationScratch` struct allocated once per thread:
+
+```rust
+/// Pre-allocated scratch buffers for simulation hot paths
+/// Allocated once per thread and reused across Monte Carlo iterations
+pub struct SimulationScratch {
+    /// Scratch for triggered event IDs (process_events_into)
+    pub triggered: Vec<EventId>,
+    /// Scratch for evaluate_effect results
+    pub eval_events: Vec<EvalEvent>,
+    /// Scratch for event IDs to check
+    pub event_ids_to_check: Vec<EventId>,
+    /// Scratch for liquidation effects (avoid extend)
+    pub liquidation_effects: Vec<EvalEvent>,
+}
+
+impl SimulationScratch {
+    pub fn new() -> Self {
+        Self {
+            triggered: Vec::with_capacity(16),
+            eval_events: Vec::with_capacity(8),
+            event_ids_to_check: Vec::with_capacity(32),
+            liquidation_effects: Vec::with_capacity(16),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.triggered.clear();
+        self.eval_events.clear();
+        self.event_ids_to_check.clear();
+        self.liquidation_effects.clear();
+    }
+}
+```
+
+**Monte Carlo integration:**
+```rust
+// In monte_carlo_simulate_with_config
+(0..batch_size)
+    .filter_map(|i| {
+        // Create scratch once per thread, reuse across batch
+        thread_local! {
+            static SCRATCH: RefCell<SimulationScratch> = RefCell::new(SimulationScratch::new());
+        }
+
+        SCRATCH.with(|scratch| {
+            let mut scratch = scratch.borrow_mut();
+            let seed = rng.next_u64();
+            simulate_with_scratch(params, seed, &mut scratch).ok()
+        })
+    })
+```
+
+**Alternative:** Pass `&mut SimulationScratch` explicitly through the closure:
+```rust
+let mut scratch = SimulationScratch::new();
+(0..batch_size).filter_map(|_| {
+    scratch.clear();
+    let seed = rng.next_u64();
+    simulate_with_scratch(params, seed, &mut scratch).ok()
+})
+```
+
+**Benefits:**
+- Zero allocations after first iteration per thread
+- Buffers grow to max needed size and stay there
+- Works naturally with Rayon's work-stealing (each thread has own scratch)
+
+**Files to modify:**
+- `crates/finplan_core/src/simulation.rs` - Add SimulationScratch, thread-local usage
+- `crates/finplan_core/src/apply.rs` - Accept &mut SimulationScratch
+- `crates/finplan_core/src/evaluate.rs` - Accept scratch for liquidation
+- `crates/finplan_core/src/liquidation.rs` - Use scratch instead of returning Vec
+
+---
+
+### P2.3: Cache repeating event next-trigger dates (Target: 3-5% improvement)
+
+**Current code (evaluate.rs:244, 261):**
+```rust
+state.timeline.current_date.saturating_add(interval.span())
+```
+
+**Problem:** Date arithmetic is expensive (~10% combined). For repeating events, we already store `event_next_date`, but we recalculate the span every trigger.
+
+**Proposed fix:** Pre-compute interval span once when event is created:
+```rust
+// In EventTrigger::Repeating
+Repeating {
+    interval: RepeatInterval,
+    interval_span: jiff::Span,  // Pre-computed span
+    start_condition: Option<Box<EventTrigger>>,
+    end_condition: Option<Box<EventTrigger>>,
+}
+```
+
+Or cache in SimEventState:
+```rust
+pub struct SimEventState {
+    // ... existing fields ...
+    /// Cached interval spans for repeating events
+    repeating_interval_spans: FxHashMap<EventId, jiff::Span>,
+}
+```
+
+**Files to modify:**
+- `crates/finplan_core/src/model/events.rs`
+- `crates/finplan_core/src/evaluate.rs`
+
+---
+
+### P2.4: Optimize lot_subtractions_to_effects (Target: 2-3% improvement)
+
+**Current code (liquidation.rs:483-500):**
+```rust
+pub fn lot_subtractions_to_effects(...) -> Vec<EvalEvent> {
+    result.lot_subtractions.iter()
+        .map(|sub| EvalEvent::SubtractAssetLot { ... })
+        .collect()
+}
+```
+
+**Problem:** Allocates new Vec then extends into scratch buffer.
+
+**Proposed fix:** Inline into the liquidation functions:
+```rust
+fn liquidate_taxable_into(..., out: &mut Vec<EvalEvent>) -> LiquidationResult {
+    // Push SubtractAssetLot directly to out
+    for sub in &lot_result.lot_subtractions {
+        out.push(EvalEvent::SubtractAssetLot { ... });
+    }
+    // ... rest of function
+}
+```
+
+**Files to modify:**
+- `crates/finplan_core/src/liquidation.rs`
+
+---
+
+### P2.5: Reduce date arithmetic in trigger evaluation (Target: 2-3% improvement)
+
+**Current code (evaluate.rs:129-134):**
+```rust
+let trigger_date = state.timeline.current_date
+    .checked_add(remaining_years.years().months(remaining_months))?;
+```
+
+**Problem:** Age trigger recalculates target date every evaluation.
+
+**Proposed fix:** Cache computed trigger dates in SimEventState for date-based triggers:
+```rust
+pub struct SimEventState {
+    // ... existing fields ...
+    /// Cached trigger dates for Age/Date triggers (cleared when date advances)
+    cached_trigger_dates: FxHashMap<EventId, Date>,
+}
+```
+
+Only recompute when `current_date` changes (which happens infrequently due to `advance_time`).
+
+**Files to modify:**
+- `crates/finplan_core/src/simulation_state.rs`
+- `crates/finplan_core/src/evaluate.rs`
+
+---
+
+## Implementation Order
+
+| Priority | Task | Est. Improvement | Complexity |
+|----------|------|------------------|------------|
+| 1 | P2.2 - Pre-allocate scratch per-thread | 8-12% | Medium |
+| 2 | P2.4 - Inline lot_subtractions into scratch | 2-3% | Low |
+| 3 | P2.1 - Avoid EventEffect cloning | 8-10% | Medium |
+| 4 | P2.3 - Cache interval spans | 3-5% | Medium |
+| 5 | P2.5 - Cache trigger dates | 2-3% | Medium |
+
+**Total expected improvement: 25-35%**
+
+**Note:** P2.2 (scratch buffers) is the foundation - implement first, then P2.4 builds on it by using the scratch for liquidation. P2.1 can be done independently.
+
+---
+
+## Status
+
+- [x] P2.2 - Pre-allocate SimulationScratch per-thread
+- [ ] P2.4 - Inline lot_subtractions into scratch buffer
+- [ ] P2.1 - Eliminate EventEffect cloning
+- [ ] P2.3 - Cache repeating event interval spans
+- [ ] P2.5 - Cache trigger dates for Age/Date triggers
+
+---
+
+## Implementation Notes
+
+### P2.2 Implementation (2026-01-22)
+
+Created `SimulationScratch` struct in `apply.rs` with pre-allocated buffers:
+- `triggered: Vec<EventId>` - for triggered event IDs
+- `eval_events: Vec<EvalEvent>` - for evaluate_effect results
+- `event_ids_to_check: Vec<EventId>` - for event IDs to process
+
+Changes:
+1. Added `SimulationScratch` struct with `new()`, `clear()`, and `Default` impl
+2. Added `process_events_with_scratch()` that uses scratch buffers instead of allocating
+3. Updated `process_events()` and `process_events_into()` to use the new function
+4. Added `simulate_with_scratch()` that accepts pre-allocated scratch
+5. Updated Monte Carlo functions to create one scratch per batch and reuse across iterations
+
+Benefits:
+- Zero allocations for scratch buffers after first iteration per thread
+- Buffers grow to worst-case size and stay there
+- Each Rayon thread processes its batch with a single scratch instance
+
+---
+
+## Validation Strategy
+
+1. Run existing test suite: `cargo test -p finplan_core`
+2. Benchmark with perf before/after each change
+3. Compare Monte Carlo 1000-iteration times
+4. Verify deterministic results with same seed

@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use rustc_hash::FxHashMap;
 
-use crate::apply::process_events_into;
+use crate::apply::{SimulationScratch, process_events_with_scratch};
 use crate::config::SimulationConfig;
 use crate::error::MarketError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
@@ -68,11 +68,20 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
 }
 
 pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult, MarketError> {
+    let mut scratch = SimulationScratch::new();
+    simulate_with_scratch(params, seed, &mut scratch)
+}
+
+/// Simulate with a pre-allocated scratch buffer for reuse across Monte Carlo iterations.
+/// This avoids allocation overhead when running many simulations.
+pub fn simulate_with_scratch(
+    params: &SimulationConfig,
+    seed: u64,
+    scratch: &mut SimulationScratch,
+) -> Result<SimulationResult, MarketError> {
     const MAX_SAME_DATE_ITERATIONS: u64 = 1000;
 
     let mut state = SimulationState::from_parameters(params, seed)?;
-    // Scratch buffer for triggered event IDs - reused across all process_events calls
-    let mut triggered_scratch = Vec::with_capacity(16);
     state.snapshot_wealth();
 
     while state.timeline.current_date < state.timeline.end_date {
@@ -99,8 +108,8 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult
             }
 
             // Process events - now handles ALL money movement
-            process_events_into(&mut state, &mut triggered_scratch);
-            if !triggered_scratch.is_empty() {
+            process_events_with_scratch(&mut state, scratch);
+            if !scratch.triggered.is_empty() {
                 something_happened = true;
             }
         }
@@ -139,8 +148,8 @@ pub fn simulate_with_metrics(
 ) -> Result<(SimulationResult, SimulationMetrics), MarketError> {
     let mut state = SimulationState::from_parameters(params, seed)?;
     let mut metrics = SimulationMetrics::new();
-    // Scratch buffer for triggered event IDs - reused across all process_events calls
-    let mut triggered_scratch = Vec::with_capacity(16);
+    // Scratch buffer for simulation - reused across all process_events calls
+    let mut scratch = SimulationScratch::new();
 
     state.snapshot_wealth();
 
@@ -171,13 +180,13 @@ pub fn simulate_with_metrics(
             }
 
             // Process events - now handles ALL money movement
-            process_events_into(&mut state, &mut triggered_scratch);
-            if !triggered_scratch.is_empty() {
+            process_events_with_scratch(&mut state, &mut scratch);
+            if !scratch.triggered.is_empty() {
                 something_happened = true;
 
                 // Record event metrics
                 if config.collect_metrics {
-                    for event_id in &triggered_scratch {
+                    for event_id in &scratch.triggered {
                         metrics.record_event_triggered(*event_id);
                     }
                 }
@@ -452,6 +461,8 @@ pub fn monte_carlo_simulate(
         .into_par_iter()
         .flat_map(|i| {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(i as u64);
+            // Reuse scratch buffer across all iterations in this batch
+            let mut scratch = SimulationScratch::new();
 
             let batch_size = if i == num_batches - 1 {
                 num_iterations - i * MAX_BATCH_SIZE
@@ -463,7 +474,7 @@ pub fn monte_carlo_simulate(
                 .filter_map(|_| {
                     let seed = rng.next_u64();
                     // Skip failed simulations (should be rare after initial validation)
-                    simulate(params, seed).ok()
+                    simulate_with_scratch(params, seed, &mut scratch).ok()
                 })
                 .collect::<Vec<_>>()
         })
@@ -504,6 +515,8 @@ pub fn monte_carlo_simulate_with_config(
         .into_par_iter()
         .flat_map(|batch_idx| {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
+            // Reuse scratch buffer across all iterations in this batch
+            let mut scratch = SimulationScratch::new();
 
             let batch_size = if batch_idx == num_batches - 1 {
                 num_iterations - batch_idx * MAX_BATCH_SIZE
@@ -515,7 +528,7 @@ pub fn monte_carlo_simulate_with_config(
                 .filter_map(|_| {
                     let seed = rng.next_u64();
                     // Skip failed simulations (should be rare after initial validation)
-                    let result = simulate(params, seed).ok()?;
+                    let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
                     let fnw = final_net_worth(&result);
 
                     // Accumulate mean sums if requested
