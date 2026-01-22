@@ -10,6 +10,7 @@ cargo fmt               # Format code (REQUIRED before commits)
 ```
 
 IMPORTIANT:
+- Use PLAN.md to record current and future work plans. Read PLAN.md thoroughly before doing work.
 - When finished making changes run `cargo fmt`
 - Run `cargo clippy` and fix any warnings if they will not cause major refactor work.
 - `git add` changed files to track
