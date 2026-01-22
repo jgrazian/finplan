@@ -9,8 +9,8 @@ use ratatui::{
 
 use crate::state::ConfirmModal;
 
-use super::ModalResult;
 use super::helpers::{HelpText, render_modal_frame};
+use super::{ConfirmedValue, ModalResult};
 
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 10;
@@ -52,7 +52,7 @@ pub fn render_confirm_modal(frame: &mut Frame, modal: &ConfirmModal) {
 pub fn handle_confirm_key(key: KeyEvent, modal: &ConfirmModal) -> ModalResult {
     match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => {
-            ModalResult::Confirmed(modal.action, String::new())
+            ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Confirm))
         }
         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => ModalResult::Cancelled,
         _ => ModalResult::Continue,

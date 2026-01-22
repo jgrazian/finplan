@@ -9,8 +9,8 @@ use ratatui::{
 
 use crate::state::TextInputModal;
 
-use super::ModalResult;
 use super::helpers::{HelpText, calculate_scroll, render_cursor_line, render_modal_frame};
+use super::{ConfirmedValue, ModalResult};
 
 const MODAL_WIDTH: u16 = 60;
 const MODAL_HEIGHT: u16 = 9;
@@ -70,7 +70,7 @@ pub fn handle_text_input_key(key: KeyEvent, modal: &mut TextInputModal) -> Modal
         KeyCode::Enter => {
             let value = modal.value.clone();
             let action = modal.action;
-            ModalResult::Confirmed(action, value)
+            ModalResult::Confirmed(action, Box::new(ConfirmedValue::Text(value)))
         }
         KeyCode::Esc => ModalResult::Cancelled,
         KeyCode::Backspace => {

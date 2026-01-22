@@ -9,8 +9,8 @@ use ratatui::{
 
 use crate::state::{ModalAction, ScenarioPickerModal};
 
-use super::ModalResult;
 use super::helpers::{HelpText, render_modal_frame};
+use super::{ConfirmedValue, ModalResult};
 
 const MODAL_WIDTH: u16 = 50;
 const MODAL_MIN_HEIGHT: u16 = 10;
@@ -138,7 +138,10 @@ pub fn handle_scenario_picker_key(key: KeyEvent, modal: &mut ScenarioPickerModal
                     && !name.is_empty()
                 {
                     let name = name.clone();
-                    return ModalResult::Confirmed(modal.action, name);
+                    return ModalResult::Confirmed(
+                        modal.action,
+                        Box::new(ConfirmedValue::Text(name)),
+                    );
                 }
                 ModalResult::Continue
             }
@@ -172,7 +175,7 @@ pub fn handle_scenario_picker_key(key: KeyEvent, modal: &mut ScenarioPickerModal
                     modal.editing_new_name = true;
                     ModalResult::Continue
                 } else if let Some(name) = modal.selected_name() {
-                    ModalResult::Confirmed(modal.action, name)
+                    ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Text(name)))
                 } else {
                     ModalResult::Continue
                 }

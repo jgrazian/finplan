@@ -1,4 +1,5 @@
 mod app_state;
+mod cache;
 pub mod context;
 mod errors;
 mod modal;
@@ -9,6 +10,7 @@ mod tabs;
 
 // Re-export all types from submodules
 pub use app_state::*;
+pub use cache::*;
 pub use errors::*;
 pub use modal::*;
 pub use modal_action::*;

@@ -9,7 +9,7 @@ mod text_input;
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
-use crate::state::{AppState, ModalAction, ModalState};
+use crate::state::{AppState, FormModal, ModalAction, ModalState};
 
 pub use confirm::render_confirm_modal;
 pub use form::{
@@ -21,11 +21,56 @@ pub use picker::render_picker_modal;
 pub use scenario_picker::render_scenario_picker_modal;
 pub use text_input::render_text_input_modal;
 
+/// Typed value returned when a modal is confirmed
+#[derive(Debug, Clone)]
+pub enum ConfirmedValue {
+    /// Form modal with typed field access
+    Form(FormModal),
+    /// Picker modal - selected option string
+    Picker(String),
+    /// Text input modal - entered text
+    Text(String),
+    /// Confirm modal - just confirmed, no value
+    Confirm,
+}
+
+impl ConfirmedValue {
+    /// Get the form if this is a Form variant
+    pub fn as_form(&self) -> Option<&FormModal> {
+        match self {
+            ConfirmedValue::Form(form) => Some(form),
+            _ => None,
+        }
+    }
+
+    /// Get the selected string for Picker or Text variants
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            ConfirmedValue::Picker(s) | ConfirmedValue::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Get string representation (for backwards compatibility during migration)
+    pub fn to_legacy_string(&self) -> String {
+        match self {
+            ConfirmedValue::Form(form) => form
+                .fields
+                .iter()
+                .map(|f| f.value.clone())
+                .collect::<Vec<_>>()
+                .join("|"),
+            ConfirmedValue::Picker(s) | ConfirmedValue::Text(s) => s.clone(),
+            ConfirmedValue::Confirm => String::new(),
+        }
+    }
+}
+
 /// Result of handling a modal key event
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum ModalResult {
-    /// Modal confirmed with action and value
-    Confirmed(ModalAction, String),
+    /// Modal confirmed with action and typed value
+    Confirmed(ModalAction, Box<ConfirmedValue>),
     /// Modal was cancelled
     Cancelled,
     /// Key was handled, modal still active

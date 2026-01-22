@@ -1100,3 +1100,80 @@ impl Screen for EventsScreen {
         "Events"
     }
 }
+
+impl super::ModalHandler for EventsScreen {
+    fn handles(&self, action: &ModalAction) -> bool {
+        matches!(action, ModalAction::Event(_) | ModalAction::Effect(_))
+    }
+
+    fn handle_modal_result(
+        &self,
+        state: &mut AppState,
+        action: ModalAction,
+        value: &crate::modals::ConfirmedValue,
+        legacy_value: &str,
+    ) -> crate::actions::ActionResult {
+        use crate::actions::{self, ActionContext, ActionResult};
+        use crate::state::{EffectAction, EventAction};
+
+        // Extract modal context FIRST (clone to break the borrow)
+        let modal_context = match &state.modal {
+            ModalState::Form(form) => form.context.clone(),
+            ModalState::Confirm(confirm) => confirm.context.clone(),
+            ModalState::Picker(picker) => picker.context.clone(),
+            _ => None,
+        };
+
+        let ctx = ActionContext::new(modal_context.as_ref(), value);
+
+        match action {
+            // Event actions
+            ModalAction::Event(EventAction::PickTriggerType) => {
+                actions::handle_trigger_type_pick(state, legacy_value)
+            }
+            ModalAction::Event(EventAction::PickEventReference) => {
+                actions::handle_event_reference_pick(legacy_value)
+            }
+            ModalAction::Event(EventAction::PickInterval) => {
+                actions::handle_interval_pick(legacy_value)
+            }
+            ModalAction::Event(EventAction::Create) => actions::handle_create_event(state, ctx),
+            ModalAction::Event(EventAction::Edit) => actions::handle_edit_event(state, ctx),
+            ModalAction::Event(EventAction::Delete) => actions::handle_delete_event(state, ctx),
+            // Trigger builder actions
+            ModalAction::Event(EventAction::PickChildTriggerType) => {
+                actions::handle_pick_child_trigger_type(state, legacy_value, ctx)
+            }
+            ModalAction::Event(EventAction::BuildChildTrigger) => {
+                actions::handle_build_child_trigger(state, legacy_value, ctx)
+            }
+            ModalAction::Event(EventAction::CompleteChildTrigger) => {
+                actions::handle_complete_child_trigger(state, ctx)
+            }
+            ModalAction::Event(EventAction::FinalizeRepeating) => {
+                actions::handle_finalize_repeating(state, ctx)
+            }
+
+            // Effect actions
+            ModalAction::Effect(EffectAction::Manage) => {
+                actions::handle_manage_effects(state, legacy_value)
+            }
+            ModalAction::Effect(EffectAction::PickType) => ActionResult::close(),
+            ModalAction::Effect(EffectAction::PickTypeForAdd) => {
+                actions::handle_effect_type_for_add(state, legacy_value)
+            }
+            ModalAction::Effect(EffectAction::PickAccountForEffect) => {
+                actions::handle_account_for_effect_pick(legacy_value)
+            }
+            ModalAction::Effect(EffectAction::PickActionForEffect) => {
+                actions::handle_action_for_effect_pick(state, legacy_value, ctx)
+            }
+            ModalAction::Effect(EffectAction::Add) => actions::handle_add_effect(state, ctx),
+            ModalAction::Effect(EffectAction::Edit) => actions::handle_edit_effect(state, ctx),
+            ModalAction::Effect(EffectAction::Delete) => actions::handle_delete_effect(state, ctx),
+
+            // This shouldn't happen if handles() is correct
+            _ => ActionResult::close(),
+        }
+    }
+}

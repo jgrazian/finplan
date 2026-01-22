@@ -10,7 +10,7 @@ use ratatui::{
 use crate::state::{FieldType, FormField, FormModal};
 
 use super::helpers::{HelpText, MultiLineHelp, calculate_scroll, render_cursor_line};
-use super::{ModalResult, centered_rect};
+use super::{ConfirmedValue, ModalResult, centered_rect};
 
 /// Render the form modal
 pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
@@ -225,7 +225,7 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     ) || key.code == KeyCode::F(10);
 
     if is_submit {
-        return ModalResult::Confirmed(modal.action, serialize_form(modal));
+        return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
     }
 
     let field = &mut modal.fields[modal.focused_field];
@@ -348,7 +348,7 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     ) || key.code == KeyCode::F(10);
 
     if is_submit {
-        return ModalResult::Confirmed(modal.action, serialize_form(modal));
+        return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
     }
 
     let current_field_type = modal.fields[modal.focused_field].field_type;
@@ -413,17 +413,6 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
         }
         _ => ModalResult::Continue,
     }
-}
-
-/// Serialize form fields to a string representation
-/// Format: field1_value|field2_value|field3_value
-fn serialize_form(modal: &FormModal) -> String {
-    modal
-        .fields
-        .iter()
-        .map(|f| f.value.clone())
-        .collect::<Vec<_>>()
-        .join("|")
 }
 
 // ========== Validation Helpers ==========

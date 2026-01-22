@@ -765,3 +765,27 @@ impl Screen for OptimizeScreen {
         "Optimize"
     }
 }
+
+impl super::ModalHandler for OptimizeScreen {
+    fn handles(&self, action: &crate::state::ModalAction) -> bool {
+        matches!(action, crate::state::ModalAction::Optimize(_))
+    }
+
+    fn handle_modal_result(
+        &self,
+        state: &mut AppState,
+        action: crate::state::ModalAction,
+        _value: &crate::modals::ConfirmedValue,
+        legacy_value: &str,
+    ) -> crate::actions::ActionResult {
+        use crate::actions::optimize::handle_optimize_action;
+
+        match action {
+            crate::state::ModalAction::Optimize(optimize_action) => {
+                handle_optimize_action(state, optimize_action, legacy_value)
+            }
+            // This shouldn't happen if handles() is correct
+            _ => crate::actions::ActionResult::close(),
+        }
+    }
+}

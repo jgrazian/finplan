@@ -9,8 +9,8 @@ use ratatui::{
 
 use crate::state::PickerModal;
 
-use super::ModalResult;
 use super::helpers::{HelpText, MultiLineHelp, render_modal_frame};
+use super::{ConfirmedValue, ModalResult};
 
 /// Render the picker modal
 pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
@@ -80,7 +80,10 @@ pub fn handle_picker_key(key: KeyEvent, modal: &mut PickerModal) -> ModalResult 
     match key.code {
         KeyCode::Enter => {
             if let Some(selected) = modal.options.get(modal.selected_index) {
-                ModalResult::Confirmed(modal.action, selected.clone())
+                ModalResult::Confirmed(
+                    modal.action,
+                    Box::new(ConfirmedValue::Picker(selected.clone())),
+                )
             } else {
                 ModalResult::Cancelled
             }

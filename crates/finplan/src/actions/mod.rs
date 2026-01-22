@@ -21,8 +21,9 @@ pub use holding::*;
 pub use profile::*;
 pub use scenario::*;
 
-use crate::state::ModalState;
+use crate::modals::ConfirmedValue;
 use crate::state::context::{ModalContext, TriggerBuilderState, TriggerContext};
+use crate::state::{FormModal, ModalState};
 
 /// Result of an action handler
 ///
@@ -68,17 +69,50 @@ impl ActionResult {
 pub struct ActionContext<'a> {
     /// The typed context from the modal (when using ModalContextValue::Typed)
     pub typed_modal_context: Option<&'a ModalContext>,
-    /// The value submitted from the modal (pipe-delimited form fields)
-    pub value: &'a str,
+    /// The typed value submitted from the modal
+    confirmed_value: &'a ConfirmedValue,
+    /// Legacy string value for backwards compatibility
+    legacy_value: String,
 }
 
 impl<'a> ActionContext<'a> {
-    pub fn new(modal_context: Option<&'a ModalContext>, value: &'a str) -> Self {
-        let typed = modal_context;
+    pub fn new(
+        modal_context: Option<&'a ModalContext>,
+        confirmed_value: &'a ConfirmedValue,
+    ) -> Self {
+        let legacy_value = confirmed_value.to_legacy_string();
         Self {
-            typed_modal_context: typed,
-            value,
+            typed_modal_context: modal_context,
+            confirmed_value,
+            legacy_value,
         }
+    }
+
+    /// Get the form if this was a form modal
+    pub fn form(&self) -> Option<&FormModal> {
+        self.confirmed_value.as_form()
+    }
+
+    /// Get the selected/entered string value (for pickers and text inputs)
+    pub fn selected(&self) -> Option<&str> {
+        self.confirmed_value.as_str()
+    }
+
+    /// Get the confirmed value
+    pub fn confirmed_value(&self) -> &ConfirmedValue {
+        self.confirmed_value
+    }
+
+    /// Get the legacy string value (for backwards compatibility during migration)
+    /// This will be removed once all handlers are migrated to typed extraction
+    pub fn value(&self) -> &str {
+        &self.legacy_value
+    }
+
+    /// Split the legacy value by pipe delimiter (for backwards compatibility)
+    /// This will be removed once all handlers are migrated to typed extraction
+    pub fn value_parts(&self) -> Vec<&str> {
+        self.legacy_value.split('|').collect()
     }
 
     /// Parse the context as an index (from typed or legacy context)
@@ -127,10 +161,5 @@ impl<'a> ActionContext<'a> {
                 None
             }
         })
-    }
-
-    /// Split the value by pipe delimiter
-    pub fn value_parts(&self) -> Vec<&str> {
-        self.value.split('|').collect()
     }
 }

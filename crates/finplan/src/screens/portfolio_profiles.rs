@@ -7,8 +7,8 @@ use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileData};
 use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
-    AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal,
-    PortfolioProfilesPanel,
+    AccountInteractionMode, AppState, ConfirmModal, FormField, FormModal, HoldingEditState,
+    ModalAction, ModalState, PickerModal, PortfolioProfilesPanel,
 };
 use crate::util::format::{format_currency, format_percentage};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -85,9 +85,16 @@ impl PortfolioProfilesScreen {
             .border_style(border_style);
 
         if is_focused {
-            let help_text = if state.portfolio_profiles_state.editing_holdings {
-                if state.portfolio_profiles_state.editing_holding_value
-                    || state.portfolio_profiles_state.adding_new_holding
+            let help_text = if state
+                .portfolio_profiles_state
+                .account_mode
+                .is_editing_holdings()
+            {
+                if state
+                    .portfolio_profiles_state
+                    .account_mode
+                    .is_editing_value()
+                    || state.portfolio_profiles_state.account_mode.is_adding_new()
                 {
                     " [Enter] Save  [Esc] Cancel "
                 } else {
@@ -366,10 +373,29 @@ impl PortfolioProfilesScreen {
             }
         };
 
-        let editing_mode = state.portfolio_profiles_state.editing_holdings;
-        let selected_idx = state.portfolio_profiles_state.selected_holding_index;
-        let editing_value = state.portfolio_profiles_state.editing_holding_value;
-        let adding_new = state.portfolio_profiles_state.adding_new_holding;
+        // Extract state from the state machine
+        let (editing_mode, selected_idx, editing_value, adding_new, edit_buffer, name_buffer) =
+            match &state.portfolio_profiles_state.account_mode {
+                AccountInteractionMode::Browsing => (false, 0, false, false, "", ""),
+                AccountInteractionMode::EditingHoldings {
+                    selected_index,
+                    edit_state,
+                } => {
+                    let (editing_value, adding_new, edit_buf, name_buf) = match edit_state {
+                        HoldingEditState::Selecting => (false, false, "", ""),
+                        HoldingEditState::EditingValue(buf) => (true, false, buf.as_str(), ""),
+                        HoldingEditState::AddingNew(buf) => (false, true, "", buf.as_str()),
+                    };
+                    (
+                        true,
+                        *selected_index,
+                        editing_value,
+                        adding_new,
+                        edit_buf,
+                        name_buf,
+                    )
+                }
+            };
 
         if assets.is_empty() && !editing_mode {
             let msg = Paragraph::new("No holdings. Press Enter to edit.")
@@ -433,7 +459,7 @@ impl PortfolioProfilesScreen {
 
             // Determine value display
             let value_display = if is_selected && editing_value {
-                format!(" ${}_", state.portfolio_profiles_state.holding_edit_buffer)
+                format!(" ${}_", edit_buffer)
             } else {
                 format!(" {}", format_currency(asset_val.value))
             };
@@ -478,10 +504,7 @@ impl PortfolioProfilesScreen {
                 Line::from(vec![
                     Span::styled("> ", Style::default().fg(Color::Yellow)),
                     Span::styled(
-                        format!(
-                            "Name: {}_",
-                            state.portfolio_profiles_state.new_holding_name_buffer
-                        ),
+                        format!("Name: {}_", name_buffer),
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
@@ -1277,15 +1300,8 @@ impl PortfolioProfilesScreen {
                         | AccountType::Roth401k(_)
                         | AccountType::TraditionalIRA(_)
                         | AccountType::RothIRA(_) => {
-                            state.portfolio_profiles_state.editing_holdings = true;
-                            state.portfolio_profiles_state.selected_holding_index = 0;
-                            state.portfolio_profiles_state.editing_holding_value = false;
-                            state.portfolio_profiles_state.holding_edit_buffer.clear();
-                            state.portfolio_profiles_state.adding_new_holding = false;
-                            state
-                                .portfolio_profiles_state
-                                .new_holding_name_buffer
-                                .clear();
+                            state.portfolio_profiles_state.account_mode =
+                                AccountInteractionMode::enter_editing(0);
                         }
                         _ => {
                             state.set_error(
@@ -1405,8 +1421,6 @@ impl PortfolioProfilesScreen {
     /// Handle key events when in holdings editing mode
     fn handle_holdings_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let account_idx = state.portfolio_profiles_state.selected_account_index;
-        let adding_new = state.portfolio_profiles_state.adding_new_holding;
-        let editing_value = state.portfolio_profiles_state.editing_holding_value;
 
         // Get the number of assets for navigation bounds
         let num_assets = {
@@ -1425,35 +1439,124 @@ impl PortfolioProfilesScreen {
             }
         };
 
-        // Ensure selected index is in bounds (e.g., after a deletion)
         let num_items = num_assets + 1; // +1 for "Add new" option
-        if state.portfolio_profiles_state.selected_holding_index >= num_items && num_items > 0 {
-            state.portfolio_profiles_state.selected_holding_index = num_items - 1;
-        }
 
-        // If we're typing a new holding name
-        if adding_new {
-            match key.code {
-                KeyCode::Esc => {
-                    state.portfolio_profiles_state.adding_new_holding = false;
-                    state
-                        .portfolio_profiles_state
-                        .new_holding_name_buffer
-                        .clear();
-                    EventResult::Handled
+        // Extract current state to determine how to handle the key
+        let (selected_idx, edit_state_clone) = match &state.portfolio_profiles_state.account_mode {
+            AccountInteractionMode::Browsing => return EventResult::NotHandled,
+            AccountInteractionMode::EditingHoldings {
+                selected_index,
+                edit_state,
+            } => (*selected_index, edit_state.clone()),
+        };
+
+        // Ensure selected index is in bounds (e.g., after a deletion)
+        let selected_idx = if selected_idx >= num_items && num_items > 0 {
+            let new_idx = num_items - 1;
+            if let AccountInteractionMode::EditingHoldings { selected_index, .. } =
+                &mut state.portfolio_profiles_state.account_mode
+            {
+                *selected_index = new_idx;
+            }
+            new_idx
+        } else {
+            selected_idx
+        };
+
+        match edit_state_clone {
+            HoldingEditState::AddingNew(buffer) => {
+                // Handle adding new holding name
+                match key.code {
+                    KeyCode::Esc => {
+                        // Cancel adding - go back to selecting
+                        if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                            &mut state.portfolio_profiles_state.account_mode
+                        {
+                            *edit_state = HoldingEditState::Selecting;
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Enter => {
+                        // Finish adding the name, add the holding and start editing its value
+                        if buffer.is_empty() {
+                            state.set_error("Asset name cannot be empty".to_string());
+                        } else {
+                            let asset_tag = AssetTag(buffer.clone());
+                            let new_idx = {
+                                if let Some(account) =
+                                    state.data_mut().portfolios.accounts.get_mut(account_idx)
+                                {
+                                    match &mut account.account_type {
+                                        AccountType::Brokerage(inv)
+                                        | AccountType::Traditional401k(inv)
+                                        | AccountType::Roth401k(inv)
+                                        | AccountType::TraditionalIRA(inv)
+                                        | AccountType::RothIRA(inv) => {
+                                            inv.assets.push(
+                                                crate::data::portfolio_data::AssetValue {
+                                                    asset: asset_tag,
+                                                    value: 0.0,
+                                                },
+                                            );
+                                            Some(inv.assets.len() - 1)
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(idx) = new_idx {
+                                state.mark_modified();
+                                // Transition to editing the value of the new holding
+                                state.portfolio_profiles_state.account_mode =
+                                    AccountInteractionMode::EditingHoldings {
+                                        selected_index: idx,
+                                        edit_state: HoldingEditState::EditingValue(String::new()),
+                                    };
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Backspace => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::AddingNew(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.pop();
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Char(c) => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::AddingNew(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.push(c);
+                        }
+                        EventResult::Handled
+                    }
+                    _ => EventResult::Handled,
                 }
-                KeyCode::Enter => {
-                    // Finish adding the name, now we need to get a value
-                    let name = state
-                        .portfolio_profiles_state
-                        .new_holding_name_buffer
-                        .clone();
-                    if name.is_empty() {
-                        state.set_error("Asset name cannot be empty".to_string());
-                    } else {
-                        // Add the new holding with value 0, then start editing the value
-                        let asset_tag = AssetTag(name);
-                        let new_idx = {
+            }
+            HoldingEditState::EditingValue(buffer) => {
+                // Handle editing a holding's value
+                match key.code {
+                    KeyCode::Esc => {
+                        // Cancel editing - go back to selecting
+                        if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                            &mut state.portfolio_profiles_state.account_mode
+                        {
+                            *edit_state = HoldingEditState::Selecting;
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Enter => {
+                        // Parse and save the value
+                        let clean_buffer: String = buffer.chars().filter(|c| *c != ',').collect();
+                        if let Ok(value) = clean_buffer.parse::<f64>() {
                             if let Some(account) =
                                 state.data_mut().portfolios.accounts.get_mut(account_idx)
                             {
@@ -1463,62 +1566,64 @@ impl PortfolioProfilesScreen {
                                     | AccountType::Roth401k(inv)
                                     | AccountType::TraditionalIRA(inv)
                                     | AccountType::RothIRA(inv) => {
-                                        inv.assets.push(crate::data::portfolio_data::AssetValue {
-                                            asset: asset_tag,
-                                            value: 0.0,
-                                        });
-                                        Some(inv.assets.len() - 1)
+                                        if let Some(asset) = inv.assets.get_mut(selected_idx) {
+                                            asset.value = value;
+                                            state.mark_modified();
+                                        }
                                     }
-                                    _ => None,
+                                    _ => {}
                                 }
-                            } else {
-                                None
                             }
-                        };
-                        if let Some(idx) = new_idx {
-                            state.mark_modified();
-                            state.portfolio_profiles_state.selected_holding_index = idx;
-                            state.portfolio_profiles_state.adding_new_holding = false;
-                            state
-                                .portfolio_profiles_state
-                                .new_holding_name_buffer
-                                .clear();
-                            state.portfolio_profiles_state.editing_holding_value = true;
-                            state.portfolio_profiles_state.holding_edit_buffer.clear();
+                            // Go back to selecting
+                            if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                                &mut state.portfolio_profiles_state.account_mode
+                            {
+                                *edit_state = HoldingEditState::Selecting;
+                            }
+                        } else {
+                            state.set_error("Invalid number format".to_string());
                         }
+                        EventResult::Handled
                     }
-                    EventResult::Handled
+                    KeyCode::Backspace => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::EditingValue(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.pop();
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Char(c) if c.is_ascii_digit() || c == '.' || c == ',' => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::EditingValue(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.push(c);
+                        }
+                        EventResult::Handled
+                    }
+                    _ => EventResult::Handled,
                 }
-                KeyCode::Backspace => {
-                    state.portfolio_profiles_state.new_holding_name_buffer.pop();
-                    EventResult::Handled
-                }
-                KeyCode::Char(c) => {
-                    state
-                        .portfolio_profiles_state
-                        .new_holding_name_buffer
-                        .push(c);
-                    EventResult::Handled
-                }
-                _ => EventResult::Handled,
             }
-        } else if editing_value {
-            // Editing an existing holding's value
-            match key.code {
-                KeyCode::Esc => {
-                    state.portfolio_profiles_state.editing_holding_value = false;
-                    state.portfolio_profiles_state.holding_edit_buffer.clear();
-                    EventResult::Handled
-                }
-                KeyCode::Enter => {
-                    // Parse and save the value
-                    let buffer = state.portfolio_profiles_state.holding_edit_buffer.clone();
-                    // Remove commas and parse
-                    let clean_buffer: String = buffer.chars().filter(|c| *c != ',').collect();
-                    if let Ok(value) = clean_buffer.parse::<f64>() {
-                        let holding_idx = state.portfolio_profiles_state.selected_holding_index;
-                        if let Some(account) =
-                            state.data_mut().portfolios.accounts.get_mut(account_idx)
+            HoldingEditState::Selecting => {
+                // Normal navigation mode within holdings
+                let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                match key.code {
+                    KeyCode::Esc => {
+                        // Exit holdings editing mode
+                        state.portfolio_profiles_state.account_mode =
+                            AccountInteractionMode::Browsing;
+                        EventResult::Handled
+                    }
+                    // Move down (Shift+J or Shift+Down) - only for actual holdings, not "Add new"
+                    KeyCode::Char('J') if has_shift => {
+                        if num_assets >= 2
+                            && selected_idx < num_assets - 1
+                            && let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(account_idx)
                         {
                             match &mut account.account_type {
                                 AccountType::Brokerage(inv)
@@ -1526,228 +1631,207 @@ impl PortfolioProfilesScreen {
                                 | AccountType::Roth401k(inv)
                                 | AccountType::TraditionalIRA(inv)
                                 | AccountType::RothIRA(inv) => {
-                                    if let Some(asset) = inv.assets.get_mut(holding_idx) {
-                                        asset.value = value;
-                                        state.mark_modified();
+                                    inv.assets.swap(selected_idx, selected_idx + 1);
+                                    if let AccountInteractionMode::EditingHoldings {
+                                        selected_index,
+                                        ..
+                                    } = &mut state.portfolio_profiles_state.account_mode
+                                    {
+                                        *selected_index = selected_idx + 1;
                                     }
+                                    state.mark_modified();
                                 }
                                 _ => {}
                             }
                         }
-                        state.portfolio_profiles_state.editing_holding_value = false;
-                        state.portfolio_profiles_state.holding_edit_buffer.clear();
-                    } else {
-                        state.set_error("Invalid number format".to_string());
+                        EventResult::Handled
                     }
-                    EventResult::Handled
-                }
-                KeyCode::Backspace => {
-                    state.portfolio_profiles_state.holding_edit_buffer.pop();
-                    EventResult::Handled
-                }
-                KeyCode::Char(c) if c.is_ascii_digit() || c == '.' || c == ',' => {
-                    state.portfolio_profiles_state.holding_edit_buffer.push(c);
-                    EventResult::Handled
-                }
-                _ => EventResult::Handled,
-            }
-        } else {
-            // Normal navigation mode within holdings
-            let num_items = num_assets + 1; // +1 for "Add new" option
-            let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
-            match key.code {
-                KeyCode::Esc => {
-                    // Exit holdings editing mode
-                    state.portfolio_profiles_state.editing_holdings = false;
-                    state.portfolio_profiles_state.selected_holding_index = 0;
-                    EventResult::Handled
-                }
-                // Move down (Shift+J or Shift+Down) - only for actual holdings, not "Add new"
-                KeyCode::Char('J') if has_shift => {
-                    let idx = state.portfolio_profiles_state.selected_holding_index;
-                    // Only reorder if we have real assets and not on "Add new" option
-                    if num_assets >= 2
-                        && idx < num_assets - 1
-                        && let Some(account) =
-                            state.data_mut().portfolios.accounts.get_mut(account_idx)
-                    {
-                        match &mut account.account_type {
-                            AccountType::Brokerage(inv)
-                            | AccountType::Traditional401k(inv)
-                            | AccountType::Roth401k(inv)
-                            | AccountType::TraditionalIRA(inv)
-                            | AccountType::RothIRA(inv) => {
-                                inv.assets.swap(idx, idx + 1);
-                                state.portfolio_profiles_state.selected_holding_index = idx + 1;
-                                state.mark_modified();
+                    KeyCode::Down if has_shift => {
+                        if num_assets >= 2
+                            && selected_idx < num_assets - 1
+                            && let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(selected_idx, selected_idx + 1);
+                                    if let AccountInteractionMode::EditingHoldings {
+                                        selected_index,
+                                        ..
+                                    } = &mut state.portfolio_profiles_state.account_mode
+                                    {
+                                        *selected_index = selected_idx + 1;
+                                    }
+                                    state.mark_modified();
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
+                        EventResult::Handled
                     }
-                    EventResult::Handled
-                }
-                KeyCode::Down if has_shift => {
-                    let idx = state.portfolio_profiles_state.selected_holding_index;
-                    if num_assets >= 2
-                        && idx < num_assets - 1
-                        && let Some(account) =
-                            state.data_mut().portfolios.accounts.get_mut(account_idx)
-                    {
-                        match &mut account.account_type {
-                            AccountType::Brokerage(inv)
-                            | AccountType::Traditional401k(inv)
-                            | AccountType::Roth401k(inv)
-                            | AccountType::TraditionalIRA(inv)
-                            | AccountType::RothIRA(inv) => {
-                                inv.assets.swap(idx, idx + 1);
-                                state.portfolio_profiles_state.selected_holding_index = idx + 1;
-                                state.mark_modified();
+                    // Move up (Shift+K or Shift+Up)
+                    KeyCode::Char('K') if has_shift => {
+                        if num_assets >= 2
+                            && selected_idx > 0
+                            && selected_idx < num_assets
+                            && let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(selected_idx, selected_idx - 1);
+                                    if let AccountInteractionMode::EditingHoldings {
+                                        selected_index,
+                                        ..
+                                    } = &mut state.portfolio_profiles_state.account_mode
+                                    {
+                                        *selected_index = selected_idx - 1;
+                                    }
+                                    state.mark_modified();
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
+                        EventResult::Handled
                     }
-                    EventResult::Handled
-                }
-                // Move up (Shift+K or Shift+Up)
-                KeyCode::Char('K') if has_shift => {
-                    let idx = state.portfolio_profiles_state.selected_holding_index;
-                    if num_assets >= 2
-                        && idx > 0
-                        && idx < num_assets
-                        && let Some(account) =
-                            state.data_mut().portfolios.accounts.get_mut(account_idx)
-                    {
-                        match &mut account.account_type {
-                            AccountType::Brokerage(inv)
-                            | AccountType::Traditional401k(inv)
-                            | AccountType::Roth401k(inv)
-                            | AccountType::TraditionalIRA(inv)
-                            | AccountType::RothIRA(inv) => {
-                                inv.assets.swap(idx, idx - 1);
-                                state.portfolio_profiles_state.selected_holding_index = idx - 1;
-                                state.mark_modified();
+                    KeyCode::Up if has_shift => {
+                        if num_assets >= 2
+                            && selected_idx > 0
+                            && selected_idx < num_assets
+                            && let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(selected_idx, selected_idx - 1);
+                                    if let AccountInteractionMode::EditingHoldings {
+                                        selected_index,
+                                        ..
+                                    } = &mut state.portfolio_profiles_state.account_mode
+                                    {
+                                        *selected_index = selected_idx - 1;
+                                    }
+                                    state.mark_modified();
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
+                        EventResult::Handled
                     }
-                    EventResult::Handled
-                }
-                KeyCode::Up if has_shift => {
-                    let idx = state.portfolio_profiles_state.selected_holding_index;
-                    if num_assets >= 2
-                        && idx > 0
-                        && idx < num_assets
-                        && let Some(account) =
-                            state.data_mut().portfolios.accounts.get_mut(account_idx)
-                    {
-                        match &mut account.account_type {
-                            AccountType::Brokerage(inv)
-                            | AccountType::Traditional401k(inv)
-                            | AccountType::Roth401k(inv)
-                            | AccountType::TraditionalIRA(inv)
-                            | AccountType::RothIRA(inv) => {
-                                inv.assets.swap(idx, idx - 1);
-                                state.portfolio_profiles_state.selected_holding_index = idx - 1;
-                                state.mark_modified();
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if num_items > 0
+                            && let AccountInteractionMode::EditingHoldings {
+                                selected_index, ..
+                            } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            *selected_index = (*selected_index + 1) % num_items;
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if num_items > 0
+                            && let AccountInteractionMode::EditingHoldings {
+                                selected_index, ..
+                            } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            if *selected_index == 0 {
+                                *selected_index = num_items - 1;
+                            } else {
+                                *selected_index -= 1;
                             }
-                            _ => {}
                         }
+                        EventResult::Handled
                     }
-                    EventResult::Handled
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if num_items > 0 {
-                        state.portfolio_profiles_state.selected_holding_index =
-                            (state.portfolio_profiles_state.selected_holding_index + 1) % num_items;
-                    }
-                    EventResult::Handled
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if num_items > 0 {
-                        if state.portfolio_profiles_state.selected_holding_index == 0 {
-                            state.portfolio_profiles_state.selected_holding_index = num_items - 1;
-                        } else {
-                            state.portfolio_profiles_state.selected_holding_index -= 1;
-                        }
-                    }
-                    EventResult::Handled
-                }
-                KeyCode::Enter => {
-                    let selected = state.portfolio_profiles_state.selected_holding_index;
-                    if selected == num_assets {
-                        // "Add new" option selected - start adding a new holding
-                        state.portfolio_profiles_state.adding_new_holding = true;
-                        state
-                            .portfolio_profiles_state
-                            .new_holding_name_buffer
-                            .clear();
-                    } else if selected < num_assets {
-                        // Edit existing holding value - get current value first
-                        let current_value = {
-                            if let Some(account) = state.data().portfolios.accounts.get(account_idx)
+                    KeyCode::Enter => {
+                        if selected_idx == num_assets {
+                            // "Add new" option selected - start adding a new holding
+                            if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                                &mut state.portfolio_profiles_state.account_mode
                             {
-                                match &account.account_type {
-                                    AccountType::Brokerage(inv)
-                                    | AccountType::Traditional401k(inv)
-                                    | AccountType::Roth401k(inv)
-                                    | AccountType::TraditionalIRA(inv)
-                                    | AccountType::RothIRA(inv) => {
-                                        inv.assets.get(selected).map(|asset| asset.value)
-                                    }
-                                    _ => None,
-                                }
-                            } else {
-                                None
+                                *edit_state = HoldingEditState::AddingNew(String::new());
                             }
-                        };
-                        if let Some(value) = current_value {
-                            state.portfolio_profiles_state.editing_holding_value = true;
-                            // Pre-populate with current value (without $ and commas)
-                            state.portfolio_profiles_state.holding_edit_buffer =
-                                format!("{:.0}", value);
+                        } else if selected_idx < num_assets {
+                            // Edit existing holding value - get current value first
+                            let current_value = {
+                                if let Some(account) =
+                                    state.data().portfolios.accounts.get(account_idx)
+                                {
+                                    match &account.account_type {
+                                        AccountType::Brokerage(inv)
+                                        | AccountType::Traditional401k(inv)
+                                        | AccountType::Roth401k(inv)
+                                        | AccountType::TraditionalIRA(inv)
+                                        | AccountType::RothIRA(inv) => {
+                                            inv.assets.get(selected_idx).map(|asset| asset.value)
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(value) = current_value
+                                && let AccountInteractionMode::EditingHoldings {
+                                    edit_state, ..
+                                } = &mut state.portfolio_profiles_state.account_mode
+                            {
+                                *edit_state =
+                                    HoldingEditState::EditingValue(format!("{:.0}", value));
+                            }
                         }
+                        EventResult::Handled
                     }
-                    EventResult::Handled
-                }
-                KeyCode::Char('d') => {
-                    // Delete selected holding
-                    let selected = state.portfolio_profiles_state.selected_holding_index;
-                    if selected < num_assets {
-                        // Get the asset name for confirmation
-                        let asset_name = {
-                            let accounts = &state.data().portfolios.accounts;
-                            if let Some(account) = accounts.get(account_idx) {
-                                match &account.account_type {
-                                    AccountType::Brokerage(inv)
-                                    | AccountType::Traditional401k(inv)
-                                    | AccountType::Roth401k(inv)
-                                    | AccountType::TraditionalIRA(inv)
-                                    | AccountType::RothIRA(inv) => {
-                                        inv.assets.get(selected).map(|a| a.asset.0.clone())
+                    KeyCode::Char('d') => {
+                        // Delete selected holding
+                        if selected_idx < num_assets {
+                            // Get the asset name for confirmation
+                            let asset_name = {
+                                let accounts = &state.data().portfolios.accounts;
+                                if let Some(account) = accounts.get(account_idx) {
+                                    match &account.account_type {
+                                        AccountType::Brokerage(inv)
+                                        | AccountType::Traditional401k(inv)
+                                        | AccountType::Roth401k(inv)
+                                        | AccountType::TraditionalIRA(inv)
+                                        | AccountType::RothIRA(inv) => {
+                                            inv.assets.get(selected_idx).map(|a| a.asset.0.clone())
+                                        }
+                                        _ => None,
                                     }
-                                    _ => None,
+                                } else {
+                                    None
                                 }
-                            } else {
-                                None
-                            }
-                        };
+                            };
 
-                        if let Some(name) = asset_name {
-                            state.modal = ModalState::Confirm(
-                                ConfirmModal::new(
-                                    "Delete Holding",
-                                    &format!("Delete holding '{}'?", name),
-                                    ModalAction::DELETE_HOLDING,
-                                )
-                                .with_typed_context(
-                                    ModalContext::holding_index(account_idx, selected),
-                                ),
-                            );
+                            if let Some(name) = asset_name {
+                                state.modal = ModalState::Confirm(
+                                    ConfirmModal::new(
+                                        "Delete Holding",
+                                        &format!("Delete holding '{}'?", name),
+                                        ModalAction::DELETE_HOLDING,
+                                    )
+                                    .with_typed_context(
+                                        ModalContext::holding_index(account_idx, selected_idx),
+                                    ),
+                                );
+                            }
                         }
+                        EventResult::Handled
                     }
-                    EventResult::Handled
+                    _ => EventResult::NotHandled,
                 }
-                _ => EventResult::NotHandled,
             }
         }
     }
@@ -2222,7 +2306,11 @@ fn format_account_type(account_type: &AccountType) -> &'static str {
 impl Component for PortfolioProfilesScreen {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         // If in holdings editing mode, handle all keys there first (captures Tab, etc.)
-        if state.portfolio_profiles_state.editing_holdings {
+        if state
+            .portfolio_profiles_state
+            .account_mode
+            .is_editing_holdings()
+        {
             return self.handle_holdings_keys(key, state);
         }
 
@@ -2292,5 +2380,92 @@ impl Component for PortfolioProfilesScreen {
 impl Screen for PortfolioProfilesScreen {
     fn title(&self) -> &str {
         "Portfolio & Profiles"
+    }
+}
+
+impl super::ModalHandler for PortfolioProfilesScreen {
+    fn handles(&self, action: &ModalAction) -> bool {
+        matches!(
+            action,
+            ModalAction::Account(_)
+                | ModalAction::Profile(_)
+                | ModalAction::Holding(_)
+                | ModalAction::Config(_)
+        )
+    }
+
+    fn handle_modal_result(
+        &self,
+        state: &mut AppState,
+        action: ModalAction,
+        value: &crate::modals::ConfirmedValue,
+        legacy_value: &str,
+    ) -> crate::actions::ActionResult {
+        use crate::actions::{self, ActionContext, ActionResult};
+        use crate::state::{AccountAction, ConfigAction, HoldingAction, ProfileAction};
+
+        // Extract modal context FIRST (clone to break the borrow)
+        let modal_context = match &state.modal {
+            ModalState::Form(form) => form.context.clone(),
+            ModalState::Confirm(confirm) => confirm.context.clone(),
+            ModalState::Picker(picker) => picker.context.clone(),
+            _ => None,
+        };
+
+        let ctx = ActionContext::new(modal_context.as_ref(), value);
+
+        match action {
+            // Account actions
+            ModalAction::Account(AccountAction::PickCategory) => {
+                actions::handle_category_pick(legacy_value)
+            }
+            ModalAction::Account(AccountAction::PickType) => {
+                actions::handle_type_pick(legacy_value, state)
+            }
+            ModalAction::Account(AccountAction::Create) => {
+                actions::handle_create_account(state, ctx)
+            }
+            ModalAction::Account(AccountAction::Edit) => actions::handle_edit_account(state, ctx),
+            ModalAction::Account(AccountAction::Delete) => {
+                actions::handle_delete_account(state, ctx)
+            }
+
+            // Profile actions
+            ModalAction::Profile(ProfileAction::PickType) => {
+                actions::handle_profile_type_pick(legacy_value)
+            }
+            ModalAction::Profile(ProfileAction::Create) => {
+                actions::handle_create_profile(state, ctx)
+            }
+            ModalAction::Profile(ProfileAction::Edit) => actions::handle_edit_profile(state, ctx),
+            ModalAction::Profile(ProfileAction::Delete) => {
+                actions::handle_delete_profile(state, ctx)
+            }
+
+            // Holding actions
+            ModalAction::Holding(HoldingAction::PickReturnProfile) => ActionResult::close(),
+            ModalAction::Holding(HoldingAction::Add) => actions::handle_add_holding(state, ctx),
+            ModalAction::Holding(HoldingAction::Edit) => actions::handle_edit_holding(state, ctx),
+            ModalAction::Holding(HoldingAction::Delete) => {
+                actions::handle_delete_holding(state, ctx)
+            }
+
+            // Config actions
+            ModalAction::Config(ConfigAction::PickFederalBrackets) => {
+                actions::handle_federal_brackets_pick(state, legacy_value)
+            }
+            ModalAction::Config(ConfigAction::EditTax) => {
+                actions::handle_edit_tax_config(state, ctx)
+            }
+            ModalAction::Config(ConfigAction::PickInflationType) => {
+                actions::handle_inflation_type_pick(state, legacy_value)
+            }
+            ModalAction::Config(ConfigAction::EditInflation) => {
+                actions::handle_edit_inflation(state, ctx)
+            }
+
+            // This shouldn't happen if handles() is correct
+            _ => ActionResult::close(),
+        }
     }
 }

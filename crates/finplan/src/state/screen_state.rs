@@ -17,6 +17,84 @@ pub enum PercentileView {
     Mean,
 }
 
+// ========== Account Interaction State Machine ==========
+
+/// Interaction mode for the account panel in Portfolio & Profiles screen.
+/// Replaces boolean flags with an explicit state machine.
+#[derive(Debug, Default)]
+pub enum AccountInteractionMode {
+    /// Normal browsing mode - navigating accounts
+    #[default]
+    Browsing,
+    /// Editing holdings within an account
+    EditingHoldings {
+        selected_index: usize,
+        edit_state: HoldingEditState,
+    },
+}
+
+/// State for editing holdings within an account
+#[derive(Debug, Default, Clone)]
+pub enum HoldingEditState {
+    /// Selecting which holding to edit/add
+    #[default]
+    Selecting,
+    /// Editing a holding's value (with buffer)
+    EditingValue(String),
+    /// Adding a new holding (with name buffer)
+    AddingNew(String),
+}
+
+impl AccountInteractionMode {
+    /// Check if we're in holdings editing mode
+    pub fn is_editing_holdings(&self) -> bool {
+        matches!(self, Self::EditingHoldings { .. })
+    }
+
+    /// Check if we're editing a value
+    pub fn is_editing_value(&self) -> bool {
+        matches!(
+            self,
+            Self::EditingHoldings {
+                edit_state: HoldingEditState::EditingValue(_),
+                ..
+            }
+        )
+    }
+
+    /// Check if we're adding a new holding
+    pub fn is_adding_new(&self) -> bool {
+        matches!(
+            self,
+            Self::EditingHoldings {
+                edit_state: HoldingEditState::AddingNew(_),
+                ..
+            }
+        )
+    }
+
+    /// Get the selected holding index (if editing)
+    pub fn selected_holding_index(&self) -> Option<usize> {
+        match self {
+            Self::EditingHoldings { selected_index, .. } => Some(*selected_index),
+            Self::Browsing => None,
+        }
+    }
+
+    /// Enter holdings editing mode
+    pub fn enter_editing(selected_index: usize) -> Self {
+        Self::EditingHoldings {
+            selected_index,
+            edit_state: HoldingEditState::Selecting,
+        }
+    }
+
+    /// Exit to browsing mode
+    pub fn exit_editing(&mut self) {
+        *self = Self::Browsing;
+    }
+}
+
 impl PercentileView {
     pub fn next(self) -> Self {
         match self {
@@ -57,18 +135,8 @@ pub struct PortfolioProfilesState {
     pub mappings_collapsed: bool,
     /// Whether the tax/inflation config panel is collapsed
     pub config_collapsed: bool,
-    /// Whether we're in holdings editing mode for the selected account
-    pub editing_holdings: bool,
-    /// Selected holding index when editing (len = "Add new" option)
-    pub selected_holding_index: usize,
-    /// Whether we're currently editing a holding's value inline
-    pub editing_holding_value: bool,
-    /// Buffer for inline value editing
-    pub holding_edit_buffer: String,
-    /// Whether we're adding a new holding (entering name)
-    pub adding_new_holding: bool,
-    /// Buffer for new holding name
-    pub new_holding_name_buffer: String,
+    /// Account interaction mode (browsing vs editing holdings)
+    pub account_mode: AccountInteractionMode,
 }
 
 impl Default for PortfolioProfilesState {
@@ -81,12 +149,7 @@ impl Default for PortfolioProfilesState {
             focused_panel: PortfolioProfilesPanel::Accounts,
             mappings_collapsed: false,
             config_collapsed: false,
-            editing_holdings: false,
-            selected_holding_index: 0,
-            editing_holding_value: false,
-            holding_edit_buffer: String::new(),
-            adding_new_holding: false,
-            new_holding_name_buffer: String::new(),
+            account_mode: AccountInteractionMode::Browsing,
         }
     }
 }

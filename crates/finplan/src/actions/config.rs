@@ -129,7 +129,7 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
 /// Handle inflation editing
 pub fn handle_edit_inflation(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let parts = ctx.value_parts();
-    let value = ctx.value;
+    let value = ctx.value();
 
     // Get typed config context
     let inflation_ctx = ctx

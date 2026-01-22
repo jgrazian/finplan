@@ -7,18 +7,15 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
 };
 
-use crate::actions::{self, ActionContext, ActionResult};
+use crate::actions::ActionResult;
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
 use crate::data::storage::DataDirectory;
-use crate::modals::{ModalResult, handle_modal_key, render_modal};
+use crate::modals::{ConfirmedValue, ModalResult, handle_modal_key, render_modal};
 use crate::screens::{
-    events::EventsScreen, optimize::OptimizeScreen, portfolio_profiles::PortfolioProfilesScreen,
-    results::ResultsScreen, scenario::ScenarioScreen,
+    ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
+    portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
 };
-use crate::state::{
-    AccountAction, AppState, ConfigAction, EffectAction, EventAction, HoldingAction, ModalAction,
-    ModalState, ProfileAction, ScenarioAction, TabId, context::ModalContext,
-};
+use crate::state::{AppState, ModalAction, ModalState, TabId};
 
 pub struct App {
     state: AppState,
@@ -204,7 +201,7 @@ impl App {
         if !matches!(self.state.modal, ModalState::None) {
             match handle_modal_key(key_event, &mut self.state) {
                 ModalResult::Confirmed(action, value) => {
-                    self.handle_modal_result(action, value);
+                    self.handle_modal_result(action, *value);
                 }
                 ModalResult::Cancelled => {
                     self.state.modal = ModalState::None;
@@ -231,7 +228,12 @@ impl App {
             }
             KeyCode::Esc => {
                 // Let holdings editing mode handle Esc first
-                if self.state.portfolio_profiles_state.editing_holdings {
+                if self
+                    .state
+                    .portfolio_profiles_state
+                    .account_mode
+                    .is_editing_holdings()
+                {
                     // Fall through to screen handler
                 } else {
                     // Clear error message on Esc
@@ -264,164 +266,31 @@ impl App {
         }
     }
 
-    fn handle_modal_result(&mut self, action: ModalAction, value: String) {
-        // Extract context from the modal before we clear it
-        let context: Option<ModalContext> = match &self.state.modal {
-            ModalState::Form(form) => form.context.clone(),
-            ModalState::Confirm(confirm) => confirm.context.clone(),
-            ModalState::Picker(picker) => picker.context.clone(),
-            _ => None,
-        };
+    fn handle_modal_result(&mut self, action: ModalAction, value: ConfirmedValue) {
+        // Legacy string value for handlers not yet migrated
+        let legacy_value = value.to_legacy_string();
 
-        let ctx = ActionContext::new(context.as_ref(), &value);
-
-        // Dispatch to domain-specific action handlers
-        let result = match action {
-            // Scenario actions
-            ModalAction::Scenario(ScenarioAction::SaveAs) => {
-                actions::handle_save_as(&mut self.state, &value)
-            }
-            ModalAction::Scenario(ScenarioAction::Load) => {
-                actions::handle_load_scenario(&mut self.state, &value)
-            }
-            ModalAction::Scenario(ScenarioAction::SwitchTo) => {
-                actions::handle_switch_to(&mut self.state, &value)
-            }
-            ModalAction::Scenario(ScenarioAction::EditParameters) => {
-                actions::handle_edit_parameters(&mut self.state, ctx)
-            }
-            ModalAction::Scenario(ScenarioAction::Import) => {
-                actions::handle_import(&mut self.state, ctx)
-            }
-            ModalAction::Scenario(ScenarioAction::Export) => {
-                actions::handle_export(&self.state, ctx)
-            }
-            ModalAction::Scenario(ScenarioAction::New) => {
-                actions::handle_new_scenario(&mut self.state, ctx)
-            }
-            ModalAction::Scenario(ScenarioAction::Duplicate) => {
-                actions::handle_duplicate_scenario(&mut self.state, ctx)
-            }
-            ModalAction::Scenario(ScenarioAction::Delete) => {
-                actions::handle_delete_scenario(&mut self.state)
-            }
-
-            // Account actions
-            ModalAction::Account(AccountAction::PickCategory) => {
-                actions::handle_category_pick(&value)
-            }
-            ModalAction::Account(AccountAction::PickType) => {
-                actions::handle_type_pick(&value, &self.state)
-            }
-            ModalAction::Account(AccountAction::Create) => {
-                actions::handle_create_account(&mut self.state, ctx)
-            }
-            ModalAction::Account(AccountAction::Edit) => {
-                actions::handle_edit_account(&mut self.state, ctx)
-            }
-            ModalAction::Account(AccountAction::Delete) => {
-                actions::handle_delete_account(&mut self.state, ctx)
-            }
-
-            // Profile actions
-            ModalAction::Profile(ProfileAction::PickType) => {
-                actions::handle_profile_type_pick(&value)
-            }
-            ModalAction::Profile(ProfileAction::Create) => {
-                actions::handle_create_profile(&mut self.state, ctx)
-            }
-            ModalAction::Profile(ProfileAction::Edit) => {
-                actions::handle_edit_profile(&mut self.state, ctx)
-            }
-            ModalAction::Profile(ProfileAction::Delete) => {
-                actions::handle_delete_profile(&mut self.state, ctx)
-            }
-
-            // Holding actions
-            ModalAction::Holding(HoldingAction::PickReturnProfile) => ActionResult::close(),
-            ModalAction::Holding(HoldingAction::Add) => {
-                actions::handle_add_holding(&mut self.state, ctx)
-            }
-            ModalAction::Holding(HoldingAction::Edit) => {
-                actions::handle_edit_holding(&mut self.state, ctx)
-            }
-            ModalAction::Holding(HoldingAction::Delete) => {
-                actions::handle_delete_holding(&mut self.state, ctx)
-            }
-
-            // Config actions
-            ModalAction::Config(ConfigAction::PickFederalBrackets) => {
-                actions::handle_federal_brackets_pick(&mut self.state, &value)
-            }
-            ModalAction::Config(ConfigAction::EditTax) => {
-                actions::handle_edit_tax_config(&mut self.state, ctx)
-            }
-            ModalAction::Config(ConfigAction::PickInflationType) => {
-                actions::handle_inflation_type_pick(&mut self.state, &value)
-            }
-            ModalAction::Config(ConfigAction::EditInflation) => {
-                actions::handle_edit_inflation(&mut self.state, ctx)
-            }
-
-            // Event actions
-            ModalAction::Event(EventAction::PickTriggerType) => {
-                actions::handle_trigger_type_pick(&self.state, &value)
-            }
-            ModalAction::Event(EventAction::PickEventReference) => {
-                actions::handle_event_reference_pick(&value)
-            }
-            ModalAction::Event(EventAction::PickInterval) => actions::handle_interval_pick(&value),
-            ModalAction::Event(EventAction::Create) => {
-                actions::handle_create_event(&mut self.state, ctx)
-            }
-            ModalAction::Event(EventAction::Edit) => {
-                actions::handle_edit_event(&mut self.state, ctx)
-            }
-            ModalAction::Event(EventAction::Delete) => {
-                actions::handle_delete_event(&mut self.state, ctx)
-            }
-            // Trigger builder actions for recursive trigger construction
-            ModalAction::Event(EventAction::PickChildTriggerType) => {
-                actions::handle_pick_child_trigger_type(&self.state, &value, ctx)
-            }
-            ModalAction::Event(EventAction::BuildChildTrigger) => {
-                actions::handle_build_child_trigger(&self.state, &value, ctx)
-            }
-            ModalAction::Event(EventAction::CompleteChildTrigger) => {
-                actions::handle_complete_child_trigger(&mut self.state, ctx)
-            }
-            ModalAction::Event(EventAction::FinalizeRepeating) => {
-                actions::handle_finalize_repeating(&mut self.state, ctx)
-            }
-
-            // Effect actions
-            ModalAction::Effect(EffectAction::Manage) => {
-                actions::handle_manage_effects(&self.state, &value)
-            }
-            ModalAction::Effect(EffectAction::PickType) => ActionResult::close(),
-            ModalAction::Effect(EffectAction::PickTypeForAdd) => {
-                actions::handle_effect_type_for_add(&self.state, &value)
-            }
-            ModalAction::Effect(EffectAction::PickAccountForEffect) => {
-                actions::handle_account_for_effect_pick(&value)
-            }
-            ModalAction::Effect(EffectAction::PickActionForEffect) => {
-                actions::handle_action_for_effect_pick(&self.state, &value, ctx)
-            }
-            ModalAction::Effect(EffectAction::Add) => {
-                actions::handle_add_effect(&mut self.state, ctx)
-            }
-            ModalAction::Effect(EffectAction::Edit) => {
-                actions::handle_edit_effect(&mut self.state, ctx)
-            }
-            ModalAction::Effect(EffectAction::Delete) => {
-                actions::handle_delete_effect(&mut self.state, ctx)
-            }
-
-            // Optimize actions
-            ModalAction::Optimize(action) => {
-                actions::optimize::handle_optimize_action(&mut self.state, action, &value)
-            }
+        // Delegate to screen-specific handlers based on action type
+        // Each screen handles its own domain actions
+        let result = if self.portfolio_profiles_screen.handles(&action) {
+            self.portfolio_profiles_screen.handle_modal_result(
+                &mut self.state,
+                action,
+                &value,
+                &legacy_value,
+            )
+        } else if self.events_screen.handles(&action) {
+            self.events_screen
+                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+        } else if self.scenario_screen.handles(&action) {
+            self.scenario_screen
+                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+        } else if self.optimize_screen.handles(&action) {
+            self.optimize_screen
+                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+        } else {
+            // No handler found - this shouldn't happen with proper coverage
+            ActionResult::close()
         };
 
         // Handle the action result

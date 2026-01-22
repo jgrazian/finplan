@@ -855,3 +855,55 @@ impl Screen for ScenarioScreen {
         "Scenario"
     }
 }
+
+impl super::ModalHandler for ScenarioScreen {
+    fn handles(&self, action: &ModalAction) -> bool {
+        matches!(action, ModalAction::Scenario(_))
+    }
+
+    fn handle_modal_result(
+        &self,
+        state: &mut AppState,
+        action: ModalAction,
+        value: &crate::modals::ConfirmedValue,
+        legacy_value: &str,
+    ) -> crate::actions::ActionResult {
+        use crate::actions::{self, ActionContext};
+        use crate::state::ScenarioAction;
+
+        // Extract modal context FIRST (clone to break the borrow)
+        let modal_context = match &state.modal {
+            ModalState::Form(form) => form.context.clone(),
+            ModalState::Confirm(confirm) => confirm.context.clone(),
+            ModalState::Picker(picker) => picker.context.clone(),
+            _ => None,
+        };
+
+        let ctx = ActionContext::new(modal_context.as_ref(), value);
+
+        match action {
+            ModalAction::Scenario(ScenarioAction::SaveAs) => {
+                actions::handle_save_as(state, legacy_value)
+            }
+            ModalAction::Scenario(ScenarioAction::Load) => {
+                actions::handle_load_scenario(state, legacy_value)
+            }
+            ModalAction::Scenario(ScenarioAction::SwitchTo) => {
+                actions::handle_switch_to(state, legacy_value)
+            }
+            ModalAction::Scenario(ScenarioAction::EditParameters) => {
+                actions::handle_edit_parameters(state, ctx)
+            }
+            ModalAction::Scenario(ScenarioAction::Import) => actions::handle_import(state, ctx),
+            ModalAction::Scenario(ScenarioAction::Export) => actions::handle_export(state, ctx),
+            ModalAction::Scenario(ScenarioAction::New) => actions::handle_new_scenario(state, ctx),
+            ModalAction::Scenario(ScenarioAction::Duplicate) => {
+                actions::handle_duplicate_scenario(state, ctx)
+            }
+            ModalAction::Scenario(ScenarioAction::Delete) => actions::handle_delete_scenario(state),
+
+            // This shouldn't happen if handles() is correct
+            _ => crate::actions::ActionResult::close(),
+        }
+    }
+}

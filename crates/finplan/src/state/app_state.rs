@@ -7,6 +7,7 @@ use rand::RngCore;
 use crate::data::app_data::{AppData, SimulationData};
 use crate::data::convert::{ConvertError, to_simulation_config, to_tui_result};
 
+use super::cache::CachedValue;
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::modal::ModalState;
 use super::screen_state::{
@@ -87,8 +88,12 @@ pub struct AppState {
     pub current_scenario: String,
     /// Path to the data directory (for per-scenario file storage)
     pub data_dir: Option<PathBuf>,
-    /// Cached simulation config (rebuilt when running simulation)
-    cached_config: Option<SimulationConfig>,
+
+    /// Data version for cache invalidation - incremented on every modification
+    data_version: u64,
+    /// Cached simulation config with version-based invalidation
+    cached_config: CachedValue<SimulationConfig>,
+
     pub simulation_result: Option<SimulationResult>,
     /// Core simulation result (needed for ledger and wealth snapshots)
     pub core_simulation_result: Option<finplan_core::model::SimulationResult>,
@@ -123,7 +128,8 @@ impl Default for AppState {
             app_data,
             current_scenario: default_name,
             data_dir: None,
-            cached_config: None,
+            data_version: 1, // Start at 1 so version 0 is always stale
+            cached_config: CachedValue::new(),
             simulation_result: None,
             core_simulation_result: None,
             monte_carlo_result: None,
@@ -175,7 +181,8 @@ impl AppState {
             self.simulation_result = None;
             self.core_simulation_result = None;
             self.monte_carlo_result = None;
-            self.invalidate_config_cache();
+            // Increment version to invalidate caches (different scenario = different data)
+            self.data_version = self.data_version.wrapping_add(1);
         }
     }
 
@@ -195,7 +202,8 @@ impl AppState {
         self.simulation_result = None;
         self.core_simulation_result = None;
         self.monte_carlo_result = None;
-        self.invalidate_config_cache();
+        // Increment version for new scenario data
+        self.data_version = self.data_version.wrapping_add(1);
     }
 
     /// Load from the data directory (new per-scenario storage)
@@ -331,23 +339,36 @@ impl AppState {
         to_simulation_config(self.data())
     }
 
-    /// Get or build the cached simulation config
+    /// Get or build the cached simulation config using version-based caching.
+    /// The cache is automatically invalidated when data_version changes.
     pub fn get_or_build_config(&mut self) -> Result<&SimulationConfig, ConvertError> {
-        if self.cached_config.is_none() {
-            self.cached_config = Some(self.to_simulation_config()?);
+        let version = self.data_version;
+
+        // Check if cache is stale and compute new value if needed
+        if self.cached_config.is_stale(version) {
+            let config = self.to_simulation_config()?;
+            self.cached_config.set(config, version);
         }
-        Ok(self.cached_config.as_ref().unwrap())
+
+        // Safe to unwrap because we just set it if it was stale
+        Ok(self.cached_config.get(version).unwrap())
     }
 
-    /// Invalidate the cached config (call after modifying data)
+    /// Invalidate the cached config explicitly (rarely needed with version-based caching)
     pub fn invalidate_config_cache(&mut self) {
-        self.cached_config = None;
+        self.cached_config.invalidate();
     }
 
-    /// Mark current scenario as modified (invalidates cache and marks dirty)
+    /// Mark current scenario as modified.
+    /// Increments the data version (which invalidates caches) and marks scenario dirty.
     pub fn mark_modified(&mut self) {
-        self.invalidate_config_cache();
+        self.data_version = self.data_version.wrapping_add(1);
         self.dirty_scenarios.insert(self.current_scenario.clone());
+    }
+
+    /// Get the current data version (for cache consumers)
+    pub fn data_version(&self) -> u64 {
+        self.data_version
     }
 
     /// Mark a specific scenario as clean (after saving)
@@ -809,7 +830,8 @@ impl AppState {
             self.simulation_result = None;
             self.core_simulation_result = None;
             self.monte_carlo_result = None;
-            self.invalidate_config_cache();
+            // Increment version when switching to different scenario data
+            self.data_version = self.data_version.wrapping_add(1);
         }
 
         // Adjust selected index if needed
