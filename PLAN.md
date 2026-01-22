@@ -376,8 +376,8 @@ Only check events whose `next_date <= current_date`.
 - [x] Phase 3.2 - Nested scratch for Sweep calls (now handled by reusing outer scratch via slicing)
 - [x] Phase 3.3 - Scratch for triggered event IDs
 - [x] Phase 3.4 - Pre-allocate internal vectors
-- [ ] Phase 4.1 - Balance cache
-- [ ] Phase 5.1 - Event date indexing
+- [x] Phase 4.1 - Balance cache (DEFERRED - see notes)
+- [x] Phase 5.1 - Event date indexing (DEFERRED - see notes)
 
 ---
 
@@ -389,3 +389,67 @@ Only check events whose `next_date <= current_date`.
 - Consider adding `#[inline]` hints to hot functions if needed
 - Scratch buffer pattern is idiomatic Rust for hot loops - see `std::io::Read::read_to_string` for precedent
 - For Monte Carlo, each thread can have its own `ScratchBuffers` instance (thread-local or passed per-iteration)
+
+### Phase 4.1 Analysis (Balance Cache - DEFERRED)
+
+After detailed analysis, Phase 4.1 (account balance caching) was deferred due to unfavorable cost-benefit:
+
+**Why caching is complex:**
+1. Account balances change frequently during effect application (CashCredit, CashDebit, AddAssetLot, SubtractAssetLot, AdjustBalance)
+2. The `process_events` function is called multiple times within the `while something_happened` loop
+3. After each effect is applied, balances for affected accounts become stale
+4. Every mutation operation (5+ types) would need cache invalidation
+
+**Why benefit is limited:**
+1. Within a single trigger/effect evaluation pass, the same account balance is rarely queried multiple times
+2. The actual `account_balance()` function is O(n) where n = number of positions in account, but positions are typically small (1-5)
+3. The expensive part (market.get_asset_value) is already O(1) with pre-computed cumulative rates
+
+**Conclusion:** The complexity of cache invalidation outweighs the marginal performance benefit. If profiling reveals this as a bottleneck in the future, consider:
+- Caching asset prices per time step (since market prices don't change within a step)
+- Using a "dirty flag" pattern per-account to selectively invalidate
+
+### Phase 5.1 Analysis (Event Date Indexing - DEFERRED)
+
+After analysis, Phase 5.1 (event date indexing) was deferred:
+
+**Current optimization already in place:**
+The `advance_time()` function in simulation.rs already jumps directly to the next relevant date by:
+1. Scanning all events for their trigger dates
+2. Checking repeating event scheduled dates in `event_next_date`
+3. Setting `next_checkpoint` to the earliest future date
+4. Using a heartbeat (quarterly) to ensure progress even without events
+
+This means `process_events_into` only runs at dates where at least one event might trigger.
+
+**What Phase 5.1 would add:**
+- Skip calling `evaluate_trigger` for events whose next trigger date > current_date
+- Would require storing `next_trigger_date: Option<Date>` per event after evaluation
+
+**Why benefit is limited:**
+1. Most date-based events (Date, Age, RelativeToEvent) should trigger exactly when checked due to `advance_time` logic
+2. Condition-based events (AccountBalance, NetWorth) have no predictable date and must always be checked
+3. The `evaluate_trigger` function is already O(1) for simple Date events
+
+**Conclusion:** The `advance_time` optimization already provides most of the benefit. Additional indexing would add complexity for marginal gain. Reconsider if profiling shows `evaluate_trigger` calls as a significant cost.
+
+---
+
+## Summary
+
+All phases of the performance optimization plan have been addressed:
+
+### Implemented (Phases 1-3)
+- **Phase 1**: Eliminated unnecessary cloning of triggers, effects, and events
+- **Phase 2**: Short-circuit evaluation for And/Or triggers
+- **Phase 3**: Scratch buffer pattern for Vec reuse, pre-allocated vectors
+
+### Deferred (Phases 4-5)
+- **Phase 4.1**: Balance cache - complexity of cache invalidation outweighs benefit
+- **Phase 5.1**: Event date indexing - `advance_time()` already provides similar optimization
+
+The implemented optimizations target the original profiling hotspots:
+- ~35% of runtime from cloning/allocation → addressed by Phases 1 and 3
+- Short-circuit And/Or evaluation → addressed by Phase 2
+
+Further optimization should be guided by new profiling data to identify remaining bottlenecks.
