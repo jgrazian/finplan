@@ -662,7 +662,7 @@ impl AppState {
         if let Some(storage) = self.get_storage()
             && let Err(e) = storage.save_summaries(&self.scenario_state.scenario_summaries)
         {
-            eprintln!("Warning: Failed to save scenario summaries: {}", e);
+            tracing::warn!(error = %e, "Failed to save scenario summaries");
         }
     }
 
@@ -755,10 +755,7 @@ impl AppState {
         for scenario_name in scenarios {
             if let Err(e) = self.run_monte_carlo_for_scenario(&scenario_name, num_iterations) {
                 // Log error but continue with other scenarios
-                eprintln!(
-                    "Warning: Failed to run Monte Carlo for '{}': {}",
-                    scenario_name, e
-                );
+                tracing::warn!(scenario = scenario_name, error = %e, "Monte Carlo failed");
             } else {
                 count += 1;
             }

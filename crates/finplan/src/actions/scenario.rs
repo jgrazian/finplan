@@ -201,7 +201,7 @@ pub fn handle_delete_scenario(state: &mut AppState) -> ActionResult {
         // Try to delete from disk first
         if let Err(e) = state.delete_scenario_file(&name) {
             // Log but continue - file might not exist
-            eprintln!("Warning: Could not delete scenario file: {}", e);
+            tracing::warn!(scenario = name, error = %e, "Could not delete scenario file");
         }
 
         if state.delete_scenario(&name) {

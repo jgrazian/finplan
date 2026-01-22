@@ -188,7 +188,7 @@ impl DataDirectory {
                             simulations.insert(name.to_string(), data);
                         }
                         Err(e) => {
-                            eprintln!("Warning: Failed to load scenario '{}': {}", name, e);
+                            tracing::warn!(scenario = name, error = %e, "Failed to load scenario");
                         }
                     }
                 }

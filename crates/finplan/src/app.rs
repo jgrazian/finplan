@@ -83,16 +83,16 @@ impl App {
             // Migrate from old format
             match storage.migrate_from_single_file(&old_config_path) {
                 Ok(true) => {
-                    eprintln!("Migrated data from {:?} to {:?}", old_config_path, data_dir);
-                    eprintln!(
-                        "Old config backed up to {:?}",
-                        old_config_path.with_extension("yaml.backup")
+                    tracing::info!(
+                        from = ?old_config_path,
+                        to = ?data_dir,
+                        backup = ?old_config_path.with_extension("yaml.backup"),
+                        "Migrated data from old format"
                     );
                 }
                 Ok(false) => {}
                 Err(e) => {
-                    eprintln!("Warning: Migration failed: {:?}", e);
-                    eprintln!("Starting with default configuration.");
+                    tracing::warn!(error = ?e, "Migration failed, starting with defaults");
                     let mut state = AppState::default();
                     state.data_dir = Some(data_dir);
                     return state;
@@ -104,8 +104,7 @@ impl App {
         match AppState::load_from_data_dir(data_dir.clone()) {
             Ok(state) => state,
             Err(e) => {
-                eprintln!("Warning: Failed to load from {:?}: {:?}", data_dir, e);
-                eprintln!("Starting with default configuration.");
+                tracing::warn!(path = ?data_dir, error = ?e, "Failed to load, using defaults");
                 let mut state = AppState::default();
                 state.data_dir = Some(data_dir);
                 state
@@ -124,15 +123,8 @@ impl App {
 
         // No auto-save on exit - user must explicitly save with Ctrl+S
         if self.state.has_unsaved_changes() {
-            eprintln!(
-                "Exiting with unsaved changes in: {}",
-                self.state
-                    .dirty_scenarios
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
+            let unsaved: Vec<_> = self.state.dirty_scenarios.iter().cloned().collect();
+            tracing::info!(scenarios = ?unsaved, "Exiting with unsaved changes");
         }
 
         Ok(())

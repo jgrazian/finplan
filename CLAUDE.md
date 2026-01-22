@@ -9,6 +9,12 @@ cargo test              # Run all tests
 cargo fmt               # Format code (REQUIRED before commits)
 ```
 
+IMPORTIANT:
+- When finished making changes run `cargo fmt`
+- Run `cargo clippy` and fix any warnings if they will not cause major refactor work.
+- `git add` changed files to track
+- Suggest a commit message for the completed work
+
 ## Project Structure
 
 ```

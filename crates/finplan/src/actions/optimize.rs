@@ -168,13 +168,13 @@ fn handle_configure_parameter(state: &mut AppState, index: usize) -> ActionResul
     };
 
     // Apply updates
-    if let Some((_param_type, event_id, account_id, min_value, max_value)) = updates {
-        if let Some(param) = state.optimize_state.selected_parameters.get_mut(index) {
-            param.event_id = event_id;
-            param.account_id = account_id;
-            param.min_value = min_value;
-            param.max_value = max_value;
-        }
+    if let Some((_param_type, event_id, account_id, min_value, max_value)) = updates
+        && let Some(param) = state.optimize_state.selected_parameters.get_mut(index)
+    {
+        param.event_id = event_id;
+        param.account_id = account_id;
+        param.min_value = min_value;
+        param.max_value = max_value;
     }
 
     ActionResult::Modified(None)
