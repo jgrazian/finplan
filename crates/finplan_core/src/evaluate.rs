@@ -5,7 +5,7 @@ use rustc_hash::FxHashMap;
 use crate::error::{
     AccountTypeError, EngineError, StateEventError, TransferEvaluationError, TriggerEventError,
 };
-use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment};
+use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment_into};
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
     EventId, EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TransferAmount,
@@ -662,27 +662,28 @@ pub fn evaluate_effect_into(
                 };
 
                 // Liquidate into the source account's cash balance
-                let (result, effects) = liquidate_investment(&LiquidationParams {
-                    investment,
-                    asset_coord,
-                    to_account: *from, // Cash stays in source account
-                    amount: take_gross,
-                    current_price,
-                    lot_method: *lot_method,
-                    current_date: state.timeline.current_date,
-                    tax_config: &state.taxes.config,
-                    ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income,
-                    early_withdrawal_penalty_applies: state
-                        .timeline
-                        .is_below_early_withdrawal_age(),
-                });
+                let result = liquidate_investment_into(
+                    &LiquidationParams {
+                        investment,
+                        asset_coord,
+                        to_account: *from, // Cash stays in source account
+                        amount: take_gross,
+                        current_price,
+                        lot_method: *lot_method,
+                        current_date: state.timeline.current_date,
+                        tax_config: &state.taxes.config,
+                        ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income,
+                        early_withdrawal_penalty_applies: state
+                            .timeline
+                            .is_below_early_withdrawal_age(),
+                    },
+                    out, // Push effects directly to scratch buffer
+                );
 
                 remaining -= match amount_mode {
                     AmountMode::Gross => result.gross_amount,
                     AmountMode::Net => result.net_proceeds,
                 };
-
-                out.extend(effects);
             }
 
             Ok(())

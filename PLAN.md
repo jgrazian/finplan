@@ -716,7 +716,7 @@ Only recompute when `current_date` changes (which happens infrequently due to `a
 ## Status
 
 - [x] P2.2 - Pre-allocate SimulationScratch per-thread
-- [ ] P2.4 - Inline lot_subtractions into scratch buffer
+- [x] P2.4 - Inline lot_subtractions into scratch buffer
 - [ ] P2.1 - Eliminate EventEffect cloning
 - [ ] P2.3 - Cache repeating event interval spans
 - [ ] P2.5 - Cache trigger dates for Age/Date triggers
@@ -743,6 +743,23 @@ Benefits:
 - Zero allocations for scratch buffers after first iteration per thread
 - Buffers grow to worst-case size and stay there
 - Each Rayon thread processes its batch with a single scratch instance
+
+### P2.4 Implementation (2026-01-22)
+
+Inlined lot subtractions to avoid intermediate Vec allocations in liquidation functions.
+
+Changes:
+1. Added `push_lot_subtractions()` helper that pushes SubtractAssetLot events directly to output buffer
+2. Added `liquidate_investment_into()` that accepts `&mut Vec<EvalEvent>` and returns just `LiquidationResult`
+3. Added `liquidate_taxable_into()`, `liquidate_tax_deferred_into()`, `liquidate_tax_free_into()` helper functions
+4. Updated `evaluate.rs` to use `liquidate_investment_into()` instead of `liquidate_investment()`
+5. Removed the original non-`_into` helper functions (now dead code after refactor)
+6. Refactored `liquidate_investment()` to delegate to `liquidate_investment_into()`
+
+Benefits:
+- Avoids intermediate Vec allocation and subsequent extend() copy for lot subtractions
+- Effects are pushed directly to caller's scratch buffer
+- Consistent with scratch buffer pattern established in P2.2
 
 ---
 

@@ -68,6 +68,22 @@ pub struct LiquidationParams<'a> {
 /// # Arguments
 /// * `params` - Liquidation parameters containing all necessary information
 pub fn liquidate_investment(params: &LiquidationParams) -> (LiquidationResult, Vec<EvalEvent>) {
+    let mut effects = Vec::with_capacity(8);
+    let result = liquidate_investment_into(params, &mut effects);
+    (result, effects)
+}
+
+/// Liquidate assets from an investment container, pushing effects directly to output buffer.
+///
+/// This variant avoids intermediate Vec allocations by writing directly to the caller's buffer.
+///
+/// # Arguments
+/// * `params` - Liquidation parameters containing all necessary information
+/// * `out` - Output buffer to push effects into
+pub fn liquidate_investment_into(
+    params: &LiquidationParams,
+    out: &mut Vec<EvalEvent>,
+) -> LiquidationResult {
     // Get positions for this specific asset
     let lots: Vec<AssetLot> = params
         .investment
@@ -78,7 +94,7 @@ pub fn liquidate_investment(params: &LiquidationParams) -> (LiquidationResult, V
         .collect();
 
     if lots.is_empty() || params.amount <= 0.001 || params.current_price <= 0.0 {
-        return (LiquidationResult::default(), Vec::new());
+        return LiquidationResult::default();
     }
 
     // Calculate total available value
@@ -87,22 +103,24 @@ pub fn liquidate_investment(params: &LiquidationParams) -> (LiquidationResult, V
     let actual_amount = params.amount.min(available_value);
 
     if actual_amount <= 0.001 {
-        return (LiquidationResult::default(), Vec::new());
+        return LiquidationResult::default();
     }
 
     match params.investment.tax_status {
-        TaxStatus::Taxable => liquidate_taxable(&lots, actual_amount, params),
-        TaxStatus::TaxDeferred => liquidate_tax_deferred(&lots, actual_amount, params),
-        TaxStatus::TaxFree => liquidate_tax_free(&lots, actual_amount, params),
+        TaxStatus::Taxable => liquidate_taxable_into(&lots, actual_amount, params, out),
+        TaxStatus::TaxDeferred => liquidate_tax_deferred_into(&lots, actual_amount, params, out),
+        TaxStatus::TaxFree => liquidate_tax_free_into(&lots, actual_amount, params, out),
     }
 }
 
-/// Liquidate from a taxable account with full lot tracking
-fn liquidate_taxable(
+/// Liquidate from a taxable account, pushing effects directly to output buffer
+#[inline]
+fn liquidate_taxable_into(
     lots: &[AssetLot],
     amount: f64,
     params: &LiquidationParams,
-) -> (LiquidationResult, Vec<EvalEvent>) {
+    out: &mut Vec<EvalEvent>,
+) -> LiquidationResult {
     let lot_result = consume_lots(
         lots,
         amount,
@@ -110,7 +128,7 @@ fn liquidate_taxable(
         params.lot_method,
         params.current_date,
     );
-    let mut effects = lot_subtractions_to_effects(params.asset_coord, &lot_result);
+    push_lot_subtractions(params.asset_coord, &lot_result, out);
 
     let gross_amount = lot_result.proceeds;
     let mut net_amount = gross_amount;
@@ -124,7 +142,7 @@ fn liquidate_taxable(
         );
         let state_short_term_tax = lot_result.short_term_gain * params.tax_config.state_rate;
 
-        effects.push(EvalEvent::ShortTermCapitalGainsTax {
+        out.push(EvalEvent::ShortTermCapitalGainsTax {
             gross_gain_amount: lot_result.short_term_gain,
             federal_tax: federal_short_term_tax,
             state_tax: state_short_term_tax,
@@ -139,7 +157,7 @@ fn liquidate_taxable(
             lot_result.long_term_gain * params.tax_config.capital_gains_rate;
         let state_long_term_tax = lot_result.long_term_gain * params.tax_config.state_rate;
 
-        effects.push(EvalEvent::LongTermCapitalGainsTax {
+        out.push(EvalEvent::LongTermCapitalGainsTax {
             gross_gain_amount: lot_result.long_term_gain,
             federal_tax: federal_long_term_tax,
             state_tax: state_long_term_tax,
@@ -148,30 +166,27 @@ fn liquidate_taxable(
         net_amount -= federal_long_term_tax + state_long_term_tax;
     }
 
-    effects.push(EvalEvent::CashCredit {
+    out.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
         kind: CashFlowKind::LiquidationProceeds,
     });
 
-    (
-        LiquidationResult {
-            gross_amount,
-            net_proceeds: net_amount,
-            early_withdrawal_penalty: 0.0, // No penalty for taxable accounts
-        },
-        effects,
-    )
+    LiquidationResult {
+        gross_amount,
+        net_proceeds: net_amount,
+        early_withdrawal_penalty: 0.0, // No penalty for taxable accounts
+    }
 }
 
-/// Liquidate from a tax-deferred account (Traditional IRA, 401k)
-/// All withdrawals are taxed as ordinary income
-/// Early withdrawal penalty applies if person is below age 59.5
-fn liquidate_tax_deferred(
+/// Liquidate from a tax-deferred account, pushing effects directly to output buffer
+#[inline]
+fn liquidate_tax_deferred_into(
     lots: &[AssetLot],
     amount: f64,
     params: &LiquidationParams,
-) -> (LiquidationResult, Vec<EvalEvent>) {
+    out: &mut Vec<EvalEvent>,
+) -> LiquidationResult {
     let lot_result = consume_lots(
         lots,
         amount,
@@ -179,7 +194,7 @@ fn liquidate_tax_deferred(
         params.lot_method,
         params.current_date,
     );
-    let mut effects = lot_subtractions_to_effects(params.asset_coord, &lot_result);
+    push_lot_subtractions(params.asset_coord, &lot_result, out);
 
     let gross_amount = lot_result.proceeds;
 
@@ -192,7 +207,7 @@ fn liquidate_tax_deferred(
     let state_tax = gross_amount * params.tax_config.state_rate;
     let mut net_amount = gross_amount - federal_tax - state_tax;
 
-    effects.push(EvalEvent::IncomeTax {
+    out.push(EvalEvent::IncomeTax {
         gross_income_amount: gross_amount,
         federal_tax,
         state_tax,
@@ -202,7 +217,7 @@ fn liquidate_tax_deferred(
     let early_withdrawal_penalty = if params.early_withdrawal_penalty_applies {
         let penalty = gross_amount * params.tax_config.early_withdrawal_penalty_rate;
         net_amount -= penalty;
-        effects.push(EvalEvent::EarlyWithdrawalPenalty {
+        out.push(EvalEvent::EarlyWithdrawalPenalty {
             gross_amount,
             penalty_amount: penalty,
             penalty_rate: params.tax_config.early_withdrawal_penalty_rate,
@@ -212,29 +227,27 @@ fn liquidate_tax_deferred(
         0.0
     };
 
-    effects.push(EvalEvent::CashCredit {
+    out.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
         kind: CashFlowKind::LiquidationProceeds,
     });
 
-    (
-        LiquidationResult {
-            gross_amount,
-            net_proceeds: net_amount,
-            early_withdrawal_penalty,
-        },
-        effects,
-    )
+    LiquidationResult {
+        gross_amount,
+        net_proceeds: net_amount,
+        early_withdrawal_penalty,
+    }
 }
 
-/// Liquidate from a tax-free account (Roth IRA)
-/// Qualified withdrawals are completely tax-free
-fn liquidate_tax_free(
+/// Liquidate from a tax-free account, pushing effects directly to output buffer
+#[inline]
+fn liquidate_tax_free_into(
     lots: &[AssetLot],
     amount: f64,
     params: &LiquidationParams,
-) -> (LiquidationResult, Vec<EvalEvent>) {
+    out: &mut Vec<EvalEvent>,
+) -> LiquidationResult {
     let lot_result = consume_lots(
         lots,
         amount,
@@ -242,25 +255,22 @@ fn liquidate_tax_free(
         params.lot_method,
         params.current_date,
     );
-    let mut effects = lot_subtractions_to_effects(params.asset_coord, &lot_result);
+    push_lot_subtractions(params.asset_coord, &lot_result, out);
 
     let gross_amount = lot_result.proceeds;
     let net_amount = gross_amount; // No taxes
 
-    effects.push(EvalEvent::CashCredit {
+    out.push(EvalEvent::CashCredit {
         to: params.to_account,
         net_amount,
         kind: CashFlowKind::LiquidationProceeds,
     });
 
-    (
-        LiquidationResult {
-            gross_amount,
-            net_proceeds: net_amount,
-            early_withdrawal_penalty: 0.0, // No penalty for tax-free accounts (simplified MVP)
-        },
-        effects,
-    )
+    LiquidationResult {
+        gross_amount,
+        net_proceeds: net_amount,
+        early_withdrawal_penalty: 0.0, // No penalty for tax-free accounts (simplified MVP)
+    }
 }
 
 /// Result of lot consumption calculation
@@ -497,6 +507,26 @@ pub fn lot_subtractions_to_effects(
             long_term_gain: sub.long_term_gain,
         })
         .collect()
+}
+
+/// Push lot subtractions directly to output buffer (avoids intermediate Vec allocation)
+#[inline]
+fn push_lot_subtractions(
+    asset_coord: AssetCoord,
+    result: &LotConsumptionResult,
+    out: &mut Vec<EvalEvent>,
+) {
+    for sub in &result.lot_subtractions {
+        out.push(EvalEvent::SubtractAssetLot {
+            from: asset_coord,
+            lot_date: sub.lot_date,
+            units: sub.units,
+            cost_basis: sub.cost_basis,
+            proceeds: sub.proceeds,
+            short_term_gain: sub.short_term_gain,
+            long_term_gain: sub.long_term_gain,
+        });
+    }
 }
 
 #[cfg(test)]
