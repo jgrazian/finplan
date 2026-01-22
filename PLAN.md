@@ -717,7 +717,7 @@ Only recompute when `current_date` changes (which happens infrequently due to `a
 
 - [x] P2.2 - Pre-allocate SimulationScratch per-thread
 - [x] P2.4 - Inline lot_subtractions into scratch buffer
-- [ ] P2.1 - Eliminate EventEffect cloning
+- [x] P2.1 - Eliminate EventEffect cloning
 - [ ] P2.3 - Cache repeating event interval spans
 - [ ] P2.5 - Cache trigger dates for Age/Date triggers
 
@@ -760,6 +760,41 @@ Benefits:
 - Avoids intermediate Vec allocation and subsequent extend() copy for lot subtractions
 - Effects are pushed directly to caller's scratch buffer
 - Consistent with scratch buffer pattern established in P2.2
+
+### P2.1 Implementation (2026-01-22)
+
+Eliminated `EventEffect::clone()` calls in `process_events_with_scratch` by restructuring borrow scopes.
+
+**Key insight:** `evaluate_effect_into` takes `&SimulationState` (immutable), so we can hold both `&effect` and `&state` simultaneously. The clone was only needed because the borrow scope extended past where we needed it.
+
+**Changes to `apply.rs`:**
+1. Restructured effect evaluation loops to use a two-phase approach:
+   - Phase 1: Evaluate with immutable borrows (effect ref + state ref) - fills scratch buffer
+   - Phase 2: Apply with mutable borrow (state mut ref) - drains scratch buffer
+2. Used a block scope `{ ... }` to ensure effect borrow ends before apply phase begins
+3. Applied the same pattern to both the main event loop and the pending_triggers loop
+
+**Before:**
+```rust
+let effect = state.event_state.events.get(&event_id)
+    .and_then(|e| e.effects.get(effect_idx))
+    .map(|e| e.clone());  // Expensive clone!
+evaluate_effect_into(&effect, state, &mut scratch);
+```
+
+**After:**
+```rust
+let eval_result = {
+    let Some(effect) = state.event_state.events.get(&event_id)
+        .and_then(|e| e.effects.get(effect_idx)) else { break };
+    evaluate_effect_into(effect, state, &mut scratch)
+}; // Borrow ends here, no clone needed
+```
+
+Benefits:
+- Zero-cost effect access - no cloning of potentially large `EventEffect` variants
+- `CreateAccount(Account)` with `Vec<AssetLot>` positions no longer copied per evaluation
+- Maintains correct sequential semantics (each effect applied before next evaluated)
 
 ---
 

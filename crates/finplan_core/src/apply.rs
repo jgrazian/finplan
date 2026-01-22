@@ -612,22 +612,26 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 .map(|e| e.effects.len())
                 .unwrap_or(0);
 
-            // Evaluate and apply effects by index to avoid holding borrow across apply calls
+            // Evaluate and apply effects by index, avoiding EventEffect clone
             for effect_idx in 0..effects_len {
-                // Re-borrow to get each effect - borrow ends before apply_eval_event_with_source
-                let effect = match state
-                    .event_state
-                    .events
-                    .get(&event_id)
-                    .and_then(|e| e.effects.get(effect_idx))
-                {
-                    Some(effect) => effect.clone(),
-                    None => break,
-                };
-
-                // Clear and reuse scratch buffer
+                // Phase 1: Evaluate with immutable borrows (no clone needed)
                 scratch.eval_events.clear();
-                match evaluate_effect_into(&effect, state, &mut scratch.eval_events) {
+                let eval_result = {
+                    // Borrow effect without cloning - both borrows are immutable so this is safe
+                    let Some(effect) = state
+                        .event_state
+                        .events
+                        .get(&event_id)
+                        .and_then(|e| e.effects.get(effect_idx))
+                    else {
+                        break;
+                    };
+                    // Evaluate while holding effect borrow
+                    evaluate_effect_into(effect, state, &mut scratch.eval_events)
+                }; // effect borrow ends here
+
+                // Phase 2: Apply with mutable borrow
+                match eval_result {
                     Ok(()) => {
                         for ee in scratch.eval_events.drain(..) {
                             if let Err(e) = apply_eval_event_with_source(state, &ee, Some(event_id))
@@ -697,22 +701,25 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 .map(|e| e.effects.len())
                 .unwrap_or(0);
 
-            // Evaluate and apply effects by index to avoid holding borrow across apply calls
+            // Evaluate and apply effects by index, avoiding EventEffect clone
             for effect_idx in 0..effects_len {
-                // Re-borrow to get each effect - borrow ends before apply_eval_event_with_source
-                let effect = match state
-                    .event_state
-                    .events
-                    .get(&event_id)
-                    .and_then(|e| e.effects.get(effect_idx))
-                {
-                    Some(effect) => effect.clone(),
-                    None => break,
-                };
-
-                // Clear and reuse scratch buffer
+                // Phase 1: Evaluate with immutable borrows (no clone needed)
                 scratch.eval_events.clear();
-                if evaluate_effect_into(&effect, state, &mut scratch.eval_events).is_ok() {
+                let eval_ok = {
+                    // Borrow effect without cloning
+                    let Some(effect) = state
+                        .event_state
+                        .events
+                        .get(&event_id)
+                        .and_then(|e| e.effects.get(effect_idx))
+                    else {
+                        break;
+                    };
+                    evaluate_effect_into(effect, state, &mut scratch.eval_events).is_ok()
+                }; // effect borrow ends here
+
+                // Phase 2: Apply with mutable borrow
+                if eval_ok {
                     for ee in scratch.eval_events.drain(..) {
                         let _ = apply_eval_event_with_source(state, &ee, Some(event_id));
                     }
