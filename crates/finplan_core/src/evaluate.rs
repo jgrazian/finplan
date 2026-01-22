@@ -187,33 +187,27 @@ pub fn evaluate_trigger(
         }
 
         EventTrigger::And(triggers) => {
-            let results: Vec<bool> = triggers
-                .iter()
-                .map(|t| {
-                    evaluate_trigger(event_id, t, state)
-                        .map(|eval| matches!(eval, TriggerEvent::Triggered))
-                })
-                .collect::<Result<Vec<bool>, _>>()?;
-            Ok(if results.into_iter().all(|b| b) {
-                TriggerEvent::Triggered
-            } else {
-                TriggerEvent::NotTriggered
-            })
+            // Short-circuit: return NotTriggered on first non-triggered, avoiding Vec allocation
+            for t in triggers {
+                match evaluate_trigger(event_id, t, state)? {
+                    TriggerEvent::Triggered => continue,
+                    _ => return Ok(TriggerEvent::NotTriggered),
+                }
+            }
+            Ok(TriggerEvent::Triggered)
         }
 
         EventTrigger::Or(triggers) => {
-            let results: Vec<bool> = triggers
-                .iter()
-                .map(|t| {
-                    evaluate_trigger(event_id, t, state)
-                        .map(|eval| matches!(eval, TriggerEvent::Triggered))
-                })
-                .collect::<Result<Vec<bool>, _>>()?;
-            Ok(if results.into_iter().any(|b| b) {
-                TriggerEvent::Triggered
-            } else {
-                TriggerEvent::NotTriggered
-            })
+            // Short-circuit: return Triggered on first triggered, avoiding Vec allocation
+            for t in triggers {
+                if matches!(
+                    evaluate_trigger(event_id, t, state)?,
+                    TriggerEvent::Triggered
+                ) {
+                    return Ok(TriggerEvent::Triggered);
+                }
+            }
+            Ok(TriggerEvent::NotTriggered)
         }
 
         EventTrigger::Repeating {

@@ -371,7 +371,7 @@ Only check events whose `next_date <= current_date`.
 - [x] Phase 1.1 - Avoid trigger cloning
 - [x] Phase 1.2 - Avoid effects cloning
 - [x] Phase 1.3 - Fix pending_triggers clone
-- [ ] Phase 2.1 - Short-circuit And/Or
+- [x] Phase 2.1 - Short-circuit And/Or
 - [ ] Phase 3.1 - Scratch Vec for evaluate_effect
 - [ ] Phase 3.2 - Nested scratch for Sweep calls
 - [ ] Phase 3.3 - Scratch for triggered event IDs
