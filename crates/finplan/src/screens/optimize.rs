@@ -3,13 +3,15 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    symbols,
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, List, ListItem, Paragraph},
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph},
 };
 
 use super::Screen;
+use crate::actions::optimize::{show_objective_picker, show_settings_form};
 use crate::components::{Component, EventResult};
-use crate::state::{AppState, OptimizePanel};
+use crate::state::{AppState, ModalState, OptimizeAction, OptimizePanel};
 use crate::util::format::format_currency;
 
 pub struct OptimizeScreen;
@@ -24,7 +26,7 @@ impl OptimizeScreen {
         };
 
         let title = if focused {
-            " PARAMETERS [j/k nav, a add, d del, Enter config] "
+            " PARAMETERS [a add, d del, Enter edit] "
         } else {
             " PARAMETERS "
         };
@@ -46,6 +48,15 @@ impl OptimizeScreen {
                     "Press 'a' to add a parameter.",
                     Style::default().fg(Color::DarkGray),
                 )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Parameters you can optimize:",
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from("  - Retirement Age"),
+                Line::from("  - Contribution Rate"),
+                Line::from("  - Withdrawal Amount"),
+                Line::from("  - Asset Allocation"),
             ];
             let paragraph = Paragraph::new(content).block(block);
             frame.render_widget(paragraph, area);
@@ -61,7 +72,26 @@ impl OptimizeScreen {
                         crate::state::ParameterType::AssetAllocation => "Asset Allocation",
                     };
 
-                    let bounds = format!("[{:.0} - {:.0}]", param.min_value, param.max_value);
+                    let bounds = match param.param_type {
+                        crate::state::ParameterType::RetirementAge => {
+                            format!("[{:.0} - {:.0} yrs]", param.min_value, param.max_value)
+                        }
+                        crate::state::ParameterType::ContributionRate
+                        | crate::state::ParameterType::WithdrawalAmount => {
+                            format!(
+                                "[{} - {}]",
+                                format_currency(param.min_value),
+                                format_currency(param.max_value)
+                            )
+                        }
+                        crate::state::ParameterType::AssetAllocation => {
+                            format!(
+                                "[{:.0}% - {:.0}% stocks]",
+                                param.min_value * 100.0,
+                                param.max_value * 100.0
+                            )
+                        }
+                    };
 
                     let is_selected = idx == selected_idx;
                     let style = if is_selected {
@@ -96,7 +126,7 @@ impl OptimizeScreen {
         };
 
         let title = if focused {
-            " OBJECTIVE [Enter config] "
+            " OBJECTIVE [Enter change, s settings] "
         } else {
             " OBJECTIVE "
         };
@@ -146,9 +176,14 @@ impl OptimizeScreen {
                 Span::styled(format!("{}", mc_iter), Style::default().fg(Color::Green)),
             ]),
             Line::from(vec![
-                Span::raw("  Max Optimization Iterations: "),
+                Span::raw("  Max Opt Iterations: "),
                 Span::styled(format!("{}", max_iter), Style::default().fg(Color::Green)),
             ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Press 's' to change settings",
+                Style::default().fg(Color::DarkGray),
+            )),
         ];
 
         let paragraph = Paragraph::new(content).block(block);
@@ -187,7 +222,7 @@ impl OptimizeScreen {
                 Span::styled(format!("{}", mc_iter), Style::default().fg(Color::Green)),
             ]),
             Line::from(vec![
-                Span::raw("  Max Optimization Iterations: "),
+                Span::raw("  Max Opt Iterations: "),
                 Span::styled(format!("{}", max_iter), Style::default().fg(Color::Green)),
             ]),
         ];
@@ -210,7 +245,7 @@ impl OptimizeScreen {
                 state.optimize_state.current_iteration, state.optimize_state.max_iterations
             )
         } else if focused {
-            " PROGRESS [r run] ".to_string()
+            " PROGRESS [r run optimization] ".to_string()
         } else {
             " PROGRESS ".to_string()
         };
@@ -230,6 +265,8 @@ impl OptimizeScreen {
                         "  Optimization in progress...",
                         Style::default().fg(Color::Yellow),
                     )),
+                    Line::from(""),
+                    Line::from("  Running Monte Carlo simulations..."),
                 ]
             } else {
                 vec![
@@ -238,6 +275,15 @@ impl OptimizeScreen {
                     Line::from(""),
                     Line::from(Span::styled(
                         "  Press 'r' to run optimization.",
+                        Style::default().fg(Color::Cyan),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "  Make sure you have parameters configured",
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    Line::from(Span::styled(
+                        "  before running optimization.",
                         Style::default().fg(Color::DarkGray),
                     )),
                 ]
@@ -245,39 +291,52 @@ impl OptimizeScreen {
             let paragraph = Paragraph::new(content).block(block);
             frame.render_widget(paragraph, area);
         } else {
-            // Render convergence chart
+            // Render convergence line chart
             let inner = block.inner(area);
             frame.render_widget(block, area);
 
-            // Find max value for scaling
-            let max_value = convergence_data
+            // Prepare data for line chart
+            let chart_data: Vec<(f64, f64)> = convergence_data
                 .iter()
-                .map(|(_, v)| *v)
-                .fold(f64::NEG_INFINITY, f64::max);
-
-            // Create bars for convergence history
-            let bars: Vec<Bar> = convergence_data
-                .iter()
-                .map(|(iter, value)| {
-                    let scaled = if max_value > 0.0 {
-                        ((value / max_value) * 100.0) as u64
-                    } else {
-                        0
-                    };
-
-                    Bar::default()
-                        .value(scaled)
-                        .label(Line::from(format!("{}", iter)))
-                        .style(Style::default().fg(Color::Cyan))
-                })
+                .map(|(iter, value)| (*iter as f64, *value))
                 .collect();
 
-            if !bars.is_empty() {
-                let chart = BarChart::default()
-                    .data(BarGroup::default().bars(&bars))
-                    .bar_width(3)
-                    .bar_gap(1)
-                    .direction(Direction::Vertical);
+            if !chart_data.is_empty() {
+                let max_iter = convergence_data.iter().map(|(i, _)| *i).max().unwrap_or(1) as f64;
+                let max_value = convergence_data
+                    .iter()
+                    .map(|(_, v)| *v)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let min_value = convergence_data
+                    .iter()
+                    .map(|(_, v)| *v)
+                    .fold(f64::INFINITY, f64::min);
+
+                let y_range = if (max_value - min_value).abs() < 1.0 {
+                    [min_value - 1000.0, max_value + 1000.0]
+                } else {
+                    [min_value * 0.95, max_value * 1.05]
+                };
+
+                let dataset = Dataset::default()
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(Color::Cyan))
+                    .data(&chart_data);
+
+                let chart = Chart::new(vec![dataset])
+                    .x_axis(
+                        Axis::default()
+                            .title("Iteration")
+                            .style(Style::default().fg(Color::DarkGray))
+                            .bounds([1.0, max_iter]),
+                    )
+                    .y_axis(
+                        Axis::default()
+                            .title("Objective")
+                            .style(Style::default().fg(Color::DarkGray))
+                            .bounds(y_range),
+                    );
 
                 frame.render_widget(chart, inner);
             }
@@ -292,7 +351,7 @@ impl OptimizeScreen {
             Style::default()
         };
 
-        let title = if focused { " RESULTS " } else { " RESULTS " };
+        let title = " RESULTS ";
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -300,18 +359,33 @@ impl OptimizeScreen {
             .title(title);
 
         if let Some(result) = &state.optimize_state.result {
+            let status_style = if result.converged {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
+
+            let status_text = if result.converged {
+                "CONVERGED"
+            } else {
+                "Max Iterations"
+            };
+
+            // Success rate color based on value
+            let success_color = if result.success_rate >= 0.95 {
+                Color::Green
+            } else if result.success_rate >= 0.85 {
+                Color::Yellow
+            } else {
+                Color::Red
+            };
+
             let mut content = vec![
-                Line::from(""),
                 Line::from(vec![
                     Span::raw("  Status: "),
-                    if result.converged {
-                        Span::styled("Converged", Style::default().fg(Color::Green))
-                    } else {
-                        Span::styled("Not Converged", Style::default().fg(Color::Yellow))
-                    },
-                ]),
-                Line::from(vec![
-                    Span::raw("  Iterations: "),
+                    Span::styled(status_text, status_style),
+                    Span::raw("  |  "),
+                    Span::raw("Iterations: "),
                     Span::styled(
                         format!("{}", result.iterations),
                         Style::default().fg(Color::Cyan),
@@ -319,23 +393,44 @@ impl OptimizeScreen {
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Optimal Values:",
-                    Style::default().add_modifier(Modifier::BOLD),
+                    "  OPTIMAL VALUES:",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Green),
                 )),
             ];
 
             for (name, value) in &result.optimal_values {
+                let formatted_value = if name.contains("Age") {
+                    format!("{:.0} years", value)
+                } else if name.contains("Allocation") {
+                    format!("{:.1}% stocks", value * 100.0)
+                } else {
+                    format_currency(*value)
+                };
+
                 content.push(Line::from(vec![
                     Span::raw("    "),
-                    Span::raw(name),
+                    Span::styled(name, Style::default().fg(Color::White)),
                     Span::raw(": "),
-                    Span::styled(format!("{:.2}", value), Style::default().fg(Color::Green)),
+                    Span::styled(
+                        formatted_value,
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]));
             }
 
             content.push(Line::from(""));
+            content.push(Line::from(Span::styled(
+                "  METRICS:",
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Blue),
+            )));
             content.push(Line::from(vec![
-                Span::raw("  Objective Value: "),
+                Span::raw("    Objective Value: "),
                 Span::styled(
                     format_currency(result.objective_value),
                     Style::default()
@@ -344,12 +439,46 @@ impl OptimizeScreen {
                 ),
             ]));
             content.push(Line::from(vec![
-                Span::raw("  Success Rate: "),
+                Span::raw("    Success Rate: "),
                 Span::styled(
                     format!("{:.1}%", result.success_rate * 100.0),
-                    Style::default().fg(Color::Magenta),
+                    Style::default()
+                        .fg(success_color)
+                        .add_modifier(Modifier::BOLD),
                 ),
+                Span::raw(if result.success_rate >= 0.95 {
+                    "  (Excellent)"
+                } else if result.success_rate >= 0.85 {
+                    "  (Good)"
+                } else {
+                    "  (Needs improvement)"
+                }),
             ]));
+
+            // Add convergence trend if we have data
+            let convergence = &state.optimize_state.convergence_data;
+            if convergence.len() >= 2 {
+                let first_value = convergence.first().map(|(_, v)| *v).unwrap_or(0.0);
+                let last_value = convergence.last().map(|(_, v)| *v).unwrap_or(0.0);
+                let improvement = last_value - first_value;
+                let improvement_pct = if first_value.abs() > 0.0 {
+                    (improvement / first_value.abs()) * 100.0
+                } else {
+                    0.0
+                };
+
+                content.push(Line::from(vec![
+                    Span::raw("    Improvement: "),
+                    Span::styled(
+                        format!("{:+.1}%", improvement_pct),
+                        Style::default().fg(if improvement >= 0.0 {
+                            Color::Green
+                        } else {
+                            Color::Red
+                        }),
+                    ),
+                ]));
+            }
 
             let paragraph = Paragraph::new(content).block(block);
             frame.render_widget(paragraph, area);
@@ -359,7 +488,15 @@ impl OptimizeScreen {
                 Line::from("  No optimization results yet."),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "  Configure parameters and run optimization.",
+                    "  1. Add parameters to optimize (a)",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "  2. Configure objective (Enter on Objective)",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                Line::from(Span::styled(
+                    "  3. Run optimization (r)",
                     Style::default().fg(Color::DarkGray),
                 )),
             ];
@@ -373,6 +510,11 @@ impl Component for OptimizeScreen {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let panel = state.optimize_state.focused_panel;
 
+        // Don't handle keys if optimization is running
+        if state.optimize_state.running {
+            return EventResult::NotHandled;
+        }
+
         match key.code {
             // Panel navigation
             KeyCode::Tab => {
@@ -384,9 +526,40 @@ impl Component for OptimizeScreen {
                 EventResult::Handled
             }
 
-            // r: Run optimization
+            // r: Run optimization (from any panel)
             KeyCode::Char('r') => {
-                state.set_error("Optimization not yet connected".to_string());
+                let result = crate::actions::optimize::handle_optimize_action(
+                    state,
+                    OptimizeAction::RunOptimization,
+                    "",
+                );
+                match result {
+                    crate::actions::ActionResult::Done(modal) => {
+                        state.modal = modal.unwrap_or(ModalState::None);
+                    }
+                    crate::actions::ActionResult::Modified(modal) => {
+                        state.mark_modified();
+                        state.modal = modal.unwrap_or(ModalState::None);
+                    }
+                    crate::actions::ActionResult::Error(msg) => {
+                        state.set_error(msg);
+                    }
+                }
+                EventResult::Handled
+            }
+
+            // s: Settings (from any panel)
+            KeyCode::Char('s') => {
+                let result = show_settings_form(state);
+                match result {
+                    crate::actions::ActionResult::Done(modal)
+                    | crate::actions::ActionResult::Modified(modal) => {
+                        state.modal = modal.unwrap_or(ModalState::None);
+                    }
+                    crate::actions::ActionResult::Error(msg) => {
+                        state.set_error(msg);
+                    }
+                }
                 EventResult::Handled
             }
 
@@ -418,7 +591,20 @@ impl Component for OptimizeScreen {
             // a: Add parameter
             KeyCode::Char('a') => {
                 if panel == OptimizePanel::Parameters {
-                    state.set_error("Press Enter to configure".to_string());
+                    let result = crate::actions::optimize::handle_optimize_action(
+                        state,
+                        OptimizeAction::AddParameter,
+                        "",
+                    );
+                    match result {
+                        crate::actions::ActionResult::Done(modal)
+                        | crate::actions::ActionResult::Modified(modal) => {
+                            state.modal = modal.unwrap_or(ModalState::None);
+                        }
+                        crate::actions::ActionResult::Error(msg) => {
+                            state.set_error(msg);
+                        }
+                    }
                 }
                 EventResult::Handled
             }
@@ -441,9 +627,82 @@ impl Component for OptimizeScreen {
                 EventResult::Handled
             }
 
-            // Enter: Configure (show message for now)
+            // Enter: Configure based on panel
             KeyCode::Enter => {
-                state.set_error("Press Enter to configure".to_string());
+                match panel {
+                    OptimizePanel::Parameters => {
+                        // Edit selected parameter (if any)
+                        if !state.optimize_state.selected_parameters.is_empty() {
+                            // For now, just show add dialog since editing is complex
+                            let result = crate::actions::optimize::handle_optimize_action(
+                                state,
+                                OptimizeAction::AddParameter,
+                                "",
+                            );
+                            match result {
+                                crate::actions::ActionResult::Done(modal)
+                                | crate::actions::ActionResult::Modified(modal) => {
+                                    state.modal = modal.unwrap_or(ModalState::None);
+                                }
+                                crate::actions::ActionResult::Error(msg) => {
+                                    state.set_error(msg);
+                                }
+                            }
+                        } else {
+                            // No parameters, show add dialog
+                            let result = crate::actions::optimize::handle_optimize_action(
+                                state,
+                                OptimizeAction::AddParameter,
+                                "",
+                            );
+                            match result {
+                                crate::actions::ActionResult::Done(modal)
+                                | crate::actions::ActionResult::Modified(modal) => {
+                                    state.modal = modal.unwrap_or(ModalState::None);
+                                }
+                                crate::actions::ActionResult::Error(msg) => {
+                                    state.set_error(msg);
+                                }
+                            }
+                        }
+                    }
+                    OptimizePanel::Objective => {
+                        // Show objective picker
+                        let result = show_objective_picker(state);
+                        match result {
+                            crate::actions::ActionResult::Done(modal)
+                            | crate::actions::ActionResult::Modified(modal) => {
+                                state.modal = modal.unwrap_or(ModalState::None);
+                            }
+                            crate::actions::ActionResult::Error(msg) => {
+                                state.set_error(msg);
+                            }
+                        }
+                    }
+                    OptimizePanel::Progress => {
+                        // Run optimization
+                        let result = crate::actions::optimize::handle_optimize_action(
+                            state,
+                            OptimizeAction::RunOptimization,
+                            "",
+                        );
+                        match result {
+                            crate::actions::ActionResult::Done(modal) => {
+                                state.modal = modal.unwrap_or(ModalState::None);
+                            }
+                            crate::actions::ActionResult::Modified(modal) => {
+                                state.mark_modified();
+                                state.modal = modal.unwrap_or(ModalState::None);
+                            }
+                            crate::actions::ActionResult::Error(msg) => {
+                                state.set_error(msg);
+                            }
+                        }
+                    }
+                    OptimizePanel::Results => {
+                        // Nothing to configure in results
+                    }
+                }
                 EventResult::Handled
             }
 
@@ -467,9 +726,9 @@ impl Component for OptimizeScreen {
         let right_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(33), // Objective
-                Constraint::Percentage(34), // Progress
-                Constraint::Percentage(33), // Results
+                Constraint::Percentage(30), // Objective
+                Constraint::Percentage(35), // Progress
+                Constraint::Percentage(35), // Results
             ])
             .split(main_layout[1]);
 

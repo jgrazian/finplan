@@ -21,6 +21,8 @@ pub enum ModalContext {
     Effect(EffectContext),
     /// Context for config operations (tax, inflation)
     Config(ConfigContext),
+    /// Context for optimization operations
+    Optimize(OptimizeContext),
 }
 
 /// Simple index-based context
@@ -431,6 +433,17 @@ pub enum ConfigContext {
     Inflation(InflationConfigContext),
 }
 
+/// Optimization context for parameter/objective configuration
+#[derive(Debug, Clone, PartialEq)]
+pub enum OptimizeContext {
+    /// Configuring a parameter at a specific index
+    Parameter { index: usize },
+    /// Selecting objective type
+    Objective,
+    /// Configuring settings (iterations, algorithm)
+    Settings,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaxConfigContext {
     StateRate,
@@ -563,6 +576,22 @@ impl ModalContext {
     pub fn as_config(&self) -> Option<&ConfigContext> {
         match self {
             Self::Config(ctx) => Some(ctx),
+            _ => None,
+        }
+    }
+
+    /// Extract optimize context
+    pub fn as_optimize(&self) -> Option<&OptimizeContext> {
+        match self {
+            Self::Optimize(ctx) => Some(ctx),
+            _ => None,
+        }
+    }
+
+    /// Extract optimize parameter index
+    pub fn as_optimize_param_index(&self) -> Option<usize> {
+        match self {
+            Self::Optimize(OptimizeContext::Parameter { index }) => Some(*index),
             _ => None,
         }
     }

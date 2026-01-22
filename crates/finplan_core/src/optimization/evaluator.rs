@@ -45,10 +45,42 @@ pub fn apply_parameters(
                 let event = config.events.iter_mut().find(|e| e.event_id == *event_id)?;
                 modify_fixed_amount_in_effects(&mut event.effects, *value);
             }
-            OptimizableParameter::AssetAllocation { .. } => {
-                // Asset allocation optimization is more complex - would need to
-                // modify account asset holdings. For now, skip.
-                // TODO: Implement asset allocation optimization
+            OptimizableParameter::AssetAllocation { account_id, .. } => {
+                // Find the account and adjust asset allocation
+                // The stock_pct value represents what percentage of the portfolio
+                // should be in the first asset (stocks) vs cash
+                let stock_pct = *value;
+
+                let account = config
+                    .accounts
+                    .iter_mut()
+                    .find(|a| a.account_id == *account_id)?;
+
+                if let crate::model::AccountFlavor::Investment(ref mut inv) = account.flavor {
+                    // Calculate total value (positions + cash)
+                    // Use cost_basis as proxy for value since we don't have market data here
+                    let total_positions_value: f64 =
+                        inv.positions.iter().map(|p| p.cost_basis).sum();
+                    let total_value = total_positions_value + inv.cash.value;
+
+                    if total_value > 0.0 && !inv.positions.is_empty() {
+                        // Target: stock_pct in positions, (1-stock_pct) in cash
+                        let target_stock_value = total_value * stock_pct;
+                        let target_cash_value = total_value * (1.0 - stock_pct);
+
+                        // Scale all positions proportionally to hit target stock value
+                        if total_positions_value > 0.0 {
+                            let scale_factor = target_stock_value / total_positions_value;
+                            for position in &mut inv.positions {
+                                position.units *= scale_factor;
+                                position.cost_basis *= scale_factor;
+                            }
+                        }
+
+                        // Set cash to target cash value
+                        inv.cash.value = target_cash_value;
+                    }
+                }
             }
         }
     }
