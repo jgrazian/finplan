@@ -588,9 +588,26 @@ impl ResultsScreen {
         let selected_year = years.get(year_index).copied().unwrap_or(0) as i32;
 
         let items: Vec<ListItem> = if let Some(result) = Self::get_current_tui_result(state) {
-            // Auto-scroll to keep selected year visible
-            let visible_count = (area.height as usize).saturating_sub(5); // Account for borders, header, summary
-            let start_idx = state.results_state.scroll_offset;
+            // Calculate visible rows (account for borders, header, summary)
+            let visible_count = (area.height as usize).saturating_sub(5);
+            let total_years = result.years.len();
+
+            // Center-based scrolling: keep selection in the middle when possible
+            let center = visible_count / 2;
+
+            // Calculate scroll offset to center the selected year
+            let start_idx = if year_index <= center {
+                // Near the top: selection moves down from top, no scroll needed
+                0
+            } else if year_index >= total_years.saturating_sub(visible_count.saturating_sub(center))
+            {
+                // Near the bottom: keep at least half the visible rows showing
+                // This ensures context is visible even at the end
+                total_years.saturating_sub(visible_count)
+            } else {
+                // Middle: center the selection
+                year_index.saturating_sub(center)
+            };
 
             // Summary section
             let mut items = vec![
@@ -864,8 +881,7 @@ impl Component for ResultsScreen {
                         let years = Self::get_years_current(state);
                         if state.results_state.selected_year_index + 1 < years.len() {
                             state.results_state.selected_year_index += 1;
-                            state.results_state.scroll_offset =
-                                state.results_state.selected_year_index;
+                            // Scroll offset is calculated in render, not here
                         }
                     }
                     ResultsPanel::Ledger => {
@@ -890,8 +906,7 @@ impl Component for ResultsScreen {
                     ResultsPanel::YearlyBreakdown => {
                         if state.results_state.selected_year_index > 0 {
                             state.results_state.selected_year_index -= 1;
-                            state.results_state.scroll_offset =
-                                state.results_state.selected_year_index;
+                            // Scroll offset is calculated in render, not here
                         }
                     }
                     ResultsPanel::Ledger => {
@@ -912,9 +927,7 @@ impl Component for ResultsScreen {
                     | ResultsPanel::YearlyBreakdown => {
                         if state.results_state.selected_year_index > 0 {
                             state.results_state.selected_year_index -= 1;
-                            // Sync yearly breakdown scroll to selected year
-                            state.results_state.scroll_offset =
-                                state.results_state.selected_year_index;
+                            // Scroll offset is calculated in render, not here
                         }
                     }
                     _ => {}
@@ -929,9 +942,7 @@ impl Component for ResultsScreen {
                         let years = Self::get_years_current(state);
                         if state.results_state.selected_year_index + 1 < years.len() {
                             state.results_state.selected_year_index += 1;
-                            // Sync yearly breakdown scroll to selected year
-                            state.results_state.scroll_offset =
-                                state.results_state.selected_year_index;
+                            // Scroll offset is calculated in render, not here
                         }
                     }
                     _ => {}
@@ -946,7 +957,7 @@ impl Component for ResultsScreen {
                     | ResultsPanel::AccountChart
                     | ResultsPanel::YearlyBreakdown => {
                         state.results_state.selected_year_index = 0;
-                        state.results_state.scroll_offset = 0;
+                        // Scroll offset is calculated in render, not here
                     }
                     _ => {}
                 }
@@ -959,7 +970,7 @@ impl Component for ResultsScreen {
                     | ResultsPanel::YearlyBreakdown => {
                         let years = Self::get_years_current(state);
                         state.results_state.selected_year_index = years.len().saturating_sub(1);
-                        state.results_state.scroll_offset = state.results_state.selected_year_index;
+                        // Scroll offset is calculated in render, not here
                     }
                     _ => {}
                 }

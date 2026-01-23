@@ -25,6 +25,31 @@ use super::Screen;
 pub struct PortfolioProfilesScreen;
 
 impl PortfolioProfilesScreen {
+    /// Calculate centered scroll offset for a list
+    /// Returns the scroll offset that centers the selected item when possible
+    fn calculate_centered_scroll(
+        selected_idx: usize,
+        total_items: usize,
+        visible_count: usize,
+    ) -> usize {
+        if total_items <= visible_count {
+            return 0;
+        }
+
+        let center = visible_count / 2;
+
+        if selected_idx <= center {
+            // Near the top: selection moves down from top
+            0
+        } else if selected_idx >= total_items.saturating_sub(visible_count.saturating_sub(center)) {
+            // Near the bottom: keep at least half visible
+            total_items.saturating_sub(visible_count)
+        } else {
+            // Middle: center the selection
+            selected_idx.saturating_sub(center)
+        }
+    }
+
     /// Extract all unique assets from investment accounts
     fn get_unique_assets(state: &AppState) -> Vec<AssetTag> {
         let mut assets = HashSet::new();
@@ -135,16 +160,22 @@ impl PortfolioProfilesScreen {
             top_area.height,
         );
 
-        // Render account list
+        // Render account list with scrolling
         let accounts = &state.data().portfolios.accounts;
+        let visible_count = list_area.height as usize;
+        let selected_idx = state.portfolio_profiles_state.selected_account_index;
+        let scroll_offset =
+            Self::calculate_centered_scroll(selected_idx, accounts.len(), visible_count);
+
         let mut lines = Vec::new();
-        for (idx, account) in accounts.iter().enumerate() {
+        for (idx, account) in accounts
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible_count)
+        {
             let value = get_account_value(account);
-            let prefix = if idx == state.portfolio_profiles_state.selected_account_index {
-                "> "
-            } else {
-                "  "
-            };
+            let prefix = if idx == selected_idx { "> " } else { "  " };
             // Truncate name if needed to fit
             let max_name_len = list_width.saturating_sub(15) as usize;
             let name = if account.name.len() > max_name_len && max_name_len > 3 {
@@ -160,7 +191,7 @@ impl PortfolioProfilesScreen {
                 width = max_name_len.max(1)
             );
 
-            let style = if idx == state.portfolio_profiles_state.selected_account_index {
+            let style = if idx == selected_idx {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
@@ -407,18 +438,18 @@ impl PortfolioProfilesScreen {
         // Calculate total value
         let total_value: f64 = assets.iter().map(|a| a.value).sum();
 
-        // Render horizontal bars for each asset
+        // Render horizontal bars for each asset with scrolling
         let available_height = area.height as usize;
-        let max_bars = available_height;
+        // Reserve 1 row for "Add new" option if in editing mode
+        let max_bars = available_height.saturating_sub(if editing_mode { 1 } else { 0 });
+        // Total items includes assets + "Add new" option
+        let total_items = assets.len() + if editing_mode { 1 } else { 0 };
+        let scroll_offset = Self::calculate_centered_scroll(selected_idx, total_items, max_bars);
 
         let mut y_offset = 0;
 
-        // Render existing assets
-        for (idx, asset_val) in assets
-            .iter()
-            .enumerate()
-            .take(max_bars.saturating_sub(if editing_mode { 1 } else { 0 }))
-        {
+        // Render existing assets (with scrolling)
+        for (idx, asset_val) in assets.iter().enumerate().skip(scroll_offset).take(max_bars) {
             let is_selected = editing_mode && idx == selected_idx;
             let color = Self::asset_color_from_name(&asset_val.asset.0);
 
@@ -495,9 +526,14 @@ impl PortfolioProfilesScreen {
             y_offset += 1;
         }
 
-        // Render "Add new" option in editing mode
-        if editing_mode && y_offset < max_bars {
-            let is_add_selected = selected_idx == assets.len();
+        // Render "Add new" option in editing mode (if visible after scrolling)
+        // The "Add new" option is at index `assets.len()`
+        let add_new_idx = assets.len();
+        if editing_mode
+            && add_new_idx >= scroll_offset
+            && add_new_idx < scroll_offset + available_height
+        {
+            let is_add_selected = selected_idx == add_new_idx;
 
             let line = if adding_new {
                 // Show name input buffer
@@ -601,15 +637,21 @@ impl PortfolioProfilesScreen {
             top_area.height,
         );
 
-        // Render profile list
+        // Render profile list with scrolling
         let profiles = &state.data().profiles;
+        let visible_count = list_area.height as usize;
+        let selected_idx = state.portfolio_profiles_state.selected_profile_index;
+        let scroll_offset =
+            Self::calculate_centered_scroll(selected_idx, profiles.len(), visible_count);
+
         let mut lines = Vec::new();
-        for (idx, profile_data) in profiles.iter().enumerate() {
-            let prefix = if idx == state.portfolio_profiles_state.selected_profile_index {
-                "> "
-            } else {
-                "  "
-            };
+        for (idx, profile_data) in profiles
+            .iter()
+            .enumerate()
+            .skip(scroll_offset)
+            .take(visible_count)
+        {
+            let prefix = if idx == selected_idx { "> " } else { "  " };
             // Truncate name if needed
             let max_name_len = list_width.saturating_sub(4) as usize;
             let name = if profile_data.name.0.len() > max_name_len && max_name_len > 3 {
@@ -622,7 +664,7 @@ impl PortfolioProfilesScreen {
             };
             let content = format!("{}{}", prefix, name);
 
-            let style = if idx == state.portfolio_profiles_state.selected_profile_index {
+            let style = if idx == selected_idx {
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD)
@@ -905,14 +947,22 @@ impl PortfolioProfilesScreen {
         let unique_assets = Self::get_unique_assets(state);
         let mappings = &state.data().assets;
 
+        // Calculate scrolling
+        let visible_count = area.height.saturating_sub(2) as usize; // Account for borders
+        let selected_idx = state.portfolio_profiles_state.selected_mapping_index;
+        let scroll_offset =
+            Self::calculate_centered_scroll(selected_idx, unique_assets.len(), visible_count);
+
         let items: Vec<ListItem> = unique_assets
             .iter()
             .enumerate()
+            .skip(scroll_offset)
+            .take(visible_count)
             .map(|(idx, asset)| {
                 let mapping = mappings.get(asset);
                 let mapping_str = mapping.map(|p| p.0.as_str()).unwrap_or("(unmapped)");
 
-                let style = if idx == state.portfolio_profiles_state.selected_mapping_index {
+                let style = if idx == selected_idx {
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)

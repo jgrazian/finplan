@@ -137,6 +137,14 @@ pub struct PortfolioProfilesState {
     pub config_collapsed: bool,
     /// Account interaction mode (browsing vs editing holdings)
     pub account_mode: AccountInteractionMode,
+    /// Scroll offset for accounts list
+    pub account_scroll_offset: usize,
+    /// Scroll offset for profiles list
+    pub profile_scroll_offset: usize,
+    /// Scroll offset for asset mappings list
+    pub mapping_scroll_offset: usize,
+    /// Scroll offset for holdings list (when editing)
+    pub holdings_scroll_offset: usize,
 }
 
 impl Default for PortfolioProfilesState {
@@ -150,6 +158,10 @@ impl Default for PortfolioProfilesState {
             mappings_collapsed: false,
             config_collapsed: false,
             account_mode: AccountInteractionMode::Browsing,
+            account_scroll_offset: 0,
+            profile_scroll_offset: 0,
+            mapping_scroll_offset: 0,
+            holdings_scroll_offset: 0,
         }
     }
 }
