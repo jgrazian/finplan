@@ -109,7 +109,7 @@ pub fn handle_action_for_effect_pick(
             ActionResult::modal(ModalState::Confirm(
                 ConfirmModal::new(
                     "Delete Effect",
-                    &format!("Delete effect: {}?", effect_desc),
+                    &format!("Delete effect: {}?\n\nThis cannot be undone.", effect_desc),
                     ModalAction::DELETE_EFFECT,
                 )
                 .with_typed_context(ModalContext::effect_existing(event_idx, effect_idx)),

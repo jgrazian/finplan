@@ -10,7 +10,7 @@ use jiff::civil::Date;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Bar, BarChart, BarGroup, Block, Borders, List, ListItem, Paragraph},
 };
@@ -156,7 +156,10 @@ impl Component for ScenarioScreen {
                     if let Some(selected_name) = self.get_selected_scenario_name(state) {
                         state.modal = ModalState::Confirm(ConfirmModal::new(
                             "Delete Scenario",
-                            &format!("Are you sure you want to delete '{}'?", selected_name),
+                            &format!(
+                                "Delete scenario '{}'?\n\nThis cannot be undone.",
+                                selected_name
+                            ),
                             ModalAction::DELETE_SCENARIO,
                         ));
                     }
@@ -170,7 +173,16 @@ impl Component for ScenarioScreen {
             KeyCode::Char('m') => {
                 match state.run_monte_carlo(1000) {
                     Ok(()) => {
-                        // Stay on scenario tab to see updated summary
+                        if let Some(mc) = &state.monte_carlo_result {
+                            state.modal = ModalState::Message(MessageModal::info(
+                                "Monte Carlo Complete",
+                                &format!(
+                                    "{} iterations | {:.0}% success rate",
+                                    mc.stats.num_iterations,
+                                    mc.stats.success_rate * 100.0
+                                ),
+                            ));
+                        }
                     }
                     Err(e) => state.set_error(format!("Monte Carlo simulation failed: {}", e)),
                 }
@@ -474,16 +486,16 @@ impl ScenarioScreen {
             Span::raw(" switch"),
         ]);
 
-        let title = if focused {
-            " SCENARIOS [j/k nav, Tab panels] "
-        } else {
-            " SCENARIOS "
-        };
+        let title = " SCENARIOS ";
 
-        let block = Block::default()
+        let mut block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
             .title(title);
+
+        if focused {
+            block = block.title_bottom(Line::from(" j/k nav | Tab panels ").fg(Color::DarkGray));
+        }
 
         // Layout for list + keybinds
         let inner = block.inner(area);

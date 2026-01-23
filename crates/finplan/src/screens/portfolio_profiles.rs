@@ -1354,7 +1354,10 @@ impl PortfolioProfilesScreen {
                     state.modal = ModalState::Confirm(
                         ConfirmModal::new(
                             "Delete Account",
-                            &format!("Delete account '{}'?", account.name),
+                            &format!(
+                                "Delete account '{}'?\n\nThis cannot be undone.",
+                                account.name
+                            ),
                             ModalAction::DELETE_ACCOUNT,
                         )
                         .with_typed_context(ModalContext::account_index(
@@ -1819,7 +1822,10 @@ impl PortfolioProfilesScreen {
                                 state.modal = ModalState::Confirm(
                                     ConfirmModal::new(
                                         "Delete Holding",
-                                        &format!("Delete holding '{}'?", name),
+                                        &format!(
+                                            "Delete holding '{}'?\n\nThis cannot be undone.",
+                                            name
+                                        ),
                                         ModalAction::DELETE_HOLDING,
                                     )
                                     .with_typed_context(
@@ -2006,7 +2012,10 @@ impl PortfolioProfilesScreen {
                     state.modal = ModalState::Confirm(
                         ConfirmModal::new(
                             "Delete Profile",
-                            &format!("Delete profile '{}'?", profile_data.name.0),
+                            &format!(
+                                "Delete profile '{}'?\n\nThis cannot be undone.",
+                                profile_data.name.0
+                            ),
                             ModalAction::DELETE_PROFILE,
                         )
                         .with_typed_context(ModalContext::profile_index(

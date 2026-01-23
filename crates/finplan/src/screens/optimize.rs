@@ -3,9 +3,8 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
 use super::Screen;
@@ -231,7 +230,7 @@ impl OptimizeScreen {
         frame.render_widget(paragraph, area);
     }
 
-    /// Render the Progress panel (right-middle) with convergence chart
+    /// Render the Progress panel (right-middle) with convergence info
     fn render_progress(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
         let border_style = if focused {
             Style::default().fg(Color::Yellow)
@@ -291,55 +290,138 @@ impl OptimizeScreen {
             let paragraph = Paragraph::new(content).block(block);
             frame.render_widget(paragraph, area);
         } else {
-            // Render convergence line chart
-            let inner = block.inner(area);
-            frame.render_widget(block, area);
+            // Show text-based progress information with sparkline-style trend
+            let current_iter = state.optimize_state.current_iteration;
+            let max_iter = state.optimize_state.max_iterations;
 
-            // Prepare data for line chart
-            let chart_data: Vec<(f64, f64)> = convergence_data
+            // Check if optimization is complete (has result)
+            let is_complete = state.optimize_state.result.is_some();
+            let actual_iterations = if let Some(ref result) = state.optimize_state.result {
+                result.iterations
+            } else {
+                current_iter
+            };
+
+            // Get latest objective value
+            let latest_value = convergence_data.last().map(|(_, v)| *v).unwrap_or(0.0);
+            let first_value = convergence_data.first().map(|(_, v)| *v).unwrap_or(0.0);
+
+            // Build progress bar - show 100% if complete, otherwise show progress
+            let bar_width = 30;
+            let (progress_bar, iteration_display) = if is_complete {
+                let filled = bar_width;
+                (
+                    format!("[{}] Complete", "=".repeat(filled)),
+                    format!("{} iterations", actual_iterations),
+                )
+            } else {
+                let progress_pct = (current_iter as f64 / max_iter as f64 * 100.0) as usize;
+                let filled = (progress_pct * bar_width / 100).min(bar_width);
+                let empty = bar_width - filled;
+                (
+                    format!(
+                        "[{}{}] {}%",
+                        "=".repeat(filled),
+                        " ".repeat(empty),
+                        progress_pct
+                    ),
+                    format!("{}/{}", current_iter, max_iter),
+                )
+            };
+
+            // Build sparkline from convergence data (last 20 points)
+            let sparkline_chars = [
+                ' ', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}',
+                '\u{2587}', '\u{2588}',
+            ];
+            let recent_data: Vec<f64> = convergence_data
                 .iter()
-                .map(|(iter, value)| (*iter as f64, *value))
+                .rev()
+                .take(20)
+                .map(|(_, v)| *v)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
                 .collect();
 
-            if !chart_data.is_empty() {
-                let max_iter = convergence_data.iter().map(|(i, _)| *i).max().unwrap_or(1) as f64;
-                let max_value = convergence_data
+            let sparkline = if !recent_data.is_empty() {
+                let min_val = recent_data.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_val = recent_data
                     .iter()
-                    .map(|(_, v)| *v)
+                    .cloned()
                     .fold(f64::NEG_INFINITY, f64::max);
-                let min_value = convergence_data
+                let range = max_val - min_val;
+
+                recent_data
                     .iter()
-                    .map(|(_, v)| *v)
-                    .fold(f64::INFINITY, f64::min);
+                    .map(|v| {
+                        if range.abs() < 0.0001 {
+                            sparkline_chars[4] // middle height for flat line
+                        } else {
+                            let normalized = ((v - min_val) / range * 8.0) as usize;
+                            sparkline_chars[normalized.min(8)]
+                        }
+                    })
+                    .collect::<String>()
+            } else {
+                String::new()
+            };
 
-                let y_range = if (max_value - min_value).abs() < 1.0 {
-                    [min_value - 1000.0, max_value + 1000.0]
-                } else {
-                    [min_value * 0.95, max_value * 1.05]
-                };
+            // Calculate improvement
+            let improvement = if first_value.abs() > 0.0001 {
+                ((latest_value - first_value) / first_value.abs()) * 100.0
+            } else {
+                0.0
+            };
 
-                let dataset = Dataset::default()
-                    .marker(symbols::Marker::Braille)
-                    .graph_type(GraphType::Line)
-                    .style(Style::default().fg(Color::Cyan))
-                    .data(&chart_data);
+            let improvement_style = if improvement >= 0.0 {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Red)
+            };
 
-                let chart = Chart::new(vec![dataset])
-                    .x_axis(
-                        Axis::default()
-                            .title("Iteration")
-                            .style(Style::default().fg(Color::DarkGray))
-                            .bounds([1.0, max_iter]),
-                    )
-                    .y_axis(
-                        Axis::default()
-                            .title("Objective")
-                            .style(Style::default().fg(Color::DarkGray))
-                            .bounds(y_range),
-                    );
+            let content = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  Iteration: "),
+                    Span::styled(
+                        iteration_display,
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(progress_bar, Style::default().fg(Color::Green)),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw(if is_complete {
+                        "  Best Objective: "
+                    } else {
+                        "  Current Objective: "
+                    }),
+                    Span::styled(
+                        format_currency(latest_value),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::raw("  Improvement: "),
+                    Span::styled(format!("{:+.1}%", improvement), improvement_style),
+                ]),
+                Line::from(""),
+                Line::from(vec![
+                    Span::raw("  Trend: "),
+                    Span::styled(sparkline, Style::default().fg(Color::Cyan)),
+                ]),
+            ];
 
-                frame.render_widget(chart, inner);
-            }
+            let paragraph = Paragraph::new(content).block(block);
+            frame.render_widget(paragraph, area);
         }
     }
 

@@ -25,10 +25,16 @@ impl EventsScreen {
         let is_focused = state.events_state.focused_panel == EventsPanel::EventList;
 
         let items: Vec<ListItem> = if state.data().events.is_empty() {
-            vec![ListItem::new(Line::from(Span::styled(
-                "(no events configured)",
-                Style::default().fg(Color::DarkGray),
-            )))]
+            vec![
+                ListItem::new(Line::from(Span::styled(
+                    "No events configured.",
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                ListItem::new(Line::from(Span::styled(
+                    "Press 'a' to add.",
+                    Style::default().fg(Color::DarkGray),
+                ))),
+            ]
         } else {
             state
                 .data()
@@ -40,7 +46,7 @@ impl EventsScreen {
 
                     // Create inline effect preview
                     let effect_preview = if event.effects.is_empty() {
-                        "(no effects)".to_string()
+                        "No effects".to_string()
                     } else {
                         let first_effect = Self::format_effect_short(&event.effects[0]);
                         if event.effects.len() > 1 {
@@ -75,11 +81,7 @@ impl EventsScreen {
                 .collect()
         };
 
-        let title = if is_focused {
-            " EVENTS [FOCUSED] "
-        } else {
-            " EVENTS "
-        };
+        let title = " EVENTS ";
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -178,11 +180,7 @@ impl EventsScreen {
     fn render_event_details(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused = state.events_state.focused_panel == EventsPanel::Details;
 
-        let title = if is_focused {
-            " EVENT DETAILS [FOCUSED] "
-        } else {
-            " EVENT DETAILS "
-        };
+        let title = " EVENT DETAILS ";
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -259,7 +257,7 @@ impl EventsScreen {
             )));
 
             if event.effects.is_empty() {
-                lines.push(Line::from("  (no effects)"));
+                lines.push(Line::from("  No effects"));
             } else {
                 for (i, effect) in event.effects.iter().enumerate() {
                     lines.push(Line::from(format!(
@@ -299,11 +297,7 @@ impl EventsScreen {
         }
 
         let indicator = "[-]";
-        let title = if is_focused {
-            format!(" {} TIMELINE [FOCUSED] ", indicator)
-        } else {
-            format!(" {} TIMELINE ", indicator)
-        };
+        let title = format!(" {} TIMELINE ", indicator);
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -336,7 +330,7 @@ impl EventsScreen {
 
         if events.is_empty() {
             lines.push(Line::from(Span::styled(
-                "(no events)",
+                "No events.",
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
@@ -886,7 +880,7 @@ impl EventsScreen {
                     state.modal = ModalState::Confirm(
                         ConfirmModal::new(
                             "Delete Event",
-                            &format!("Delete event '{}'?", event.name.0),
+                            &format!("Delete event '{}'?\n\nThis cannot be undone.", event.name.0),
                             ModalAction::DELETE_EVENT,
                         )
                         .with_typed_context(ModalContext::event_index(
