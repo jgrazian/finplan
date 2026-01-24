@@ -356,7 +356,7 @@ impl App {
                 ModalResult::Cancelled => {
                     self.state.modal = ModalState::None;
                 }
-                ModalResult::Continue => {}
+                ModalResult::Continue | ModalResult::FieldChanged(_) => {}
             }
             return;
         }

@@ -75,6 +75,8 @@ pub enum ModalResult {
     Cancelled,
     /// Key was handled, modal still active
     Continue,
+    /// A field value changed, may need to update dependent fields
+    FieldChanged(usize),
 }
 
 /// Render the active modal as an overlay
@@ -104,7 +106,7 @@ pub fn render_modal(frame: &mut Frame, state: &AppState) {
 
 /// Handle key events for the active modal
 pub fn handle_modal_key(key: KeyEvent, state: &mut AppState) -> ModalResult {
-    match &mut state.modal {
+    let result = match &mut state.modal {
         ModalState::None => ModalResult::Continue,
         ModalState::TextInput(modal) => text_input::handle_text_input_key(key, modal),
         ModalState::Message(_) => message::handle_message_key(key),
@@ -114,7 +116,65 @@ pub fn handle_modal_key(key: KeyEvent, state: &mut AppState) -> ModalResult {
         ModalState::Picker(modal) => picker::handle_picker_key(key, modal),
         ModalState::Form(modal) => form::handle_form_key(key, modal),
         ModalState::Confirm(modal) => confirm::handle_confirm_key(key, modal),
+    };
+
+    // Handle dependent field updates for form modals
+    if let ModalResult::FieldChanged(field_idx) = result {
+        update_dependent_fields(state, field_idx);
+        return ModalResult::Continue;
     }
+
+    result
+}
+
+/// Update dependent fields when a form field value changes
+fn update_dependent_fields(state: &mut AppState, field_idx: usize) {
+    // First, check if we need to update and get necessary data (immutable borrow)
+    let update_info = {
+        let ModalState::Form(modal) = &state.modal else {
+            return;
+        };
+
+        // Asset Purchase forms: "To Account" (field 1) affects "Asset" (field 2)
+        if (modal.title == "Edit Asset Purchase" || modal.title == "New Asset Purchase")
+            && field_idx == 1
+        {
+            let to_account = modal.fields[1].value.clone();
+            let current_asset = modal.fields[2].value.clone();
+            let assets = get_assets_for_account(state, &to_account);
+            Some((assets, current_asset))
+        } else {
+            None
+        }
+    };
+
+    // Now apply the update (mutable borrow)
+    if let Some((assets, current_asset)) = update_info {
+        let ModalState::Form(modal) = &mut state.modal else {
+            return;
+        };
+
+        // Update the Asset field options
+        modal.fields[2].options = assets;
+
+        // Keep current selection if still valid, otherwise select first
+        if !modal.fields[2].options.contains(&current_asset) {
+            modal.fields[2].value = modal.fields[2].options.first().cloned().unwrap_or_default();
+        }
+    }
+}
+
+/// Get asset names for an account by account name
+fn get_assets_for_account(state: &AppState, account_name: &str) -> Vec<String> {
+    state
+        .data()
+        .portfolios
+        .accounts
+        .iter()
+        .find(|a| a.name == account_name)
+        .and_then(|a| a.account_type.as_investment())
+        .map(|inv| inv.assets.iter().map(|av| av.asset.0.clone()).collect())
+        .unwrap_or_default()
 }
 
 /// Create a centered rectangle within the given area

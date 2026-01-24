@@ -34,7 +34,7 @@ impl StatusBar {
                 "Tab: panel | j/k: nav | r: run | a: add param | d: delete"
             }
         };
-        format!("{} | ^S: save | q: quit", base)
+        format!("{} | ctrl + s: save | q: quit", base)
     }
 
     fn get_dirty_indicator(state: &AppState) -> Option<&'static str> {

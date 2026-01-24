@@ -184,24 +184,27 @@ fn build_edit_form_for_effect(
             to_account,
             asset,
             amount,
-        } => ActionResult::modal(ModalState::Form(
-            FormModal::new(
-                "Edit Asset Purchase",
-                vec![
-                    FormField::select("From Account", accounts.clone(), &from.0),
-                    FormField::select("To Account", accounts, &to_account.0),
-                    FormField::text("Asset", &asset.0),
-                    FormField::currency("Amount", amount_to_f64(amount)),
-                ],
-                ModalAction::EDIT_EFFECT,
-            )
-            .with_typed_context(ModalContext::effect_edit(
-                event_idx,
-                effect_idx,
-                EffectTypeContext::AssetPurchase,
+        } => {
+            let assets = get_assets_for_account(state, &to_account.0);
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "Edit Asset Purchase",
+                    vec![
+                        FormField::select("From Account", accounts.clone(), &from.0),
+                        FormField::select("To Account", accounts, &to_account.0),
+                        FormField::select("Asset", assets, &asset.0),
+                        FormField::currency("Amount", amount_to_f64(amount)),
+                    ],
+                    ModalAction::EDIT_EFFECT,
+                )
+                .with_typed_context(ModalContext::effect_edit(
+                    event_idx,
+                    effect_idx,
+                    EffectTypeContext::AssetPurchase,
+                ))
+                .start_editing(),
             ))
-            .start_editing(),
-        )),
+        }
 
         EffectData::AssetSale {
             from,
@@ -493,6 +496,19 @@ fn strategy_options() -> Vec<String> {
     ]
 }
 
+/// Get asset names for an account by account name
+fn get_assets_for_account(state: &AppState, account_name: &str) -> Vec<String> {
+    state
+        .data()
+        .portfolios
+        .accounts
+        .iter()
+        .find(|a| a.name == account_name)
+        .and_then(|a| a.account_type.as_investment())
+        .map(|inv| inv.assets.iter().map(|av| av.asset.0.clone()).collect())
+        .unwrap_or_default()
+}
+
 /// Handle effect type selection for adding new effect
 pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> ActionResult {
     let event_idx = state.events_state.selected_event_index;
@@ -621,13 +637,15 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
             if accounts.is_empty() {
                 return ActionResult::error("No accounts available. Create an account first.");
             }
+            let assets = get_assets_for_account(state, &first_account);
+            let first_asset = assets.first().cloned().unwrap_or_default();
             ActionResult::modal(ModalState::Form(
                 FormModal::new(
                     "New Asset Purchase",
                     vec![
                         FormField::select("From Account", accounts.clone(), &first_account),
                         FormField::select("To Account", accounts, &first_account),
-                        FormField::text("Asset", ""),
+                        FormField::select("Asset", assets, &first_asset),
                         FormField::currency("Amount", 0.0),
                     ],
                     ModalAction::ADD_EFFECT,

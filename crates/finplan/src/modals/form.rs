@@ -265,14 +265,15 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
 
     // Handle Select fields specially - use Left/Right for option cycling
     if field.field_type == FieldType::Select {
+        let field_index = modal.focused_field;
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => {
                 field.select_prev();
-                return ModalResult::Continue;
+                return ModalResult::FieldChanged(field_index);
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 field.select_next();
-                return ModalResult::Continue;
+                return ModalResult::FieldChanged(field_index);
             }
             KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
                 // Move to next field
