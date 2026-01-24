@@ -2,7 +2,7 @@ use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
 use crate::state::{
     AppState, ConfirmModal, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState,
-    ScenarioPanel, ScenarioPickerModal, TabId,
+    ScenarioPanel, ScenarioPickerModal,
 };
 use crate::util::format::{format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -169,22 +169,10 @@ impl Component for ScenarioScreen {
                 EventResult::Handled
             }
 
-            // Run Monte Carlo on current scenario
+            // Run Monte Carlo on current scenario (background)
             KeyCode::Char('m') => {
-                match state.run_monte_carlo(1000) {
-                    Ok(()) => {
-                        if let Some(mc) = &state.monte_carlo_result {
-                            state.modal = ModalState::Message(MessageModal::info(
-                                "Monte Carlo Complete",
-                                &format!(
-                                    "{} iterations | {:.0}% success rate",
-                                    mc.stats.num_iterations,
-                                    mc.stats.success_rate * 100.0
-                                ),
-                            ));
-                        }
-                    }
-                    Err(e) => state.set_error(format!("Monte Carlo simulation failed: {}", e)),
+                if !state.simulation_status.is_running() {
+                    state.request_monte_carlo(1000);
                 }
                 EventResult::Handled
             }
@@ -203,14 +191,10 @@ impl Component for ScenarioScreen {
                 EventResult::Handled
             }
 
-            // Run single simulation and switch to results
+            // Run single simulation and switch to results (background)
             KeyCode::Char('r') => {
-                match state.run_simulation() {
-                    Ok(()) => {
-                        state.switch_tab(TabId::Results);
-                        state.results_state.scroll_offset = 0;
-                    }
-                    Err(e) => state.set_error(format!("Simulation failed: {}", e)),
+                if !state.simulation_status.is_running() {
+                    state.request_simulation();
                 }
                 EventResult::Handled
             }

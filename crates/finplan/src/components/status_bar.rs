@@ -1,13 +1,18 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use super::{Component, EventResult};
-use crate::state::AppState;
+use crate::state::{AppState, SimulationStatus};
 use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+
+// Spinner animation state
+static SPINNER_FRAME: AtomicUsize = AtomicUsize::new(0);
 
 pub struct StatusBar;
 
@@ -39,6 +44,69 @@ impl StatusBar {
             None
         }
     }
+
+    /// Render simulation status with spinner/progress
+    fn render_simulation_status(status: &SimulationStatus) -> Option<Vec<Span<'static>>> {
+        const SPINNER_CHARS: [char; 4] = ['|', '/', '-', '\\'];
+
+        match status {
+            SimulationStatus::Idle => None,
+            SimulationStatus::RunningSingle => {
+                let idx = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) % 4;
+                Some(vec![
+                    Span::styled(
+                        format!(" {} ", SPINNER_CHARS[idx]),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("Running simulation...", Style::default().fg(Color::Yellow)),
+                    Span::styled(" [Esc to cancel]", Style::default().fg(Color::DarkGray)),
+                ])
+            }
+            SimulationStatus::RunningMonteCarlo { current, total } => {
+                let idx = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) % 4;
+                let pct = if *total > 0 {
+                    (*current as f64 / *total as f64 * 100.0) as usize
+                } else {
+                    0
+                };
+                let bar_width = 20;
+                let filled = (pct * bar_width / 100).min(bar_width);
+                let empty = bar_width - filled;
+                let bar = format!("[{}{}]", "=".repeat(filled), " ".repeat(empty));
+
+                Some(vec![
+                    Span::styled(
+                        format!(" {} ", SPINNER_CHARS[idx]),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("MC ", Style::default().fg(Color::Cyan)),
+                    Span::styled(bar, Style::default().fg(Color::Cyan)),
+                    Span::styled(format!(" {}%", pct), Style::default().fg(Color::Cyan)),
+                    Span::styled(" [Esc to cancel]", Style::default().fg(Color::DarkGray)),
+                ])
+            }
+            SimulationStatus::RunningBatch { current, total } => {
+                let idx = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) % 4;
+                Some(vec![
+                    Span::styled(
+                        format!(" {} ", SPINNER_CHARS[idx]),
+                        Style::default()
+                            .fg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("Batch {}/{}", current, total),
+                        Style::default().fg(Color::Magenta),
+                    ),
+                    Span::styled(" [Esc to cancel]", Style::default().fg(Color::DarkGray)),
+                ])
+            }
+        }
+    }
 }
 
 impl Component for StatusBar {
@@ -48,11 +116,16 @@ impl Component for StatusBar {
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
         let content = if let Some(error) = &state.error_message {
+            // Error message takes priority
             Line::from(vec![
                 Span::styled("Error: ", Style::default().fg(Color::Red)),
                 Span::raw(error),
             ])
+        } else if let Some(sim_spans) = Self::render_simulation_status(&state.simulation_status) {
+            // Simulation status when running
+            Line::from(sim_spans)
         } else {
+            // Normal help text
             let mut spans = vec![];
 
             // Add dirty indicator if there are unsaved changes

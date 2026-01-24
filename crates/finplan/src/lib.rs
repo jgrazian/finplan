@@ -7,6 +7,7 @@ pub mod modals;
 pub mod screens;
 pub mod state;
 pub mod util;
+pub mod worker;
 
 pub use app::App;
 pub use logging::init_logging;

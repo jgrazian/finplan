@@ -76,6 +76,41 @@ impl MonteCarloStoredResult {
     }
 }
 
+// ========== SimulationStatus ==========
+// Track background simulation progress
+
+#[derive(Debug, Clone, Default)]
+pub enum SimulationStatus {
+    #[default]
+    Idle,
+    RunningSingle,
+    RunningMonteCarlo {
+        current: usize,
+        total: usize,
+    },
+    RunningBatch {
+        current: usize,
+        total: usize,
+    },
+}
+
+impl SimulationStatus {
+    pub fn is_running(&self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+}
+
+// ========== PendingSimulation ==========
+// Request for App to start a background simulation
+
+#[derive(Debug, Clone)]
+pub enum PendingSimulation {
+    /// Run a single deterministic simulation
+    Single,
+    /// Run Monte Carlo simulation with specified iterations
+    MonteCarlo { iterations: usize },
+}
+
 // ========== AppState ==========
 // Main application state
 
@@ -99,6 +134,12 @@ pub struct AppState {
     pub core_simulation_result: Option<finplan_core::model::SimulationResult>,
     /// Monte Carlo simulation result (4 representative runs + stats)
     pub monte_carlo_result: Option<MonteCarloStoredResult>,
+
+    /// Status of background simulation (for progress display)
+    pub simulation_status: SimulationStatus,
+
+    /// Pending simulation request (set by scenario screen, consumed by App)
+    pub pending_simulation: Option<PendingSimulation>,
 
     /// Set of scenario names with unsaved changes
     pub dirty_scenarios: HashSet<String>,
@@ -133,6 +174,8 @@ impl Default for AppState {
             simulation_result: None,
             core_simulation_result: None,
             monte_carlo_result: None,
+            simulation_status: SimulationStatus::default(),
+            pending_simulation: None,
             dirty_scenarios: HashSet::new(),
             portfolio_profiles_state: PortfolioProfilesState::default(),
             events_state: EventsState::default(),
@@ -419,7 +462,25 @@ impl AppState {
         self.error_message = None;
     }
 
-    /// Run the simulation and store results
+    /// Request a single simulation to be run in the background
+    /// The App will pick this up and dispatch to the worker
+    pub fn request_simulation(&mut self) {
+        self.pending_simulation = Some(PendingSimulation::Single);
+        self.simulation_status = SimulationStatus::RunningSingle;
+    }
+
+    /// Request a Monte Carlo simulation to be run in the background
+    /// The App will pick this up and dispatch to the worker
+    pub fn request_monte_carlo(&mut self, iterations: usize) {
+        self.pending_simulation = Some(PendingSimulation::MonteCarlo { iterations });
+        self.simulation_status = SimulationStatus::RunningMonteCarlo {
+            current: 0,
+            total: iterations,
+        };
+    }
+
+    /// Run the simulation and store results (synchronous, blocks UI)
+    /// Use request_simulation() for background execution
     pub fn run_simulation(&mut self) -> Result<(), SimulationError> {
         // Convert TUI data to simulation config
         let config = self

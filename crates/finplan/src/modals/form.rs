@@ -101,7 +101,7 @@ fn render_field(
         .constraints([Constraint::Length(1), Constraint::Length(3)]) // 3 = 1 for content + 2 for borders
         .split(area);
 
-    // Render label
+    // Render label with inline hints for discoverability
     let label_style = if is_focused {
         Style::default()
             .fg(Color::Yellow)
@@ -110,21 +110,54 @@ fn render_field(
         Style::default().add_modifier(Modifier::BOLD)
     };
 
-    let label = Paragraph::new(Line::from(Span::styled(&field.label, label_style)));
+    // Build label spans with contextual hints
+    let mut label_spans = vec![Span::styled(&field.label, label_style)];
+
+    // Add inline hints based on field type and state
+    match field.field_type {
+        FieldType::ReadOnly => {
+            label_spans.push(Span::styled(
+                " (read-only)",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        FieldType::Select if is_focused => {
+            label_spans.push(Span::styled(" [</>]", Style::default().fg(Color::Cyan)));
+        }
+        _ if is_focused && is_editing => {
+            label_spans.push(Span::styled(
+                " [EDITING]",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+        _ if is_focused => {
+            label_spans.push(Span::styled(
+                " [Enter to edit]",
+                Style::default().fg(Color::Green),
+            ));
+        }
+        _ => {}
+    }
+
+    let label = Paragraph::new(Line::from(label_spans));
     frame.render_widget(label, chunks[0]);
 
-    // Render input field
-    let (border_color, fg_color) = match field.field_type {
-        FieldType::ReadOnly => (Color::DarkGray, Color::DarkGray),
-        FieldType::Select if is_focused => (Color::Yellow, Color::Cyan),
-        _ if is_focused && is_editing => (Color::Cyan, Color::White),
-        _ if is_focused => (Color::Yellow, Color::White),
-        _ => (Color::DarkGray, Color::White),
+    // Render input field with enhanced styling for edit mode
+    let (border_color, border_modifier, fg_color) = match field.field_type {
+        FieldType::ReadOnly => (Color::DarkGray, Modifier::empty(), Color::DarkGray),
+        FieldType::Select if is_focused => (Color::Yellow, Modifier::empty(), Color::Cyan),
+        _ if is_focused && is_editing => (Color::Cyan, Modifier::BOLD, Color::White), // Bold border when editing
+        _ if is_focused => (Color::Yellow, Modifier::empty(), Color::White),
+        _ => (Color::DarkGray, Modifier::empty(), Color::White),
     };
 
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let input_block = Block::default().borders(Borders::ALL).border_style(
+        Style::default()
+            .fg(border_color)
+            .add_modifier(border_modifier),
+    );
 
     let input_inner = input_block.inner(chunks[1]);
     frame.render_widget(input_block, chunks[1]);

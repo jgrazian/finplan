@@ -1,7 +1,9 @@
 use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use rand::RngCore;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -15,10 +17,15 @@ use crate::screens::{
     ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
     portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
 };
-use crate::state::{AppState, ModalAction, ModalState, TabId};
+use crate::state::{
+    AppState, MessageModal, ModalAction, ModalState, PercentileView, ResultsState,
+    SimulationStatus, TabId,
+};
+use crate::worker::{SimulationResponse, SimulationWorker};
 
 pub struct App {
     state: AppState,
+    worker: SimulationWorker,
     tab_bar: TabBar,
     status_bar: StatusBar,
     portfolio_profiles_screen: PortfolioProfilesScreen,
@@ -40,6 +47,7 @@ impl App {
 
         Self {
             state,
+            worker: SimulationWorker::new(),
             tab_bar: TabBar,
             status_bar: StatusBar,
             portfolio_profiles_screen: PortfolioProfilesScreen,
@@ -57,6 +65,7 @@ impl App {
 
         Self {
             state,
+            worker: SimulationWorker::new(),
             tab_bar: TabBar,
             status_bar: StatusBar,
             portfolio_profiles_screen: PortfolioProfilesScreen,
@@ -113,10 +122,33 @@ impl App {
 impl App {
     /// runs the application's main loop until the user quits
     pub fn run(&mut self, terminal: &mut DefaultTerminal) -> color_eyre::Result<()> {
+        const POLL_TIMEOUT: Duration = Duration::from_millis(50);
+
         while !self.state.exit {
             terminal.draw(|frame| self.draw(frame))?;
-            self.handle_events()?;
+
+            // Process any pending worker responses (non-blocking)
+            self.process_worker_responses();
+
+            // Update progress if Monte Carlo is running
+            if let SimulationStatus::RunningMonteCarlo { total, .. } = self.state.simulation_status
+            {
+                let current = self.worker.get_progress();
+                self.state.simulation_status =
+                    SimulationStatus::RunningMonteCarlo { current, total };
+            }
+
+            // Check for pending simulation requests
+            self.dispatch_pending_simulation();
+
+            // Poll for input events with timeout (allows UI to update during simulation)
+            if event::poll(POLL_TIMEOUT)? {
+                self.handle_events()?;
+            }
         }
+
+        // Shutdown worker thread
+        self.worker.shutdown();
 
         // No auto-save on exit - user must explicitly save with Ctrl+S
         if self.state.has_unsaved_changes() {
@@ -125,6 +157,124 @@ impl App {
         }
 
         Ok(())
+    }
+
+    /// Process responses from the background simulation worker
+    fn process_worker_responses(&mut self) {
+        while let Some(response) = self.worker.try_recv() {
+            match response {
+                SimulationResponse::SingleComplete {
+                    tui_result,
+                    core_result,
+                } => {
+                    self.state.simulation_result = Some(tui_result);
+                    self.state.core_simulation_result = Some(core_result);
+                    self.state.monte_carlo_result = None;
+                    self.state.results_state = ResultsState::default();
+                    self.state.results_state.viewing_monte_carlo = false;
+                    self.state.simulation_status = SimulationStatus::Idle;
+
+                    // Switch to results tab
+                    self.state.active_tab = TabId::Results;
+                }
+                SimulationResponse::MonteCarloComplete {
+                    stored_result,
+                    preview_summary,
+                    default_tui_result,
+                    default_core_result,
+                } => {
+                    // Store results
+                    self.state.simulation_result = Some(default_tui_result);
+                    self.state.core_simulation_result = Some(default_core_result);
+
+                    // Update scenario preview
+                    if let Some(preview) = &mut self.state.scenario_state.projection_preview {
+                        preview.mc_summary = Some(preview_summary.clone());
+                    }
+
+                    // Store full MC result (unbox)
+                    let iterations = stored_result.stats.num_iterations;
+                    let success_rate = stored_result.stats.success_rate;
+                    self.state.monte_carlo_result = Some(*stored_result);
+
+                    // Reset results state for MC viewing
+                    self.state.results_state = ResultsState::default();
+                    self.state.results_state.viewing_monte_carlo = true;
+                    self.state.results_state.percentile_view = PercentileView::P50;
+                    self.state.simulation_status = SimulationStatus::Idle;
+
+                    // Update scenario summary cache
+                    self.state.update_current_scenario_summary();
+
+                    // Show completion modal
+                    self.state.modal = ModalState::Message(MessageModal::info(
+                        "Monte Carlo Complete",
+                        &format!(
+                            "{} iterations | {:.1}% success rate",
+                            iterations,
+                            success_rate * 100.0
+                        ),
+                    ));
+                }
+                SimulationResponse::Cancelled => {
+                    self.state.simulation_status = SimulationStatus::Idle;
+                    self.state.modal = ModalState::Message(MessageModal::info(
+                        "Cancelled",
+                        "Simulation cancelled.",
+                    ));
+                }
+                SimulationResponse::Error(msg) => {
+                    self.state.simulation_status = SimulationStatus::Idle;
+                    self.state.set_error(msg);
+                }
+                SimulationResponse::Progress { current, total } => {
+                    self.state.simulation_status =
+                        SimulationStatus::RunningMonteCarlo { current, total };
+                }
+            }
+        }
+    }
+
+    /// Check for and dispatch pending simulation requests to the worker
+    fn dispatch_pending_simulation(&mut self) {
+        use crate::state::PendingSimulation;
+        use crate::worker::SimulationRequest;
+
+        let pending = self.state.pending_simulation.take();
+        if let Some(request) = pending {
+            // Build simulation config
+            let config = match self.state.to_simulation_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    self.state.simulation_status = SimulationStatus::Idle;
+                    self.state.set_error(format!("Config error: {}", e));
+                    return;
+                }
+            };
+
+            let birth_date = self.state.data().parameters.birth_date.clone();
+            let start_date = self.state.data().parameters.start_date.clone();
+
+            match request {
+                PendingSimulation::Single => {
+                    let seed = rand::rng().next_u64();
+                    self.worker.send(SimulationRequest::Single {
+                        config,
+                        seed,
+                        birth_date,
+                        start_date,
+                    });
+                }
+                PendingSimulation::MonteCarlo { iterations } => {
+                    self.worker.send(SimulationRequest::MonteCarlo {
+                        config,
+                        iterations,
+                        birth_date,
+                        start_date,
+                    });
+                }
+            }
+        }
     }
 
     /// Save all dirty scenarios
@@ -227,6 +377,12 @@ impl App {
                 return;
             }
             KeyCode::Esc => {
+                // Cancel running simulation first
+                if self.state.simulation_status.is_running() {
+                    self.worker.cancel();
+                    self.state.simulation_status = SimulationStatus::Idle;
+                    return;
+                }
                 // Let holdings editing mode handle Esc first
                 if self
                     .state
