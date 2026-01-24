@@ -141,7 +141,11 @@ fn build_edit_form_for_effect(
                 vec![
                     FormField::select("To Account", accounts, &to.0),
                     FormField::currency("Amount", amount_to_f64(amount)),
-                    FormField::select("Gross", yes_no_options(), if *gross { "Yes" } else { "No" }),
+                    FormField::select(
+                        "Amount Type",
+                        amount_type_options(),
+                        if *gross { "Gross" } else { "Net" },
+                    ),
                     FormField::select(
                         "Taxable",
                         yes_no_options(),
@@ -215,7 +219,11 @@ fn build_edit_form_for_effect(
                         asset.as_ref().map(|a| a.0.as_str()).unwrap_or(""),
                     ),
                     FormField::currency("Amount", amount_to_f64(amount)),
-                    FormField::select("Gross", yes_no_options(), if *gross { "Yes" } else { "No" }),
+                    FormField::select(
+                        "Amount Type",
+                        amount_type_options(),
+                        if *gross { "Gross" } else { "Net" },
+                    ),
                     FormField::select(
                         "Lot Method",
                         lot_method_options(),
@@ -251,7 +259,11 @@ fn build_edit_form_for_effect(
                         strategy_options(),
                         strategy_to_display(*strategy),
                     ),
-                    FormField::select("Gross", yes_no_options(), if *gross { "Yes" } else { "No" }),
+                    FormField::select(
+                        "Amount Type",
+                        amount_type_options(),
+                        if *gross { "Gross" } else { "Net" },
+                    ),
                     FormField::select(
                         "Taxable",
                         yes_no_options(),
@@ -454,6 +466,14 @@ fn yes_no_options() -> Vec<String> {
     vec!["No".to_string(), "Yes".to_string()]
 }
 
+fn amount_type_options() -> Vec<String> {
+    vec!["Net".to_string(), "Gross".to_string()]
+}
+
+fn parse_amount_type(s: &str) -> bool {
+    matches!(s.to_lowercase().as_str(), "gross")
+}
+
 fn lot_method_options() -> Vec<String> {
     vec![
         "FIFO".to_string(),
@@ -493,7 +513,7 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                     vec![
                         FormField::select("To Account", accounts, &first_account),
                         FormField::currency("Amount", 0.0),
-                        FormField::select("Gross", yes_no_options(), "No"),
+                        FormField::select("Amount Type", amount_type_options(), "Gross"),
                         FormField::select("Taxable", yes_no_options(), "Yes"),
                     ],
                     ModalAction::ADD_EFFECT,
@@ -630,7 +650,7 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                         FormField::select("From Account", accounts, &first_account),
                         FormField::text("Asset (blank=liquidate)", ""),
                         FormField::currency("Amount", 0.0),
-                        FormField::select("Gross", yes_no_options(), "No"),
+                        FormField::select("Amount Type", amount_type_options(), "Net"),
                         FormField::select("Lot Method", lot_method_options(), "FIFO"),
                     ],
                     ModalAction::ADD_EFFECT,
@@ -653,7 +673,7 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                         FormField::select("To Account", accounts, &first_account),
                         FormField::currency("Amount", 0.0),
                         FormField::select("Strategy", strategy_options(), "Tax Efficient"),
-                        FormField::select("Gross", yes_no_options(), "No"),
+                        FormField::select("Amount Type", amount_type_options(), "Net"),
                         FormField::select("Taxable", yes_no_options(), "Yes"),
                         FormField::select("Lot Method", lot_method_options(), "FIFO"),
                     ],
@@ -748,7 +768,10 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 .get(1)
                 .and_then(|s| parse_currency(s).ok())
                 .unwrap_or(0.0);
-            let gross = form_parts.get(2).map(|s| parse_yes_no(s)).unwrap_or(false);
+            let gross = form_parts
+                .get(2)
+                .map(|s| parse_amount_type(s))
+                .unwrap_or(false);
             let taxable = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(true);
 
             EffectData::Income {
@@ -822,7 +845,10 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 .get(2)
                 .and_then(|s| parse_currency(s).ok())
                 .unwrap_or(0.0);
-            let gross = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(false);
+            let gross = form_parts
+                .get(3)
+                .map(|s| parse_amount_type(s))
+                .unwrap_or(false);
             let lot_method = form_parts
                 .get(4)
                 .map(|s| parse_lot_method(s))
@@ -846,7 +872,10 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 .get(2)
                 .map(|s| parse_strategy(s))
                 .unwrap_or_default();
-            let gross = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(false);
+            let gross = form_parts
+                .get(3)
+                .map(|s| parse_amount_type(s))
+                .unwrap_or(false);
             let taxable = form_parts.get(4).map(|s| parse_yes_no(s)).unwrap_or(true);
             let lot_method = form_parts
                 .get(5)
@@ -951,7 +980,10 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 .get(1)
                 .and_then(|s| parse_currency(s).ok())
                 .unwrap_or(0.0);
-            let gross = form_parts.get(2).map(|s| parse_yes_no(s)).unwrap_or(false);
+            let gross = form_parts
+                .get(2)
+                .map(|s| parse_amount_type(s))
+                .unwrap_or(false);
             let taxable = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(true);
 
             Some(EffectData::Income {
@@ -1001,7 +1033,10 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 .get(2)
                 .and_then(|s| parse_currency(s).ok())
                 .unwrap_or(0.0);
-            let gross = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(false);
+            let gross = form_parts
+                .get(3)
+                .map(|s| parse_amount_type(s))
+                .unwrap_or(false);
             let lot_method = form_parts
                 .get(4)
                 .map(|s| parse_lot_method(s))
@@ -1025,7 +1060,10 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 .get(2)
                 .map(|s| parse_strategy(s))
                 .unwrap_or_default();
-            let gross = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(false);
+            let gross = form_parts
+                .get(3)
+                .map(|s| parse_amount_type(s))
+                .unwrap_or(false);
             let taxable = form_parts.get(4).map(|s| parse_yes_no(s)).unwrap_or(true);
             let lot_method = form_parts
                 .get(5)

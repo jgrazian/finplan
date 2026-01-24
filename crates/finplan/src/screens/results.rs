@@ -6,7 +6,7 @@ use crate::state::{AppState, LedgerFilter, PercentileView, ResultsPanel, Simulat
 use crate::util::format::{format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
 use finplan_core::model::{
-    AccountId, AccountSnapshotFlavor, LedgerEntry, StateEvent, WealthSnapshot,
+    AccountId, AccountSnapshotFlavor, EventId, LedgerEntry, StateEvent, WealthSnapshot,
 };
 use ratatui::{
     Frame,
@@ -31,10 +31,21 @@ impl ResultsScreen {
         map
     }
 
+    /// Build a map of EventId to event names from the current simulation data
+    fn build_event_name_map(state: &AppState) -> HashMap<EventId, String> {
+        let mut map = HashMap::new();
+        for (idx, event) in state.data().events.iter().enumerate() {
+            let id = EventId((idx + 1) as u16);
+            map.insert(id, event.name.0.clone());
+        }
+        map
+    }
+
     /// Format a StateEvent for display in the ledger
     fn format_state_event(
         event: &StateEvent,
         account_names: &HashMap<AccountId, String>,
+        event_names: &HashMap<EventId, String>,
     ) -> String {
         match event {
             StateEvent::TimeAdvance {
@@ -214,16 +225,32 @@ impl ResultsScreen {
                 )
             }
             StateEvent::EventTriggered { event_id } => {
-                format!("Event triggered: #{}", event_id.0)
+                let name = event_names
+                    .get(event_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                format!("Event triggered: {}", name)
             }
             StateEvent::EventPaused { event_id } => {
-                format!("Event paused: #{}", event_id.0)
+                let name = event_names
+                    .get(event_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                format!("Event paused: {}", name)
             }
             StateEvent::EventResumed { event_id } => {
-                format!("Event resumed: #{}", event_id.0)
+                let name = event_names
+                    .get(event_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                format!("Event resumed: {}", name)
             }
             StateEvent::EventTerminated { event_id } => {
-                format!("Event terminated: #{}", event_id.0)
+                let name = event_names
+                    .get(event_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                format!("Event terminated: {}", name)
             }
             StateEvent::YearRollover { from_year, to_year } => {
                 format!("Year rollover: {} -> {}", from_year, to_year)
@@ -812,6 +839,7 @@ impl ResultsScreen {
 
         if let Some(core_result) = Self::get_current_core_result(state) {
             let account_names = Self::build_account_name_map(state);
+            let event_names = Self::build_event_name_map(state);
 
             // Filter entries
             let filtered_entries: Vec<&LedgerEntry> = core_result
@@ -838,7 +866,7 @@ impl ResultsScreen {
                 .take(visible_count)
                 .map(|entry| {
                     let color = Self::get_event_color(&entry.event);
-                    let text = Self::format_state_event(&entry.event, &account_names);
+                    let text = Self::format_state_event(&entry.event, &account_names, &event_names);
                     let line = Line::from(vec![
                         Span::styled(
                             format!("[{}] ", entry.date),

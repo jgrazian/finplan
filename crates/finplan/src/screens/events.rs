@@ -1,7 +1,8 @@
 use crate::components::collapsible::CollapsiblePanel;
 use crate::components::{Component, EventResult};
 use crate::data::events_data::{
-    AmountData, EffectData, EventData, EventTag, IntervalData, SpecialAmount, TriggerData,
+    AmountData, EffectData, EventData, EventTag, IntervalData, OffsetData, SpecialAmount,
+    ThresholdData, TriggerData,
 };
 use crate::state::context::ModalContext;
 use crate::state::{
@@ -506,12 +507,20 @@ impl EventsScreen {
             TriggerData::RelativeToEvent { event, offset } => {
                 lines.push(Line::from(format!("{}Type: Relative to Event", prefix)));
                 lines.push(Line::from(format!("{}Event: \"{}\"", prefix, event.0)));
-                lines.push(Line::from(format!("{}Offset: {:?}", prefix, offset)));
+                lines.push(Line::from(format!(
+                    "{}Offset: {}",
+                    prefix,
+                    Self::format_offset(offset)
+                )));
             }
             TriggerData::AccountBalance { account, threshold } => {
                 lines.push(Line::from(format!("{}Type: Account Balance", prefix)));
                 lines.push(Line::from(format!("{}Account: \"{}\"", prefix, account.0)));
-                lines.push(Line::from(format!("{}Threshold: {:?}", prefix, threshold)));
+                lines.push(Line::from(format!(
+                    "{}Threshold: {}",
+                    prefix,
+                    Self::format_threshold(threshold)
+                )));
             }
             TriggerData::AssetBalance {
                 account,
@@ -521,11 +530,19 @@ impl EventsScreen {
                 lines.push(Line::from(format!("{}Type: Asset Balance", prefix)));
                 lines.push(Line::from(format!("{}Account: \"{}\"", prefix, account.0)));
                 lines.push(Line::from(format!("{}Asset: \"{}\"", prefix, asset.0)));
-                lines.push(Line::from(format!("{}Threshold: {:?}", prefix, threshold)));
+                lines.push(Line::from(format!(
+                    "{}Threshold: {}",
+                    prefix,
+                    Self::format_threshold(threshold)
+                )));
             }
             TriggerData::NetWorth { threshold } => {
                 lines.push(Line::from(format!("{}Type: Net Worth", prefix)));
-                lines.push(Line::from(format!("{}Threshold: {:?}", prefix, threshold)));
+                lines.push(Line::from(format!(
+                    "{}Threshold: {}",
+                    prefix,
+                    Self::format_threshold(threshold)
+                )));
             }
             TriggerData::And { conditions } => {
                 lines.push(Line::from(format!(
@@ -602,19 +619,34 @@ impl EventsScreen {
                 }
             }
             TriggerData::RelativeToEvent { event, offset } => {
-                format!("Relative to \"{}\" ({:?})", event.0, offset)
+                format!(
+                    "Relative to \"{}\", {}",
+                    event.0,
+                    Self::format_offset(offset)
+                )
             }
             TriggerData::AccountBalance { account, threshold } => {
-                format!("Account \"{}\" {:?}", account.0, threshold)
+                format!(
+                    "Account \"{}\" {}",
+                    account.0,
+                    Self::format_threshold(threshold)
+                )
             }
             TriggerData::AssetBalance {
                 account,
                 asset,
                 threshold,
             } => {
-                format!("Asset \"{}/{}\" {:?}", account.0, asset.0, threshold)
+                format!(
+                    "Asset \"{}/{}\" {}",
+                    account.0,
+                    asset.0,
+                    Self::format_threshold(threshold)
+                )
             }
-            TriggerData::NetWorth { threshold } => format!("Net Worth {:?}", threshold),
+            TriggerData::NetWorth { threshold } => {
+                format!("Net Worth {}", Self::format_threshold(threshold))
+            }
             TriggerData::And { conditions } => format!("AND ({} conditions)", conditions.len()),
             TriggerData::Or { conditions } => format!("OR ({} conditions)", conditions.len()),
             TriggerData::Repeating { interval, .. } => {
@@ -632,6 +664,57 @@ impl EventsScreen {
             IntervalData::Monthly => "Monthly",
             IntervalData::Quarterly => "Quarterly",
             IntervalData::Yearly => "Yearly",
+        }
+    }
+
+    fn format_offset(offset: &OffsetData) -> String {
+        match offset {
+            OffsetData::Days { value } => {
+                if *value == 0 {
+                    "same day".to_string()
+                } else if *value == 1 {
+                    "1 day later".to_string()
+                } else if *value == -1 {
+                    "1 day before".to_string()
+                } else if *value > 0 {
+                    format!("{} days later", value)
+                } else {
+                    format!("{} days before", value.abs())
+                }
+            }
+            OffsetData::Months { value } => {
+                if *value == 0 {
+                    "same month".to_string()
+                } else if *value == 1 {
+                    "1 month later".to_string()
+                } else if *value == -1 {
+                    "1 month before".to_string()
+                } else if *value > 0 {
+                    format!("{} months later", value)
+                } else {
+                    format!("{} months before", value.abs())
+                }
+            }
+            OffsetData::Years { value } => {
+                if *value == 0 {
+                    "same year".to_string()
+                } else if *value == 1 {
+                    "1 year later".to_string()
+                } else if *value == -1 {
+                    "1 year before".to_string()
+                } else if *value > 0 {
+                    format!("{} years later", value)
+                } else {
+                    format!("{} years before", value.abs())
+                }
+            }
+        }
+    }
+
+    fn format_threshold(threshold: &ThresholdData) -> String {
+        match threshold {
+            ThresholdData::GreaterThanOrEqual { value } => format!(">= ${:.2}", value),
+            ThresholdData::LessThanOrEqual { value } => format!("<= ${:.2}", value),
         }
     }
 
