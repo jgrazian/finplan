@@ -121,8 +121,12 @@ pub struct SimEventState {
     /// Cached interval spans for repeating events (dense Vec)
     pub repeating_event_spans: Vec<Option<jiff::Span>>,
 
-    /// Events that have been permanently terminated (typically 0-2 items)
-    pub terminated_events: Vec<EventId>,
+    /// Events that have been permanently terminated (dense Vec indexed by EventId.0)
+    pub terminated_events: Vec<bool>,
+
+    /// Next possible trigger date for each event (dense Vec indexed by EventId.0)
+    /// Used for early-skip optimization: if current_date < next_possible_trigger, skip evaluation
+    pub next_possible_trigger: Vec<Option<jiff::civil::Date>>,
 
     /// Accumulated values for event flow limits (less hot, keep as HashMap)
     pub event_flow_ytd: FxHashMap<EventId, f64>,
@@ -165,10 +169,45 @@ impl SimEventState {
         self.age_trigger_dates.get(id.0 as usize).and_then(|o| *o)
     }
 
-    /// Check if an event is terminated
+    /// Check if an event is terminated (O(1) lookup)
     #[inline]
     pub fn is_terminated(&self, id: &EventId) -> bool {
-        self.terminated_events.contains(id)
+        self.terminated_events
+            .get(id.0 as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Mark an event as terminated
+    #[inline]
+    pub fn set_terminated(&mut self, id: EventId) {
+        if let Some(slot) = self.terminated_events.get_mut(id.0 as usize) {
+            *slot = true;
+        }
+    }
+
+    /// Get next possible trigger date for early-skip optimization
+    #[inline]
+    pub fn next_possible_trigger(&self, id: EventId) -> Option<jiff::civil::Date> {
+        self.next_possible_trigger
+            .get(id.0 as usize)
+            .and_then(|o| *o)
+    }
+
+    /// Set next possible trigger date for early-skip optimization
+    #[inline]
+    pub fn set_next_possible_trigger(&mut self, id: EventId, date: jiff::civil::Date) {
+        if let Some(slot) = self.next_possible_trigger.get_mut(id.0 as usize) {
+            *slot = Some(date);
+        }
+    }
+
+    /// Clear next possible trigger date (event can trigger any time)
+    #[inline]
+    pub fn clear_next_possible_trigger(&mut self, id: EventId) {
+        if let Some(slot) = self.next_possible_trigger.get_mut(id.0 as usize) {
+            *slot = None;
+        }
     }
 
     /// Get repeating event active status: None=not started, Some(true)=active, Some(false)=paused
@@ -429,7 +468,8 @@ impl SimulationState {
                 event_next_date,
                 repeating_event_active,
                 repeating_event_spans,
-                terminated_events: Vec::new(),
+                terminated_events: vec![false; vec_size],
+                next_possible_trigger: vec![None; vec_size],
                 event_flow_ytd: FxHashMap::default(),
                 event_flow_lifetime: FxHashMap::default(),
                 event_flow_last_period_key: FxHashMap::default(),

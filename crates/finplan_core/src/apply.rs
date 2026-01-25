@@ -385,9 +385,7 @@ pub fn apply_eval_event_with_source(
 
         EvalEvent::TerminateEvent(event_id) => {
             // Mark the event as permanently terminated so it can't start or fire again
-            if !state.event_state.terminated_events.contains(event_id) {
-                state.event_state.terminated_events.push(*event_id);
-            }
+            state.event_state.set_terminated(*event_id);
             state.event_state.clear_repeating(*event_id);
 
             // Record to ledger
@@ -540,8 +538,17 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
     );
 
     // Evaluate each event - iterate by index to avoid moving out of scratch
+    let current_date = state.timeline.current_date;
     for i in 0..scratch.event_ids_to_check.len() {
         let event_id = scratch.event_ids_to_check[i];
+
+        // Early-skip optimization: if we know this event can't trigger until a future date, skip it
+        if let Some(next_trigger) = state.event_state.next_possible_trigger(event_id)
+            && current_date < next_trigger
+        {
+            continue;
+        }
+
         // Get trigger reference without cloning - borrow ends when evaluate_trigger returns
         let trigger_result = {
             let trigger = match state.event_state.get_event(event_id) {
@@ -555,24 +562,42 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
         };
 
         let should_trigger = match trigger_result {
-            TriggerEvent::Triggered => true,
+            TriggerEvent::Triggered => {
+                // Clear next_possible_trigger since event is firing
+                state.event_state.clear_next_possible_trigger(event_id);
+                true
+            }
             TriggerEvent::StartRepeating(next_date) => {
                 // Activate the repeating event
                 state.event_state.set_repeating_active(event_id, true);
                 state.event_state.set_next_date(event_id, next_date);
+                // Set next possible trigger to the scheduled next occurrence
+                state
+                    .event_state
+                    .set_next_possible_trigger(event_id, next_date);
                 true // Trigger immediately on activation
             }
             TriggerEvent::TriggerRepeating(next_date) => {
                 // Schedule next occurrence
                 state.event_state.set_next_date(event_id, next_date);
+                // Set next possible trigger to the scheduled next occurrence
+                state
+                    .event_state
+                    .set_next_possible_trigger(event_id, next_date);
                 true
             }
             TriggerEvent::StopRepeating => {
                 // Terminate the repeating event
                 state.event_state.clear_repeating(event_id);
+                state.event_state.clear_next_possible_trigger(event_id);
                 false
             }
-            TriggerEvent::NotTriggered | TriggerEvent::NextTriggerDate(_) => false,
+            TriggerEvent::NextTriggerDate(date) => {
+                // Record when this event might next trigger for early-skip optimization
+                state.event_state.set_next_possible_trigger(event_id, date);
+                false
+            }
+            TriggerEvent::NotTriggered => false,
         };
 
         if should_trigger {
