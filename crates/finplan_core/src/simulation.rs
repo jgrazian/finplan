@@ -228,13 +228,10 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     let mut next_checkpoint = state.timeline.end_date;
 
     // Check event dates
-    for event in state.event_state.events.values() {
+    for event in state.event_state.iter_events() {
         // Skip if already triggered and once=true (unless Repeating)
         if event.once
-            && state
-                .event_state
-                .triggered_events
-                .contains_key(&event.event_id)
+            && state.event_state.is_triggered(event.event_id)
             && !matches!(event.trigger, EventTrigger::Repeating { .. })
         {
             continue;
@@ -252,7 +249,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             event_id: ref_event_id,
             offset,
         } = &event.trigger
-            && let Some(&trigger_date) = state.event_state.triggered_events.get(ref_event_id)
+            && let Some(trigger_date) = state.event_state.triggered_date(*ref_event_id)
         {
             let d = offset.add_to_date(trigger_date);
             if d > state.timeline.current_date && d < next_checkpoint {
@@ -262,7 +259,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
     }
 
     // Check repeating event scheduled dates
-    for date in state.event_state.event_next_date.values() {
+    for date in state.event_state.event_next_date.iter().flatten() {
         if *date > state.timeline.current_date && *date < next_checkpoint {
             next_checkpoint = *date;
         }

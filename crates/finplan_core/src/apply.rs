@@ -360,10 +360,7 @@ pub fn apply_eval_event_with_source(
         }
 
         EvalEvent::PauseEvent(event_id) => {
-            state
-                .event_state
-                .repeating_event_active
-                .insert(*event_id, false);
+            state.event_state.set_repeating_active(*event_id, false);
 
             // Record to ledger
             let ledger_event = StateEvent::EventPaused {
@@ -375,10 +372,7 @@ pub fn apply_eval_event_with_source(
         }
 
         EvalEvent::ResumeEvent(event_id) => {
-            state
-                .event_state
-                .repeating_event_active
-                .insert(*event_id, true);
+            state.event_state.set_repeating_active(*event_id, true);
 
             // Record to ledger
             let ledger_event = StateEvent::EventResumed {
@@ -391,9 +385,10 @@ pub fn apply_eval_event_with_source(
 
         EvalEvent::TerminateEvent(event_id) => {
             // Mark the event as permanently terminated so it can't start or fire again
-            state.event_state.terminated_events.insert(*event_id);
-            state.event_state.repeating_event_active.remove(event_id);
-            state.event_state.event_next_date.remove(event_id);
+            if !state.event_state.terminated_events.contains(event_id) {
+                state.event_state.terminated_events.push(*event_id);
+            }
+            state.event_state.clear_repeating(*event_id);
 
             // Record to ledger
             let ledger_event = StateEvent::EventTerminated {
@@ -529,17 +524,19 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             .event_state
             .events
             .iter()
+            .enumerate()
+            .filter_map(|(idx, opt)| opt.as_ref().map(|e| (EventId(idx as u16), e)))
             .filter(|(id, event)| {
                 // Skip if already triggered and once=true (but not for Repeating)
                 if event.once
-                    && state.event_state.triggered_events.contains_key(id)
+                    && state.event_state.is_triggered(*id)
                     && !matches!(event.trigger, EventTrigger::Repeating { .. })
                 {
                     return false;
                 }
                 true
             })
-            .map(|(id, _)| *id),
+            .map(|(id, _)| id),
     );
 
     // Evaluate each event - iterate by index to avoid moving out of scratch
@@ -547,7 +544,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
         let event_id = scratch.event_ids_to_check[i];
         // Get trigger reference without cloning - borrow ends when evaluate_trigger returns
         let trigger_result = {
-            let trigger = match state.event_state.events.get(&event_id) {
+            let trigger = match state.event_state.get_event(event_id) {
                 Some(event) => &event.trigger,
                 None => continue,
             };
@@ -561,28 +558,18 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             TriggerEvent::Triggered => true,
             TriggerEvent::StartRepeating(next_date) => {
                 // Activate the repeating event
-                state
-                    .event_state
-                    .repeating_event_active
-                    .insert(event_id, true);
-                state
-                    .event_state
-                    .event_next_date
-                    .insert(event_id, next_date);
+                state.event_state.set_repeating_active(event_id, true);
+                state.event_state.set_next_date(event_id, next_date);
                 true // Trigger immediately on activation
             }
             TriggerEvent::TriggerRepeating(next_date) => {
                 // Schedule next occurrence
-                state
-                    .event_state
-                    .event_next_date
-                    .insert(event_id, next_date);
+                state.event_state.set_next_date(event_id, next_date);
                 true
             }
             TriggerEvent::StopRepeating => {
                 // Terminate the repeating event
-                state.event_state.repeating_event_active.remove(&event_id);
-                state.event_state.event_next_date.remove(&event_id);
+                state.event_state.clear_repeating(event_id);
                 false
             }
             TriggerEvent::NotTriggered | TriggerEvent::NextTriggerDate(_) => false,
@@ -592,8 +579,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             // Record trigger for once checks and RelativeToEvent
             state
                 .event_state
-                .triggered_events
-                .insert(event_id, state.timeline.current_date);
+                .set_triggered(event_id, state.timeline.current_date);
 
             // Record event trigger to ledger
             state.history.ledger.push(LedgerEntry::with_source(
@@ -607,8 +593,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             // Get effects length to iterate by index, avoiding clone of effects vector
             let effects_len = state
                 .event_state
-                .events
-                .get(&event_id)
+                .get_event(event_id)
                 .map(|e| e.effects.len())
                 .unwrap_or(0);
 
@@ -620,8 +605,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                     // Borrow effect without cloning - both borrows are immutable so this is safe
                     let Some(effect) = state
                         .event_state
-                        .events
-                        .get(&event_id)
+                        .get_event(event_id)
                         .and_then(|e| e.effects.get(effect_idx))
                     else {
                         break;
@@ -667,26 +651,19 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
 
         for event_id in triggers {
             // Check if event exists and get `once` flag without cloning
-            let (event_exists, is_once) = state
-                .event_state
-                .events
-                .get(&event_id)
-                .map(|e| (true, e.once))
-                .unwrap_or((false, false));
-
-            if !event_exists {
+            let Some(event) = state.event_state.get_event(event_id) else {
                 continue;
-            }
+            };
+            let is_once = event.once;
 
             // Skip if already triggered and once=true
-            if is_once && state.event_state.triggered_events.contains_key(&event_id) {
+            if is_once && state.event_state.is_triggered(event_id) {
                 continue;
             }
 
             state
                 .event_state
-                .triggered_events
-                .insert(event_id, state.timeline.current_date);
+                .set_triggered(event_id, state.timeline.current_date);
             state.history.ledger.push(LedgerEntry::new(
                 state.timeline.current_date,
                 StateEvent::EventTriggered { event_id },
@@ -696,8 +673,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             // Get effects length to iterate by index, avoiding clone of entire Event
             let effects_len = state
                 .event_state
-                .events
-                .get(&event_id)
+                .get_event(event_id)
                 .map(|e| e.effects.len())
                 .unwrap_or(0);
 
@@ -709,8 +685,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                     // Borrow effect without cloning
                     let Some(effect) = state
                         .event_state
-                        .events
-                        .get(&event_id)
+                        .get_event(event_id)
                         .and_then(|e| e.effects.get(effect_idx))
                     else {
                         break;

@@ -104,7 +104,7 @@ pub fn evaluate_trigger(
     state: &SimulationState,
 ) -> Result<TriggerEvent, TriggerEventError> {
     // Check if this event has been permanently terminated
-    if state.event_state.terminated_events.contains(event_id) {
+    if state.event_state.is_terminated(event_id) {
         return Ok(TriggerEvent::NotTriggered);
     }
 
@@ -116,8 +116,8 @@ pub fn evaluate_trigger(
         }),
 
         EventTrigger::Age { .. } => {
-            // Use pre-computed trigger date from cache (birth_date + target_age)
-            if let Some(&trigger_date) = state.event_state.age_trigger_dates.get(event_id) {
+            // Use pre-computed trigger date (O(1) lookup)
+            if let Some(trigger_date) = state.event_state.age_trigger_date(*event_id) {
                 if state.timeline.current_date >= trigger_date {
                     Ok(TriggerEvent::Triggered)
                 } else {
@@ -133,7 +133,8 @@ pub fn evaluate_trigger(
             event_id: ref_event_id,
             offset,
         } => {
-            if let Some(&trigger_date) = state.event_state.triggered_events.get(ref_event_id) {
+            // O(1) lookup from dense Vec
+            if let Some(trigger_date) = state.event_state.triggered_date(*ref_event_id) {
                 // Fast date arithmetic - avoids expensive Span conversion
                 let target_date = offset.add_to_date(trigger_date);
 
@@ -209,17 +210,15 @@ pub fn evaluate_trigger(
             start_condition,
             end_condition,
         } => {
-            // Check if this repeating event has been started and its active status
-            let active_status = state.event_state.repeating_event_active.get(event_id);
-            let is_started = active_status.is_some(); // Event has been activated at least once
-            let is_active = active_status.copied().unwrap_or(false);
+            // Check if this repeating event has been started and its active status (O(1) lookup)
+            let active_status = state.event_state.repeating_active(*event_id);
+            let is_started = active_status.is_some();
+            let is_active = active_status.unwrap_or(false);
 
             // Use cached interval span if available, otherwise compute it
             let interval_span = state
                 .event_state
-                .repeating_event_spans
-                .get(event_id)
-                .copied()
+                .interval_span(*event_id)
                 .unwrap_or_else(|| interval.span());
 
             // Check if end_condition is met - if so, terminate the event
@@ -256,9 +255,9 @@ pub fn evaluate_trigger(
                 // Event was started but is now paused - don't trigger
                 Ok(TriggerEvent::NotTriggered)
             } else {
-                // Active event - check if scheduled for today
-                if let Some(next_date) = state.event_state.event_next_date.get(event_id) {
-                    if state.timeline.current_date >= *next_date {
+                // Active event - check if scheduled for today (O(1) lookup)
+                if let Some(next_date) = state.event_state.next_date(*event_id) {
+                    if state.timeline.current_date >= next_date {
                         // Schedule next occurrence
                         let next = next_date.saturating_add(interval_span);
                         Ok(TriggerEvent::TriggerRepeating(next))
