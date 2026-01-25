@@ -3,13 +3,17 @@ name = "finplan_core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["parallel"]
+parallel = ["rayon"]
+
 [dependencies]
 jiff = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 serde = { workspace = true }
 
-rayon = "1.11.0"
+rayon = { version = "1.11.0", optional = true }
 rustc-hash = "2"
 
 [dev-dependencies]

@@ -1,3 +1,4 @@
+#[cfg(feature = "parallel")]
 use std::sync::Mutex;
 
 use rustc_hash::FxHashMap;
@@ -14,6 +15,8 @@ use crate::model::{
 };
 use crate::simulation_state::{SimulationState, cached_spans};
 use rand::{RngCore, SeedableRng};
+
+#[cfg(feature = "parallel")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 // Re-export for backwards compatibility
@@ -451,23 +454,39 @@ pub fn monte_carlo_simulate(
     // This prevents us from running many iterations only to fail at the end
     let _ = simulate(params, 0)?;
 
+    #[cfg(feature = "parallel")]
     let iterations: Vec<SimulationResult> = (0..num_batches)
         .into_par_iter()
         .flat_map(|i| {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(i as u64);
-            // Reuse scratch buffer across all iterations in this batch
             let mut scratch = SimulationScratch::new();
-
             let batch_size = if i == num_batches - 1 {
                 num_iterations - i * MAX_BATCH_SIZE
             } else {
                 MAX_BATCH_SIZE
             };
-
             (0..batch_size)
                 .filter_map(|_| {
                     let seed = rng.next_u64();
-                    // Skip failed simulations (should be rare after initial validation)
+                    simulate_with_scratch(params, seed, &mut scratch).ok()
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    #[cfg(not(feature = "parallel"))]
+    let iterations: Vec<SimulationResult> = (0..num_batches)
+        .flat_map(|i| {
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(i as u64);
+            let mut scratch = SimulationScratch::new();
+            let batch_size = if i == num_batches - 1 {
+                num_iterations - i * MAX_BATCH_SIZE
+            } else {
+                MAX_BATCH_SIZE
+            };
+            (0..batch_size)
+                .filter_map(|_| {
+                    let seed = rng.next_u64();
                     simulate_with_scratch(params, seed, &mut scratch).ok()
                 })
                 .collect::<Vec<_>>()
@@ -498,37 +517,34 @@ pub fn monte_carlo_simulate_with_config(
 
     // Phase 1: Run all iterations, collecting seeds and final net worth
     // Also accumulate mean sums if requested
+    #[cfg(feature = "parallel")]
     let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
         Some(Mutex::new(None))
     } else {
         None
     };
 
+    #[cfg(not(feature = "parallel"))]
+    let mut mean_accumulator: Option<MeanAccumulators> = None;
+
     // Collect (seed, final_net_worth) for all iterations
+    #[cfg(feature = "parallel")]
     let mut seed_results: Vec<(u64, f64)> = (0..num_batches)
         .into_par_iter()
         .flat_map(|batch_idx| {
             let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
-            // Reuse scratch buffer across all iterations in this batch
             let mut scratch = SimulationScratch::new();
-
             let batch_size = if batch_idx == num_batches - 1 {
                 num_iterations - batch_idx * MAX_BATCH_SIZE
             } else {
                 MAX_BATCH_SIZE
             };
-
             (0..batch_size)
                 .filter_map(|_| {
                     let seed = rng.next_u64();
-                    // Skip failed simulations (should be rare after initial validation)
                     let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
                     let fnw = final_net_worth(&result);
-
-                    // Accumulate mean sums if requested
                     if let Some(ref acc_mutex) = mean_accumulator {
-                        // Recover from poisoned mutex - another thread may have panicked
-                        // but we still want to continue accumulating
                         let mut acc_guard = match acc_mutex.lock() {
                             Ok(guard) => guard,
                             Err(poisoned) => poisoned.into_inner(),
@@ -542,7 +558,37 @@ pub fn monte_carlo_simulate_with_config(
                             }
                         }
                     }
+                    Some((seed, fnw))
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
 
+    #[cfg(not(feature = "parallel"))]
+    let mut seed_results: Vec<(u64, f64)> = (0..num_batches)
+        .flat_map(|batch_idx| {
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
+            let mut scratch = SimulationScratch::new();
+            let batch_size = if batch_idx == num_batches - 1 {
+                num_iterations - batch_idx * MAX_BATCH_SIZE
+            } else {
+                MAX_BATCH_SIZE
+            };
+            (0..batch_size)
+                .filter_map(|_| {
+                    let seed = rng.next_u64();
+                    let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
+                    let fnw = final_net_worth(&result);
+                    if config.compute_mean {
+                        match mean_accumulator.as_mut() {
+                            Some(acc) => acc.accumulate(&result),
+                            None => {
+                                let mut new_acc = MeanAccumulators::new(&result);
+                                new_acc.accumulate(&result);
+                                mean_accumulator = Some(new_acc);
+                            }
+                        }
+                    }
                     Some((seed, fnw))
                 })
                 .collect::<Vec<_>>()
@@ -605,10 +651,14 @@ pub fn monte_carlo_simulate_with_config(
         .collect();
 
     // Extract mean accumulators
+    #[cfg(feature = "parallel")]
     let mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
         Ok(opt) => opt,
         Err(poisoned) => poisoned.into_inner(),
     });
+
+    #[cfg(not(feature = "parallel"))]
+    let mean_accumulators = mean_accumulator;
 
     let stats = MonteCarloStats {
         num_iterations: actual_iterations,
@@ -685,75 +735,115 @@ pub fn monte_carlo_simulate_with_progress(
     }
 
     // Phase 1: Run all iterations, collecting seeds and final net worth
+    #[cfg(feature = "parallel")]
     let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
         Some(Mutex::new(None))
     } else {
         None
     };
 
-    // Track if any thread detected cancellation
-    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    #[cfg(not(feature = "parallel"))]
+    let mut mean_accumulator: Option<MeanAccumulators> = None;
 
     // Collect (seed, final_net_worth) for all iterations
-    let mut seed_results: Vec<(u64, f64)> = (0..num_batches)
-        .into_par_iter()
-        .flat_map(|batch_idx| {
-            // Check cancellation at batch start
-            if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
-                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                return Vec::new();
-            }
+    #[cfg(feature = "parallel")]
+    let (seed_results, was_cancelled) = {
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let results: Vec<(u64, f64)> = (0..num_batches)
+            .into_par_iter()
+            .flat_map(|batch_idx| {
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+                    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return Vec::new();
+                }
+                let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
+                let mut scratch = SimulationScratch::new();
+                let batch_size = if batch_idx == num_batches - 1 {
+                    num_iterations - batch_idx * MAX_BATCH_SIZE
+                } else {
+                    MAX_BATCH_SIZE
+                };
+                (0..batch_size)
+                    .filter_map(|_| {
+                        if progress.is_cancelled() {
+                            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                            return None;
+                        }
+                        let seed = rng.next_u64();
+                        let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
+                        let fnw = final_net_worth(&result);
+                        if let Some(ref acc_mutex) = mean_accumulator {
+                            let mut acc_guard = match acc_mutex.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            match acc_guard.as_mut() {
+                                Some(acc) => acc.accumulate(&result),
+                                None => {
+                                    let mut new_acc = MeanAccumulators::new(&result);
+                                    new_acc.accumulate(&result);
+                                    *acc_guard = Some(new_acc);
+                                }
+                            }
+                        }
+                        progress.increment();
+                        Some((seed, fnw))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        (
+            results,
+            cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled(),
+        )
+    };
 
+    #[cfg(not(feature = "parallel"))]
+    let (seed_results, was_cancelled) = {
+        let mut results = Vec::new();
+        let mut cancelled = false;
+        'outer: for batch_idx in 0..num_batches {
+            if progress.is_cancelled() {
+                cancelled = true;
+                break;
+            }
             let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
             let mut scratch = SimulationScratch::new();
-
             let batch_size = if batch_idx == num_batches - 1 {
                 num_iterations - batch_idx * MAX_BATCH_SIZE
             } else {
                 MAX_BATCH_SIZE
             };
-
-            let results: Vec<(u64, f64)> = (0..batch_size)
-                .filter_map(|_| {
-                    // Check cancellation periodically within batch
-                    if progress.is_cancelled() {
-                        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                        return None;
-                    }
-
-                    let seed = rng.next_u64();
-                    let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
+            for _ in 0..batch_size {
+                if progress.is_cancelled() {
+                    cancelled = true;
+                    break 'outer;
+                }
+                let seed = rng.next_u64();
+                if let Ok(result) = simulate_with_scratch(params, seed, &mut scratch) {
                     let fnw = final_net_worth(&result);
-
-                    // Accumulate mean sums if requested
-                    if let Some(ref acc_mutex) = mean_accumulator {
-                        let mut acc_guard = match acc_mutex.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        match acc_guard.as_mut() {
+                    if config.compute_mean {
+                        match mean_accumulator.as_mut() {
                             Some(acc) => acc.accumulate(&result),
                             None => {
                                 let mut new_acc = MeanAccumulators::new(&result);
                                 new_acc.accumulate(&result);
-                                *acc_guard = Some(new_acc);
+                                mean_accumulator = Some(new_acc);
                             }
                         }
                     }
-
-                    // Update progress counter
                     progress.increment();
+                    results.push((seed, fnw));
+                }
+            }
+        }
+        (results, cancelled)
+    };
 
-                    Some((seed, fnw))
-                })
-                .collect();
-
-            results
-        })
-        .collect();
+    let mut seed_results = seed_results;
 
     // Check if simulation was cancelled
-    if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+    if was_cancelled {
         return Err(MarketError::Cancelled);
     }
 
@@ -810,10 +900,14 @@ pub fn monte_carlo_simulate_with_progress(
         .collect();
 
     // Extract mean accumulators
+    #[cfg(feature = "parallel")]
     let mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
         Ok(opt) => opt,
         Err(poisoned) => poisoned.into_inner(),
     });
+
+    #[cfg(not(feature = "parallel"))]
+    let mean_accumulators = mean_accumulator;
 
     let stats = MonteCarloStats {
         num_iterations: actual_iterations,

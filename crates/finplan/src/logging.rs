@@ -1,12 +1,13 @@
-use std::path::Path;
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-/// Initialize logging to write to a file in the data directory.
+/// Initialize logging for native builds - writes to a file in the data directory.
 ///
 /// Logs are written to `{data_dir}/finplan.log` with daily rotation.
 /// The log level can be controlled via the `level` parameter or the `RUST_LOG` environment variable.
-pub fn init_logging(data_dir: &Path, level: &str) -> color_eyre::Result<()> {
+#[cfg(feature = "native")]
+pub fn init_logging(data_dir: &std::path::Path, level: &str) -> color_eyre::Result<()> {
+    use tracing_appender::rolling::{RollingFileAppender, Rotation};
+
     // Ensure data directory exists
     std::fs::create_dir_all(data_dir)?;
 
@@ -32,4 +33,19 @@ pub fn init_logging(data_dir: &Path, level: &str) -> color_eyre::Result<()> {
 
     tracing::info!("FinPlan logging initialized");
     Ok(())
+}
+
+/// Initialize logging for web builds - logs to browser console.
+#[cfg(feature = "web")]
+pub fn init_logging_web() {
+    // For web, we use a simple fmt subscriber that writes to stdout
+    // which will be captured by the browser console
+    let env_filter = EnvFilter::new("finplan=info,finplan_core=warn");
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(fmt::layer().without_time().with_ansi(false))
+        .init();
+
+    tracing::info!("FinPlan web logging initialized");
 }

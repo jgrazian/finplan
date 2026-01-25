@@ -2,6 +2,42 @@
 
 This document outlines the plan to add a `web` feature flag that enables compiling the finplan TUI to WebAssembly using [Ratzilla](https://github.com/ratatui/ratzilla).
 
+## Progress
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Project Structure & Dependencies | **COMPLETE** | Feature flags added, rayon conditional, native build verified |
+| Phase 2: Platform Abstraction Traits | **COMPLETE** | Storage and SimulationWorker traits defined |
+| Phase 3: Native Platform Implementation | **COMPLETE** | NativeStorage and NativeWorker wrappers |
+| Phase 4: Web Platform Implementation | Pending | |
+| Phase 5: Refactor App to Use Platform Abstraction | Pending | |
+| Phase 6: Web Workers (Enhancement) | Pending | |
+| Phase 7: finplan_core WASM Compatibility | **COMPLETE** | rayon feature-flagged |
+| Phase 8: Build & Deploy Infrastructure | Pending | index.html, Trunk.toml created |
+
+### Completed Changes
+
+**Phase 1 (Complete):**
+- `crates/finplan/Cargo.toml` - Added `native` and `web` feature flags
+- `crates/finplan_core/Cargo.toml` - Added `parallel` feature flag for rayon
+- `crates/finplan/index.html` - Created web entry point HTML
+- `crates/finplan/Trunk.toml` - Created Trunk build configuration
+- `crates/finplan/src/main.rs` - Feature-gated for native only
+- `crates/finplan/src/logging.rs` - Split into native/web logging functions
+- `crates/finplan/src/lib.rs` - Conditional exports
+- `crates/finplan_core/src/simulation.rs` - Conditional rayon parallel iteration
+- `crates/finplan_core/src/optimization/grid_search.rs` - Conditional rayon parallel iteration
+
+**Phase 2 (Complete):**
+- `crates/finplan/src/platform/mod.rs` - Platform abstraction module
+- `crates/finplan/src/platform/storage.rs` - Storage trait with LoadResult, StorageError
+- `crates/finplan/src/platform/worker.rs` - SimulationWorker trait with Request/Response types
+
+**Phase 3 (Complete):**
+- `crates/finplan/src/platform/native/mod.rs` - Native platform module
+- `crates/finplan/src/platform/native/storage.rs` - NativeStorage wrapping DataDirectory
+- `crates/finplan/src/platform/native/worker.rs` - NativeWorker wrapping SimulationWorker
+
 ## Overview
 
 Ratzilla provides web backends (DOM, Canvas, WebGL2) for ratatui applications, allowing the same widget code to run in browsers via WASM. The finplan TUI can be adapted with feature-flagged platform abstractions.

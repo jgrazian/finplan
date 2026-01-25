@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 use crate::config::SimulationConfig;
@@ -99,19 +100,31 @@ pub fn optimize_grid_search(
     };
 
     // Parallel evaluation of all grid points
+    #[cfg(feature = "parallel")]
     let results: Vec<Option<EvaluationRecord>> = grid_points
         .par_iter()
         .map(|values| {
-            // Apply parameters
             let config = apply_parameters(base_config, &opt_config.parameters, values)?;
-
-            // Run Monte Carlo simulation
             let summary = monte_carlo_simulate_with_config(&config, &mc_config).ok()?;
-
-            // Calculate objective and check constraints
             let objective_value = calculate_objective(&opt_config.objective, &summary);
             let constraints_satisfied = check_constraints(&opt_config.constraints, &summary.stats);
+            Some(EvaluationRecord {
+                parameter_values: values.clone(),
+                objective_value,
+                constraints_satisfied,
+                stats: summary.stats,
+            })
+        })
+        .collect();
 
+    #[cfg(not(feature = "parallel"))]
+    let results: Vec<Option<EvaluationRecord>> = grid_points
+        .iter()
+        .map(|values| {
+            let config = apply_parameters(base_config, &opt_config.parameters, values)?;
+            let summary = monte_carlo_simulate_with_config(&config, &mc_config).ok()?;
+            let objective_value = calculate_objective(&opt_config.objective, &summary);
+            let constraints_satisfied = check_constraints(&opt_config.constraints, &summary.stats);
             Some(EvaluationRecord {
                 parameter_values: values.clone(),
                 objective_value,
