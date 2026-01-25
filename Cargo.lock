@@ -616,6 +616,7 @@ dependencies = [
  "gloo-storage",
  "gloo-timers",
  "jiff",
+ "js-sys",
  "rand",
  "rand_distr",
  "ratatui",

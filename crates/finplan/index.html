@@ -1,27 +1,34 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FinPlan - Retirement Simulator</title>
     <link data-trunk rel="rust" data-wasm-opt="z" data-cargo-features="web" data-cargo-no-default-features />
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
         body {
-            background: #1a1a2e;
-            overflow: hidden;
-        }
-        #terminal {
-            width: 100vw;
+            margin: 0;
+            width: 100%;
             height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            align-content: center;
+            background-color: #2E3440;
+        }
+
+        pre {
+            font-family: "Fira Code", monospace;
+            font-size: 16px;
+            margin: 1px 0px;
         }
     </style>
 </head>
+
 <body>
     <div id="terminal"></div>
 </body>
+
 </html>

@@ -19,7 +19,7 @@ use crate::components::{Component, EventResult};
 use crate::event::AppKeyEvent;
 use crate::modals::{ConfirmedValue, ModalResult, handle_modal_key, render_modal};
 use crate::platform::web::{WebStorage, WebWorker};
-use crate::platform::{SimulationWorker, Storage};
+use crate::platform::{SimulationRequest, SimulationWorker, Storage};
 use crate::screens::{
     ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
     portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
@@ -312,6 +312,101 @@ impl WebApp {
             }
         }
     }
+
+    /// Check for and dispatch pending simulation requests to the worker.
+    fn dispatch_pending_simulation(&mut self) {
+        use crate::data::convert::to_simulation_config;
+        use crate::state::PendingSimulation;
+
+        let pending = self.state.pending_simulation.take();
+        if let Some(request) = pending {
+            match request {
+                PendingSimulation::Single | PendingSimulation::MonteCarlo { .. } => {
+                    // Build simulation config for current scenario
+                    let config = match self.state.to_simulation_config() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            self.state.simulation_status = SimulationStatus::Idle;
+                            self.state.set_error(format!("Config error: {}", e));
+                            return;
+                        }
+                    };
+
+                    let birth_date = self.state.data().parameters.birth_date.clone();
+                    let start_date = self.state.data().parameters.start_date.clone();
+
+                    match request {
+                        PendingSimulation::Single => {
+                            let seed = js_sys::Math::random().to_bits();
+                            self.worker.send(SimulationRequest::Single {
+                                config,
+                                seed,
+                                birth_date,
+                                start_date,
+                            });
+                        }
+                        PendingSimulation::MonteCarlo { iterations } => {
+                            self.worker.send(SimulationRequest::MonteCarlo {
+                                config,
+                                iterations,
+                                birth_date,
+                                start_date,
+                            });
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                PendingSimulation::Batch { iterations } => {
+                    // Build configs for all scenarios
+                    let mut scenarios = Vec::new();
+                    let mut errors = Vec::new();
+
+                    for (name, data) in &self.state.app_data.simulations {
+                        match to_simulation_config(data) {
+                            Ok(config) => {
+                                let birth_date = data.parameters.birth_date.clone();
+                                let start_date = data.parameters.start_date.clone();
+                                scenarios.push((name.clone(), config, birth_date, start_date));
+                            }
+                            Err(e) => {
+                                errors.push(format!("{}: {}", name, e));
+                            }
+                        }
+                    }
+
+                    if !errors.is_empty() {
+                        tracing::warn!(errors = ?errors, "Some scenarios failed to build config");
+                    }
+
+                    if scenarios.is_empty() {
+                        self.state.simulation_status = SimulationStatus::Idle;
+                        self.state.scenario_state.batch_running = false;
+                        self.state
+                            .set_error("No valid scenarios to run".to_string());
+                        return;
+                    }
+
+                    // Sort scenarios by name for consistent ordering
+                    scenarios.sort_by(|a, b| a.0.cmp(&b.0));
+
+                    // Update status with first scenario name
+                    let first_name = scenarios.first().map(|(n, _, _, _)| n.clone());
+                    self.state.simulation_status = SimulationStatus::RunningBatch {
+                        scenario_index: 0,
+                        scenario_total: scenarios.len(),
+                        iteration_current: 0,
+                        iteration_total: iterations,
+                        current_scenario_name: first_name,
+                    };
+
+                    self.worker.send(SimulationRequest::Batch {
+                        scenarios,
+                        iterations,
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Set up event listener to prevent default browser behavior for captured keys.
@@ -375,6 +470,9 @@ pub fn main() -> Result<(), JsValue> {
     // Set up draw callback
     terminal.draw_web(move |frame| {
         let mut app = app.borrow_mut();
+
+        // Dispatch any pending simulation requests
+        app.dispatch_pending_simulation();
 
         // Process any pending worker responses
         app.process_worker_responses();

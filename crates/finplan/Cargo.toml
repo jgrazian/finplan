@@ -30,6 +30,7 @@ web = [
     "wasm-bindgen",
     "wasm-bindgen-futures",
     "web-sys",
+    "js-sys",
     "console_error_panic_hook",
     "getrandom",
     "tracing-wasm",
@@ -65,6 +66,7 @@ wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = ["console", "Window", "Document", "KeyboardEvent", "EventTarget"] }
 console_error_panic_hook = { version = "0.1", optional = true }
 getrandom = { version = "0.3", optional = true, features = ["wasm_js"] }
+js-sys = { version = "0.3", optional = true }
 tracing-wasm = { version = "0.2", optional = true }
 
 [dev-dependencies]
