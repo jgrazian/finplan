@@ -54,7 +54,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy crates/finplan/dist --project-name=finplan
+          command: pages deploy crates/finplan/dist --project-name=finplan --branch=main
 
       # Option 2b: Alternative - Push to gh-pages branch
       # Uncomment below and comment out the Cloudflare step above if you prefer this approach
