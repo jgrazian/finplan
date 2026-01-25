@@ -6,10 +6,12 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{self, JoinHandle};
 
 use finplan_core::config::SimulationConfig;
-use finplan_core::model::{MonteCarloConfig, SimulationResult as CoreResult};
+use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, SimulationResult as CoreResult};
 
 use crate::data::convert::to_tui_result;
-use crate::state::{MonteCarloPreviewSummary, MonteCarloStoredResult, SimulationResult};
+use crate::state::{
+    MonteCarloPreviewSummary, MonteCarloStoredResult, ScenarioSummary, SimulationResult,
+};
 
 /// Request sent to the background worker
 #[derive(Debug)]
@@ -27,6 +29,12 @@ pub enum SimulationRequest {
         iterations: usize,
         birth_date: String,
         start_date: String,
+    },
+    /// Run Monte Carlo on multiple scenarios (batch mode)
+    Batch {
+        /// Vec of (scenario_name, config, birth_date, start_date)
+        scenarios: Vec<(String, SimulationConfig, String, String)>,
+        iterations: usize,
     },
     /// Graceful shutdown
     Shutdown,
@@ -49,6 +57,13 @@ pub enum SimulationResponse {
         default_tui_result: SimulationResult,
         default_core_result: CoreResult,
     },
+    /// Batch Monte Carlo completed for one scenario
+    BatchScenarioComplete {
+        scenario_name: String,
+        summary: ScenarioSummary,
+    },
+    /// All batch scenarios completed
+    BatchComplete { completed_count: usize },
     /// Simulation was cancelled
     Cancelled,
     /// Error occurred
@@ -61,6 +76,10 @@ pub struct SimulationWorker {
     response_rx: Receiver<SimulationResponse>,
     cancel_flag: Arc<AtomicBool>,
     progress: Arc<AtomicUsize>,
+    /// For batch runs: current scenario index
+    batch_scenario_index: Arc<AtomicUsize>,
+    /// For batch runs: total number of scenarios
+    batch_scenario_total: Arc<AtomicUsize>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -71,12 +90,23 @@ impl SimulationWorker {
         let (response_tx, response_rx) = channel();
         let cancel_flag = Arc::new(AtomicBool::new(false));
         let progress = Arc::new(AtomicUsize::new(0));
+        let batch_scenario_index = Arc::new(AtomicUsize::new(0));
+        let batch_scenario_total = Arc::new(AtomicUsize::new(0));
 
         let flag_clone = cancel_flag.clone();
         let progress_clone = progress.clone();
+        let batch_idx_clone = batch_scenario_index.clone();
+        let batch_total_clone = batch_scenario_total.clone();
 
         let thread = thread::spawn(move || {
-            worker_loop(request_rx, response_tx, flag_clone, progress_clone);
+            worker_loop(
+                request_rx,
+                response_tx,
+                flag_clone,
+                progress_clone,
+                batch_idx_clone,
+                batch_total_clone,
+            );
         });
 
         Self {
@@ -84,6 +114,8 @@ impl SimulationWorker {
             response_rx,
             cancel_flag,
             progress,
+            batch_scenario_index,
+            batch_scenario_total,
             thread: Some(thread),
         }
     }
@@ -101,9 +133,19 @@ impl SimulationWorker {
         self.response_rx.try_recv().ok()
     }
 
-    /// Get current progress for Monte Carlo (0..total)
+    /// Get current progress for Monte Carlo (0..total iterations)
     pub fn get_progress(&self) -> usize {
         self.progress.load(Ordering::SeqCst)
+    }
+
+    /// Get current batch scenario index (0..total scenarios)
+    pub fn get_batch_scenario_index(&self) -> usize {
+        self.batch_scenario_index.load(Ordering::SeqCst)
+    }
+
+    /// Get total number of scenarios in batch
+    pub fn get_batch_scenario_total(&self) -> usize {
+        self.batch_scenario_total.load(Ordering::SeqCst)
     }
 
     /// Request cancellation of the current operation
@@ -143,6 +185,8 @@ fn worker_loop(
     response_tx: Sender<SimulationResponse>,
     cancel_flag: Arc<AtomicBool>,
     progress: Arc<AtomicUsize>,
+    batch_scenario_index: Arc<AtomicUsize>,
+    batch_scenario_total: Arc<AtomicUsize>,
 ) {
     while let Ok(request) = request_rx.recv() {
         match request {
@@ -201,6 +245,34 @@ fn worker_loop(
                     }
                 }
             }
+
+            SimulationRequest::Batch {
+                scenarios,
+                iterations,
+            } => {
+                batch_scenario_index.store(0, Ordering::SeqCst);
+                batch_scenario_total.store(scenarios.len(), Ordering::SeqCst);
+                progress.store(0, Ordering::SeqCst);
+
+                match run_batch_monte_carlo(
+                    scenarios,
+                    iterations,
+                    &cancel_flag,
+                    &progress,
+                    &batch_scenario_index,
+                    &response_tx,
+                ) {
+                    Ok(count) => {
+                        let _ = response_tx.send(SimulationResponse::BatchComplete {
+                            completed_count: count,
+                        });
+                    }
+                    Err(_) => {
+                        // Cancelled during batch
+                        let _ = response_tx.send(SimulationResponse::Cancelled);
+                    }
+                }
+            }
         }
     }
 }
@@ -241,13 +313,23 @@ fn run_monte_carlo_simulation(
         compute_mean: true,
     };
 
-    // Run Monte Carlo with progress updates
-    // Note: finplan_core doesn't expose per-iteration callbacks, so we run the full simulation
-    // and update progress based on completion. For true progress, we'd need to modify the core.
-    let mc_summary = finplan_core::simulation::monte_carlo_simulate_with_config(config, &mc_config)
-        .map_err(|e| e.to_string())?;
+    // Create progress tracker from existing atomics for real-time progress updates
+    let mc_progress = MonteCarloProgress::from_atomics(progress.clone(), cancel_flag.clone());
 
-    // Update progress to completion
+    // Run Monte Carlo with real-time progress updates
+    let mc_summary = match finplan_core::simulation::monte_carlo_simulate_with_progress(
+        config,
+        &mc_config,
+        &mc_progress,
+    ) {
+        Ok(summary) => summary,
+        Err(finplan_core::error::MarketError::Cancelled) => {
+            return Ok(None); // Cancelled by user
+        }
+        Err(e) => return Err(e.to_string()),
+    };
+
+    // Ensure progress shows completion
     progress.store(iterations, Ordering::SeqCst);
 
     // Check for cancellation after simulation
@@ -325,4 +407,104 @@ fn run_monte_carlo_simulation(
         default_tui_result,
         default_core_result,
     }))
+}
+
+/// Run Monte Carlo on multiple scenarios in batch mode
+fn run_batch_monte_carlo(
+    scenarios: Vec<(String, SimulationConfig, String, String)>,
+    iterations: usize,
+    cancel_flag: &Arc<AtomicBool>,
+    progress: &Arc<AtomicUsize>,
+    batch_scenario_index: &Arc<AtomicUsize>,
+    response_tx: &Sender<SimulationResponse>,
+) -> Result<usize, ()> {
+    let mut completed_count = 0;
+
+    for (idx, (scenario_name, config, birth_date, start_date)) in scenarios.into_iter().enumerate()
+    {
+        // Update batch scenario index
+        batch_scenario_index.store(idx, Ordering::SeqCst);
+        progress.store(0, Ordering::SeqCst);
+
+        // Check for cancellation before each scenario
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err(());
+        }
+
+        // Configure Monte Carlo simulation (simpler config for batch - no mean needed)
+        let mc_config = MonteCarloConfig {
+            iterations,
+            percentiles: vec![0.05, 0.50, 0.95],
+            compute_mean: false,
+        };
+
+        // Create progress tracker for this scenario
+        let mc_progress = MonteCarloProgress::from_atomics(progress.clone(), cancel_flag.clone());
+
+        // Run Monte Carlo with progress updates
+        let mc_summary = match finplan_core::simulation::monte_carlo_simulate_with_progress(
+            &config,
+            &mc_config,
+            &mc_progress,
+        ) {
+            Ok(summary) => summary,
+            Err(finplan_core::error::MarketError::Cancelled) => {
+                return Err(()); // Cancelled by user
+            }
+            Err(e) => {
+                // Log error but continue with other scenarios
+                tracing::warn!(scenario = scenario_name, error = %e, "Monte Carlo failed");
+                continue;
+            }
+        };
+
+        // Extract summary data
+        let p5 = mc_summary
+            .stats
+            .percentile_values
+            .iter()
+            .find(|(p, _)| (*p - 0.05).abs() < 0.001)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+        let p50 = mc_summary
+            .stats
+            .percentile_values
+            .iter()
+            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+        let p95 = mc_summary
+            .stats
+            .percentile_values
+            .iter()
+            .find(|(p, _)| (*p - 0.95).abs() < 0.001)
+            .map(|(_, v)| *v)
+            .unwrap_or(0.0);
+
+        // Get yearly net worth from P50 run
+        let yearly_nw = mc_summary
+            .percentile_runs
+            .iter()
+            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
+            .and_then(|(_, core_result)| to_tui_result(core_result, &birth_date, &start_date).ok())
+            .map(|tui| tui.years.iter().map(|y| (y.year, y.net_worth)).collect());
+
+        let summary = ScenarioSummary {
+            name: scenario_name.clone(),
+            final_net_worth: Some(p50),
+            success_rate: Some(mc_summary.stats.success_rate),
+            percentiles: Some((p5, p50, p95)),
+            yearly_net_worth: yearly_nw,
+        };
+
+        // Send per-scenario completion
+        let _ = response_tx.send(SimulationResponse::BatchScenarioComplete {
+            scenario_name,
+            summary,
+        });
+
+        completed_count += 1;
+    }
+
+    Ok(completed_count)
 }

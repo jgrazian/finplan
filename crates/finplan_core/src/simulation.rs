@@ -8,9 +8,9 @@ use crate::error::MarketError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
     AccountFlavor, AccountId, CashFlowKind, EventTrigger, LedgerEntry, MeanAccumulators,
-    MonteCarloConfig, MonteCarloResult, MonteCarloStats, MonteCarloSummary, SimulationResult,
-    SimulationWarning, StateEvent, TaxStatus, TriggerOffset, WarningKind, YearlyCashFlowSummary,
-    final_net_worth,
+    MonteCarloConfig, MonteCarloProgress, MonteCarloResult, MonteCarloStats, MonteCarloSummary,
+    SimulationResult, SimulationWarning, StateEvent, TaxStatus, TriggerOffset, WarningKind,
+    YearlyCashFlowSummary, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 
@@ -608,6 +608,211 @@ pub fn monte_carlo_simulate_with_config(
             // Skip failed re-runs (should match initial run)
             simulate(params, seed).ok().map(|result| (p, result))
         })
+        .collect();
+
+    // Extract mean accumulators
+    let mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
+        Ok(opt) => opt,
+        Err(poisoned) => poisoned.into_inner(),
+    });
+
+    let stats = MonteCarloStats {
+        num_iterations: actual_iterations,
+        success_rate,
+        mean_final_net_worth,
+        std_dev_final_net_worth,
+        min_final_net_worth,
+        max_final_net_worth,
+        percentile_values,
+    };
+
+    Ok(MonteCarloSummary {
+        stats,
+        percentile_runs,
+        mean_accumulators,
+    })
+}
+
+/// Memory-efficient Monte Carlo simulation with progress tracking
+///
+/// This function is identical to `monte_carlo_simulate_with_config` but provides
+/// real-time progress updates via a `MonteCarloProgress` struct. This allows
+/// UI applications to display accurate progress bars during simulation.
+///
+/// # Progress Updates
+/// The `progress.completed()` counter is incremented after each iteration completes.
+/// The TUI can poll this value to update progress display.
+///
+/// # Cancellation
+/// If `progress.is_cancelled()` returns true, the simulation will stop early
+/// and return `Err(MarketError::Cancelled)`.
+///
+/// # Example
+/// ```ignore
+/// let progress = MonteCarloProgress::new();
+/// let progress_clone = progress.clone();
+///
+/// // Run simulation in background thread
+/// let handle = std::thread::spawn(move || {
+///     monte_carlo_simulate_with_progress(&config, &mc_config, &progress_clone)
+/// });
+///
+/// // Poll progress in main thread
+/// while progress.completed() < mc_config.iterations {
+///     println!("Progress: {}/{}", progress.completed(), mc_config.iterations);
+///     std::thread::sleep(std::time::Duration::from_millis(100));
+/// }
+///
+/// let result = handle.join().unwrap()?;
+/// ```
+pub fn monte_carlo_simulate_with_progress(
+    params: &SimulationConfig,
+    config: &MonteCarloConfig,
+    progress: &MonteCarloProgress,
+) -> Result<MonteCarloSummary, MarketError> {
+    let num_iterations = config.iterations;
+    const MAX_BATCH_SIZE: usize = 100;
+    let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
+
+    // Reset progress for new simulation
+    progress.reset();
+
+    // Check for early cancellation
+    if progress.is_cancelled() {
+        return Err(MarketError::Cancelled);
+    }
+
+    // First validate by running one simulation to check for market errors
+    let _ = simulate(params, 0)?;
+
+    // Check for cancellation after validation
+    if progress.is_cancelled() {
+        return Err(MarketError::Cancelled);
+    }
+
+    // Phase 1: Run all iterations, collecting seeds and final net worth
+    let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
+        Some(Mutex::new(None))
+    } else {
+        None
+    };
+
+    // Track if any thread detected cancellation
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+    // Collect (seed, final_net_worth) for all iterations
+    let mut seed_results: Vec<(u64, f64)> = (0..num_batches)
+        .into_par_iter()
+        .flat_map(|batch_idx| {
+            // Check cancellation at batch start
+            if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                return Vec::new();
+            }
+
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
+            let mut scratch = SimulationScratch::new();
+
+            let batch_size = if batch_idx == num_batches - 1 {
+                num_iterations - batch_idx * MAX_BATCH_SIZE
+            } else {
+                MAX_BATCH_SIZE
+            };
+
+            let results: Vec<(u64, f64)> = (0..batch_size)
+                .filter_map(|_| {
+                    // Check cancellation periodically within batch
+                    if progress.is_cancelled() {
+                        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                        return None;
+                    }
+
+                    let seed = rng.next_u64();
+                    let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
+                    let fnw = final_net_worth(&result);
+
+                    // Accumulate mean sums if requested
+                    if let Some(ref acc_mutex) = mean_accumulator {
+                        let mut acc_guard = match acc_mutex.lock() {
+                            Ok(guard) => guard,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        match acc_guard.as_mut() {
+                            Some(acc) => acc.accumulate(&result),
+                            None => {
+                                let mut new_acc = MeanAccumulators::new(&result);
+                                new_acc.accumulate(&result);
+                                *acc_guard = Some(new_acc);
+                            }
+                        }
+                    }
+
+                    // Update progress counter
+                    progress.increment();
+
+                    Some((seed, fnw))
+                })
+                .collect();
+
+            results
+        })
+        .collect();
+
+    // Check if simulation was cancelled
+    if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+        return Err(MarketError::Cancelled);
+    }
+
+    // Sort by final net worth (ascending)
+    seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Calculate statistics
+    let actual_iterations = seed_results.len();
+    let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
+    let mean_final_net_worth: f64 = if actual_iterations > 0 {
+        final_values.iter().sum::<f64>() / actual_iterations as f64
+    } else {
+        0.0
+    };
+
+    let variance: f64 = if actual_iterations > 0 {
+        final_values
+            .iter()
+            .map(|v| (v - mean_final_net_worth).powi(2))
+            .sum::<f64>()
+            / actual_iterations as f64
+    } else {
+        0.0
+    };
+    let std_dev_final_net_worth = variance.sqrt();
+
+    let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
+    let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
+
+    let success_count = final_values.iter().filter(|v| **v > 0.0).count();
+    let success_rate = if actual_iterations > 0 {
+        success_count as f64 / actual_iterations as f64
+    } else {
+        0.0
+    };
+
+    // Calculate percentile indices and values
+    let mut percentile_values = Vec::new();
+    let mut percentile_seeds = Vec::new();
+
+    if actual_iterations > 0 {
+        for &p in &config.percentiles {
+            let idx = ((actual_iterations as f64 * p).floor() as usize).min(actual_iterations - 1);
+            let (seed, value) = seed_results[idx];
+            percentile_values.push((p, value));
+            percentile_seeds.push((p, seed));
+        }
+    }
+
+    // Phase 2: Re-run simulations for percentile seeds to get full results
+    let percentile_runs: Vec<(f64, SimulationResult)> = percentile_seeds
+        .into_iter()
+        .filter_map(|(p, seed)| simulate(params, seed).ok().map(|result| (p, result)))
         .collect();
 
     // Extract mean accumulators

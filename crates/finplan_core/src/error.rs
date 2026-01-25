@@ -64,6 +64,8 @@ pub enum MarketError {
         reason: &'static str,
     },
     Lookup(LookupError),
+    /// Monte Carlo simulation was cancelled by user request
+    Cancelled,
 }
 
 impl fmt::Display for MarketError {
@@ -82,6 +84,7 @@ impl fmt::Display for MarketError {
                 )
             }
             MarketError::Lookup(e) => write!(f, "{}", e),
+            MarketError::Cancelled => write!(f, "simulation cancelled"),
         }
     }
 }

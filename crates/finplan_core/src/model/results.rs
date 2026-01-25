@@ -560,3 +560,86 @@ pub fn final_net_worth(result: &SimulationResult) -> f64 {
         snap.accounts.iter().map(|acc| acc.total_value()).sum()
     })
 }
+
+// ============================================================================
+// Monte Carlo Progress Tracking
+// ============================================================================
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+/// Progress tracker for Monte Carlo simulations
+///
+/// This struct provides thread-safe progress tracking and cancellation
+/// for Monte Carlo simulations running in the background.
+///
+/// # Example
+/// ```ignore
+/// let progress = MonteCarloProgress::new();
+///
+/// // In a separate thread, run the simulation
+/// let result = monte_carlo_simulate_with_progress(&config, &mc_config, &progress);
+///
+/// // In the main thread, poll progress
+/// loop {
+///     let completed = progress.completed();
+///     let total = mc_config.iterations;
+///     println!("Progress: {}/{}", completed, total);
+///     if completed >= total { break; }
+///     std::thread::sleep(std::time::Duration::from_millis(100));
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct MonteCarloProgress {
+    /// Count of completed iterations
+    completed: Arc<AtomicUsize>,
+    /// Flag to request cancellation
+    cancel: Arc<AtomicBool>,
+}
+
+impl Default for MonteCarloProgress {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MonteCarloProgress {
+    /// Create a new progress tracker
+    pub fn new() -> Self {
+        Self {
+            completed: Arc::new(AtomicUsize::new(0)),
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Create from existing atomics (for interop with existing TUI code)
+    pub fn from_atomics(completed: Arc<AtomicUsize>, cancel: Arc<AtomicBool>) -> Self {
+        Self { completed, cancel }
+    }
+
+    /// Get the number of completed iterations
+    pub fn completed(&self) -> usize {
+        self.completed.load(Ordering::Relaxed)
+    }
+
+    /// Check if cancellation was requested
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// Request cancellation of the simulation
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+
+    /// Reset the progress tracker for reuse
+    pub fn reset(&self) {
+        self.completed.store(0, Ordering::Relaxed);
+        self.cancel.store(false, Ordering::Relaxed);
+    }
+
+    /// Increment the completed count (called internally by simulation)
+    pub(crate) fn increment(&self) {
+        self.completed.fetch_add(1, Ordering::Relaxed);
+    }
+}

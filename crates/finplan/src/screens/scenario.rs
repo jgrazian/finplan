@@ -177,16 +177,10 @@ impl Component for ScenarioScreen {
                 EventResult::Handled
             }
 
-            // Run All scenarios
+            // Run All scenarios (background)
             KeyCode::Char('R') => {
-                match state.run_monte_carlo_all(1000) {
-                    Ok(count) => {
-                        state.modal = ModalState::Message(MessageModal::info(
-                            "Batch Run Complete",
-                            &format!("Ran Monte Carlo on {} scenarios.", count),
-                        ));
-                    }
-                    Err(e) => state.set_error(format!("Batch Monte Carlo failed: {}", e)),
+                if !state.simulation_status.is_running() {
+                    state.request_batch_monte_carlo(1000);
                 }
                 EventResult::Handled
             }

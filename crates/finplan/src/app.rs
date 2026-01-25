@@ -138,6 +138,25 @@ impl App {
                     SimulationStatus::RunningMonteCarlo { current, total };
             }
 
+            // Update progress if batch is running
+            if let SimulationStatus::RunningBatch {
+                scenario_total,
+                iteration_total,
+                current_scenario_name,
+                ..
+            } = &self.state.simulation_status
+            {
+                let scenario_index = self.worker.get_batch_scenario_index();
+                let iteration_current = self.worker.get_progress();
+                self.state.simulation_status = SimulationStatus::RunningBatch {
+                    scenario_index,
+                    scenario_total: *scenario_total,
+                    iteration_current,
+                    iteration_total: *iteration_total,
+                    current_scenario_name: current_scenario_name.clone(),
+                };
+            }
+
             // Check for pending simulation requests
             self.dispatch_pending_simulation();
 
@@ -231,46 +250,140 @@ impl App {
                     self.state.simulation_status =
                         SimulationStatus::RunningMonteCarlo { current, total };
                 }
+                SimulationResponse::BatchScenarioComplete {
+                    scenario_name,
+                    summary,
+                } => {
+                    // Store the summary for this scenario
+                    self.state
+                        .scenario_state
+                        .scenario_summaries
+                        .insert(scenario_name.clone(), summary);
+
+                    // Update batch status with scenario name
+                    if let SimulationStatus::RunningBatch {
+                        scenario_index,
+                        scenario_total,
+                        iteration_total,
+                        ..
+                    } = &self.state.simulation_status
+                    {
+                        self.state.simulation_status = SimulationStatus::RunningBatch {
+                            scenario_index: *scenario_index,
+                            scenario_total: *scenario_total,
+                            iteration_current: 0,
+                            iteration_total: *iteration_total,
+                            current_scenario_name: Some(scenario_name),
+                        };
+                    }
+                }
+                SimulationResponse::BatchComplete { completed_count } => {
+                    self.state.simulation_status = SimulationStatus::Idle;
+                    self.state.scenario_state.batch_running = false;
+
+                    // Persist summaries to disk
+                    self.state.save_scenario_summaries();
+
+                    // Show completion modal
+                    self.state.modal = ModalState::Message(MessageModal::info(
+                        "Batch Run Complete",
+                        &format!("Ran Monte Carlo on {} scenarios.", completed_count),
+                    ));
+                }
             }
         }
     }
 
     /// Check for and dispatch pending simulation requests to the worker
     fn dispatch_pending_simulation(&mut self) {
+        use crate::data::convert::to_simulation_config;
         use crate::state::PendingSimulation;
         use crate::worker::SimulationRequest;
 
         let pending = self.state.pending_simulation.take();
         if let Some(request) = pending {
-            // Build simulation config
-            let config = match self.state.to_simulation_config() {
-                Ok(c) => c,
-                Err(e) => {
-                    self.state.simulation_status = SimulationStatus::Idle;
-                    self.state.set_error(format!("Config error: {}", e));
-                    return;
-                }
-            };
-
-            let birth_date = self.state.data().parameters.birth_date.clone();
-            let start_date = self.state.data().parameters.start_date.clone();
-
             match request {
-                PendingSimulation::Single => {
-                    let seed = rand::rng().next_u64();
-                    self.worker.send(SimulationRequest::Single {
-                        config,
-                        seed,
-                        birth_date,
-                        start_date,
-                    });
+                PendingSimulation::Single | PendingSimulation::MonteCarlo { .. } => {
+                    // Build simulation config for current scenario
+                    let config = match self.state.to_simulation_config() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            self.state.simulation_status = SimulationStatus::Idle;
+                            self.state.set_error(format!("Config error: {}", e));
+                            return;
+                        }
+                    };
+
+                    let birth_date = self.state.data().parameters.birth_date.clone();
+                    let start_date = self.state.data().parameters.start_date.clone();
+
+                    match request {
+                        PendingSimulation::Single => {
+                            let seed = rand::rng().next_u64();
+                            self.worker.send(SimulationRequest::Single {
+                                config,
+                                seed,
+                                birth_date,
+                                start_date,
+                            });
+                        }
+                        PendingSimulation::MonteCarlo { iterations } => {
+                            self.worker.send(SimulationRequest::MonteCarlo {
+                                config,
+                                iterations,
+                                birth_date,
+                                start_date,
+                            });
+                        }
+                        _ => unreachable!(),
+                    }
                 }
-                PendingSimulation::MonteCarlo { iterations } => {
-                    self.worker.send(SimulationRequest::MonteCarlo {
-                        config,
+                PendingSimulation::Batch { iterations } => {
+                    // Build configs for all scenarios
+                    let mut scenarios = Vec::new();
+                    let mut errors = Vec::new();
+
+                    for (name, data) in &self.state.app_data.simulations {
+                        match to_simulation_config(data) {
+                            Ok(config) => {
+                                let birth_date = data.parameters.birth_date.clone();
+                                let start_date = data.parameters.start_date.clone();
+                                scenarios.push((name.clone(), config, birth_date, start_date));
+                            }
+                            Err(e) => {
+                                errors.push(format!("{}: {}", name, e));
+                            }
+                        }
+                    }
+
+                    if !errors.is_empty() {
+                        tracing::warn!(errors = ?errors, "Some scenarios failed to build config");
+                    }
+
+                    if scenarios.is_empty() {
+                        self.state.simulation_status = SimulationStatus::Idle;
+                        self.state.scenario_state.batch_running = false;
+                        self.state
+                            .set_error("No valid scenarios to run".to_string());
+                        return;
+                    }
+
+                    // Sort scenarios by name for consistent ordering
+                    scenarios.sort_by(|a, b| a.0.cmp(&b.0));
+
+                    // Update status with first scenario name
+                    let first_name = scenarios.first().map(|(n, _, _, _)| n.clone());
+                    self.state.simulation_status = SimulationStatus::RunningBatch {
+                        scenario_index: 0,
+                        scenario_total: scenarios.len(),
+                        iteration_current: 0,
+                        iteration_total: iterations,
+                        current_scenario_name: first_name,
+                    };
+
+                    self.worker.send(SimulationRequest::Batch {
+                        scenarios,
                         iterations,
-                        birth_date,
-                        start_date,
                     });
                 }
             }

@@ -917,3 +917,70 @@ Fresh profiling after all Phase 2 implementations (48K samples, ~218B cycles):
    - RelativeToEvent offset calculations
 3. `account_balance` (3.79%) - balance lookups
    - Consider per-timestep caching if same account queried multiple times
+
+---
+
+# Monte Carlo Progress Tracking (2026-01-24)
+
+## Feature Summary
+
+Added real-time progress tracking for Monte Carlo simulations to support TUI progress bars.
+
+## Implementation
+
+### New Types
+
+**`MonteCarloProgress`** (in `finplan_core/src/model/results.rs`):
+- Thread-safe progress tracker using `Arc<AtomicUsize>` for completion count and `Arc<AtomicBool>` for cancellation
+- `from_atomics()` constructor for interop with existing TUI code
+- `completed()`, `is_cancelled()`, `cancel()`, `reset()` methods for external use
+- `increment()` method (crate-internal) called after each iteration
+
+### New Function
+
+**`monte_carlo_simulate_with_progress()`** (in `finplan_core/src/simulation.rs`):
+- Identical to `monte_carlo_simulate_with_config()` but accepts `&MonteCarloProgress`
+- Updates progress counter after each iteration
+- Checks cancellation flag periodically and returns `Err(MarketError::Cancelled)` if set
+- TUI can poll `progress.completed()` for real-time updates
+
+### Error Handling
+
+**`MarketError::Cancelled`** (in `finplan_core/src/error.rs`):
+- New variant for cancelled simulations
+- TUI worker handles this gracefully by returning `Ok(None)`
+
+### TUI Integration
+
+**`worker.rs`**:
+- Updated `run_monte_carlo_simulation()` to use `monte_carlo_simulate_with_progress()`
+- Creates `MonteCarloProgress` from existing atomics via `from_atomics()`
+- Progress bar now shows real iteration progress instead of jumping to 100%
+
+## Benefits
+
+- Accurate progress bars in TUI during Monte Carlo runs
+- Responsive cancellation (checks at iteration level, not just batch level)
+- Minimal overhead (atomic increments are cheap)
+- Backwards compatible (original function unchanged)
+
+## Batch Progress Display
+
+Added to the same feature:
+
+**`SimulationStatus::RunningBatch`** - Extended to track:
+- `scenario_index` / `scenario_total` - Which scenario is being processed
+- `iteration_current` / `iteration_total` - Iteration progress within current scenario
+- `current_scenario_name` - Name of scenario being processed
+
+**`SimulationRequest::Batch`** - New worker request type for batch Monte Carlo
+
+**`SimulationResponse::BatchScenarioComplete`** - Sent after each scenario completes  
+**`SimulationResponse::BatchComplete`** - Sent when all scenarios complete
+
+**Status bar display**: Shows combined progress with scenario count, overall percentage, progress bar, and current scenario name:
+```
+⎯ Batch 2/5 [========       ] 42% (Scenario A) [Esc]
+```
+
+The `[R]un All` feature now runs in the background with real-time progress updates instead of blocking the UI.

@@ -89,8 +89,42 @@ impl StatusBar {
                     Span::styled(" [Esc to cancel]", Style::default().fg(Color::DarkGray)),
                 ])
             }
-            SimulationStatus::RunningBatch { current, total } => {
+            SimulationStatus::RunningBatch {
+                scenario_index,
+                scenario_total,
+                iteration_current,
+                iteration_total,
+                current_scenario_name,
+            } => {
                 let idx = SPINNER_FRAME.fetch_add(1, Ordering::Relaxed) % 4;
+
+                // Calculate overall progress
+                let total_iterations = *scenario_total * *iteration_total;
+                let completed_iterations = *scenario_index * *iteration_total + *iteration_current;
+                let overall_pct = if total_iterations > 0 {
+                    (completed_iterations as f64 / total_iterations as f64 * 100.0) as usize
+                } else {
+                    0
+                };
+
+                // Build progress bar
+                let bar_width = 15;
+                let filled = (overall_pct * bar_width / 100).min(bar_width);
+                let empty = bar_width - filled;
+                let bar = format!("[{}{}]", "=".repeat(filled), " ".repeat(empty));
+
+                // Scenario name (truncated if needed)
+                let scenario_display = current_scenario_name
+                    .as_ref()
+                    .map(|n| {
+                        if n.len() > 12 {
+                            format!("{}…", n.chars().take(11).collect::<String>())
+                        } else {
+                            n.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| "...".to_string());
+
                 Some(vec![
                     Span::styled(
                         format!(" {} ", SPINNER_CHARS[idx]),
@@ -99,10 +133,19 @@ impl StatusBar {
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!("Batch {}/{}", current, total),
+                        format!("Batch {}/{} ", scenario_index + 1, scenario_total),
                         Style::default().fg(Color::Magenta),
                     ),
-                    Span::styled(" [Esc to cancel]", Style::default().fg(Color::DarkGray)),
+                    Span::styled(bar, Style::default().fg(Color::Magenta)),
+                    Span::styled(
+                        format!(" {}% ", overall_pct),
+                        Style::default().fg(Color::Magenta),
+                    ),
+                    Span::styled(
+                        format!("({})", scenario_display),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(" [Esc]", Style::default().fg(Color::DarkGray)),
                 ])
             }
         }

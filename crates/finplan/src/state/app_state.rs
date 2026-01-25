@@ -89,8 +89,16 @@ pub enum SimulationStatus {
         total: usize,
     },
     RunningBatch {
-        current: usize,
-        total: usize,
+        /// Current scenario index (0-based)
+        scenario_index: usize,
+        /// Total number of scenarios
+        scenario_total: usize,
+        /// Current iteration within scenario
+        iteration_current: usize,
+        /// Total iterations per scenario
+        iteration_total: usize,
+        /// Name of current scenario being processed
+        current_scenario_name: Option<String>,
     },
 }
 
@@ -109,6 +117,8 @@ pub enum PendingSimulation {
     Single,
     /// Run Monte Carlo simulation with specified iterations
     MonteCarlo { iterations: usize },
+    /// Run Monte Carlo on all scenarios
+    Batch { iterations: usize },
 }
 
 // ========== AppState ==========
@@ -477,6 +487,21 @@ impl AppState {
             current: 0,
             total: iterations,
         };
+    }
+
+    /// Request batch Monte Carlo on all scenarios in the background
+    /// The App will pick this up and dispatch to the worker
+    pub fn request_batch_monte_carlo(&mut self, iterations: usize) {
+        let num_scenarios = self.app_data.simulations.len();
+        self.pending_simulation = Some(PendingSimulation::Batch { iterations });
+        self.simulation_status = SimulationStatus::RunningBatch {
+            scenario_index: 0,
+            scenario_total: num_scenarios,
+            iteration_current: 0,
+            iteration_total: iterations,
+            current_scenario_name: None,
+        };
+        self.scenario_state.batch_running = true;
     }
 
     /// Run the simulation and store results (synchronous, blocks UI)
