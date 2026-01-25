@@ -196,6 +196,38 @@ impl PickerModal {
 
 // ========== FormModal ==========
 
+/// Form kind for type-safe dispatch of form-specific behavior.
+/// Only forms with special runtime behavior (e.g., dependent fields) need explicit kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FormKind {
+    /// Asset purchase effect - has dependent fields (To Account → Asset)
+    AssetPurchase,
+    /// Asset sale effect - may need dependent fields (From Account → Asset)
+    AssetSale,
+    /// All other forms without special behavior
+    #[default]
+    Generic,
+}
+
+/// Field indices for AssetPurchase form
+pub mod asset_purchase_fields {
+    pub const FROM_ACCOUNT: usize = 0;
+    pub const TO_ACCOUNT: usize = 1;
+    pub const ASSET: usize = 2;
+    pub const AMOUNT: usize = 3;
+}
+
+/// Field indices for AssetSale form
+pub mod asset_sale_fields {
+    pub const FROM_ACCOUNT: usize = 0;
+    pub const ASSET: usize = 1;
+    pub const AMOUNT: usize = 2;
+    pub const AMOUNT_TYPE: usize = 3;
+    pub const LOT_METHOD: usize = 4;
+    /// Special value meaning "sell all assets" (liquidate)
+    pub const ALL_ASSETS: &str = "[All]";
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldType {
     Text,
@@ -305,6 +337,8 @@ pub struct FormModal {
     pub action: ModalAction,
     /// Context data for the form (e.g., account index being edited)
     pub context: Option<ModalContext>,
+    /// Form kind for type-safe dispatch of special behavior
+    pub kind: FormKind,
 }
 
 impl FormModal {
@@ -322,7 +356,14 @@ impl FormModal {
             editing: false,
             action,
             context: None,
+            kind: FormKind::default(),
         }
+    }
+
+    /// Set the form kind for type-safe dispatch
+    pub fn with_kind(mut self, kind: FormKind) -> Self {
+        self.kind = kind;
+        self
     }
 
     /// Set typed context

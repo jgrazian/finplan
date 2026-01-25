@@ -8,7 +8,8 @@ use crate::modals::parse_currency;
 use crate::screens::events::EventsScreen;
 use crate::state::context::{EffectContext, EffectTypeContext, ModalContext};
 use crate::state::{
-    AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal,
+    AppState, ConfirmModal, FormField, FormKind, FormModal, ModalAction, ModalState, PickerModal,
+    asset_sale_fields,
 };
 
 use super::{ActionContext, ActionResult};
@@ -127,6 +128,7 @@ fn build_edit_form_for_effect(
     effect_idx: usize,
 ) -> ActionResult {
     let accounts = EventsScreen::get_account_names(state);
+    let investment_accounts = EventsScreen::get_investment_account_names(state);
     let events = EventsScreen::get_event_names(state);
 
     match effect {
@@ -191,12 +193,13 @@ fn build_edit_form_for_effect(
                     "Edit Asset Purchase",
                     vec![
                         FormField::select("From Account", accounts.clone(), &from.0),
-                        FormField::select("To Account", accounts, &to_account.0),
+                        FormField::select("To Account", investment_accounts.clone(), &to_account.0),
                         FormField::select("Asset", assets, &asset.0),
                         FormField::currency("Amount", amount_to_f64(amount)),
                     ],
                     ModalAction::EDIT_EFFECT,
                 )
+                .with_kind(FormKind::AssetPurchase)
                 .with_typed_context(ModalContext::effect_edit(
                     event_idx,
                     effect_idx,
@@ -212,36 +215,41 @@ fn build_edit_form_for_effect(
             amount,
             gross,
             lot_method,
-        } => ActionResult::modal(ModalState::Form(
-            FormModal::new(
-                "Edit Asset Sale",
-                vec![
-                    FormField::select("From Account", accounts, &from.0),
-                    FormField::text(
-                        "Asset (blank=liquidate)",
-                        asset.as_ref().map(|a| a.0.as_str()).unwrap_or(""),
-                    ),
-                    FormField::currency("Amount", amount_to_f64(amount)),
-                    FormField::select(
-                        "Amount Type",
-                        amount_type_options(),
-                        if *gross { "Gross" } else { "Net" },
-                    ),
-                    FormField::select(
-                        "Lot Method",
-                        lot_method_options(),
-                        lot_method_to_display(*lot_method),
-                    ),
-                ],
-                ModalAction::EDIT_EFFECT,
-            )
-            .with_typed_context(ModalContext::effect_edit(
-                event_idx,
-                effect_idx,
-                EffectTypeContext::AssetSale,
+        } => {
+            let sale_assets = get_assets_for_sale(state, &from.0);
+            let selected_asset = asset
+                .as_ref()
+                .map(|a| a.0.as_str())
+                .unwrap_or(asset_sale_fields::ALL_ASSETS);
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "Edit Asset Sale",
+                    vec![
+                        FormField::select("From Account", investment_accounts.clone(), &from.0),
+                        FormField::select("Asset", sale_assets, selected_asset),
+                        FormField::currency("Amount", amount_to_f64(amount)),
+                        FormField::select(
+                            "Amount Type",
+                            amount_type_options(),
+                            if *gross { "Gross" } else { "Net" },
+                        ),
+                        FormField::select(
+                            "Lot Method",
+                            lot_method_options(),
+                            lot_method_to_display(*lot_method),
+                        ),
+                    ],
+                    ModalAction::EDIT_EFFECT,
+                )
+                .with_kind(FormKind::AssetSale)
+                .with_typed_context(ModalContext::effect_edit(
+                    event_idx,
+                    effect_idx,
+                    EffectTypeContext::AssetSale,
+                ))
+                .start_editing(),
             ))
-            .start_editing(),
-        )),
+        }
 
         EffectData::Sweep {
             to,
@@ -497,7 +505,7 @@ fn strategy_options() -> Vec<String> {
 }
 
 /// Get asset names for an account by account name
-fn get_assets_for_account(state: &AppState, account_name: &str) -> Vec<String> {
+pub fn get_assets_for_account(state: &AppState, account_name: &str) -> Vec<String> {
     state
         .data()
         .portfolios
@@ -509,13 +517,27 @@ fn get_assets_for_account(state: &AppState, account_name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Get asset names for sale with "[All]" option (for liquidating entire account)
+/// Only includes "[All]" when there are 2+ assets
+pub fn get_assets_for_sale(state: &AppState, account_name: &str) -> Vec<String> {
+    let mut assets = get_assets_for_account(state, account_name);
+    if assets.len() < 2 {
+        return assets;
+    }
+
+    assets.insert(0, asset_sale_fields::ALL_ASSETS.to_string());
+    assets
+}
+
 /// Handle effect type selection for adding new effect
 pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> ActionResult {
     let event_idx = state.events_state.selected_event_index;
     let accounts = EventsScreen::get_account_names(state);
+    let investment_accounts = EventsScreen::get_investment_account_names(state);
     let events = EventsScreen::get_event_names(state);
 
     let first_account = accounts.first().cloned().unwrap_or_default();
+    let first_investment_account = investment_accounts.first().cloned().unwrap_or_default();
     let first_event = events.first().cloned().unwrap_or_default();
 
     match effect_type {
@@ -637,19 +659,29 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
             if accounts.is_empty() {
                 return ActionResult::error("No accounts available. Create an account first.");
             }
-            let assets = get_assets_for_account(state, &first_account);
+            if investment_accounts.is_empty() {
+                return ActionResult::error(
+                    "No investment accounts available. Create an investment account first.",
+                );
+            }
+            let assets = get_assets_for_account(state, &first_investment_account);
             let first_asset = assets.first().cloned().unwrap_or_default();
             ActionResult::modal(ModalState::Form(
                 FormModal::new(
                     "New Asset Purchase",
                     vec![
-                        FormField::select("From Account", accounts.clone(), &first_account),
-                        FormField::select("To Account", accounts, &first_account),
+                        FormField::select("From Account", accounts, &first_account),
+                        FormField::select(
+                            "To Account",
+                            investment_accounts.clone(),
+                            &first_investment_account,
+                        ),
                         FormField::select("Asset", assets, &first_asset),
                         FormField::currency("Amount", 0.0),
                     ],
                     ModalAction::ADD_EFFECT,
                 )
+                .with_kind(FormKind::AssetPurchase)
                 .with_typed_context(ModalContext::effect_add(
                     event_idx,
                     EffectTypeContext::AssetPurchase,
@@ -658,21 +690,30 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
             ))
         }
         "Asset Sale" => {
-            if accounts.is_empty() {
-                return ActionResult::error("No accounts available. Create an account first.");
+            if investment_accounts.is_empty() {
+                return ActionResult::error(
+                    "No investment accounts available. Create an investment account first.",
+                );
             }
+            let sale_assets = get_assets_for_sale(state, &first_investment_account);
+            let first_asset = sale_assets.first().cloned().unwrap_or_default();
             ActionResult::modal(ModalState::Form(
                 FormModal::new(
                     "New Asset Sale",
                     vec![
-                        FormField::select("From Account", accounts, &first_account),
-                        FormField::text("Asset (blank=liquidate)", ""),
+                        FormField::select(
+                            "From Account",
+                            investment_accounts.clone(),
+                            &first_investment_account,
+                        ),
+                        FormField::select("Asset", sale_assets, &first_asset),
                         FormField::currency("Amount", 0.0),
                         FormField::select("Amount Type", amount_type_options(), "Net"),
                         FormField::select("Lot Method", lot_method_options(), "FIFO"),
                     ],
                     ModalAction::ADD_EFFECT,
                 )
+                .with_kind(FormKind::AssetSale)
                 .with_typed_context(ModalContext::effect_add(
                     event_idx,
                     EffectTypeContext::AssetSale,
@@ -854,7 +895,7 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
         EffectTypeContext::AssetSale => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let asset_str = form_parts.get(1).unwrap_or(&"").trim();
-            let asset = if asset_str.is_empty() {
+            let asset = if asset_str.is_empty() || asset_str == asset_sale_fields::ALL_ASSETS {
                 None
             } else {
                 Some(AssetTag(asset_str.to_string()))
@@ -1042,7 +1083,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
         EffectTypeContext::AssetSale => {
             let from_account = form_parts.first().unwrap_or(&"").to_string();
             let asset_str = form_parts.get(1).unwrap_or(&"").trim();
-            let asset = if asset_str.is_empty() {
+            let asset = if asset_str.is_empty() || asset_str == asset_sale_fields::ALL_ASSETS {
                 None
             } else {
                 Some(AssetTag(asset_str.to_string()))

@@ -1041,6 +1041,18 @@ impl EventsScreen {
             .collect()
     }
 
+    /// Get accounts that can hold assets (investment accounts only)
+    pub fn get_investment_account_names(state: &AppState) -> Vec<String> {
+        state
+            .data()
+            .portfolios
+            .accounts
+            .iter()
+            .filter(|a| a.account_type.can_hold_assets())
+            .map(|a| a.name.clone())
+            .collect()
+    }
+
     /// Get available event names for references
     pub fn get_event_names(state: &AppState) -> Vec<String> {
         state

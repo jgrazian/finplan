@@ -9,7 +9,11 @@ mod text_input;
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
-use crate::state::{AppState, FormModal, ModalAction, ModalState};
+use crate::actions::{get_assets_for_account, get_assets_for_sale};
+use crate::state::{
+    AppState, FormKind, FormModal, ModalAction, ModalState, asset_purchase_fields,
+    asset_sale_fields,
+};
 
 pub use confirm::render_confirm_modal;
 pub use form::{
@@ -135,46 +139,48 @@ fn update_dependent_fields(state: &mut AppState, field_idx: usize) {
             return;
         };
 
-        // Asset Purchase forms: "To Account" (field 1) affects "Asset" (field 2)
-        if (modal.title == "Edit Asset Purchase" || modal.title == "New Asset Purchase")
-            && field_idx == 1
-        {
-            let to_account = modal.fields[1].value.clone();
-            let current_asset = modal.fields[2].value.clone();
-            let assets = get_assets_for_account(state, &to_account);
-            Some((assets, current_asset))
-        } else {
-            None
+        match modal.kind {
+            // Asset Purchase: "To Account" field affects "Asset" field options
+            FormKind::AssetPurchase if field_idx == asset_purchase_fields::TO_ACCOUNT => {
+                let to_account = modal.fields[asset_purchase_fields::TO_ACCOUNT]
+                    .value
+                    .clone();
+                let current_asset = modal.fields[asset_purchase_fields::ASSET].value.clone();
+                let assets = get_assets_for_account(state, &to_account);
+                Some((asset_purchase_fields::ASSET, assets, current_asset))
+            }
+            // Asset Sale: "From Account" field affects "Asset" field options
+            FormKind::AssetSale if field_idx == asset_sale_fields::FROM_ACCOUNT => {
+                let from_account = modal.fields[asset_sale_fields::FROM_ACCOUNT].value.clone();
+                let current_asset = modal.fields[asset_sale_fields::ASSET].value.clone();
+                let assets = get_assets_for_sale(state, &from_account);
+                Some((asset_sale_fields::ASSET, assets, current_asset))
+            }
+            _ => None,
         }
     };
 
     // Now apply the update (mutable borrow)
-    if let Some((assets, current_asset)) = update_info {
+    if let Some((asset_field_idx, assets, current_asset)) = update_info {
         let ModalState::Form(modal) = &mut state.modal else {
             return;
         };
 
-        // Update the Asset field options
-        modal.fields[2].options = assets;
+        // Update the dependent field options
+        modal.fields[asset_field_idx].options = assets;
 
         // Keep current selection if still valid, otherwise select first
-        if !modal.fields[2].options.contains(&current_asset) {
-            modal.fields[2].value = modal.fields[2].options.first().cloned().unwrap_or_default();
+        if !modal.fields[asset_field_idx]
+            .options
+            .contains(&current_asset)
+        {
+            modal.fields[asset_field_idx].value = modal.fields[asset_field_idx]
+                .options
+                .first()
+                .cloned()
+                .unwrap_or_default();
         }
     }
-}
-
-/// Get asset names for an account by account name
-fn get_assets_for_account(state: &AppState, account_name: &str) -> Vec<String> {
-    state
-        .data()
-        .portfolios
-        .accounts
-        .iter()
-        .find(|a| a.name == account_name)
-        .and_then(|a| a.account_type.as_investment())
-        .map(|inv| inv.assets.iter().map(|av| av.asset.0.clone()).collect())
-        .unwrap_or_default()
 }
 
 /// Create a centered rectangle within the given area
