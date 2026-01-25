@@ -6,7 +6,7 @@ mod picker;
 mod scenario_picker;
 mod text_input;
 
-use crossterm::event::KeyEvent;
+use crate::event::AppKeyEvent;
 use ratatui::{Frame, layout::Rect};
 
 use crate::actions::{get_assets_for_account, get_assets_for_sale};
@@ -109,7 +109,7 @@ pub fn render_modal(frame: &mut Frame, state: &AppState) {
 }
 
 /// Handle key events for the active modal
-pub fn handle_modal_key(key: KeyEvent, state: &mut AppState) -> ModalResult {
+pub fn handle_modal_key(key: AppKeyEvent, state: &mut AppState) -> ModalResult {
     let result = match &mut state.modal {
         ModalState::None => ModalResult::Continue,
         ModalState::TextInput(modal) => text_input::handle_text_input_key(key, modal),

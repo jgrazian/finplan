@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::{Component, EventResult};
+use crate::event::AppKeyEvent;
 use crate::state::{AppState, SimulationStatus};
-use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -153,7 +153,7 @@ impl StatusBar {
 }
 
 impl Component for StatusBar {
-    fn handle_key(&mut self, _key: KeyEvent, _state: &mut AppState) -> EventResult {
+    fn handle_key(&mut self, _key: AppKeyEvent, _state: &mut AppState) -> EventResult {
         EventResult::NotHandled
     }
 

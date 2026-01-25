@@ -1,5 +1,6 @@
 // Scenario actions - save, load, switch scenarios, import, export
 
+#[cfg(feature = "native")]
 use std::path::Path;
 
 use crate::state::{AppState, MessageModal, ModalState};
@@ -94,7 +95,8 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
     ))))
 }
 
-/// Handle importing a scenario from an external file
+/// Handle importing a scenario from an external file (native only - uses filesystem)
+#[cfg(feature = "native")]
 pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let path_str = ctx.value().trim();
     if path_str.is_empty() {
@@ -119,7 +121,8 @@ pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     }
 }
 
-/// Handle exporting the current scenario to an external file
+/// Handle exporting the current scenario to an external file (native only - uses filesystem)
+#[cfg(feature = "native")]
 pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
     let path_str = ctx.value().trim();
     if path_str.is_empty() {
@@ -190,6 +193,7 @@ pub fn handle_duplicate_scenario(state: &mut AppState, ctx: ActionContext) -> Ac
 }
 
 /// Handle deleting a scenario (confirm dialog already shown)
+/// On native, also deletes from disk. On web, only removes from memory.
 pub fn handle_delete_scenario(state: &mut AppState) -> ActionResult {
     // Get the selected scenario name
     let scenarios = state.get_scenario_list_with_summaries();
@@ -198,7 +202,8 @@ pub fn handle_delete_scenario(state: &mut AppState) -> ActionResult {
         .map(|(name, _)| name.clone());
 
     if let Some(name) = selected_name {
-        // Try to delete from disk first
+        // Try to delete from disk first (native only)
+        #[cfg(feature = "native")]
         if let Err(e) = state.delete_scenario_file(&name) {
             // Log but continue - file might not exist
             tracing::warn!(scenario = name, error = %e, "Could not delete scenario file");

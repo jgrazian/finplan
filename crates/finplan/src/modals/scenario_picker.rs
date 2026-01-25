@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::event::{AppKeyEvent, KeyCode};
 use ratatui::{
     Frame,
     layout::Constraint,
@@ -129,7 +129,10 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
 }
 
 /// Handle key events for scenario picker modal
-pub fn handle_scenario_picker_key(key: KeyEvent, modal: &mut ScenarioPickerModal) -> ModalResult {
+pub fn handle_scenario_picker_key(
+    key: AppKeyEvent,
+    modal: &mut ScenarioPickerModal,
+) -> ModalResult {
     if modal.editing_new_name {
         // Text input mode for new scenario name
         match key.code {

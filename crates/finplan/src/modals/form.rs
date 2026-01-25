@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::event::{AppKeyEvent, KeyCode};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
@@ -241,7 +241,7 @@ fn format_display_value(field: &FormField) -> String {
 }
 
 /// Handle key events for form modal
-pub fn handle_form_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
+pub fn handle_form_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
     if modal.editing {
         handle_editing_key(key, modal)
     } else {
@@ -249,13 +249,13 @@ pub fn handle_form_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     }
 }
 
-fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
+fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
     // Check for submit keys first - works in both editing and navigation mode
     // Support multiple key combos since Ctrl+Enter is unreliable in some terminals
     let is_submit = matches!(
-        (key.code, key.modifiers.contains(KeyModifiers::CONTROL)),
+        (&key.code, key.ctrl()),
         (KeyCode::Enter, true) | (KeyCode::Char('s'), true)
-    ) || key.code == KeyCode::F(10);
+    ) || matches!(key.code, KeyCode::F(10));
 
     if is_submit {
         return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
@@ -266,6 +266,26 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     // Handle Select fields specially - use Left/Right for option cycling
     if field.field_type == FieldType::Select {
         let field_index = modal.focused_field;
+
+        // Handle back-tab first (Shift+Tab on web, BackTab on native)
+        if key.is_back_tab() || matches!(key.code, KeyCode::Up) {
+            // Move to previous field
+            let start = modal.focused_field;
+            loop {
+                if modal.focused_field == 0 {
+                    modal.focused_field = modal.fields.len() - 1;
+                } else {
+                    modal.focused_field -= 1;
+                }
+                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
+                    || modal.focused_field == start
+                {
+                    break;
+                }
+            }
+            return ModalResult::Continue;
+        }
+
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => {
                 field.select_prev();
@@ -280,23 +300,6 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
                 let start = modal.focused_field;
                 loop {
                     modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                    if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                        || modal.focused_field == start
-                    {
-                        break;
-                    }
-                }
-                return ModalResult::Continue;
-            }
-            KeyCode::BackTab | KeyCode::Up => {
-                // Move to previous field
-                let start = modal.focused_field;
-                loop {
-                    if modal.focused_field == 0 {
-                        modal.focused_field = modal.fields.len() - 1;
-                    } else {
-                        modal.focused_field -= 1;
-                    }
                     if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
                         || modal.focused_field == start
                     {
@@ -374,12 +377,12 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     }
 }
 
-fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
+fn handle_navigation_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
     // Check for submit keys first
     let is_submit = matches!(
-        (key.code, key.modifiers.contains(KeyModifiers::CONTROL)),
+        (&key.code, key.ctrl()),
         (KeyCode::Enter, true) | (KeyCode::Char('s'), true)
-    ) || key.code == KeyCode::F(10);
+    ) || matches!(key.code, KeyCode::F(10));
 
     if is_submit {
         return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
@@ -402,6 +405,25 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
         }
     }
 
+    // Handle back-tab first (Shift+Tab on web, BackTab on native)
+    if key.is_back_tab() || matches!(key.code, KeyCode::Char('k') | KeyCode::Up) {
+        // Skip read-only fields when navigating
+        let start = modal.focused_field;
+        loop {
+            if modal.focused_field == 0 {
+                modal.focused_field = modal.fields.len() - 1;
+            } else {
+                modal.focused_field -= 1;
+            }
+            if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
+                || modal.focused_field == start
+            {
+                break;
+            }
+        }
+        return ModalResult::Continue;
+    }
+
     match key.code {
         KeyCode::Enter | KeyCode::Char('e') => {
             // Enter edit mode for current field if not read-only and not a Select
@@ -420,23 +442,6 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
             let start = modal.focused_field;
             loop {
                 modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                    || modal.focused_field == start
-                {
-                    break;
-                }
-            }
-            ModalResult::Continue
-        }
-        KeyCode::BackTab | KeyCode::Char('k') | KeyCode::Up => {
-            // Skip read-only fields when navigating
-            let start = modal.focused_field;
-            loop {
-                if modal.focused_field == 0 {
-                    modal.focused_field = modal.fields.len() - 1;
-                } else {
-                    modal.focused_field -= 1;
-                }
                 if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
                     || modal.focused_field == start
                 {

@@ -6,17 +6,15 @@ pub mod platform;
 pub mod state;
 pub mod util;
 
-// Native-only modules (use crossterm/threads)
-#[cfg(feature = "native")]
+// UI modules - now platform-agnostic thanks to AppKeyEvent abstraction
 pub mod actions;
+pub mod components;
+pub mod modals;
+pub mod screens;
+
+// Native-only modules (use crossterm event loop / threads)
 #[cfg(feature = "native")]
 pub mod app;
-#[cfg(feature = "native")]
-pub mod components;
-#[cfg(feature = "native")]
-pub mod modals;
-#[cfg(feature = "native")]
-pub mod screens;
 #[cfg(feature = "native")]
 pub mod worker;
 

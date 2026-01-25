@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::event::{AppKeyEvent, KeyCode};
 use ratatui::{
     Frame,
     layout::Constraint,
@@ -55,7 +55,7 @@ pub fn render_message_modal(frame: &mut Frame, modal: &MessageModal) {
 }
 
 /// Handle key events for message modal
-pub fn handle_message_key(key: KeyEvent) -> ModalResult {
+pub fn handle_message_key(key: AppKeyEvent) -> ModalResult {
     match key.code {
         KeyCode::Enter | KeyCode::Esc => ModalResult::Cancelled,
         _ => ModalResult::Continue,

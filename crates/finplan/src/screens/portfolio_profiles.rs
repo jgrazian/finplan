@@ -5,13 +5,13 @@ use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileData};
+use crate::event::{AppKeyEvent, KeyCode};
 use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
     AccountInteractionMode, AppState, ConfirmModal, FormField, FormModal, HoldingEditState,
     ModalAction, ModalState, PickerModal, PortfolioProfilesPanel,
 };
 use crate::util::format::{format_currency, format_percentage};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -1276,9 +1276,9 @@ impl PortfolioProfilesScreen {
 
     // ========== Key Handlers ==========
 
-    fn handle_accounts_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_accounts_keys(&self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let accounts_len = state.data().portfolios.accounts.len();
-        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let has_shift = key.shift();
         match key.code {
             // Move down (Shift+J or Shift+Down)
             KeyCode::Char('J') if has_shift => {
@@ -1472,7 +1472,7 @@ impl PortfolioProfilesScreen {
     }
 
     /// Handle key events when in holdings editing mode
-    fn handle_holdings_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_holdings_keys(&self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let account_idx = state.portfolio_profiles_state.selected_account_index;
 
         // Get the number of assets for navigation bounds
@@ -1663,7 +1663,7 @@ impl PortfolioProfilesScreen {
             }
             HoldingEditState::Selecting => {
                 // Normal navigation mode within holdings
-                let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                let has_shift = key.shift();
                 match key.code {
                     KeyCode::Esc => {
                         // Exit holdings editing mode
@@ -1960,9 +1960,9 @@ impl PortfolioProfilesScreen {
         }
     }
 
-    fn handle_profiles_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_profiles_keys(&self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let profiles_len = state.data().profiles.len();
-        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let has_shift = key.shift();
         match key.code {
             // Move down (Shift+J or Shift+Down)
             KeyCode::Char('J') if has_shift => {
@@ -2174,7 +2174,7 @@ impl PortfolioProfilesScreen {
         }
     }
 
-    fn handle_mappings_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_mappings_keys(&self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let unique_assets = Self::get_unique_assets(state);
         match key.code {
             KeyCode::Char(' ') => {
@@ -2238,7 +2238,7 @@ impl PortfolioProfilesScreen {
         }
     }
 
-    fn handle_config_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_config_keys(&self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         const CONFIG_ITEMS: usize = 4; // Federal, State, Cap Gains, Inflation
         match key.code {
             KeyCode::Char(' ') => {
@@ -2363,7 +2363,7 @@ fn format_account_type(account_type: &AccountType) -> &'static str {
 }
 
 impl Component for PortfolioProfilesScreen {
-    fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_key(&mut self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         // If in holdings editing mode, handle all keys there first (captures Tab, etc.)
         if state
             .portfolio_profiles_state
@@ -2373,16 +2373,18 @@ impl Component for PortfolioProfilesScreen {
             return self.handle_holdings_keys(key, state);
         }
 
+        // Handle back-tab first (Shift+Tab on web, BackTab on native)
+        if key.is_back_tab() {
+            state.portfolio_profiles_state.focused_panel =
+                state.portfolio_profiles_state.focused_panel.prev();
+            return EventResult::Handled;
+        }
+
         match key.code {
             // Tab cycling through all panels
-            KeyCode::Tab if key.modifiers.is_empty() => {
+            KeyCode::Tab if key.no_modifiers() => {
                 state.portfolio_profiles_state.focused_panel =
                     state.portfolio_profiles_state.focused_panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.portfolio_profiles_state.focused_panel =
-                    state.portfolio_profiles_state.focused_panel.prev();
                 EventResult::Handled
             }
             _ => {

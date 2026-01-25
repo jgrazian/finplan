@@ -1,11 +1,11 @@
 use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
+use crate::event::{AppKeyEvent, KeyCode};
 use crate::state::{
     AppState, ConfirmModal, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState,
     ScenarioPanel, ScenarioPickerModal,
 };
 use crate::util::format::{format_currency, format_currency_short};
-use crossterm::event::{KeyCode, KeyEvent};
 use jiff::civil::Date;
 use ratatui::{
     Frame,
@@ -78,19 +78,21 @@ impl ScenarioScreen {
 }
 
 impl Component for ScenarioScreen {
-    fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_key(&mut self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let panel = state.scenario_state.focused_panel;
         let scenarios = state.get_scenario_list_with_summaries();
         let num_scenarios = scenarios.len();
+
+        // Handle back-tab first (Shift+Tab on web, BackTab on native)
+        if key.is_back_tab() {
+            state.scenario_state.focused_panel = panel.prev();
+            return EventResult::Handled;
+        }
 
         match key.code {
             // Panel navigation
             KeyCode::Tab => {
                 state.scenario_state.focused_panel = panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.scenario_state.focused_panel = panel.prev();
                 EventResult::Handled
             }
 
@@ -261,7 +263,8 @@ impl Component for ScenarioScreen {
                 EventResult::Handled
             }
 
-            // Import scenario
+            // Import scenario (native only - uses filesystem)
+            #[cfg(feature = "native")]
             KeyCode::Char('i') => {
                 let default_path = dirs::home_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -279,7 +282,8 @@ impl Component for ScenarioScreen {
                 EventResult::Handled
             }
 
-            // Export scenario
+            // Export scenario (native only - uses filesystem)
+            #[cfg(feature = "native")]
             KeyCode::Char('x') => {
                 let default_path = dirs::home_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -884,7 +888,9 @@ impl super::ModalHandler for ScenarioScreen {
             ModalAction::Scenario(ScenarioAction::EditParameters) => {
                 actions::handle_edit_parameters(state, ctx)
             }
+            #[cfg(feature = "native")]
             ModalAction::Scenario(ScenarioAction::Import) => actions::handle_import(state, ctx),
+            #[cfg(feature = "native")]
             ModalAction::Scenario(ScenarioAction::Export) => actions::handle_export(state, ctx),
             ModalAction::Scenario(ScenarioAction::New) => actions::handle_new_scenario(state, ctx),
             ModalAction::Scenario(ScenarioAction::Duplicate) => {

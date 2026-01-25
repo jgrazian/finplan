@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::event::{AppKeyEvent, KeyCode};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -589,7 +589,7 @@ impl OptimizeScreen {
 }
 
 impl Component for OptimizeScreen {
-    fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_key(&mut self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let panel = state.optimize_state.focused_panel;
 
         // Don't handle keys if optimization is running
@@ -597,14 +597,16 @@ impl Component for OptimizeScreen {
             return EventResult::NotHandled;
         }
 
+        // Handle back-tab first (Shift+Tab on web, BackTab on native)
+        if key.is_back_tab() {
+            state.optimize_state.focused_panel = panel.prev();
+            return EventResult::Handled;
+        }
+
         match key.code {
             // Panel navigation
             KeyCode::Tab => {
                 state.optimize_state.focused_panel = panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.optimize_state.focused_panel = panel.prev();
                 EventResult::Handled
             }
 

@@ -1,7 +1,7 @@
 use super::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
+use crate::event::{AppKeyEvent, KeyCode};
 use crate::state::{AppState, TabId};
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -13,7 +13,7 @@ use ratatui::{
 pub struct TabBar;
 
 impl Component for TabBar {
-    fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_key(&mut self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         // Don't intercept keys when editing holdings (value input needs digits)
         if state
             .portfolio_profiles_state

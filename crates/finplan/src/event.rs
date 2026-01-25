@@ -41,6 +41,19 @@ impl AppKeyEvent {
     pub fn no_modifiers(&self) -> bool {
         !self.ctrl && !self.alt && !self.shift
     }
+
+    /// Check if this is a "back tab" (Shift+Tab).
+    /// On native, this matches KeyCode::BackTab.
+    /// On web, this matches Shift+Tab since BackTab doesn't exist.
+    #[cfg(feature = "native")]
+    pub fn is_back_tab(&self) -> bool {
+        matches!(self.code, KeyCode::BackTab)
+    }
+
+    #[cfg(feature = "web")]
+    pub fn is_back_tab(&self) -> bool {
+        matches!(self.code, KeyCode::Tab) && self.shift
+    }
 }
 
 #[cfg(feature = "native")]

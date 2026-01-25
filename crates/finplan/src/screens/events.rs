@@ -4,11 +4,11 @@ use crate::data::events_data::{
     AmountData, EffectData, EventData, EventTag, IntervalData, OffsetData, SpecialAmount,
     ThresholdData, TriggerData,
 };
+use crate::event::{AppKeyEvent, KeyCode};
 use crate::state::context::ModalContext;
 use crate::state::{
     AppState, ConfirmModal, EventsPanel, FormField, FormModal, ModalAction, ModalState, PickerModal,
 };
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -825,9 +825,9 @@ impl EventsScreen {
 
     // ========== Key Handlers ==========
 
-    fn handle_event_list_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_event_list_keys(&self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let events_len = state.data().events.len();
-        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let has_shift = key.shift();
         match key.code {
             // Move down (Shift+J or Shift+Down)
             KeyCode::Char('J') if has_shift => {
@@ -1065,15 +1065,17 @@ impl EventsScreen {
 }
 
 impl Component for EventsScreen {
-    fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_key(&mut self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
+        // Handle back-tab first (Shift+Tab on web, BackTab on native)
+        if key.is_back_tab() {
+            state.events_state.focused_panel = state.events_state.focused_panel.prev();
+            return EventResult::Handled;
+        }
+
         match key.code {
             // Tab cycling through panels
-            KeyCode::Tab if key.modifiers.is_empty() => {
+            KeyCode::Tab if key.no_modifiers() => {
                 state.events_state.focused_panel = state.events_state.focused_panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.events_state.focused_panel = state.events_state.focused_panel.prev();
                 EventResult::Handled
             }
             _ => {

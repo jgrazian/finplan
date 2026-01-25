@@ -10,10 +10,10 @@ This document outlines the plan to add a `web` feature flag that enables compili
 | Phase 2: Platform Abstraction Traits | **COMPLETE** | Storage and SimulationWorker traits defined |
 | Phase 3: Native Platform Implementation | **COMPLETE** | NativeStorage and NativeWorker wrappers |
 | Phase 4: Web Platform Implementation | **COMPLETE** | WebStorage and WebWorker, feature-gated modules |
-| Phase 5: Refactor App to Use Platform Abstraction | **COMPLETE** | Web entry point with ratzilla, AppKeyEvent abstraction |
+| Phase 5: Refactor App to Use Platform Abstraction | **COMPLETE** | Web entry point with ratzilla, AppKeyEvent abstraction, shared event handling |
 | Phase 6: Web Workers (Enhancement) | Pending | |
 | Phase 7: finplan_core WASM Compatibility | **COMPLETE** | rayon feature-flagged |
-| Phase 8: Build & Deploy Infrastructure | **IN PROGRESS** | Basic web rendering works, trunk serve functional |
+| Phase 8: Build & Deploy Infrastructure | **COMPLETE** | Web builds compile, shared screens/modals/components |
 
 ### Completed Changes
 
@@ -22,6 +22,15 @@ This document outlines the plan to add a `web` feature flag that enables compili
 - `crates/finplan/Cargo.toml` - Added `tracing-wasm` dependency for web logging
 - `crates/finplan/src/logging.rs` - Use `tracing_wasm::set_as_global_default()` for web instead of fmt layer (which writes to stdout and doesn't work in WASM)
 - `crates/finplan_core/Cargo.toml` - Added target-specific jiff dependency with `js` feature for WASM timezone support
+
+**Event Handling Refactor (2026-01-25):**
+- `crates/finplan/src/event.rs` - Added `is_back_tab()` helper to handle platform differences (BackTab on native, Shift+Tab on web)
+- `crates/finplan/src/components/mod.rs` - Component trait now uses `AppKeyEvent` instead of `crossterm::event::KeyEvent`
+- All screens, modals, and components now use `AppKeyEvent` for platform-agnostic key handling
+- `crates/finplan/src/lib.rs` - Removed feature gates from `actions`, `components`, `modals`, `screens` modules - now shared between native and web
+- `crates/finplan/src/app.rs` - Converts crossterm events to `AppKeyEvent` at entry point
+- `crates/finplan/src/web.rs` - Now uses shared screen handlers and modal handling instead of duplicating logic
+- Feature-gated native-only code: import/export file operations, `dirs` crate usage
 
 **Phase 1 (Complete):**
 - `crates/finplan/Cargo.toml` - Added `native` and `web` feature flags

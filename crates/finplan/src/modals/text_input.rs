@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::event::{AppKeyEvent, KeyCode};
 use ratatui::{
     Frame,
     layout::Constraint,
@@ -65,7 +65,7 @@ pub fn render_text_input_modal(frame: &mut Frame, modal: &TextInputModal) {
 }
 
 /// Handle key events for text input modal
-pub fn handle_text_input_key(key: KeyEvent, modal: &mut TextInputModal) -> ModalResult {
+pub fn handle_text_input_key(key: AppKeyEvent, modal: &mut TextInputModal) -> ModalResult {
     match key.code {
         KeyCode::Enter => {
             let value = modal.value.clone();

@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEventKind};
 use rand::RngCore;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -12,6 +12,7 @@ use ratatui::{
 use crate::actions::ActionResult;
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
 use crate::data::storage::DataDirectory;
+use crate::event::{AppKeyEvent, KeyCode};
 use crate::modals::{ConfirmedValue, ModalResult, handle_modal_key, render_modal};
 use crate::screens::{
     ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
@@ -459,10 +460,13 @@ impl App {
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
+    fn handle_key_event(&mut self, key_event: crossterm::event::KeyEvent) {
+        // Convert crossterm event to platform-agnostic AppKeyEvent
+        let key: AppKeyEvent = key_event.into();
+
         // Handle modal first if active
         if !matches!(self.state.modal, ModalState::None) {
-            match handle_modal_key(key_event, &mut self.state) {
+            match handle_modal_key(key, &mut self.state) {
                 ModalResult::Confirmed(action, value) => {
                     self.handle_modal_result(action, *value);
                 }
@@ -475,16 +479,16 @@ impl App {
         }
 
         // Global key bindings
-        match key_event.code {
-            KeyCode::Char('q') if key_event.modifiers.is_empty() => {
+        match key.code {
+            KeyCode::Char('q') if key.no_modifiers() => {
                 self.state.exit = true;
                 return;
             }
-            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('c') if key.ctrl() => {
                 self.state.exit = true;
                 return;
             }
-            KeyCode::Char('s') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('s') if key.ctrl() => {
                 // Ctrl+S: Save all dirty scenarios
                 self.save_all();
                 return;
@@ -514,7 +518,7 @@ impl App {
         }
 
         // Try tab bar first
-        let result = self.tab_bar.handle_key(key_event, &mut self.state);
+        let result = self.tab_bar.handle_key(key.clone(), &mut self.state);
         if result != EventResult::NotHandled {
             return;
         }
@@ -523,11 +527,11 @@ impl App {
         let result = match self.state.active_tab {
             TabId::PortfolioProfiles => self
                 .portfolio_profiles_screen
-                .handle_key(key_event, &mut self.state),
-            TabId::Scenario => self.scenario_screen.handle_key(key_event, &mut self.state),
-            TabId::Events => self.events_screen.handle_key(key_event, &mut self.state),
-            TabId::Results => self.results_screen.handle_key(key_event, &mut self.state),
-            TabId::Optimize => self.optimize_screen.handle_key(key_event, &mut self.state),
+                .handle_key(key, &mut self.state),
+            TabId::Scenario => self.scenario_screen.handle_key(key, &mut self.state),
+            TabId::Events => self.events_screen.handle_key(key, &mut self.state),
+            TabId::Results => self.results_screen.handle_key(key, &mut self.state),
+            TabId::Optimize => self.optimize_screen.handle_key(key, &mut self.state),
         };
 
         if result == EventResult::Exit {

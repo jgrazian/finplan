@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
+use crate::event::{AppKeyEvent, KeyCode};
 use crate::state::{AppState, LedgerFilter, PercentileView, ResultsPanel, SimulationResult};
 use crate::util::format::{format_currency, format_currency_short};
-use crossterm::event::{KeyCode, KeyEvent};
 use finplan_core::model::{
     AccountId, AccountSnapshotFlavor, EventId, LedgerEntry, StateEvent, WealthSnapshot,
 };
@@ -888,17 +888,19 @@ impl ResultsScreen {
 }
 
 impl Component for ResultsScreen {
-    fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
+    fn handle_key(&mut self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let panel = state.results_state.focused_panel;
+
+        // Handle back-tab first (Shift+Tab on web, BackTab on native)
+        if key.is_back_tab() {
+            state.results_state.focused_panel = panel.prev();
+            return EventResult::Handled;
+        }
 
         match key.code {
             // Panel navigation
             KeyCode::Tab => {
                 state.results_state.focused_panel = panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.results_state.focused_panel = panel.prev();
                 EventResult::Handled
             }
 

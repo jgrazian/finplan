@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::event::{AppKeyEvent, KeyCode};
 use ratatui::{
     Frame,
     layout::Constraint,
@@ -49,7 +49,7 @@ pub fn render_confirm_modal(frame: &mut Frame, modal: &ConfirmModal) {
 }
 
 /// Handle key events for confirm modal
-pub fn handle_confirm_key(key: KeyEvent, modal: &ConfirmModal) -> ModalResult {
+pub fn handle_confirm_key(key: AppKeyEvent, modal: &ConfirmModal) -> ModalResult {
     match key.code {
         KeyCode::Char('y') | KeyCode::Char('Y') => {
             ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Confirm))

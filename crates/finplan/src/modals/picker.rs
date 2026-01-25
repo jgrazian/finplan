@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crate::event::{AppKeyEvent, KeyCode};
 use ratatui::{
     Frame,
     layout::Constraint,
@@ -76,7 +76,7 @@ pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
 }
 
 /// Handle key events for picker modal
-pub fn handle_picker_key(key: KeyEvent, modal: &mut PickerModal) -> ModalResult {
+pub fn handle_picker_key(key: AppKeyEvent, modal: &mut PickerModal) -> ModalResult {
     match key.code {
         KeyCode::Enter => {
             if let Some(selected) = modal.options.get(modal.selected_index) {

@@ -11,16 +11,35 @@ use ratzilla::event::{KeyCode, KeyEvent as RatzillaKeyEvent};
 use ratzilla::{DomBackend, WebRenderer};
 use wasm_bindgen::prelude::*;
 
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+
+use crate::components::status_bar::StatusBar;
+use crate::components::tab_bar::TabBar;
+use crate::components::{Component, EventResult};
 use crate::event::AppKeyEvent;
+use crate::modals::{ConfirmedValue, ModalResult, handle_modal_key, render_modal};
 use crate::platform::web::{WebStorage, WebWorker};
 use crate::platform::{SimulationWorker, Storage};
-use crate::state::{AppState, SimulationStatus, TabId};
+use crate::screens::{
+    ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
+    portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
+};
+use crate::state::{AppState, ModalAction, ModalState, SimulationStatus, TabId};
 
 /// Web application state wrapped for callback access.
 struct WebApp {
     state: AppState,
     storage: WebStorage,
     worker: WebWorker,
+    // UI components
+    tab_bar: TabBar,
+    status_bar: StatusBar,
+    // Screen instances
+    portfolio_profiles_screen: PortfolioProfilesScreen,
+    scenario_screen: ScenarioScreen,
+    events_screen: EventsScreen,
+    results_screen: ResultsScreen,
+    optimize_screen: OptimizeScreen,
 }
 
 impl WebApp {
@@ -49,16 +68,42 @@ impl WebApp {
             state,
             storage,
             worker: WebWorker::new(),
+            tab_bar: TabBar,
+            status_bar: StatusBar,
+            portfolio_profiles_screen: PortfolioProfilesScreen,
+            scenario_screen: ScenarioScreen,
+            events_screen: EventsScreen,
+            results_screen: ResultsScreen,
+            optimize_screen: OptimizeScreen,
         }
     }
 
     /// Handle a key event.
     fn handle_key(&mut self, key: AppKeyEvent) {
+        // Handle modal first if active (uses shared modal handling)
+        if !matches!(self.state.modal, ModalState::None) {
+            match handle_modal_key(key, &mut self.state) {
+                ModalResult::Confirmed(action, value) => {
+                    self.handle_modal_result(action, *value);
+                }
+                ModalResult::Cancelled => {
+                    self.state.modal = ModalState::None;
+                }
+                ModalResult::Continue | ModalResult::FieldChanged(_) => {}
+            }
+            return;
+        }
+
         // Global key bindings
         match key.code {
             KeyCode::Char('q') if key.no_modifiers() => {
                 // Can't really exit in web, but we could show a message
                 tracing::info!("Exit requested (q pressed)");
+                return;
+            }
+            KeyCode::Char('c') if key.ctrl() => {
+                // Ctrl+C: Would exit on native, just log on web
+                tracing::info!("Ctrl+C pressed");
                 return;
             }
             KeyCode::Char('s') if key.ctrl() => {
@@ -73,49 +118,83 @@ impl WebApp {
                     self.state.simulation_status = SimulationStatus::Idle;
                     return;
                 }
-                // Clear error
-                self.state.clear_error();
-                return;
+                // Let holdings editing mode handle Esc first
+                if self
+                    .state
+                    .portfolio_profiles_state
+                    .account_mode
+                    .is_editing_holdings()
+                {
+                    // Fall through to screen handler
+                } else {
+                    // Clear error message on Esc
+                    self.state.clear_error();
+                    return;
+                }
             }
             _ => {}
         }
 
-        // Tab navigation
-        match key.code {
-            KeyCode::Char('1') if key.no_modifiers() => {
-                self.state.active_tab = TabId::PortfolioProfiles;
-                return;
-            }
-            KeyCode::Char('2') if key.no_modifiers() => {
-                self.state.active_tab = TabId::Scenario;
-                return;
-            }
-            KeyCode::Char('3') if key.no_modifiers() => {
-                self.state.active_tab = TabId::Events;
-                return;
-            }
-            KeyCode::Char('4') if key.no_modifiers() => {
-                self.state.active_tab = TabId::Results;
-                return;
-            }
-            KeyCode::Char('5') if key.no_modifiers() => {
-                self.state.active_tab = TabId::Optimize;
-                return;
-            }
-            KeyCode::Tab if key.shift() => {
-                self.state.active_tab = prev_tab(self.state.active_tab);
-                return;
-            }
-            KeyCode::Tab => {
-                self.state.active_tab = next_tab(self.state.active_tab);
-                return;
-            }
-            _ => {}
+        // Try tab bar first - it checks for editing states before switching tabs
+        let result = self.tab_bar.handle_key(key.clone(), &mut self.state);
+        if result != EventResult::NotHandled {
+            return;
         }
 
-        // TODO: Delegate to screen-specific handlers
-        // For now, just log unhandled keys
-        tracing::debug!(key = ?key.code, "Unhandled key event");
+        // Delegate to active screen handler (using shared screen implementations)
+        let result = match self.state.active_tab {
+            TabId::PortfolioProfiles => self
+                .portfolio_profiles_screen
+                .handle_key(key, &mut self.state),
+            TabId::Scenario => self.scenario_screen.handle_key(key, &mut self.state),
+            TabId::Events => self.events_screen.handle_key(key, &mut self.state),
+            TabId::Results => self.results_screen.handle_key(key, &mut self.state),
+            TabId::Optimize => self.optimize_screen.handle_key(key, &mut self.state),
+        };
+
+        if result == EventResult::Exit {
+            tracing::info!("Exit requested from screen");
+        }
+    }
+
+    /// Handle modal result (dispatch to appropriate screen handler).
+    fn handle_modal_result(&mut self, action: ModalAction, value: ConfirmedValue) {
+        // Legacy string value for handlers not yet migrated
+        let legacy_value = value.to_legacy_string();
+
+        // Delegate to screen-specific handlers based on action type
+        let result = if self.portfolio_profiles_screen.handles(&action) {
+            self.portfolio_profiles_screen.handle_modal_result(
+                &mut self.state,
+                action,
+                &value,
+                &legacy_value,
+            )
+        } else if self.scenario_screen.handles(&action) {
+            self.scenario_screen
+                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+        } else if self.events_screen.handles(&action) {
+            self.events_screen
+                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+        } else if self.optimize_screen.handles(&action) {
+            self.optimize_screen
+                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+        } else {
+            crate::actions::ActionResult::close()
+        };
+
+        // Process the result
+        use crate::actions::ActionResult;
+        match result {
+            ActionResult::Modified(modal) | ActionResult::Done(modal) => {
+                self.state.modal = modal.unwrap_or(ModalState::None);
+                self.state.mark_modified();
+            }
+            ActionResult::Error(msg) => {
+                self.state.set_error(msg);
+                self.state.modal = ModalState::None;
+            }
+        }
     }
 
     /// Save the current scenario.
@@ -127,6 +206,45 @@ impl WebApp {
         } else {
             self.state.dirty_scenarios.remove(&name);
             tracing::info!(scenario = name, "Scenario saved");
+        }
+    }
+
+    /// Draw the UI using the actual screen renderers.
+    fn draw(&mut self, frame: &mut ratatui::Frame) {
+        // Create main layout: tab bar, content, status bar
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Tab bar
+                Constraint::Min(0),    // Content
+                Constraint::Length(2), // Status bar
+            ])
+            .split(frame.area());
+
+        // Render tab bar
+        self.tab_bar.render(frame, chunks[0], &self.state);
+
+        // Render active screen
+        self.render_active_screen(frame, chunks[1]);
+
+        // Render status bar
+        self.status_bar.render(frame, chunks[2], &self.state);
+
+        // Render modal overlay (if active)
+        render_modal(frame, &self.state);
+    }
+
+    /// Render the currently active screen.
+    fn render_active_screen(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        match self.state.active_tab {
+            TabId::PortfolioProfiles => {
+                self.portfolio_profiles_screen
+                    .render(frame, area, &self.state)
+            }
+            TabId::Scenario => self.scenario_screen.render(frame, area, &self.state),
+            TabId::Events => self.events_screen.render(frame, area, &self.state),
+            TabId::Results => self.results_screen.render(frame, area, &self.state),
+            TabId::Optimize => self.optimize_screen.render(frame, area, &self.state),
         }
     }
 
@@ -196,24 +314,6 @@ impl WebApp {
     }
 }
 
-/// Get next tab in order.
-fn next_tab(current: TabId) -> TabId {
-    let idx = current.index();
-    let next_idx = (idx + 1) % TabId::ALL.len();
-    TabId::from_index(next_idx).unwrap_or(current)
-}
-
-/// Get previous tab in order.
-fn prev_tab(current: TabId) -> TabId {
-    let idx = current.index();
-    let prev_idx = if idx == 0 {
-        TabId::ALL.len() - 1
-    } else {
-        idx - 1
-    };
-    TabId::from_index(prev_idx).unwrap_or(current)
-}
-
 /// WASM entry point.
 #[wasm_bindgen(start)]
 pub fn main() -> Result<(), JsValue> {
@@ -247,125 +347,9 @@ pub fn main() -> Result<(), JsValue> {
         // Process any pending worker responses
         app.process_worker_responses();
 
-        // Render the UI
-        render_app(frame, &app.state);
+        // Render the UI using actual screen renderers
+        app.draw(frame);
     });
 
     Ok(())
-}
-
-/// Render the application UI.
-fn render_app(frame: &mut ratatui::Frame, state: &AppState) {
-    use ratatui::layout::{Constraint, Direction, Layout};
-    use ratatui::style::{Color, Modifier, Style};
-    use ratatui::text::{Line, Span};
-    use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // Tab bar
-            Constraint::Min(0),    // Content
-            Constraint::Length(2), // Status bar
-        ])
-        .split(frame.area());
-
-    // Render tab bar
-    let tab_titles: Vec<Line> = vec![
-        Line::from("1:Portfolio"),
-        Line::from("2:Scenario"),
-        Line::from("3:Events"),
-        Line::from("4:Results"),
-        Line::from("5:Optimize"),
-    ];
-
-    let selected_idx = match state.active_tab {
-        TabId::PortfolioProfiles => 0,
-        TabId::Scenario => 1,
-        TabId::Events => 2,
-        TabId::Results => 3,
-        TabId::Optimize => 4,
-    };
-
-    let tabs = Tabs::new(tab_titles)
-        .block(Block::default().borders(Borders::ALL).title("FinPlan"))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-        .select(selected_idx);
-
-    frame.render_widget(tabs, chunks[0]);
-
-    // Render content area
-    let content_block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!("{:?}", state.active_tab));
-
-    let data = state.data();
-    let content_text = match state.active_tab {
-        TabId::PortfolioProfiles => {
-            format!(
-                "Portfolio: {}\nAccounts: {}",
-                data.portfolios.name,
-                data.portfolios.accounts.len()
-            )
-        }
-        TabId::Scenario => {
-            format!(
-                "Birth Date: {}\nStart Date: {}\nDuration: {} years",
-                data.parameters.birth_date,
-                data.parameters.start_date,
-                data.parameters.duration_years
-            )
-        }
-        TabId::Events => {
-            format!("Events: {}", data.events.len())
-        }
-        TabId::Results => {
-            if let Some(result) = &state.simulation_result {
-                format!(
-                    "Years simulated: {}\nFinal net worth: ${:.2}",
-                    result.years.len(),
-                    result.years.last().map(|y| y.net_worth).unwrap_or(0.0)
-                )
-            } else {
-                "No simulation results. Press 'r' to run.".to_string()
-            }
-        }
-        TabId::Optimize => "Optimization parameters".to_string(),
-    };
-
-    let content = Paragraph::new(content_text).block(content_block);
-    frame.render_widget(content, chunks[1]);
-
-    // Render status bar
-    let status_text = if let Some(error) = &state.error_message {
-        vec![Line::from(vec![
-            Span::styled("Error: ", Style::default().fg(Color::Red)),
-            Span::raw(error.as_str()),
-        ])]
-    } else {
-        let scenario_name = &state.current_scenario;
-        let dirty = if state.dirty_scenarios.contains(scenario_name) {
-            " [modified]"
-        } else {
-            ""
-        };
-
-        vec![Line::from(vec![
-            Span::raw(format!("Scenario: {}{} | ", scenario_name, dirty)),
-            Span::styled(
-                format!("{:?}", state.simulation_status),
-                Style::default().fg(Color::Cyan),
-            ),
-        ])]
-    };
-
-    let status = Paragraph::new(status_text)
-        .block(Block::default().borders(Borders::TOP))
-        .style(Style::default().fg(Color::Gray));
-
-    frame.render_widget(status, chunks[2]);
 }
