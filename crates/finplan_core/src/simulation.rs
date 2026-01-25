@@ -247,18 +247,17 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             next_checkpoint = d;
         }
 
-        // Also check relative events - use cached spans for performance
+        // Also check relative events - use fast add_to_date
         if let EventTrigger::RelativeToEvent {
             event_id: ref_event_id,
-            ..
+            offset,
         } = &event.trigger
-            && let Some(trigger_date) = state.event_state.triggered_events.get(ref_event_id)
-            && let Some(offset_span) = state.event_state.relative_event_spans.get(&event.event_id)
-            && let Ok(d) = trigger_date.checked_add(*offset_span)
-            && d > state.timeline.current_date
-            && d < next_checkpoint
+            && let Some(&trigger_date) = state.event_state.triggered_events.get(ref_event_id)
         {
-            next_checkpoint = d;
+            let d = offset.add_to_date(trigger_date);
+            if d > state.timeline.current_date && d < next_checkpoint {
+                next_checkpoint = d;
+            }
         }
     }
 

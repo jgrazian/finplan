@@ -121,9 +121,9 @@ pub struct SimEventState {
     /// Avoids repeated calls to RepeatInterval::span() during trigger evaluation
     pub repeating_event_spans: FxHashMap<EventId, jiff::Span>,
 
-    /// Cached offset spans for RelativeToEvent triggers (EventId -> pre-computed Span)
-    /// Avoids repeated calls to TriggerOffset::to_span() during trigger evaluation
-    pub relative_event_spans: FxHashMap<EventId, jiff::Span>,
+    /// Cached trigger dates for Age triggers (EventId -> pre-computed Date)
+    /// Since birth_date and target age are fixed, the trigger date is deterministic
+    pub age_trigger_dates: FxHashMap<EventId, jiff::civil::Date>,
 }
 
 #[derive(Debug, Clone)]
@@ -216,16 +216,21 @@ impl SimulationState {
 
         let mut events = FxHashMap::default();
         let mut repeating_event_spans = FxHashMap::default();
-        let mut relative_event_spans = FxHashMap::default();
-        // Load events and pre-cache interval spans for repeating and relative events
+        let mut age_trigger_dates = FxHashMap::default();
+        let birth_date = params.birth_date.unwrap_or(jiff::civil::date(1970, 1, 1));
+
+        // Load events and pre-cache spans/dates for performance
         for event in &params.events {
             // Cache the interval span if this is a repeating event
             if let EventTrigger::Repeating { interval, .. } = &event.trigger {
                 repeating_event_spans.insert(event.event_id, interval.span());
             }
-            // Cache the offset span if this is a relative-to-event trigger
-            if let EventTrigger::RelativeToEvent { offset, .. } = &event.trigger {
-                relative_event_spans.insert(event.event_id, offset.to_span());
+            // Cache the trigger date for Age triggers (birth_date + target_age)
+            if let EventTrigger::Age { years, months } = &event.trigger {
+                let target_months = months.unwrap_or(0);
+                let trigger_date =
+                    birth_date.saturating_add((*years as i64).years().months(target_months as i64));
+                age_trigger_dates.insert(event.event_id, trigger_date);
             }
             events.insert(event.event_id, event.clone());
         }
@@ -256,7 +261,7 @@ impl SimulationState {
                 event_flow_lifetime: FxHashMap::default(),
                 event_flow_last_period_key: FxHashMap::default(),
                 repeating_event_spans,
-                relative_event_spans,
+                age_trigger_dates,
             },
             taxes: SimTaxState {
                 ytd_tax: TaxSummary {

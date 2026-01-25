@@ -1,4 +1,3 @@
-use jiff::ToSpan;
 use jiff::civil::Date;
 use rustc_hash::FxHashMap;
 
@@ -116,22 +115,17 @@ pub fn evaluate_trigger(
             TriggerEvent::NextTriggerDate(*date)
         }),
 
-        EventTrigger::Age { years, months } => {
-            let (current_years, current_months) = state.current_age();
-            let target_months = months.unwrap_or(0);
-
-            let remaining_years = *years as i16 - current_years as i16;
-            let remaining_months = target_months as i16 - current_months as i16;
-
-            if remaining_years <= 0 && remaining_months <= 0 {
-                Ok(TriggerEvent::Triggered)
+        EventTrigger::Age { .. } => {
+            // Use pre-computed trigger date from cache (birth_date + target_age)
+            if let Some(&trigger_date) = state.event_state.age_trigger_dates.get(event_id) {
+                if state.timeline.current_date >= trigger_date {
+                    Ok(TriggerEvent::Triggered)
+                } else {
+                    Ok(TriggerEvent::NextTriggerDate(trigger_date))
+                }
             } else {
-                let trigger_date = state
-                    .timeline
-                    .current_date
-                    .checked_add(remaining_years.years().months(remaining_months))?;
-
-                Ok(TriggerEvent::NextTriggerDate(trigger_date))
+                // Fallback: event not in cache (shouldn't happen in normal use)
+                Ok(TriggerEvent::NotTriggered)
             }
         }
 
@@ -139,16 +133,9 @@ pub fn evaluate_trigger(
             event_id: ref_event_id,
             offset,
         } => {
-            if let Some(trigger_date) = state.event_state.triggered_events.get(ref_event_id) {
-                // Use pre-computed span from cache if available, otherwise compute it
-                let offset_span = state
-                    .event_state
-                    .relative_event_spans
-                    .get(event_id)
-                    .copied()
-                    .unwrap_or_else(|| offset.to_span());
-
-                let target_date = trigger_date.checked_add(offset_span)?;
+            if let Some(&trigger_date) = state.event_state.triggered_events.get(ref_event_id) {
+                // Fast date arithmetic - avoids expensive Span conversion
+                let target_date = offset.add_to_date(trigger_date);
 
                 if state.timeline.current_date >= target_date {
                     Ok(TriggerEvent::Triggered)

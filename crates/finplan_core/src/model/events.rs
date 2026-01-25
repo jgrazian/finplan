@@ -243,7 +243,7 @@ pub enum TriggerOffset {
 
 impl TriggerOffset {
     /// Convert to a jiff::Span for date arithmetic.
-    /// This is relatively expensive - prefer using cached spans when possible.
+    /// This is relatively expensive - prefer using add_to_date() instead.
     #[inline]
     pub fn to_span(&self) -> jiff::Span {
         use jiff::ToSpan;
@@ -251,6 +251,33 @@ impl TriggerOffset {
             TriggerOffset::Days(d) => (*d as i64).days(),
             TriggerOffset::Months(m) => (*m as i64).months(),
             TriggerOffset::Years(y) => (*y as i64).years(),
+        }
+    }
+
+    /// Fast date addition that avoids expensive Span->DateArithmetic conversion.
+    #[inline]
+    pub fn add_to_date(&self, date: jiff::civil::Date) -> jiff::civil::Date {
+        match self {
+            TriggerOffset::Days(d) => {
+                // Direct day addition via SignedDuration avoids Span overhead
+                let duration = jiff::SignedDuration::from_hours(*d as i64 * 24);
+                date.checked_add(duration).unwrap_or(date)
+            }
+            TriggerOffset::Months(m) => {
+                // Manual month arithmetic
+                let total_months = date.year() as i32 * 12 + date.month() as i32 - 1 + *m;
+                let new_year = total_months.div_euclid(12) as i16;
+                let new_month = (total_months.rem_euclid(12) + 1) as i8;
+                let max_day = jiff::civil::date(new_year, new_month, 1).days_in_month() as i8;
+                let new_day = date.day().min(max_day);
+                jiff::civil::date(new_year, new_month, new_day)
+            }
+            TriggerOffset::Years(y) => {
+                let new_year = (date.year() as i32 + *y) as i16;
+                let max_day = jiff::civil::date(new_year, date.month(), 1).days_in_month() as i8;
+                let new_day = date.day().min(max_day);
+                jiff::civil::date(new_year, date.month(), new_day)
+            }
         }
     }
 }
