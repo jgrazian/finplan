@@ -9,7 +9,7 @@ This document outlines the plan to add a `web` feature flag that enables compili
 | Phase 1: Project Structure & Dependencies | **COMPLETE** | Feature flags added, rayon conditional, native build verified |
 | Phase 2: Platform Abstraction Traits | **COMPLETE** | Storage and SimulationWorker traits defined |
 | Phase 3: Native Platform Implementation | **COMPLETE** | NativeStorage and NativeWorker wrappers |
-| Phase 4: Web Platform Implementation | Pending | |
+| Phase 4: Web Platform Implementation | **COMPLETE** | WebStorage and WebWorker, feature-gated modules |
 | Phase 5: Refactor App to Use Platform Abstraction | Pending | |
 | Phase 6: Web Workers (Enhancement) | Pending | |
 | Phase 7: finplan_core WASM Compatibility | **COMPLETE** | rayon feature-flagged |
@@ -37,6 +37,14 @@ This document outlines the plan to add a `web` feature flag that enables compili
 - `crates/finplan/src/platform/native/mod.rs` - Native platform module
 - `crates/finplan/src/platform/native/storage.rs` - NativeStorage wrapping DataDirectory
 - `crates/finplan/src/platform/native/worker.rs` - NativeWorker wrapping SimulationWorker
+
+**Phase 4 (Complete):**
+- `crates/finplan/src/platform/web/mod.rs` - Web platform module
+- `crates/finplan/src/platform/web/storage.rs` - WebStorage using LocalStorage (gloo-storage)
+- `crates/finplan/src/platform/web/worker.rs` - WebWorker (synchronous, runs in main thread)
+- `crates/finplan/src/lib.rs` - Feature-gated native-only modules (app, screens, modals, etc.)
+- `crates/finplan/src/data/storage.rs` - Feature-gated DataDirectory for native only
+- `crates/finplan/src/state/app_state.rs` - Feature-gated native-only methods
 
 ## Overview
 

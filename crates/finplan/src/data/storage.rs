@@ -1,20 +1,25 @@
-// Per-scenario file storage system
-//
-// Directory structure:
-// ~/.finplan/
-//   config.yaml          # Active scenario, preferences
-//   summaries.yaml       # Cached scenario summaries (MC results)
-//   scenarios/
-//     retirement.yaml
-//     aggressive.yaml
-//     conservative.yaml
+//! Per-scenario file storage system (native only)
+//!
+//! Directory structure:
+//! ~/.finplan/
+//!   config.yaml          # Active scenario, preferences
+//!   summaries.yaml       # Cached scenario summaries (MC results)
+//!   scenarios/
+//!     retirement.yaml
+//!     aggressive.yaml
+//!     conservative.yaml
 
+#[cfg(feature = "native")]
 use std::collections::HashMap;
+#[cfg(feature = "native")]
 use std::fs;
+#[cfg(feature = "native")]
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "native")]
 use crate::state::ScenarioSummary;
 
+#[cfg(feature = "native")]
 use super::app_data::{AppData, SimulationData};
 
 /// Configuration stored in config.yaml
@@ -45,18 +50,21 @@ impl std::fmt::Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
-/// Result of loading data from the storage directory
+/// Result of loading data from the storage directory (native only)
+#[cfg(feature = "native")]
 pub struct LoadResult {
     pub app_data: AppData,
     pub current_scenario: String,
     pub scenario_summaries: HashMap<String, ScenarioSummary>,
 }
 
-/// Manages the data directory for per-scenario file storage
+/// Manages the data directory for per-scenario file storage (native only)
+#[cfg(feature = "native")]
 pub struct DataDirectory {
     root: PathBuf,
 }
 
+#[cfg(feature = "native")]
 impl DataDirectory {
     /// Create a new DataDirectory instance
     pub fn new(root: PathBuf) -> Self {
@@ -366,6 +374,7 @@ impl DataDirectory {
 }
 
 /// Sanitize a filename to be safe for the filesystem
+#[cfg(feature = "native")]
 fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -378,7 +387,7 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
     use tempfile::TempDir;

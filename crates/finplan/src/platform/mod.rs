@@ -13,9 +13,8 @@ mod worker;
 #[cfg(feature = "native")]
 pub mod native;
 
-// TODO: Add web module when implementing Phase 4
-// #[cfg(feature = "web")]
-// pub mod web;
+#[cfg(feature = "web")]
+pub mod web;
 
 pub use storage::{LoadResult, Storage, StorageError};
 pub use worker::{SimulationRequest, SimulationResponse, SimulationWorker};
@@ -23,3 +22,6 @@ pub use worker::{SimulationRequest, SimulationResponse, SimulationWorker};
 // Re-export platform-specific implementations
 #[cfg(feature = "native")]
 pub use native::{NativeStorage, NativeWorker};
+
+#[cfg(feature = "web")]
+pub use web::{WebStorage, WebWorker};

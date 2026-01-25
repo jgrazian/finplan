@@ -8,7 +8,9 @@ use crate::data::app_data::{AppData, SimulationData};
 use crate::data::convert::{ConvertError, to_simulation_config, to_tui_result};
 
 use super::cache::CachedValue;
-use super::errors::{LoadError, SaveError, SimulationError};
+use super::errors::SimulationError;
+#[cfg(feature = "native")]
+use super::errors::{LoadError, SaveError};
 use super::modal::ModalState;
 use super::screen_state::{
     EventsState, MonteCarloPreviewSummary, OptimizeState, PercentileView, PortfolioProfilesState,
@@ -259,7 +261,8 @@ impl AppState {
         self.data_version = self.data_version.wrapping_add(1);
     }
 
-    /// Load from the data directory (new per-scenario storage)
+    /// Load from the data directory (new per-scenario storage) - native only
+    #[cfg(feature = "native")]
     pub fn load_from_data_dir(data_dir: PathBuf) -> Result<Self, LoadError> {
         use crate::data::storage::DataDirectory;
 
@@ -279,14 +282,16 @@ impl AppState {
         Ok(state)
     }
 
-    /// Get the DataDirectory if configured
+    /// Get the DataDirectory if configured - native only
+    #[cfg(feature = "native")]
     fn get_storage(&self) -> Option<crate::data::storage::DataDirectory> {
         self.data_dir
             .as_ref()
             .map(|p| crate::data::storage::DataDirectory::new(p.clone()))
     }
 
-    /// Save the current scenario to its file
+    /// Save the current scenario to its file - native only
+    #[cfg(feature = "native")]
     pub fn save_current_scenario(&mut self) -> Result<(), SaveError> {
         let storage = self.get_storage().ok_or(SaveError::NoPath)?;
         let data = self.data().clone();
@@ -304,7 +309,8 @@ impl AppState {
         Ok(())
     }
 
-    /// Save a specific scenario to its file
+    /// Save a specific scenario to its file - native only
+    #[cfg(feature = "native")]
     pub fn save_scenario(&mut self, name: &str) -> Result<(), SaveError> {
         let storage = self.get_storage().ok_or(SaveError::NoPath)?;
         let data = self
@@ -322,7 +328,8 @@ impl AppState {
         Ok(())
     }
 
-    /// Save all dirty scenarios
+    /// Save all dirty scenarios - native only
+    #[cfg(feature = "native")]
     pub fn save_all_dirty(&mut self) -> Result<usize, SaveError> {
         let dirty: Vec<String> = self.dirty_scenarios.iter().cloned().collect();
         let mut saved = 0;
@@ -342,7 +349,8 @@ impl AppState {
         Ok(saved)
     }
 
-    /// Delete a scenario file from storage
+    /// Delete a scenario file from storage - native only
+    #[cfg(feature = "native")]
     pub fn delete_scenario_file(&self, name: &str) -> Result<(), SaveError> {
         let storage = self.get_storage().ok_or(SaveError::NoPath)?;
         storage
@@ -350,7 +358,8 @@ impl AppState {
             .map_err(|e| SaveError::Io(e.to_string()))
     }
 
-    /// Export current scenario to an external file
+    /// Export current scenario to an external file - native only
+    #[cfg(feature = "native")]
     pub fn export_scenario(&self, dest: &std::path::Path) -> Result<(), SaveError> {
         let data = self.data();
         let yaml = data
@@ -359,7 +368,8 @@ impl AppState {
         std::fs::write(dest, yaml).map_err(|e| SaveError::Io(e.to_string()))
     }
 
-    /// Import a scenario from an external file
+    /// Import a scenario from an external file - native only
+    #[cfg(feature = "native")]
     pub fn import_scenario(&mut self, source: &std::path::Path) -> Result<String, LoadError> {
         let content = std::fs::read_to_string(source).map_err(|e| LoadError::Io(e.to_string()))?;
 
@@ -764,13 +774,20 @@ impl AppState {
         }
     }
 
-    /// Save scenario summaries to disk
+    /// Save scenario summaries to disk - native only
+    #[cfg(feature = "native")]
     pub fn save_scenario_summaries(&self) {
         if let Some(storage) = self.get_storage()
             && let Err(e) = storage.save_summaries(&self.scenario_state.scenario_summaries)
         {
             tracing::warn!(error = %e, "Failed to save scenario summaries");
         }
+    }
+
+    /// No-op on web (storage handled differently)
+    #[cfg(not(feature = "native"))]
+    pub fn save_scenario_summaries(&self) {
+        // Web storage would be handled differently (e.g., via WebStorage)
     }
 
     /// Run Monte Carlo simulation on a specific scenario (by name) and cache results
