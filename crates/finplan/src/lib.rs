@@ -1,5 +1,6 @@
 // Shared modules (available on all platforms)
 pub mod data;
+pub mod event;
 pub mod logging;
 pub mod platform;
 pub mod state;
@@ -18,6 +19,10 @@ pub mod modals;
 pub mod screens;
 #[cfg(feature = "native")]
 pub mod worker;
+
+// Web-only entry point
+#[cfg(feature = "web")]
+pub mod web;
 
 #[cfg(feature = "native")]
 pub use app::App;

@@ -10,7 +10,7 @@ This document outlines the plan to add a `web` feature flag that enables compili
 | Phase 2: Platform Abstraction Traits | **COMPLETE** | Storage and SimulationWorker traits defined |
 | Phase 3: Native Platform Implementation | **COMPLETE** | NativeStorage and NativeWorker wrappers |
 | Phase 4: Web Platform Implementation | **COMPLETE** | WebStorage and WebWorker, feature-gated modules |
-| Phase 5: Refactor App to Use Platform Abstraction | Pending | |
+| Phase 5: Refactor App to Use Platform Abstraction | **COMPLETE** | Web entry point with ratzilla, AppKeyEvent abstraction |
 | Phase 6: Web Workers (Enhancement) | Pending | |
 | Phase 7: finplan_core WASM Compatibility | **COMPLETE** | rayon feature-flagged |
 | Phase 8: Build & Deploy Infrastructure | Pending | index.html, Trunk.toml created |
@@ -45,6 +45,15 @@ This document outlines the plan to add a `web` feature flag that enables compili
 - `crates/finplan/src/lib.rs` - Feature-gated native-only modules (app, screens, modals, etc.)
 - `crates/finplan/src/data/storage.rs` - Feature-gated DataDirectory for native only
 - `crates/finplan/src/state/app_state.rs` - Feature-gated native-only methods
+
+**Phase 5 (Complete):**
+- `crates/finplan/src/event.rs` - Platform-agnostic AppKeyEvent type with crossterm/ratzilla From impls
+- `crates/finplan/src/web.rs` - Web entry point using ratzilla WebRenderer trait
+  - WASM entry point with `wasm_bindgen(start)`
+  - Event-driven app with `on_key_event()` and `draw_web()` callbacks
+  - Tab navigation, scenario saving, worker response processing
+  - Basic rendering of all tabs with state information
+- `crates/finplan/src/lib.rs` - Added event and web modules
 
 ## Overview
 
