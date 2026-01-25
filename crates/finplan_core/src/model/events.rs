@@ -234,11 +234,25 @@ pub enum AmountMode {
 }
 
 /// Time offset relative to another event
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash, PartialEq, Eq)]
 pub enum TriggerOffset {
     Days(i32),
     Months(i32),
     Years(i32),
+}
+
+impl TriggerOffset {
+    /// Convert to a jiff::Span for date arithmetic.
+    /// This is relatively expensive - prefer using cached spans when possible.
+    #[inline]
+    pub fn to_span(&self) -> jiff::Span {
+        use jiff::ToSpan;
+        match self {
+            TriggerOffset::Days(d) => (*d as i64).days(),
+            TriggerOffset::Months(m) => (*m as i64).months(),
+            TriggerOffset::Years(y) => (*y as i64).years(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

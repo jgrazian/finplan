@@ -9,7 +9,7 @@ use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investm
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
     EventId, EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TransferAmount,
-    TransferEndpoint, TriggerOffset, WithdrawalOrder, WithdrawalSources,
+    TransferEndpoint, WithdrawalOrder, WithdrawalSources,
 };
 use crate::simulation_state::SimulationState;
 use crate::taxes::{calculate_federal_marginal_tax, calculate_gross_from_net};
@@ -135,13 +135,20 @@ pub fn evaluate_trigger(
             }
         }
 
-        EventTrigger::RelativeToEvent { event_id, offset } => {
-            if let Some(trigger_date) = state.event_state.triggered_events.get(event_id) {
-                let target_date = match offset {
-                    TriggerOffset::Days(d) => trigger_date.checked_add((*d as i64).days()),
-                    TriggerOffset::Months(m) => trigger_date.checked_add((*m as i64).months()),
-                    TriggerOffset::Years(y) => trigger_date.checked_add((*y as i64).years()),
-                }?;
+        EventTrigger::RelativeToEvent {
+            event_id: ref_event_id,
+            offset,
+        } => {
+            if let Some(trigger_date) = state.event_state.triggered_events.get(ref_event_id) {
+                // Use pre-computed span from cache if available, otherwise compute it
+                let offset_span = state
+                    .event_state
+                    .relative_event_spans
+                    .get(event_id)
+                    .copied()
+                    .unwrap_or_else(|| offset.to_span());
+
+                let target_date = trigger_date.checked_add(offset_span)?;
 
                 if state.timeline.current_date >= target_date {
                     Ok(TriggerEvent::Triggered)

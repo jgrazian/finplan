@@ -9,12 +9,10 @@ use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
     AccountFlavor, AccountId, CashFlowKind, EventTrigger, LedgerEntry, MeanAccumulators,
     MonteCarloConfig, MonteCarloProgress, MonteCarloResult, MonteCarloStats, MonteCarloSummary,
-    SimulationResult, SimulationWarning, StateEvent, TaxStatus, TriggerOffset, WarningKind,
-    YearlyCashFlowSummary, final_net_worth,
+    SimulationResult, SimulationWarning, StateEvent, TaxStatus, WarningKind, YearlyCashFlowSummary,
+    final_net_worth,
 };
-use crate::simulation_state::SimulationState;
-
-use jiff::ToSpan;
+use crate::simulation_state::{SimulationState, cached_spans};
 use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -249,21 +247,18 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
             next_checkpoint = d;
         }
 
-        // Also check relative events
-        if let EventTrigger::RelativeToEvent { event_id, offset } = &event.trigger
-            && let Some(trigger_date) = state.event_state.triggered_events.get(event_id)
+        // Also check relative events - use cached spans for performance
+        if let EventTrigger::RelativeToEvent {
+            event_id: ref_event_id,
+            ..
+        } = &event.trigger
+            && let Some(trigger_date) = state.event_state.triggered_events.get(ref_event_id)
+            && let Some(offset_span) = state.event_state.relative_event_spans.get(&event.event_id)
+            && let Ok(d) = trigger_date.checked_add(*offset_span)
+            && d > state.timeline.current_date
+            && d < next_checkpoint
         {
-            let target_date = match offset {
-                TriggerOffset::Days(d) => trigger_date.checked_add((*d as i64).days()),
-                TriggerOffset::Months(m) => trigger_date.checked_add((*m as i64).months()),
-                TriggerOffset::Years(y) => trigger_date.checked_add((*y as i64).years()),
-            };
-            if let Ok(d) = target_date
-                && d > state.timeline.current_date
-                && d < next_checkpoint
-            {
-                next_checkpoint = d;
-            }
+            next_checkpoint = d;
         }
     }
 
@@ -274,8 +269,11 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
         }
     }
 
-    // Heartbeat - advance at least quarterly
-    let heartbeat = state.timeline.current_date.saturating_add(3.months());
+    // Heartbeat - advance at least quarterly (use cached span)
+    let heartbeat = state
+        .timeline
+        .current_date
+        .saturating_add(*cached_spans::HEARTBEAT);
     if heartbeat < next_checkpoint {
         next_checkpoint = heartbeat;
     }

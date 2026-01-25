@@ -9,6 +9,19 @@ use jiff::ToSpan;
 use rand::SeedableRng;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+/// Pre-computed spans for common intervals to avoid repeated jiff ToSpan calls.
+/// These are computed once at module load time.
+pub mod cached_spans {
+    use jiff::Span;
+    use std::sync::LazyLock;
+
+    /// 3-month span used for heartbeat time advancement
+    pub static HEARTBEAT: LazyLock<Span> = LazyLock::new(|| {
+        use jiff::ToSpan;
+        3.months()
+    });
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct AssetPrice {
     pub price: f64,
@@ -107,6 +120,10 @@ pub struct SimEventState {
     /// Cached interval spans for repeating events (EventId -> pre-computed Span)
     /// Avoids repeated calls to RepeatInterval::span() during trigger evaluation
     pub repeating_event_spans: FxHashMap<EventId, jiff::Span>,
+
+    /// Cached offset spans for RelativeToEvent triggers (EventId -> pre-computed Span)
+    /// Avoids repeated calls to TriggerOffset::to_span() during trigger evaluation
+    pub relative_event_spans: FxHashMap<EventId, jiff::Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -199,11 +216,16 @@ impl SimulationState {
 
         let mut events = FxHashMap::default();
         let mut repeating_event_spans = FxHashMap::default();
-        // Load events and pre-cache interval spans for repeating events
+        let mut relative_event_spans = FxHashMap::default();
+        // Load events and pre-cache interval spans for repeating and relative events
         for event in &params.events {
             // Cache the interval span if this is a repeating event
             if let EventTrigger::Repeating { interval, .. } = &event.trigger {
                 repeating_event_spans.insert(event.event_id, interval.span());
+            }
+            // Cache the offset span if this is a relative-to-event trigger
+            if let EventTrigger::RelativeToEvent { offset, .. } = &event.trigger {
+                relative_event_spans.insert(event.event_id, offset.to_span());
             }
             events.insert(event.event_id, event.clone());
         }
@@ -234,6 +256,7 @@ impl SimulationState {
                 event_flow_lifetime: FxHashMap::default(),
                 event_flow_last_period_key: FxHashMap::default(),
                 repeating_event_spans,
+                relative_event_spans,
             },
             taxes: SimTaxState {
                 ytd_tax: TaxSummary {
