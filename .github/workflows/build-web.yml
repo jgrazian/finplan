@@ -1,0 +1,67 @@
+name: Build and Deploy Web
+
+on:
+  push:
+    branches: [feature/ratzilla-web]
+  pull_request:
+    branches: [feature/ratzilla-web]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: cargo install trunk --locked
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-web-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-web-
+
+      - name: Build with trunk
+        working-directory: crates/finplan
+        run: trunk build --release
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: crates/finplan/dist
+          if-no-files-found: error
+
+      # Option 2a: Deploy to Cloudflare Pages
+      # Requires CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID secrets
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name == 'push'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy crates/finplan/dist --project-name=finplan
+
+      # Option 2b: Alternative - Push to gh-pages branch
+      # Uncomment below and comment out the Cloudflare step above if you prefer this approach
+      # - name: Deploy to gh-pages branch
+      #   if: github.event_name == 'push'
+      #   uses: peaceiris/actions-gh-pages@v4
+      #   with:
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      #     publish_dir: crates/finplan/dist
+      #     publish_branch: gh-pages
