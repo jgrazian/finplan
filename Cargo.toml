@@ -2,15 +2,11 @@
 resolver = "2"
 members = [
     "crates/finplan",
-    "crates/finplan_core",
-    # "crates/finplan_server"
+    "crates/finplan_core"
 ]
-
-[profile.release]
-lto = "thin"
 
 [workspace.dependencies]
 jiff = { version = "0.2", features = ["serde"] }
+rand = "0.9.2"
+rand_distr = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-ts-rs = { git = "https://github.com/Aleph-Alpha/ts-rs.git", features = ["serde-compat", "jiff-impl"] }

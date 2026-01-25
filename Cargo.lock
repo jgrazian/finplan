@@ -724,7 +724,6 @@ dependencies = [
  "rayon",
  "rustc-hash",
  "serde",
- "ts-rs",
 ]
 
 [[package]]
@@ -1933,15 +1932,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "termcolor"
-version = "1.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "terminfo"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2177,27 +2167,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
-]
-
-[[package]]
-name = "ts-rs"
-version = "11.1.0"
-source = "git+https://github.com/Aleph-Alpha/ts-rs.git#858f413038568123004d3e08d2298bbb38659447"
-dependencies = [
- "jiff",
- "thiserror 2.0.17",
- "ts-rs-macros",
-]
-
-[[package]]
-name = "ts-rs-macros"
-version = "11.1.0"
-source = "git+https://github.com/Aleph-Alpha/ts-rs.git#858f413038568123004d3e08d2298bbb38659447"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.111",
- "termcolor",
 ]
 
 [[package]]

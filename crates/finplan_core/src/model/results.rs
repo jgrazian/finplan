@@ -10,16 +10,12 @@ use super::state_event::{LedgerEntry, StateEvent};
 use super::tax_config::TaxSummary;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "ts")]
-use ts_rs::TS;
-
 /// A warning generated during simulation execution
 ///
 /// Warnings are non-fatal issues that occurred during simulation but did not
 /// prevent the simulation from completing. Consumers should inspect warnings
 /// to understand if any events were skipped or other issues occurred.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub struct SimulationWarning {
     /// Date when the warning occurred
     pub date: jiff::civil::Date,
@@ -33,7 +29,6 @@ pub struct SimulationWarning {
 
 /// Categories of simulation warnings
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum WarningKind {
     /// An effect was skipped due to an error during application
     #[default]

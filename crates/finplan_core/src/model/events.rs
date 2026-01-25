@@ -11,12 +11,8 @@ use super::ids::{AccountId, AssetId, EventId};
 use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "ts")]
-use ts_rs::TS;
-
 /// How often a repeating event occurs
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Hash)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum RepeatInterval {
     Never,
     Weekly,
@@ -146,7 +142,6 @@ pub struct FlowLimits {
 
 /// Method for selecting which lots to sell (affects capital gains calculation)
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum LotMethod {
     /// First-in, first-out (default, most common)
     #[default]
@@ -163,7 +158,6 @@ pub enum LotMethod {
 
 /// Pre-defined withdrawal order strategies
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum WithdrawalOrder {
     /// Taxable accounts first, then tax-deferred, then tax-free
     /// Minimizes taxes in early retirement, preserves tax-advantaged growth
@@ -364,7 +358,6 @@ pub enum EventTrigger {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum IncomeType {
     Taxable,
     TaxFree,

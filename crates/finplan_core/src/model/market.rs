@@ -7,9 +7,6 @@ use serde::{Deserialize, Serialize};
 
 // Note: std::collections::HashMap is used in from_profiles for return_profiles parameter
 
-#[cfg(feature = "ts")]
-use ts_rs::TS;
-
 use crate::error::MarketError;
 use crate::model::{AssetId, ReturnProfileId};
 
@@ -228,7 +225,6 @@ impl Market {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(tag = "type")]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum InflationProfile {
     #[default]
     None,
@@ -282,7 +278,6 @@ impl InflationProfile {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(tag = "type")]
-#[cfg_attr(feature = "ts", derive(TS), ts(export))]
 pub enum ReturnProfile {
     None,
     Fixed(f64),
