@@ -13,9 +13,15 @@ This document outlines the plan to add a `web` feature flag that enables compili
 | Phase 5: Refactor App to Use Platform Abstraction | **COMPLETE** | Web entry point with ratzilla, AppKeyEvent abstraction |
 | Phase 6: Web Workers (Enhancement) | Pending | |
 | Phase 7: finplan_core WASM Compatibility | **COMPLETE** | rayon feature-flagged |
-| Phase 8: Build & Deploy Infrastructure | Pending | index.html, Trunk.toml created |
+| Phase 8: Build & Deploy Infrastructure | **IN PROGRESS** | Basic web rendering works, trunk serve functional |
 
 ### Completed Changes
+
+**Critical Fixes (2026-01-25):**
+- `crates/finplan/Cargo.toml` - Added explicit `[[bin]]` with `required-features = ["native"]` and `[lib]` with `crate-type = ["cdylib", "rlib"]` to ensure trunk builds the library (with wasm_bindgen entry point) instead of the binary for web targets
+- `crates/finplan/Cargo.toml` - Added `tracing-wasm` dependency for web logging
+- `crates/finplan/src/logging.rs` - Use `tracing_wasm::set_as_global_default()` for web instead of fmt layer (which writes to stdout and doesn't work in WASM)
+- `crates/finplan_core/Cargo.toml` - Added target-specific jiff dependency with `js` feature for WASM timezone support
 
 **Phase 1 (Complete):**
 - `crates/finplan/Cargo.toml` - Added `native` and `web` feature flags

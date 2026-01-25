@@ -3,6 +3,16 @@ name = "finplan"
 version = "0.1.0"
 edition = "2024"
 
+# Library target for both native and web
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Binary target only for native builds
+[[bin]]
+name = "finplan"
+path = "src/main.rs"
+required-features = ["native"]
+
 [features]
 default = ["native"]
 native = [
@@ -21,13 +31,15 @@ web = [
     "wasm-bindgen-futures",
     "web-sys",
     "console_error_panic_hook",
+    "getrandom",
+    "tracing-wasm",
 ]
 
 [dependencies]
 # Core simulation library
 finplan_core = { path = "../finplan_core", default-features = false }
 
-# Shared dependencies
+# Shared dependencies - jiff needs 'js' feature for WASM timezone support
 jiff = { workspace = true }
 serde = { workspace = true }
 serde-saphyr = "0.0.15"
@@ -52,6 +64,8 @@ wasm-bindgen = { version = "0.2", optional = true }
 wasm-bindgen-futures = { version = "0.4", optional = true }
 web-sys = { version = "0.3", optional = true, features = ["console", "Window"] }
 console_error_panic_hook = { version = "0.1", optional = true }
+getrandom = { version = "0.3", optional = true, features = ["wasm_js"] }
+tracing-wasm = { version = "0.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

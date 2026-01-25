@@ -48,6 +48,9 @@ fn main() -> color_eyre::Result<()> {
     Ok(())
 }
 
+// DO NOT DELETE: required to build web target
+#[cfg(not(feature = "native"))]
+use web_sys::*;
 #[cfg(not(feature = "native"))]
 fn main() {
     // Web entry point is handled via wasm_bindgen in lib.rs

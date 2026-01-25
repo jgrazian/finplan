@@ -220,7 +220,7 @@ pub fn main() -> Result<(), JsValue> {
     // Set up panic hook for better error messages
     console_error_panic_hook::set_once();
 
-    // Initialize logging
+    // Initialize logging to browser console
     crate::init_logging_web();
 
     tracing::info!("FinPlan web version starting");

@@ -1,3 +1,4 @@
+#[cfg(feature = "native")]
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Initialize logging for native builds - writes to a file in the data directory.
@@ -38,14 +39,7 @@ pub fn init_logging(data_dir: &std::path::Path, level: &str) -> color_eyre::Resu
 /// Initialize logging for web builds - logs to browser console.
 #[cfg(feature = "web")]
 pub fn init_logging_web() {
-    // For web, we use a simple fmt subscriber that writes to stdout
-    // which will be captured by the browser console
-    let env_filter = EnvFilter::new("finplan=info,finplan_core=warn");
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(fmt::layer().without_time().with_ansi(false))
-        .init();
-
+    // Use tracing-wasm to log to browser console
+    tracing_wasm::set_as_global_default();
     tracing::info!("FinPlan web logging initialized");
 }

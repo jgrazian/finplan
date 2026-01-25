@@ -16,6 +16,10 @@ serde = { workspace = true }
 rayon = { version = "1.11.0", optional = true }
 rustc-hash = "2"
 
+# WASM support: jiff needs 'js' feature for timezone access in browsers
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+jiff = { version = "0.2", features = ["serde", "js"] }
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
