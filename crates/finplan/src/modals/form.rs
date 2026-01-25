@@ -64,7 +64,7 @@ pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
             .line(
                 HelpText::new()
                     .key("EDITING:", Color::Cyan, "Type to enter text")
-                    .key("[F10/Ctrl+S]", Color::Cyan, "Submit"),
+                    .key("[F10]", Color::Cyan, "Submit"),
             )
             .line(
                 HelpText::new()
@@ -79,11 +79,11 @@ pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
                     .key("[j/k/Tab]", Color::DarkGray, "Navigate")
                     .key("[Enter]", Color::Green, "Edit field"),
             )
-            .line(
-                HelpText::new()
-                    .key("[F10/Ctrl+S]", Color::Cyan, "Submit")
-                    .key("[Esc]", Color::Yellow, "Cancel"),
-            )
+            .line(HelpText::new().key("[s]", Color::Cyan, "Save").key(
+                "[Esc]",
+                Color::Yellow,
+                "Cancel",
+            ))
             .build()
     };
     frame.render_widget(help, chunks[help_idx]);
@@ -250,14 +250,8 @@ pub fn handle_form_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
 }
 
 fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
-    // Check for submit keys first - works in both editing and navigation mode
-    // Support multiple key combos since Ctrl+Enter is unreliable in some terminals
-    let is_submit = matches!(
-        (&key.code, key.ctrl()),
-        (KeyCode::Enter, true) | (KeyCode::Char('s'), true)
-    ) || matches!(key.code, KeyCode::F(10));
-
-    if is_submit {
+    // In editing mode, only F10 submits (since 's' types the character)
+    if matches!(key.code, KeyCode::F(10)) {
         return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
     }
 
@@ -378,13 +372,8 @@ fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
 }
 
 fn handle_navigation_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
-    // Check for submit keys first
-    let is_submit = matches!(
-        (&key.code, key.ctrl()),
-        (KeyCode::Enter, true) | (KeyCode::Char('s'), true)
-    ) || matches!(key.code, KeyCode::F(10));
-
-    if is_submit {
+    // In navigation mode, 's' or F10 submits
+    if matches!(key.code, KeyCode::Char('s') | KeyCode::F(10)) {
         return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
     }
 

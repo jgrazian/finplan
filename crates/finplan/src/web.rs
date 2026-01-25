@@ -314,6 +314,35 @@ impl WebApp {
     }
 }
 
+/// Set up event listener to prevent default browser behavior for captured keys.
+fn setup_prevent_default() {
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::closure::Closure;
+
+    let window = web_sys::window().expect("no global window");
+    let document = window.document().expect("no document");
+
+    let closure = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
+        let key = event.key();
+        let ctrl = event.ctrl_key() || event.meta_key();
+
+        // Prevent default for keys we want to capture
+        let should_prevent =
+            matches!(key.as_str(), "Tab") || (ctrl && matches!(key.to_lowercase().as_str(), "s"));
+
+        if should_prevent {
+            event.prevent_default();
+        }
+    });
+
+    document
+        .add_event_listener_with_callback("keydown", closure.as_ref().unchecked_ref())
+        .expect("failed to add keydown listener");
+
+    // Prevent the closure from being dropped
+    closure.forget();
+}
+
 /// WASM entry point.
 #[wasm_bindgen(start)]
 pub fn main() -> Result<(), JsValue> {
@@ -324,6 +353,9 @@ pub fn main() -> Result<(), JsValue> {
     crate::init_logging_web();
 
     tracing::info!("FinPlan web version starting");
+
+    // Prevent default browser behavior for keys we capture (Tab, Ctrl+S)
+    setup_prevent_default();
 
     // Create the app state
     let app = Rc::new(RefCell::new(WebApp::new()));
