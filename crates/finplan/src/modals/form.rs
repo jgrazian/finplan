@@ -312,13 +312,53 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
 
     match key.code {
         KeyCode::Enter => {
-            // Exit edit mode (plain Enter without Ctrl)
+            // Exit edit mode, keep changes
             modal.editing = false;
+            modal.editing_original_value = None;
             ModalResult::Continue
         }
         KeyCode::Esc => {
-            // Cancel edit and revert to original (for now, just exit edit mode)
+            // Cancel edit and revert to original value
+            if let Some(original) = modal.editing_original_value.take() {
+                modal.fields[modal.focused_field].value = original;
+                modal.fields[modal.focused_field].cursor_pos =
+                    modal.fields[modal.focused_field].value.len();
+            }
             modal.editing = false;
+            ModalResult::Continue
+        }
+        KeyCode::Tab | KeyCode::Down => {
+            // Exit edit mode and move to next field
+            modal.editing = false;
+            modal.editing_original_value = None;
+            let start = modal.focused_field;
+            loop {
+                modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
+                    || modal.focused_field == start
+                {
+                    break;
+                }
+            }
+            ModalResult::Continue
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            // Exit edit mode and move to previous field
+            modal.editing = false;
+            modal.editing_original_value = None;
+            let start = modal.focused_field;
+            loop {
+                if modal.focused_field == 0 {
+                    modal.focused_field = modal.fields.len() - 1;
+                } else {
+                    modal.focused_field -= 1;
+                }
+                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
+                    || modal.focused_field == start
+                {
+                    break;
+                }
+            }
             ModalResult::Continue
         }
         KeyCode::Backspace => {
@@ -408,6 +448,9 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
             if current_field_type != FieldType::ReadOnly && current_field_type != FieldType::Select
             {
                 modal.editing = true;
+                // Store original value for Esc to revert
+                modal.editing_original_value =
+                    Some(modal.fields[modal.focused_field].value.clone());
                 // Move cursor to end of value
                 let field = &mut modal.fields[modal.focused_field];
                 field.cursor_pos = field.value.len();
