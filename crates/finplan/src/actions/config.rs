@@ -71,9 +71,10 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
                     vec![FormField::percentage("Rate", 0.03)],
                     ModalAction::EDIT_INFLATION,
                 )
-                .with_typed_context(ModalContext::Config(
-                    ConfigContext::Inflation(InflationConfigContext::Fixed),
-                )),
+                .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
+                    InflationConfigContext::Fixed,
+                )))
+                .start_editing(),
             ))
         }
         "Normal" => ActionResult::modal(ModalState::Form(
@@ -87,7 +88,8 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
             )
             .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
                 InflationConfigContext::Normal,
-            ))),
+            )))
+            .start_editing(),
         )),
         "Log-Normal" => ActionResult::modal(ModalState::Form(
             FormModal::new(
@@ -100,7 +102,8 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
             )
             .with_typed_context(ModalContext::Config(ConfigContext::Inflation(
                 InflationConfigContext::LogNormal,
-            ))),
+            )))
+            .start_editing(),
         )),
         "US Historical" => {
             // Show picker for distribution type

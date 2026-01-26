@@ -1440,11 +1440,10 @@ impl PortfolioProfilesScreen {
                                 ],
                                 ModalAction::ADD_HOLDING,
                             )
-                            .with_typed_context(
-                                ModalContext::account_index(
-                                    state.portfolio_profiles_state.selected_account_index,
-                                ),
-                            );
+                            .with_typed_context(ModalContext::account_index(
+                                state.portfolio_profiles_state.selected_account_index,
+                            ))
+                            .start_editing();
                             state.modal = ModalState::Form(form);
                         }
                         _ => {

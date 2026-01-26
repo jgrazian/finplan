@@ -52,7 +52,8 @@ pub fn handle_profile_type_pick(profile_type: &str) -> ActionResult {
 
     ActionResult::modal(ModalState::Form(
         FormModal::new(title, fields, ModalAction::CREATE_PROFILE)
-            .with_typed_context(ModalContext::ProfileType(profile_type_ctx)),
+            .with_typed_context(ModalContext::ProfileType(profile_type_ctx))
+            .start_editing(),
     ))
 }
 
