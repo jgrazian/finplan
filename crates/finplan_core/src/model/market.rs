@@ -286,8 +286,24 @@ impl InflationProfile {
 pub enum ReturnProfile {
     None,
     Fixed(f64),
-    Normal { mean: f64, std_dev: f64 },
-    LogNormal { mean: f64, std_dev: f64 },
+    Normal {
+        mean: f64,
+        std_dev: f64,
+    },
+    LogNormal {
+        mean: f64,
+        std_dev: f64,
+    },
+    /// Student's t distribution for fat-tailed returns.
+    /// Better captures extreme market events than Normal distribution.
+    /// - `mean`: Expected return (location parameter)
+    /// - `scale`: Scale parameter (similar to std_dev but adjusted for df)
+    /// - `df`: Degrees of freedom (lower = fatter tails, typically 4-6 for equities)
+    StudentT {
+        mean: f64,
+        scale: f64,
+        df: f64,
+    },
 }
 
 impl ReturnProfile {
@@ -305,6 +321,13 @@ impl ReturnProfile {
         mean: 0.11471,
         std_dev: 0.18146,
     };
+    /// Student's t with df=5 captures equity fat tails well
+    /// scale = std_dev * sqrt((df-2)/df) = 0.18146 * sqrt(0.6) ≈ 0.1406
+    pub const SP_500_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.11471,
+        scale: 0.14058,
+        df: 5.0,
+    };
 
     // US Small Cap Stocks (Market + SMB Factor)
     // Source: Kenneth French Data Library, Dartmouth
@@ -319,6 +342,11 @@ impl ReturnProfile {
     pub const US_SMALL_CAP_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
         mean: 0.147749,
         std_dev: 0.278003,
+    };
+    pub const US_SMALL_CAP_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.147749,
+        scale: 0.21534,
+        df: 5.0,
     };
 
     // US 3-Month Treasury Bills
@@ -379,6 +407,11 @@ impl ReturnProfile {
     pub const EMERGING_MARKETS_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
         mean: 0.107264,
         std_dev: 0.347473,
+    };
+    pub const EMERGING_MARKETS_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.107264,
+        scale: 0.26916,
+        df: 5.0,
     };
 
     // US Real Estate Investment Trusts (via VNQ)
@@ -478,6 +511,14 @@ impl ReturnProfile {
                         reason: "std_dev must be positive and finite",
                     })
             }
+            ReturnProfile::StudentT { mean, scale, df } => rand_distr::StudentT::new(*df)
+                .map(|d| mean + scale * d.sample(rng))
+                .map_err(|_| MarketError::InvalidDistributionParameters {
+                    profile_type: "StudentT return",
+                    mean: *mean,
+                    std_dev: *scale,
+                    reason: "degrees of freedom must be positive and finite",
+                }),
         }
     }
 }
@@ -663,5 +704,68 @@ mod tests {
         // Before start date
         let val = market.get_asset_value(start_date, date(2023, 12, 31), asset_id);
         assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_student_t_sampling() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        // Test StudentT sampling works
+        let profile = ReturnProfile::StudentT {
+            mean: 0.10,
+            scale: 0.15,
+            df: 5.0,
+        };
+
+        // Sample many times and check basic statistics
+        let samples: Vec<f64> = (0..10000)
+            .map(|_| profile.sample(&mut rng).unwrap())
+            .collect();
+
+        let mean: f64 = samples.iter().sum::<f64>() / samples.len() as f64;
+        let variance: f64 =
+            samples.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / samples.len() as f64;
+        let std_dev = variance.sqrt();
+
+        // Mean should be close to 0.10 (within 2% absolute)
+        assert!(
+            (mean - 0.10).abs() < 0.02,
+            "Mean {} too far from expected 0.10",
+            mean
+        );
+
+        // For Student's t with df=5, variance = scale^2 * df/(df-2) = 0.15^2 * 5/3 = 0.0375
+        // Expected std_dev = sqrt(0.0375) ≈ 0.1936
+        // Allow 20% tolerance for sampling variance
+        let expected_std = 0.15 * (5.0_f64 / 3.0).sqrt();
+        assert!(
+            (std_dev - expected_std).abs() < expected_std * 0.20,
+            "Std dev {} too far from expected {}",
+            std_dev,
+            expected_std
+        );
+    }
+
+    #[test]
+    fn test_student_t_preset_constants() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+
+        // Test that the preset constants can be sampled
+        let sample = ReturnProfile::SP_500_HISTORICAL_STUDENT_T
+            .sample(&mut rng)
+            .unwrap();
+        assert!(sample.is_finite());
+
+        let sample = ReturnProfile::US_SMALL_CAP_HISTORICAL_STUDENT_T
+            .sample(&mut rng)
+            .unwrap();
+        assert!(sample.is_finite());
+
+        let sample = ReturnProfile::EMERGING_MARKETS_HISTORICAL_STUDENT_T
+            .sample(&mut rng)
+            .unwrap();
+        assert!(sample.is_finite());
     }
 }

@@ -1331,6 +1331,19 @@ def fetch_aggregate_bonds_yahoo() -> AssetStats:
 # Output Formatters
 # ============================================================================
 
+def compute_student_t_scale(std_dev: float, df: float = 5.0) -> float:
+    """
+    Compute the scale parameter for Student's t distribution.
+
+    For a Student's t with df degrees of freedom:
+    - Standard t has variance = df/(df-2) for df > 2
+    - To achieve target std_dev, scale = std_dev * sqrt((df-2)/df)
+    """
+    if df <= 2:
+        raise ValueError("df must be > 2 for finite variance")
+    return std_dev * np.sqrt((df - 2) / df)
+
+
 def format_rust_const(stats: AssetStats, const_prefix: str) -> str:
     """Format statistics as Rust const definitions."""
     rust_name = const_prefix.upper().replace(" ", "_").replace("-", "_")
@@ -1354,6 +1367,19 @@ def format_rust_const(stats: AssetStats, const_prefix: str) -> str:
             f"    pub const {rust_name}_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {{",
             f"        mean: {stats.arithmetic_mean:.6},",
             f"        std_dev: {stats.std_dev:.6},",
+            f"    }};",
+        ])
+
+    # Add Student's t for equity-like assets (std_dev > 5%)
+    # Student's t with df=5 captures fat tails better than Normal
+    if stats.std_dev > 0.05:
+        df = 5.0
+        scale = compute_student_t_scale(stats.std_dev, df)
+        lines.extend([
+            f"    pub const {rust_name}_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {{",
+            f"        mean: {stats.arithmetic_mean:.6},",
+            f"        scale: {scale:.6},",
+            f"        df: {df},",
             f"    }};",
         ])
 

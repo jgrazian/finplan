@@ -1711,9 +1711,9 @@ Add a "Load Preset" option in profile editor that offers:
 
 ## Status
 
-- [ ] Phase 1.1 - Asset class preset constants
-- [ ] Phase 1.2 - Student's t distribution
-- [ ] Phase 1.3 - Inflation preset constants
+- [x] Phase 1.1 - Asset class preset constants (11 asset classes with Fixed/Normal/LogNormal)
+- [x] Phase 1.2 - Student's t distribution (variant added, presets for high-volatility assets)
+- [x] Phase 1.3 - Inflation preset constants (US_HISTORICAL_FIXED, US_HISTORICAL_NORMAL, US_HISTORICAL_LOG_NORMAL)
 - [ ] Phase 2.1 - Regime switching variant
 - [ ] Phase 2.2 - Regime switching presets
 - [ ] Phase 3.1 - Correlation matrix structure
@@ -1725,6 +1725,53 @@ Add a "Load Preset" option in profile editor that offers:
 - [ ] Phase 5.1 - TUI profile data types
 - [ ] Phase 5.2 - TUI profile editor updates
 - [ ] Phase 5.3 - TUI preset selection
+
+---
+
+## Phase 1 Implementation Notes (2026-01-26)
+
+### Phase 1.1 - Asset Class Presets
+Added comprehensive return profile constants sourced from:
+- Robert Shiller, Yale University (S&P 500 since 1871)
+- Kenneth French Data Library, Dartmouth (Fama-French factors since 1926)
+- Yahoo Finance (ETF data for recent history)
+
+Asset classes covered:
+- S&P 500 (97 years)
+- US Small Cap (98 years)
+- US T-Bills (92 years)
+- US Long-Term Bonds (97 years)
+- International Developed (34 years)
+- Emerging Markets (33 years)
+- REITs (22 years)
+- Gold (26 years)
+- US Aggregate Bonds (23 years)
+- US Corporate Bonds (24 years)
+- TIPS (23 years)
+
+Also added `historical_returns` module with annual return arrays for future bootstrap sampling.
+
+### Phase 1.2 - Student's t Distribution
+Added `ReturnProfile::StudentT { mean, scale, df }` variant for fat-tailed returns.
+
+**Key implementation details:**
+- `mean`: Location parameter (expected return)
+- `scale`: Scale parameter, computed as `std_dev * sqrt((df-2)/df)` to match target std_dev
+- `df`: Degrees of freedom (lower = fatter tails, typically 4-6 for equities)
+
+**Presets added:**
+- SP_500_HISTORICAL_STUDENT_T (df=5)
+- US_SMALL_CAP_HISTORICAL_STUDENT_T (df=5)
+- EMERGING_MARKETS_HISTORICAL_STUDENT_T (df=5)
+
+The Python data script (`scripts/fetch_historical_returns.py`) was updated to automatically
+generate StudentT constants for high-volatility assets (std_dev > 5%).
+
+### Phase 1.3 - Inflation Presets
+Inflation constants were already present:
+- US_HISTORICAL_FIXED (geometric mean: 3.43%)
+- US_HISTORICAL_NORMAL (mean: 3.47%, std_dev: 2.79%)
+- US_HISTORICAL_LOG_NORMAL
 
 ---
 
