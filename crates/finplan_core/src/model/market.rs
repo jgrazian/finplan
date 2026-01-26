@@ -240,14 +240,19 @@ pub enum InflationProfile {
 }
 
 impl InflationProfile {
-    pub const US_HISTORICAL_FIXED: InflationProfile = InflationProfile::Fixed(0.035432);
+    // US CPI Inflation (All Urban Consumers)
+    // Source: FRED (CPIAUCSL)
+    // Data: 1948-2025 (78 years)
+    // Arithmetic mean: 0.0347, Geometric mean: 0.0343
+    // Std dev: 0.0279
+    pub const US_HISTORICAL_FIXED: InflationProfile = InflationProfile::Fixed(0.0343436);
     pub const US_HISTORICAL_NORMAL: InflationProfile = InflationProfile::Normal {
-        mean: 0.035432,
-        std_dev: 0.027807,
+        mean: 0.0347068,
+        std_dev: 0.0279436,
     };
     pub const US_HISTORICAL_LOG_NORMAL: InflationProfile = InflationProfile::LogNormal {
-        mean: 0.035432,
-        std_dev: 0.026317,
+        mean: 0.0347068,
+        std_dev: 0.0279436,
     };
 
     pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<f64, MarketError> {
@@ -286,14 +291,169 @@ pub enum ReturnProfile {
 }
 
 impl ReturnProfile {
-    pub const SP_500_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.095668);
+    // US Large Cap Stocks (S&P 500 Total Return)
+    // Source: Robert Shiller, Yale University
+    // Data: 1927-2023 (97 years)
+    // Arithmetic mean: 0.1147, Geometric mean: 0.0991
+    // Std dev: 0.1815, Skewness: -0.27, Kurtosis: 0.11
+    pub const SP_500_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0990829);
     pub const SP_500_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
-        mean: 0.095668,
-        std_dev: 0.165234,
+        mean: 0.11471,
+        std_dev: 0.18146,
     };
-    pub const SP_500_HISTORICAL_LOG_NORMAL: ReturnProfile = ReturnProfile::LogNormal {
-        mean: 0.079088,
-        std_dev: 0.161832,
+    pub const SP_500_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.11471,
+        std_dev: 0.18146,
+    };
+
+    // US Small Cap Stocks (Market + SMB Factor)
+    // Source: Kenneth French Data Library, Dartmouth
+    // Data: 1927-2024 (98 years)
+    // Arithmetic mean: 0.1477, Geometric mean: 0.1120
+    // Std dev: 0.2780, Skewness: 0.09, Kurtosis: 0.32
+    pub const US_SMALL_CAP_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.112028);
+    pub const US_SMALL_CAP_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.147749,
+        std_dev: 0.278003,
+    };
+    pub const US_SMALL_CAP_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.147749,
+        std_dev: 0.278003,
+    };
+
+    // US 3-Month Treasury Bills
+    // Source: FRED (TB3MS)
+    // Data: 1934-2025 (92 years)
+    // Arithmetic mean: 0.0342, Geometric mean: 0.0337
+    // Std dev: 0.0305, Skewness: 0.96, Kurtosis: 0.78
+    pub const US_TBILLS_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0337398);
+    pub const US_TBILLS_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.0341782,
+        std_dev: 0.0305423,
+    };
+    pub const US_TBILLS_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.0341782,
+        std_dev: 0.0305423,
+    };
+
+    // US Long-Term Government Bonds (estimated from yields)
+    // Source: Robert Shiller, Yale University (estimated)
+    // Data: 1927-2023 (97 years)
+    // Arithmetic mean: 0.0477, Geometric mean: 0.0455
+    // Std dev: 0.0701, Skewness: 1.52, Kurtosis: 4.22
+    pub const US_LONG_BOND_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0455233);
+    pub const US_LONG_BOND_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.047717,
+        std_dev: 0.0700793,
+    };
+    pub const US_LONG_BOND_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.047717,
+        std_dev: 0.0700793,
+    };
+
+    // Developed Markets ex-US (Fama-French)
+    // Source: Kenneth French Data Library, Dartmouth
+    // Data: 1991-2024 (34 years)
+    // Arithmetic mean: 0.0778, Geometric mean: 0.0603
+    // Std dev: 0.1883, Skewness: -0.47, Kurtosis: 0.24
+    pub const INTL_DEVELOPED_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0602527);
+    pub const INTL_DEVELOPED_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.0778324,
+        std_dev: 0.188273,
+    };
+    pub const INTL_DEVELOPED_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.0778324,
+        std_dev: 0.188273,
+    };
+
+    // Emerging Markets (Fama-French)
+    // Source: Kenneth French Data Library, Dartmouth
+    // Data: 1991-2024 (33 years)
+    // Arithmetic mean: 0.1073, Geometric mean: 0.0507
+    // Std dev: 0.3475, Skewness: 0.54, Kurtosis: 0.99
+    pub const EMERGING_MARKETS_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0507225);
+    pub const EMERGING_MARKETS_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.107264,
+        std_dev: 0.347473,
+    };
+    pub const EMERGING_MARKETS_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.107264,
+        std_dev: 0.347473,
+    };
+
+    // US Real Estate Investment Trusts (via VNQ)
+    // Source: Yahoo Finance
+    // Data: 2005-2026 (22 years)
+    // Arithmetic mean: 0.0828, Geometric mean: 0.0642
+    // Std dev: 0.1959, Skewness: -0.44, Kurtosis: 0.18
+    pub const REITS_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0642145);
+    pub const REITS_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.082752,
+        std_dev: 0.195905,
+    };
+    pub const REITS_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.082752,
+        std_dev: 0.195905,
+    };
+
+    // Gold (via GC=F futures)
+    // Source: Yahoo Finance
+    // Data: 2001-2026 (26 years)
+    // Arithmetic mean: 0.1317, Geometric mean: 0.1189
+    // Std dev: 0.1734, Skewness: 0.45, Kurtosis: 2.63
+    pub const GOLD_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.118905);
+    pub const GOLD_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.131744,
+        std_dev: 0.173436,
+    };
+    pub const GOLD_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.131744,
+        std_dev: 0.173436,
+    };
+
+    // US Investment Grade Bonds (Bloomberg Aggregate via AGG)
+    // Source: Yahoo Finance
+    // Data: 2004-2026 (23 years)
+    // Arithmetic mean: 0.0312, Geometric mean: 0.0301
+    // Std dev: 0.0469, Skewness: -1.88, Kurtosis: 5.44
+    pub const US_AGG_BOND_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0301011);
+    pub const US_AGG_BOND_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.0311818,
+        std_dev: 0.0468972,
+    };
+    pub const US_AGG_BOND_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.0311818,
+        std_dev: 0.0468972,
+    };
+
+    // US Investment Grade Corporate Bonds (via LQD)
+    // Source: Yahoo Finance
+    // Data: 2003-2026 (24 years)
+    // Arithmetic mean: 0.0441, Geometric mean: 0.0418
+    // Std dev: 0.0698, Skewness: -1.28, Kurtosis: 3.54
+    pub const US_CORPORATE_BOND_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0417664);
+    pub const US_CORPORATE_BOND_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.0441447,
+        std_dev: 0.0697513,
+    };
+    pub const US_CORPORATE_BOND_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.0441447,
+        std_dev: 0.0697513,
+    };
+
+    // US Treasury Inflation-Protected Securities (via TIP)
+    // Source: Yahoo Finance
+    // Data: 2004-2026 (23 years)
+    // Arithmetic mean: 0.0359, Geometric mean: 0.0341
+    // Std dev: 0.0607, Skewness: -0.85, Kurtosis: 1.17
+    pub const TIPS_HISTORICAL_FIXED: ReturnProfile = ReturnProfile::Fixed(0.0341326);
+    pub const TIPS_HISTORICAL_NORMAL: ReturnProfile = ReturnProfile::Normal {
+        mean: 0.0358924,
+        std_dev: 0.0606518,
+    };
+    pub const TIPS_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
+        mean: 0.0358924,
+        std_dev: 0.0606518,
     };
 
     pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<f64, MarketError> {
@@ -320,6 +480,134 @@ impl ReturnProfile {
             }
         }
     }
+}
+
+/// Historical annual returns for bootstrap sampling
+pub mod historical_returns {
+    /// US Large Cap Stocks (S&P 500 Total Return)
+    /// Source: Robert Shiller, Yale University
+    /// Annual returns 1927-2023 (97 years)
+    pub const SP_500_ANNUAL_RETURNS: &[f64] = &[
+        0.1071, 0.3490, 0.4533, -0.0803, -0.1985, -0.3873, -0.0936, 0.5318, -0.0791, 0.5231,
+        0.3292, -0.2964, 0.1507, 0.0431, -0.0719, -0.0786, 0.1817, 0.2250, 0.1815, 0.3760, -0.1054,
+        0.0309, 0.1032, 0.1677, 0.3240, 0.1990, 0.1397, 0.0222, 0.4375, 0.2781, 0.0684, -0.0571,
+        0.3839, 0.0780, 0.0587, 0.1897, -0.0266, 0.2045, 0.1562, 0.1168, -0.0634, 0.1558, 0.1052,
+        -0.0765, 0.0667, 0.1332, 0.1763, -0.1457, -0.2023, 0.3722, 0.1162, -0.0793, 0.1570, 0.1623,
+        0.2494, -0.0613, 0.2736, 0.1987, 0.0727, 0.2477, 0.3002, -0.0181, 0.1715, 0.2260, -0.0102,
+        0.3080, 0.0737, 0.1147, 0.0084, 0.3421, 0.2645, 0.2720, 0.3087, 0.1532, -0.0498, -0.1304,
+        -0.1972, 0.2807, 0.0606, 0.1004, 0.1316, -0.0085, -0.3455, 0.3176, 0.1609, 0.0348, 0.1586,
+        0.2504, 0.1332, -0.0327, 0.2052, 0.2449, -0.0461, 0.2756, 0.1710, 0.2212, -0.1180,
+    ];
+
+    /// US Small Cap Stocks (Market + SMB Factor)
+    /// Source: Kenneth French Data Library, Dartmouth
+    /// Annual returns 1927-2024 (98 years)
+    pub const US_SMALL_CAP_ANNUAL_RETURNS: &[f64] = &[
+        0.3036, 0.4285, -0.4551, -0.3426, -0.4070, -0.0361, 1.0140, 0.2907, 0.5564, 0.5019,
+        -0.4884, 0.3753, 0.0842, -0.0646, -0.1436, 0.2149, 0.6202, 0.3947, 0.6470, -0.1002,
+        -0.0354, -0.0737, 0.2399, 0.3080, 0.1543, 0.0672, -0.0045, 0.4811, 0.1899, 0.0745, -0.1267,
+        0.5950, 0.1802, -0.0189, 0.2803, -0.1823, 0.1494, 0.1492, 0.3629, -0.0609, 0.7850, 0.3837,
+        -0.2490, -0.1171, 0.2186, 0.0475, -0.4268, -0.2846, 0.5334, 0.4164, 0.1961, 0.2254, 0.4431,
+        0.3849, 0.0346, 0.2967, 0.3648, -0.0410, 0.3257, 0.0687, -0.0919, 0.2347, 0.1612, -0.1996,
+        0.5089, 0.1745, 0.1769, -0.0061, 0.2700, 0.1656, 0.2346, -0.0069, 0.3903, -0.1590, 0.0660,
+        -0.1714, 0.5801, 0.1628, 0.0366, 0.1549, -0.0177, -0.3419, 0.3758, 0.3131, -0.0519, 0.1514,
+        0.4282, 0.0411, -0.0367, 0.2010, 0.1702, -0.0819, 0.2414, 0.3751, 0.2013, -0.2691, 0.2316,
+        0.1368,
+    ];
+
+    /// US 3-Month Treasury Bills
+    /// Source: FRED (TB3MS)
+    /// Annual returns 1934-2025 (92 years)
+    pub const US_TBILLS_ANNUAL_RETURNS: &[f64] = &[
+        0.0028, 0.0017, 0.0017, 0.0028, 0.0006, 0.0005, 0.0004, 0.0013, 0.0034, 0.0038, 0.0038,
+        0.0038, 0.0038, 0.0060, 0.0104, 0.0112, 0.0120, 0.0152, 0.0172, 0.0189, 0.0094, 0.0172,
+        0.0263, 0.0323, 0.0177, 0.0339, 0.0288, 0.0235, 0.0277, 0.0316, 0.0355, 0.0395, 0.0486,
+        0.0431, 0.0534, 0.0667, 0.0639, 0.0433, 0.0407, 0.0703, 0.0783, 0.0577, 0.0497, 0.0527,
+        0.0719, 0.1007, 0.1143, 0.1402, 0.1061, 0.0861, 0.0952, 0.0748, 0.0598, 0.0577, 0.0667,
+        0.0811, 0.0749, 0.0537, 0.0343, 0.0300, 0.0425, 0.0549, 0.0501, 0.0506, 0.0478, 0.0464,
+        0.0582, 0.0339, 0.0160, 0.0101, 0.0137, 0.0315, 0.0473, 0.0435, 0.0137, 0.0015, 0.0014,
+        0.0005, 0.0009, 0.0006, 0.0003, 0.0005, 0.0032, 0.0093, 0.0194, 0.0206, 0.0037, 0.0004,
+        0.0202, 0.0507, 0.0497, 0.0407,
+    ];
+
+    /// US Long-Term Government Bonds (estimated from yields)
+    /// Source: Robert Shiller, Yale University (estimated)
+    /// Annual returns 1927-2023 (97 years)
+    pub const US_LONG_BOND_ANNUAL_RETURNS: &[f64] = &[
+        0.0503, 0.0239, 0.0342, 0.0462, 0.0185, 0.0338, 0.0581, 0.0526, 0.0491, 0.0322, 0.0297,
+        0.0388, 0.0388, 0.0389, 0.0135, -0.0006, 0.0238, 0.0283, 0.0357, 0.0285, 0.0126, 0.0199,
+        0.0291, 0.0135, 0.0095, 0.0159, 0.0202, 0.0634, -0.0092, -0.0011, -0.0054, 0.0630, -0.0482,
+        0.0607, 0.0599, 0.0338, 0.0349, 0.0253, 0.0342, -0.0084, 0.0372, 0.0049, -0.0255, 0.0125,
+        0.1686, 0.0575, 0.0115, 0.0112, 0.0412, 0.1099, 0.0915, -0.0051, 0.0015, -0.0670, -0.0815,
+        0.2118, 0.2817, 0.0044, 0.2696, 0.3415, 0.0207, 0.0469, 0.1163, 0.0809, 0.1408, 0.1464,
+        0.1610, -0.0378, 0.1108, 0.0771, 0.0712, 0.1506, 0.0228, 0.0250, 0.1412, 0.0827, 0.0938,
+        0.0194, 0.0415, 0.0028, 0.0609, 0.1233, 0.0695, 0.0360, 0.0664, 0.1065, -0.0258, 0.0083,
+        0.0578, 0.0449, -0.0206, -0.0231, 0.0933, 0.1181, -0.0349, -0.1063, -0.0355,
+    ];
+
+    /// Developed Markets ex-US (Fama-French)
+    /// Source: Kenneth French Data Library, Dartmouth
+    /// Annual returns 1991-2024 (34 years)
+    pub const INTL_DEVELOPED_ANNUAL_RETURNS: &[f64] = &[
+        0.0945, -0.1537, 0.3019, 0.1000, 0.0842, 0.0586, -0.0049, 0.1680, 0.3664, -0.1644, -0.2111,
+        -0.1197, 0.4391, 0.2269, 0.1680, 0.2552, 0.1302, -0.4280, 0.3354, 0.1189, -0.1260, 0.1729,
+        0.2302, -0.0452, -0.0076, 0.0329, 0.2712, -0.1400, 0.2188, 0.1060, 0.1215, -0.1504, 0.1606,
+        0.0359,
+    ];
+
+    /// Emerging Markets (Fama-French)
+    /// Source: Kenneth French Data Library, Dartmouth
+    /// Annual returns 1991-2024 (33 years)
+    pub const EMERGING_MARKETS_ANNUAL_RETURNS: &[f64] = &[
+        -0.6837, 0.9595, -0.0735, -0.0367, 0.0100, -0.2101, -0.2418, 0.9092, -0.2908, -0.0264,
+        -0.0267, 0.6641, 0.2772, 0.3210, 0.3271, 0.4351, -0.4321, 0.6174, 0.3272, -0.1210, 0.1976,
+        0.0432, 0.0213, -0.1138, 0.1656, 0.2911, -0.0875, 0.0745, 0.1037, 0.1414, -0.0707, 0.0995,
+        -0.0312,
+    ];
+
+    /// US Real Estate Investment Trusts (via VNQ)
+    /// Source: Yahoo Finance
+    /// Annual returns 2005-2026 (22 years)
+    pub const REITS_ANNUAL_RETURNS: &[f64] = &[
+        0.1194, 0.3528, -0.1652, -0.3698, 0.3014, 0.2839, 0.0864, 0.1763, 0.0230, 0.3040, 0.0243,
+        0.0857, 0.0490, -0.0603, 0.2891, -0.0461, 0.4054, -0.2625, 0.1185, 0.0481, 0.0325, 0.0246,
+    ];
+
+    /// Gold (via GC=F futures)
+    /// Source: Yahoo Finance
+    /// Annual returns 2001-2026 (26 years)
+    pub const GOLD_ANNUAL_RETURNS: &[f64] = &[
+        0.0246, 0.2472, 0.1959, 0.0524, 0.1819, 0.2284, 0.3144, 0.0583, 0.2395, 0.2976, 0.1018,
+        0.0696, -0.2824, -0.0150, -0.1044, 0.0846, 0.1359, -0.0214, 0.1887, 0.2459, -0.0347,
+        -0.0043, 0.1334, 0.2748, 0.6452, 0.1672,
+    ];
+
+    /// US Investment Grade Bonds (Bloomberg Aggregate via AGG)
+    /// Source: Yahoo Finance
+    /// Annual returns 2004-2026 (23 years)
+    pub const US_AGG_BOND_ANNUAL_RETURNS: &[f64] = &[
+        0.0378, 0.0226, 0.0390, 0.0659, 0.0790, 0.0297, 0.0636, 0.0770, 0.0375, -0.0198, 0.0600,
+        0.0048, 0.0241, 0.0355, 0.0034, 0.0846, 0.0748, -0.0177, -0.1302, 0.0566, 0.0131, 0.0719,
+        0.0039,
+    ];
+
+    /// US Investment Grade Corporate Bonds (via LQD)
+    /// Source: Yahoo Finance
+    /// Annual returns 2003-2026 (24 years)
+    pub const US_CORPORATE_BOND_ANNUAL_RETURNS: &[f64] = &[
+        0.0911, 0.0571, 0.0116, 0.0422, 0.0373, 0.0242, 0.0845, 0.0932, 0.0974, 0.1024, -0.0200,
+        0.0821, -0.0126, 0.0620, 0.0705, -0.0379, 0.1737, 0.1097, -0.0184, -0.1792, 0.0940, 0.0086,
+        0.0790, 0.0069,
+    ];
+
+    /// US Treasury Inflation-Protected Securities (via TIP)
+    /// Source: Yahoo Finance
+    /// Annual returns 2004-2026 (23 years)
+    pub const TIPS_ANNUAL_RETURNS: &[f64] = &[
+        0.0828, 0.0249, 0.0028, 0.1193, 0.0005, 0.0893, 0.0613, 0.1330, 0.0640, -0.0849, 0.0359,
+        -0.0175, 0.0468, 0.0292, -0.0143, 0.0835, 0.1084, 0.0568, -0.1226, 0.0380, 0.0165, 0.0676,
+        0.0042,
+    ];
 }
 
 #[cfg(test)]

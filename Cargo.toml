@@ -10,3 +10,9 @@ jiff = { version = "0.2", features = ["serde"] }
 rand = "0.9.2"
 rand_distr = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+strip = true

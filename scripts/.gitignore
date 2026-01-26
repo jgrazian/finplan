@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data cache (downloaded historical data)
+.data_cache/
+
+# Environment files with secrets
+.env
+.env.local
