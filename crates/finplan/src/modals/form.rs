@@ -307,6 +307,27 @@ fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
         }
     }
 
+    // Handle back-tab first (Shift+Tab on web, BackTab on native)
+    if key.is_back_tab() || matches!(key.code, KeyCode::Up) {
+        // Exit edit mode and move to previous field
+        modal.editing = false;
+        modal.editing_original_value = None;
+        let start = modal.focused_field;
+        loop {
+            if modal.focused_field == 0 {
+                modal.focused_field = modal.fields.len() - 1;
+            } else {
+                modal.focused_field -= 1;
+            }
+            if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
+                || modal.focused_field == start
+            {
+                break;
+            }
+        }
+        return ModalResult::Continue;
+    }
+
     match key.code {
         KeyCode::Enter => {
             // Exit edit mode, keep changes
@@ -331,25 +352,6 @@ fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
             let start = modal.focused_field;
             loop {
                 modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                    || modal.focused_field == start
-                {
-                    break;
-                }
-            }
-            ModalResult::Continue
-        }
-        KeyCode::BackTab | KeyCode::Up => {
-            // Exit edit mode and move to previous field
-            modal.editing = false;
-            modal.editing_original_value = None;
-            let start = modal.focused_field;
-            loop {
-                if modal.focused_field == 0 {
-                    modal.focused_field = modal.fields.len() - 1;
-                } else {
-                    modal.focused_field -= 1;
-                }
                 if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
                     || modal.focused_field == start
                 {
