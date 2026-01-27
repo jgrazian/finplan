@@ -22,6 +22,8 @@ use super::tabs::TabId;
 #[derive(Debug, Clone)]
 pub struct SimulationResult {
     pub final_net_worth: f64,
+    /// Final net worth in real (today's) dollars
+    pub final_real_net_worth: f64,
     pub years: Vec<YearResult>,
 }
 
@@ -35,6 +37,12 @@ pub struct YearResult {
     pub withdrawals: f64,
     pub contributions: f64,
     pub taxes: f64,
+    /// Net worth in real (today's) dollars
+    pub real_net_worth: f64,
+    /// Income in real (today's) dollars
+    pub real_income: f64,
+    /// Expenses in real (today's) dollars
+    pub real_expenses: f64,
 }
 
 // ========== Monte Carlo Results ==========
@@ -742,10 +750,51 @@ impl AppState {
                 .map(|(_, v)| *v)
                 .unwrap_or(0.0);
 
-            // Get yearly net worth from P50 run
-            let yearly_nw = mc
-                .get_percentile_tui(0.50)
-                .map(|tui| tui.years.iter().map(|y| (y.year, y.net_worth)).collect());
+            // Get yearly net worth (nominal and real) from P50 TUI result
+            let p50_tui = mc.get_percentile_tui(0.50);
+            let yearly_nw = p50_tui.map(|tui| {
+                tui.years
+                    .iter()
+                    .map(|y| (y.year, y.net_worth))
+                    .collect::<Vec<_>>()
+            });
+            let yearly_real_nw = p50_tui.map(|tui| {
+                tui.years
+                    .iter()
+                    .map(|y| (y.year, y.real_net_worth))
+                    .collect::<Vec<_>>()
+            });
+
+            // Get real final net worth and calculate real percentiles
+            // Use the inflation factor from P50 to convert all percentiles
+            let (final_real_nw, real_p5, real_p50, real_p95) = if let Some(tui) = p50_tui {
+                let final_real = tui.final_real_net_worth;
+                // Calculate inflation factor from P50: nominal / real
+                let inflation_factor = if tui.final_real_net_worth > 0.0 {
+                    tui.final_net_worth / tui.final_real_net_worth
+                } else {
+                    1.0
+                };
+                // Apply same factor to convert all percentiles to real terms
+                let real_p5 = if inflation_factor > 0.0 {
+                    p5 / inflation_factor
+                } else {
+                    p5
+                };
+                let real_p50 = if inflation_factor > 0.0 {
+                    p50 / inflation_factor
+                } else {
+                    p50
+                };
+                let real_p95 = if inflation_factor > 0.0 {
+                    p95 / inflation_factor
+                } else {
+                    p95
+                };
+                (Some(final_real), real_p5, real_p50, real_p95)
+            } else {
+                (None, p5, p50, p95)
+            };
 
             let summary = ScenarioSummary {
                 name: self.current_scenario.clone(),
@@ -753,6 +802,9 @@ impl AppState {
                 success_rate: Some(mc.stats.success_rate),
                 percentiles: Some((p5, p50, p95)),
                 yearly_net_worth: yearly_nw,
+                final_real_net_worth: final_real_nw,
+                real_percentiles: Some((real_p5, real_p50, real_p95)),
+                yearly_real_net_worth: yearly_real_nw,
             };
 
             self.scenario_state
@@ -828,15 +880,54 @@ impl AppState {
             .map(|(_, v)| *v)
             .unwrap_or(0.0);
 
-        // Get yearly net worth from P50 run
+        // Get yearly net worth (nominal and real) from P50 run
         let birth_date = &scenario_data.parameters.birth_date;
         let start_date = &scenario_data.parameters.start_date;
-        let yearly_nw = mc_summary
+        let p50_tui = mc_summary
             .percentile_runs
             .iter()
             .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .and_then(|(_, core_result)| to_tui_result(core_result, birth_date, start_date).ok())
+            .and_then(|(_, core_result)| to_tui_result(core_result, birth_date, start_date).ok());
+
+        let yearly_nw = p50_tui
+            .as_ref()
             .map(|tui| tui.years.iter().map(|y| (y.year, y.net_worth)).collect());
+        let yearly_real_nw = p50_tui.as_ref().map(|tui| {
+            tui.years
+                .iter()
+                .map(|y| (y.year, y.real_net_worth))
+                .collect()
+        });
+
+        // Calculate real values using inflation factor from P50 TUI result
+        let (final_real_nw, real_p5, real_p50, real_p95) = if let Some(ref tui) = p50_tui {
+            let final_real = tui.final_real_net_worth;
+            // Calculate inflation factor from P50: nominal / real
+            let inflation_factor = if tui.final_real_net_worth > 0.0 {
+                tui.final_net_worth / tui.final_real_net_worth
+            } else {
+                1.0
+            };
+            // Apply same factor to convert all percentiles to real terms
+            let real_p5 = if inflation_factor > 0.0 {
+                p5 / inflation_factor
+            } else {
+                p5
+            };
+            let real_p50 = if inflation_factor > 0.0 {
+                p50 / inflation_factor
+            } else {
+                p50
+            };
+            let real_p95 = if inflation_factor > 0.0 {
+                p95 / inflation_factor
+            } else {
+                p95
+            };
+            (Some(final_real), real_p5, real_p50, real_p95)
+        } else {
+            (None, p5, p50, p95)
+        };
 
         let summary = ScenarioSummary {
             name: scenario_name.to_string(),
@@ -844,6 +935,9 @@ impl AppState {
             success_rate: Some(mc_summary.stats.success_rate),
             percentiles: Some((p5, p50, p95)),
             yearly_net_worth: yearly_nw,
+            final_real_net_worth: final_real_nw,
+            real_percentiles: Some((real_p5, real_p50, real_p95)),
+            yearly_real_net_worth: yearly_real_nw,
         };
 
         self.scenario_state

@@ -2,7 +2,9 @@ use std::collections::HashMap;
 
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
-use crate::state::{AppState, LedgerFilter, PercentileView, ResultsPanel, SimulationResult};
+use crate::state::{
+    AppState, LedgerFilter, PercentileView, ResultsPanel, SimulationResult, ValueDisplayMode,
+};
 use crate::util::format::{format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
 use finplan_core::model::{
@@ -428,21 +430,34 @@ impl ResultsScreen {
             .min(years.len().saturating_sub(1));
         let selected_year = years.get(year_index).copied().unwrap_or(0) as i32;
 
-        // Build title with percentile indicator if viewing Monte Carlo
+        // Check display mode
+        let display_mode = state.results_state.value_display_mode;
+        let mode_label = display_mode.short_label();
+
+        // Build title with percentile and display mode indicators
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
                 format!(
-                    " NET WORTH PROJECTION ({}) ({}) [h/l year, v view] ",
-                    selected_year, pct
+                    " NET WORTH PROJECTION ({}) ({}) ({}) [h/l year, v view, r $mode] ",
+                    selected_year, pct, mode_label
                 )
             } else {
-                format!(" NET WORTH PROJECTION ({}) ({}) ", selected_year, pct)
+                format!(
+                    " NET WORTH PROJECTION ({}) ({}) ({}) ",
+                    selected_year, pct, mode_label
+                )
             }
         } else if focused {
-            format!(" NET WORTH PROJECTION ({}) [h/l year] ", selected_year)
+            format!(
+                " NET WORTH PROJECTION ({}) ({}) [h/l year, r $mode] ",
+                selected_year, mode_label
+            )
         } else {
-            format!(" NET WORTH PROJECTION ({}) ", selected_year)
+            format!(
+                " NET WORTH PROJECTION ({}) ({}) ",
+                selected_year, mode_label
+            )
         };
 
         let block = Block::default()
@@ -474,13 +489,25 @@ impl ResultsScreen {
                 1
             };
 
+            // Determine which final net worth to use for color scaling
+            let final_nw_for_scale = match display_mode {
+                ValueDisplayMode::Nominal => result.final_net_worth,
+                ValueDisplayMode::Real => result.final_real_net_worth,
+            };
+
             // Create bars for the chart
             let bars: Vec<Bar> = result
                 .years
                 .iter()
                 .step_by(step.max(1))
                 .map(|year| {
-                    let value = (year.net_worth / 1000.0).max(0.0) as u64;
+                    // Use real or nominal value based on display mode
+                    let net_worth_value = match display_mode {
+                        ValueDisplayMode::Nominal => year.net_worth,
+                        ValueDisplayMode::Real => year.real_net_worth,
+                    };
+
+                    let value = (net_worth_value / 1000.0).max(0.0) as u64;
                     let is_selected = year.year == selected_year;
 
                     // Highlight selected year with white/bright style
@@ -489,7 +516,7 @@ impl ResultsScreen {
                             .fg(Color::White)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        self.net_worth_style(year.net_worth, result.final_net_worth)
+                        self.net_worth_style(net_worth_value, final_nw_for_scale)
                     };
 
                     let label_style = if is_selected {
@@ -510,7 +537,7 @@ impl ResultsScreen {
                     Bar::default()
                         .value(value)
                         .label(label)
-                        .text_value(format_currency(year.net_worth))
+                        .text_value(format_currency(net_worth_value))
                         .style(style)
                         .value_style(style.reversed())
                 })
@@ -614,6 +641,10 @@ impl ResultsScreen {
             .min(years.len().saturating_sub(1));
         let selected_year = years.get(year_index).copied().unwrap_or(0) as i32;
 
+        // Check display mode
+        let display_mode = state.results_state.value_display_mode;
+        let mode_label = display_mode.short_label();
+
         let items: Vec<ListItem> = if let Some(result) = Self::get_current_tui_result(state) {
             // Calculate visible rows (account for borders, header, summary)
             let visible_count = (area.height as usize).saturating_sub(5);
@@ -636,12 +667,19 @@ impl ResultsScreen {
                 year_index.saturating_sub(center)
             };
 
+            // Determine which final net worth to display
+            let final_nw_display = match display_mode {
+                ValueDisplayMode::Nominal => result.final_net_worth,
+                ValueDisplayMode::Real => result.final_real_net_worth,
+            };
+
             // Summary section
             let mut items = vec![
                 ListItem::new(Line::from(vec![Span::styled(
                     format!(
-                        "Final: {}  Years: {}",
-                        format_currency(result.final_net_worth),
+                        "Final: {} ({})  Years: {}",
+                        format_currency(final_nw_display),
+                        mode_label,
                         result.years.len()
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
@@ -666,16 +704,25 @@ impl ResultsScreen {
             // Data rows with highlighting for selected year
             for year in result.years.iter().skip(start_idx).take(visible_count) {
                 let is_selected = year.year == selected_year;
+
+                // Use real or nominal values based on display mode
+                let (income, expenses, net_worth) = match display_mode {
+                    ValueDisplayMode::Nominal => (year.income, year.expenses, year.net_worth),
+                    ValueDisplayMode::Real => {
+                        (year.real_income, year.real_expenses, year.real_net_worth)
+                    }
+                };
+
                 let row_text = format!(
                     "{:>5} {:>4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>12}",
                     year.year,
                     year.age,
-                    format_currency_short(year.income),
+                    format_currency_short(income),
                     format_currency_short(year.withdrawals),
                     format_currency_short(year.contributions),
-                    format_currency_short(year.expenses),
+                    format_currency_short(expenses),
                     format_currency_short(year.taxes),
-                    format_currency_short(year.net_worth)
+                    format_currency_short(net_worth)
                 );
 
                 let style = if is_selected {
@@ -694,21 +741,27 @@ impl ResultsScreen {
             vec![ListItem::new(Line::from("No data"))]
         };
 
-        // Build title with percentile indicator if viewing Monte Carlo
+        // Build title with percentile and display mode indicators
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
                 format!(
-                    " YEARLY BREAKDOWN ({}) ({}) [j/k scroll, v view] ",
-                    selected_year, pct
+                    " YEARLY BREAKDOWN ({}) ({}) ({}) [j/k scroll, v view, r $mode] ",
+                    selected_year, pct, mode_label
                 )
             } else {
-                format!(" YEARLY BREAKDOWN ({}) ({}) ", selected_year, pct)
+                format!(
+                    " YEARLY BREAKDOWN ({}) ({}) ({}) ",
+                    selected_year, pct, mode_label
+                )
             }
         } else if focused {
-            format!(" YEARLY BREAKDOWN ({}) [j/k scroll] ", selected_year)
+            format!(
+                " YEARLY BREAKDOWN ({}) ({}) [j/k scroll, r $mode] ",
+                selected_year, mode_label
+            )
         } else {
-            format!(" YEARLY BREAKDOWN ({}) ", selected_year)
+            format!(" YEARLY BREAKDOWN ({}) ({}) ", selected_year, mode_label)
         };
 
         let list = List::new(items).block(
@@ -729,21 +782,39 @@ impl ResultsScreen {
             .min(years.len().saturating_sub(1));
         let selected_year = years.get(year_index).copied().unwrap_or(0);
 
-        // Build title with percentile indicator if viewing Monte Carlo
+        // Check display mode
+        let display_mode = state.results_state.value_display_mode;
+        let mode_label = display_mode.short_label();
+
+        // Get inflation factor for the selected year (for real value calculation)
+        // Use the first year in results as the base year for inflation indexing
+        let first_year = years.first().copied().unwrap_or(selected_year);
+        let inflation_index = (selected_year - first_year).max(0) as usize;
+        let inflation_factor = Self::get_current_core_result(state)
+            .and_then(|core| core.cumulative_inflation.get(inflation_index).copied())
+            .unwrap_or(1.0);
+
+        // Build title with percentile and display mode indicators
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
                 format!(
-                    " ACCOUNT BREAKDOWN ({}) ({}) [h/l year, v view] ",
-                    selected_year, pct
+                    " ACCOUNT BREAKDOWN ({}) ({}) ({}) [h/l year, v view, r $mode] ",
+                    selected_year, pct, mode_label
                 )
             } else {
-                format!(" ACCOUNT BREAKDOWN ({}) ({}) ", selected_year, pct)
+                format!(
+                    " ACCOUNT BREAKDOWN ({}) ({}) ({}) ",
+                    selected_year, pct, mode_label
+                )
             }
         } else if focused {
-            format!(" ACCOUNT BREAKDOWN ({}) [h/l year] ", selected_year)
+            format!(
+                " ACCOUNT BREAKDOWN ({}) ({}) [h/l year, r $mode] ",
+                selected_year, mode_label
+            )
         } else {
-            format!(" ACCOUNT BREAKDOWN ({}) ", selected_year)
+            format!(" ACCOUNT BREAKDOWN ({}) ({}) ", selected_year, mode_label)
         };
 
         if let Some(snapshot) = Self::get_wealth_snapshot_for_year_current(state, year_index) {
@@ -759,7 +830,20 @@ impl ResultsScreen {
                         .map(|s| s.as_str())
                         .unwrap_or("Unknown");
 
-                    let value = acc.total_value();
+                    let nominal_value = acc.total_value();
+
+                    // Apply inflation adjustment if in Real mode
+                    let value = match display_mode {
+                        ValueDisplayMode::Nominal => nominal_value,
+                        ValueDisplayMode::Real => {
+                            if inflation_factor > 0.0 {
+                                nominal_value / inflation_factor
+                            } else {
+                                nominal_value
+                            }
+                        }
+                    };
+
                     let label = match &acc.flavor {
                         AccountSnapshotFlavor::Investment { assets, .. } => {
                             format!("{} ({} assets)", name, assets.len())
@@ -1045,6 +1129,13 @@ impl Component for ResultsScreen {
                     state.results_state.percentile_view =
                         state.results_state.percentile_view.next();
                 }
+                EventResult::Handled
+            }
+
+            // r for toggling between nominal and real (inflation-adjusted) values
+            KeyCode::Char('r') => {
+                state.results_state.value_display_mode =
+                    state.results_state.value_display_mode.toggle();
                 EventResult::Handled
             }
 

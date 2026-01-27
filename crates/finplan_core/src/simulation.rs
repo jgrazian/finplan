@@ -122,12 +122,16 @@ pub fn simulate_with_scratch(
     // Build yearly cash flow summaries from ledger
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
 
+    // Extract cumulative inflation factors for real value calculations
+    let cumulative_inflation = state.portfolio.market.get_cumulative_inflation_factors();
+
     Ok(SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
         yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
         ledger: std::mem::take(&mut state.history.ledger),
         warnings: std::mem::take(&mut state.warnings),
+        cumulative_inflation,
     })
 }
 
@@ -209,12 +213,16 @@ pub fn simulate_with_metrics(
     // Build yearly cash flow summaries from ledger
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
 
+    // Extract cumulative inflation factors for real value calculations
+    let cumulative_inflation = state.portfolio.market.get_cumulative_inflation_factors();
+
     let result = SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
         yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
         ledger: std::mem::take(&mut state.history.ledger),
         warnings: std::mem::take(&mut state.warnings),
+        cumulative_inflation,
     };
 
     Ok((result, metrics))

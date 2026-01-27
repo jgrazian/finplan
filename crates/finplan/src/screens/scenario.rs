@@ -2,7 +2,7 @@ use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
 use crate::state::{
     AppState, ConfirmModal, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState,
-    ScenarioPanel, ScenarioPickerModal,
+    ScenarioPanel, ScenarioPickerModal, ValueDisplayMode,
 };
 use crate::util::format::{format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -187,9 +187,17 @@ impl Component for ScenarioScreen {
 
             // Run single simulation and switch to results (background)
             KeyCode::Char('r') => {
+                // Check if Shift is held (for toggle mode) - use lowercase 'r' for run
                 if !state.simulation_status.is_running() {
                     state.request_simulation();
                 }
+                EventResult::Handled
+            }
+
+            // Toggle between nominal and real (inflation-adjusted) value display
+            KeyCode::Char('$') => {
+                state.results_state.value_display_mode =
+                    state.results_state.value_display_mode.toggle();
                 EventResult::Handled
             }
 
@@ -368,6 +376,7 @@ impl ScenarioScreen {
 
         let scenarios = state.get_scenario_list_with_summaries();
         let selected_index = state.scenario_state.selected_index;
+        let display_mode = state.results_state.value_display_mode;
 
         let items: Vec<ListItem> = scenarios
             .iter()
@@ -394,8 +403,13 @@ impl ScenarioScreen {
                 };
 
                 let (final_nw, success) = if let Some(s) = summary {
+                    // Use real or nominal value based on display mode
+                    let nw_value = match display_mode {
+                        ValueDisplayMode::Real => s.final_real_net_worth.or(s.final_net_worth),
+                        ValueDisplayMode::Nominal => s.final_net_worth,
+                    };
                     (
-                        s.final_net_worth
+                        nw_value
                             .map(format_currency_short)
                             .unwrap_or_else(|| "--".to_string()),
                         s.success_rate
@@ -489,6 +503,11 @@ impl ScenarioScreen {
 
         let keybinds_para = Paragraph::new(keybinds);
         frame.render_widget(keybinds_para, inner_chunks[1]);
+    }
+
+    /// Helper to get the display mode label
+    fn get_mode_label(state: &AppState) -> &'static str {
+        state.results_state.value_display_mode.short_label()
     }
 
     fn render_selected_details(
@@ -605,6 +624,8 @@ impl ScenarioScreen {
         };
 
         let scenarios = state.get_scenario_list_with_summaries();
+        let display_mode = state.results_state.value_display_mode;
+        let mode_label = Self::get_mode_label(state);
 
         // Header with percentiles integrated
         let mut lines = vec![
@@ -637,7 +658,14 @@ impl ScenarioScreen {
                     .success_rate
                     .map(|r| format!("{:.0}%", r * 100.0))
                     .unwrap_or_else(|| "--".to_string());
-                let (p5_val, p50_val, p95_val) = if let Some((p5, p50, p95)) = s.percentiles {
+
+                // Use real or nominal percentiles based on display mode
+                let percentiles_to_use = match display_mode {
+                    ValueDisplayMode::Real => s.real_percentiles.or(s.percentiles),
+                    ValueDisplayMode::Nominal => s.percentiles,
+                };
+
+                let (p5_val, p50_val, p95_val) = if let Some((p5, p50, p95)) = percentiles_to_use {
                     (
                         format_currency_short(p5),
                         format_currency_short(p50),
@@ -671,7 +699,7 @@ impl ScenarioScreen {
             )));
         }
 
-        let title = " COMPARISON ";
+        let title = format!(" COMPARISON ({}) [$ toggle] ", mode_label);
 
         let paragraph = Paragraph::new(lines).block(
             Block::default()
@@ -690,7 +718,9 @@ impl ScenarioScreen {
             Style::default()
         };
 
-        let title = " NET WORTH OVERLAY ";
+        let display_mode = state.results_state.value_display_mode;
+        let mode_label = Self::get_mode_label(state);
+        let title = format!(" NET WORTH OVERLAY ({}) ", mode_label);
 
         let block = Block::default()
             .borders(Borders::ALL)
@@ -702,14 +732,20 @@ impl ScenarioScreen {
 
         let scenarios = state.get_scenario_list_with_summaries();
 
-        // Collect all scenarios with yearly data
+        // Collect all scenarios with yearly data, using real or nominal based on display mode
         let scenarios_with_data: Vec<_> = scenarios
             .iter()
             .filter_map(|(name, summary)| {
                 summary.and_then(|s| {
-                    s.yearly_net_worth
-                        .as_ref()
-                        .map(|data| (name.clone(), data.clone()))
+                    // Use real or nominal yearly data based on display mode
+                    let data = match display_mode {
+                        ValueDisplayMode::Real => s
+                            .yearly_real_net_worth
+                            .as_ref()
+                            .or(s.yearly_net_worth.as_ref()),
+                        ValueDisplayMode::Nominal => s.yearly_net_worth.as_ref(),
+                    };
+                    data.map(|d| (name.clone(), d.clone()))
                 })
             })
             .collect();

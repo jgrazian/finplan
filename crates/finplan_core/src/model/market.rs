@@ -223,6 +223,30 @@ impl Market {
         let period_rate = n_day_rate(yearly_rate, days as f64);
         Some(1.0 + period_rate)
     }
+
+    /// Get cumulative inflation factors for each year of the simulation.
+    ///
+    /// Returns a vector where index i represents the cumulative inflation from
+    /// the start of the simulation through year i. The first element (year 0) is 1.0,
+    /// representing today's dollars. Each subsequent year is multiplied by (1 + inflation_rate).
+    ///
+    /// These factors can be used to convert nominal future values to real (today's) dollars
+    /// by dividing: real_value = nominal_value / cumulative_inflation[year_index]
+    pub fn get_cumulative_inflation_factors(&self) -> Vec<f64> {
+        // Build cumulative factors: [1.0, 1.0*(1+r0), 1.0*(1+r0)*(1+r1), ...]
+        // Note: inflation_values stores Rate { incremental, cumulative } where
+        // cumulative is the product BEFORE applying this year's rate
+        let mut factors = Vec::with_capacity(self.inflation_values.len() + 1);
+        factors.push(1.0); // Year 0 = today's dollars
+
+        let mut cumulative = 1.0;
+        for rate in &self.inflation_values {
+            cumulative *= 1.0 + rate.incremental;
+            factors.push(cumulative);
+        }
+
+        factors
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
