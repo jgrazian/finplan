@@ -1722,9 +1722,9 @@ Add a "Load Preset" option in profile editor that offers:
 - [ ] Phase 4.1 - Historical returns data structure
 - [ ] Phase 4.2 - Bootstrap variant
 - [ ] Phase 4.3 - Multi-asset bootstrap
-- [ ] Phase 5.1 - TUI profile data types
-- [ ] Phase 5.2 - TUI profile editor updates
-- [ ] Phase 5.3 - TUI preset selection
+- [x] Phase 5.1 - TUI profile data types (StudentT and RegimeSwitching variants)
+- [x] Phase 5.2 - TUI profile editor updates (forms, pickers, display)
+- [x] Phase 5.3 - TUI distribution visualization (histogram rendering for new types)
 
 ---
 
@@ -1840,3 +1840,224 @@ RegimeSwitching {
 - Correlation becomes more important with diversified portfolios
 - Historical bootstrap is non-parametric "gold standard" but requires good data
 - Consider lazy-loading historical data to avoid bloating binary size
+
+---
+
+# Phase 5: TUI Integration for StudentT and RegimeSwitching
+
+## Design Decisions (2026-01-26)
+
+Based on user input, the following design choices were made:
+
+1. **RegimeSwitching UI**: Presets only
+   - No custom configuration of bull/bear profiles in the TUI
+   - Offer predefined presets: "S&P 500 Regime Switching (Normal)", "S&P 500 Regime Switching (Student-t)"
+   - Users who need custom regime-switching can edit YAML directly
+
+2. **StudentT degrees of freedom**: Descriptive dropdown choices
+   - "Moderate tails (df=5)" - default, most common for equities
+   - "Fat tails (df=3)" - for higher volatility / extreme events
+   - "Very fat tails (df=2)" - maximum fat-tail effect
+
+3. **Distribution visualization**: Histogram for both new types
+   - StudentT: Render similar to Normal but with visible fat tails
+   - RegimeSwitching: Bimodal overlay showing bull and bear distributions
+
+---
+
+## Implementation Plan
+
+### Phase 5.1: Data Layer (`profiles_data.rs`)
+
+Add new variants to `ReturnProfileData`:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ReturnProfileData {
+    None,
+    Fixed { rate: f64 },
+    Normal { mean: f64, std_dev: f64 },
+    LogNormal { mean: f64, std_dev: f64 },
+    // NEW
+    StudentT { mean: f64, scale: f64, df: f64 },
+    // RegimeSwitching stored with explicit parameters for presets
+    RegimeSwitching {
+        bull_mean: f64,
+        bull_std_dev: f64,
+        bear_mean: f64,
+        bear_std_dev: f64,
+        bull_to_bear_prob: f64,
+        bear_to_bull_prob: f64,
+    },
+}
+```
+
+Update conversion methods:
+- `to_return_profile()` - convert to core type
+- `From<&ReturnProfile>` - convert from core type
+
+**Note:** For RegimeSwitching, we only support Normal distributions in bull/bear to keep the data layer simple. The TUI will offer presets but store the flattened parameters.
+
+### Phase 5.2: Context Layer (`context.rs`)
+
+Add to `ProfileTypeContext`:
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProfileTypeContext {
+    None,
+    Fixed,
+    Normal,
+    LogNormal,
+    // NEW
+    StudentT,
+    RegimeSwitchingNormal,    // Preset: Normal distributions
+    RegimeSwitchingStudentT,  // Preset: Student-t distributions
+}
+```
+
+Update `FromStr` and `display_name()`:
+- "Student's t" / "StudentT" -> `StudentT`
+- "Regime Switching (Normal)" -> `RegimeSwitchingNormal`
+- "Regime Switching (Student-t)" -> `RegimeSwitchingStudentT`
+
+### Phase 5.3: Profile Actions (`profile.rs`)
+
+Update `handle_profile_type_pick()` with new forms:
+
+**StudentT form fields:**
+- Name (text)
+- Description (text)
+- Mean (percentage)
+- Scale (percentage) - computed from std_dev
+- Tail Behavior (picker): "Moderate tails", "Fat tails", "Very fat tails"
+
+**RegimeSwitching preset forms:**
+Pre-fill with historical S&P 500 values:
+- Name (text)
+- Description (text)
+- (Read-only display of preset parameters)
+
+Update `handle_create_profile()` and `handle_edit_profile()` to handle new types.
+
+### Phase 5.4: Type Picker (`portfolio_profiles.rs`)
+
+Update type picker (line ~2026):
+
+```rust
+let types = vec![
+    "None".to_string(),
+    "Fixed Rate".to_string(),
+    "Normal Distribution".to_string(),
+    "Log-Normal Distribution".to_string(),
+    "Student's t Distribution".to_string(),
+    "Regime Switching (Normal)".to_string(),
+    "Regime Switching (Student-t)".to_string(),
+];
+```
+
+### Phase 5.5: Display Updates (`portfolio_profiles.rs`)
+
+**`format_profile_type()`:**
+```rust
+ReturnProfileData::StudentT { .. } => "Student's t Distribution".to_string(),
+ReturnProfileData::RegimeSwitching { .. } => "Regime Switching".to_string(),
+```
+
+**Profile details panel (line ~718):**
+- StudentT: Show Mean, Scale, df, Tail Behavior
+- RegimeSwitching: Show Bull/Bear params, transition probs
+
+**`create_profile_edit_form()`:**
+- StudentT: Mean, Scale, Tail Behavior picker
+- RegimeSwitching: Read-only params (presets not customizable in UI)
+
+### Phase 5.6: Distribution Visualization (`portfolio_profiles.rs`)
+
+**`render_distribution_inline()`:**
+
+StudentT visualization:
+- Similar to Normal but with extended tails
+- Use Student's t PDF formula for histogram
+- Show legend indicating df value
+
+RegimeSwitching visualization:
+- Bimodal histogram: two overlapping bell curves
+- Bull regime in green, Bear regime in red
+- Alpha/transparency to show overlap
+- Legend showing regime names
+
+### Phase 5.7: Preset Shortcuts
+
+Consider adding new keyboard shortcuts:
+- '5' = StudentT preset (S&P 500 historical)
+- '6' = RegimeSwitching Normal preset
+- '7' = RegimeSwitching StudentT preset
+
+Or consolidate into a preset picker modal for cleaner UX.
+
+---
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `crates/finplan/src/data/profiles_data.rs` | Add StudentT, RegimeSwitching variants |
+| `crates/finplan/src/state/context.rs` | Add ProfileTypeContext variants |
+| `crates/finplan/src/actions/profile.rs` | Form creation and handling |
+| `crates/finplan/src/screens/portfolio_profiles.rs` | Display, picker, visualization |
+
+---
+
+## Implementation Order
+
+1. **Phase 5.1** - Data layer (profiles_data.rs)
+2. **Phase 5.2** - Context layer (context.rs)
+3. **Phase 5.3** - Profile actions (profile.rs)
+4. **Phase 5.4** - Type picker update
+5. **Phase 5.5** - Display updates (format, details, edit form)
+6. **Phase 5.6** - Distribution visualization
+7. **Phase 5.7** - Preset shortcuts (optional)
+
+---
+
+## Status
+
+- [x] Phase 5.1 - Data layer (profiles_data.rs - StudentT and RegimeSwitching variants)
+- [x] Phase 5.2 - Context layer (context.rs - ProfileTypeContext variants)
+- [x] Phase 5.3 - Profile actions (profile.rs - form creation and handling)
+- [x] Phase 5.4 - Type picker (portfolio_profiles.rs - updated picker list)
+- [x] Phase 5.5 - Display updates (format_profile_type, details panel, edit forms)
+- [x] Phase 5.6 - Distribution visualization (StudentT and RegimeSwitching histograms)
+- [x] Phase 5.7 - Preset shortcuts ('5' for StudentT, '6' for RegimeSwitching)
+
+### Implementation Notes (2026-01-26)
+
+**Files Modified:**
+1. `crates/finplan/src/data/profiles_data.rs` - Added StudentT and RegimeSwitching variants with conversion logic
+2. `crates/finplan/src/state/context.rs` - Added ProfileTypeContext variants (StudentT, RegimeSwitchingNormal, RegimeSwitchingStudentT)
+3. `crates/finplan/src/actions/profile.rs` - Form creation with select field for tail behavior, profile creation/editing logic
+4. `crates/finplan/src/screens/portfolio_profiles.rs` - Type picker, display formatting, edit forms, distribution rendering
+
+**StudentT Implementation:**
+- Form fields: Name, Description, Mean, Std Dev, Tail Behavior (dropdown)
+- Tail behavior options: "Moderate tails (df=5)", "Fat tails (df=3)", "Very fat tails (df=2)"
+- Scale computed from std_dev: `scale = std_dev * sqrt((df-2)/df)` for df > 2
+- Visualization: Histogram with magenta coloring, wider range (±4σ) to show fat tails
+
+**RegimeSwitching Implementation:**
+- Preset-only (no custom configuration in UI)
+- Two presets: "Regime Switching (Normal)" and "Regime Switching (Student-t)"
+- Parameters are read-only in the edit form
+- Visualization: Bimodal histogram showing bull (green) and bear (red) distributions
+- **Conservative parameters (updated 2026-01-26):**
+  - Bull: 12% mean, 12% std dev (was 15% mean)
+  - Bear: -5% mean, 22% std dev (was -8% mean, 25% std)
+  - Bull->Bear: 15% (~7 year cycles, was 12%/~8 years)
+  - Bear->Bull: 40% (~2.5 year cycles, was 50%/~2 years)
+  - Expected return: ~7.4% (was ~10.5%, now comparable to LogNormal ~7%)
+
+**Keyboard Shortcuts:**
+- '5' = Apply StudentT preset (S&P 500 historical with df=5)
+- '6' = Apply RegimeSwitching preset (S&P 500 bull/bear model, conservative)
