@@ -46,6 +46,8 @@ pub enum ProfileAction {
     Create,
     Edit,
     Delete,
+    /// Pick block size for historical bootstrap mode
+    PickBlockSize,
 }
 
 /// Holding-specific actions (assets within investment accounts)
@@ -135,6 +137,7 @@ impl ModalAction {
     pub const CREATE_PROFILE: Self = Self::Profile(ProfileAction::Create);
     pub const EDIT_PROFILE: Self = Self::Profile(ProfileAction::Edit);
     pub const DELETE_PROFILE: Self = Self::Profile(ProfileAction::Delete);
+    pub const PICK_BLOCK_SIZE: Self = Self::Profile(ProfileAction::PickBlockSize);
 
     // Holding shortcuts
     pub const PICK_RETURN_PROFILE: Self = Self::Holding(HoldingAction::PickReturnProfile);

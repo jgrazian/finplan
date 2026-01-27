@@ -24,13 +24,18 @@ pub struct SimulationData {
     /// Portfolio with accounts
     pub portfolios: PortfolioData,
 
-    /// Return profiles (named)
+    /// Return profiles (named) - used in Parametric mode
     #[serde(default)]
     pub profiles: Vec<ProfileData>,
 
-    /// Asset to return profile mappings
+    /// Asset to return profile mappings - used in Parametric mode
     #[serde(default)]
     pub assets: HashMap<AssetTag, ReturnProfileTag>,
+
+    /// Asset to return profile mappings for Historical mode
+    /// Maps asset tickers to Bootstrap profile names (e.g., "S&P 500", "US Small Cap")
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub historical_assets: HashMap<AssetTag, ReturnProfileTag>,
 
     /// Events (income, expenses, transfers, etc.)
     #[serde(default)]
@@ -51,6 +56,7 @@ impl Default for SimulationData {
             },
             profiles: vec![],
             assets: HashMap::new(),
+            historical_assets: HashMap::new(),
             events: vec![],
             parameters: ParametersData::default(),
         }
@@ -151,6 +157,7 @@ mod tests {
                 AssetTag("VTSAX".to_string()),
                 ReturnProfileTag("S&P 500".to_string()),
             )]),
+            historical_assets: HashMap::new(),
             events: vec![
                 EventData {
                     name: EventTag("Monthly Salary".to_string()),
@@ -196,6 +203,8 @@ mod tests {
                     distribution: DistributionType::Normal,
                 },
                 tax_config: Default::default(),
+                returns_mode: Default::default(),
+                historical_block_size: None,
             },
         };
 

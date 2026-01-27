@@ -2,10 +2,11 @@ use std::collections::HashSet;
 
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
-use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
+use crate::data::parameters_data::{FederalBracketsPreset, InflationData, ReturnsMode};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
 use crate::data::ticker_profiles;
+use crate::data::ticker_profiles::HISTORICAL_PRESETS;
 use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
     AccountInteractionMode, AppState, ConfirmModal, FormField, FormModal, HoldingEditState,
@@ -71,6 +72,19 @@ impl PortfolioProfilesScreen {
         let mut sorted: Vec<_> = assets.into_iter().collect();
         sorted.sort_by(|a, b| a.0.cmp(&b.0));
         sorted
+    }
+
+    /// Auto-map assets to historical profiles based on ticker suggestions
+    fn auto_map_historical_assets(state: &mut AppState) {
+        let unique_assets = Self::get_unique_assets(state);
+        let data = state.data_mut();
+
+        for asset in unique_assets {
+            if let Some((_, display_name)) = ticker_profiles::get_historical_suggestion(&asset.0) {
+                data.historical_assets
+                    .insert(asset, ReturnProfileTag(display_name.to_string()));
+            }
+        }
     }
 
     // ========== Unified Panel Renderers ==========
@@ -591,6 +605,7 @@ impl PortfolioProfilesScreen {
     fn render_unified_profiles(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Profiles;
+        let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
 
         let border_style = if is_focused {
             Style::default().fg(Color::Yellow)
@@ -598,15 +613,24 @@ impl PortfolioProfilesScreen {
             Style::default()
         };
 
+        let title = if is_historical {
+            " RETURN PROFILES (Historical) "
+        } else {
+            " RETURN PROFILES "
+        };
+
         let mut block = Block::default()
             .borders(Borders::ALL)
-            .title(" RETURN PROFILES ")
+            .title(title)
             .border_style(border_style);
 
         if is_focused {
-            block = block.title_bottom(
-                Line::from(" [a]dd [e]dit [d]el [Shift+J/K] Reorder ").fg(Color::DarkGray),
-            );
+            let help_text = if is_historical {
+                " [b]lock size [h] parametric "
+            } else {
+                " [a]dd [e]dit [d]el [h]istorical [Shift+J/K] Reorder "
+            };
+            block = block.title_bottom(Line::from(help_text).fg(Color::DarkGray));
         }
 
         let inner_area = block.inner(area);
@@ -639,52 +663,90 @@ impl PortfolioProfilesScreen {
         );
 
         // Render profile list with scrolling
-        let profiles = &state.data().profiles;
         let visible_count = list_area.height as usize;
         let selected_idx = state.portfolio_profiles_state.selected_profile_index;
-        let scroll_offset =
-            Self::calculate_centered_scroll(selected_idx, profiles.len(), visible_count);
 
         let mut lines = Vec::new();
-        for (idx, profile_data) in profiles
-            .iter()
-            .enumerate()
-            .skip(scroll_offset)
-            .take(visible_count)
-        {
-            let prefix = if idx == selected_idx { "> " } else { "  " };
-            // Truncate name if needed
-            let max_name_len = list_width.saturating_sub(4) as usize;
-            let name = if profile_data.name.0.len() > max_name_len && max_name_len > 3 {
-                format!(
-                    "{}...",
-                    &profile_data.name.0[..max_name_len.saturating_sub(3)]
-                )
-            } else {
-                profile_data.name.0.clone()
-            };
-            let content = format!("{}{}", prefix, name);
 
-            let style = if idx == selected_idx {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
+        if is_historical {
+            // Historical mode: show preset profiles
+            let scroll_offset = Self::calculate_centered_scroll(
+                selected_idx,
+                HISTORICAL_PRESETS.len(),
+                visible_count,
+            );
 
-            lines.push(Line::from(Span::styled(content, style)));
-        }
+            for (idx, (_, display_name, _)) in HISTORICAL_PRESETS
+                .iter()
+                .enumerate()
+                .skip(scroll_offset)
+                .take(visible_count)
+            {
+                let prefix = if idx == selected_idx { "> " } else { "  " };
+                let max_name_len = list_width.saturating_sub(4) as usize;
+                let name = if display_name.len() > max_name_len && max_name_len > 3 {
+                    format!("{}...", &display_name[..max_name_len.saturating_sub(3)])
+                } else {
+                    display_name.to_string()
+                };
+                let content = format!("{}{}", prefix, name);
 
-        if lines.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  No profiles.",
-                Style::default().fg(Color::DarkGray),
-            )));
-            lines.push(Line::from(Span::styled(
-                "  Press 'a' to add.",
-                Style::default().fg(Color::DarkGray),
-            )));
+                let style = if idx == selected_idx {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+
+                lines.push(Line::from(Span::styled(content, style)));
+            }
+        } else {
+            // Parametric mode: show user-defined profiles
+            let profiles = &state.data().profiles;
+            let scroll_offset =
+                Self::calculate_centered_scroll(selected_idx, profiles.len(), visible_count);
+
+            for (idx, profile_data) in profiles
+                .iter()
+                .enumerate()
+                .skip(scroll_offset)
+                .take(visible_count)
+            {
+                let prefix = if idx == selected_idx { "> " } else { "  " };
+                // Truncate name if needed
+                let max_name_len = list_width.saturating_sub(4) as usize;
+                let name = if profile_data.name.0.len() > max_name_len && max_name_len > 3 {
+                    format!(
+                        "{}...",
+                        &profile_data.name.0[..max_name_len.saturating_sub(3)]
+                    )
+                } else {
+                    profile_data.name.0.clone()
+                };
+                let content = format!("{}{}", prefix, name);
+
+                let style = if idx == selected_idx {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+
+                lines.push(Line::from(Span::styled(content, style)));
+            }
+
+            if lines.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  No profiles.",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                lines.push(Line::from(Span::styled(
+                    "  Press 'a' to add.",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
         }
 
         let list_para = Paragraph::new(lines);
@@ -702,8 +764,69 @@ impl PortfolioProfilesScreen {
         frame.render_widget(vsep, vsep_area);
 
         // Render profile details
-        let detail_lines = if let Some(profile_data) =
-            profiles.get(state.portfolio_profiles_state.selected_profile_index)
+        let detail_lines = if is_historical {
+            // Historical mode: show preset details
+            if let Some((preset_key, display_name, description)) =
+                HISTORICAL_PRESETS.get(selected_idx)
+            {
+                let history = ReturnProfileData::get_historical_returns(preset_key);
+
+                let block_size_str = match state.data().parameters.historical_block_size {
+                    Some(bs) => format!("{} years", bs),
+                    None => "i.i.d.".to_string(),
+                };
+
+                let mut lines = vec![
+                    Line::from(vec![
+                        Span::styled("Name: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(*display_name),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Type: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled("Bootstrap", Style::default().fg(Color::Cyan)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Data: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(*description),
+                    ]),
+                ];
+
+                if let Some(stats) = history.statistics() {
+                    lines.push(Line::from(vec![
+                        Span::styled("Mean: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            format_percentage(stats.arithmetic_mean),
+                            Style::default().fg(Color::Yellow),
+                        ),
+                        Span::raw(" (arith), "),
+                        Span::styled(
+                            format_percentage(stats.geometric_mean),
+                            Style::default().fg(Color::Green),
+                        ),
+                        Span::raw(" (geom)"),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("Std Dev: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(format_percentage(stats.std_dev)),
+                    ]));
+                }
+
+                lines.push(Line::from(vec![
+                    Span::styled("Block: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(block_size_str, Style::default().fg(Color::Magenta)),
+                ]));
+
+                lines
+            } else {
+                vec![Line::from(Span::styled(
+                    "No profile selected",
+                    Style::default().fg(Color::DarkGray),
+                ))]
+            }
+        } else if let Some(profile_data) = state
+            .data()
+            .profiles
+            .get(state.portfolio_profiles_state.selected_profile_index)
         {
             let mut lines = vec![
                 Line::from(vec![
@@ -806,6 +929,12 @@ impl PortfolioProfilesScreen {
                         )),
                     ]));
                 }
+                ReturnProfileData::Bootstrap { preset } => {
+                    lines.push(Line::from(vec![
+                        Span::styled("Preset: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(preset.clone(), Style::default().fg(Color::Cyan)),
+                    ]));
+                }
             }
 
             lines
@@ -848,14 +977,30 @@ impl PortfolioProfilesScreen {
         );
 
         // Render distribution chart for selected profile
-        if let Some(profile_data) =
-            profiles.get(state.portfolio_profiles_state.selected_profile_index)
-        {
-            self.render_distribution_inline(frame, chart_area, &profile_data.profile);
+        if is_historical {
+            // Historical mode: render histogram from preset data
+            let selected_idx = state.portfolio_profiles_state.selected_profile_index;
+            if let Some((preset_key, _, _)) = HISTORICAL_PRESETS.get(selected_idx) {
+                let history = ReturnProfileData::get_historical_returns(preset_key);
+                self.render_historical_histogram(frame, chart_area, &history);
+            } else {
+                let msg = Paragraph::new("No profile selected")
+                    .style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(msg, chart_area);
+            }
         } else {
-            let msg =
-                Paragraph::new("No profile selected").style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(msg, chart_area);
+            // Parametric mode: use stored profiles
+            if let Some(profile_data) = state
+                .data()
+                .profiles
+                .get(state.portfolio_profiles_state.selected_profile_index)
+            {
+                self.render_distribution_inline(frame, chart_area, &profile_data.profile);
+            } else {
+                let msg = Paragraph::new("No profile selected")
+                    .style(Style::default().fg(Color::DarkGray));
+                frame.render_widget(msg, chart_area);
+            }
         }
     }
 
@@ -915,6 +1060,10 @@ impl PortfolioProfilesScreen {
                     *bear_mean,
                     *bear_std_dev,
                 );
+            }
+            ReturnProfileData::Bootstrap { preset } => {
+                let history = ReturnProfileData::get_historical_returns(preset);
+                self.render_historical_histogram(frame, area, &history);
             }
         }
     }
@@ -1029,9 +1178,15 @@ impl PortfolioProfilesScreen {
     fn render_asset_mappings(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::AssetMappings;
+        let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
 
         let unique_assets = Self::get_unique_assets(state);
-        let mappings = &state.data().assets;
+        // Use mode-specific mappings
+        let mappings = if is_historical {
+            &state.data().historical_assets
+        } else {
+            &state.data().assets
+        };
 
         // Calculate scrolling
         let visible_count = area.height.saturating_sub(2) as usize; // Account for borders
@@ -1203,6 +1358,7 @@ impl PortfolioProfilesScreen {
             ReturnProfileData::LogNormal { .. } => "Log-Normal Distribution".to_string(),
             ReturnProfileData::StudentT { .. } => "Student's t Distribution".to_string(),
             ReturnProfileData::RegimeSwitching { .. } => "Regime Switching".to_string(),
+            ReturnProfileData::Bootstrap { .. } => "Bootstrap (Historical)".to_string(),
         }
     }
 
@@ -1619,6 +1775,126 @@ impl PortfolioProfilesScreen {
             Span::styled(
                 format_percentage(bull_mean),
                 Style::default().fg(Color::Green),
+            ),
+        ]);
+        let label_area = Rect::new(area.x, label_y, area.width, 1);
+        frame.render_widget(Paragraph::new(label_line), label_area);
+    }
+
+    /// Render a histogram of actual historical returns
+    fn render_historical_histogram(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        history: &finplan_core::model::HistoricalReturns,
+    ) {
+        let returns: &[f64] = &history.returns;
+        if returns.is_empty() {
+            let msg =
+                Paragraph::new("No historical data").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        let num_bins = (area.width as usize).saturating_sub(4).max(10);
+        let height = area.height.saturating_sub(2) as usize;
+
+        if height < 3 || area.width < 20 {
+            let msg = Paragraph::new("Area too small").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        // Calculate statistics
+        let min_ret = returns.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_ret = returns.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+        let variance =
+            returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+        let std_dev = variance.sqrt();
+
+        // Compute histogram bins
+        let range = (max_ret - min_ret).max(0.01);
+        let bin_width = range / num_bins as f64;
+        let mut bin_counts = vec![0usize; num_bins];
+
+        for &ret in returns {
+            let bin = ((ret - min_ret) / bin_width).floor() as usize;
+            let bin = bin.min(num_bins - 1);
+            bin_counts[bin] += 1;
+        }
+
+        let max_count = *bin_counts.iter().max().unwrap_or(&1);
+        if max_count == 0 {
+            let msg = Paragraph::new("No data in bins").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        // Scale to height units (8 sub-rows per character row for smooth bars)
+        let height_units = height * 8;
+        let bar_heights: Vec<usize> = bin_counts
+            .iter()
+            .map(|&c| ((c as f64 / max_count as f64) * height_units as f64).round() as usize)
+            .collect();
+
+        let x_offset = (area.width as usize).saturating_sub(num_bins) / 2;
+        let bin_chars = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+        for row in 0..height {
+            let row_base = (height - 1 - row) * 8;
+            let row_top = row_base + 8;
+            let mut spans = Vec::new();
+
+            if x_offset > 0 {
+                spans.push(Span::raw(" ".repeat(x_offset)));
+            }
+
+            for (i, &bar_h) in bar_heights.iter().enumerate() {
+                let x = min_ret + (i as f64 + 0.5) * bin_width;
+
+                // Color based on position relative to mean
+                let color = if x < mean - std_dev {
+                    Color::Red // Below -1σ
+                } else if x > mean + std_dev {
+                    Color::Green // Above +1σ
+                } else {
+                    Color::Cyan // Within ±1σ
+                };
+
+                let char_to_use = if bar_h >= row_top {
+                    "█"
+                } else if bar_h > row_base {
+                    let fill_level = bar_h - row_base;
+                    bin_chars[fill_level.min(8)]
+                } else {
+                    " "
+                };
+
+                spans.push(Span::styled(char_to_use, Style::default().fg(color)));
+            }
+
+            let line = Line::from(spans);
+            let row_area = Rect::new(area.x, area.y + row as u16, area.width, 1);
+            frame.render_widget(Paragraph::new(line), row_area);
+        }
+
+        // Render x-axis labels
+        let label_y = area.y + height as u16;
+        let label_line = Line::from(vec![
+            Span::styled(
+                format!("{:>6}", format_percentage(min_ret)),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(" ".repeat((area.width as usize).saturating_sub(20) / 2)),
+            Span::styled(
+                format!("μ={}", format_percentage(mean)),
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::raw(" ".repeat((area.width as usize).saturating_sub(20) / 2)),
+            Span::styled(
+                format!("{:<6}", format_percentage(max_ret)),
+                Style::default().fg(Color::DarkGray),
             ),
         ]);
         let label_area = Rect::new(area.x, label_y, area.width, 1);
@@ -2311,41 +2587,80 @@ impl PortfolioProfilesScreen {
     }
 
     fn handle_profiles_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
-        let profiles_len = state.data().profiles.len();
+        let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
+        let list_len = if is_historical {
+            HISTORICAL_PRESETS.len()
+        } else {
+            state.data().profiles.len()
+        };
         let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
         match key.code {
-            // Move down (Shift+J or Shift+Down)
-            KeyCode::Char('J') if has_shift => {
+            // Toggle between Parametric and Historical mode
+            KeyCode::Char('h') => {
+                let current_mode = state.data().parameters.returns_mode;
+                let new_mode = match current_mode {
+                    ReturnsMode::Parametric => {
+                        // Switching to Historical: auto-map known tickers if no historical mappings exist
+                        if state.data().historical_assets.is_empty() {
+                            Self::auto_map_historical_assets(state);
+                        }
+                        ReturnsMode::Historical
+                    }
+                    ReturnsMode::Historical => ReturnsMode::Parametric,
+                };
+                state.data_mut().parameters.returns_mode = new_mode;
+                state.portfolio_profiles_state.selected_profile_index = 0;
+                state.mark_modified();
+                EventResult::Handled
+            }
+            // Block size picker (Historical mode only)
+            KeyCode::Char('b') if is_historical => {
+                let options = vec![
+                    "1 (i.i.d. sampling)".to_string(),
+                    "3 (short-term momentum)".to_string(),
+                    "5 (medium-term cycles)".to_string(),
+                    "10 (long-term trends)".to_string(),
+                ];
+                state.modal = ModalState::Picker(PickerModal::new(
+                    "Select Block Size",
+                    options,
+                    ModalAction::PICK_BLOCK_SIZE,
+                ));
+                EventResult::Handled
+            }
+            // Move down (Shift+J or Shift+Down) - Parametric only
+            KeyCode::Char('J') if has_shift && !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
-                if profiles_len >= 2 && idx < profiles_len - 1 {
+                if list_len >= 2 && idx < list_len - 1 {
                     state.data_mut().profiles.swap(idx, idx + 1);
                     state.portfolio_profiles_state.selected_profile_index = idx + 1;
                     state.mark_modified();
                 }
                 EventResult::Handled
             }
-            KeyCode::Down if has_shift => {
+            KeyCode::Down if has_shift && !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
-                if profiles_len >= 2 && idx < profiles_len - 1 {
+                if list_len >= 2 && idx < list_len - 1 {
                     state.data_mut().profiles.swap(idx, idx + 1);
                     state.portfolio_profiles_state.selected_profile_index = idx + 1;
                     state.mark_modified();
                 }
                 EventResult::Handled
             }
-            // Move up (Shift+K or Shift+Up)
-            KeyCode::Char('K') if has_shift => {
+            // Move up (Shift+K or Shift+Up) - Parametric only
+            KeyCode::Char('K') if has_shift && !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
-                if profiles_len >= 2 && idx > 0 {
+                if list_len >= 2 && idx > 0 {
                     state.data_mut().profiles.swap(idx, idx - 1);
                     state.portfolio_profiles_state.selected_profile_index = idx - 1;
                     state.mark_modified();
                 }
                 EventResult::Handled
             }
-            KeyCode::Up if has_shift => {
+            KeyCode::Up if has_shift && !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
-                if profiles_len >= 2 && idx > 0 {
+                if list_len >= 2 && idx > 0 {
                     state.data_mut().profiles.swap(idx, idx - 1);
                     state.portfolio_profiles_state.selected_profile_index = idx - 1;
                     state.mark_modified();
@@ -2353,27 +2668,24 @@ impl PortfolioProfilesScreen {
                 EventResult::Handled
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                let profiles = &state.data().profiles;
-                if !profiles.is_empty() {
+                if list_len > 0 {
                     state.portfolio_profiles_state.selected_profile_index =
-                        (state.portfolio_profiles_state.selected_profile_index + 1)
-                            % profiles.len();
+                        (state.portfolio_profiles_state.selected_profile_index + 1) % list_len;
                 }
                 EventResult::Handled
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                let profiles = &state.data().profiles;
-                if !profiles.is_empty() {
+                if list_len > 0 {
                     if state.portfolio_profiles_state.selected_profile_index == 0 {
-                        state.portfolio_profiles_state.selected_profile_index = profiles.len() - 1;
+                        state.portfolio_profiles_state.selected_profile_index = list_len - 1;
                     } else {
                         state.portfolio_profiles_state.selected_profile_index -= 1;
                     }
                 }
                 EventResult::Handled
             }
-            KeyCode::Char('a') => {
-                // Add new profile - show type picker
+            KeyCode::Char('a') if !is_historical => {
+                // Add new profile - show type picker (Parametric only)
                 let types = vec![
                     "None".to_string(),
                     "Fixed Rate".to_string(),
@@ -2390,8 +2702,8 @@ impl PortfolioProfilesScreen {
                 ));
                 EventResult::Handled
             }
-            KeyCode::Char('e') => {
-                // Edit selected profile
+            KeyCode::Char('e') if !is_historical => {
+                // Edit selected profile (Parametric only)
                 if let Some(profile_data) = state
                     .data()
                     .profiles
@@ -2405,8 +2717,8 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
-            KeyCode::Char('d') => {
-                // Delete selected profile with confirmation
+            KeyCode::Char('d') if !is_historical => {
+                // Delete selected profile with confirmation (Parametric only)
                 if let Some(profile_data) = state
                     .data()
                     .profiles
@@ -2429,7 +2741,8 @@ impl PortfolioProfilesScreen {
                 EventResult::Handled
             }
             // Preset shortcuts
-            KeyCode::Char('1') => {
+            // Preset shortcuts (Parametric only)
+            KeyCode::Char('1') if !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
                 if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
                     profile_data.profile = ReturnProfileData::Fixed { rate: 0.095668 };
@@ -2437,7 +2750,7 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
-            KeyCode::Char('2') => {
+            KeyCode::Char('2') if !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
                 if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
                     profile_data.profile = ReturnProfileData::Normal {
@@ -2448,7 +2761,7 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
-            KeyCode::Char('3') => {
+            KeyCode::Char('3') if !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
                 if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
                     profile_data.profile = ReturnProfileData::LogNormal {
@@ -2459,7 +2772,7 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
-            KeyCode::Char('4') => {
+            KeyCode::Char('4') if !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
                 if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
                     profile_data.profile = ReturnProfileData::None;
@@ -2467,7 +2780,7 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
-            KeyCode::Char('5') => {
+            KeyCode::Char('5') if !is_historical => {
                 // StudentT preset (S&P 500 historical with fat tails)
                 let idx = state.portfolio_profiles_state.selected_profile_index;
                 if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
@@ -2480,7 +2793,7 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
-            KeyCode::Char('6') => {
+            KeyCode::Char('6') if !is_historical => {
                 // Regime Switching preset (S&P 500 bull/bear, conservative)
                 // ~7.4% expected return: 73% bull (12%), 27% bear (-5%)
                 let idx = state.portfolio_profiles_state.selected_profile_index;
@@ -2638,11 +2951,42 @@ impl PortfolioProfilesScreen {
                     ModalAction::EDIT_PROFILE,
                 )
             }
+            ReturnProfileData::Bootstrap { preset } => {
+                // Bootstrap profiles are preset-only, show read-only parameters
+                let history = ReturnProfileData::get_historical_returns(preset);
+                let stats_text = if let Some(stats) = history.statistics() {
+                    format!(
+                        "{} mean, {} std, {} years",
+                        format_percentage(stats.arithmetic_mean),
+                        format_percentage(stats.std_dev),
+                        stats.years
+                    )
+                } else {
+                    "No statistics available".to_string()
+                };
+
+                FormModal::new(
+                    "Edit Profile",
+                    vec![
+                        FormField::text("Name", &profile_data.name.0),
+                        FormField::text(
+                            "Description",
+                            profile_data.description.as_deref().unwrap_or(""),
+                        ),
+                        FormField::read_only("Type", &type_name),
+                        FormField::read_only("Preset", preset),
+                        FormField::read_only("Statistics", &stats_text),
+                    ],
+                    ModalAction::EDIT_PROFILE,
+                )
+            }
         }
     }
 
     fn handle_mappings_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let unique_assets = Self::get_unique_assets(state);
+        let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
+
         match key.code {
             KeyCode::Char(' ') => {
                 // Collapse both secondary panels and return to main panel
@@ -2675,28 +3019,56 @@ impl PortfolioProfilesScreen {
                 if let Some(asset) =
                     unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
                 {
-                    // For now, cycle through available profiles
-                    let profiles = &state.data().profiles;
-                    if !profiles.is_empty() {
-                        let current_mapping = state.data().assets.get(asset);
+                    if is_historical {
+                        // Historical mode: cycle through preset profiles
+                        let mappings = &state.data().historical_assets;
+                        let current_mapping = mappings.get(asset);
                         let current_idx = current_mapping
-                            .and_then(|tag| profiles.iter().position(|p| &p.name == tag))
-                            .unwrap_or(profiles.len());
+                            .and_then(|tag| {
+                                HISTORICAL_PRESETS
+                                    .iter()
+                                    .position(|(_, name, _)| *name == tag.0)
+                            })
+                            .unwrap_or(HISTORICAL_PRESETS.len());
 
-                        let next_idx = if current_idx >= profiles.len() - 1 {
+                        let next_idx = if current_idx >= HISTORICAL_PRESETS.len() - 1 {
                             0
                         } else {
                             current_idx + 1
                         };
 
-                        let new_profile = profiles[next_idx].name.clone();
+                        let (_, display_name, _) = HISTORICAL_PRESETS[next_idx];
+                        let new_profile = ReturnProfileTag(display_name.to_string());
                         let asset_clone = asset.clone();
-                        state.data_mut().assets.insert(asset_clone, new_profile);
+                        state
+                            .data_mut()
+                            .historical_assets
+                            .insert(asset_clone, new_profile);
                         state.mark_modified();
                     } else {
-                        state.set_error(
-                            "No return profiles defined. Add a profile first.".to_string(),
-                        );
+                        // Parametric mode: cycle through user-defined profiles
+                        let profiles = &state.data().profiles;
+                        if !profiles.is_empty() {
+                            let current_mapping = state.data().assets.get(asset);
+                            let current_idx = current_mapping
+                                .and_then(|tag| profiles.iter().position(|p| &p.name == tag))
+                                .unwrap_or(profiles.len());
+
+                            let next_idx = if current_idx >= profiles.len() - 1 {
+                                0
+                            } else {
+                                current_idx + 1
+                            };
+
+                            let new_profile = profiles[next_idx].name.clone();
+                            let asset_clone = asset.clone();
+                            state.data_mut().assets.insert(asset_clone, new_profile);
+                            state.mark_modified();
+                        } else {
+                            state.set_error(
+                                "No return profiles defined. Add a profile first.".to_string(),
+                            );
+                        }
                     }
                 }
                 EventResult::Handled
@@ -2706,31 +3078,53 @@ impl PortfolioProfilesScreen {
                 if let Some(asset) =
                     unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
                 {
-                    // Check if already mapped
-                    if state.data().assets.contains_key(asset) {
-                        state.set_error(format!("{} is already mapped", asset.0));
-                        return EventResult::Handled;
-                    }
-
-                    // Look up suggestion
-                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
-                        // Create profile if it doesn't exist
-                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
-                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
-                            state.data_mut().profiles.push(ProfileData {
-                                name: profile_tag.clone(),
-                                description: Some(format!(
-                                    "Auto-generated from ticker {}",
-                                    asset.0
-                                )),
-                                profile: suggestion.profile_data.clone(),
-                            });
+                    if is_historical {
+                        // Historical mode: check historical_assets
+                        if state.data().historical_assets.contains_key(asset) {
+                            state.set_error(format!("{} is already mapped", asset.0));
+                            return EventResult::Handled;
                         }
-                        // Add the mapping
-                        state.data_mut().assets.insert(asset.clone(), profile_tag);
-                        state.mark_modified();
+
+                        // Look up historical suggestion
+                        if let Some((_, display_name)) =
+                            ticker_profiles::get_historical_suggestion(&asset.0)
+                        {
+                            let profile_tag = ReturnProfileTag(display_name.to_string());
+                            state
+                                .data_mut()
+                                .historical_assets
+                                .insert(asset.clone(), profile_tag);
+                            state.mark_modified();
+                        } else {
+                            state.set_error(format!("No historical suggestion for {}", asset.0));
+                        }
                     } else {
-                        state.set_error(format!("No suggestion available for {}", asset.0));
+                        // Parametric mode: check regular assets
+                        if state.data().assets.contains_key(asset) {
+                            state.set_error(format!("{} is already mapped", asset.0));
+                            return EventResult::Handled;
+                        }
+
+                        // Look up suggestion
+                        if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                            // Create profile if it doesn't exist
+                            let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                            if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                                state.data_mut().profiles.push(ProfileData {
+                                    name: profile_tag.clone(),
+                                    description: Some(format!(
+                                        "Auto-generated from ticker {}",
+                                        asset.0
+                                    )),
+                                    profile: suggestion.profile_data.clone(),
+                                });
+                            }
+                            // Add the mapping
+                            state.data_mut().assets.insert(asset.clone(), profile_tag);
+                            state.mark_modified();
+                        } else {
+                            state.set_error(format!("No suggestion available for {}", asset.0));
+                        }
                     }
                 }
                 EventResult::Handled
@@ -2739,26 +3133,40 @@ impl PortfolioProfilesScreen {
                 // Suggest profiles for ALL unmapped known tickers
                 let mut suggestions_applied = 0;
                 for asset in &unique_assets {
-                    // Skip if already mapped
-                    if state.data().assets.contains_key(asset) {
-                        continue;
-                    }
-                    // Look up suggestion
-                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
-                        // Create profile if it doesn't exist
-                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
-                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
-                            state.data_mut().profiles.push(ProfileData {
-                                name: profile_tag.clone(),
-                                description: Some(
-                                    "Auto-generated from ticker suggestion".to_string(),
-                                ),
-                                profile: suggestion.profile_data.clone(),
-                            });
+                    if is_historical {
+                        // Historical mode
+                        if state.data().historical_assets.contains_key(asset) {
+                            continue;
                         }
-                        // Add the mapping
-                        state.data_mut().assets.insert(asset.clone(), profile_tag);
-                        suggestions_applied += 1;
+                        if let Some((_, display_name)) =
+                            ticker_profiles::get_historical_suggestion(&asset.0)
+                        {
+                            let profile_tag = ReturnProfileTag(display_name.to_string());
+                            state
+                                .data_mut()
+                                .historical_assets
+                                .insert(asset.clone(), profile_tag);
+                            suggestions_applied += 1;
+                        }
+                    } else {
+                        // Parametric mode
+                        if state.data().assets.contains_key(asset) {
+                            continue;
+                        }
+                        if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                            let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                            if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                                state.data_mut().profiles.push(ProfileData {
+                                    name: profile_tag.clone(),
+                                    description: Some(
+                                        "Auto-generated from ticker suggestion".to_string(),
+                                    ),
+                                    profile: suggestion.profile_data.clone(),
+                                });
+                            }
+                            state.data_mut().assets.insert(asset.clone(), profile_tag);
+                            suggestions_applied += 1;
+                        }
                     }
                 }
                 if suggestions_applied > 0 {
@@ -3034,6 +3442,19 @@ impl super::ModalHandler for PortfolioProfilesScreen {
             ModalAction::Profile(ProfileAction::Edit) => actions::handle_edit_profile(state, ctx),
             ModalAction::Profile(ProfileAction::Delete) => {
                 actions::handle_delete_profile(state, ctx)
+            }
+            ModalAction::Profile(ProfileAction::PickBlockSize) => {
+                // Parse block size from picker selection
+                let block_size = match legacy_value {
+                    "1 (i.i.d. sampling)" => None,
+                    "3 (short-term momentum)" => Some(3),
+                    "5 (medium-term cycles)" => Some(5),
+                    "10 (long-term trends)" => Some(10),
+                    _ => None,
+                };
+                state.data_mut().parameters.historical_block_size = block_size;
+                state.mark_modified();
+                ActionResult::close()
             }
 
             // Holding actions

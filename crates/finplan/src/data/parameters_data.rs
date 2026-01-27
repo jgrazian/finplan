@@ -1,6 +1,17 @@
 use finplan_core::model::{InflationProfile, TaxConfig};
 use serde::{Deserialize, Serialize};
 
+/// Returns modeling mode for the simulation
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReturnsMode {
+    /// User-defined parametric distributions (Normal, StudentT, etc.)
+    #[default]
+    Parametric,
+    /// Historical bootstrap sampling from preset data
+    Historical,
+}
+
 /// Simulation parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParametersData {
@@ -21,6 +32,15 @@ pub struct ParametersData {
     /// Tax configuration
     #[serde(default)]
     pub tax_config: TaxConfigData,
+
+    /// Returns modeling mode (Parametric or Historical)
+    #[serde(default)]
+    pub returns_mode: ReturnsMode,
+
+    /// Block size for historical bootstrap (only used when returns_mode == Historical)
+    /// None = i.i.d. sampling, Some(n) = n-year block bootstrap
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub historical_block_size: Option<usize>,
 }
 
 fn default_duration() -> usize {
@@ -198,6 +218,8 @@ impl Default for ParametersData {
             duration_years: 30,
             inflation: InflationData::default(),
             tax_config: TaxConfigData::default(),
+            returns_mode: ReturnsMode::default(),
+            historical_block_size: None,
         }
     }
 }
@@ -220,6 +242,8 @@ mod tests {
                 capital_gains_rate: 0.15,
                 federal_brackets: FederalBracketsPreset::Single2024,
             },
+            returns_mode: ReturnsMode::Parametric,
+            historical_block_size: None,
         };
 
         let yaml = serde_saphyr::to_string(&params).unwrap();

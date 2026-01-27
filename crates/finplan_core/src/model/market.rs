@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use jiff::civil::Date;
@@ -317,6 +318,16 @@ pub enum ReturnProfile {
         bull_to_bear_prob: f64,
         bear_to_bull_prob: f64,
     },
+    /// Bootstrap sampling from historical return data.
+    /// Non-parametric approach that samples directly from observed historical returns.
+    /// - `preset`: Preset key identifying the historical data source (e.g., "sp500", "us_small_cap")
+    /// - `block_size`: Optional block size for block bootstrap (preserves autocorrelation).
+    ///   If None or 1, uses i.i.d. sampling with replacement.
+    Bootstrap {
+        history: HistoricalReturns,
+        #[serde(default)]
+        block_size: Option<usize>,
+    },
 }
 
 impl ReturnProfile {
@@ -378,6 +389,16 @@ impl ReturnProfile {
                     bear.sample(rng)
                 }
             }
+            ReturnProfile::Bootstrap { history, .. } => {
+                history
+                    .sample(rng)
+                    .ok_or(MarketError::InvalidDistributionParameters {
+                        profile_type: "Bootstrap return",
+                        mean: 0.0,
+                        std_dev: 0.0,
+                        reason: "historical returns data is empty or unknown preset",
+                    })
+            }
         }
     }
 
@@ -422,6 +443,22 @@ impl ReturnProfile {
                 }
 
                 Ok(returns)
+            }
+            ReturnProfile::Bootstrap {
+                history,
+                block_size,
+            } => {
+                // Use block bootstrap if block_size > 1, otherwise i.i.d.
+                let result = match block_size {
+                    Some(bs) if *bs > 1 => history.block_bootstrap(rng, num_years, *bs),
+                    _ => history.sample_years(rng, num_years),
+                };
+                result.ok_or(MarketError::InvalidDistributionParameters {
+                    profile_type: "Bootstrap return",
+                    mean: 0.0,
+                    std_dev: 0.0,
+                    reason: "historical returns data is empty",
+                })
             }
             // For non-regime-switching profiles, just sample independently
             _ => {
@@ -708,10 +745,449 @@ impl ReturnProfile {
             bear_to_bull_prob,
         }
     }
+
+    // =========================================================================
+    // Bootstrap Presets
+    // =========================================================================
+    // Non-parametric sampling from historical return data.
+    // Preserves the actual distribution shape including fat tails and skewness.
+
+    /// Bootstrap from S&P 500 historical returns (1927-2023, 97 years).
+    /// Uses i.i.d. sampling with replacement.
+    pub fn sp500_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::sp500(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from S&P 500 with 5-year blocks (preserves momentum/mean-reversion).
+    pub fn sp500_bootstrap_block5() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::sp500(),
+            block_size: Some(5),
+        }
+    }
+
+    /// Bootstrap from US Small Cap historical returns (1927-2024, 98 years).
+    pub fn us_small_cap_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::us_small_cap(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from US T-Bills historical returns (1934-2025, 92 years).
+    pub fn us_tbills_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::us_tbills(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from US Long-Term Bonds historical returns (1927-2023, 97 years).
+    pub fn us_long_bonds_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::us_long_bonds(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from International Developed Markets (1991-2024, 34 years).
+    pub fn intl_developed_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::intl_developed(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from Emerging Markets (1991-2024, 33 years).
+    pub fn emerging_markets_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::emerging_markets(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from US REITs (2005-2026, 22 years).
+    pub fn reits_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::reits(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from Gold (2001-2026, 26 years).
+    pub fn gold_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::gold(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from US Aggregate Bonds (2004-2026, 23 years).
+    pub fn us_agg_bonds_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::us_agg_bonds(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from US Corporate Bonds (2003-2026, 24 years).
+    pub fn us_corporate_bonds_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::us_corporate_bonds(),
+            block_size: None,
+        }
+    }
+
+    /// Bootstrap from US TIPS (2004-2026, 23 years).
+    pub fn tips_bootstrap() -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history: HistoricalReturns::tips(),
+            block_size: None,
+        }
+    }
+
+    /// Create a custom bootstrap profile from historical data.
+    pub fn bootstrap(history: HistoricalReturns, block_size: Option<usize>) -> ReturnProfile {
+        ReturnProfile::Bootstrap {
+            history,
+            block_size,
+        }
+    }
+}
+
+/// Historical return series for bootstrap sampling.
+///
+/// Enables non-parametric simulation by sampling directly from historical data.
+/// Supports both i.i.d. sampling and block bootstrap (preserves autocorrelation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoricalReturns {
+    /// Asset/index name for display purposes
+    pub name: Cow<'static, str>,
+    /// Starting year of the data series
+    pub start_year: i16,
+    /// Annual returns (index 0 = start_year)
+    pub returns: Cow<'static, [f64]>,
+}
+
+impl HistoricalReturns {
+    /// Create a new historical returns series.
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        start_year: i16,
+        returns: impl Into<Cow<'static, [f64]>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            start_year,
+            returns: returns.into(),
+        }
+    }
+
+    /// Number of years of historical data available.
+    pub fn len(&self) -> usize {
+        self.returns.len()
+    }
+
+    /// Returns true if the historical data is empty.
+    pub fn is_empty(&self) -> bool {
+        self.returns.is_empty()
+    }
+
+    /// Sample a random year's return (i.i.d. with replacement).
+    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<f64> {
+        if self.returns.is_empty() {
+            return None;
+        }
+        let idx = rng.random_range(0..self.returns.len());
+        Some(self.returns[idx])
+    }
+
+    /// Sample n years with replacement (i.i.d. bootstrap).
+    pub fn sample_years<R: Rng + ?Sized>(&self, rng: &mut R, n: usize) -> Option<Vec<f64>> {
+        if self.returns.is_empty() {
+            return None;
+        }
+        Some(
+            (0..n)
+                .map(|_| self.returns[rng.random_range(0..self.returns.len())])
+                .collect(),
+        )
+    }
+
+    /// Block bootstrap: sample contiguous blocks to preserve autocorrelation.
+    ///
+    /// This is useful for capturing momentum/mean-reversion effects in returns.
+    /// Blocks wrap around at the end of the series (circular bootstrap).
+    ///
+    /// # Arguments
+    /// * `rng` - Random number generator
+    /// * `n` - Number of years to sample
+    /// * `block_size` - Size of contiguous blocks to sample
+    pub fn block_bootstrap<R: Rng + ?Sized>(
+        &self,
+        rng: &mut R,
+        n: usize,
+        block_size: usize,
+    ) -> Option<Vec<f64>> {
+        if self.returns.is_empty() || block_size == 0 {
+            return None;
+        }
+        let mut result = Vec::with_capacity(n);
+        while result.len() < n {
+            let start = rng.random_range(0..self.returns.len());
+            for i in 0..block_size {
+                if result.len() >= n {
+                    break;
+                }
+                // Circular wrap for blocks that extend past the end
+                let idx = (start + i) % self.returns.len();
+                result.push(self.returns[idx]);
+            }
+        }
+        Some(result)
+    }
+
+    /// Compute basic statistics of the historical returns.
+    pub fn statistics(&self) -> Option<HistoricalStatistics> {
+        if self.returns.is_empty() {
+            return None;
+        }
+        let n = self.returns.len() as f64;
+        let arithmetic_mean = self.returns.iter().sum::<f64>() / n;
+
+        // Geometric mean: (product of (1+r))^(1/n) - 1
+        let product: f64 = self.returns.iter().map(|r| 1.0 + r).product();
+        let geometric_mean = product.powf(1.0 / n) - 1.0;
+
+        let variance = self
+            .returns
+            .iter()
+            .map(|r| (r - arithmetic_mean).powi(2))
+            .sum::<f64>()
+            / n;
+        let std_dev = variance.sqrt();
+
+        let min = self.returns.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = self
+            .returns
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        Some(HistoricalStatistics {
+            arithmetic_mean,
+            geometric_mean,
+            std_dev,
+            min,
+            max,
+            years: self.returns.len(),
+        })
+    }
+
+    // =========================================================================
+    // Preset Historical Data Constructors
+    // =========================================================================
+
+    /// S&P 500 Total Return (1927-2023, 97 years)
+    pub fn sp500() -> Self {
+        Self::new("S&P 500", 1927, historical_returns::SP_500_ANNUAL_RETURNS)
+    }
+
+    /// US Small Cap Stocks (1927-2024, 98 years)
+    pub fn us_small_cap() -> Self {
+        Self::new(
+            "US Small Cap",
+            1927,
+            historical_returns::US_SMALL_CAP_ANNUAL_RETURNS,
+        )
+    }
+
+    /// US 3-Month Treasury Bills (1934-2025, 92 years)
+    pub fn us_tbills() -> Self {
+        Self::new(
+            "US T-Bills",
+            1934,
+            historical_returns::US_TBILLS_ANNUAL_RETURNS,
+        )
+    }
+
+    /// US Long-Term Government Bonds (1927-2023, 97 years)
+    pub fn us_long_bonds() -> Self {
+        Self::new(
+            "US Long Bonds",
+            1927,
+            historical_returns::US_LONG_BOND_ANNUAL_RETURNS,
+        )
+    }
+
+    /// Developed Markets ex-US (1991-2024, 34 years)
+    pub fn intl_developed() -> Self {
+        Self::new(
+            "Intl Developed",
+            1991,
+            historical_returns::INTL_DEVELOPED_ANNUAL_RETURNS,
+        )
+    }
+
+    /// Emerging Markets (1991-2024, 33 years)
+    pub fn emerging_markets() -> Self {
+        Self::new(
+            "Emerging Markets",
+            1991,
+            historical_returns::EMERGING_MARKETS_ANNUAL_RETURNS,
+        )
+    }
+
+    /// US REITs (2005-2026, 22 years)
+    pub fn reits() -> Self {
+        Self::new("REITs", 2005, historical_returns::REITS_ANNUAL_RETURNS)
+    }
+
+    /// Gold (2001-2026, 26 years)
+    pub fn gold() -> Self {
+        Self::new("Gold", 2001, historical_returns::GOLD_ANNUAL_RETURNS)
+    }
+
+    /// US Aggregate Bonds (2004-2026, 23 years)
+    pub fn us_agg_bonds() -> Self {
+        Self::new(
+            "US Agg Bonds",
+            2004,
+            historical_returns::US_AGG_BOND_ANNUAL_RETURNS,
+        )
+    }
+
+    /// US Corporate Bonds (2003-2026, 24 years)
+    pub fn us_corporate_bonds() -> Self {
+        Self::new(
+            "US Corporate Bonds",
+            2003,
+            historical_returns::US_CORPORATE_BOND_ANNUAL_RETURNS,
+        )
+    }
+
+    /// US TIPS (2004-2026, 23 years)
+    pub fn tips() -> Self {
+        Self::new("TIPS", 2004, historical_returns::TIPS_ANNUAL_RETURNS)
+    }
+}
+
+/// Basic statistics for historical returns.
+#[derive(Debug, Clone, Copy)]
+pub struct HistoricalStatistics {
+    pub arithmetic_mean: f64,
+    pub geometric_mean: f64,
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+    pub years: usize,
+}
+
+/// Multi-asset historical returns for correlated bootstrap sampling.
+///
+/// When bootstrapping multiple assets, sampling the same historical year
+/// across all assets preserves the cross-asset correlations from that period.
+#[allow(dead_code)] // Available for future integration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultiAssetHistory {
+    /// Asset names in order (defines column indices)
+    pub names: Vec<String>,
+    /// Starting year of the aligned data series
+    pub start_year: i16,
+    /// Returns matrix: returns[year_index][asset_index]
+    /// All rows must have the same length as `names`
+    pub returns: Vec<Vec<f64>>,
+}
+
+#[allow(dead_code)] // Available for future integration
+impl MultiAssetHistory {
+    /// Create a new multi-asset history with validation.
+    pub fn new(
+        names: Vec<String>,
+        start_year: i16,
+        returns: Vec<Vec<f64>>,
+    ) -> Result<Self, &'static str> {
+        let n_assets = names.len();
+        if n_assets == 0 {
+            return Err("At least one asset required");
+        }
+        for row in &returns {
+            if row.len() != n_assets {
+                return Err("All return rows must have same length as names");
+            }
+        }
+        Ok(Self {
+            names,
+            start_year,
+            returns,
+        })
+    }
+
+    /// Number of years of historical data.
+    pub fn len(&self) -> usize {
+        self.returns.len()
+    }
+
+    /// Returns true if no historical data is available.
+    pub fn is_empty(&self) -> bool {
+        self.returns.is_empty()
+    }
+
+    /// Number of assets in the series.
+    pub fn num_assets(&self) -> usize {
+        self.names.len()
+    }
+
+    /// Sample a single year's returns for all assets (preserves correlation).
+    pub fn sample_year<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<Vec<f64>> {
+        if self.returns.is_empty() {
+            return None;
+        }
+        let idx = rng.random_range(0..self.returns.len());
+        Some(self.returns[idx].clone())
+    }
+
+    /// Sample n years of returns for all assets (preserves within-year correlation).
+    pub fn sample_years<R: Rng + ?Sized>(&self, rng: &mut R, n: usize) -> Option<Vec<Vec<f64>>> {
+        if self.returns.is_empty() {
+            return None;
+        }
+        Some(
+            (0..n)
+                .map(|_| self.returns[rng.random_range(0..self.returns.len())].clone())
+                .collect(),
+        )
+    }
+
+    /// Block bootstrap for multiple assets (preserves both autocorrelation and cross-correlation).
+    pub fn block_bootstrap<R: Rng + ?Sized>(
+        &self,
+        rng: &mut R,
+        n: usize,
+        block_size: usize,
+    ) -> Option<Vec<Vec<f64>>> {
+        if self.returns.is_empty() || block_size == 0 {
+            return None;
+        }
+        let mut result = Vec::with_capacity(n);
+        while result.len() < n {
+            let start = rng.random_range(0..self.returns.len());
+            for i in 0..block_size {
+                if result.len() >= n {
+                    break;
+                }
+                let idx = (start + i) % self.returns.len();
+                result.push(self.returns[idx].clone());
+            }
+        }
+        Some(result)
+    }
 }
 
 /// Historical annual returns for bootstrap sampling
-#[allow(dead_code)]
 pub mod historical_returns {
     /// US Large Cap Stocks (S&P 500 Total Return)
     /// Source: Robert Shiller, Yale University
@@ -1079,5 +1555,313 @@ mod tests {
         let value = market.get_asset_value(start, date(2025, 1, 1), asset_id);
         assert!(value.is_some());
         assert!(value.unwrap().is_finite());
+    }
+
+    // =========================================================================
+    // Bootstrap Tests
+    // =========================================================================
+
+    #[test]
+    fn test_historical_returns_statistics() {
+        let history = HistoricalReturns::sp500();
+        assert_eq!(history.len(), 97);
+        assert!(!history.is_empty());
+        assert_eq!(history.start_year, 1927);
+
+        let stats = history.statistics().unwrap();
+        // S&P 500 historical stats should match the preset constants
+        assert!(
+            (stats.arithmetic_mean - 0.1147).abs() < 0.01,
+            "Arithmetic mean {} should be ~0.1147",
+            stats.arithmetic_mean
+        );
+        assert!(
+            (stats.geometric_mean - 0.099).abs() < 0.01,
+            "Geometric mean {} should be ~0.099",
+            stats.geometric_mean
+        );
+        assert!(
+            (stats.std_dev - 0.18).abs() < 0.02,
+            "Std dev {} should be ~0.18",
+            stats.std_dev
+        );
+    }
+
+    #[test]
+    fn test_historical_returns_sampling() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let history = HistoricalReturns::sp500();
+
+        // Single sample should be from historical data
+        let sample = history.sample(&mut rng).unwrap();
+        assert!(
+            history.returns.contains(&sample),
+            "Sample {} should be from historical data",
+            sample
+        );
+
+        // Multi-year sample
+        let samples = history.sample_years(&mut rng, 30).unwrap();
+        assert_eq!(samples.len(), 30);
+        for s in &samples {
+            assert!(
+                history.returns.contains(s),
+                "Sample {} should be from historical data",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_historical_returns_block_bootstrap() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let history = HistoricalReturns::sp500();
+        let returns = history.block_bootstrap(&mut rng, 30, 5).unwrap();
+        assert_eq!(returns.len(), 30);
+
+        // All samples should be from historical data
+        for r in &returns {
+            assert!(
+                history.returns.contains(r),
+                "Sample {} should be from historical data",
+                r
+            );
+        }
+
+        // Block bootstrap should show some consecutive sequences
+        // (This is probabilistic but with seed 42 should be stable)
+    }
+
+    #[test]
+    fn test_bootstrap_profile_sample() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let profile = ReturnProfile::sp500_bootstrap();
+        let history = HistoricalReturns::sp500();
+
+        // Sample should be from historical data
+        let sample = profile.sample(&mut rng).unwrap();
+        assert!(
+            history.returns.contains(&sample),
+            "Sample {} should be from historical data",
+            sample
+        );
+
+        // Generate sequence
+        let returns = profile.sample_sequence(&mut rng, 50).unwrap();
+        assert_eq!(returns.len(), 50);
+        for r in &returns {
+            assert!(
+                history.returns.contains(r),
+                "Sample {} should be from historical data",
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_profile_block() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let profile = ReturnProfile::sp500_bootstrap_block5();
+        let history = HistoricalReturns::sp500();
+
+        // Generate sequence with block bootstrap
+        let returns = profile.sample_sequence(&mut rng, 30).unwrap();
+        assert_eq!(returns.len(), 30);
+        for r in &returns {
+            assert!(
+                history.returns.contains(r),
+                "Sample {} should be from historical data",
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_all_presets() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+
+        // Test all preset bootstrap profiles work
+        let presets = vec![
+            ReturnProfile::sp500_bootstrap(),
+            ReturnProfile::sp500_bootstrap_block5(),
+            ReturnProfile::us_small_cap_bootstrap(),
+            ReturnProfile::us_tbills_bootstrap(),
+            ReturnProfile::us_long_bonds_bootstrap(),
+            ReturnProfile::intl_developed_bootstrap(),
+            ReturnProfile::emerging_markets_bootstrap(),
+            ReturnProfile::reits_bootstrap(),
+            ReturnProfile::gold_bootstrap(),
+            ReturnProfile::us_agg_bonds_bootstrap(),
+            ReturnProfile::us_corporate_bonds_bootstrap(),
+            ReturnProfile::tips_bootstrap(),
+        ];
+
+        for profile in presets {
+            let sample = profile.sample(&mut rng).unwrap();
+            assert!(sample.is_finite(), "Bootstrap sample should be finite");
+
+            let returns = profile.sample_sequence(&mut rng, 10).unwrap();
+            assert_eq!(returns.len(), 10);
+            assert!(
+                returns.iter().all(|r| r.is_finite()),
+                "All returns should be finite"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bootstrap_in_market_from_profiles() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(456);
+
+        let rp_id = ReturnProfileId(1);
+        let asset_id = AssetId(1);
+
+        let mut return_profiles = HashMap::new();
+        return_profiles.insert(rp_id, ReturnProfile::sp500_bootstrap());
+
+        let assets = FxHashMap::from_iter([(asset_id, (1000.0, rp_id))]);
+
+        let market = Market::from_profiles(
+            &mut rng,
+            30,
+            &InflationProfile::Fixed(0.02),
+            &return_profiles,
+            &assets,
+        )
+        .unwrap();
+
+        // Should be able to get asset values
+        let start = date(2024, 1, 1);
+        let value = market.get_asset_value(start, date(2025, 1, 1), asset_id);
+        assert!(value.is_some());
+        assert!(value.unwrap().is_finite());
+    }
+
+    #[test]
+    fn test_bootstrap_custom() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(789);
+
+        // Create custom historical data
+        let history = HistoricalReturns::new("Custom", 2020, vec![0.10, 0.20, -0.05, 0.15]);
+
+        let profile = ReturnProfile::bootstrap(history.clone(), Some(2));
+
+        let sample = profile.sample(&mut rng).unwrap();
+        assert!(
+            history.returns.contains(&sample),
+            "Sample {} should be from custom data",
+            sample
+        );
+
+        let returns = profile.sample_sequence(&mut rng, 20).unwrap();
+        assert_eq!(returns.len(), 20);
+        for r in &returns {
+            assert!(
+                history.returns.contains(r),
+                "Sample {} should be from custom data",
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn test_multi_asset_history() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        // Create a simple 3-year, 2-asset history
+        let history = MultiAssetHistory::new(
+            vec!["Stocks".to_string(), "Bonds".to_string()],
+            2020,
+            vec![
+                vec![0.10, 0.05],  // 2020
+                vec![0.20, -0.02], // 2021
+                vec![-0.15, 0.08], // 2022
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history.num_assets(), 2);
+
+        // Sample a year - should get both assets from same year
+        let year = history.sample_year(&mut rng).unwrap();
+        assert_eq!(year.len(), 2);
+        // Verify it's one of the actual years
+        assert!(
+            history.returns.contains(&year),
+            "Sampled year {:?} should be from history",
+            year
+        );
+
+        // Sample multiple years
+        let years = history.sample_years(&mut rng, 10).unwrap();
+        assert_eq!(years.len(), 10);
+        for y in &years {
+            assert_eq!(y.len(), 2);
+            assert!(
+                history.returns.contains(y),
+                "Sampled year {:?} should be from history",
+                y
+            );
+        }
+    }
+
+    #[test]
+    fn test_multi_asset_block_bootstrap() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let history = MultiAssetHistory::new(
+            vec!["A".to_string(), "B".to_string()],
+            2020,
+            vec![
+                vec![0.10, 0.05],
+                vec![0.20, -0.02],
+                vec![-0.15, 0.08],
+                vec![0.05, 0.03],
+            ],
+        )
+        .unwrap();
+
+        let samples = history.block_bootstrap(&mut rng, 10, 2).unwrap();
+        assert_eq!(samples.len(), 10);
+        for s in &samples {
+            assert_eq!(s.len(), 2);
+            assert!(
+                history.returns.contains(s),
+                "Block bootstrap sample {:?} should be from history",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn test_empty_historical_returns_error() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let profile = ReturnProfile::Bootstrap {
+            history: HistoricalReturns::new("Empty", 2020, vec![]),
+            block_size: None,
+        };
+
+        // Should return error for empty data
+        let result = profile.sample(&mut rng);
+        assert!(result.is_err());
+
+        let result = profile.sample_sequence(&mut rng, 10);
+        assert!(result.is_err());
     }
 }

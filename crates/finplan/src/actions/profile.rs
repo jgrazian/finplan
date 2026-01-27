@@ -296,6 +296,9 @@ pub fn handle_edit_profile(state: &mut AppState, ctx: ActionContext) -> ActionRe
             ReturnProfileData::RegimeSwitching { .. } => {
                 // Regime switching is preset-only, no editable parameters
             }
+            ReturnProfileData::Bootstrap { .. } => {
+                // Bootstrap profiles use historical presets, no editable parameters
+            }
         }
         ActionResult::modified()
     } else {

@@ -17,8 +17,10 @@ use super::{
         AccountTag, AmountData, EffectData, EventTag, IntervalData, LotMethodData, OffsetData,
         SpecialAmount, ThresholdData, TriggerData, WithdrawalStrategyData,
     },
-    parameters_data::ParametersData,
+    parameters_data::{ParametersData, ReturnsMode},
     portfolio_data::{AccountData, AccountType, AssetTag},
+    profiles_data::ReturnProfileData,
+    ticker_profiles::HISTORICAL_PRESETS,
 };
 
 #[derive(Debug, Clone)]
@@ -127,10 +129,22 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
         }
     }
 
-    // Assign profile IDs
-    for (idx, profile) in data.profiles.iter().enumerate() {
-        let id = ReturnProfileId((idx + 1) as u16);
-        profile_ids.insert(profile.name.0.clone(), id);
+    // Assign profile IDs based on mode
+    match data.parameters.returns_mode {
+        ReturnsMode::Historical => {
+            // In Historical mode, assign IDs to preset profiles
+            for (idx, (_, display_name, _)) in HISTORICAL_PRESETS.iter().enumerate() {
+                let id = ReturnProfileId((idx + 1) as u16);
+                profile_ids.insert(display_name.to_string(), id);
+            }
+        }
+        ReturnsMode::Parametric => {
+            // In Parametric mode, assign IDs to user-defined profiles
+            for (idx, profile) in data.profiles.iter().enumerate() {
+                let id = ReturnProfileId((idx + 1) as u16);
+                profile_ids.insert(profile.name.0.clone(), id);
+            }
+        }
     }
 
     // Assign event IDs
@@ -165,11 +179,31 @@ fn convert_profiles(
     ctx: &ResolveContext,
     config: &mut SimulationConfig,
 ) -> Result<(), ConvertError> {
-    for profile_data in &data.profiles {
-        if let Some(&id) = ctx.profile_ids.get(&profile_data.name.0) {
-            config
-                .return_profiles
-                .insert(id, profile_data.profile.to_return_profile());
+    match data.parameters.returns_mode {
+        ReturnsMode::Historical => {
+            // Generate historical profiles at runtime
+            let block_size = data.parameters.historical_block_size;
+            for (preset_key, display_name, _) in HISTORICAL_PRESETS {
+                if let Some(&id) = ctx.profile_ids.get(*display_name) {
+                    let profile_data = ReturnProfileData::Bootstrap {
+                        preset: preset_key.to_string(),
+                    };
+                    config.return_profiles.insert(
+                        id,
+                        profile_data.to_return_profile_with_block_size(block_size),
+                    );
+                }
+            }
+        }
+        ReturnsMode::Parametric => {
+            // Use user-defined profiles
+            for profile_data in &data.profiles {
+                if let Some(&id) = ctx.profile_ids.get(&profile_data.name.0) {
+                    config
+                        .return_profiles
+                        .insert(id, profile_data.profile.to_return_profile());
+                }
+            }
         }
     }
     Ok(())
@@ -303,8 +337,14 @@ fn build_asset_mappings(
     ctx: &ResolveContext,
     config: &mut SimulationConfig,
 ) -> Result<(), ConvertError> {
-    // Build asset_returns map from the assets HashMap in SimulationData
-    for (asset_tag, profile_tag) in &data.assets {
+    // Select the appropriate asset mappings based on mode
+    let asset_mappings = match data.parameters.returns_mode {
+        ReturnsMode::Historical => &data.historical_assets,
+        ReturnsMode::Parametric => &data.assets,
+    };
+
+    // Build asset_returns map from the selected assets HashMap
+    for (asset_tag, profile_tag) in asset_mappings {
         if let Some(&profile_id) = ctx.profile_ids.get(&profile_tag.0) {
             // Find all instances of this asset across accounts
             for ((_, asset_name), (_, asset_id)) in &ctx.asset_ids {
@@ -318,14 +358,18 @@ fn build_asset_mappings(
     }
 
     // Register Property/Collectible assets with their return profiles
-    for account in &data.portfolios.accounts {
-        if let AccountType::Property(prop) | AccountType::Collectible(prop) = &account.account_type
-            && let Some((asset_id, Some(profile_name))) = ctx.property_assets.get(&account.name)
-            && let Some(&profile_id) = ctx.profile_ids.get(profile_name)
-        {
-            config.asset_returns.insert(*asset_id, profile_id);
-            // Use the property's value as the initial price
-            config.asset_prices.insert(*asset_id, prop.value);
+    // Note: Properties currently only use parametric profiles
+    if data.parameters.returns_mode == ReturnsMode::Parametric {
+        for account in &data.portfolios.accounts {
+            if let AccountType::Property(prop) | AccountType::Collectible(prop) =
+                &account.account_type
+                && let Some((asset_id, Some(profile_name))) = ctx.property_assets.get(&account.name)
+                && let Some(&profile_id) = ctx.profile_ids.get(profile_name)
+            {
+                config.asset_returns.insert(*asset_id, profile_id);
+                // Use the property's value as the initial price
+                config.asset_prices.insert(*asset_id, prop.value);
+            }
         }
     }
 
