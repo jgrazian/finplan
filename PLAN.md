@@ -1306,3 +1306,62 @@ Add a scenario-level toggle between "Parametric" and "Historical" returns modes:
 - [ ] Phase 6.5 - Runtime profile generation in convert.rs
 - [ ] Phase 6.6 - Mode toggle and UI in portfolio_profiles.rs
 - [ ] Phase 6.7 - Mode-aware asset mapping storage
+
+---
+
+# Historical Bootstrap Inflation (2026-01-27)
+
+## Overview
+
+Added support for historical inflation bootstrap sampling in Historical returns mode. When Historical mode is selected, inflation is now automatically sampled from real US CPI historical data using the same block size as the returns profiles.
+
+## Changes Made
+
+### finplan_core
+
+**crates/finplan_core/src/model/market.rs:**
+- Added `HistoricalInflation` struct (similar to `HistoricalReturns`) with:
+  - `sample()` - single year i.i.d. sampling
+  - `sample_years()` - multiple years i.i.d. sampling
+  - `block_bootstrap()` - contiguous block sampling for autocorrelation preservation
+  - `statistics()` - compute mean, std_dev, etc.
+  - `us_cpi()` - preset constructor for US CPI data
+- Added `Bootstrap` variant to `InflationProfile` enum:
+  ```rust
+  Bootstrap {
+      history: HistoricalInflation,
+      block_size: Option<usize>,
+  }
+  ```
+- Added `sample_sequence()` method to `InflationProfile` for block bootstrap support
+- Added `us_historical_bootstrap(block_size)` constructor to `InflationProfile`
+- Added `historical_inflation` module with US CPI annual rates (1948-2025, 78 years)
+- Updated `Market::from_profiles()` to use `sample_sequence` for inflation
+- Changed `InflationProfile` from `Copy` to `Clone` (required for `Bootstrap` variant)
+
+**crates/finplan_core/src/error.rs:**
+- Added `MarketError::EmptyHistoricalData` variant
+
+**crates/finplan_core/src/model/mod.rs:**
+- Exported `HistoricalInflation`
+
+### finplan (TUI)
+
+**crates/finplan/src/data/convert.rs:**
+- Updated `convert_parameters()` to automatically use `InflationProfile::us_historical_bootstrap(block_size)` when Historical returns mode is selected
+
+## Data Source
+
+US CPI Inflation data (All Urban Consumers):
+- Source: FRED CPIAUCSL
+- Period: 1948-2025 (78 years)
+- Arithmetic mean: 3.47%
+- Geometric mean: 3.43%
+- Standard deviation: 2.79%
+
+## Behavior
+
+- **Historical Mode**: Inflation is automatically sampled from historical US CPI data using the same block size as returns (configured via the block size picker)
+- **Parametric Mode**: Inflation uses the user-configured profile (Fixed, Normal, LogNormal, or USHistorical parametric)
+
+This ensures that in Historical mode, both returns and inflation are sampled consistently using the same methodology and block size, preserving temporal correlations between market returns and inflation.

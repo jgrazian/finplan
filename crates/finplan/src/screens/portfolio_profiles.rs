@@ -10,7 +10,7 @@ use crate::data::ticker_profiles::HISTORICAL_PRESETS;
 use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
     AccountInteractionMode, AppState, ConfirmModal, FormField, FormModal, HoldingEditState,
-    ModalAction, ModalState, PickerModal, PortfolioProfilesPanel,
+    MessageModal, ModalAction, ModalState, PickerModal, PortfolioProfilesPanel,
 };
 use crate::util::format::{format_currency, format_percentage};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1137,6 +1137,7 @@ impl PortfolioProfilesScreen {
     fn render_config_collapsed(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Config;
+        let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
 
         let tax_config = &state.data().parameters.tax_config;
         let federal_short = match &tax_config.federal_brackets {
@@ -1145,12 +1146,17 @@ impl PortfolioProfilesScreen {
             FederalBracketsPreset::Custom { .. } => "Custom",
         };
 
-        let inflation_short = match &state.data().parameters.inflation {
-            InflationData::None => "None",
-            InflationData::Fixed { .. } => "Fixed",
-            InflationData::Normal { .. } => "Normal",
-            InflationData::LogNormal { .. } => "LogN",
-            InflationData::USHistorical { .. } => "US Hist",
+        // In Historical mode, inflation is always US Historical Bootstrap
+        let inflation_short = if is_historical {
+            "US Hist Bootstrap"
+        } else {
+            match &state.data().parameters.inflation {
+                InflationData::None => "None",
+                InflationData::Fixed { .. } => "Fixed",
+                InflationData::Normal { .. } => "Normal",
+                InflationData::LogNormal { .. } => "LogN",
+                InflationData::USHistorical { .. } => "US Hist",
+            }
         };
 
         let state_str = format_percentage(tax_config.state_rate);
@@ -1260,6 +1266,7 @@ impl PortfolioProfilesScreen {
     fn render_tax_inflation_config(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::Config;
+        let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
 
         let selected_idx = state.portfolio_profiles_state.selected_config_index;
 
@@ -1276,13 +1283,26 @@ impl PortfolioProfilesScreen {
             }
         };
 
-        let inflation_desc = match &state.data().parameters.inflation {
-            InflationData::None => "None (0%)".to_string(),
-            InflationData::Fixed { rate } => format!("Fixed {}", format_percentage(*rate)),
-            InflationData::Normal { mean, .. } => format!("Normal μ={}", format_percentage(*mean)),
-            InflationData::LogNormal { mean, .. } => format!("LogN μ={}", format_percentage(*mean)),
-            InflationData::USHistorical { distribution } => {
-                format!("US Historical ({:?})", distribution)
+        // In Historical mode, inflation is always US Historical Bootstrap with same block size
+        let inflation_desc = if is_historical {
+            let block_size = state.data().parameters.historical_block_size;
+            match block_size {
+                Some(bs) => format!("US Historical Bootstrap (block={})", bs),
+                None => "US Historical Bootstrap (i.i.d.)".to_string(),
+            }
+        } else {
+            match &state.data().parameters.inflation {
+                InflationData::None => "None (0%)".to_string(),
+                InflationData::Fixed { rate } => format!("Fixed {}", format_percentage(*rate)),
+                InflationData::Normal { mean, .. } => {
+                    format!("Normal μ={}", format_percentage(*mean))
+                }
+                InflationData::LogNormal { mean, .. } => {
+                    format!("LogN μ={}", format_percentage(*mean))
+                }
+                InflationData::USHistorical { distribution } => {
+                    format!("US Historical ({:?})", distribution)
+                }
             }
         };
 
@@ -3246,19 +3266,30 @@ impl PortfolioProfilesScreen {
                         );
                     }
                     3 => {
-                        // Inflation - picker for type
-                        let options = vec![
-                            "None".to_string(),
-                            "Fixed".to_string(),
-                            "Normal".to_string(),
-                            "Log-Normal".to_string(),
-                            "US Historical".to_string(),
-                        ];
-                        state.modal = ModalState::Picker(PickerModal::new(
-                            "Inflation Type",
-                            options,
-                            ModalAction::PICK_INFLATION_TYPE,
-                        ));
+                        // Inflation - picker for type (disabled in Historical mode)
+                        let is_historical =
+                            state.data().parameters.returns_mode == ReturnsMode::Historical;
+                        if is_historical {
+                            // In Historical mode, inflation is auto-set to US Historical Bootstrap
+                            // Show info message instead of edit picker
+                            state.modal = ModalState::Message(MessageModal::info(
+                                "Inflation (Historical Mode)",
+                                "In Historical mode, inflation is automatically set to US Historical Bootstrap sampling with the same block size as returns.\n\nSwitch to Parametric mode to customize inflation settings.",
+                            ));
+                        } else {
+                            let options = vec![
+                                "None".to_string(),
+                                "Fixed".to_string(),
+                                "Normal".to_string(),
+                                "Log-Normal".to_string(),
+                                "US Historical".to_string(),
+                            ];
+                            state.modal = ModalState::Picker(PickerModal::new(
+                                "Inflation Type",
+                                options,
+                                ModalAction::PICK_INFLATION_TYPE,
+                            ));
+                        }
                     }
                     _ => {}
                 }

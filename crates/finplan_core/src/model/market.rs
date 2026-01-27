@@ -146,8 +146,9 @@ impl Market {
 
     /// Generate market data from profiles.
     ///
-    /// For `RegimeSwitching` profiles, this properly maintains regime state
-    /// across years, modeling the clustering of good and bad market periods.
+    /// For `RegimeSwitching` return profiles and `Bootstrap` inflation profiles,
+    /// this properly maintains state across years, modeling the clustering of
+    /// good and bad market periods and inflation persistence.
     pub fn from_profiles<R: Rng + ?Sized>(
         rng: &mut R,
         num_years: usize,
@@ -155,10 +156,8 @@ impl Market {
         return_profiles: &HashMap<ReturnProfileId, ReturnProfile>,
         assets: &FxHashMap<AssetId, (f64, ReturnProfileId)>,
     ) -> Result<Self, MarketError> {
-        let mut inflation_values = Vec::with_capacity(num_years);
-        for _ in 0..num_years {
-            inflation_values.push(inflation_profile.sample(rng)?);
-        }
+        // Use sample_sequence for inflation to support block bootstrap
+        let inflation_values = inflation_profile.sample_sequence(rng, num_years)?;
 
         let mut returns: FxHashMap<ReturnProfileId, Vec<f64>> = FxHashMap::default();
         for (rp_id, rp) in return_profiles.iter() {
@@ -249,7 +248,7 @@ impl Market {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(tag = "type")]
 pub enum InflationProfile {
     #[default]
@@ -262,6 +261,16 @@ pub enum InflationProfile {
     LogNormal {
         mean: f64,
         std_dev: f64,
+    },
+    /// Bootstrap sampling from historical inflation data.
+    /// Non-parametric approach that samples directly from observed historical inflation rates.
+    /// - `history`: Historical inflation data to sample from
+    /// - `block_size`: Optional block size for block bootstrap (preserves autocorrelation).
+    ///   If None or 1, uses i.i.d. sampling with replacement.
+    Bootstrap {
+        history: HistoricalInflation,
+        #[serde(default)]
+        block_size: Option<usize>,
     },
 }
 
@@ -280,6 +289,14 @@ impl InflationProfile {
         mean: 0.0347068,
         std_dev: 0.0279436,
     };
+
+    /// Create a bootstrap inflation profile from US historical CPI data.
+    pub fn us_historical_bootstrap(block_size: Option<usize>) -> Self {
+        InflationProfile::Bootstrap {
+            history: HistoricalInflation::us_cpi(),
+            block_size,
+        }
+    }
 
     pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<f64, MarketError> {
         match self {
@@ -302,6 +319,45 @@ impl InflationProfile {
                         std_dev: *std_dev,
                         reason: "std_dev must be positive and finite",
                     })
+            }
+            InflationProfile::Bootstrap { history, .. } => {
+                history.sample(rng).ok_or(MarketError::EmptyHistoricalData)
+            }
+        }
+    }
+
+    /// Sample a sequence of inflation rates.
+    ///
+    /// For `Bootstrap` profiles, this uses block bootstrap if block_size > 1,
+    /// otherwise i.i.d. sampling. Other profile types sample independently each year.
+    pub fn sample_sequence<R: Rng + ?Sized>(
+        &self,
+        rng: &mut R,
+        n: usize,
+    ) -> Result<Vec<f64>, MarketError> {
+        match self {
+            InflationProfile::Bootstrap {
+                history,
+                block_size,
+            } => {
+                let bs = block_size.unwrap_or(1);
+                if bs > 1 {
+                    history
+                        .block_bootstrap(rng, n, bs)
+                        .ok_or(MarketError::EmptyHistoricalData)
+                } else {
+                    history
+                        .sample_years(rng, n)
+                        .ok_or(MarketError::EmptyHistoricalData)
+                }
+            }
+            // For all other profile types, sample independently each year
+            _ => {
+                let mut results = Vec::with_capacity(n);
+                for _ in 0..n {
+                    results.push(self.sample(rng)?);
+                }
+                Ok(results)
             }
         }
     }
@@ -1110,6 +1166,137 @@ pub struct HistoricalStatistics {
     pub years: usize,
 }
 
+/// Historical inflation series for bootstrap sampling.
+///
+/// Enables non-parametric simulation by sampling directly from historical inflation data.
+/// Supports both i.i.d. sampling and block bootstrap (preserves autocorrelation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoricalInflation {
+    /// Name/source for display purposes
+    pub name: Cow<'static, str>,
+    /// Starting year of the data series
+    pub start_year: i16,
+    /// Annual inflation rates (index 0 = start_year)
+    pub rates: Cow<'static, [f64]>,
+}
+
+impl HistoricalInflation {
+    /// Create a new historical inflation series.
+    pub fn new(
+        name: impl Into<Cow<'static, str>>,
+        start_year: i16,
+        rates: impl Into<Cow<'static, [f64]>>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            start_year,
+            rates: rates.into(),
+        }
+    }
+
+    /// Number of years of historical data available.
+    pub fn len(&self) -> usize {
+        self.rates.len()
+    }
+
+    /// Returns true if the historical data is empty.
+    pub fn is_empty(&self) -> bool {
+        self.rates.is_empty()
+    }
+
+    /// Sample a random year's inflation rate (i.i.d. with replacement).
+    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Option<f64> {
+        if self.rates.is_empty() {
+            return None;
+        }
+        let idx = rng.random_range(0..self.rates.len());
+        Some(self.rates[idx])
+    }
+
+    /// Sample n years with replacement (i.i.d. bootstrap).
+    pub fn sample_years<R: Rng + ?Sized>(&self, rng: &mut R, n: usize) -> Option<Vec<f64>> {
+        if self.rates.is_empty() {
+            return None;
+        }
+        Some(
+            (0..n)
+                .map(|_| self.rates[rng.random_range(0..self.rates.len())])
+                .collect(),
+        )
+    }
+
+    /// Block bootstrap: sample contiguous blocks to preserve autocorrelation.
+    ///
+    /// This is useful for capturing inflation persistence effects.
+    /// Blocks wrap around at the end of the series (circular bootstrap).
+    pub fn block_bootstrap<R: Rng + ?Sized>(
+        &self,
+        rng: &mut R,
+        n: usize,
+        block_size: usize,
+    ) -> Option<Vec<f64>> {
+        if self.rates.is_empty() || block_size == 0 {
+            return None;
+        }
+        let mut result = Vec::with_capacity(n);
+        while result.len() < n {
+            let start = rng.random_range(0..self.rates.len());
+            for i in 0..block_size {
+                if result.len() >= n {
+                    break;
+                }
+                // Circular wrap for blocks that extend past the end
+                let idx = (start + i) % self.rates.len();
+                result.push(self.rates[idx]);
+            }
+        }
+        Some(result)
+    }
+
+    /// Compute basic statistics of the historical inflation.
+    pub fn statistics(&self) -> Option<HistoricalStatistics> {
+        if self.rates.is_empty() {
+            return None;
+        }
+        let n = self.rates.len() as f64;
+        let arithmetic_mean = self.rates.iter().sum::<f64>() / n;
+
+        // Geometric mean: (product of (1+r))^(1/n) - 1
+        let product: f64 = self.rates.iter().map(|r| 1.0 + r).product();
+        let geometric_mean = product.powf(1.0 / n) - 1.0;
+
+        let variance = self
+            .rates
+            .iter()
+            .map(|r| (r - arithmetic_mean).powi(2))
+            .sum::<f64>()
+            / n;
+        let std_dev = variance.sqrt();
+
+        let min = self.rates.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max = self.rates.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+        Some(HistoricalStatistics {
+            arithmetic_mean,
+            geometric_mean,
+            std_dev,
+            min,
+            max,
+            years: self.rates.len(),
+        })
+    }
+
+    // =========================================================================
+    // Preset Historical Data Constructors
+    // =========================================================================
+
+    /// US CPI Inflation (All Urban Consumers) (1948-2025, 78 years)
+    /// Source: FRED CPIAUCSL
+    pub fn us_cpi() -> Self {
+        Self::new("US CPI", 1948, historical_inflation::US_CPI_ANNUAL_RATES)
+    }
+}
+
 /// Multi-asset historical returns for correlated bootstrap sampling.
 ///
 /// When bootstrapping multiple assets, sampling the same historical year
@@ -1336,6 +1523,94 @@ pub mod historical_returns {
         0.0828, 0.0249, 0.0028, 0.1193, 0.0005, 0.0893, 0.0613, 0.1330, 0.0640, -0.0849, 0.0359,
         -0.0175, 0.0468, 0.0292, -0.0143, 0.0835, 0.1084, 0.0568, -0.1226, 0.0380, 0.0165, 0.0676,
         0.0042,
+    ];
+}
+
+/// Historical annual inflation rates for bootstrap sampling
+pub mod historical_inflation {
+    /// US CPI Inflation (All Urban Consumers)
+    /// Source: FRED CPIAUCSL - year-over-year percent change
+    /// Annual rates 1948-2025 (78 years)
+    /// Arithmetic mean: 3.47%, Geometric mean: 3.43%, Std dev: 2.79%
+    pub const US_CPI_ANNUAL_RATES: &[f64] = &[
+        0.0772,  // 1948
+        -0.0197, // 1949
+        0.0179,  // 1950
+        0.0793,  // 1951
+        0.0192,  // 1952
+        0.0062,  // 1953
+        -0.0074, // 1954
+        0.0037,  // 1955
+        0.0286,  // 1956
+        0.0302,  // 1957
+        0.0176,  // 1958
+        0.0150,  // 1959
+        0.0148,  // 1960
+        0.0067,  // 1961
+        0.0122,  // 1962
+        0.0165,  // 1963
+        0.0097,  // 1964
+        0.0192,  // 1965
+        0.0324,  // 1966
+        0.0304,  // 1967
+        0.0472,  // 1968
+        0.0611,  // 1969
+        0.0549,  // 1970
+        0.0336,  // 1971
+        0.0341,  // 1972
+        0.0862,  // 1973
+        0.1212,  // 1974
+        0.0701,  // 1975
+        0.0486,  // 1976
+        0.0677,  // 1977
+        0.0903,  // 1978
+        0.1331,  // 1979
+        0.1240,  // 1980
+        0.0894,  // 1981
+        0.0397,  // 1982
+        0.0380,  // 1983
+        0.0395,  // 1984
+        0.0377,  // 1985
+        0.0113,  // 1986
+        0.0441,  // 1987
+        0.0442,  // 1988
+        0.0465,  // 1989
+        0.0611,  // 1990
+        0.0306,  // 1991
+        0.0290,  // 1992
+        0.0275,  // 1993
+        0.0267,  // 1994
+        0.0254,  // 1995
+        0.0332,  // 1996
+        0.0170,  // 1997
+        0.0161,  // 1998
+        0.0268,  // 1999
+        0.0339,  // 2000
+        0.0155,  // 2001
+        0.0238,  // 2002
+        0.0188,  // 2003
+        0.0326,  // 2004
+        0.0342,  // 2005
+        0.0254,  // 2006
+        0.0408,  // 2007
+        0.0009,  // 2008
+        0.0272,  // 2009
+        0.0150,  // 2010
+        0.0296,  // 2011
+        0.0174,  // 2012
+        0.0150,  // 2013
+        0.0076,  // 2014
+        0.0073,  // 2015
+        0.0212,  // 2016
+        0.0211,  // 2017
+        0.0191,  // 2018
+        0.0229,  // 2019
+        0.0123,  // 2020
+        0.0700,  // 2021
+        0.0649,  // 2022
+        0.0313,  // 2023
+        0.0294,  // 2024
+        0.0290,  // 2025 (estimated)
     ];
 }
 

@@ -90,7 +90,7 @@ def load_dotenv():
 # ============================================================================
 
 CACHE_DIR = Path(__file__).parent / ".data_cache"
-CACHE_MAX_AGE_DAYS = 7  # Re-download data older than this
+CACHE_MAX_AGE_DAYS = 30  # Re-download data older than this
 
 
 def get_cache_path(url: str, suffix: str = ".pkl") -> Path:
@@ -1424,6 +1424,27 @@ def format_inflation_rust_const(stats: AssetStats) -> str:
     return "\n".join(lines)
 
 
+def format_inflation_rust_array(stats: AssetStats) -> str:
+    """Format historical inflation rates as Rust array for bootstrap sampling."""
+    # Format compactly with 8 values per line (same as returns arrays)
+    returns_str = ",\n        ".join(
+        ", ".join(f"{r:.4f}" for r in stats.annual_returns[i:i+8])
+        for i in range(0, len(stats.annual_returns), 8)
+    )
+
+    lines = [
+        f"    /// {stats.description}",
+        f"    /// Source: {stats.source}",
+        f"    /// Annual rates {stats.start_year}-{stats.end_year} ({stats.num_years} years)",
+        f"    /// Arithmetic mean: {stats.arithmetic_mean:.2%}, Geometric mean: {stats.geometric_mean:.2%}, Std dev: {stats.std_dev:.2%}",
+        f"    pub const US_CPI_ANNUAL_RATES: &[f64] = &[",
+        f"        {returns_str}",
+        f"    ];",
+    ]
+
+    return "\n".join(lines)
+
+
 # ============================================================================
 # Main
 # ============================================================================
@@ -1609,6 +1630,13 @@ Examples:
             print("impl InflationProfile {")
             print(format_inflation_rust_const(inflation_stats))
             print("}")
+
+            if args.include_returns:
+                print()
+                print("/// Historical annual inflation rates for bootstrap sampling")
+                print("pub mod historical_inflation {")
+                print(format_inflation_rust_array(inflation_stats))
+                print("}")
 
     return 0
 

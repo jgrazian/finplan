@@ -166,10 +166,20 @@ fn convert_parameters(
     params: &ParametersData,
     config: &mut SimulationConfig,
 ) -> Result<(), ConvertError> {
+    use finplan_core::model::InflationProfile;
+
     config.birth_date = Some(parse_date(&params.birth_date)?);
     config.start_date = Some(parse_date(&params.start_date)?);
     config.duration_years = params.duration_years;
-    config.inflation_profile = params.inflation.to_inflation_profile();
+
+    // In Historical mode, always use historical bootstrap inflation with the same block size
+    config.inflation_profile = match params.returns_mode {
+        ReturnsMode::Historical => {
+            InflationProfile::us_historical_bootstrap(params.historical_block_size)
+        }
+        ReturnsMode::Parametric => params.inflation.to_inflation_profile(),
+    };
+
     config.tax_config = params.tax_config.to_tax_config();
     Ok(())
 }
