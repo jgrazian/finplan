@@ -86,6 +86,8 @@ pub enum EventAction {
     CompleteChildTrigger,
     /// Final form for repeating event (name, description)
     FinalizeRepeating,
+    /// Pick a quick event template (Social Security, RMD, Medicare)
+    PickQuickEvent,
 }
 
 /// Effect-specific actions (effects within events)
@@ -163,6 +165,7 @@ impl ModalAction {
     pub const BUILD_CHILD_TRIGGER: Self = Self::Event(EventAction::BuildChildTrigger);
     pub const COMPLETE_CHILD_TRIGGER: Self = Self::Event(EventAction::CompleteChildTrigger);
     pub const FINALIZE_REPEATING: Self = Self::Event(EventAction::FinalizeRepeating);
+    pub const PICK_QUICK_EVENT: Self = Self::Event(EventAction::PickQuickEvent);
 
     // Effect shortcuts
     pub const MANAGE_EFFECTS: Self = Self::Effect(EffectAction::Manage);

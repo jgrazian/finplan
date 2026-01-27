@@ -903,6 +903,7 @@ impl EventsScreen {
                     "Account Balance".to_string(),
                     "Net Worth".to_string(),
                     "Relative to Event".to_string(),
+                    "Quick Events".to_string(),
                 ];
                 state.modal = ModalState::Picker(PickerModal::new(
                     "Select Trigger Type",
@@ -1241,6 +1242,9 @@ impl super::ModalHandler for EventsScreen {
             }
             ModalAction::Event(EventAction::FinalizeRepeating) => {
                 actions::handle_finalize_repeating(state, ctx)
+            }
+            ModalAction::Event(EventAction::PickQuickEvent) => {
+                actions::handle_quick_event_pick(state, legacy_value)
             }
 
             // Effect actions
