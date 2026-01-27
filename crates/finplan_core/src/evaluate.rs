@@ -613,14 +613,16 @@ pub fn evaluate_effect_into(
                     None => continue, // Skip if no price available
                 };
 
-                // Calculate available value at current price
-                let units: f64 = investment
+                // Single pass over positions to get both units and cost basis
+                let (total_units, total_basis): (f64, f64) = investment
                     .positions
                     .iter()
                     .filter(|lot| lot.asset_id == asset_id)
-                    .map(|lot| lot.units)
-                    .sum();
-                let available = units * current_price;
+                    .fold((0.0, 0.0), |(u, b), lot| {
+                        (u + lot.units, b + lot.cost_basis)
+                    });
+
+                let available = total_units * current_price;
 
                 if available < 0.01 {
                     continue;
@@ -631,19 +633,6 @@ pub fn evaluate_effect_into(
                     AmountMode::Gross => remaining.min(available),
                     AmountMode::Net => {
                         // For net mode, estimate gross needed based on actual position data
-                        let total_units: f64 = investment
-                            .positions
-                            .iter()
-                            .filter(|lot| lot.asset_id == asset_id)
-                            .map(|lot| lot.units)
-                            .sum();
-                        let total_basis: f64 = investment
-                            .positions
-                            .iter()
-                            .filter(|lot| lot.asset_id == asset_id)
-                            .map(|lot| lot.cost_basis)
-                            .sum();
-
                         let avg_cost_per_unit = if total_units > 0.0 {
                             total_basis / total_units
                         } else {

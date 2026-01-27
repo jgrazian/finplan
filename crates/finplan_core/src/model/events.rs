@@ -262,18 +262,37 @@ impl TriggerOffset {
                 let total_months = date.year() as i32 * 12 + date.month() as i32 - 1 + *m;
                 let new_year = total_months.div_euclid(12) as i16;
                 let new_month = (total_months.rem_euclid(12) + 1) as i8;
-                let max_day = jiff::civil::date(new_year, new_month, 1).days_in_month() as i8;
+                // Inline days_in_month to avoid creating a temporary jiff::civil::date
+                let max_day = days_in_month(new_year, new_month);
                 let new_day = date.day().min(max_day);
                 jiff::civil::date(new_year, new_month, new_day)
             }
             TriggerOffset::Years(y) => {
                 let new_year = (date.year() as i32 + *y) as i16;
-                let max_day = jiff::civil::date(new_year, date.month(), 1).days_in_month() as i8;
+                // Inline days_in_month to avoid creating a temporary jiff::civil::date
+                let max_day = days_in_month(new_year, date.month());
                 let new_day = date.day().min(max_day);
                 jiff::civil::date(new_year, date.month(), new_day)
             }
         }
     }
+}
+
+/// Fast inline days-in-month calculation without creating a jiff::civil::Date.
+#[inline]
+fn days_in_month(year: i16, month: i8) -> i8 {
+    const DAYS: [i8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if month == 2 && is_leap_year(year) {
+        29
+    } else {
+        DAYS[(month - 1) as usize]
+    }
+}
+
+/// Fast leap year check.
+#[inline]
+fn is_leap_year(year: i16) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
