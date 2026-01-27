@@ -4,7 +4,8 @@ use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
-use crate::data::profiles_data::{ProfileData, ReturnProfileData};
+use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
+use crate::data::ticker_profiles;
 use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
     AccountInteractionMode, AppState, ConfirmModal, FormField, FormModal, HoldingEditState,
@@ -1045,13 +1046,27 @@ impl PortfolioProfilesScreen {
             .take(visible_count)
             .map(|(idx, asset)| {
                 let mapping = mappings.get(asset);
-                let mapping_str = mapping.map(|p| p.0.as_str()).unwrap_or("(unmapped)");
+                let is_unmapped = mapping.is_none();
+                let has_suggestion = is_unmapped && ticker_profiles::is_known_ticker(&asset.0);
+
+                let mapping_str = if is_unmapped {
+                    if has_suggestion {
+                        "(unmapped) [?]" // Indicates suggestion available
+                    } else {
+                        "(unmapped)"
+                    }
+                } else {
+                    mapping.map(|p| p.0.as_str()).unwrap_or("")
+                };
 
                 let style = if idx == selected_idx {
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
-                } else if mapping.is_none() {
+                } else if has_suggestion {
+                    // Unmapped with suggestion available - highlight in cyan
+                    Style::default().fg(Color::Cyan)
+                } else if is_unmapped {
                     Style::default().fg(Color::Red)
                 } else {
                     Style::default()
@@ -1076,8 +1091,9 @@ impl PortfolioProfilesScreen {
             .border_style(border_style);
 
         if is_focused && !unique_assets.is_empty() {
-            block =
-                block.title_bottom(Line::from(" [m] Map  [Space] Collapse ").fg(Color::DarkGray));
+            block = block.title_bottom(
+                Line::from(" [m] Map [a] Suggest [A] All [Space] Collapse ").fg(Color::DarkGray),
+            );
         }
 
         let list = List::new(items).block(block);
@@ -2682,6 +2698,74 @@ impl PortfolioProfilesScreen {
                             "No return profiles defined. Add a profile first.".to_string(),
                         );
                     }
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('a') => {
+                // Suggest profile for the selected asset
+                if let Some(asset) =
+                    unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
+                {
+                    // Check if already mapped
+                    if state.data().assets.contains_key(asset) {
+                        state.set_error(format!("{} is already mapped", asset.0));
+                        return EventResult::Handled;
+                    }
+
+                    // Look up suggestion
+                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                        // Create profile if it doesn't exist
+                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                            state.data_mut().profiles.push(ProfileData {
+                                name: profile_tag.clone(),
+                                description: Some(format!(
+                                    "Auto-generated from ticker {}",
+                                    asset.0
+                                )),
+                                profile: suggestion.profile_data.clone(),
+                            });
+                        }
+                        // Add the mapping
+                        state.data_mut().assets.insert(asset.clone(), profile_tag);
+                        state.mark_modified();
+                    } else {
+                        state.set_error(format!("No suggestion available for {}", asset.0));
+                    }
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('A') => {
+                // Suggest profiles for ALL unmapped known tickers
+                let mut suggestions_applied = 0;
+                for asset in &unique_assets {
+                    // Skip if already mapped
+                    if state.data().assets.contains_key(asset) {
+                        continue;
+                    }
+                    // Look up suggestion
+                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                        // Create profile if it doesn't exist
+                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                            state.data_mut().profiles.push(ProfileData {
+                                name: profile_tag.clone(),
+                                description: Some(
+                                    "Auto-generated from ticker suggestion".to_string(),
+                                ),
+                                profile: suggestion.profile_data.clone(),
+                            });
+                        }
+                        // Add the mapping
+                        state.data_mut().assets.insert(asset.clone(), profile_tag);
+                        suggestions_applied += 1;
+                    }
+                }
+                if suggestions_applied > 0 {
+                    state.mark_modified();
+                    // Success - mappings will be visible immediately in the UI
+                } else {
+                    state.set_error("No suggestions available for unmapped assets".to_string());
                 }
                 EventResult::Handled
             }

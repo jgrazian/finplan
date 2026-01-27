@@ -5,3 +5,4 @@ pub mod parameters_data;
 pub mod portfolio_data;
 pub mod profiles_data;
 pub mod storage;
+pub mod ticker_profiles;
