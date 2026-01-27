@@ -3,5 +3,5 @@
 [target.wasm32-unknown-unknown]
 rustflags = [
     '--cfg', 'getrandom_backend="wasm_js"',
-    '-C', 'target-feature=+reference-types',
+    '-C', 'target-feature=+reference-types,+bulk-memory',
 ]
