@@ -339,6 +339,8 @@ pub struct FormModal {
     pub context: Option<ModalContext>,
     /// Form kind for type-safe dispatch of special behavior
     pub kind: FormKind,
+    /// Original value of field being edited (for Esc to revert)
+    pub editing_original_value: Option<String>,
 }
 
 impl FormModal {
@@ -357,6 +359,7 @@ impl FormModal {
             action,
             context: None,
             kind: FormKind::default(),
+            editing_original_value: None,
         }
     }
 
@@ -378,6 +381,7 @@ impl FormModal {
             && self.fields[self.focused_field].field_type != FieldType::ReadOnly
         {
             self.editing = true;
+            self.editing_original_value = Some(self.fields[self.focused_field].value.clone());
             self.fields[self.focused_field].cursor_pos =
                 self.fields[self.focused_field].value.len();
         }

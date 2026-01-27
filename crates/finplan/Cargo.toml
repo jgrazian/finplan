@@ -71,9 +71,3 @@ tracing-wasm = { version = "0.2", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
-
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-strip = true

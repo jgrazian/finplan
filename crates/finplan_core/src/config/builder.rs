@@ -347,7 +347,7 @@ impl SimulationBuilder {
                         self.next_return_profile_id += 1;
                         self.config
                             .return_profiles
-                            .insert(id, asset_def.return_profile);
+                            .insert(id, asset_def.return_profile.clone());
                         self.metadata
                             .register_return_profile(id, Some(profile_name.clone()), None);
                         id
@@ -358,7 +358,7 @@ impl SimulationBuilder {
                 self.next_return_profile_id += 1;
                 self.config
                     .return_profiles
-                    .insert(profile_id, asset_def.return_profile);
+                    .insert(profile_id, asset_def.return_profile.clone());
                 profile_id
             };
 

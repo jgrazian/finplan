@@ -4,7 +4,8 @@ use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
-use crate::data::profiles_data::{ProfileData, ReturnProfileData};
+use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
+use crate::data::ticker_profiles;
 use crate::event::{AppKeyEvent, KeyCode};
 use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
@@ -739,6 +740,72 @@ impl PortfolioProfilesScreen {
                         Span::raw(format_percentage(*std_dev)),
                     ]));
                 }
+                ReturnProfileData::StudentT { mean, scale, df } => {
+                    lines.push(Line::from(vec![
+                        Span::styled("Mean: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(format_percentage(*mean), Style::default().fg(Color::Yellow)),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("Scale: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::raw(format_percentage(*scale)),
+                    ]));
+                    let tail_desc = if *df <= 2.5 {
+                        "Very fat tails"
+                    } else if *df <= 4.0 {
+                        "Fat tails"
+                    } else {
+                        "Moderate tails"
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled("Tails: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            format!("{} (df={:.0})", tail_desc, df),
+                            Style::default().fg(Color::Magenta),
+                        ),
+                    ]));
+                }
+                ReturnProfileData::RegimeSwitching {
+                    bull_mean,
+                    bull_std_dev,
+                    bear_mean,
+                    bear_std_dev,
+                    bull_to_bear_prob,
+                    bear_to_bull_prob,
+                } => {
+                    lines.push(Line::from(vec![
+                        Span::styled("Bull: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            format!(
+                                "{} mean, {} std",
+                                format_percentage(*bull_mean),
+                                format_percentage(*bull_std_dev)
+                            ),
+                            Style::default().fg(Color::Green),
+                        ),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled("Bear: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            format!(
+                                "{} mean, {} std",
+                                format_percentage(*bear_mean),
+                                format_percentage(*bear_std_dev)
+                            ),
+                            Style::default().fg(Color::Red),
+                        ),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            "Transitions: ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw(format!(
+                            "{}->bear, {}->bull",
+                            format_percentage(*bull_to_bear_prob),
+                            format_percentage(*bear_to_bull_prob)
+                        )),
+                    ]));
+                }
             }
 
             lines
@@ -829,6 +896,25 @@ impl PortfolioProfilesScreen {
             }
             ReturnProfileData::LogNormal { mean, std_dev } => {
                 self.render_normal_distribution(frame, area, *mean, *std_dev, true);
+            }
+            ReturnProfileData::StudentT { mean, scale, df } => {
+                self.render_student_t_distribution(frame, area, *mean, *scale, *df);
+            }
+            ReturnProfileData::RegimeSwitching {
+                bull_mean,
+                bull_std_dev,
+                bear_mean,
+                bear_std_dev,
+                ..
+            } => {
+                self.render_regime_switching_distribution(
+                    frame,
+                    area,
+                    *bull_mean,
+                    *bull_std_dev,
+                    *bear_mean,
+                    *bear_std_dev,
+                );
             }
         }
     }
@@ -960,13 +1046,27 @@ impl PortfolioProfilesScreen {
             .take(visible_count)
             .map(|(idx, asset)| {
                 let mapping = mappings.get(asset);
-                let mapping_str = mapping.map(|p| p.0.as_str()).unwrap_or("(unmapped)");
+                let is_unmapped = mapping.is_none();
+                let has_suggestion = is_unmapped && ticker_profiles::is_known_ticker(&asset.0);
+
+                let mapping_str = if is_unmapped {
+                    if has_suggestion {
+                        "(unmapped) [?]" // Indicates suggestion available
+                    } else {
+                        "(unmapped)"
+                    }
+                } else {
+                    mapping.map(|p| p.0.as_str()).unwrap_or("")
+                };
 
                 let style = if idx == selected_idx {
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
-                } else if mapping.is_none() {
+                } else if has_suggestion {
+                    // Unmapped with suggestion available - highlight in cyan
+                    Style::default().fg(Color::Cyan)
+                } else if is_unmapped {
                     Style::default().fg(Color::Red)
                 } else {
                     Style::default()
@@ -991,8 +1091,9 @@ impl PortfolioProfilesScreen {
             .border_style(border_style);
 
         if is_focused && !unique_assets.is_empty() {
-            block =
-                block.title_bottom(Line::from(" [m] Map  [Space] Collapse ").fg(Color::DarkGray));
+            block = block.title_bottom(
+                Line::from(" [m] Map [a] Suggest [A] All [Space] Collapse ").fg(Color::DarkGray),
+            );
         }
 
         let list = List::new(items).block(block);
@@ -1100,6 +1201,8 @@ impl PortfolioProfilesScreen {
             ReturnProfileData::Fixed { .. } => "Fixed Rate".to_string(),
             ReturnProfileData::Normal { .. } => "Normal Distribution".to_string(),
             ReturnProfileData::LogNormal { .. } => "Log-Normal Distribution".to_string(),
+            ReturnProfileData::StudentT { .. } => "Student's t Distribution".to_string(),
+            ReturnProfileData::RegimeSwitching { .. } => "Regime Switching".to_string(),
         }
     }
 
@@ -1274,6 +1377,254 @@ impl PortfolioProfilesScreen {
         frame.render_widget(Paragraph::new(label_line), label_area);
     }
 
+    /// Render Student's t distribution with fat tails
+    fn render_student_t_distribution(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        mean: f64,
+        scale: f64,
+        df: f64,
+    ) {
+        // Use as many bins as we have columns (minus padding for labels)
+        let num_bins = (area.width as usize).saturating_sub(4).max(10);
+        let height = area.height.saturating_sub(2) as usize;
+
+        if height < 3 || area.width < 20 {
+            let msg = Paragraph::new("Area too small").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        // For Student's t, use wider range due to fat tails (±4σ instead of ±3σ)
+        let range_mult = 4.0;
+        let min_val = mean - range_mult * scale;
+        let max_val = mean + range_mult * scale;
+        let bin_size = (max_val - min_val) / num_bins as f64;
+
+        // Student's t PDF: Γ((df+1)/2) / (sqrt(df*π) * Γ(df/2)) * (1 + x²/df)^(-(df+1)/2)
+        // For simplicity, we normalize later, so we only need the shape
+        let exponent = -(df + 1.0) / 2.0;
+
+        let mut pdf_values = Vec::with_capacity(num_bins);
+        for i in 0..num_bins {
+            let x = min_val + (i as f64 + 0.5) * bin_size;
+            let z = (x - mean) / scale;
+            let pdf = (1.0 + z * z / df).powf(exponent);
+            pdf_values.push(pdf);
+        }
+
+        // Normalize to height
+        let max_pdf = pdf_values.iter().cloned().fold(0.0_f64, f64::max);
+        if max_pdf == 0.0 {
+            let msg =
+                Paragraph::new("Invalid distribution").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        let height_units = height * 8;
+        let bar_heights: Vec<usize> = pdf_values
+            .iter()
+            .map(|&pdf| ((pdf / max_pdf) * height_units as f64).round() as usize)
+            .collect();
+
+        let x_offset = (area.width as usize).saturating_sub(num_bins) / 2;
+        let bin_chars = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+        for row in 0..height {
+            let row_base = (height - 1 - row) * 8;
+            let row_top = row_base + 8;
+            let mut spans = Vec::new();
+
+            if x_offset > 0 {
+                spans.push(Span::raw(" ".repeat(x_offset)));
+            }
+
+            for (i, &bar_h) in bar_heights.iter().enumerate() {
+                let x = min_val + (i as f64 + 0.5) * bin_size;
+
+                // Use magenta for Student's t to distinguish from Normal
+                let color = if x < mean - scale {
+                    Color::Red
+                } else if x > mean + scale {
+                    Color::Green
+                } else {
+                    Color::Magenta
+                };
+
+                let char_to_use = if bar_h >= row_top {
+                    "█"
+                } else if bar_h > row_base {
+                    let fill_level = bar_h - row_base;
+                    bin_chars[fill_level.min(8)]
+                } else {
+                    " "
+                };
+
+                spans.push(Span::styled(char_to_use, Style::default().fg(color)));
+            }
+
+            let line = Line::from(spans);
+            let row_area = Rect::new(area.x, area.y + row as u16, area.width, 1);
+            frame.render_widget(Paragraph::new(line), row_area);
+        }
+
+        // Render x-axis labels with df indicator
+        let label_y = area.y + height as u16;
+        let label_line = Line::from(vec![
+            Span::styled(
+                format!("{:>6}", format_percentage(min_val)),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::raw(" ".repeat((area.width as usize).saturating_sub(24) / 2)),
+            Span::styled(
+                format!("μ={} df={:.0}", format_percentage(mean), df),
+                Style::default().fg(Color::Magenta),
+            ),
+            Span::raw(" ".repeat((area.width as usize).saturating_sub(24) / 2)),
+            Span::styled(
+                format!("{:<6}", format_percentage(max_val)),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+        let label_area = Rect::new(area.x, label_y, area.width, 1);
+        frame.render_widget(Paragraph::new(label_line), label_area);
+    }
+
+    /// Render bimodal distribution for regime switching (bull/bear overlay)
+    fn render_regime_switching_distribution(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        bull_mean: f64,
+        bull_std_dev: f64,
+        bear_mean: f64,
+        bear_std_dev: f64,
+    ) {
+        let num_bins = (area.width as usize).saturating_sub(4).max(10);
+        let height = area.height.saturating_sub(2) as usize;
+
+        if height < 3 || area.width < 20 {
+            let msg = Paragraph::new("Area too small").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        // Calculate range to include both distributions
+        let min_val = (bear_mean - 3.0 * bear_std_dev).min(bull_mean - 3.0 * bull_std_dev);
+        let max_val = (bear_mean + 3.0 * bear_std_dev).max(bull_mean + 3.0 * bull_std_dev);
+        let bin_size = (max_val - min_val) / num_bins as f64;
+
+        let pi = std::f64::consts::PI;
+
+        // Calculate PDF values for both distributions
+        let mut bull_pdf = Vec::with_capacity(num_bins);
+        let mut bear_pdf = Vec::with_capacity(num_bins);
+
+        for i in 0..num_bins {
+            let x = min_val + (i as f64 + 0.5) * bin_size;
+
+            // Bull market PDF (Normal)
+            let bull_exp = -(x - bull_mean).powi(2) / (2.0 * bull_std_dev * bull_std_dev);
+            let bull_p = (1.0 / (bull_std_dev * (2.0 * pi).sqrt())) * bull_exp.exp();
+            bull_pdf.push(bull_p);
+
+            // Bear market PDF (Normal)
+            let bear_exp = -(x - bear_mean).powi(2) / (2.0 * bear_std_dev * bear_std_dev);
+            let bear_p = (1.0 / (bear_std_dev * (2.0 * pi).sqrt())) * bear_exp.exp();
+            bear_pdf.push(bear_p);
+        }
+
+        // Normalize both to same scale
+        let max_pdf = bull_pdf
+            .iter()
+            .chain(bear_pdf.iter())
+            .cloned()
+            .fold(0.0_f64, f64::max);
+
+        if max_pdf == 0.0 {
+            let msg =
+                Paragraph::new("Invalid distribution").style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(msg, area);
+            return;
+        }
+
+        let height_units = height * 8;
+        let bull_heights: Vec<usize> = bull_pdf
+            .iter()
+            .map(|&pdf| ((pdf / max_pdf) * height_units as f64).round() as usize)
+            .collect();
+        let bear_heights: Vec<usize> = bear_pdf
+            .iter()
+            .map(|&pdf| ((pdf / max_pdf) * height_units as f64).round() as usize)
+            .collect();
+
+        let x_offset = (area.width as usize).saturating_sub(num_bins) / 2;
+        let bin_chars = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+
+        for row in 0..height {
+            let row_base = (height - 1 - row) * 8;
+            let row_top = row_base + 8;
+            let mut spans = Vec::new();
+
+            if x_offset > 0 {
+                spans.push(Span::raw(" ".repeat(x_offset)));
+            }
+
+            for i in 0..num_bins {
+                let bull_h = bull_heights[i];
+                let bear_h = bear_heights[i];
+
+                // Determine which distribution is dominant at this position
+                let (dom_h, dom_color) = if bull_h > bear_h {
+                    (bull_h, Color::Green)
+                } else if bear_h > bull_h {
+                    (bear_h, Color::Red)
+                } else if bull_h > 0 {
+                    (bull_h, Color::Yellow) // Overlap
+                } else {
+                    (0, Color::DarkGray)
+                };
+
+                let char_to_use = if dom_h >= row_top {
+                    "█"
+                } else if dom_h > row_base {
+                    let fill_level = dom_h - row_base;
+                    bin_chars[fill_level.min(8)]
+                } else {
+                    " "
+                };
+
+                spans.push(Span::styled(char_to_use, Style::default().fg(dom_color)));
+            }
+
+            let line = Line::from(spans);
+            let row_area = Rect::new(area.x, area.y + row as u16, area.width, 1);
+            frame.render_widget(Paragraph::new(line), row_area);
+        }
+
+        // Render x-axis labels with regime indicator
+        let label_y = area.y + height as u16;
+        let label_line = Line::from(vec![
+            Span::styled("Bear", Style::default().fg(Color::Red)),
+            Span::raw(": "),
+            Span::styled(
+                format_percentage(bear_mean),
+                Style::default().fg(Color::Red),
+            ),
+            Span::raw("  "),
+            Span::styled("Bull", Style::default().fg(Color::Green)),
+            Span::raw(": "),
+            Span::styled(
+                format_percentage(bull_mean),
+                Style::default().fg(Color::Green),
+            ),
+        ]);
+        let label_area = Rect::new(area.x, label_y, area.width, 1);
+        frame.render_widget(Paragraph::new(label_line), label_area);
+    }
+
     // ========== Key Handlers ==========
 
     fn handle_accounts_keys(&self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
@@ -1440,11 +1791,10 @@ impl PortfolioProfilesScreen {
                                 ],
                                 ModalAction::ADD_HOLDING,
                             )
-                            .with_typed_context(
-                                ModalContext::account_index(
-                                    state.portfolio_profiles_state.selected_account_index,
-                                ),
-                            );
+                            .with_typed_context(ModalContext::account_index(
+                                state.portfolio_profiles_state.selected_account_index,
+                            ))
+                            .start_editing();
                             state.modal = ModalState::Form(form);
                         }
                         _ => {
@@ -2029,6 +2379,9 @@ impl PortfolioProfilesScreen {
                     "Fixed Rate".to_string(),
                     "Normal Distribution".to_string(),
                     "Log-Normal Distribution".to_string(),
+                    "Student's t Distribution".to_string(),
+                    "Regime Switching (Normal)".to_string(),
+                    "Regime Switching (Student-t)".to_string(),
                 ];
                 state.modal = ModalState::Picker(PickerModal::new(
                     "Select Profile Type",
@@ -2114,6 +2467,36 @@ impl PortfolioProfilesScreen {
                 }
                 EventResult::Handled
             }
+            KeyCode::Char('5') => {
+                // StudentT preset (S&P 500 historical with fat tails)
+                let idx = state.portfolio_profiles_state.selected_profile_index;
+                if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
+                    profile_data.profile = ReturnProfileData::StudentT {
+                        mean: 0.11471,
+                        scale: 0.140558,
+                        df: 5.0,
+                    };
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('6') => {
+                // Regime Switching preset (S&P 500 bull/bear, conservative)
+                // ~7.4% expected return: 73% bull (12%), 27% bear (-5%)
+                let idx = state.portfolio_profiles_state.selected_profile_index;
+                if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
+                    profile_data.profile = ReturnProfileData::RegimeSwitching {
+                        bull_mean: 0.12,
+                        bull_std_dev: 0.12,
+                        bear_mean: -0.05,
+                        bear_std_dev: 0.22,
+                        bull_to_bear_prob: 0.15,
+                        bear_to_bull_prob: 0.40,
+                    };
+                    state.mark_modified();
+                }
+                EventResult::Handled
+            }
             KeyCode::Char(' ') => {
                 // Space: toggle both secondary panels and focus Config
                 let expanding = state.portfolio_profiles_state.config_collapsed;
@@ -2171,6 +2554,90 @@ impl PortfolioProfilesScreen {
                 ],
                 ModalAction::EDIT_PROFILE,
             ),
+            ReturnProfileData::StudentT { mean, scale, df } => {
+                // Convert scale back to std_dev for display
+                let std_dev = if *df > 2.0 {
+                    scale / ((df - 2.0) / df).sqrt()
+                } else {
+                    *scale
+                };
+                let tail_choice = if *df <= 2.5 {
+                    "Very fat tails (df=2)"
+                } else if *df <= 4.0 {
+                    "Fat tails (df=3)"
+                } else {
+                    "Moderate tails (df=5)"
+                };
+                FormModal::new(
+                    "Edit Profile",
+                    vec![
+                        FormField::text("Name", &profile_data.name.0),
+                        FormField::text(
+                            "Description",
+                            profile_data.description.as_deref().unwrap_or(""),
+                        ),
+                        FormField::read_only("Type", &type_name),
+                        FormField::percentage("Mean", *mean),
+                        FormField::percentage("Std Dev", std_dev),
+                        FormField::select(
+                            "Tail Behavior",
+                            vec![
+                                "Moderate tails (df=5)".to_string(),
+                                "Fat tails (df=3)".to_string(),
+                                "Very fat tails (df=2)".to_string(),
+                            ],
+                            tail_choice,
+                        ),
+                    ],
+                    ModalAction::EDIT_PROFILE,
+                )
+            }
+            ReturnProfileData::RegimeSwitching {
+                bull_mean,
+                bull_std_dev,
+                bear_mean,
+                bear_std_dev,
+                bull_to_bear_prob,
+                bear_to_bull_prob,
+            } => {
+                // Regime switching profiles are preset-only, show read-only parameters
+                FormModal::new(
+                    "Edit Profile",
+                    vec![
+                        FormField::text("Name", &profile_data.name.0),
+                        FormField::text(
+                            "Description",
+                            profile_data.description.as_deref().unwrap_or(""),
+                        ),
+                        FormField::read_only("Type", &type_name),
+                        FormField::read_only(
+                            "Bull Market",
+                            &format!(
+                                "{} mean, {} std",
+                                format_percentage(*bull_mean),
+                                format_percentage(*bull_std_dev)
+                            ),
+                        ),
+                        FormField::read_only(
+                            "Bear Market",
+                            &format!(
+                                "{} mean, {} std",
+                                format_percentage(*bear_mean),
+                                format_percentage(*bear_std_dev)
+                            ),
+                        ),
+                        FormField::read_only(
+                            "Transitions",
+                            &format!(
+                                "{}->bear, {}->bull",
+                                format_percentage(*bull_to_bear_prob),
+                                format_percentage(*bear_to_bull_prob)
+                            ),
+                        ),
+                    ],
+                    ModalAction::EDIT_PROFILE,
+                )
+            }
         }
     }
 
@@ -2231,6 +2698,74 @@ impl PortfolioProfilesScreen {
                             "No return profiles defined. Add a profile first.".to_string(),
                         );
                     }
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('a') => {
+                // Suggest profile for the selected asset
+                if let Some(asset) =
+                    unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
+                {
+                    // Check if already mapped
+                    if state.data().assets.contains_key(asset) {
+                        state.set_error(format!("{} is already mapped", asset.0));
+                        return EventResult::Handled;
+                    }
+
+                    // Look up suggestion
+                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                        // Create profile if it doesn't exist
+                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                            state.data_mut().profiles.push(ProfileData {
+                                name: profile_tag.clone(),
+                                description: Some(format!(
+                                    "Auto-generated from ticker {}",
+                                    asset.0
+                                )),
+                                profile: suggestion.profile_data.clone(),
+                            });
+                        }
+                        // Add the mapping
+                        state.data_mut().assets.insert(asset.clone(), profile_tag);
+                        state.mark_modified();
+                    } else {
+                        state.set_error(format!("No suggestion available for {}", asset.0));
+                    }
+                }
+                EventResult::Handled
+            }
+            KeyCode::Char('A') => {
+                // Suggest profiles for ALL unmapped known tickers
+                let mut suggestions_applied = 0;
+                for asset in &unique_assets {
+                    // Skip if already mapped
+                    if state.data().assets.contains_key(asset) {
+                        continue;
+                    }
+                    // Look up suggestion
+                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                        // Create profile if it doesn't exist
+                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                            state.data_mut().profiles.push(ProfileData {
+                                name: profile_tag.clone(),
+                                description: Some(
+                                    "Auto-generated from ticker suggestion".to_string(),
+                                ),
+                                profile: suggestion.profile_data.clone(),
+                            });
+                        }
+                        // Add the mapping
+                        state.data_mut().assets.insert(asset.clone(), profile_tag);
+                        suggestions_applied += 1;
+                    }
+                }
+                if suggestions_applied > 0 {
+                    state.mark_modified();
+                    // Success - mappings will be visible immediately in the UI
+                } else {
+                    state.set_error("No suggestions available for unmapped assets".to_string());
                 }
                 EventResult::Handled
             }

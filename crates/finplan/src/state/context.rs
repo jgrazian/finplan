@@ -109,6 +109,9 @@ pub enum ProfileTypeContext {
     Fixed,
     Normal,
     LogNormal,
+    StudentT,
+    RegimeSwitchingNormal,
+    RegimeSwitchingStudentT,
 }
 
 impl FromStr for ProfileTypeContext {
@@ -120,6 +123,13 @@ impl FromStr for ProfileTypeContext {
             "Fixed" | "Fixed Rate" => Ok(Self::Fixed),
             "Normal" | "Normal Distribution" => Ok(Self::Normal),
             "LogNormal" | "Log-Normal" | "Log-Normal Distribution" => Ok(Self::LogNormal),
+            "StudentT" | "Student's t" | "Student's t Distribution" => Ok(Self::StudentT),
+            "RegimeSwitchingNormal" | "Regime Switching (Normal)" => {
+                Ok(Self::RegimeSwitchingNormal)
+            }
+            "RegimeSwitchingStudentT" | "Regime Switching (Student-t)" => {
+                Ok(Self::RegimeSwitchingStudentT)
+            }
             _ => Err(()),
         }
     }
@@ -132,6 +142,9 @@ impl ProfileTypeContext {
             Self::Fixed => "Fixed",
             Self::Normal => "Normal",
             Self::LogNormal => "Log-Normal",
+            Self::StudentT => "Student's t",
+            Self::RegimeSwitchingNormal => "Regime Switching (Normal)",
+            Self::RegimeSwitchingStudentT => "Regime Switching (Student-t)",
         }
     }
 }

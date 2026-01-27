@@ -100,7 +100,8 @@ pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
 
     ActionResult::modal(ModalState::Form(
         FormModal::new(title, fields, ModalAction::CREATE_ACCOUNT)
-            .with_typed_context(ModalContext::AccountType(account_type_ctx)),
+            .with_typed_context(ModalContext::AccountType(account_type_ctx))
+            .start_editing(),
     ))
 }
 
