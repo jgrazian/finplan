@@ -16,3 +16,8 @@ codegen-units = 1
 lto = "thin"
 opt-level = "s"
 strip = true
+
+[profile.flamegraph]
+inherits = "release"
+debug = true
+strip = false
