@@ -1714,8 +1714,8 @@ Add a "Load Preset" option in profile editor that offers:
 - [x] Phase 1.1 - Asset class preset constants (11 asset classes with Fixed/Normal/LogNormal)
 - [x] Phase 1.2 - Student's t distribution (variant added, presets for high-volatility assets)
 - [x] Phase 1.3 - Inflation preset constants (US_HISTORICAL_FIXED, US_HISTORICAL_NORMAL, US_HISTORICAL_LOG_NORMAL)
-- [ ] Phase 2.1 - Regime switching variant
-- [ ] Phase 2.2 - Regime switching presets
+- [x] Phase 2.1 - Regime switching variant (Box<ReturnProfile> for bull/bear, sample_sequence for stateful)
+- [x] Phase 2.2 - Regime switching presets (sp500_regime_switching_normal, sp500_regime_switching_student_t)
 - [ ] Phase 3.1 - Correlation matrix structure
 - [ ] Phase 3.2 - Correlated sampling in Market
 - [ ] Phase 3.3 - Default correlation presets
@@ -1772,6 +1772,46 @@ Inflation constants were already present:
 - US_HISTORICAL_FIXED (geometric mean: 3.43%)
 - US_HISTORICAL_NORMAL (mean: 3.47%, std_dev: 2.79%)
 - US_HISTORICAL_LOG_NORMAL
+
+### Phase 2.1-2.2 - Regime Switching (2026-01-26)
+
+Added `ReturnProfile::RegimeSwitching` variant for Markov regime-switching models.
+
+**Design decisions:**
+- Used `Box<ReturnProfile>` for bull/bear states instead of just mean/std_dev
+- This allows any distribution type (Normal, StudentT, etc.) for each regime
+- More flexible and composable, follows same pattern as nested EventTriggers
+- Removed `Copy` derive from `ReturnProfile` (required for `Box`)
+
+**Key implementation:**
+```rust
+RegimeSwitching {
+    bull: Box<ReturnProfile>,      // Return profile during bull markets
+    bear: Box<ReturnProfile>,      // Return profile during bear markets
+    bull_to_bear_prob: f64,        // Annual transition probability
+    bear_to_bull_prob: f64,        // Annual transition probability
+}
+```
+
+**Two sampling modes:**
+1. `sample()` - Stateless sampling using steady-state regime probabilities
+   - P(bull) = bear_to_bull / (bull_to_bear + bear_to_bull)
+   - Useful for one-off sampling
+2. `sample_sequence()` - Stateful sampling that maintains regime across years
+   - Starts in bull market, transitions based on probabilities
+   - Used by `Market::from_profiles()` for proper regime clustering
+
+**Presets added (as functions, not const):**
+- `sp500_regime_switching_normal()` - Bull: 15%/12% | Bear: -8%/25%
+- `sp500_regime_switching_student_t()` - Same with df=5 fat tails
+- `regime_switching()` - Custom constructor helper
+
+**Test coverage:**
+- Stateless sampling produces mix of bull/bear returns
+- Sequence sampling shows regime persistence (fewer sign-change "runs")
+- Works with StudentT sub-profiles
+- Custom profile construction
+- Integration with Market::from_profiles
 
 ---
 

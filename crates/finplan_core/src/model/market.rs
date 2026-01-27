@@ -143,7 +143,10 @@ impl Market {
         }
     }
 
-    /// Generate market data from profiles
+    /// Generate market data from profiles.
+    ///
+    /// For `RegimeSwitching` profiles, this properly maintains regime state
+    /// across years, modeling the clustering of good and bad market periods.
     pub fn from_profiles<R: Rng + ?Sized>(
         rng: &mut R,
         num_years: usize,
@@ -158,10 +161,8 @@ impl Market {
 
         let mut returns: FxHashMap<ReturnProfileId, Vec<f64>> = FxHashMap::default();
         for (rp_id, rp) in return_profiles.iter() {
-            let mut rp_returns = Vec::with_capacity(num_years);
-            for _ in 0..num_years {
-                rp_returns.push(rp.sample(rng)?);
-            }
+            // Use sample_sequence for proper regime-switching support
+            let rp_returns = rp.sample_sequence(rng, num_years)?;
             returns.insert(*rp_id, rp_returns);
         }
 
@@ -281,7 +282,7 @@ impl InflationProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ReturnProfile {
     None,
@@ -304,8 +305,143 @@ pub enum ReturnProfile {
         scale: f64,
         df: f64,
     },
+    /// Markov regime-switching model with bull/bear market states.
+    /// Captures the tendency of markets to cluster good and bad years.
+    /// - `bull`: Return profile during bull markets (typically higher returns, lower volatility)
+    /// - `bear`: Return profile during bear markets (typically lower/negative returns, higher volatility)
+    /// - `bull_to_bear_prob`: Annual probability of transitioning from bull to bear (e.g., 0.12 = ~8yr bull cycles)
+    /// - `bear_to_bull_prob`: Annual probability of transitioning from bear to bull (e.g., 0.50 = ~2yr bear cycles)
+    RegimeSwitching {
+        bull: Box<ReturnProfile>,
+        bear: Box<ReturnProfile>,
+        bull_to_bear_prob: f64,
+        bear_to_bull_prob: f64,
+    },
 }
 
+impl ReturnProfile {
+    /// Sample a single return from this profile.
+    ///
+    /// For `RegimeSwitching`, this samples statelessly using steady-state regime probabilities.
+    /// Use `sample_sequence()` for proper stateful regime-switching simulation.
+    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<f64, MarketError> {
+        match self {
+            ReturnProfile::None => Ok(0.0),
+            ReturnProfile::Fixed(rate) => Ok(*rate),
+            ReturnProfile::Normal { mean, std_dev } => rand_distr::Normal::new(*mean, *std_dev)
+                .map(|d| d.sample(rng))
+                .map_err(|_| MarketError::InvalidDistributionParameters {
+                    profile_type: "Normal return",
+                    mean: *mean,
+                    std_dev: *std_dev,
+                    reason: "std_dev must be non-negative and finite",
+                }),
+            ReturnProfile::LogNormal { mean, std_dev } => {
+                rand_distr::LogNormal::new(*mean, *std_dev)
+                    .map(|d| d.sample(rng) - 1.0)
+                    .map_err(|_| MarketError::InvalidDistributionParameters {
+                        profile_type: "LogNormal return",
+                        mean: *mean,
+                        std_dev: *std_dev,
+                        reason: "std_dev must be positive and finite",
+                    })
+            }
+            ReturnProfile::StudentT { mean, scale, df } => rand_distr::StudentT::new(*df)
+                .map(|d| mean + scale * d.sample(rng))
+                .map_err(|_| MarketError::InvalidDistributionParameters {
+                    profile_type: "StudentT return",
+                    mean: *mean,
+                    std_dev: *scale,
+                    reason: "degrees of freedom must be positive and finite",
+                }),
+            ReturnProfile::RegimeSwitching {
+                bull,
+                bear,
+                bull_to_bear_prob,
+                bear_to_bull_prob,
+            } => {
+                // For stateless sampling, use steady-state regime probabilities
+                // P(bull) = bear_to_bull / (bull_to_bear + bear_to_bull)
+                let total_prob = bull_to_bear_prob + bear_to_bull_prob;
+                if total_prob <= 0.0 {
+                    return Err(MarketError::InvalidDistributionParameters {
+                        profile_type: "RegimeSwitching return",
+                        mean: 0.0,
+                        std_dev: 0.0,
+                        reason: "transition probabilities must be positive",
+                    });
+                }
+                let bull_steady_state = bear_to_bull_prob / total_prob;
+                if rng.random::<f64>() < bull_steady_state {
+                    bull.sample(rng)
+                } else {
+                    bear.sample(rng)
+                }
+            }
+        }
+    }
+
+    /// Sample a sequence of returns with proper regime state tracking.
+    ///
+    /// For `RegimeSwitching`, this maintains regime state across years,
+    /// properly modeling the tendency of markets to cluster good and bad years.
+    /// For other profile types, this is equivalent to calling `sample()` n times.
+    pub fn sample_sequence<R: Rng + ?Sized>(
+        &self,
+        rng: &mut R,
+        num_years: usize,
+    ) -> Result<Vec<f64>, MarketError> {
+        match self {
+            ReturnProfile::RegimeSwitching {
+                bull,
+                bear,
+                bull_to_bear_prob,
+                bear_to_bull_prob,
+            } => {
+                let mut returns = Vec::with_capacity(num_years);
+                let mut in_bull = true; // Start in bull market
+
+                for _ in 0..num_years {
+                    // Sample return from current regime
+                    let ret = if in_bull {
+                        bull.sample(rng)?
+                    } else {
+                        bear.sample(rng)?
+                    };
+                    returns.push(ret);
+
+                    // Transition regime for next year
+                    let transition_prob = if in_bull {
+                        *bull_to_bear_prob
+                    } else {
+                        *bear_to_bull_prob
+                    };
+                    if rng.random::<f64>() < transition_prob {
+                        in_bull = !in_bull;
+                    }
+                }
+
+                Ok(returns)
+            }
+            // For non-regime-switching profiles, just sample independently
+            _ => {
+                let mut returns = Vec::with_capacity(num_years);
+                for _ in 0..num_years {
+                    returns.push(self.sample(rng)?);
+                }
+                Ok(returns)
+            }
+        }
+    }
+}
+
+// Auto-generated by scripts/fetch_historical_returns.py
+// Generated: 2026-01-26T16:13:37.329914
+//
+// Data Sources:
+//   - Robert Shiller, Yale University (S&P 500 since 1871)
+//   - Kenneth French Data Library, Dartmouth (Fama-French factors since 1926)
+//   - Yahoo Finance (ETF data for recent history)
 impl ReturnProfile {
     // US Large Cap Stocks (S&P 500 Total Return)
     // Source: Robert Shiller, Yale University
@@ -321,11 +457,9 @@ impl ReturnProfile {
         mean: 0.11471,
         std_dev: 0.18146,
     };
-    /// Student's t with df=5 captures equity fat tails well
-    /// scale = std_dev * sqrt((df-2)/df) = 0.18146 * sqrt(0.6) ≈ 0.1406
     pub const SP_500_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
         mean: 0.11471,
-        scale: 0.14058,
+        scale: 0.140558,
         df: 5.0,
     };
 
@@ -378,6 +512,11 @@ impl ReturnProfile {
         mean: 0.047717,
         std_dev: 0.0700793,
     };
+    pub const US_LONG_BOND_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.047717,
+        scale: 0.0542832,
+        df: 5.0,
+    };
 
     // Developed Markets ex-US (Fama-French)
     // Source: Kenneth French Data Library, Dartmouth
@@ -393,6 +532,11 @@ impl ReturnProfile {
         mean: 0.0778324,
         std_dev: 0.188273,
     };
+    pub const INTL_DEVELOPED_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.0778324,
+        scale: 0.145836,
+        df: 5.0,
+    };
 
     // Emerging Markets (Fama-French)
     // Source: Kenneth French Data Library, Dartmouth
@@ -404,13 +548,9 @@ impl ReturnProfile {
         mean: 0.107264,
         std_dev: 0.347473,
     };
-    pub const EMERGING_MARKETS_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
-        mean: 0.107264,
-        std_dev: 0.347473,
-    };
     pub const EMERGING_MARKETS_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
         mean: 0.107264,
-        scale: 0.26916,
+        scale: 0.269151,
         df: 5.0,
     };
 
@@ -428,6 +568,11 @@ impl ReturnProfile {
         mean: 0.082752,
         std_dev: 0.195905,
     };
+    pub const REITS_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.082752,
+        scale: 0.151748,
+        df: 5.0,
+    };
 
     // Gold (via GC=F futures)
     // Source: Yahoo Finance
@@ -442,6 +587,11 @@ impl ReturnProfile {
     pub const GOLD_HISTORICAL_LOGNORMAL: ReturnProfile = ReturnProfile::LogNormal {
         mean: 0.131744,
         std_dev: 0.173436,
+    };
+    pub const GOLD_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.131744,
+        scale: 0.134343,
+        df: 5.0,
     };
 
     // US Investment Grade Bonds (Bloomberg Aggregate via AGG)
@@ -473,6 +623,11 @@ impl ReturnProfile {
         mean: 0.0441447,
         std_dev: 0.0697513,
     };
+    pub const US_CORPORATE_BOND_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.0441447,
+        scale: 0.0540291,
+        df: 5.0,
+    };
 
     // US Treasury Inflation-Protected Securities (via TIP)
     // Source: Yahoo Finance
@@ -488,42 +643,75 @@ impl ReturnProfile {
         mean: 0.0358924,
         std_dev: 0.0606518,
     };
+    pub const TIPS_HISTORICAL_STUDENT_T: ReturnProfile = ReturnProfile::StudentT {
+        mean: 0.0358924,
+        scale: 0.0469807,
+        df: 5.0,
+    };
 
-    pub fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> Result<f64, MarketError> {
-        match self {
-            ReturnProfile::None => Ok(0.0),
-            ReturnProfile::Fixed(rate) => Ok(*rate),
-            ReturnProfile::Normal { mean, std_dev } => rand_distr::Normal::new(*mean, *std_dev)
-                .map(|d| d.sample(rng))
-                .map_err(|_| MarketError::InvalidDistributionParameters {
-                    profile_type: "Normal return",
-                    mean: *mean,
-                    std_dev: *std_dev,
-                    reason: "std_dev must be non-negative and finite",
-                }),
-            ReturnProfile::LogNormal { mean, std_dev } => {
-                rand_distr::LogNormal::new(*mean, *std_dev)
-                    .map(|d| d.sample(rng) - 1.0)
-                    .map_err(|_| MarketError::InvalidDistributionParameters {
-                        profile_type: "LogNormal return",
-                        mean: *mean,
-                        std_dev: *std_dev,
-                        reason: "std_dev must be positive and finite",
-                    })
-            }
-            ReturnProfile::StudentT { mean, scale, df } => rand_distr::StudentT::new(*df)
-                .map(|d| mean + scale * d.sample(rng))
-                .map_err(|_| MarketError::InvalidDistributionParameters {
-                    profile_type: "StudentT return",
-                    mean: *mean,
-                    std_dev: *scale,
-                    reason: "degrees of freedom must be positive and finite",
-                }),
+    // =========================================================================
+    // Regime-Switching Presets
+    // =========================================================================
+    // These are functions (not const) because Box allocation isn't const.
+    // Based on historical analysis of S&P 500 bull/bear market cycles:
+    // - Bull markets: avg duration ~8 years, higher returns (~15%), lower vol (~12%)
+    // - Bear markets: avg duration ~2 years, lower returns (~-8%), higher vol (~25%)
+
+    /// S&P 500 regime-switching model with Normal distributions for each regime.
+    /// Bull: 15% mean, 12% std_dev | Bear: -8% mean, 25% std_dev
+    /// Transition: ~12% bull->bear (8yr cycles), ~50% bear->bull (2yr cycles)
+    pub fn sp500_regime_switching_normal() -> ReturnProfile {
+        ReturnProfile::RegimeSwitching {
+            bull: Box::new(ReturnProfile::Normal {
+                mean: 0.15,
+                std_dev: 0.12,
+            }),
+            bear: Box::new(ReturnProfile::Normal {
+                mean: -0.08,
+                std_dev: 0.25,
+            }),
+            bull_to_bear_prob: 0.12,
+            bear_to_bull_prob: 0.50,
+        }
+    }
+
+    /// S&P 500 regime-switching model with Student's t distributions for fat tails.
+    /// Same parameters as normal but with df=5 for each regime.
+    pub fn sp500_regime_switching_student_t() -> ReturnProfile {
+        ReturnProfile::RegimeSwitching {
+            bull: Box::new(ReturnProfile::StudentT {
+                mean: 0.15,
+                scale: 0.12 * (3.0_f64 / 5.0).sqrt(), // Adjust for df=5
+                df: 5.0,
+            }),
+            bear: Box::new(ReturnProfile::StudentT {
+                mean: -0.08,
+                scale: 0.25 * (3.0_f64 / 5.0).sqrt(), // Adjust for df=5
+                df: 5.0,
+            }),
+            bull_to_bear_prob: 0.12,
+            bear_to_bull_prob: 0.50,
+        }
+    }
+
+    /// Create a custom regime-switching profile.
+    pub fn regime_switching(
+        bull: ReturnProfile,
+        bear: ReturnProfile,
+        bull_to_bear_prob: f64,
+        bear_to_bull_prob: f64,
+    ) -> ReturnProfile {
+        ReturnProfile::RegimeSwitching {
+            bull: Box::new(bull),
+            bear: Box::new(bear),
+            bull_to_bear_prob,
+            bear_to_bull_prob,
         }
     }
 }
 
 /// Historical annual returns for bootstrap sampling
+#[allow(dead_code)]
 pub mod historical_returns {
     /// US Large Cap Stocks (S&P 500 Total Return)
     /// Source: Robert Shiller, Yale University
@@ -767,5 +955,129 @@ mod tests {
             .sample(&mut rng)
             .unwrap();
         assert!(sample.is_finite());
+    }
+
+    #[test]
+    fn test_regime_switching_stateless_sample() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let profile = ReturnProfile::sp500_regime_switching_normal();
+
+        // Sample many times and verify we get a mix of bull and bear returns
+        let samples: Vec<f64> = (0..1000)
+            .map(|_| profile.sample(&mut rng).unwrap())
+            .collect();
+
+        // Should have some positive (bull) and negative (bear) returns
+        let positive_count = samples.iter().filter(|&&x| x > 0.0).count();
+        let negative_count = samples.iter().filter(|&&x| x < 0.0).count();
+
+        // With steady-state ~80% bull, ~20% bear, we expect mostly positive
+        // but with bear's higher volatility some samples can be positive too
+        assert!(positive_count > 500, "Expected majority positive returns");
+        assert!(negative_count > 50, "Expected some negative returns");
+    }
+
+    #[test]
+    fn test_regime_switching_sequence_maintains_state() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let profile = ReturnProfile::sp500_regime_switching_normal();
+
+        // Generate a sequence
+        let returns = profile.sample_sequence(&mut rng, 100).unwrap();
+        assert_eq!(returns.len(), 100);
+
+        // Check that returns cluster (characteristic of regime switching)
+        // Count "runs" - consecutive returns of same sign
+        let mut runs = 1;
+        for i in 1..returns.len() {
+            if (returns[i] > 0.0) != (returns[i - 1] > 0.0) {
+                runs += 1;
+            }
+        }
+
+        // With regime switching, runs should be fewer than with independent samples
+        // Independent samples would have ~50 runs on average (50% chance of sign change)
+        // Regime switching should have fewer due to persistence
+        // This is a probabilistic test, but with seed 42 it should be stable
+        assert!(
+            runs < 45,
+            "Expected fewer runs ({}) due to regime persistence",
+            runs
+        );
+    }
+
+    #[test]
+    fn test_regime_switching_with_student_t() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+
+        let profile = ReturnProfile::sp500_regime_switching_student_t();
+
+        // Should be able to sample
+        let sample = profile.sample(&mut rng).unwrap();
+        assert!(sample.is_finite());
+
+        // Should be able to generate sequence
+        let returns = profile.sample_sequence(&mut rng, 50).unwrap();
+        assert_eq!(returns.len(), 50);
+        assert!(returns.iter().all(|r| r.is_finite()));
+    }
+
+    #[test]
+    fn test_regime_switching_custom() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(456);
+
+        // Create a custom regime switching profile
+        let profile = ReturnProfile::regime_switching(
+            ReturnProfile::Fixed(0.10),  // Bull: always 10%
+            ReturnProfile::Fixed(-0.20), // Bear: always -20%
+            0.25,                        // 25% chance bull->bear
+            0.50,                        // 50% chance bear->bull
+        );
+
+        let returns = profile.sample_sequence(&mut rng, 20).unwrap();
+
+        // All returns should be either 0.10 or -0.20
+        for r in &returns {
+            assert!(
+                (*r - 0.10).abs() < 1e-10 || (*r - (-0.20)).abs() < 1e-10,
+                "Unexpected return value: {}",
+                r
+            );
+        }
+    }
+
+    #[test]
+    fn test_regime_switching_in_market_from_profiles() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(789);
+
+        let rp_id = ReturnProfileId(1);
+        let asset_id = AssetId(1);
+
+        let mut return_profiles = HashMap::new();
+        return_profiles.insert(rp_id, ReturnProfile::sp500_regime_switching_normal());
+
+        let assets = FxHashMap::from_iter([(asset_id, (1000.0, rp_id))]);
+
+        let market = Market::from_profiles(
+            &mut rng,
+            30,
+            &InflationProfile::Fixed(0.02),
+            &return_profiles,
+            &assets,
+        )
+        .unwrap();
+
+        // Should be able to get asset values
+        let start = date(2024, 1, 1);
+        let value = market.get_asset_value(start, date(2025, 1, 1), asset_id);
+        assert!(value.is_some());
+        assert!(value.unwrap().is_finite());
     }
 }
