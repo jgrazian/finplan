@@ -439,7 +439,7 @@ impl ResultsScreen {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
                 format!(
-                    " NET WORTH PROJECTION ({}) ({}) ({}) [h/l year, v view, r $mode] ",
+                    " NET WORTH PROJECTION ({}) ({}) ({}) [h/l year, v view, $ toggle] ",
                     selected_year, pct, mode_label
                 )
             } else {
@@ -450,7 +450,7 @@ impl ResultsScreen {
             }
         } else if focused {
             format!(
-                " NET WORTH PROJECTION ({}) ({}) [h/l year, r $mode] ",
+                " NET WORTH PROJECTION ({}) ({}) [h/l year, $ toggle] ",
                 selected_year, mode_label
             )
         } else {
@@ -746,7 +746,7 @@ impl ResultsScreen {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
                 format!(
-                    " YEARLY BREAKDOWN ({}) ({}) ({}) [j/k scroll, v view, r $mode] ",
+                    " YEARLY BREAKDOWN ({}) ({}) ({}) [j/k scroll, v view, $ toggle] ",
                     selected_year, pct, mode_label
                 )
             } else {
@@ -757,7 +757,7 @@ impl ResultsScreen {
             }
         } else if focused {
             format!(
-                " YEARLY BREAKDOWN ({}) ({}) [j/k scroll, r $mode] ",
+                " YEARLY BREAKDOWN ({}) ({}) [j/k scroll, $ toggle] ",
                 selected_year, mode_label
             )
         } else {
@@ -799,7 +799,7 @@ impl ResultsScreen {
             let pct = state.results_state.percentile_view.short_label();
             if focused {
                 format!(
-                    " ACCOUNT BREAKDOWN ({}) ({}) ({}) [h/l year, v view, r $mode] ",
+                    " ACCOUNT BREAKDOWN ({}) ({}) ({}) [h/l year, v view, $ toggle] ",
                     selected_year, pct, mode_label
                 )
             } else {
@@ -810,7 +810,7 @@ impl ResultsScreen {
             }
         } else if focused {
             format!(
-                " ACCOUNT BREAKDOWN ({}) ({}) [h/l year, r $mode] ",
+                " ACCOUNT BREAKDOWN ({}) ({}) [h/l year, $ toggle] ",
                 selected_year, mode_label
             )
         } else {
@@ -1133,7 +1133,7 @@ impl Component for ResultsScreen {
             }
 
             // r for toggling between nominal and real (inflation-adjusted) values
-            KeyCode::Char('r') => {
+            KeyCode::Char('$') => {
                 state.results_state.value_display_mode =
                     state.results_state.value_display_mode.toggle();
                 EventResult::Handled
