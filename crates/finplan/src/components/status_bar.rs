@@ -29,7 +29,9 @@ impl StatusBar {
             crate::state::TabId::Events => {
                 "j/k: scroll | Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
             }
-            crate::state::TabId::Results => "j/k: scroll",
+            crate::state::TabId::Results => {
+                "j/k: scroll | h/l: year | $: real/nominal $ | v: percentile"
+            }
             crate::state::TabId::Optimize => {
                 "Tab: panel | j/k: nav | r: run | a: add param | d: delete"
             }

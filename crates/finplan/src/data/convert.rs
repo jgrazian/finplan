@@ -17,8 +17,10 @@ use super::{
         AccountTag, AmountData, EffectData, EventTag, IntervalData, LotMethodData, OffsetData,
         SpecialAmount, ThresholdData, TriggerData, WithdrawalStrategyData,
     },
-    parameters_data::ParametersData,
+    parameters_data::{ParametersData, ReturnsMode},
     portfolio_data::{AccountData, AccountType, AssetTag},
+    profiles_data::ReturnProfileData,
+    ticker_profiles::HISTORICAL_PRESETS,
 };
 
 #[derive(Debug, Clone)]
@@ -127,10 +129,22 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
         }
     }
 
-    // Assign profile IDs
-    for (idx, profile) in data.profiles.iter().enumerate() {
-        let id = ReturnProfileId((idx + 1) as u16);
-        profile_ids.insert(profile.name.0.clone(), id);
+    // Assign profile IDs based on mode
+    match data.parameters.returns_mode {
+        ReturnsMode::Historical => {
+            // In Historical mode, assign IDs to preset profiles
+            for (idx, (_, display_name, _)) in HISTORICAL_PRESETS.iter().enumerate() {
+                let id = ReturnProfileId((idx + 1) as u16);
+                profile_ids.insert(display_name.to_string(), id);
+            }
+        }
+        ReturnsMode::Parametric => {
+            // In Parametric mode, assign IDs to user-defined profiles
+            for (idx, profile) in data.profiles.iter().enumerate() {
+                let id = ReturnProfileId((idx + 1) as u16);
+                profile_ids.insert(profile.name.0.clone(), id);
+            }
+        }
     }
 
     // Assign event IDs
@@ -152,10 +166,20 @@ fn convert_parameters(
     params: &ParametersData,
     config: &mut SimulationConfig,
 ) -> Result<(), ConvertError> {
+    use finplan_core::model::InflationProfile;
+
     config.birth_date = Some(parse_date(&params.birth_date)?);
     config.start_date = Some(parse_date(&params.start_date)?);
     config.duration_years = params.duration_years;
-    config.inflation_profile = params.inflation.to_inflation_profile();
+
+    // In Historical mode, always use historical bootstrap inflation with the same block size
+    config.inflation_profile = match params.returns_mode {
+        ReturnsMode::Historical => {
+            InflationProfile::us_historical_bootstrap(params.historical_block_size)
+        }
+        ReturnsMode::Parametric => params.inflation.to_inflation_profile(),
+    };
+
     config.tax_config = params.tax_config.to_tax_config();
     Ok(())
 }
@@ -165,11 +189,31 @@ fn convert_profiles(
     ctx: &ResolveContext,
     config: &mut SimulationConfig,
 ) -> Result<(), ConvertError> {
-    for profile_data in &data.profiles {
-        if let Some(&id) = ctx.profile_ids.get(&profile_data.name.0) {
-            config
-                .return_profiles
-                .insert(id, profile_data.profile.to_return_profile());
+    match data.parameters.returns_mode {
+        ReturnsMode::Historical => {
+            // Generate historical profiles at runtime
+            let block_size = data.parameters.historical_block_size;
+            for (preset_key, display_name, _) in HISTORICAL_PRESETS {
+                if let Some(&id) = ctx.profile_ids.get(*display_name) {
+                    let profile_data = ReturnProfileData::Bootstrap {
+                        preset: preset_key.to_string(),
+                    };
+                    config.return_profiles.insert(
+                        id,
+                        profile_data.to_return_profile_with_block_size(block_size),
+                    );
+                }
+            }
+        }
+        ReturnsMode::Parametric => {
+            // Use user-defined profiles
+            for profile_data in &data.profiles {
+                if let Some(&id) = ctx.profile_ids.get(&profile_data.name.0) {
+                    config
+                        .return_profiles
+                        .insert(id, profile_data.profile.to_return_profile());
+                }
+            }
         }
     }
     Ok(())
@@ -303,8 +347,14 @@ fn build_asset_mappings(
     ctx: &ResolveContext,
     config: &mut SimulationConfig,
 ) -> Result<(), ConvertError> {
-    // Build asset_returns map from the assets HashMap in SimulationData
-    for (asset_tag, profile_tag) in &data.assets {
+    // Select the appropriate asset mappings based on mode
+    let asset_mappings = match data.parameters.returns_mode {
+        ReturnsMode::Historical => &data.historical_assets,
+        ReturnsMode::Parametric => &data.assets,
+    };
+
+    // Build asset_returns map from the selected assets HashMap
+    for (asset_tag, profile_tag) in asset_mappings {
         if let Some(&profile_id) = ctx.profile_ids.get(&profile_tag.0) {
             // Find all instances of this asset across accounts
             for ((_, asset_name), (_, asset_id)) in &ctx.asset_ids {
@@ -318,14 +368,18 @@ fn build_asset_mappings(
     }
 
     // Register Property/Collectible assets with their return profiles
-    for account in &data.portfolios.accounts {
-        if let AccountType::Property(prop) | AccountType::Collectible(prop) = &account.account_type
-            && let Some((asset_id, Some(profile_name))) = ctx.property_assets.get(&account.name)
-            && let Some(&profile_id) = ctx.profile_ids.get(profile_name)
-        {
-            config.asset_returns.insert(*asset_id, profile_id);
-            // Use the property's value as the initial price
-            config.asset_prices.insert(*asset_id, prop.value);
+    // Note: Properties currently only use parametric profiles
+    if data.parameters.returns_mode == ReturnsMode::Parametric {
+        for account in &data.portfolios.accounts {
+            if let AccountType::Property(prop) | AccountType::Collectible(prop) =
+                &account.account_type
+                && let Some((asset_id, Some(profile_name))) = ctx.property_assets.get(&account.name)
+                && let Some(&profile_id) = ctx.profile_ids.get(profile_name)
+            {
+                config.asset_returns.insert(*asset_id, profile_id);
+                // Use the property's value as the initial price
+                config.asset_prices.insert(*asset_id, prop.value);
+            }
         }
     }
 
@@ -713,6 +767,8 @@ fn convert_withdrawal_strategy(strategy: &WithdrawalStrategyData) -> WithdrawalO
 ///
 /// Uses the pre-computed yearly_cash_flows from the core simulation which
 /// properly categorizes income, expenses, and withdrawals using CashFlowKind.
+///
+/// Also computes inflation-adjusted (real) values for display in "today's dollars".
 pub fn to_tui_result(
     core_result: &finplan_core::model::SimulationResult,
     birth_date: &str,
@@ -721,7 +777,7 @@ pub fn to_tui_result(
     use std::collections::BTreeMap;
 
     let birth = parse_date(birth_date)?;
-    let _start = parse_date(start_date)?;
+    let start = parse_date(start_date)?;
 
     // Use pre-computed yearly cash flows from core simulation
     let yearly_income: BTreeMap<i32, f64> = core_result
@@ -775,6 +831,22 @@ pub fn to_tui_result(
         snap.accounts.iter().map(|acc| acc.total_value()).sum()
     });
 
+    // Get cumulative inflation factors for real value calculations
+    let inflation_factors = &core_result.cumulative_inflation;
+    let start_year = start.year() as i32;
+
+    // Helper to get inflation factor for a given year
+    let get_inflation_factor = |year: i32| -> f64 {
+        let year_index = (year - start_year).max(0) as usize;
+        inflation_factors
+            .get(year_index)
+            .copied()
+            .unwrap_or_else(|| {
+                // If beyond available data, use the last factor
+                inflation_factors.last().copied().unwrap_or(1.0)
+            })
+    };
+
     // Build year results
     let mut years = Vec::new();
 
@@ -789,20 +861,56 @@ pub fn to_tui_result(
             .copied()
             .unwrap_or(final_net_worth);
 
+        let income = *yearly_income.get(year).unwrap_or(&0.0);
+        let expenses = *yearly_expenses.get(year).unwrap_or(&0.0);
+
+        // Calculate inflation factor for this year
+        let inflation_factor = get_inflation_factor(*year);
+
+        // Calculate real (inflation-adjusted) values
+        let real_net_worth = if inflation_factor > 0.0 {
+            net_worth / inflation_factor
+        } else {
+            net_worth
+        };
+        let real_income = if inflation_factor > 0.0 {
+            income / inflation_factor
+        } else {
+            income
+        };
+        let real_expenses = if inflation_factor > 0.0 {
+            expenses / inflation_factor
+        } else {
+            expenses
+        };
+
         years.push(crate::state::YearResult {
             year: *year,
             age,
             net_worth,
-            income: *yearly_income.get(year).unwrap_or(&0.0),
-            expenses: *yearly_expenses.get(year).unwrap_or(&0.0),
+            income,
+            expenses,
             withdrawals: *yearly_withdrawals.get(year).unwrap_or(&0.0),
             contributions: *yearly_contributions.get(year).unwrap_or(&0.0),
             taxes: *yearly_taxes.get(year).unwrap_or(&0.0),
+            real_net_worth,
+            real_income,
+            real_expenses,
         });
     }
 
+    // Calculate final real net worth
+    let final_year = all_years.last().copied().unwrap_or(start_year);
+    let final_inflation_factor = get_inflation_factor(final_year);
+    let final_real_net_worth = if final_inflation_factor > 0.0 {
+        final_net_worth / final_inflation_factor
+    } else {
+        final_net_worth
+    };
+
     Ok(crate::state::SimulationResult {
         final_net_worth,
+        final_real_net_worth,
         years,
     })
 }

@@ -132,6 +132,19 @@ pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionR
                 ModalAction::PICK_EVENT_REFERENCE,
             )))
         }
+        "Quick Events" => {
+            // Show quick event template picker
+            let templates = vec![
+                "Social Security".to_string(),
+                "RMD (Required Minimum Distributions)".to_string(),
+                "Medicare Part B".to_string(),
+            ];
+            ActionResult::modal(ModalState::Picker(PickerModal::new(
+                "Select Quick Event",
+                templates,
+                ModalAction::PICK_QUICK_EVENT,
+            )))
+        }
         _ => ActionResult::close(),
     }
 }
@@ -930,5 +943,117 @@ fn convert_partial_to_trigger(partial: &PartialTrigger) -> Option<TriggerData> {
                 end: end_trigger,
             })
         }
+    }
+}
+
+// =============================================================================
+// Quick Event Templates
+// =============================================================================
+
+use crate::data::events_data::{AmountData, EffectData, LotMethodData};
+use crate::data::portfolio_data::AccountType;
+
+/// Handle quick event template selection
+pub fn handle_quick_event_pick(state: &mut AppState, template: &str) -> ActionResult {
+    let event = match template {
+        "Social Security" => create_social_security_template(state),
+        "RMD (Required Minimum Distributions)" => create_rmd_template(state),
+        "Medicare Part B" => create_medicare_template(state),
+        _ => return ActionResult::close(),
+    };
+
+    // Add event and select it
+    state.data_mut().events.push(event);
+    state.events_state.selected_event_index = state.data().events.len() - 1;
+    state.mark_modified();
+
+    ActionResult::modified()
+}
+
+/// Find the first cash account (Checking or Savings) for use as default destination
+fn first_cash_account_name(state: &AppState) -> String {
+    state
+        .data()
+        .portfolios
+        .accounts
+        .iter()
+        .find(|a| {
+            matches!(
+                a.account_type,
+                AccountType::Checking(_) | AccountType::Savings(_)
+            )
+        })
+        .map(|a| a.name.clone())
+        .unwrap_or_else(|| "Checking".to_string())
+}
+
+/// Create a Social Security template event
+fn create_social_security_template(state: &AppState) -> EventData {
+    let dest = first_cash_account_name(state);
+    EventData {
+        name: EventTag("Social Security".to_string()),
+        description: Some("Monthly Social Security benefits".to_string()),
+        trigger: TriggerData::Repeating {
+            interval: IntervalData::Monthly,
+            start: Some(Box::new(TriggerData::Age {
+                years: 67,
+                months: None,
+            })),
+            end: None,
+        },
+        effects: vec![EffectData::Income {
+            to: AccountTag(dest),
+            amount: AmountData::Fixed(2000.0), // Placeholder - user should customize
+            gross: true,
+            taxable: true, // SS is partially taxable at higher incomes
+        }],
+        once: false,
+        enabled: true,
+    }
+}
+
+/// Create an RMD (Required Minimum Distributions) template event
+fn create_rmd_template(state: &AppState) -> EventData {
+    let dest = first_cash_account_name(state);
+    EventData {
+        name: EventTag("RMD".to_string()),
+        description: Some("Required Minimum Distributions from tax-deferred accounts".to_string()),
+        trigger: TriggerData::Repeating {
+            interval: IntervalData::Yearly,
+            start: Some(Box::new(TriggerData::Age {
+                years: 73,
+                months: None,
+            })),
+            end: None,
+        },
+        effects: vec![EffectData::ApplyRmd {
+            destination: AccountTag(dest),
+            lot_method: LotMethodData::Fifo,
+        }],
+        once: false,
+        enabled: true,
+    }
+}
+
+/// Create a Medicare Part B template event
+fn create_medicare_template(state: &AppState) -> EventData {
+    let source = first_cash_account_name(state);
+    EventData {
+        name: EventTag("Medicare Part B".to_string()),
+        description: Some("Medicare Part B monthly premiums".to_string()),
+        trigger: TriggerData::Repeating {
+            interval: IntervalData::Monthly,
+            start: Some(Box::new(TriggerData::Age {
+                years: 65,
+                months: None,
+            })),
+            end: None,
+        },
+        effects: vec![EffectData::Expense {
+            from: AccountTag(source),
+            amount: AmountData::Fixed(174.70), // 2024 standard Part B premium
+        }],
+        once: false,
+        enabled: true,
     }
 }

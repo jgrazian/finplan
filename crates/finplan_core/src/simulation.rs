@@ -22,18 +22,30 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 // Re-export for backwards compatibility
 pub use crate::model::n_day_rate;
 
-/// Build yearly cash flow summaries from ledger entries
+/// Build yearly cash flow summaries from ledger entries.
+/// Uses a Vec indexed by (year - min_year) for O(1) lookups instead of BTreeMap.
 fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary> {
-    use std::collections::BTreeMap;
+    if ledger.is_empty() {
+        return Vec::new();
+    }
 
-    let mut yearly: BTreeMap<i16, YearlyCashFlowSummary> = BTreeMap::new();
+    // Find year range from ledger (entries are chronological)
+    let min_year = ledger.first().map(|e| e.date.year()).unwrap_or(2024);
+    let max_year = ledger.last().map(|e| e.date.year()).unwrap_or(min_year);
+    let num_years = (max_year - min_year + 1) as usize;
+
+    // Pre-allocate Vec with default summaries
+    let mut yearly: Vec<YearlyCashFlowSummary> = (0..num_years)
+        .map(|i| YearlyCashFlowSummary {
+            year: min_year + i as i16,
+            ..Default::default()
+        })
+        .collect();
 
     for entry in ledger {
-        let year = entry.date.year();
-        let summary = yearly.entry(year).or_insert_with(|| YearlyCashFlowSummary {
-            year,
-            ..Default::default()
-        });
+        let year_idx = (entry.date.year() - min_year) as usize;
+        // Safety: year_idx is guaranteed to be in bounds since we calculated range from ledger
+        let summary = &mut yearly[year_idx];
 
         match &entry.event {
             StateEvent::CashCredit { amount, kind, .. } => match kind {
@@ -61,11 +73,11 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
     }
 
     // Calculate net cash flow for each year
-    for summary in yearly.values_mut() {
+    for summary in &mut yearly {
         summary.net_cash_flow = summary.income - summary.expenses + summary.appreciation;
     }
 
-    yearly.into_values().collect()
+    yearly
 }
 
 pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult, MarketError> {
@@ -125,12 +137,16 @@ pub fn simulate_with_scratch(
     // Build yearly cash flow summaries from ledger
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
 
+    // Extract cumulative inflation factors for real value calculations
+    let cumulative_inflation = state.portfolio.market.get_cumulative_inflation_factors();
+
     Ok(SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
         yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
         ledger: std::mem::take(&mut state.history.ledger),
         warnings: std::mem::take(&mut state.warnings),
+        cumulative_inflation,
     })
 }
 
@@ -212,12 +228,16 @@ pub fn simulate_with_metrics(
     // Build yearly cash flow summaries from ledger
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
 
+    // Extract cumulative inflation factors for real value calculations
+    let cumulative_inflation = state.portfolio.market.get_cumulative_inflation_factors();
+
     let result = SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
         yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
         ledger: std::mem::take(&mut state.history.ledger),
         warnings: std::mem::take(&mut state.warnings),
+        cumulative_inflation,
     };
 
     Ok((result, metrics))

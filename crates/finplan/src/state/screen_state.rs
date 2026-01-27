@@ -17,6 +17,34 @@ pub enum PercentileView {
     Mean,
 }
 
+/// Display mode for monetary values in results
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ValueDisplayMode {
+    /// Display nominal (future) dollar values
+    Nominal,
+    /// Display real (today's) inflation-adjusted dollar values
+    #[default]
+    Real,
+}
+
+impl ValueDisplayMode {
+    /// Toggle between nominal and real display modes
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Nominal => Self::Real,
+            Self::Real => Self::Nominal,
+        }
+    }
+
+    /// Get a short label for display in titles
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::Nominal => "Nominal $",
+            Self::Real => "Real $",
+        }
+    }
+}
+
 // ========== Account Interaction State Machine ==========
 
 /// Interaction mode for the account panel in Portfolio & Profiles screen.
@@ -217,6 +245,15 @@ pub struct ScenarioSummary {
     pub success_rate: Option<f64>,
     pub percentiles: Option<(f64, f64, f64)>, // P5, P50, P95
     pub yearly_net_worth: Option<Vec<(i32, f64)>>, // For overlay chart
+    /// Final net worth in real (today's) dollars
+    #[serde(default)]
+    pub final_real_net_worth: Option<f64>,
+    /// Percentiles in real (today's) dollars: P5, P50, P95
+    #[serde(default)]
+    pub real_percentiles: Option<(f64, f64, f64)>,
+    /// Yearly net worth in real (today's) dollars
+    #[serde(default)]
+    pub yearly_real_net_worth: Option<Vec<(i32, f64)>>,
 }
 
 #[derive(Debug, Default)]
@@ -287,6 +324,8 @@ pub struct ResultsState {
     pub percentile_view: PercentileView,
     /// Whether we're viewing Monte Carlo results
     pub viewing_monte_carlo: bool,
+    /// Display mode for monetary values (nominal vs real/inflation-adjusted)
+    pub value_display_mode: ValueDisplayMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

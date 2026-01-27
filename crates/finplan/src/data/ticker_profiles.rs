@@ -158,6 +158,84 @@ pub fn is_known_ticker(ticker: &str) -> bool {
     get_suggestion(ticker).is_some()
 }
 
+/// Historical Bootstrap preset definitions
+/// (preset_key, display_name, description)
+pub const HISTORICAL_PRESETS: &[(&str, &str, &str)] = &[
+    ("sp500", "S&P 500", "US Large Cap (1927-2023, 97yr)"),
+    (
+        "us_small_cap",
+        "US Small Cap",
+        "Small Cap Stocks (1927-2024, 98yr)",
+    ),
+    (
+        "us_tbills",
+        "US T-Bills",
+        "3-Month Treasury (1934-2025, 92yr)",
+    ),
+    (
+        "us_long_bonds",
+        "US Long Bonds",
+        "Long-Term Gov Bonds (1927-2023, 97yr)",
+    ),
+    (
+        "intl_developed",
+        "Intl Developed",
+        "Developed ex-US (1991-2024, 34yr)",
+    ),
+    (
+        "emerging_markets",
+        "Emerging Markets",
+        "EM Stocks (1991-2024, 33yr)",
+    ),
+    ("reits", "REITs", "Real Estate Trusts (2005-2026, 22yr)"),
+    ("gold", "Gold", "Gold (2001-2026, 26yr)"),
+    (
+        "us_agg_bonds",
+        "US Agg Bonds",
+        "Aggregate Bonds (2004-2026, 23yr)",
+    ),
+    (
+        "us_corporate_bonds",
+        "US Corp Bonds",
+        "Corporate Bonds (2003-2026, 24yr)",
+    ),
+    ("tips", "TIPS", "Inflation-Protected (2004-2026, 23yr)"),
+];
+
+/// Maps parametric profile_name to historical preset key
+pub fn get_historical_preset_key(profile_name: &str) -> Option<&'static str> {
+    match profile_name {
+        "US Total Market" | "S&P 500" => Some("sp500"),
+        "US Small Cap" => Some("us_small_cap"),
+        "US Aggregate Bond" => Some("us_agg_bonds"),
+        "International Developed" => Some("intl_developed"),
+        "Emerging Markets" => Some("emerging_markets"),
+        "REITs" => Some("reits"),
+        "Money Market" => Some("us_tbills"),
+        "Long-Term Treasury" => Some("us_long_bonds"),
+        "TIPS" => Some("tips"),
+        "US Corporate Bond" => Some("us_corporate_bonds"),
+        "Gold" => Some("gold"),
+        _ => None,
+    }
+}
+
+/// Get historical preset key directly from ticker
+pub fn get_historical_suggestion(ticker: &str) -> Option<(&'static str, &'static str)> {
+    get_suggestion(ticker).and_then(|m| {
+        get_historical_preset_key(m.profile_name).map(|key| (key, get_historical_display_name(key)))
+    })
+}
+
+/// Get display name for a historical preset key
+pub fn get_historical_display_name(preset_key: &str) -> &'static str {
+    HISTORICAL_PRESETS
+        .iter()
+        .find(|(key, _, _)| *key == preset_key)
+        .map(|(_, name, _)| *name)
+        .unwrap_or("S&P 500")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

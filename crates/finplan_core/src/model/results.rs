@@ -81,6 +81,10 @@ pub struct SimulationResult {
     /// Non-fatal warnings encountered during simulation
     #[serde(default)]
     pub warnings: Vec<SimulationWarning>,
+    /// Cumulative inflation factors for each year (index 0 = 1.0 for today's dollars)
+    /// Used to convert nominal values to real (inflation-adjusted) values
+    #[serde(default)]
+    pub cumulative_inflation: Vec<f64>,
 }
 
 impl SimulationResult {
@@ -485,12 +489,51 @@ impl CashFlowMeanAccumulator {
     }
 }
 
+/// Accumulator for computing mean inflation factors across iterations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InflationMeanAccumulator {
+    /// Sum of cumulative inflation factors for each year index
+    sums: Vec<f64>,
+    /// Number of iterations accumulated
+    pub count: usize,
+}
+
+impl InflationMeanAccumulator {
+    /// Create a new accumulator using the first result as a template
+    pub fn new(template: &SimulationResult) -> Self {
+        Self {
+            sums: vec![0.0; template.cumulative_inflation.len()],
+            count: 0,
+        }
+    }
+
+    /// Add a result to the accumulator
+    pub fn accumulate(&mut self, result: &SimulationResult) {
+        for (idx, &factor) in result.cumulative_inflation.iter().enumerate() {
+            if let Some(sum) = self.sums.get_mut(idx) {
+                *sum += factor;
+            }
+        }
+        self.count += 1;
+    }
+
+    /// Build the mean inflation factors
+    pub fn build_mean_inflation(&self) -> Vec<f64> {
+        if self.count == 0 {
+            return self.sums.clone();
+        }
+        let n = self.count as f64;
+        self.sums.iter().map(|sum| sum / n).collect()
+    }
+}
+
 /// Accumulators for computing mean values (used to build synthetic mean result)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeanAccumulators {
     pub snapshots: SnapshotMeanAccumulator,
     pub taxes: TaxMeanAccumulator,
     pub cash_flows: CashFlowMeanAccumulator,
+    pub inflation: InflationMeanAccumulator,
 }
 
 impl MeanAccumulators {
@@ -499,6 +542,7 @@ impl MeanAccumulators {
             snapshots: SnapshotMeanAccumulator::new(template),
             taxes: TaxMeanAccumulator::new(template),
             cash_flows: CashFlowMeanAccumulator::new(template),
+            inflation: InflationMeanAccumulator::new(template),
         }
     }
 
@@ -506,6 +550,7 @@ impl MeanAccumulators {
         self.snapshots.accumulate(result);
         self.taxes.accumulate(result);
         self.cash_flows.accumulate(result);
+        self.inflation.accumulate(result);
     }
 
     /// Build a synthetic SimulationResult with mean values
@@ -516,6 +561,7 @@ impl MeanAccumulators {
             yearly_cash_flows: self.cash_flows.build_mean_cash_flows(),
             ledger: Vec::new(),   // No meaningful ledger for averaged results
             warnings: Vec::new(), // No warnings for averaged results
+            cumulative_inflation: self.inflation.build_mean_inflation(),
         }
     }
 }

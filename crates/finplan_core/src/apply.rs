@@ -516,26 +516,24 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
     scratch.eval_events.clear();
     scratch.event_ids_to_check.clear();
 
-    // Collect only event IDs to evaluate (avoid cloning entire Event structures)
-    scratch.event_ids_to_check.extend(
-        state
-            .event_state
-            .events
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, opt)| opt.as_ref().map(|e| (EventId(idx as u16), e)))
-            .filter(|(id, event)| {
-                // Skip if already triggered and once=true (but not for Repeating)
-                if event.once
-                    && state.event_state.is_triggered(*id)
-                    && !matches!(event.trigger, EventTrigger::Repeating { .. })
-                {
-                    return false;
-                }
-                true
-            })
-            .map(|(id, _)| id),
-    );
+    // Collect event IDs to evaluate using simple loop (faster than iterator chain + extend)
+    let num_events = state.event_state.events.len();
+    for idx in 0..num_events {
+        let Some(event) = state.event_state.events.get(idx).and_then(|o| o.as_ref()) else {
+            continue;
+        };
+        let event_id = EventId(idx as u16);
+
+        // Skip if already triggered and once=true (but not for Repeating)
+        if event.once
+            && state.event_state.is_triggered(event_id)
+            && !matches!(event.trigger, EventTrigger::Repeating { .. })
+        {
+            continue;
+        }
+
+        scratch.event_ids_to_check.push(event_id);
+    }
 
     // Evaluate each event - iterate by index to avoid moving out of scratch
     let current_date = state.timeline.current_date;
