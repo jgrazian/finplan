@@ -34,7 +34,7 @@ jobs:
             ${{ runner.os }}-cargo-web-
 
       - name: Install trunk
-        run: cargo install trunk
+        run: cargo install trunk --force
 
       - name: Build with trunk
         working-directory: crates/finplan
