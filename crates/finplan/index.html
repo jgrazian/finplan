@@ -5,7 +5,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FinPlan - Retirement Simulator</title>
-    <link data-trunk rel="rust" data-wasm-opt="z" data-cargo-features="web" data-cargo-no-default-features />
+    <link data-trunk rel="rust" data-wasm-opt="z"
+        data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-reference-types"
+        data-cargo-features="web" data-cargo-no-default-features />
     <style>
         body {
             margin: 0;
