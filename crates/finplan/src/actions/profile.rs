@@ -1,8 +1,7 @@
 // Profile actions - type picking, CRUD operations
 
 use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
-use crate::modals::parse_percentage;
-use crate::state::context::{ModalContext, ProfileTypeContext};
+use crate::modals::context::{ModalContext, ProfileTypeContext};
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState};
 
 use super::{ActionContext, ActionResult};
@@ -102,7 +101,10 @@ pub fn handle_profile_type_pick(profile_type: &str) -> ActionResult {
 
 /// Handle profile creation
 pub fn handle_create_profile(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::error("Invalid form data"),
+    };
 
     // Get typed profile type context
     let profile_type_ctx = ctx
@@ -110,59 +112,35 @@ pub fn handle_create_profile(state: &mut AppState, ctx: ActionContext) -> Action
         .and_then(|c| c.as_profile_type())
         .cloned();
 
-    let name = parts.first().unwrap_or(&"").to_string();
+    let name = form.str("Name").unwrap_or("").to_string();
     if name.is_empty() {
         return ActionResult::error("Profile name cannot be empty");
     }
 
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
+    let desc = form.optional_str("Description");
 
     let profile = match profile_type_ctx {
         Some(ProfileTypeContext::None) | None => ReturnProfileData::None,
         Some(ProfileTypeContext::Fixed) => {
-            let rate = parts
-                .get(2)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.07);
+            let rate = form.get_percentage(2).unwrap_or(0.07);
             ReturnProfileData::Fixed { rate }
         }
         Some(ProfileTypeContext::Normal) => {
-            let mean = parts
-                .get(2)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.07);
-            let std_dev = parts
-                .get(3)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.15);
+            let mean = form.get_percentage(2).unwrap_or(0.07);
+            let std_dev = form.get_percentage(3).unwrap_or(0.15);
             ReturnProfileData::Normal { mean, std_dev }
         }
         Some(ProfileTypeContext::LogNormal) => {
-            let mean = parts
-                .get(2)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.07);
-            let std_dev = parts
-                .get(3)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.15);
+            let mean = form.get_percentage(2).unwrap_or(0.07);
+            let std_dev = form.get_percentage(3).unwrap_or(0.15);
             ReturnProfileData::LogNormal { mean, std_dev }
         }
         Some(ProfileTypeContext::StudentT) => {
-            let mean = parts
-                .get(2)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.0957);
-            let std_dev = parts
-                .get(3)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.1652);
+            let mean = form.get_percentage(2).unwrap_or(0.0957);
+            let std_dev = form.get_percentage(3).unwrap_or(0.1652);
             // Parse tail behavior to get df
-            let df: f64 = parts
-                .get(4)
+            let df: f64 = form
+                .get_str(4)
                 .map(|s| {
                     if s.contains("df=2") {
                         2.0_f64
@@ -227,35 +205,32 @@ pub fn handle_edit_profile(state: &mut AppState, ctx: ActionContext) -> ActionRe
         None => return ActionResult::close(),
     };
 
-    let parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
-        // Parts vary by profile type
-        // [name, description, type, ...params]
-        if let Some(name) = parts.first()
-            && !name.is_empty()
-        {
+        // Update name and description from form
+        if let Some(name) = form.str_non_empty("Name") {
             profile_data.name = ReturnProfileTag(name.to_string());
         }
-        profile_data.description = parts
-            .get(1)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty());
+        profile_data.description = form.optional_str("Description");
 
         // Update parameters based on profile type
         match &mut profile_data.profile {
             ReturnProfileData::None => {}
             ReturnProfileData::Fixed { rate } => {
-                if let Some(r) = parts.get(3).and_then(|s| parse_percentage(s).ok()) {
+                if let Some(r) = form.get_percentage(2) {
                     *rate = r;
                 }
             }
             ReturnProfileData::Normal { mean, std_dev }
             | ReturnProfileData::LogNormal { mean, std_dev } => {
-                if let Some(m) = parts.get(3).and_then(|s| parse_percentage(s).ok()) {
+                if let Some(m) = form.get_percentage(2) {
                     *mean = m;
                 }
-                if let Some(s) = parts.get(4).and_then(|s| parse_percentage(s).ok()) {
+                if let Some(s) = form.get_percentage(3) {
                     *std_dev = s;
                 }
             }
@@ -264,17 +239,14 @@ pub fn handle_edit_profile(state: &mut AppState, ctx: ActionContext) -> ActionRe
                 scale,
                 df: current_df,
             } => {
-                if let Some(m) = parts.get(3).and_then(|s| parse_percentage(s).ok()) {
+                if let Some(m) = form.get_percentage(2) {
                     *mean = m;
                 }
                 // Parse std_dev from form and convert to scale
-                let std_dev = parts
-                    .get(4)
-                    .and_then(|s| parse_percentage(s).ok())
-                    .unwrap_or(*scale);
+                let std_dev = form.get_percentage(3).unwrap_or(*scale);
                 // Parse tail behavior to get new df
-                let new_df = parts
-                    .get(5)
+                let new_df = form
+                    .get_str(4)
                     .map(|s| {
                         if s.contains("df=2") {
                             2.0
