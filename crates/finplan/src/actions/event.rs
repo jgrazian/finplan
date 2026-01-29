@@ -3,13 +3,12 @@
 use crate::data::events_data::{
     AccountTag, EventData, EventTag, IntervalData, OffsetData, ThresholdData, TriggerData,
 };
-use crate::modals::parse_currency;
-use crate::screens::events::EventsScreen;
-use crate::state::context::{
+use crate::modals::context::{
     ModalContext, PartialTrigger, TriggerBuilderState, TriggerChildSlot, TriggerContext,
 };
+use crate::screens::events::EventsScreen;
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
-use crate::util::common::{parse_yes_no, yes_no_options};
+use crate::util::common::yes_no_options;
 
 use super::{ActionContext, ActionResult};
 
@@ -238,23 +237,24 @@ pub fn handle_event_reference_pick(event_ref: &str) -> ActionResult {
 
 /// Handle event creation
 pub fn handle_create_event(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     // Get typed trigger context
     let trigger_ctx = ctx.typed_context().and_then(|c| c.as_trigger()).cloned();
 
     // Parse trigger type and create appropriate event
     let (trigger, name, description, once) = match trigger_ctx {
-        Some(TriggerContext::Date) => parse_date_trigger(&parts),
-        Some(TriggerContext::Age) => parse_age_trigger(&parts),
-        Some(TriggerContext::Manual) => parse_manual_trigger(&parts),
-        Some(TriggerContext::NetWorth) => parse_net_worth_trigger(&parts),
+        Some(TriggerContext::Date) => parse_date_trigger(form),
+        Some(TriggerContext::Age) => parse_age_trigger(form),
+        Some(TriggerContext::Manual) => parse_manual_trigger(form),
+        Some(TriggerContext::NetWorth) => parse_net_worth_trigger(form),
         Some(TriggerContext::AccountBalance(account)) => {
-            parse_account_balance_trigger_typed(&account, &parts)
+            parse_account_balance_trigger_typed(&account, form)
         }
-        Some(TriggerContext::RelativeToEvent(event)) => {
-            parse_relative_trigger_typed(&event, &parts)
-        }
+        Some(TriggerContext::RelativeToEvent(event)) => parse_relative_trigger_typed(&event, form),
         Some(TriggerContext::Repeating(_)) | Some(TriggerContext::RepeatingBuilder(_)) => {
             // Repeating events use the separate finalize flow
             return ActionResult::close();
@@ -288,25 +288,19 @@ pub fn handle_edit_event(state: &mut AppState, ctx: ActionContext) -> ActionResu
         None => return ActionResult::close(),
     };
 
-    let parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     if let Some(event) = state.data_mut().events.get_mut(idx) {
-        // Parts: [name, description, once, enabled, trigger (ro), effects (ro)]
-        if let Some(name) = parts.first()
-            && !name.is_empty()
-        {
+        // Fields: [name, description, once, enabled, trigger (ro), effects (ro)]
+        if let Some(name) = form.get_str_non_empty(0) {
             event.name = EventTag(name.to_string());
         }
-        event.description = parts
-            .get(1)
-            .map(|s| s.to_string())
-            .filter(|s| !s.is_empty());
-        if let Some(once_str) = parts.get(2) {
-            event.once = parse_yes_no(once_str);
-        }
-        if let Some(enabled_str) = parts.get(3) {
-            event.enabled = parse_yes_no(enabled_str);
-        }
+        event.description = form.get_optional_str(1);
+        event.once = form.get_bool_or(2, false);
+        event.enabled = form.get_bool_or(3, true);
         ActionResult::modified()
     } else {
         ActionResult::close()
@@ -332,26 +326,20 @@ pub fn handle_delete_event(state: &mut AppState, ctx: ActionContext) -> ActionRe
 
 // Helper functions for parsing trigger data
 
-fn parse_date_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>, bool) {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    let date = parts.get(2).unwrap_or(&"2025-01-01").to_string();
-    let once = parse_yes_no(parts.get(3).unwrap_or(&"No"));
+fn parse_date_trigger(form: &FormModal) -> (TriggerData, String, Option<String>, bool) {
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    let date = form.get_str(2).unwrap_or("2025-01-01").to_string();
+    let once = form.get_bool_or(3, false);
 
     (TriggerData::Date { date }, name, desc, once)
 }
 
-fn parse_age_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>, bool) {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    let years: u8 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(65);
-    let once = parse_yes_no(parts.get(3).unwrap_or(&"Yes"));
+fn parse_age_trigger(form: &FormModal) -> (TriggerData, String, Option<String>, bool) {
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    let years: u8 = form.get_int_or(2, 65);
+    let once = form.get_bool_or(3, true);
 
     (
         TriggerData::Age {
@@ -364,29 +352,20 @@ fn parse_age_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>, bo
     )
 }
 
-fn parse_manual_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>, bool) {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    let once = parse_yes_no(parts.get(2).unwrap_or(&"No"));
+fn parse_manual_trigger(form: &FormModal) -> (TriggerData, String, Option<String>, bool) {
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    let once = form.get_bool_or(2, false);
 
     (TriggerData::Manual, name, desc, once)
 }
 
-fn parse_net_worth_trigger(parts: &[&str]) -> (TriggerData, String, Option<String>, bool) {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    let threshold_val = parts
-        .get(2)
-        .and_then(|s| parse_currency(s).ok())
-        .unwrap_or(1000000.0);
-    let comparison = parts.get(3).unwrap_or(&"Balance rises to or above");
-    let once = parse_yes_no(parts.get(4).unwrap_or(&"Yes"));
+fn parse_net_worth_trigger(form: &FormModal) -> (TriggerData, String, Option<String>, bool) {
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    let threshold_val = form.get_currency_or(2, 1000000.0);
+    let comparison = form.get_str(3).unwrap_or("Balance rises to or above");
+    let once = form.get_bool_or(4, true);
 
     // "Balance drops to or below" → LessThanOrEqual
     // "Balance rises to or above" → GreaterThanOrEqual
@@ -406,20 +385,14 @@ fn parse_net_worth_trigger(parts: &[&str]) -> (TriggerData, String, Option<Strin
 /// Parse account balance trigger with typed context
 fn parse_account_balance_trigger_typed(
     account_name: &str,
-    parts: &[&str],
+    form: &FormModal,
 ) -> (TriggerData, String, Option<String>, bool) {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    // parts[2] is the read-only account field
-    let threshold_val = parts
-        .get(3)
-        .and_then(|s| parse_currency(s).ok())
-        .unwrap_or(100000.0);
-    let comparison = parts.get(4).unwrap_or(&"Balance drops to or below");
-    let once = parse_yes_no(parts.get(5).unwrap_or(&"Yes"));
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    // form field 2 is the read-only account field
+    let threshold_val = form.get_currency_or(3, 100000.0);
+    let comparison = form.get_str(4).unwrap_or("Balance drops to or below");
+    let once = form.get_bool_or(5, true);
 
     let threshold = if comparison.contains("drops") || comparison.contains("<=") {
         ThresholdData::LessThanOrEqual {
@@ -445,17 +418,14 @@ fn parse_account_balance_trigger_typed(
 /// Parse relative trigger with typed context
 fn parse_relative_trigger_typed(
     event_ref: &str,
-    parts: &[&str],
+    form: &FormModal,
 ) -> (TriggerData, String, Option<String>, bool) {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    // parts[2] is the read-only event ref field
-    let offset_years: i32 = parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let offset_months: i32 = parts.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let once = parse_yes_no(parts.get(5).unwrap_or(&"Yes"));
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    // form field 2 is the read-only event ref field
+    let offset_years: i32 = form.get_int_or(3, 0);
+    let offset_months: i32 = form.get_int_or(4, 0);
+    let once = form.get_bool_or(5, true);
 
     let offset = if offset_years != 0 {
         OffsetData::Years {
@@ -716,7 +686,10 @@ pub fn handle_complete_child_trigger(_state: &mut AppState, ctx: ActionContext) 
         None => return ActionResult::error("Missing trigger builder context"),
     };
 
-    let parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::error("Missing form data"),
+    };
 
     // Determine which slot we were building
     let was_start = builder
@@ -728,18 +701,18 @@ pub fn handle_complete_child_trigger(_state: &mut AppState, ctx: ActionContext) 
     // Update the current partial trigger with form values
     match &mut builder.current {
         PartialTrigger::Date { date } => {
-            *date = parts.first().map(|s| s.to_string());
+            *date = form.get_str(0).map(|s| s.to_string());
         }
         PartialTrigger::Age { years, months } => {
-            *years = parts.first().and_then(|s| s.parse().ok());
-            *months = parts.get(1).and_then(|s| s.parse().ok());
+            *years = form.get_int(0);
+            *months = form.get_int(1);
         }
         PartialTrigger::NetWorth {
             threshold,
             comparison,
         } => {
-            *threshold = parts.first().and_then(|s| parse_currency(s).ok());
-            *comparison = parts.get(1).map(|s| s.to_string());
+            *threshold = form.get_currency(0);
+            *comparison = form.get_str(1).map(|s| s.to_string());
         }
         PartialTrigger::AccountBalance {
             threshold,
@@ -747,8 +720,8 @@ pub fn handle_complete_child_trigger(_state: &mut AppState, ctx: ActionContext) 
             ..
         } => {
             // Skip field 0 (read-only account name)
-            *threshold = parts.get(1).and_then(|s| parse_currency(s).ok());
-            *comparison = parts.get(2).map(|s| s.to_string());
+            *threshold = form.get_currency(1);
+            *comparison = form.get_str(2).map(|s| s.to_string());
         }
         PartialTrigger::RelativeToEvent {
             offset_years,
@@ -756,8 +729,8 @@ pub fn handle_complete_child_trigger(_state: &mut AppState, ctx: ActionContext) 
             ..
         } => {
             // Skip field 0 (read-only event name)
-            *offset_years = parts.get(1).and_then(|s| s.parse().ok());
-            *offset_months = parts.get(2).and_then(|s| s.parse().ok());
+            *offset_years = form.get_int(1);
+            *offset_months = form.get_int(2);
         }
         _ => {}
     }
@@ -812,12 +785,13 @@ pub fn handle_finalize_repeating(state: &mut AppState, ctx: ActionContext) -> Ac
         None => return ActionResult::error("Missing trigger builder context"),
     };
 
-    let parts = ctx.value_parts();
-    let name = parts.first().unwrap_or(&"").to_string();
-    let description = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::error("Missing form data"),
+    };
+
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let description = form.get_optional_str(1);
 
     if name.is_empty() {
         return ActionResult::error("Event name cannot be empty");
