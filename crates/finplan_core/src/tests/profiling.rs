@@ -339,6 +339,7 @@ fn test_monte_carlo_memory_efficiency() {
         iterations: 100,
         percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
         compute_mean: true,
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();

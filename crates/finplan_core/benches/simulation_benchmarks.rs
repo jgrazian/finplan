@@ -222,6 +222,7 @@ fn bench_monte_carlo(c: &mut Criterion) {
             iterations: *iterations,
             percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
             compute_mean: true,
+            ..Default::default()
         };
 
         group.bench_with_input(

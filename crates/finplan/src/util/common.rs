@@ -1,5 +1,7 @@
 //! Common utility functions for form parsing and options
 
+use std::thread::available_parallelism;
+
 /// Parse "Yes"/"No" strings to bool
 ///
 /// Accepts: "Yes", "Y", "yes", "y", "TRUE", "true", "1" -> true
@@ -14,6 +16,10 @@ pub fn parse_yes_no(s: &str) -> bool {
 /// Returns ["Yes", "No"] - use with `parse_yes_no()` for consistent parsing
 pub fn yes_no_options() -> Vec<String> {
     vec!["Yes".to_string(), "No".to_string()]
+}
+
+pub fn cpu_parallel_batches() -> usize {
+    available_parallelism().map(|n| n.get()).unwrap_or(4)
 }
 
 #[cfg(test)]

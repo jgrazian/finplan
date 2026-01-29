@@ -149,6 +149,7 @@ pub fn evaluate(
         iterations: opt_config.monte_carlo_iterations,
         percentiles: vec![0.05, 0.50, 0.95],
         compute_mean: true,
+        ..Default::default()
     };
 
     let summary = monte_carlo_simulate_with_config(&config, &mc_config)?;
@@ -240,6 +241,8 @@ mod tests {
             min_final_net_worth: 500_000.0,
             max_final_net_worth: 1_500_000.0,
             percentile_values: vec![],
+            converged: None,
+            relative_standard_error: None,
         };
         assert!(check_constraints(&constraints, &stats));
     }
@@ -258,6 +261,8 @@ mod tests {
             min_final_net_worth: 500_000.0,
             max_final_net_worth: 1_500_000.0,
             percentile_values: vec![],
+            converged: None,
+            relative_standard_error: None,
         };
         let bad_stats = MonteCarloStats {
             success_rate: 0.85,

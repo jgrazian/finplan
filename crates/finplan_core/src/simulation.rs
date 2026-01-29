@@ -497,6 +497,70 @@ pub fn monte_carlo_simulate(
     Ok(MonteCarloResult { iterations })
 }
 
+/// Online statistics accumulator for convergence checking
+struct OnlineStats {
+    count: usize,
+    sum: f64,
+    sum_sq: f64,
+}
+
+impl OnlineStats {
+    fn new() -> Self {
+        Self {
+            count: 0,
+            sum: 0.0,
+            sum_sq: 0.0,
+        }
+    }
+
+    fn add(&mut self, value: f64) {
+        self.count += 1;
+        self.sum += value;
+        self.sum_sq += value * value;
+    }
+
+    fn merge(&mut self, other: &OnlineStats) {
+        self.count += other.count;
+        self.sum += other.sum;
+        self.sum_sq += other.sum_sq;
+    }
+
+    fn mean(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum / self.count as f64
+        }
+    }
+
+    fn variance(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            let mean = self.mean();
+            (self.sum_sq / self.count as f64) - (mean * mean)
+        }
+    }
+
+    fn std_dev(&self) -> f64 {
+        self.variance().sqrt()
+    }
+
+    /// Calculate relative standard error: SEM / |mean|
+    /// Returns None if mean is zero (to avoid division by zero)
+    fn relative_standard_error(&self) -> Option<f64> {
+        if self.count == 0 {
+            return None;
+        }
+        let mean = self.mean();
+        if mean.abs() < f64::EPSILON {
+            return None;
+        }
+        let sem = self.std_dev() / (self.count as f64).sqrt();
+        Some(sem / mean.abs())
+    }
+}
+
 /// Memory-efficient Monte Carlo simulation
 ///
 /// This function runs simulations in two phases:
@@ -504,301 +568,144 @@ pub fn monte_carlo_simulate(
 /// 2. Second pass: Re-run only the specific seeds needed for percentile runs
 ///
 /// This approach uses O(N) memory for seeds/values instead of O(N * result_size)
+///
+/// # Convergence Mode
+/// If `config.convergence` is set, the simulation will continue running batches until:
+/// - The relative standard error (SEM / |mean|) falls below the threshold, OR
+/// - The maximum number of iterations is reached
+///
+/// In this mode, `config.iterations` serves as the minimum number of iterations
+/// before convergence checking begins.
 pub fn monte_carlo_simulate_with_config(
     params: &SimulationConfig,
     config: &MonteCarloConfig,
 ) -> Result<MonteCarloSummary, MarketError> {
-    let num_iterations = config.iterations;
-    const MAX_BATCH_SIZE: usize = 100;
-    let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
+    let batch_size = config.batch_size;
+    let parallel_batches = config.parallel_batches;
 
     // First validate by running one simulation to check for market errors
     // This prevents us from running many iterations only to fail
     let _ = simulate(params, 0)?;
 
-    // Phase 1: Run all iterations, collecting seeds and final net worth
-    // Also accumulate mean sums if requested
-    let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
-        Some(Mutex::new(None))
-    } else {
-        None
-    };
+    // Determine iteration limits based on mode
+    let min_iterations = config.iterations;
+    let max_iterations = config
+        .convergence
+        .as_ref()
+        .map(|c| c.max_iterations)
+        .unwrap_or(config.iterations);
+    let convergence_threshold = config.convergence.as_ref().map(|c| c.relative_threshold);
 
-    // Collect (seed, final_net_worth) for all iterations
-    let mut seed_results: Vec<(u64, f64)> = (0..num_batches)
-        .into_par_iter()
-        .flat_map(|batch_idx| {
-            let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
-            // Reuse scratch buffer across all iterations in this batch
-            let mut scratch = SimulationScratch::new();
+    // Track all results and statistics
+    let mut seed_results: Vec<(u64, f64)> = Vec::new();
+    let mut online_stats = OnlineStats::new();
+    let mut mean_accumulators: Option<MeanAccumulators> = None;
+    let mut batch_seed: u64 = 0;
+    let mut converged = false;
 
-            let batch_size = if batch_idx == num_batches - 1 {
-                num_iterations - batch_idx * MAX_BATCH_SIZE
-            } else {
-                MAX_BATCH_SIZE
-            };
+    // Run batches until we have enough iterations and (optionally) convergence
+    loop {
+        let current_count = seed_results.len();
 
-            (0..batch_size)
-                .filter_map(|_| {
+        // Check if we've reached max iterations
+        if current_count >= max_iterations {
+            break;
+        }
+
+        // Calculate how many iterations to run in this round
+        let remaining = max_iterations - current_count;
+        let target_this_round = remaining.min(batch_size * parallel_batches);
+        let num_batches = target_this_round.div_ceil(batch_size);
+
+        // Run batches in parallel
+        let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
+            Some(Mutex::new(mean_accumulators.take()))
+        } else {
+            None
+        };
+
+        // Run batches in parallel, collecting results and stats
+        let batch_outputs: Vec<(Vec<(u64, f64)>, OnlineStats)> = (0..num_batches)
+            .into_par_iter()
+            .map(|local_batch_idx| {
+                let mut rng =
+                    rand::rngs::SmallRng::seed_from_u64(batch_seed + local_batch_idx as u64);
+                let mut scratch = SimulationScratch::new();
+                let mut local_stats = OnlineStats::new();
+                let mut local_results = Vec::new();
+
+                let this_batch_size = if local_batch_idx == num_batches - 1 {
+                    target_this_round - local_batch_idx * batch_size
+                } else {
+                    batch_size
+                };
+
+                for _ in 0..this_batch_size {
                     let seed = rng.next_u64();
-                    // Skip failed simulations (should be rare after initial validation)
-                    let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
-                    let fnw = final_net_worth(&result);
+                    if let Ok(result) = simulate_with_scratch(params, seed, &mut scratch) {
+                        let fnw = final_net_worth(&result);
+                        local_stats.add(fnw);
+                        local_results.push((seed, fnw));
 
-                    // Accumulate mean sums if requested
-                    if let Some(ref acc_mutex) = mean_accumulator {
-                        // Recover from poisoned mutex - another thread may have panicked
-                        // but we still want to continue accumulating
-                        let mut acc_guard = match acc_mutex.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        match acc_guard.as_mut() {
-                            Some(acc) => acc.accumulate(&result),
-                            None => {
-                                let mut new_acc = MeanAccumulators::new(&result);
-                                new_acc.accumulate(&result);
-                                *acc_guard = Some(new_acc);
+                        if let Some(ref acc_mutex) = mean_accumulator {
+                            let mut acc_guard = match acc_mutex.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            match acc_guard.as_mut() {
+                                Some(acc) => acc.accumulate(&result),
+                                None => {
+                                    let mut new_acc = MeanAccumulators::new(&result);
+                                    new_acc.accumulate(&result);
+                                    *acc_guard = Some(new_acc);
+                                }
                             }
                         }
                     }
+                }
 
-                    Some((seed, fnw))
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+                (local_results, local_stats)
+            })
+            .collect();
 
-    // Sort by final net worth (ascending)
-    seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Merge results and stats
+        for (results, stats) in batch_outputs {
+            seed_results.extend(results);
+            online_stats.merge(&stats);
+        }
 
-    // Calculate statistics
-    let actual_iterations = seed_results.len();
-    let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
-    let mean_final_net_worth: f64 = if actual_iterations > 0 {
-        final_values.iter().sum::<f64>() / actual_iterations as f64
-    } else {
-        0.0
-    };
+        // Update batch seed for next round
+        batch_seed += num_batches as u64;
 
-    let variance: f64 = if actual_iterations > 0 {
-        final_values
-            .iter()
-            .map(|v| (v - mean_final_net_worth).powi(2))
-            .sum::<f64>()
-            / actual_iterations as f64
-    } else {
-        0.0
-    };
-    let std_dev_final_net_worth = variance.sqrt();
+        // Extract mean accumulators for next round or final use
+        mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
+            Ok(opt) => opt,
+            Err(poisoned) => poisoned.into_inner(),
+        });
 
-    let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
-    let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
-
-    let success_count = final_values.iter().filter(|v| **v > 0.0).count();
-    let success_rate = if actual_iterations > 0 {
-        success_count as f64 / actual_iterations as f64
-    } else {
-        0.0
-    };
-
-    // Calculate percentile indices and values
-    let mut percentile_values = Vec::new();
-    let mut percentile_seeds = Vec::new();
-
-    if actual_iterations > 0 {
-        for &p in &config.percentiles {
-            let idx = ((actual_iterations as f64 * p).floor() as usize).min(actual_iterations - 1);
-            let (seed, value) = seed_results[idx];
-            percentile_values.push((p, value));
-            percentile_seeds.push((p, seed));
+        // Check convergence if we have enough iterations
+        if let Some(threshold) = convergence_threshold {
+            if seed_results.len() >= min_iterations
+                && let Some(rse) = online_stats.relative_standard_error()
+                && rse < threshold
+            {
+                converged = true;
+                break;
+            }
+        } else if seed_results.len() >= config.iterations {
+            // Fixed mode: stop after reaching target iterations
+            break;
         }
     }
 
-    // Phase 2: Re-run simulations for percentile seeds to get full results
-    let percentile_runs: Vec<(f64, SimulationResult)> = percentile_seeds
-        .into_iter()
-        .filter_map(|(p, seed)| {
-            // Skip failed re-runs (should match initial run)
-            simulate(params, seed).ok().map(|result| (p, result))
-        })
-        .collect();
-
-    // Extract mean accumulators
-    let mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
-        Ok(opt) => opt,
-        Err(poisoned) => poisoned.into_inner(),
-    });
-
-    let stats = MonteCarloStats {
-        num_iterations: actual_iterations,
-        success_rate,
-        mean_final_net_worth,
-        std_dev_final_net_worth,
-        min_final_net_worth,
-        max_final_net_worth,
-        percentile_values,
-    };
-
-    Ok(MonteCarloSummary {
-        stats,
-        percentile_runs,
-        mean_accumulators,
-    })
-}
-
-/// Memory-efficient Monte Carlo simulation with progress tracking
-///
-/// This function is identical to `monte_carlo_simulate_with_config` but provides
-/// real-time progress updates via a `MonteCarloProgress` struct. This allows
-/// UI applications to display accurate progress bars during simulation.
-///
-/// # Progress Updates
-/// The `progress.completed()` counter is incremented after each iteration completes.
-/// The TUI can poll this value to update progress display.
-///
-/// # Cancellation
-/// If `progress.is_cancelled()` returns true, the simulation will stop early
-/// and return `Err(MarketError::Cancelled)`.
-///
-/// # Example
-/// ```ignore
-/// let progress = MonteCarloProgress::new();
-/// let progress_clone = progress.clone();
-///
-/// // Run simulation in background thread
-/// let handle = std::thread::spawn(move || {
-///     monte_carlo_simulate_with_progress(&config, &mc_config, &progress_clone)
-/// });
-///
-/// // Poll progress in main thread
-/// while progress.completed() < mc_config.iterations {
-///     println!("Progress: {}/{}", progress.completed(), mc_config.iterations);
-///     std::thread::sleep(std::time::Duration::from_millis(100));
-/// }
-///
-/// let result = handle.join().unwrap()?;
-/// ```
-pub fn monte_carlo_simulate_with_progress(
-    params: &SimulationConfig,
-    config: &MonteCarloConfig,
-    progress: &MonteCarloProgress,
-) -> Result<MonteCarloSummary, MarketError> {
-    let num_iterations = config.iterations;
-    const MAX_BATCH_SIZE: usize = 100;
-    let num_batches = num_iterations.div_ceil(MAX_BATCH_SIZE);
-
-    // Reset progress for new simulation
-    progress.reset();
-
-    // Check for early cancellation
-    if progress.is_cancelled() {
-        return Err(MarketError::Cancelled);
-    }
-
-    // First validate by running one simulation to check for market errors
-    let _ = simulate(params, 0)?;
-
-    // Check for cancellation after validation
-    if progress.is_cancelled() {
-        return Err(MarketError::Cancelled);
-    }
-
-    // Phase 1: Run all iterations, collecting seeds and final net worth
-    let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
-        Some(Mutex::new(None))
-    } else {
-        None
-    };
-
-    // Track if any thread detected cancellation
-    let cancelled = std::sync::atomic::AtomicBool::new(false);
-
-    // Collect (seed, final_net_worth) for all iterations
-    let mut seed_results: Vec<(u64, f64)> = (0..num_batches)
-        .into_par_iter()
-        .flat_map(|batch_idx| {
-            // Check cancellation at batch start
-            if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
-                cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                return Vec::new();
-            }
-
-            let mut rng = rand::rngs::SmallRng::seed_from_u64(batch_idx as u64);
-            let mut scratch = SimulationScratch::new();
-
-            let batch_size = if batch_idx == num_batches - 1 {
-                num_iterations - batch_idx * MAX_BATCH_SIZE
-            } else {
-                MAX_BATCH_SIZE
-            };
-
-            let results: Vec<(u64, f64)> = (0..batch_size)
-                .filter_map(|_| {
-                    // Check cancellation periodically within batch
-                    if progress.is_cancelled() {
-                        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                        return None;
-                    }
-
-                    let seed = rng.next_u64();
-                    let result = simulate_with_scratch(params, seed, &mut scratch).ok()?;
-                    let fnw = final_net_worth(&result);
-
-                    // Accumulate mean sums if requested
-                    if let Some(ref acc_mutex) = mean_accumulator {
-                        let mut acc_guard = match acc_mutex.lock() {
-                            Ok(guard) => guard,
-                            Err(poisoned) => poisoned.into_inner(),
-                        };
-                        match acc_guard.as_mut() {
-                            Some(acc) => acc.accumulate(&result),
-                            None => {
-                                let mut new_acc = MeanAccumulators::new(&result);
-                                new_acc.accumulate(&result);
-                                *acc_guard = Some(new_acc);
-                            }
-                        }
-                    }
-
-                    // Update progress counter
-                    progress.increment();
-
-                    Some((seed, fnw))
-                })
-                .collect();
-
-            results
-        })
-        .collect();
-
-    // Check if simulation was cancelled
-    if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
-        return Err(MarketError::Cancelled);
-    }
-
     // Sort by final net worth (ascending)
     seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Calculate statistics
+    // Calculate final statistics
     let actual_iterations = seed_results.len();
     let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
-    let mean_final_net_worth: f64 = if actual_iterations > 0 {
-        final_values.iter().sum::<f64>() / actual_iterations as f64
-    } else {
-        0.0
-    };
-
-    let variance: f64 = if actual_iterations > 0 {
-        final_values
-            .iter()
-            .map(|v| (v - mean_final_net_worth).powi(2))
-            .sum::<f64>()
-            / actual_iterations as f64
-    } else {
-        0.0
-    };
-    let std_dev_final_net_worth = variance.sqrt();
+    let mean_final_net_worth = online_stats.mean();
+    let std_dev_final_net_worth = online_stats.std_dev();
 
     let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
     let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
@@ -829,12 +736,8 @@ pub fn monte_carlo_simulate_with_progress(
         .filter_map(|(p, seed)| simulate(params, seed).ok().map(|result| (p, result)))
         .collect();
 
-    // Extract mean accumulators
-    let mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
-        Ok(opt) => opt,
-        Err(poisoned) => poisoned.into_inner(),
-    });
-
+    // Build stats with convergence info
+    let relative_standard_error = online_stats.relative_standard_error();
     let stats = MonteCarloStats {
         num_iterations: actual_iterations,
         success_rate,
@@ -843,6 +746,270 @@ pub fn monte_carlo_simulate_with_progress(
         min_final_net_worth,
         max_final_net_worth,
         percentile_values,
+        converged: config.convergence.as_ref().map(|_| converged),
+        relative_standard_error,
+    };
+
+    Ok(MonteCarloSummary {
+        stats,
+        percentile_runs,
+        mean_accumulators,
+    })
+}
+
+/// Memory-efficient Monte Carlo simulation with progress tracking
+///
+/// This function is identical to `monte_carlo_simulate_with_config` but provides
+/// real-time progress updates via a `MonteCarloProgress` struct. This allows
+/// UI applications to display accurate progress bars during simulation.
+///
+/// # Progress Updates
+/// The `progress.completed()` counter is incremented after each iteration completes.
+/// The TUI can poll this value to update progress display.
+///
+/// # Cancellation
+/// If `progress.is_cancelled()` returns true, the simulation will stop early
+/// and return `Err(MarketError::Cancelled)`.
+///
+/// # Convergence Mode
+/// If `config.convergence` is set, the simulation will continue running batches until:
+/// - The relative standard error (SEM / |mean|) falls below the threshold, OR
+/// - The maximum number of iterations is reached
+///
+/// In this mode, `config.iterations` serves as the minimum number of iterations
+/// before convergence checking begins.
+///
+/// # Example
+/// ```ignore
+/// let progress = MonteCarloProgress::new();
+/// let progress_clone = progress.clone();
+///
+/// // Run simulation in background thread
+/// let handle = std::thread::spawn(move || {
+///     monte_carlo_simulate_with_progress(&config, &mc_config, &progress_clone)
+/// });
+///
+/// // Poll progress in main thread
+/// while progress.completed() < mc_config.iterations {
+///     println!("Progress: {}/{}", progress.completed(), mc_config.iterations);
+///     std::thread::sleep(std::time::Duration::from_millis(100));
+/// }
+///
+/// let result = handle.join().unwrap()?;
+/// ```
+pub fn monte_carlo_simulate_with_progress(
+    params: &SimulationConfig,
+    config: &MonteCarloConfig,
+    progress: &MonteCarloProgress,
+) -> Result<MonteCarloSummary, MarketError> {
+    let batch_size = config.batch_size;
+    let parallel_batches = config.parallel_batches;
+
+    // Reset progress for new simulation
+    progress.reset();
+
+    // Check for early cancellation
+    if progress.is_cancelled() {
+        return Err(MarketError::Cancelled);
+    }
+
+    // First validate by running one simulation to check for market errors
+    let _ = simulate(params, 0)?;
+
+    // Check for cancellation after validation
+    if progress.is_cancelled() {
+        return Err(MarketError::Cancelled);
+    }
+
+    // Determine iteration limits based on mode
+    let min_iterations = config.iterations;
+    let max_iterations = config
+        .convergence
+        .as_ref()
+        .map(|c| c.max_iterations)
+        .unwrap_or(config.iterations);
+    let convergence_threshold = config.convergence.as_ref().map(|c| c.relative_threshold);
+
+    // Track all results and statistics
+    let mut seed_results: Vec<(u64, f64)> = Vec::new();
+    let mut online_stats = OnlineStats::new();
+    let mut mean_accumulators: Option<MeanAccumulators> = None;
+    let mut batch_seed: u64 = 0;
+    let mut converged = false;
+
+    // Track if any thread detected cancellation
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+    // Run batches until we have enough iterations and (optionally) convergence
+    loop {
+        let current_count = seed_results.len();
+
+        // Check if we've reached max iterations
+        if current_count >= max_iterations {
+            break;
+        }
+
+        // Check for cancellation
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+            return Err(MarketError::Cancelled);
+        }
+
+        // Calculate how many iterations to run in this round
+        let remaining = max_iterations - current_count;
+        let target_this_round = remaining.min(batch_size * parallel_batches);
+        let num_batches = target_this_round.div_ceil(batch_size);
+
+        // Run batches in parallel
+        let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> = if config.compute_mean {
+            Some(Mutex::new(mean_accumulators.take()))
+        } else {
+            None
+        };
+
+        // Run batches in parallel
+        let batch_outputs: Vec<(Vec<(u64, f64)>, OnlineStats)> = (0..num_batches)
+            .into_par_iter()
+            .map(|local_batch_idx| {
+                // Check cancellation at batch start
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+                    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return (Vec::new(), OnlineStats::new());
+                }
+
+                let mut rng =
+                    rand::rngs::SmallRng::seed_from_u64(batch_seed + local_batch_idx as u64);
+                let mut scratch = SimulationScratch::new();
+                let mut local_stats = OnlineStats::new();
+                let mut local_results = Vec::new();
+
+                let this_batch_size = if local_batch_idx == num_batches - 1 {
+                    target_this_round - local_batch_idx * batch_size
+                } else {
+                    batch_size
+                };
+
+                for _ in 0..this_batch_size {
+                    // Check cancellation periodically within batch
+                    if progress.is_cancelled() {
+                        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                        break;
+                    }
+
+                    let seed = rng.next_u64();
+                    if let Ok(result) = simulate_with_scratch(params, seed, &mut scratch) {
+                        let fnw = final_net_worth(&result);
+                        local_stats.add(fnw);
+                        local_results.push((seed, fnw));
+
+                        if let Some(ref acc_mutex) = mean_accumulator {
+                            let mut acc_guard = match acc_mutex.lock() {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            match acc_guard.as_mut() {
+                                Some(acc) => acc.accumulate(&result),
+                                None => {
+                                    let mut new_acc = MeanAccumulators::new(&result);
+                                    new_acc.accumulate(&result);
+                                    *acc_guard = Some(new_acc);
+                                }
+                            }
+                        }
+
+                        // Update progress counter
+                        progress.increment();
+                    }
+                }
+
+                (local_results, local_stats)
+            })
+            .collect();
+
+        // Merge results and stats
+        for (results, stats) in batch_outputs {
+            seed_results.extend(results);
+            online_stats.merge(&stats);
+        }
+
+        // Update batch seed for next round
+        batch_seed += num_batches as u64;
+
+        // Extract mean accumulators for next round or final use
+        mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
+            Ok(opt) => opt,
+            Err(poisoned) => poisoned.into_inner(),
+        });
+
+        // Check for cancellation after batch
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+            return Err(MarketError::Cancelled);
+        }
+
+        // Check convergence if we have enough iterations
+        if let Some(threshold) = convergence_threshold {
+            if seed_results.len() >= min_iterations
+                && let Some(rse) = online_stats.relative_standard_error()
+                && rse < threshold
+            {
+                converged = true;
+                break;
+            }
+        } else if seed_results.len() >= config.iterations {
+            // Fixed mode: stop after reaching target iterations
+            break;
+        }
+    }
+
+    // Sort by final net worth (ascending)
+    seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Calculate final statistics
+    let actual_iterations = seed_results.len();
+    let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
+    let mean_final_net_worth = online_stats.mean();
+    let std_dev_final_net_worth = online_stats.std_dev();
+
+    let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
+    let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
+
+    let success_count = final_values.iter().filter(|v| **v > 0.0).count();
+    let success_rate = if actual_iterations > 0 {
+        success_count as f64 / actual_iterations as f64
+    } else {
+        0.0
+    };
+
+    // Calculate percentile indices and values
+    let mut percentile_values = Vec::new();
+    let mut percentile_seeds = Vec::new();
+
+    if actual_iterations > 0 {
+        for &p in &config.percentiles {
+            let idx = ((actual_iterations as f64 * p).floor() as usize).min(actual_iterations - 1);
+            let (seed, value) = seed_results[idx];
+            percentile_values.push((p, value));
+            percentile_seeds.push((p, seed));
+        }
+    }
+
+    // Phase 2: Re-run simulations for percentile seeds to get full results
+    let percentile_runs: Vec<(f64, SimulationResult)> = percentile_seeds
+        .into_iter()
+        .filter_map(|(p, seed)| simulate(params, seed).ok().map(|result| (p, result)))
+        .collect();
+
+    // Build stats with convergence info
+    let relative_standard_error = online_stats.relative_standard_error();
+    let stats = MonteCarloStats {
+        num_iterations: actual_iterations,
+        success_rate,
+        mean_final_net_worth,
+        std_dev_final_net_worth,
+        min_final_net_worth,
+        max_final_net_worth,
+        percentile_values,
+        converged: config.convergence.as_ref().map(|_| converged),
+        relative_standard_error,
     };
 
     Ok(MonteCarloSummary {

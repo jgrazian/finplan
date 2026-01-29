@@ -242,16 +242,46 @@ pub struct MonteCarloResult {
 // Memory-efficient Monte Carlo types
 // ============================================================================
 
+/// Configuration for convergence-based stopping
+#[derive(Debug, Clone)]
+pub struct ConvergenceConfig {
+    /// Stop when relative standard error (SEM / |mean|) is below this threshold.
+    /// For example, 0.01 means stop when standard error is 1% of the mean.
+    pub relative_threshold: f64,
+    /// Maximum iterations (cap to prevent infinite runs)
+    pub max_iterations: usize,
+}
+
+impl Default for ConvergenceConfig {
+    fn default() -> Self {
+        Self {
+            relative_threshold: 0.01, // 1% precision
+            max_iterations: 10_000,
+        }
+    }
+}
+
 /// Configuration for Monte Carlo simulation
 #[derive(Debug, Clone)]
 pub struct MonteCarloConfig {
-    /// Number of iterations to run
+    /// Number of iterations to run (fixed mode), or minimum iterations before
+    /// checking convergence (convergence mode)
     pub iterations: usize,
     /// Percentiles to keep (e.g., [0.05, 0.50, 0.95])
     /// Sorted ascending internally
     pub percentiles: Vec<f64>,
     /// Whether to compute mean values across all iterations
     pub compute_mean: bool,
+    /// If set, use convergence-based stopping instead of fixed iterations.
+    /// The simulation will run at least `iterations` iterations, then continue
+    /// until convergence is achieved or `max_iterations` is reached.
+    pub convergence: Option<ConvergenceConfig>,
+    /// Number of simulations to run per batch. Each batch runs sequentially
+    /// within a single thread. Defaults to 100.
+    pub batch_size: usize,
+    /// Number of batches to run in parallel per round. Higher values use more
+    /// parallelism but may increase memory usage. Defaults to 4.
+    pub parallel_batches: usize,
 }
 
 impl Default for MonteCarloConfig {
@@ -260,6 +290,9 @@ impl Default for MonteCarloConfig {
             iterations: 1000,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: true,
+            convergence: None,
+            batch_size: 100,
+            parallel_batches: 4,
         }
     }
 }
@@ -276,6 +309,13 @@ pub struct MonteCarloStats {
     pub max_final_net_worth: f64,
     /// Final net worth at each requested percentile
     pub percentile_values: Vec<(f64, f64)>, // (percentile, value)
+    /// If convergence mode was used, indicates whether convergence was achieved.
+    /// None if fixed iteration mode was used.
+    #[serde(default)]
+    pub converged: Option<bool>,
+    /// The final relative standard error (SEM / |mean|) if convergence mode was used.
+    #[serde(default)]
+    pub relative_standard_error: Option<f64>,
 }
 
 /// Accumulator for computing mean wealth snapshots across iterations

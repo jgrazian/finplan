@@ -12,6 +12,7 @@ use crate::data::convert::to_tui_result;
 use crate::state::{
     MonteCarloPreviewSummary, MonteCarloStoredResult, ScenarioSummary, SimulationResult,
 };
+use crate::util::common::cpu_parallel_batches;
 use crate::util::percentiles::{
     PercentileSet, find_percentile_result, find_percentile_result_pair, standard::P50,
 };
@@ -309,11 +310,13 @@ fn run_monte_carlo_simulation(
         return Ok(None);
     }
 
-    // Configure Monte Carlo simulation
+    // Configure Monte Carlo simulation with CPU-based parallelism
     let mc_config = MonteCarloConfig {
         iterations,
         percentiles: vec![0.05, 0.50, 0.95],
         compute_mean: true,
+        parallel_batches: cpu_parallel_batches(),
+        ..Default::default()
     };
 
     // Create progress tracker from existing atomics for real-time progress updates
@@ -418,6 +421,8 @@ fn run_batch_monte_carlo(
             iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: false,
+            parallel_batches: cpu_parallel_batches(),
+            ..Default::default()
         };
 
         // Create progress tracker for this scenario

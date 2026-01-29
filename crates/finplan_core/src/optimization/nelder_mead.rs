@@ -383,6 +383,8 @@ mod tests {
                 min_final_net_worth: 0.0,
                 max_final_net_worth: 0.0,
                 percentile_values: vec![],
+                converged: None,
+                relative_standard_error: None,
             },
         };
 

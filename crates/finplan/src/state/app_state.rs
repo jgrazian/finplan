@@ -6,6 +6,7 @@ use rand::RngCore;
 
 use crate::data::app_data::{AppData, SimulationData};
 use crate::data::convert::{ConvertError, to_simulation_config, to_tui_result};
+use crate::util::common::cpu_parallel_batches;
 use crate::util::percentiles::{
     PERCENTILE_TOLERANCE, PercentileSet, find_percentile_result, find_percentile_result_pair,
     standard::P50,
@@ -558,11 +559,13 @@ impl AppState {
             .to_simulation_config()
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
-        // Configure Monte Carlo simulation
+        // Configure Monte Carlo simulation with CPU-based parallelism
         let mc_config = finplan_core::model::MonteCarloConfig {
             iterations: num_iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: true,
+            parallel_batches: cpu_parallel_batches(),
+            ..Default::default()
         };
 
         // Run the Monte Carlo simulation using memory-efficient API
@@ -807,11 +810,13 @@ impl AppState {
         let sim_config = to_simulation_config(&scenario_data)
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
-        // Configure Monte Carlo simulation
+        // Configure Monte Carlo simulation with CPU-based parallelism
         let mc_config = finplan_core::model::MonteCarloConfig {
             iterations: num_iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: false, // Don't need mean for summary
+            parallel_batches: cpu_parallel_batches(),
+            ..Default::default()
         };
 
         // Run the Monte Carlo simulation

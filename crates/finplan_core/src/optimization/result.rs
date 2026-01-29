@@ -135,6 +135,8 @@ impl OptimizationResult {
                 min_final_net_worth: 0.0,
                 max_final_net_worth: 0.0,
                 percentile_values: Vec::new(),
+                converged: None,
+                relative_standard_error: None,
             },
             converged: false,
             termination_reason: TerminationReason::NoFeasibleSolution,
