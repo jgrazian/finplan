@@ -606,6 +606,38 @@ mod snapshot_tests {
 
 ---
 
+## Modal Module Consolidation (Complete)
+
+**Goal:** Consolidate all modal-related code into the `modals/` module and remove legacy string-based value passing.
+
+**Status:** Complete
+
+### Changes Made
+
+1. **Relocated modal state files to modals module:**
+   - `state/modal.rs` → `modals/state.rs`
+   - `state/modal_action.rs` → `modals/action.rs`
+   - `state/context.rs` → `modals/context.rs`
+   - `screens/modal_handler.rs` → `modals/handler.rs`
+
+2. **Removed legacy_value from ModalHandler trait:**
+   - Updated trait signature to use only `ConfirmedValue`
+   - Migrated all screen handlers to use `value.as_str()` instead of `legacy_value`
+   - Removed `to_legacy_string()` method from `ConfirmedValue`
+
+3. **Migrated action handlers to typed extraction:**
+   - Replaced `ctx.value_parts()` with `ctx.form()` and typed field access
+   - Uses `form.get_str()`, `form.get_currency()`, `form.get_percentage()`, `form.get_bool()`, etc.
+   - Improved type safety and removed string parsing logic
+
+### Benefits
+- All modal code is now consolidated in `modals/` module
+- Type-safe field extraction replaces string parsing
+- Cleaner separation of concerns
+- Reduced code duplication (~67 lines net reduction)
+
+---
+
 ## Quick Wins (Can Do Anytime)
 
 These are isolated improvements that don't require larger refactoring:
@@ -617,6 +649,7 @@ These are isolated improvements that don't require larger refactoring:
 - [x] Extract `yes_no_options()` to common module - Created `util/common.rs` with `yes_no_options()`, `no_yes_options()`
 - [x] Consolidate duplicate `parse_yes_no()` functions - Unified in `util/common.rs`, updated `actions/event.rs` and `actions/effect.rs`
 - [x] Add style constants - Added `FOCUS_COLOR`, `HEADER_COLOR`, `POSITIVE_COLOR`, `NEGATIVE_COLOR`, etc. in `util/styles.rs`
+- [x] Consolidate modal code to modals module - See "Modal Module Consolidation" section above
 
 ---
 

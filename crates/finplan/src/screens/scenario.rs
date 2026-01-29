@@ -892,7 +892,6 @@ impl super::ModalHandler for ScenarioScreen {
         state: &mut AppState,
         action: ModalAction,
         value: &crate::modals::ConfirmedValue,
-        legacy_value: &str,
     ) -> crate::actions::ActionResult {
         use crate::actions::{self, ActionContext};
         use crate::state::ScenarioAction;
@@ -909,13 +908,13 @@ impl super::ModalHandler for ScenarioScreen {
 
         match action {
             ModalAction::Scenario(ScenarioAction::SaveAs) => {
-                actions::handle_save_as(state, legacy_value)
+                actions::handle_save_as(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Scenario(ScenarioAction::Load) => {
-                actions::handle_load_scenario(state, legacy_value)
+                actions::handle_load_scenario(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Scenario(ScenarioAction::SwitchTo) => {
-                actions::handle_switch_to(state, legacy_value)
+                actions::handle_switch_to(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Scenario(ScenarioAction::EditParameters) => {
                 actions::handle_edit_parameters(state, ctx)

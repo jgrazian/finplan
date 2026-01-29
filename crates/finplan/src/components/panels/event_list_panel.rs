@@ -4,7 +4,7 @@
 
 use crate::components::EventResult;
 use crate::data::events_data::{AmountData, EffectData, EventTag, SpecialAmount, TriggerData};
-use crate::state::context::ModalContext;
+use crate::modals::context::ModalContext;
 use crate::state::{
     AppState, ConfirmModal, EventsPanel, FormField, FormModal, ModalAction, ModalState, PickerModal,
 };

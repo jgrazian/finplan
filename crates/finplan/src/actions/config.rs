@@ -1,8 +1,7 @@
 // Config actions - tax and inflation configuration
 
 use crate::data::parameters_data::{DistributionType, FederalBracketsPreset, InflationData};
-use crate::modals::parse_percentage;
-use crate::state::context::{
+use crate::modals::context::{
     ConfigContext, InflationConfigContext, ModalContext, TaxConfigContext,
 };
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
@@ -23,7 +22,11 @@ pub fn handle_federal_brackets_pick(state: &mut AppState, value: &str) -> Action
 
 /// Handle tax config editing (state rate, cap gains rate)
 pub fn handle_edit_tax_config(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let parts = ctx.value_parts();
+    // Get the form using typed extraction
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     // Get typed config context
     let config_ctx = ctx
@@ -39,13 +42,13 @@ pub fn handle_edit_tax_config(state: &mut AppState, ctx: ActionContext) -> Actio
 
     match config_ctx {
         Some(TaxConfigContext::StateRate) => {
-            if let Some(rate) = parts.first().and_then(|s| parse_percentage(s).ok()) {
+            if let Some(rate) = form.get_percentage(0) {
                 state.data_mut().parameters.tax_config.state_rate = rate;
                 return ActionResult::modified();
             }
         }
         Some(TaxConfigContext::CapGainsRate) => {
-            if let Some(rate) = parts.first().and_then(|s| parse_percentage(s).ok()) {
+            if let Some(rate) = form.get_percentage(0) {
                 state.data_mut().parameters.tax_config.capital_gains_rate = rate;
                 return ActionResult::modified();
             }
@@ -131,9 +134,6 @@ pub fn handle_inflation_type_pick(state: &mut AppState, value: &str) -> ActionRe
 
 /// Handle inflation editing
 pub fn handle_edit_inflation(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let parts = ctx.value_parts();
-    let value = ctx.value();
-
     // Get typed config context
     let inflation_ctx = ctx
         .typed_context()
@@ -148,56 +148,58 @@ pub fn handle_edit_inflation(state: &mut AppState, ctx: ActionContext) -> Action
 
     match inflation_ctx {
         Some(InflationConfigContext::Fixed) => {
-            let rate = parts
-                .first()
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.03);
+            let form = match ctx.form() {
+                Some(f) => f,
+                None => return ActionResult::close(),
+            };
+            let rate = form.get_percentage_or(0, 0.03);
             state.data_mut().parameters.inflation = InflationData::Fixed { rate };
             ActionResult::modified()
         }
         Some(InflationConfigContext::Normal) => {
-            let mean = parts
-                .first()
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.03);
-            let std_dev = parts
-                .get(1)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.02);
+            let form = match ctx.form() {
+                Some(f) => f,
+                None => return ActionResult::close(),
+            };
+            let mean = form.get_percentage_or(0, 0.03);
+            let std_dev = form.get_percentage_or(1, 0.02);
             state.data_mut().parameters.inflation = InflationData::Normal { mean, std_dev };
             ActionResult::modified()
         }
         Some(InflationConfigContext::LogNormal) => {
-            let mean = parts
-                .first()
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.03);
-            let std_dev = parts
-                .get(1)
-                .and_then(|s| parse_percentage(s).ok())
-                .unwrap_or(0.02);
+            let form = match ctx.form() {
+                Some(f) => f,
+                None => return ActionResult::close(),
+            };
+            let mean = form.get_percentage_or(0, 0.03);
+            let std_dev = form.get_percentage_or(1, 0.02);
             state.data_mut().parameters.inflation = InflationData::LogNormal { mean, std_dev };
             ActionResult::modified()
         }
         // Handle US Historical sub-picker selection (no typed context)
-        None if value == "Normal" => {
-            state.data_mut().parameters.inflation = InflationData::USHistorical {
-                distribution: DistributionType::Normal,
-            };
-            ActionResult::modified()
+        None => {
+            let selected_value = ctx.selected().unwrap_or("");
+            match selected_value {
+                "Normal" => {
+                    state.data_mut().parameters.inflation = InflationData::USHistorical {
+                        distribution: DistributionType::Normal,
+                    };
+                    ActionResult::modified()
+                }
+                "Log-Normal" => {
+                    state.data_mut().parameters.inflation = InflationData::USHistorical {
+                        distribution: DistributionType::LogNormal,
+                    };
+                    ActionResult::modified()
+                }
+                "Fixed (Mean)" => {
+                    state.data_mut().parameters.inflation = InflationData::USHistorical {
+                        distribution: DistributionType::Fixed,
+                    };
+                    ActionResult::modified()
+                }
+                _ => ActionResult::close(),
+            }
         }
-        None if value == "Log-Normal" => {
-            state.data_mut().parameters.inflation = InflationData::USHistorical {
-                distribution: DistributionType::LogNormal,
-            };
-            ActionResult::modified()
-        }
-        None if value == "Fixed (Mean)" => {
-            state.data_mut().parameters.inflation = InflationData::USHistorical {
-                distribution: DistributionType::Fixed,
-            };
-            ActionResult::modified()
-        }
-        None => ActionResult::close(),
     }
 }

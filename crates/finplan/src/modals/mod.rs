@@ -1,3 +1,10 @@
+// Modal state types
+mod action;
+pub mod context;
+mod handler;
+mod state;
+
+// Modal UI components
 mod confirm;
 mod form;
 pub mod helpers;
@@ -10,11 +17,15 @@ use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
 
 use crate::actions::{get_assets_for_account, get_assets_for_sale};
-use crate::state::{
-    AppState, FormKind, FormModal, ModalAction, ModalState, asset_purchase_fields,
-    asset_sale_fields,
-};
+use crate::state::AppState;
 
+// Re-export modal types
+pub use action::*;
+pub use context::ModalContext;
+pub use handler::ModalHandler;
+pub use state::*;
+
+// Re-export modal UI rendering functions
 pub use confirm::render_confirm_modal;
 pub use form::{
     format_currency_for_edit, format_percentage_for_edit, parse_currency, parse_percentage,
@@ -52,20 +63,6 @@ impl ConfirmedValue {
         match self {
             ConfirmedValue::Picker(s) | ConfirmedValue::Text(s) => Some(s),
             _ => None,
-        }
-    }
-
-    /// Get string representation (for backwards compatibility during migration)
-    pub fn to_legacy_string(&self) -> String {
-        match self {
-            ConfirmedValue::Form(form) => form
-                .fields
-                .iter()
-                .map(|f| f.value.clone())
-                .collect::<Vec<_>>()
-                .join("|"),
-            ConfirmedValue::Picker(s) | ConfirmedValue::Text(s) => s.clone(),
-            ConfirmedValue::Confirm => String::new(),
         }
     }
 }

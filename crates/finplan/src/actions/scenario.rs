@@ -41,16 +41,15 @@ pub fn handle_switch_to(state: &mut AppState, name: &str) -> ActionResult {
 
 /// Handle editing simulation parameters (start date, birth date, duration)
 pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    // Parse form values: "start_date|birth_date|duration"
-    let values: Vec<&str> = ctx.value().split('|').collect();
+    // Extract form fields
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
 
-    if values.len() < 3 {
-        return ActionResult::Error("Invalid form data".to_string());
-    }
-
-    let start_date = values[0].trim();
-    let birth_date = values[1].trim();
-    let duration_str = values[2].trim();
+    let start_date = form.get_str(0).unwrap_or("").trim();
+    let birth_date = form.get_str(1).unwrap_or("").trim();
+    let duration_str = form.get_str(2).unwrap_or("").trim();
 
     // Validate start_date format (YYYY-MM-DD)
     if !start_date.is_empty() && start_date.parse::<jiff::civil::Date>().is_err() {
@@ -96,7 +95,7 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
 
 /// Handle importing a scenario from an external file
 pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let path_str = ctx.value().trim();
+    let path_str = ctx.selected().unwrap_or_default().trim();
     if path_str.is_empty() {
         return ActionResult::Error("File path cannot be empty".to_string());
     }
@@ -121,7 +120,7 @@ pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
 
 /// Handle exporting the current scenario to an external file
 pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
-    let path_str = ctx.value().trim();
+    let path_str = ctx.selected().unwrap_or_default().trim();
     if path_str.is_empty() {
         return ActionResult::Error("File path cannot be empty".to_string());
     }
@@ -139,7 +138,7 @@ pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
 
 /// Handle creating a new empty scenario
 pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let name = ctx.value().trim();
+    let name = ctx.selected().unwrap_or_default().trim();
     if name.is_empty() {
         return ActionResult::Error("Scenario name cannot be empty".to_string());
     }
@@ -160,7 +159,7 @@ pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionRe
 
 /// Handle duplicating an existing scenario
 pub fn handle_duplicate_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let new_name = ctx.value().trim();
+    let new_name = ctx.selected().unwrap_or_default().trim();
     if new_name.is_empty() {
         return ActionResult::Error("Scenario name cannot be empty".to_string());
     }

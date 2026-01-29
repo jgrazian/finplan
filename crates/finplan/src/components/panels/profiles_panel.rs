@@ -11,7 +11,7 @@ use crate::data::parameters_data::ReturnsMode;
 use crate::data::portfolio_data::{AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
 use crate::data::ticker_profiles::{self, HISTORICAL_PRESETS};
-use crate::state::context::ModalContext;
+use crate::modals::context::ModalContext;
 use crate::state::{
     AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal,
     PortfolioProfilesPanel,

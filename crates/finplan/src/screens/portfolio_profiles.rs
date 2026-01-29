@@ -9,7 +9,7 @@ use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileTag};
 use crate::data::ticker_profiles;
 use crate::data::ticker_profiles::HISTORICAL_PRESETS;
-use crate::state::context::{ConfigContext, ModalContext, TaxConfigContext};
+use crate::modals::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::state::{
     AccountInteractionMode, AppState, ConfirmModal, FormField, FormModal, HoldingEditState,
     MessageModal, ModalAction, ModalState, PickerModal, PortfolioProfilesPanel,
@@ -1232,7 +1232,6 @@ impl super::ModalHandler for PortfolioProfilesScreen {
         state: &mut AppState,
         action: ModalAction,
         value: &crate::modals::ConfirmedValue,
-        legacy_value: &str,
     ) -> crate::actions::ActionResult {
         use crate::actions::{self, ActionContext, ActionResult};
         use crate::state::{AccountAction, ConfigAction, HoldingAction, ProfileAction};
@@ -1250,10 +1249,10 @@ impl super::ModalHandler for PortfolioProfilesScreen {
         match action {
             // Account actions
             ModalAction::Account(AccountAction::PickCategory) => {
-                actions::handle_category_pick(legacy_value)
+                actions::handle_category_pick(value.as_str().unwrap_or_default())
             }
             ModalAction::Account(AccountAction::PickType) => {
-                actions::handle_type_pick(legacy_value, state)
+                actions::handle_type_pick(value.as_str().unwrap_or_default(), state)
             }
             ModalAction::Account(AccountAction::Create) => {
                 actions::handle_create_account(state, ctx)
@@ -1265,7 +1264,7 @@ impl super::ModalHandler for PortfolioProfilesScreen {
 
             // Profile actions
             ModalAction::Profile(ProfileAction::PickType) => {
-                actions::handle_profile_type_pick(legacy_value)
+                actions::handle_profile_type_pick(value.as_str().unwrap_or_default())
             }
             ModalAction::Profile(ProfileAction::Create) => {
                 actions::handle_create_profile(state, ctx)
@@ -1276,7 +1275,7 @@ impl super::ModalHandler for PortfolioProfilesScreen {
             }
             ModalAction::Profile(ProfileAction::PickBlockSize) => {
                 // Parse block size from picker selection
-                let block_size = match legacy_value {
+                let block_size = match value.as_str().unwrap_or_default() {
                     "1 (i.i.d. sampling)" => None,
                     "3 (short-term momentum)" => Some(3),
                     "5 (medium-term cycles)" => Some(5),
@@ -1298,13 +1297,13 @@ impl super::ModalHandler for PortfolioProfilesScreen {
 
             // Config actions
             ModalAction::Config(ConfigAction::PickFederalBrackets) => {
-                actions::handle_federal_brackets_pick(state, legacy_value)
+                actions::handle_federal_brackets_pick(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Config(ConfigAction::EditTax) => {
                 actions::handle_edit_tax_config(state, ctx)
             }
             ModalAction::Config(ConfigAction::PickInflationType) => {
-                actions::handle_inflation_type_pick(state, legacy_value)
+                actions::handle_inflation_type_pick(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Config(ConfigAction::EditInflation) => {
                 actions::handle_edit_inflation(state, ctx)

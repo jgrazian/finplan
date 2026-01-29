@@ -837,7 +837,6 @@ impl super::ModalHandler for EventsScreen {
         state: &mut AppState,
         action: ModalAction,
         value: &crate::modals::ConfirmedValue,
-        legacy_value: &str,
     ) -> crate::actions::ActionResult {
         use crate::actions::{self, ActionContext, ActionResult};
         use crate::state::{EffectAction, EventAction};
@@ -855,23 +854,27 @@ impl super::ModalHandler for EventsScreen {
         match action {
             // Event actions
             ModalAction::Event(EventAction::PickTriggerType) => {
-                actions::handle_trigger_type_pick(state, legacy_value)
+                actions::handle_trigger_type_pick(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Event(EventAction::PickEventReference) => {
-                actions::handle_event_reference_pick(legacy_value)
+                actions::handle_event_reference_pick(value.as_str().unwrap_or_default())
             }
             ModalAction::Event(EventAction::PickInterval) => {
-                actions::handle_interval_pick(legacy_value)
+                actions::handle_interval_pick(value.as_str().unwrap_or_default())
             }
             ModalAction::Event(EventAction::Create) => actions::handle_create_event(state, ctx),
             ModalAction::Event(EventAction::Edit) => actions::handle_edit_event(state, ctx),
             ModalAction::Event(EventAction::Delete) => actions::handle_delete_event(state, ctx),
             // Trigger builder actions
             ModalAction::Event(EventAction::PickChildTriggerType) => {
-                actions::handle_pick_child_trigger_type(state, legacy_value, ctx)
+                actions::handle_pick_child_trigger_type(
+                    state,
+                    value.as_str().unwrap_or_default(),
+                    ctx,
+                )
             }
             ModalAction::Event(EventAction::BuildChildTrigger) => {
-                actions::handle_build_child_trigger(state, legacy_value, ctx)
+                actions::handle_build_child_trigger(state, value.as_str().unwrap_or_default(), ctx)
             }
             ModalAction::Event(EventAction::CompleteChildTrigger) => {
                 actions::handle_complete_child_trigger(state, ctx)
@@ -880,22 +883,26 @@ impl super::ModalHandler for EventsScreen {
                 actions::handle_finalize_repeating(state, ctx)
             }
             ModalAction::Event(EventAction::PickQuickEvent) => {
-                actions::handle_quick_event_pick(state, legacy_value)
+                actions::handle_quick_event_pick(state, value.as_str().unwrap_or_default())
             }
 
             // Effect actions
             ModalAction::Effect(EffectAction::Manage) => {
-                actions::handle_manage_effects(state, legacy_value)
+                actions::handle_manage_effects(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Effect(EffectAction::PickType) => ActionResult::close(),
             ModalAction::Effect(EffectAction::PickTypeForAdd) => {
-                actions::handle_effect_type_for_add(state, legacy_value)
+                actions::handle_effect_type_for_add(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Effect(EffectAction::PickAccountForEffect) => {
-                actions::handle_account_for_effect_pick(legacy_value)
+                actions::handle_account_for_effect_pick(value.as_str().unwrap_or_default())
             }
             ModalAction::Effect(EffectAction::PickActionForEffect) => {
-                actions::handle_action_for_effect_pick(state, legacy_value, ctx)
+                actions::handle_action_for_effect_pick(
+                    state,
+                    value.as_str().unwrap_or_default(),
+                    ctx,
+                )
             }
             ModalAction::Effect(EffectAction::Add) => actions::handle_add_effect(state, ctx),
             ModalAction::Effect(EffectAction::Edit) => actions::handle_edit_effect(state, ctx),

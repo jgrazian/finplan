@@ -817,10 +817,7 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
         EffectTypeContext::Income => {
             let to_account = form.get_str(0).unwrap_or("").to_string();
             let amount = form.get_currency(1).unwrap_or(0.0);
-            let gross = form
-                .get_str(2)
-                .map(|s| parse_amount_type(s))
-                .unwrap_or(false);
+            let gross = form.get_str(2).map(parse_amount_type).unwrap_or(false);
             let taxable = form.get_bool(3).unwrap_or(true);
 
             EffectData::Income {
@@ -885,14 +882,8 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 Some(AssetTag(asset_str.to_string()))
             };
             let amount = form.get_currency(2).unwrap_or(0.0);
-            let gross = form
-                .get_str(3)
-                .map(|s| parse_amount_type(s))
-                .unwrap_or(false);
-            let lot_method = form
-                .get_str(4)
-                .map(|s| parse_lot_method(s))
-                .unwrap_or_default();
+            let gross = form.get_str(3).map(parse_amount_type).unwrap_or(false);
+            let lot_method = form.get_str(4).map(parse_lot_method).unwrap_or_default();
 
             EffectData::AssetSale {
                 from: AccountTag(from_account),
@@ -905,19 +896,10 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
         EffectTypeContext::Sweep => {
             let to_account = form.get_str(0).unwrap_or("").to_string();
             let amount = form.get_currency(1).unwrap_or(0.0);
-            let strategy = form
-                .get_str(2)
-                .map(|s| parse_strategy(s))
-                .unwrap_or_default();
-            let gross = form
-                .get_str(3)
-                .map(|s| parse_amount_type(s))
-                .unwrap_or(false);
+            let strategy = form.get_str(2).map(parse_strategy).unwrap_or_default();
+            let gross = form.get_str(3).map(parse_amount_type).unwrap_or(false);
             let taxable = form.get_bool(4).unwrap_or(true);
-            let lot_method = form
-                .get_str(5)
-                .map(|s| parse_lot_method(s))
-                .unwrap_or_default();
+            let lot_method = form.get_str(5).map(parse_lot_method).unwrap_or_default();
 
             EffectData::Sweep {
                 to: AccountTag(to_account),
@@ -931,10 +913,7 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
         }
         EffectTypeContext::ApplyRmd => {
             let destination = form.get_str(0).unwrap_or("").to_string();
-            let lot_method = form
-                .get_str(1)
-                .map(|s| parse_lot_method(s))
-                .unwrap_or_default();
+            let lot_method = form.get_str(1).map(parse_lot_method).unwrap_or_default();
 
             EffectData::ApplyRmd {
                 destination: AccountTag(destination),
@@ -1011,10 +990,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
         EffectTypeContext::Income => {
             let to_account = form.get_str(0).unwrap_or("").to_string();
             let amount = form.get_currency(1).unwrap_or(0.0);
-            let gross = form
-                .get_str(2)
-                .map(|s| parse_amount_type(s))
-                .unwrap_or(false);
+            let gross = form.get_str(2).map(parse_amount_type).unwrap_or(false);
             let taxable = form.get_bool(3).unwrap_or(true);
 
             Some(EffectData::Income {
@@ -1055,14 +1031,8 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 Some(AssetTag(asset_str.to_string()))
             };
             let amount = form.get_currency(2).unwrap_or(0.0);
-            let gross = form
-                .get_str(3)
-                .map(|s| parse_amount_type(s))
-                .unwrap_or(false);
-            let lot_method = form
-                .get_str(4)
-                .map(|s| parse_lot_method(s))
-                .unwrap_or_default();
+            let gross = form.get_str(3).map(parse_amount_type).unwrap_or(false);
+            let lot_method = form.get_str(4).map(parse_lot_method).unwrap_or_default();
 
             Some(EffectData::AssetSale {
                 from: AccountTag(from_account),
@@ -1075,19 +1045,10 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
         EffectTypeContext::Sweep => {
             let to_account = form.get_str(0).unwrap_or("").to_string();
             let amount = form.get_currency(1).unwrap_or(0.0);
-            let strategy = form
-                .get_str(2)
-                .map(|s| parse_strategy(s))
-                .unwrap_or_default();
-            let gross = form
-                .get_str(3)
-                .map(|s| parse_amount_type(s))
-                .unwrap_or(false);
+            let strategy = form.get_str(2).map(parse_strategy).unwrap_or_default();
+            let gross = form.get_str(3).map(parse_amount_type).unwrap_or(false);
             let taxable = form.get_bool(4).unwrap_or(true);
-            let lot_method = form
-                .get_str(5)
-                .map(|s| parse_lot_method(s))
-                .unwrap_or_default();
+            let lot_method = form.get_str(5).map(parse_lot_method).unwrap_or_default();
 
             Some(EffectData::Sweep {
                 to: AccountTag(to_account),
@@ -1125,10 +1086,7 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
         }
         EffectTypeContext::ApplyRmd => {
             let destination = form.get_str(0).unwrap_or("").to_string();
-            let lot_method = form
-                .get_str(1)
-                .map(|s| parse_lot_method(s))
-                .unwrap_or_default();
+            let lot_method = form.get_str(1).map(parse_lot_method).unwrap_or_default();
 
             Some(EffectData::ApplyRmd {
                 destination: AccountTag(destination),

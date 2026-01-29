@@ -6,7 +6,7 @@ use finplan_core::optimization::{
     OptimizationObjective,
 };
 
-use crate::state::context::{ModalContext, OptimizeContext};
+use crate::modals::context::{ModalContext, OptimizeContext};
 use crate::state::{
     AppState, FieldType, FormField, FormModal, ModalState, OptimizationObjectiveSelection,
     OptimizationResultDisplay, OptimizeAction, ParameterType, PickerModal, SelectedParameter,

@@ -857,14 +857,13 @@ impl super::ModalHandler for OptimizeScreen {
         &self,
         state: &mut AppState,
         action: crate::state::ModalAction,
-        _value: &crate::modals::ConfirmedValue,
-        legacy_value: &str,
+        value: &crate::modals::ConfirmedValue,
     ) -> crate::actions::ActionResult {
         use crate::actions::optimize::handle_optimize_action;
 
         match action {
             crate::state::ModalAction::Optimize(optimize_action) => {
-                handle_optimize_action(state, optimize_action, legacy_value)
+                handle_optimize_action(state, optimize_action, value.as_str().unwrap_or_default())
             }
             // This shouldn't happen if handles() is correct
             _ => crate::actions::ActionResult::close(),

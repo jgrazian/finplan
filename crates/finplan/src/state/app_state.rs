@@ -13,12 +13,12 @@ use crate::util::percentiles::{
 
 use super::cache::CachedValue;
 use super::errors::{LoadError, SaveError, SimulationError};
-use super::modal::ModalState;
 use super::screen_state::{
     EventsState, MonteCarloPreviewSummary, OptimizeState, PercentileView, PortfolioProfilesState,
     ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
 };
 use super::tabs::TabId;
+use crate::modals::ModalState;
 
 // ========== SimulationResult ==========
 // Simplified result structure for TUI display

@@ -1,5 +1,5 @@
 /// Modal types for forms, pickers, and confirmations.
-use super::ModalAction;
+use super::action::ModalAction;
 use super::context::ModalContext;
 
 #[derive(Debug)]

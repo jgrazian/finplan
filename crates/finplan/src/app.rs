@@ -536,27 +536,20 @@ impl App {
     }
 
     fn handle_modal_result(&mut self, action: ModalAction, value: ConfirmedValue) {
-        // Legacy string value for handlers not yet migrated
-        let legacy_value = value.to_legacy_string();
-
         // Delegate to screen-specific handlers based on action type
         // Each screen handles its own domain actions
         let result = if self.portfolio_profiles_screen.handles(&action) {
-            self.portfolio_profiles_screen.handle_modal_result(
-                &mut self.state,
-                action,
-                &value,
-                &legacy_value,
-            )
+            self.portfolio_profiles_screen
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.events_screen.handles(&action) {
             self.events_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.scenario_screen.handles(&action) {
             self.scenario_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.optimize_screen.handles(&action) {
             self.optimize_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else {
             // No handler found - this shouldn't happen with proper coverage
             ActionResult::close()
