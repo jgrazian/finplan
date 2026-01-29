@@ -116,6 +116,8 @@ pub type Result<T> = std::result::Result<T, LookupError>;
 pub enum TransferEvaluationError {
     Lookup(LookupError),
     ExternalBalanceReference,
+    /// Inflation data not available for the requested date range
+    InflationDataUnavailable,
 }
 
 impl fmt::Display for TransferEvaluationError {
@@ -124,6 +126,12 @@ impl fmt::Display for TransferEvaluationError {
             TransferEvaluationError::Lookup(e) => write!(f, "{}", e),
             TransferEvaluationError::ExternalBalanceReference => {
                 write!(f, "cannot reference balance of external endpoint")
+            }
+            TransferEvaluationError::InflationDataUnavailable => {
+                write!(
+                    f,
+                    "inflation data not available for the requested date range"
+                )
             }
         }
     }

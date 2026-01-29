@@ -23,6 +23,22 @@ fn evaluate_transfer_amount(
     match amount {
         TransferAmount::Fixed(amt) => Ok(*amt),
 
+        TransferAmount::InflationAdjusted(inner) => {
+            // First evaluate the inner amount (in "real" start-of-sim dollars)
+            let base_amount = evaluate_transfer_amount(inner, from, to, state)?;
+
+            // Then adjust for cumulative inflation
+            state
+                .portfolio
+                .market
+                .get_inflation_adjusted_value(
+                    state.timeline.start_date,
+                    state.timeline.current_date,
+                    base_amount,
+                )
+                .ok_or(TransferEvaluationError::InflationDataUnavailable)
+        }
+
         TransferAmount::SourceBalance => match from {
             TransferEndpoint::Asset { asset_coord } => Ok(state.asset_balance(*asset_coord)?),
             TransferEndpoint::Cash { account_id } => Ok(state.account_cash_balance(*account_id)?),
@@ -83,6 +99,11 @@ fn evaluate_transfer_amount(
             let left_val = evaluate_transfer_amount(left, from, to, state)?;
             let right_val = evaluate_transfer_amount(right, from, to, state)?;
             Ok(left_val * right_val)
+        }
+
+        TransferAmount::Scale(multiplier, inner) => {
+            let inner_val = evaluate_transfer_amount(inner, from, to, state)?;
+            Ok(multiplier * inner_val)
         }
     }
 }
