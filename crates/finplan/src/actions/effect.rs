@@ -4,14 +4,13 @@ use crate::data::events_data::{
     AccountTag, AmountData, EffectData, EventTag, LotMethodData, WithdrawalStrategyData,
 };
 use crate::data::portfolio_data::AssetTag;
-use crate::modals::parse_currency;
+use crate::modals::context::{EffectContext, EffectTypeContext, ModalContext};
 use crate::screens::events::EventsScreen;
-use crate::state::context::{EffectContext, EffectTypeContext, ModalContext};
 use crate::state::{
     AppState, ConfirmModal, FormField, FormKind, FormModal, ModalAction, ModalState, PickerModal,
     asset_sale_fields,
 };
-use crate::util::common::{parse_yes_no, yes_no_options};
+use crate::util::common::yes_no_options;
 
 use super::{ActionContext, ActionResult};
 
@@ -809,20 +808,20 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
         _ => return ActionResult::close(),
     };
 
-    let form_parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     let effect = match effect_type {
         EffectTypeContext::Income => {
-            let to_account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
-            let gross = form_parts
-                .get(2)
+            let to_account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
+            let gross = form
+                .get_str(2)
                 .map(|s| parse_amount_type(s))
                 .unwrap_or(false);
-            let taxable = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(true);
+            let taxable = form.get_bool(3).unwrap_or(true);
 
             EffectData::Income {
                 to: AccountTag(to_account),
@@ -832,11 +831,8 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             }
         }
         EffectTypeContext::Expense => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
 
             EffectData::Expense {
                 from: AccountTag(from_account),
@@ -844,37 +840,34 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             }
         }
         EffectTypeContext::TriggerEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             EffectData::TriggerEvent {
                 event: EventTag(event_name),
             }
         }
         EffectTypeContext::PauseEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             EffectData::PauseEvent {
                 event: EventTag(event_name),
             }
         }
         EffectTypeContext::ResumeEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             EffectData::ResumeEvent {
                 event: EventTag(event_name),
             }
         }
         EffectTypeContext::TerminateEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             EffectData::TerminateEvent {
                 event: EventTag(event_name),
             }
         }
         EffectTypeContext::AssetPurchase => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let to_account = form_parts.get(1).unwrap_or(&"").to_string();
-            let asset = form_parts.get(2).unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(3)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let to_account = form.get_str(1).unwrap_or("").to_string();
+            let asset = form.get_str(2).unwrap_or("").to_string();
+            let amount = form.get_currency(3).unwrap_or(0.0);
 
             EffectData::AssetPurchase {
                 from: AccountTag(from_account),
@@ -884,23 +877,20 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             }
         }
         EffectTypeContext::AssetSale => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let asset_str = form_parts.get(1).unwrap_or(&"").trim();
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let asset_str = form.get_str(1).unwrap_or("").trim();
             let asset = if asset_str.is_empty() || asset_str == asset_sale_fields::ALL_ASSETS {
                 None
             } else {
                 Some(AssetTag(asset_str.to_string()))
             };
-            let amount = form_parts
-                .get(2)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
-            let gross = form_parts
-                .get(3)
+            let amount = form.get_currency(2).unwrap_or(0.0);
+            let gross = form
+                .get_str(3)
                 .map(|s| parse_amount_type(s))
                 .unwrap_or(false);
-            let lot_method = form_parts
-                .get(4)
+            let lot_method = form
+                .get_str(4)
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
@@ -913,22 +903,19 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             }
         }
         EffectTypeContext::Sweep => {
-            let to_account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
-            let strategy = form_parts
-                .get(2)
+            let to_account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
+            let strategy = form
+                .get_str(2)
                 .map(|s| parse_strategy(s))
                 .unwrap_or_default();
-            let gross = form_parts
-                .get(3)
+            let gross = form
+                .get_str(3)
                 .map(|s| parse_amount_type(s))
                 .unwrap_or(false);
-            let taxable = form_parts.get(4).map(|s| parse_yes_no(s)).unwrap_or(true);
-            let lot_method = form_parts
-                .get(5)
+            let taxable = form.get_bool(4).unwrap_or(true);
+            let lot_method = form
+                .get_str(5)
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
@@ -943,9 +930,9 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             }
         }
         EffectTypeContext::ApplyRmd => {
-            let destination = form_parts.first().unwrap_or(&"").to_string();
-            let lot_method = form_parts
-                .get(1)
+            let destination = form.get_str(0).unwrap_or("").to_string();
+            let lot_method = form
+                .get_str(1)
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
@@ -955,11 +942,8 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             }
         }
         EffectTypeContext::AdjustBalance => {
-            let account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
 
             EffectData::AdjustBalance {
                 account: AccountTag(account),
@@ -967,12 +951,9 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
             }
         }
         EffectTypeContext::CashTransfer => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let to_account = form_parts.get(1).unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(2)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let to_account = form.get_str(1).unwrap_or("").to_string();
+            let amount = form.get_currency(2).unwrap_or(0.0);
 
             EffectData::CashTransfer {
                 from: AccountTag(from_account),
@@ -1021,20 +1002,20 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
         _ => return ActionResult::close(),
     };
 
-    let form_parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     let new_effect = match effect_type {
         EffectTypeContext::Income => {
-            let to_account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
-            let gross = form_parts
-                .get(2)
+            let to_account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
+            let gross = form
+                .get_str(2)
                 .map(|s| parse_amount_type(s))
                 .unwrap_or(false);
-            let taxable = form_parts.get(3).map(|s| parse_yes_no(s)).unwrap_or(true);
+            let taxable = form.get_bool(3).unwrap_or(true);
 
             Some(EffectData::Income {
                 to: AccountTag(to_account),
@@ -1044,11 +1025,8 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             })
         }
         EffectTypeContext::Expense => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
 
             Some(EffectData::Expense {
                 from: AccountTag(from_account),
@@ -1056,13 +1034,10 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             })
         }
         EffectTypeContext::AssetPurchase => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let to_account = form_parts.get(1).unwrap_or(&"").to_string();
-            let asset = form_parts.get(2).unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(3)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let to_account = form.get_str(1).unwrap_or("").to_string();
+            let asset = form.get_str(2).unwrap_or("").to_string();
+            let amount = form.get_currency(3).unwrap_or(0.0);
 
             Some(EffectData::AssetPurchase {
                 from: AccountTag(from_account),
@@ -1072,23 +1047,20 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             })
         }
         EffectTypeContext::AssetSale => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let asset_str = form_parts.get(1).unwrap_or(&"").trim();
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let asset_str = form.get_str(1).unwrap_or("").trim();
             let asset = if asset_str.is_empty() || asset_str == asset_sale_fields::ALL_ASSETS {
                 None
             } else {
                 Some(AssetTag(asset_str.to_string()))
             };
-            let amount = form_parts
-                .get(2)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
-            let gross = form_parts
-                .get(3)
+            let amount = form.get_currency(2).unwrap_or(0.0);
+            let gross = form
+                .get_str(3)
                 .map(|s| parse_amount_type(s))
                 .unwrap_or(false);
-            let lot_method = form_parts
-                .get(4)
+            let lot_method = form
+                .get_str(4)
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
@@ -1101,22 +1073,19 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             })
         }
         EffectTypeContext::Sweep => {
-            let to_account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
-            let strategy = form_parts
-                .get(2)
+            let to_account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
+            let strategy = form
+                .get_str(2)
                 .map(|s| parse_strategy(s))
                 .unwrap_or_default();
-            let gross = form_parts
-                .get(3)
+            let gross = form
+                .get_str(3)
                 .map(|s| parse_amount_type(s))
                 .unwrap_or(false);
-            let taxable = form_parts.get(4).map(|s| parse_yes_no(s)).unwrap_or(true);
-            let lot_method = form_parts
-                .get(5)
+            let taxable = form.get_bool(4).unwrap_or(true);
+            let lot_method = form
+                .get_str(5)
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
@@ -1131,33 +1100,33 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             })
         }
         EffectTypeContext::TriggerEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             Some(EffectData::TriggerEvent {
                 event: EventTag(event_name),
             })
         }
         EffectTypeContext::PauseEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             Some(EffectData::PauseEvent {
                 event: EventTag(event_name),
             })
         }
         EffectTypeContext::ResumeEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             Some(EffectData::ResumeEvent {
                 event: EventTag(event_name),
             })
         }
         EffectTypeContext::TerminateEvent => {
-            let event_name = form_parts.first().unwrap_or(&"").to_string();
+            let event_name = form.get_str(0).unwrap_or("").to_string();
             Some(EffectData::TerminateEvent {
                 event: EventTag(event_name),
             })
         }
         EffectTypeContext::ApplyRmd => {
-            let destination = form_parts.first().unwrap_or(&"").to_string();
-            let lot_method = form_parts
-                .get(1)
+            let destination = form.get_str(0).unwrap_or("").to_string();
+            let lot_method = form
+                .get_str(1)
                 .map(|s| parse_lot_method(s))
                 .unwrap_or_default();
 
@@ -1167,11 +1136,8 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             })
         }
         EffectTypeContext::AdjustBalance => {
-            let account = form_parts.first().unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(1)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let account = form.get_str(0).unwrap_or("").to_string();
+            let amount = form.get_currency(1).unwrap_or(0.0);
 
             Some(EffectData::AdjustBalance {
                 account: AccountTag(account),
@@ -1179,12 +1145,9 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
             })
         }
         EffectTypeContext::CashTransfer => {
-            let from_account = form_parts.first().unwrap_or(&"").to_string();
-            let to_account = form_parts.get(1).unwrap_or(&"").to_string();
-            let amount = form_parts
-                .get(2)
-                .and_then(|s| parse_currency(s).ok())
-                .unwrap_or(0.0);
+            let from_account = form.get_str(0).unwrap_or("").to_string();
+            let to_account = form.get_str(1).unwrap_or("").to_string();
+            let amount = form.get_currency(2).unwrap_or(0.0);
 
             Some(EffectData::CashTransfer {
                 from: AccountTag(from_account),
