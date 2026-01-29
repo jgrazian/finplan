@@ -2,9 +2,12 @@
 //!
 //! Renders the unified accounts panel with list, details, and holdings chart.
 
+use crate::actions::create_edit_account_form;
 use crate::components::EventResult;
 use crate::components::lists::calculate_centered_scroll;
 use crate::data::portfolio_data::{AccountData, AccountType};
+use crate::modals::context::ModalContext;
+use crate::modals::{ConfirmModal, ModalAction, ModalState, PickerModal};
 use crate::state::{AccountInteractionMode, AppState, PortfolioProfilesPanel};
 use crate::util::format::format_currency;
 use crate::util::styles::focused_block_with_help;
@@ -428,6 +431,61 @@ impl AccountsPanel {
                             );
                         }
                     }
+                }
+                EventResult::Handled
+            }
+            // Add account - show category picker
+            KeyCode::Char('a') => {
+                let categories = vec![
+                    "Investment".to_string(),
+                    "Cash".to_string(),
+                    "Property".to_string(),
+                    "Debt".to_string(),
+                ];
+                state.modal = ModalState::Picker(PickerModal::new(
+                    "Select Account Category",
+                    categories,
+                    ModalAction::PICK_ACCOUNT_CATEGORY,
+                ));
+                EventResult::Handled
+            }
+            // Edit account
+            KeyCode::Char('e') => {
+                if let Some(account) = state
+                    .data()
+                    .portfolios
+                    .accounts
+                    .get(state.portfolio_profiles_state.selected_account_index)
+                {
+                    let form = create_edit_account_form(account);
+                    state.modal =
+                        ModalState::Form(form.with_typed_context(ModalContext::account_index(
+                            state.portfolio_profiles_state.selected_account_index,
+                        )));
+                }
+                EventResult::Handled
+            }
+            // Delete account
+            KeyCode::Char('d') => {
+                if let Some(account) = state
+                    .data()
+                    .portfolios
+                    .accounts
+                    .get(state.portfolio_profiles_state.selected_account_index)
+                {
+                    state.modal = ModalState::Confirm(
+                        ConfirmModal::new(
+                            "Delete Account",
+                            &format!(
+                                "Delete account '{}'?\n\nThis cannot be undone.",
+                                account.name
+                            ),
+                            ModalAction::DELETE_ACCOUNT,
+                        )
+                        .with_typed_context(ModalContext::account_index(
+                            state.portfolio_profiles_state.selected_account_index,
+                        )),
+                    );
                 }
                 EventResult::Handled
             }

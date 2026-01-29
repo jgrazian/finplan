@@ -1,3 +1,4 @@
+use crate::actions::{self, ActionContext, ActionResult};
 use crate::components::collapsible::CollapsiblePanel;
 use crate::components::panels::EventListPanel;
 use crate::components::{Component, EventResult};
@@ -5,7 +6,8 @@ use crate::data::events_data::{
     AmountData, EffectData, EventData, IntervalData, OffsetData, SpecialAmount, ThresholdData,
     TriggerData,
 };
-use crate::state::{AppState, EventsPanel, ModalAction, ModalState};
+use crate::modals::{ConfirmedValue, EffectAction, EventAction, ModalAction, ModalState};
+use crate::state::{AppState, EventsPanel};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
@@ -836,11 +838,8 @@ impl super::ModalHandler for EventsScreen {
         &self,
         state: &mut AppState,
         action: ModalAction,
-        value: &crate::modals::ConfirmedValue,
-    ) -> crate::actions::ActionResult {
-        use crate::actions::{self, ActionContext, ActionResult};
-        use crate::state::{EffectAction, EventAction};
-
+        value: &ConfirmedValue,
+    ) -> ActionResult {
         // Extract modal context FIRST (clone to break the borrow)
         let modal_context = match &state.modal {
             ModalState::Form(form) => form.context.clone(),

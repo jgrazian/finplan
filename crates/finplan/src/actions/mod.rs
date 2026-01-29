@@ -21,9 +21,10 @@ pub use holding::*;
 pub use profile::*;
 pub use scenario::*;
 
-use crate::modals::ConfirmedValue;
-use crate::modals::context::{ModalContext, TriggerBuilderState, TriggerContext};
-use crate::state::{FormModal, ModalState};
+use crate::modals::{
+    ConfirmedValue, FormModal, ModalContext, ModalState,
+    context::{TriggerBuilderState, TriggerContext},
+};
 
 /// Result of an action handler
 ///

@@ -12,15 +12,15 @@ use ratatui::{
 use crate::actions::ActionResult;
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
 use crate::data::storage::DataDirectory;
-use crate::modals::{ConfirmedValue, ModalResult, handle_modal_key, render_modal};
+use crate::modals::{
+    ConfirmedValue, MessageModal, ModalAction, ModalResult, ModalState, handle_modal_key,
+    render_modal,
+};
 use crate::screens::{
     ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
     portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
 };
-use crate::state::{
-    AppState, MessageModal, ModalAction, ModalState, PercentileView, ResultsState,
-    SimulationStatus, TabId,
-};
+use crate::state::{AppState, PercentileView, ResultsState, SimulationStatus, TabId};
 use crate::worker::{SimulationResponse, SimulationWorker};
 
 pub struct App {
@@ -395,12 +395,12 @@ impl App {
         match self.state.save_all_dirty() {
             Ok(count) => {
                 if count > 0 {
-                    self.state.modal = ModalState::Message(crate::state::MessageModal::info(
+                    self.state.modal = ModalState::Message(MessageModal::info(
                         "Saved",
                         &format!("Saved {} scenario(s)", count),
                     ));
                 } else {
-                    self.state.modal = ModalState::Message(crate::state::MessageModal::info(
+                    self.state.modal = ModalState::Message(MessageModal::info(
                         "No Changes",
                         "No unsaved changes to save",
                     ));

@@ -1,9 +1,11 @@
+use crate::actions::{self, ActionContext};
 use crate::components::{Component, EventResult};
 use crate::data::portfolio_data::AccountType;
-use crate::state::{
-    AppState, ConfirmModal, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState,
-    ScenarioPanel, ScenarioPickerModal, ValueDisplayMode,
+use crate::modals::{
+    ConfirmModal, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState,
 };
+use crate::modals::{ScenarioAction, ScenarioPickerModal};
+use crate::state::{AppState, ScenarioPanel, ValueDisplayMode};
 use crate::util::format::{format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
 use jiff::civil::Date;
@@ -893,9 +895,6 @@ impl super::ModalHandler for ScenarioScreen {
         action: ModalAction,
         value: &crate::modals::ConfirmedValue,
     ) -> crate::actions::ActionResult {
-        use crate::actions::{self, ActionContext};
-        use crate::state::ScenarioAction;
-
         // Extract modal context FIRST (clone to break the borrow)
         let modal_context = match &state.modal {
             ModalState::Form(form) => form.context.clone(),

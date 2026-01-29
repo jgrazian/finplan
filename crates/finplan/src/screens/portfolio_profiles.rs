@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use crate::actions::{self, ActionContext, ActionResult};
 use crate::components::lists::calculate_centered_scroll;
 use crate::components::panels::{AccountsPanel, ProfilesPanel};
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
@@ -10,10 +11,11 @@ use crate::data::profiles_data::{ProfileData, ReturnProfileTag};
 use crate::data::ticker_profiles;
 use crate::data::ticker_profiles::HISTORICAL_PRESETS;
 use crate::modals::context::{ConfigContext, ModalContext, TaxConfigContext};
-use crate::state::{
-    AccountInteractionMode, AppState, ConfirmModal, FormField, FormModal, HoldingEditState,
-    MessageModal, ModalAction, ModalState, PickerModal, PortfolioProfilesPanel,
+use crate::modals::{AccountAction, ConfigAction, HoldingAction, ProfileAction};
+use crate::modals::{
+    ConfirmModal, FormField, FormModal, MessageModal, ModalAction, ModalState, PickerModal,
 };
+use crate::state::{AccountInteractionMode, AppState, HoldingEditState, PortfolioProfilesPanel};
 use crate::util::format::format_percentage;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -1233,9 +1235,6 @@ impl super::ModalHandler for PortfolioProfilesScreen {
         action: ModalAction,
         value: &crate::modals::ConfirmedValue,
     ) -> crate::actions::ActionResult {
-        use crate::actions::{self, ActionContext, ActionResult};
-        use crate::state::{AccountAction, ConfigAction, HoldingAction, ProfileAction};
-
         // Extract modal context FIRST (clone to break the borrow)
         let modal_context = match &state.modal {
             ModalState::Form(form) => form.context.clone(),

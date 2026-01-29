@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{List, ListItem},
 };
 
-use crate::state::PickerModal;
+use crate::modals::PickerModal;
 
 use super::helpers::{HelpText, MultiLineHelp, render_modal_frame};
 use super::{ConfirmedValue, ModalResult};

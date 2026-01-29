@@ -3,11 +3,12 @@
 use crate::data::events_data::{
     AccountTag, EventData, EventTag, IntervalData, OffsetData, ThresholdData, TriggerData,
 };
-use crate::modals::context::{
-    ModalContext, PartialTrigger, TriggerBuilderState, TriggerChildSlot, TriggerContext,
+use crate::modals::{
+    FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal,
+    context::{PartialTrigger, TriggerBuilderState, TriggerChildSlot, TriggerContext},
 };
 use crate::screens::events::EventsScreen;
-use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::state::AppState;
 use crate::util::common::yes_no_options;
 
 use super::{ActionContext, ActionResult};

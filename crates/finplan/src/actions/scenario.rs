@@ -2,7 +2,8 @@
 
 use std::path::Path;
 
-use crate::state::{AppState, MessageModal, ModalState};
+use crate::modals::{MessageModal, ModalState};
+use crate::state::AppState;
 
 use super::{ActionContext, ActionResult};
 

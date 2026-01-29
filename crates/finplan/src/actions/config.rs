@@ -1,10 +1,11 @@
 // Config actions - tax and inflation configuration
 
 use crate::data::parameters_data::{DistributionType, FederalBracketsPreset, InflationData};
-use crate::modals::context::{
-    ConfigContext, InflationConfigContext, ModalContext, TaxConfigContext,
+use crate::modals::{
+    FormField, FormModal, ModalAction, ModalState, PickerModal,
+    context::{ConfigContext, InflationConfigContext, ModalContext, TaxConfigContext},
 };
-use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::state::AppState;
 
 use super::{ActionContext, ActionResult};
 

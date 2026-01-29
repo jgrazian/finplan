@@ -2,8 +2,11 @@
 
 use crate::data::portfolio_data::{AccountData, AccountType, AssetAccount, Debt, Property};
 use crate::data::profiles_data::ReturnProfileTag;
-use crate::modals::context::{AccountTypeContext, ModalContext};
-use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::modals::{
+    FormField, FormModal, ModalAction, ModalState, PickerModal,
+    context::{AccountTypeContext, ModalContext},
+};
+use crate::state::AppState;
 
 use super::{ActionContext, ActionResult};
 
@@ -241,6 +244,59 @@ pub fn handle_delete_account(state: &mut AppState, ctx: ActionContext) -> Action
         }
     }
     ActionResult::close()
+}
+
+/// Create an edit form for an existing account
+pub fn create_edit_account_form(account: &AccountData) -> FormModal {
+    match &account.account_type {
+        AccountType::Brokerage(_)
+        | AccountType::Traditional401k(_)
+        | AccountType::Roth401k(_)
+        | AccountType::TraditionalIRA(_)
+        | AccountType::RothIRA(_) => FormModal::new(
+            "Edit Investment Account",
+            vec![
+                FormField::text("Name", &account.name),
+                FormField::text("Description", account.description.as_deref().unwrap_or("")),
+            ],
+            ModalAction::EDIT_ACCOUNT,
+        )
+        .start_editing(),
+        AccountType::Checking(prop)
+        | AccountType::Savings(prop)
+        | AccountType::HSA(prop)
+        | AccountType::Property(prop)
+        | AccountType::Collectible(prop) => FormModal::new(
+            "Edit Cash/Property Account",
+            vec![
+                FormField::text("Name", &account.name),
+                FormField::text("Description", account.description.as_deref().unwrap_or("")),
+                FormField::currency("Value", prop.value),
+                FormField::text(
+                    "Return Profile",
+                    prop.return_profile
+                        .as_ref()
+                        .map(|p| p.0.as_str())
+                        .unwrap_or(""),
+                ),
+            ],
+            ModalAction::EDIT_ACCOUNT,
+        )
+        .start_editing(),
+        AccountType::Mortgage(debt)
+        | AccountType::LoanDebt(debt)
+        | AccountType::StudentLoanDebt(debt) => FormModal::new(
+            "Edit Debt Account",
+            vec![
+                FormField::text("Name", &account.name),
+                FormField::text("Description", account.description.as_deref().unwrap_or("")),
+                FormField::currency("Balance", debt.balance),
+                FormField::percentage("Interest Rate", debt.interest_rate),
+            ],
+            ModalAction::EDIT_ACCOUNT,
+        )
+        .start_editing(),
+    }
 }
 
 // Helper functions for account creation

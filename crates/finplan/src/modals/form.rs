@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::state::{FieldType, FormField, FormModal};
+use crate::modals::{FieldType, FormField, FormModal};
 
 use super::helpers::{HelpText, MultiLineHelp, calculate_scroll, render_cursor_line};
 use super::{ConfirmedValue, ModalResult, centered_rect};

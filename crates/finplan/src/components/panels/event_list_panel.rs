@@ -3,11 +3,13 @@
 //! Renders the event list with selection and filtering.
 
 use crate::components::EventResult;
-use crate::data::events_data::{AmountData, EffectData, EventTag, SpecialAmount, TriggerData};
-use crate::modals::context::ModalContext;
-use crate::state::{
-    AppState, ConfirmModal, EventsPanel, FormField, FormModal, ModalAction, ModalState, PickerModal,
+use crate::data::events_data::{
+    AmountData, EffectData, EventTag, IntervalData, SpecialAmount, TriggerData,
 };
+use crate::modals::{
+    ConfirmModal, FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal,
+};
+use crate::state::{AppState, EventsPanel};
 use crate::util::styles::focused_block_with_help;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -373,8 +375,7 @@ impl EventListPanel {
     }
 
     /// Format interval for display.
-    fn format_interval(interval: &crate::data::events_data::IntervalData) -> String {
-        use crate::data::events_data::IntervalData;
+    fn format_interval(interval: &IntervalData) -> String {
         match interval {
             IntervalData::Never => "Never".to_string(),
             IntervalData::Weekly => "Weekly".to_string(),

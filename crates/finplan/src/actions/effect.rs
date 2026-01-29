@@ -4,12 +4,13 @@ use crate::data::events_data::{
     AccountTag, AmountData, EffectData, EventTag, LotMethodData, WithdrawalStrategyData,
 };
 use crate::data::portfolio_data::AssetTag;
-use crate::modals::context::{EffectContext, EffectTypeContext, ModalContext};
-use crate::screens::events::EventsScreen;
-use crate::state::{
-    AppState, ConfirmModal, FormField, FormKind, FormModal, ModalAction, ModalState, PickerModal,
+use crate::modals::{
+    ConfirmModal, FormField, FormKind, FormModal, ModalAction, ModalState, PickerModal,
     asset_sale_fields,
+    context::{EffectContext, EffectTypeContext, ModalContext},
 };
+use crate::screens::events::EventsScreen;
+use crate::state::AppState;
 use crate::util::common::yes_no_options;
 
 use super::{ActionContext, ActionResult};

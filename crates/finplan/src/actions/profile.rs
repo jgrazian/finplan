@@ -1,8 +1,9 @@
 // Profile actions - type picking, CRUD operations
 
 use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
-use crate::modals::context::{ModalContext, ProfileTypeContext};
-use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState};
+use crate::modals::context::ProfileTypeContext;
+use crate::modals::{FormField, FormModal, ModalAction, ModalContext, ModalState};
+use crate::state::AppState;
 
 use super::{ActionContext, ActionResult};
 

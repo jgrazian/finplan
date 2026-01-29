@@ -11,11 +11,10 @@ use crate::data::parameters_data::ReturnsMode;
 use crate::data::portfolio_data::{AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
 use crate::data::ticker_profiles::{self, HISTORICAL_PRESETS};
-use crate::modals::context::ModalContext;
-use crate::state::{
-    AppState, ConfirmModal, FormField, FormModal, ModalAction, ModalState, PickerModal,
-    PortfolioProfilesPanel,
+use crate::modals::{
+    ConfirmModal, FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal,
 };
+use crate::state::{AppState, PortfolioProfilesPanel};
 use crate::util::format::format_percentage;
 use crate::util::styles::focused_block_with_help;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

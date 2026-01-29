@@ -8,9 +8,11 @@ use ratatui::{
 };
 
 use super::Screen;
-use crate::actions::optimize::{show_objective_picker, show_settings_form};
+use crate::actions::ActionResult;
+use crate::actions::optimize::{handle_optimize_action, show_objective_picker, show_settings_form};
 use crate::components::{Component, EventResult};
-use crate::state::{AppState, ModalState, OptimizeAction, OptimizePanel};
+use crate::modals::{ConfirmedValue, ModalAction, ModalState, OptimizeAction};
+use crate::state::{AppState, OptimizePanel};
 use crate::util::format::format_currency;
 
 pub struct OptimizeScreen;
@@ -849,20 +851,18 @@ impl Screen for OptimizeScreen {
 }
 
 impl super::ModalHandler for OptimizeScreen {
-    fn handles(&self, action: &crate::state::ModalAction) -> bool {
-        matches!(action, crate::state::ModalAction::Optimize(_))
+    fn handles(&self, action: &ModalAction) -> bool {
+        matches!(action, ModalAction::Optimize(_))
     }
 
     fn handle_modal_result(
         &self,
         state: &mut AppState,
-        action: crate::state::ModalAction,
-        value: &crate::modals::ConfirmedValue,
-    ) -> crate::actions::ActionResult {
-        use crate::actions::optimize::handle_optimize_action;
-
+        action: ModalAction,
+        value: &ConfirmedValue,
+    ) -> ActionResult {
         match action {
-            crate::state::ModalAction::Optimize(optimize_action) => {
+            ModalAction::Optimize(optimize_action) => {
                 handle_optimize_action(state, optimize_action, value.as_str().unwrap_or_default())
             }
             // This shouldn't happen if handles() is correct

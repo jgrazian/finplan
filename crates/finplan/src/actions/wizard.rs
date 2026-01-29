@@ -12,8 +12,7 @@
 // Effect Addition:
 //   ManageEffects → PickEffectTypeForAdd → AddEffect
 
-use crate::modals::context::ModalContext;
-use crate::state::{FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::modals::{FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal};
 
 /// A wizard step builder for creating form modals
 pub struct FormWizard {
