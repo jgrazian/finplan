@@ -5,11 +5,11 @@
 use crate::actions::create_edit_account_form;
 use crate::components::EventResult;
 use crate::components::lists::calculate_centered_scroll;
-use crate::data::portfolio_data::{AccountData, AccountType};
+use crate::data::portfolio_data::{AccountData, AccountType, AssetTag, AssetValue};
 use crate::modals::context::ModalContext;
 use crate::modals::{ConfirmModal, ModalAction, ModalState, PickerModal};
-use crate::state::{AccountInteractionMode, AppState, PortfolioProfilesPanel};
-use crate::util::format::format_currency;
+use crate::state::{AccountInteractionMode, AppState, HoldingEditState, PortfolioProfilesPanel};
+use crate::util::format::{format_currency, format_currency_short};
 use crate::util::styles::focused_block_with_help;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -114,7 +114,7 @@ impl AccountsPanel {
                 "{}{:<width$} {:>10}",
                 prefix,
                 name,
-                format_currency(value),
+                format_currency_short(value),
                 width = max_name_len.max(1)
             );
 
@@ -255,8 +255,8 @@ impl AccountsPanel {
     }
 
     fn render_holdings_chart(frame: &mut Frame, area: Rect, state: &AppState) {
-        // Center the chart with ~20% padding on each side
-        let padding = (area.width as f32 * 0.20) as u16;
+        // Center the chart with ~15% padding on each side
+        let padding = (area.width as f32 * 0.15) as u16;
         let chart_width = area.width.saturating_sub(padding * 2);
         let chart_area = Rect::new(area.x + padding, area.y, chart_width, area.height);
 
@@ -283,7 +283,26 @@ impl AccountsPanel {
             _ => return,
         };
 
-        if assets.is_empty() {
+        let editing_mode = &state.portfolio_profiles_state.account_mode;
+        let is_editing = editing_mode.is_editing_holdings();
+
+        // Extract edit state info
+        let (selected_holding, edit_state) = match editing_mode {
+            AccountInteractionMode::EditingHoldings {
+                selected_index,
+                edit_state,
+            } => (Some(*selected_index), Some(edit_state.clone())),
+            _ => (None, None),
+        };
+
+        // When editing, we have assets + 1 item (the "Add Asset +" button or new asset being added)
+        let num_items = if is_editing {
+            assets.len() + 1
+        } else {
+            assets.len()
+        };
+
+        if assets.is_empty() && !is_editing {
             let empty_msg = Paragraph::new(Line::from(Span::styled(
                 "No holdings. Press Enter to add.",
                 Style::default().fg(Color::DarkGray),
@@ -293,41 +312,68 @@ impl AccountsPanel {
         }
 
         let total: f64 = assets.iter().map(|a| a.value).sum();
-        if total <= 0.0 {
-            return;
-        }
 
         let visible_count = area.height as usize;
-        let editing_mode = &state.portfolio_profiles_state.account_mode;
-        let (scroll_offset, selected_holding) = match editing_mode {
-            AccountInteractionMode::EditingHoldings { selected_index, .. } => {
-                let offset =
-                    calculate_centered_scroll(*selected_index, assets.len(), visible_count);
-                (offset, Some(*selected_index))
-            }
-            _ => (0, None),
-        };
+        let scroll_offset = selected_holding
+            .map(|idx| calculate_centered_scroll(idx, num_items, visible_count))
+            .unwrap_or(0);
 
-        let bar_width = area.width.saturating_sub(25) as usize; // Leave room for labels
-
-        for (line_idx, (asset_idx, asset)) in assets
+        // Calculate max value width to size the bar dynamically
+        let max_val_width = assets
             .iter()
-            .enumerate()
-            .skip(scroll_offset)
-            .take(visible_count)
-            .enumerate()
-        {
-            let pct = asset.value / total;
+            .map(|a| format_currency_short(a.value).len())
+            .max()
+            .unwrap_or(2)
+            .max(2); // Minimum width for "$0"
+
+        // Fixed widths: prefix(2) + ticker(6) + space(1) + space(1) + pct(6) + space(1) + val(dynamic)
+        let fixed_width = 2 + 6 + 1 + 1 + 6 + 1 + max_val_width;
+        let bar_width = area.width.saturating_sub(fixed_width as u16) as usize;
+        let mut line_idx = 0;
+
+        // Render asset bars
+        for (asset_idx, asset) in assets.iter().enumerate().skip(scroll_offset) {
+            if line_idx >= visible_count {
+                break;
+            }
+
+            let pct = if total > 0.0 {
+                asset.value / total
+            } else {
+                0.0
+            };
             let filled = ((pct * bar_width as f64).round() as usize).min(bar_width);
 
             let is_selected = selected_holding == Some(asset_idx);
             let bar_color = get_asset_color(asset_idx);
 
             let prefix = if is_selected { "> " } else { "  " };
-            let ticker = format!("{:>6}", &asset.asset.0);
+
+            // Check if we're editing this asset's value
+            let (ticker, val_str) = if is_selected {
+                if let Some(HoldingEditState::EditingValue(buffer)) = &edit_state {
+                    // Show the edit buffer with cursor
+                    let display_val = if buffer.is_empty() {
+                        "_".to_string()
+                    } else {
+                        format!("{}█", buffer)
+                    };
+                    (format!("{:>6}", &asset.asset.0), display_val)
+                } else {
+                    (
+                        format!("{:>6}", &asset.asset.0),
+                        format_currency_short(asset.value),
+                    )
+                }
+            } else {
+                (
+                    format!("{:>6}", &asset.asset.0),
+                    format_currency_short(asset.value),
+                )
+            };
+
             let bar: String = "█".repeat(filled) + &" ".repeat(bar_width - filled);
             let pct_str = format!("{:>5.1}%", pct * 100.0);
-            let val_str = format!("{:>10}", format_currency(asset.value));
 
             let style = if is_selected {
                 Style::default()
@@ -344,11 +390,63 @@ impl AccountsPanel {
                 Span::styled(&bar, Style::default().fg(bar_color)),
                 Span::raw(" "),
                 Span::styled(pct_str, style),
+                Span::raw(" "),
                 Span::styled(val_str, style),
             ]);
 
             let line_area = Rect::new(area.x, area.y + line_idx as u16, area.width, 1);
             frame.render_widget(Paragraph::new(line), line_area);
+            line_idx += 1;
+        }
+
+        // Render "Add Asset +" button or new asset being added
+        if is_editing && line_idx < visible_count {
+            let add_button_idx = assets.len();
+
+            if let Some(HoldingEditState::AddingNew(buffer)) = &edit_state {
+                // Render the new asset line being typed
+                let is_selected = selected_holding == Some(add_button_idx);
+                let prefix = if is_selected { "> " } else { "  " };
+
+                let display_name = if buffer.is_empty() {
+                    "_".to_string()
+                } else {
+                    format!("{}█", buffer)
+                };
+
+                let style = Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD);
+
+                let line = Line::from(vec![
+                    Span::styled(prefix, style),
+                    Span::styled(format!("{:>6}", display_name), style),
+                    Span::raw(" "),
+                    Span::styled(" ".repeat(bar_width), Style::default()),
+                    Span::raw(" "),
+                    Span::styled("    -", style),
+                    Span::raw(" "),
+                    Span::styled("       $0", style),
+                ]);
+                let line_area = Rect::new(area.x, area.y + line_idx as u16, area.width, 1);
+                frame.render_widget(Paragraph::new(line), line_area);
+            } else if scroll_offset <= add_button_idx {
+                // Render the "Add Asset +" button
+                let is_selected = selected_holding == Some(add_button_idx);
+                let prefix = if is_selected { "> " } else { "  " };
+
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+
+                let line = Line::from(Span::styled(format!("{}+ Add Asset", prefix), style));
+                let line_area = Rect::new(area.x, area.y + line_idx as u16, area.width, 1);
+                frame.render_widget(Paragraph::new(line), line_area);
+            }
         }
     }
 
@@ -494,13 +592,357 @@ impl AccountsPanel {
     }
 
     fn handle_holdings_keys(key: KeyEvent, state: &mut AppState) -> EventResult {
-        // Placeholder - full implementation will be moved from portfolio_profiles.rs
-        match key.code {
-            KeyCode::Esc => {
-                state.portfolio_profiles_state.account_mode = AccountInteractionMode::Browsing;
-                EventResult::Handled
+        let account_idx = state.portfolio_profiles_state.selected_account_index;
+
+        // Get the assets count for the current account
+        let assets_len = {
+            let accounts = &state.data().portfolios.accounts;
+            match accounts.get(account_idx) {
+                Some(account) => match &account.account_type {
+                    AccountType::Brokerage(inv)
+                    | AccountType::Traditional401k(inv)
+                    | AccountType::Roth401k(inv)
+                    | AccountType::TraditionalIRA(inv)
+                    | AccountType::RothIRA(inv) => inv.assets.len(),
+                    _ => 0,
+                },
+                None => 0,
             }
-            _ => EventResult::NotHandled,
+        };
+
+        // Extract current state
+        let (selected_idx, edit_state_clone) = match &state.portfolio_profiles_state.account_mode {
+            AccountInteractionMode::EditingHoldings {
+                selected_index,
+                edit_state,
+            } => (*selected_index, edit_state.clone()),
+            _ => return EventResult::NotHandled,
+        };
+
+        // Total items = assets + 1 for "Add Asset" button (unless adding new)
+        let num_items = assets_len + 1;
+
+        match edit_state_clone {
+            HoldingEditState::AddingNew(buffer) => {
+                // Handle adding new holding name
+                match key.code {
+                    KeyCode::Esc => {
+                        // Cancel adding - go back to selecting on add button
+                        state.portfolio_profiles_state.account_mode =
+                            AccountInteractionMode::EditingHoldings {
+                                selected_index: assets_len,
+                                edit_state: HoldingEditState::Selecting,
+                            };
+                        EventResult::Handled
+                    }
+                    KeyCode::Enter => {
+                        // Finish adding - save the asset with this name and $0 value
+                        if buffer.is_empty() {
+                            state.set_error("Asset name cannot be empty".to_string());
+                        } else {
+                            let asset_tag = AssetTag(buffer.clone());
+                            let new_idx = {
+                                if let Some(account) =
+                                    state.data_mut().portfolios.accounts.get_mut(account_idx)
+                                {
+                                    match &mut account.account_type {
+                                        AccountType::Brokerage(inv)
+                                        | AccountType::Traditional401k(inv)
+                                        | AccountType::Roth401k(inv)
+                                        | AccountType::TraditionalIRA(inv)
+                                        | AccountType::RothIRA(inv) => {
+                                            inv.assets.push(AssetValue {
+                                                asset: asset_tag,
+                                                value: 0.0,
+                                            });
+                                            Some(inv.assets.len() - 1)
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(idx) = new_idx {
+                                state.mark_modified();
+                                // Return to selecting mode with new asset selected
+                                state.portfolio_profiles_state.account_mode =
+                                    AccountInteractionMode::EditingHoldings {
+                                        selected_index: idx,
+                                        edit_state: HoldingEditState::Selecting,
+                                    };
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Backspace => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::AddingNew(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.pop();
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Char(c) => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::AddingNew(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.push(c);
+                        }
+                        EventResult::Handled
+                    }
+                    _ => EventResult::Handled,
+                }
+            }
+            HoldingEditState::EditingValue(buffer) => {
+                // Handle editing a holding's value
+                match key.code {
+                    KeyCode::Esc => {
+                        // Cancel editing - go back to selecting
+                        if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                            &mut state.portfolio_profiles_state.account_mode
+                        {
+                            *edit_state = HoldingEditState::Selecting;
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Enter => {
+                        // Parse and save the value
+                        let clean_buffer: String = buffer.chars().filter(|c| *c != ',').collect();
+                        if let Ok(value) = clean_buffer.parse::<f64>() {
+                            if let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(account_idx)
+                            {
+                                match &mut account.account_type {
+                                    AccountType::Brokerage(inv)
+                                    | AccountType::Traditional401k(inv)
+                                    | AccountType::Roth401k(inv)
+                                    | AccountType::TraditionalIRA(inv)
+                                    | AccountType::RothIRA(inv) => {
+                                        if let Some(asset) = inv.assets.get_mut(selected_idx) {
+                                            asset.value = value;
+                                            state.mark_modified();
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            // Go back to selecting
+                            if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                                &mut state.portfolio_profiles_state.account_mode
+                            {
+                                *edit_state = HoldingEditState::Selecting;
+                            }
+                        } else if clean_buffer.is_empty() {
+                            // Allow empty input to keep the current value
+                            if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                                &mut state.portfolio_profiles_state.account_mode
+                            {
+                                *edit_state = HoldingEditState::Selecting;
+                            }
+                        } else {
+                            state.set_error("Invalid number format".to_string());
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Backspace => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::EditingValue(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.pop();
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Char(c) if c.is_ascii_digit() || c == '.' || c == ',' => {
+                        if let AccountInteractionMode::EditingHoldings {
+                            edit_state: HoldingEditState::EditingValue(buf),
+                            ..
+                        } = &mut state.portfolio_profiles_state.account_mode
+                        {
+                            buf.push(c);
+                        }
+                        EventResult::Handled
+                    }
+                    _ => EventResult::Handled,
+                }
+            }
+            HoldingEditState::Selecting => {
+                // Normal navigation mode within holdings
+                let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                match key.code {
+                    KeyCode::Esc => {
+                        // Exit holdings editing mode
+                        state.portfolio_profiles_state.account_mode =
+                            AccountInteractionMode::Browsing;
+                        EventResult::Handled
+                    }
+                    // Reorder down (Shift+J or Shift+Down)
+                    KeyCode::Char('J') | KeyCode::Down if has_shift => {
+                        if assets_len >= 2
+                            && selected_idx < assets_len - 1
+                            && let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(selected_idx, selected_idx + 1);
+                                    if let AccountInteractionMode::EditingHoldings {
+                                        selected_index,
+                                        ..
+                                    } = &mut state.portfolio_profiles_state.account_mode
+                                    {
+                                        *selected_index = selected_idx + 1;
+                                    }
+                                    state.mark_modified();
+                                }
+                                _ => {}
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    // Reorder up (Shift+K or Shift+Up)
+                    KeyCode::Char('K') | KeyCode::Up if has_shift => {
+                        if assets_len >= 2
+                            && selected_idx > 0
+                            && selected_idx < assets_len
+                            && let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(account_idx)
+                        {
+                            match &mut account.account_type {
+                                AccountType::Brokerage(inv)
+                                | AccountType::Traditional401k(inv)
+                                | AccountType::Roth401k(inv)
+                                | AccountType::TraditionalIRA(inv)
+                                | AccountType::RothIRA(inv) => {
+                                    inv.assets.swap(selected_idx, selected_idx - 1);
+                                    if let AccountInteractionMode::EditingHoldings {
+                                        selected_index,
+                                        ..
+                                    } = &mut state.portfolio_profiles_state.account_mode
+                                    {
+                                        *selected_index = selected_idx - 1;
+                                    }
+                                    state.mark_modified();
+                                }
+                                _ => {}
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    // Navigate down
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        if let AccountInteractionMode::EditingHoldings { selected_index, .. } =
+                            &mut state.portfolio_profiles_state.account_mode
+                        {
+                            *selected_index = (*selected_index + 1) % num_items;
+                        }
+                        EventResult::Handled
+                    }
+                    // Navigate up
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        if let AccountInteractionMode::EditingHoldings { selected_index, .. } =
+                            &mut state.portfolio_profiles_state.account_mode
+                        {
+                            if *selected_index == 0 {
+                                *selected_index = num_items - 1;
+                            } else {
+                                *selected_index -= 1;
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    // Enter - add new asset or edit existing value
+                    KeyCode::Enter => {
+                        if selected_idx == assets_len {
+                            // "Add Asset" button selected - start adding name
+                            if let AccountInteractionMode::EditingHoldings { edit_state, .. } =
+                                &mut state.portfolio_profiles_state.account_mode
+                            {
+                                *edit_state = HoldingEditState::AddingNew(String::new());
+                            }
+                        } else if selected_idx < assets_len {
+                            // Edit existing holding value - get current value first
+                            let current_value = {
+                                let accounts = &state.data().portfolios.accounts;
+                                if let Some(account) = accounts.get(account_idx) {
+                                    match &account.account_type {
+                                        AccountType::Brokerage(inv)
+                                        | AccountType::Traditional401k(inv)
+                                        | AccountType::Roth401k(inv)
+                                        | AccountType::TraditionalIRA(inv)
+                                        | AccountType::RothIRA(inv) => {
+                                            inv.assets.get(selected_idx).map(|asset| asset.value)
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(value) = current_value
+                                && let AccountInteractionMode::EditingHoldings {
+                                    edit_state, ..
+                                } = &mut state.portfolio_profiles_state.account_mode
+                            {
+                                *edit_state =
+                                    HoldingEditState::EditingValue(format!("{:.0}", value));
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    // Delete holding
+                    KeyCode::Char('d') => {
+                        if selected_idx < assets_len {
+                            // Get the asset name for confirmation
+                            let asset_name = {
+                                let accounts = &state.data().portfolios.accounts;
+                                if let Some(account) = accounts.get(account_idx) {
+                                    match &account.account_type {
+                                        AccountType::Brokerage(inv)
+                                        | AccountType::Traditional401k(inv)
+                                        | AccountType::Roth401k(inv)
+                                        | AccountType::TraditionalIRA(inv)
+                                        | AccountType::RothIRA(inv) => {
+                                            inv.assets.get(selected_idx).map(|a| a.asset.0.clone())
+                                        }
+                                        _ => None,
+                                    }
+                                } else {
+                                    None
+                                }
+                            };
+
+                            if let Some(name) = asset_name {
+                                state.modal = ModalState::Confirm(
+                                    ConfirmModal::new(
+                                        "Delete Holding",
+                                        &format!(
+                                            "Delete holding '{}'?\n\nThis cannot be undone.",
+                                            name
+                                        ),
+                                        ModalAction::DELETE_HOLDING,
+                                    )
+                                    .with_typed_context(
+                                        ModalContext::holding_index(account_idx, selected_idx),
+                                    ),
+                                );
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    _ => EventResult::NotHandled,
+                }
+            }
         }
     }
 }
