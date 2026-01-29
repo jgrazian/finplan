@@ -6,6 +6,10 @@ use rand::RngCore;
 
 use crate::data::app_data::{AppData, SimulationData};
 use crate::data::convert::{ConvertError, to_simulation_config, to_tui_result};
+use crate::util::percentiles::{
+    PERCENTILE_TOLERANCE, PercentileSet, find_percentile_result, find_percentile_result_pair,
+    standard::P50,
+};
 
 use super::cache::CachedValue;
 use super::errors::{LoadError, SaveError, SimulationError};
@@ -68,7 +72,7 @@ impl MonteCarloStoredResult {
     pub fn get_percentile_tui(&self, percentile: f64) -> Option<&SimulationResult> {
         self.percentile_results
             .iter()
-            .find(|(p, _, _)| (*p - percentile).abs() < 0.001)
+            .find(|(p, _, _)| (*p - percentile).abs() < PERCENTILE_TOLERANCE)
             .map(|(_, tui, _)| tui)
     }
 
@@ -79,7 +83,7 @@ impl MonteCarloStoredResult {
     ) -> Option<&finplan_core::model::SimulationResult> {
         self.percentile_results
             .iter()
-            .find(|(p, _, _)| (*p - percentile).abs() < 0.001)
+            .find(|(p, _, _)| (*p - percentile).abs() < PERCENTILE_TOLERANCE)
             .map(|(_, _, core)| core)
     }
 }
@@ -588,44 +592,21 @@ impl AppState {
             };
 
         // Store the P50 run as the default simulation result
-        if let Some((_, tui, core)) = percentile_results
-            .iter()
-            .find(|(p, _, _)| (*p - 0.50).abs() < 0.001)
-        {
+        if let Some((tui, core)) = find_percentile_result_pair(&percentile_results, P50) {
             self.simulation_result = Some(tui.clone());
             self.core_simulation_result = Some(core.clone());
         }
 
         // Update scenario preview with MC summary
         if let Some(preview) = &mut self.scenario_state.projection_preview {
-            let p5_final = mc_summary
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p50_final = mc_summary
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p95_final = mc_summary
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+            let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
 
             preview.mc_summary = Some(MonteCarloPreviewSummary {
                 num_iterations: mc_summary.stats.num_iterations,
                 success_rate: mc_summary.stats.success_rate,
-                p5_final,
-                p50_final,
-                p95_final,
+                p5_final: pset.p5,
+                p50_final: pset.p50,
+                p95_final: pset.p95,
             });
         }
 
@@ -728,30 +709,11 @@ impl AppState {
     /// Update scenario summary for the current scenario after a Monte Carlo run
     pub fn update_current_scenario_summary(&mut self) {
         if let Some(mc) = &self.monte_carlo_result {
-            let p5 = mc
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p50 = mc
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p95 = mc
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+            let pset = PercentileSet::from_values_or_default(&mc.stats.percentile_values);
+            let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
 
             // Get yearly net worth (nominal and real) from P50 TUI result
-            let p50_tui = mc.get_percentile_tui(0.50);
+            let p50_tui = mc.get_percentile_tui(P50);
             let yearly_nw = p50_tui.map(|tui| {
                 tui.years
                     .iter()
@@ -858,36 +820,14 @@ impl AppState {
                 .map_err(|e| SimulationError::Config(e.to_string()))?;
 
         // Extract summary data
-        let p5 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p50 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p95 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
+        let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
+        let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
 
         // Get yearly net worth (nominal and real) from P50 run
         let birth_date = &scenario_data.parameters.birth_date;
         let start_date = &scenario_data.parameters.start_date;
-        let p50_tui = mc_summary
-            .percentile_runs
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .and_then(|(_, core_result)| to_tui_result(core_result, birth_date, start_date).ok());
+        let p50_tui = find_percentile_result(&mc_summary.percentile_runs, P50)
+            .and_then(|core_result| to_tui_result(core_result, birth_date, start_date).ok());
 
         let yearly_nw = p50_tui
             .as_ref()

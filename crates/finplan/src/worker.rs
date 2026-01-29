@@ -12,6 +12,9 @@ use crate::data::convert::to_tui_result;
 use crate::state::{
     MonteCarloPreviewSummary, MonteCarloStoredResult, ScenarioSummary, SimulationResult,
 };
+use crate::util::percentiles::{
+    PercentileSet, find_percentile_result, find_percentile_result_pair, standard::P50,
+};
 
 /// Request sent to the background worker
 #[derive(Debug)]
@@ -356,41 +359,20 @@ fn run_monte_carlo_simulation(
     };
 
     // Extract P50 as default result
-    let (default_tui_result, default_core_result) = percentile_results
-        .iter()
-        .find(|(p, _, _)| (*p - 0.50).abs() < 0.001)
-        .map(|(_, tui, core)| (tui.clone(), core.clone()))
-        .ok_or_else(|| "Missing P50 result".to_string())?;
+    let (default_tui_result, default_core_result) =
+        find_percentile_result_pair(&percentile_results, P50)
+            .map(|(tui, core)| (tui.clone(), core.clone()))
+            .ok_or_else(|| "Missing P50 result".to_string())?;
 
     // Build preview summary
-    let p5_final = mc_summary
-        .stats
-        .percentile_values
-        .iter()
-        .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-        .map(|(_, v)| *v)
-        .unwrap_or(0.0);
-    let p50_final = mc_summary
-        .stats
-        .percentile_values
-        .iter()
-        .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-        .map(|(_, v)| *v)
-        .unwrap_or(0.0);
-    let p95_final = mc_summary
-        .stats
-        .percentile_values
-        .iter()
-        .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-        .map(|(_, v)| *v)
-        .unwrap_or(0.0);
+    let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
 
     let preview_summary = MonteCarloPreviewSummary {
         num_iterations: mc_summary.stats.num_iterations,
         success_rate: mc_summary.stats.success_rate,
-        p5_final,
-        p50_final,
-        p95_final,
+        p5_final: pset.p5,
+        p50_final: pset.p50,
+        p95_final: pset.p95,
     };
 
     // Build stored result
@@ -459,34 +441,12 @@ fn run_batch_monte_carlo(
         };
 
         // Extract summary data
-        let p5 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p50 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p95 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
+        let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
+        let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
 
         // Get yearly net worth (nominal and real) from P50 run
-        let p50_tui = mc_summary
-            .percentile_runs
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .and_then(|(_, core_result)| to_tui_result(core_result, &birth_date, &start_date).ok());
+        let p50_tui = find_percentile_result(&mc_summary.percentile_runs, P50)
+            .and_then(|core_result| to_tui_result(core_result, &birth_date, &start_date).ok());
 
         let yearly_nw = p50_tui
             .as_ref()

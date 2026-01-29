@@ -9,25 +9,15 @@ use crate::state::context::{
     ModalContext, PartialTrigger, TriggerBuilderState, TriggerChildSlot, TriggerContext,
 };
 use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::util::common::{parse_yes_no, yes_no_options};
 
 use super::{ActionContext, ActionResult};
-
-// Common select options for event forms
-fn yes_no_options() -> Vec<String> {
-    vec!["Yes".to_string(), "No".to_string()]
-}
 
 fn balance_comparison_options() -> Vec<String> {
     vec![
         "Balance drops to or below".to_string(),
         "Balance rises to or above".to_string(),
     ]
-}
-
-/// Parse "Yes"/"No" strings to bool, with fallback for legacy "Y"/"N" format
-fn parse_yes_no(s: &str) -> bool {
-    let upper = s.to_uppercase();
-    upper.starts_with('Y') || upper == "TRUE"
 }
 
 /// Handle trigger type selection - shows appropriate form or picker

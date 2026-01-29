@@ -1,10 +1,18 @@
+pub mod charts;
 pub mod collapsible;
+pub mod lists;
+pub mod panels;
 pub mod portfolio_overview;
 pub mod status_bar;
 pub mod tab_bar;
 
 use crate::state::AppState;
+
 use crossterm::event::KeyEvent;
+pub use lists::{
+    PanelNavigable, SelectableListConfig, calculate_centered_scroll, handle_list_navigation,
+    handle_list_reorder, handle_panel_navigation,
+};
 use ratatui::Frame;
 
 /// Result of handling an event

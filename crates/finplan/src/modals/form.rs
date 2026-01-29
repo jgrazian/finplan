@@ -258,7 +258,10 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     ) || key.code == KeyCode::F(10);
 
     if is_submit {
-        return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
+        return ModalResult::Confirmed(
+            modal.action,
+            Box::new(ConfirmedValue::Form(Box::new(modal.clone()))),
+        );
     }
 
     let field = &mut modal.fields[modal.focused_field];
@@ -422,7 +425,10 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     ) || key.code == KeyCode::F(10);
 
     if is_submit {
-        return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
+        return ModalResult::Confirmed(
+            modal.action,
+            Box::new(ConfirmedValue::Form(Box::new(modal.clone()))),
+        );
     }
 
     let current_field_type = modal.fields[modal.focused_field].field_type;

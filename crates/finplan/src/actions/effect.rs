@@ -11,6 +11,7 @@ use crate::state::{
     AppState, ConfirmModal, FormField, FormKind, FormModal, ModalAction, ModalState, PickerModal,
     asset_sale_fields,
 };
+use crate::util::common::{parse_yes_no, yes_no_options};
 
 use super::{ActionContext, ActionResult};
 
@@ -465,16 +466,6 @@ fn parse_strategy(s: &str) -> WithdrawalStrategyData {
         "pa" | "penaltyaware" | "penalty aware" => WithdrawalStrategyData::PenaltyAware,
         _ => WithdrawalStrategyData::TaxEfficient, // Default to TaxEfficient
     }
-}
-
-/// Parse yes/no field to bool
-fn parse_yes_no(s: &str) -> bool {
-    matches!(s.to_lowercase().as_str(), "yes" | "y" | "true" | "1")
-}
-
-// Common select options
-fn yes_no_options() -> Vec<String> {
-    vec!["No".to_string(), "Yes".to_string()]
 }
 
 fn amount_type_options() -> Vec<String> {

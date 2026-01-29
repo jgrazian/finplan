@@ -28,8 +28,8 @@ pub use text_input::render_text_input_modal;
 /// Typed value returned when a modal is confirmed
 #[derive(Debug, Clone)]
 pub enum ConfirmedValue {
-    /// Form modal with typed field access
-    Form(FormModal),
+    /// Form modal with typed field access (boxed to reduce enum size)
+    Form(Box<FormModal>),
     /// Picker modal - selected option string
     Picker(String),
     /// Text input modal - entered text

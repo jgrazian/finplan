@@ -464,6 +464,83 @@ impl FormModal {
     pub fn values(&self) -> FormValues<'_> {
         FormValues { form: self }
     }
+
+    // ========== Label-Based Field Access ==========
+    //
+    // These methods access fields by label instead of index, making code
+    // more readable and resistant to field reordering.
+
+    /// Find a field by its label
+    fn field_by_label(&self, label: &str) -> Option<&FormField> {
+        self.fields.iter().find(|f| f.label == label)
+    }
+
+    /// Get a string value from a field by label
+    pub fn str(&self, label: &str) -> Option<&str> {
+        self.field_by_label(label).map(|f| f.value.as_str())
+    }
+
+    /// Get a non-empty string value by label (returns None if empty)
+    pub fn str_non_empty(&self, label: &str) -> Option<&str> {
+        self.field_by_label(label)
+            .map(|f| f.value.as_str())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Get an optional string by label (returns Some only if non-empty)
+    pub fn optional_str(&self, label: &str) -> Option<String> {
+        self.str_non_empty(label).map(|s| s.to_string())
+    }
+
+    /// Get a currency value by label. Handles $ prefix and commas.
+    pub fn currency(&self, label: &str) -> Option<f64> {
+        self.field_by_label(label).and_then(|f| {
+            let s = f.value.trim().trim_start_matches('$').replace(',', "");
+            s.parse().ok()
+        })
+    }
+
+    /// Get a currency value by label with a default
+    pub fn currency_or(&self, label: &str, default: f64) -> f64 {
+        self.currency(label).unwrap_or(default)
+    }
+
+    /// Get a percentage value by label as a decimal (e.g., "5.0" -> 0.05)
+    pub fn percentage(&self, label: &str) -> Option<f64> {
+        self.field_by_label(label).and_then(|f| {
+            let s = f.value.trim().trim_end_matches('%');
+            s.parse::<f64>().ok().map(|v| v / 100.0)
+        })
+    }
+
+    /// Get a percentage value by label with a default
+    pub fn percentage_or(&self, label: &str, default: f64) -> f64 {
+        self.percentage(label).unwrap_or(default)
+    }
+
+    /// Get a boolean value by label (Y/N, Yes/No, true/false)
+    pub fn bool(&self, label: &str) -> Option<bool> {
+        self.field_by_label(label).map(|f| {
+            let s = f.value.to_uppercase();
+            s.starts_with('Y') || s == "TRUE" || s == "1"
+        })
+    }
+
+    /// Get a boolean value by label with a default
+    pub fn bool_or(&self, label: &str, default: bool) -> bool {
+        self.bool(label).unwrap_or(default)
+    }
+
+    /// Get an integer value by label
+    pub fn int<T: std::str::FromStr>(&self, label: &str) -> Option<T> {
+        self.field_by_label(label)
+            .and_then(|f| f.value.trim().parse().ok())
+    }
+
+    /// Get an integer value by label with a default
+    pub fn int_or<T: std::str::FromStr>(&self, label: &str, default: T) -> T {
+        self.int(label).unwrap_or(default)
+    }
 }
 
 /// Helper struct for convenient typed access to form values
@@ -595,5 +672,48 @@ mod tests {
         assert_eq!(values.currency(1, 0.0), 500.0);
         assert!((values.percentage(2, 0.0) - 0.05).abs() < 0.0001);
         assert!(!values.bool(3, true));
+    }
+
+    #[test]
+    fn test_label_based_access() {
+        let form = FormModal::new(
+            "Test",
+            vec![
+                FormField::text("Name", "John Doe"),
+                FormField::text("Description", ""),
+                FormField::currency("Amount", 1234.56),
+                FormField::percentage("Rate", 0.075),
+                FormField::select("Active", vec!["Yes".to_string(), "No".to_string()], "Yes"),
+                FormField::text("Age", "25"),
+            ],
+            ModalAction::CREATE_ACCOUNT,
+        );
+
+        // String access by label
+        assert_eq!(form.str("Name"), Some("John Doe"));
+        assert_eq!(form.str("Description"), Some("")); // Empty but exists
+        assert_eq!(form.str_non_empty("Name"), Some("John Doe"));
+        assert_eq!(form.str_non_empty("Description"), None); // Empty returns None
+        assert_eq!(form.optional_str("Name"), Some("John Doe".to_string()));
+        assert_eq!(form.optional_str("Description"), None);
+        assert_eq!(form.str("NonExistent"), None); // Missing field
+
+        // Currency by label
+        assert_eq!(form.currency("Amount"), Some(1234.56));
+        assert_eq!(form.currency_or("Amount", 0.0), 1234.56);
+        assert_eq!(form.currency_or("NonExistent", 99.0), 99.0);
+
+        // Percentage by label
+        assert!((form.percentage("Rate").unwrap() - 0.075).abs() < 0.0001);
+        assert!((form.percentage_or("Rate", 0.0) - 0.075).abs() < 0.0001);
+
+        // Boolean by label
+        assert_eq!(form.bool("Active"), Some(true));
+        assert!(form.bool_or("Active", false));
+
+        // Integer by label
+        assert_eq!(form.int::<u32>("Age"), Some(25));
+        assert_eq!(form.int_or::<u32>("Age", 0), 25);
+        assert_eq!(form.int_or::<u32>("NonExistent", 42), 42);
     }
 }
