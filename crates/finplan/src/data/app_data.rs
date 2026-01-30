@@ -172,7 +172,7 @@ mod tests {
                     },
                     effects: vec![EffectData::Income {
                         to: AccountTag("Checking".to_string()),
-                        amount: AmountData::Fixed(8000.0),
+                        amount: AmountData::fixed(8000.0),
                         gross: true,
                         taxable: true,
                     }],
@@ -189,7 +189,7 @@ mod tests {
                     },
                     effects: vec![EffectData::Expense {
                         from: AccountTag("Checking".to_string()),
-                        amount: AmountData::Fixed(5000.0),
+                        amount: AmountData::fixed(5000.0),
                     }],
                     once: false,
                     enabled: true,

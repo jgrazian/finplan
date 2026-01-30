@@ -4,6 +4,7 @@
 // domain-specific files, reducing the size of app.rs.
 
 mod account;
+pub mod amount;
 mod config;
 mod effect;
 mod event;
@@ -14,6 +15,7 @@ mod scenario;
 pub mod wizard;
 
 pub use account::*;
+pub use amount::*;
 pub use config::*;
 pub use effect::*;
 pub use event::*;

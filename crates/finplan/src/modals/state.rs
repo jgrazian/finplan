@@ -1,6 +1,8 @@
 /// Modal types for forms, pickers, and confirmations.
 use super::action::ModalAction;
+use super::amount_builder::format_amount_summary;
 use super::context::ModalContext;
+use crate::data::events_data::AmountData;
 
 #[derive(Debug)]
 pub enum ModalState {
@@ -228,7 +230,7 @@ pub mod asset_sale_fields {
     pub const ALL_ASSETS: &str = "[All]";
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FieldType {
     Text,
     Currency,
@@ -236,6 +238,8 @@ pub enum FieldType {
     ReadOnly,
     /// Select from a list of options (options stored in FormField.options)
     Select,
+    /// Complex amount with recursive structure (displayed as summary, edited via modal)
+    Amount(Box<AmountData>),
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +299,33 @@ impl FormField {
             cursor_pos: 0,
             options,
         }
+    }
+
+    /// Create an amount field with recursive AmountData structure.
+    /// The value is displayed as a summary; editing opens a nested modal.
+    pub fn amount(label: &str, amount: AmountData) -> Self {
+        let value = format_amount_summary(&amount);
+        Self {
+            label: label.to_string(),
+            field_type: FieldType::Amount(Box::new(amount)),
+            value,
+            cursor_pos: 0,
+            options: Vec::new(),
+        }
+    }
+
+    /// Get the AmountData if this is an Amount field
+    pub fn as_amount(&self) -> Option<&AmountData> {
+        match &self.field_type {
+            FieldType::Amount(amount) => Some(amount),
+            _ => None,
+        }
+    }
+
+    /// Update the amount data (for Amount fields)
+    pub fn set_amount(&mut self, amount: AmountData) {
+        self.value = format_amount_summary(&amount);
+        self.field_type = FieldType::Amount(Box::new(amount));
     }
 
     /// Get the index of the currently selected option (for Select fields)
@@ -460,6 +491,19 @@ impl FormModal {
         self.get_int(index).unwrap_or(default)
     }
 
+    /// Get an AmountData value from a field by index
+    pub fn get_amount(&self, index: usize) -> Option<AmountData> {
+        self.fields.get(index).and_then(|f| match &f.field_type {
+            FieldType::Amount(amount) => Some((**amount).clone()),
+            _ => None,
+        })
+    }
+
+    /// Get an AmountData value with a default if not found or not an Amount field
+    pub fn get_amount_or(&self, index: usize, default: AmountData) -> AmountData {
+        self.get_amount(index).unwrap_or(default)
+    }
+
     /// Get all field values as a FormValues helper for convenient access
     pub fn values(&self) -> FormValues<'_> {
         FormValues { form: self }
@@ -540,6 +584,20 @@ impl FormModal {
     /// Get an integer value by label with a default
     pub fn int_or<T: std::str::FromStr>(&self, label: &str, default: T) -> T {
         self.int(label).unwrap_or(default)
+    }
+
+    /// Get an AmountData value by label
+    pub fn amount(&self, label: &str) -> Option<AmountData> {
+        self.field_by_label(label)
+            .and_then(|f| match &f.field_type {
+                FieldType::Amount(amount) => Some((**amount).clone()),
+                _ => None,
+            })
+    }
+
+    /// Get an AmountData value by label with a default
+    pub fn amount_or(&self, label: &str, default: AmountData) -> AmountData {
+        self.amount(label).unwrap_or(default)
     }
 }
 

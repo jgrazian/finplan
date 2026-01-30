@@ -13,6 +13,7 @@ pub enum ModalAction {
     Event(EventAction),
     Effect(EffectAction),
     Optimize(OptimizeAction),
+    Amount(AmountAction),
 }
 
 /// Scenario-specific actions
@@ -114,6 +115,25 @@ pub enum OptimizeAction {
     RunOptimization,
 }
 
+/// Amount-specific actions (editing amount fields in effects)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmountAction {
+    /// Pick amount type from picker
+    PickType,
+    /// Fixed amount form
+    FixedForm,
+    /// Inflation-adjusted form
+    InflationForm,
+    /// Scale/percentage form
+    ScaleForm,
+    /// Target to balance form
+    TargetForm,
+    /// Account balance reference form
+    AccountBalanceForm,
+    /// Account cash balance reference form
+    CashBalanceForm,
+}
+
 // Convenience constructors for common actions
 impl ModalAction {
     // Scenario shortcuts
@@ -182,6 +202,15 @@ impl ModalAction {
     pub const SELECT_OBJECTIVE: Self = Self::Optimize(OptimizeAction::SelectObjective);
     pub const CONFIGURE_OPTIMIZE_SETTINGS: Self = Self::Optimize(OptimizeAction::ConfigureSettings);
     pub const RUN_OPTIMIZATION: Self = Self::Optimize(OptimizeAction::RunOptimization);
+
+    // Amount shortcuts
+    pub const PICK_AMOUNT_TYPE: Self = Self::Amount(AmountAction::PickType);
+    pub const AMOUNT_FIXED_FORM: Self = Self::Amount(AmountAction::FixedForm);
+    pub const AMOUNT_INFLATION_FORM: Self = Self::Amount(AmountAction::InflationForm);
+    pub const AMOUNT_SCALE_FORM: Self = Self::Amount(AmountAction::ScaleForm);
+    pub const AMOUNT_TARGET_FORM: Self = Self::Amount(AmountAction::TargetForm);
+    pub const AMOUNT_ACCOUNT_BALANCE_FORM: Self = Self::Amount(AmountAction::AccountBalanceForm);
+    pub const AMOUNT_CASH_BALANCE_FORM: Self = Self::Amount(AmountAction::CashBalanceForm);
 }
 
 #[cfg(test)]

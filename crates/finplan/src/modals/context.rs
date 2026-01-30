@@ -23,6 +23,8 @@ pub enum ModalContext {
     Config(ConfigContext),
     /// Context for optimization operations
     Optimize(OptimizeContext),
+    /// Context for amount editing (recursive amount builder)
+    Amount(AmountContext),
 }
 
 /// Simple index-based context
@@ -457,6 +459,33 @@ pub enum OptimizeContext {
     Settings,
 }
 
+/// Amount editing context for recursive amount building
+#[derive(Debug, Clone, PartialEq)]
+pub enum AmountContext {
+    /// Editing an amount field within an effect form
+    EffectField {
+        /// Event index
+        event: usize,
+        /// Effect index within event
+        effect: usize,
+        /// Field index within form
+        field_idx: usize,
+        /// Effect type for rebuilding form
+        effect_type: EffectTypeContext,
+    },
+    /// Selecting amount type in picker
+    TypePicker {
+        /// Event index
+        event: usize,
+        /// Effect index
+        effect: usize,
+        /// Field index
+        field_idx: usize,
+        /// Effect type
+        effect_type: EffectTypeContext,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaxConfigContext {
     StateRate,
@@ -605,6 +634,14 @@ impl ModalContext {
     pub fn as_optimize_param_index(&self) -> Option<usize> {
         match self {
             Self::Optimize(OptimizeContext::Parameter { index }) => Some(*index),
+            _ => None,
+        }
+    }
+
+    /// Extract amount context
+    pub fn as_amount(&self) -> Option<&AmountContext> {
+        match self {
+            Self::Amount(ctx) => Some(ctx),
             _ => None,
         }
     }

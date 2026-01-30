@@ -114,7 +114,7 @@ fn render_field(
     let mut label_spans = vec![Span::styled(&field.label, label_style)];
 
     // Add inline hints based on field type and state
-    match field.field_type {
+    match &field.field_type {
         FieldType::ReadOnly => {
             label_spans.push(Span::styled(
                 " (read-only)",
@@ -123,6 +123,12 @@ fn render_field(
         }
         FieldType::Select if is_focused => {
             label_spans.push(Span::styled(" [</>]", Style::default().fg(Color::Cyan)));
+        }
+        FieldType::Amount(_) if is_focused => {
+            label_spans.push(Span::styled(
+                " [Enter to edit]",
+                Style::default().fg(Color::Cyan),
+            ));
         }
         _ if is_focused && is_editing => {
             label_spans.push(Span::styled(
@@ -145,9 +151,10 @@ fn render_field(
     frame.render_widget(label, chunks[0]);
 
     // Render input field with enhanced styling for edit mode
-    let (border_color, border_modifier, fg_color) = match field.field_type {
+    let (border_color, border_modifier, fg_color) = match &field.field_type {
         FieldType::ReadOnly => (Color::DarkGray, Modifier::empty(), Color::DarkGray),
         FieldType::Select if is_focused => (Color::Yellow, Modifier::empty(), Color::Cyan),
+        FieldType::Amount(_) if is_focused => (Color::Yellow, Modifier::empty(), Color::Cyan),
         _ if is_focused && is_editing => (Color::Cyan, Modifier::BOLD, Color::White), // Bold border when editing
         _ if is_focused => (Color::Yellow, Modifier::empty(), Color::White),
         _ => (Color::DarkGray, Modifier::empty(), Color::White),
@@ -165,6 +172,8 @@ fn render_field(
     // Render value based on field type
     if field.field_type == FieldType::Select {
         render_select_value(frame, input_inner, field, is_focused, fg_color);
+    } else if matches!(field.field_type, FieldType::Amount(_)) {
+        render_amount_value(frame, input_inner, field, is_focused, fg_color);
     } else if is_focused && is_editing && field.field_type != FieldType::ReadOnly {
         render_editing_value(frame, input_inner, field);
     } else {
@@ -202,6 +211,43 @@ fn render_select_value(
         Line::from(Span::styled("(none)", Style::default().fg(Color::DarkGray)))
     } else {
         Line::from(Span::styled(&field.value, Style::default().fg(fg_color)))
+    };
+
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_amount_value(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    field: &FormField,
+    is_focused: bool,
+    fg_color: Color,
+) {
+    // Amount fields show their summary value (stored in field.value)
+    // with a hint to press Enter to edit
+    let line = if is_focused {
+        // Truncate if too long for the display area
+        let max_len = area.width.saturating_sub(8) as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(vec![
+            Span::styled(display_val, Style::default().fg(fg_color)),
+            Span::styled(" [Edit]", Style::default().fg(Color::DarkGray)),
+        ])
+    } else if field.value.is_empty() {
+        Line::from(Span::styled("$0.00", Style::default().fg(Color::DarkGray)))
+    } else {
+        // Truncate for non-focused display too
+        let max_len = area.width as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(Span::styled(display_val, Style::default().fg(fg_color)))
     };
 
     frame.render_widget(Paragraph::new(line), area);
@@ -266,6 +312,51 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
 
     let field = &mut modal.fields[modal.focused_field];
 
+    // Handle Amount fields - Enter opens the amount editor
+    if matches!(field.field_type, FieldType::Amount(_)) {
+        match key.code {
+            KeyCode::Enter => {
+                return ModalResult::AmountFieldActivated(modal.focused_field);
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                // Move to next field
+                let start = modal.focused_field;
+                loop {
+                    modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+                    if !matches!(
+                        modal.fields[modal.focused_field].field_type,
+                        FieldType::ReadOnly
+                    ) || modal.focused_field == start
+                    {
+                        break;
+                    }
+                }
+                return ModalResult::Continue;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                // Move to previous field
+                let start = modal.focused_field;
+                loop {
+                    if modal.focused_field == 0 {
+                        modal.focused_field = modal.fields.len() - 1;
+                    } else {
+                        modal.focused_field -= 1;
+                    }
+                    if !matches!(
+                        modal.fields[modal.focused_field].field_type,
+                        FieldType::ReadOnly
+                    ) || modal.focused_field == start
+                    {
+                        break;
+                    }
+                }
+                return ModalResult::Continue;
+            }
+            KeyCode::Esc => return ModalResult::Cancelled,
+            _ => return ModalResult::Continue,
+        }
+    }
+
     // Handle Select fields specially - use Left/Right for option cycling
     if field.field_type == FieldType::Select {
         let field_index = modal.focused_field;
@@ -283,8 +374,10 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
                 let start = modal.focused_field;
                 loop {
                     modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                    if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                        || modal.focused_field == start
+                    if !matches!(
+                        modal.fields[modal.focused_field].field_type,
+                        FieldType::ReadOnly
+                    ) || modal.focused_field == start
                     {
                         break;
                     }
@@ -300,8 +393,10 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
                     } else {
                         modal.focused_field -= 1;
                     }
-                    if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                        || modal.focused_field == start
+                    if !matches!(
+                        modal.fields[modal.focused_field].field_type,
+                        FieldType::ReadOnly
+                    ) || modal.focused_field == start
                     {
                         break;
                     }
@@ -399,12 +494,12 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
         }
         KeyCode::Char(c) => {
             // Validate character based on field type
-            let valid = match field.field_type {
+            let valid = match &field.field_type {
                 FieldType::Currency | FieldType::Percentage => {
                     c.is_ascii_digit() || c == '.' || c == '-'
                 }
                 FieldType::Text => true,
-                FieldType::ReadOnly | FieldType::Select => false,
+                FieldType::ReadOnly | FieldType::Select | FieldType::Amount(_) => false,
             };
 
             if valid {
@@ -431,10 +526,10 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
         );
     }
 
-    let current_field_type = modal.fields[modal.focused_field].field_type;
+    let current_field_type = &modal.fields[modal.focused_field].field_type;
 
     // Handle Select field navigation with left/right
-    if current_field_type == FieldType::Select {
+    if matches!(current_field_type, FieldType::Select) {
         match key.code {
             KeyCode::Left | KeyCode::Char('h') => {
                 modal.fields[modal.focused_field].select_prev();
@@ -450,16 +545,24 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
 
     match key.code {
         KeyCode::Enter | KeyCode::Char('e') => {
-            // Enter edit mode for current field if not read-only and not a Select
-            if current_field_type != FieldType::ReadOnly && current_field_type != FieldType::Select
-            {
-                modal.editing = true;
-                // Store original value for Esc to revert
-                modal.editing_original_value =
-                    Some(modal.fields[modal.focused_field].value.clone());
-                // Move cursor to end of value
-                let field = &mut modal.fields[modal.focused_field];
-                field.cursor_pos = field.value.len();
+            // Handle different field types
+            match current_field_type {
+                // Amount fields open a nested modal for editing
+                FieldType::Amount(_) => {
+                    return ModalResult::AmountFieldActivated(modal.focused_field);
+                }
+                // Text, Currency, Percentage fields enter inline edit mode
+                FieldType::Text | FieldType::Currency | FieldType::Percentage => {
+                    modal.editing = true;
+                    // Store original value for Esc to revert
+                    modal.editing_original_value =
+                        Some(modal.fields[modal.focused_field].value.clone());
+                    // Move cursor to end of value
+                    let field = &mut modal.fields[modal.focused_field];
+                    field.cursor_pos = field.value.len();
+                }
+                // ReadOnly and Select don't enter edit mode on Enter
+                FieldType::ReadOnly | FieldType::Select => {}
             }
             ModalResult::Continue
         }
@@ -469,8 +572,10 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
             let start = modal.focused_field;
             loop {
                 modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                    || modal.focused_field == start
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
                 {
                     break;
                 }
@@ -486,8 +591,10 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
                 } else {
                     modal.focused_field -= 1;
                 }
-                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                    || modal.focused_field == start
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
                 {
                     break;
                 }

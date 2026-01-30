@@ -1,5 +1,6 @@
 // Modal state types
 mod action;
+pub mod amount_builder;
 pub mod context;
 mod handler;
 mod state;
@@ -78,6 +79,9 @@ pub enum ModalResult {
     Continue,
     /// A field value changed, may need to update dependent fields
     FieldChanged(usize),
+    /// An Amount field was activated and needs the amount editor launched
+    /// Contains the field index
+    AmountFieldActivated(usize),
 }
 
 /// Render the active modal as an overlay

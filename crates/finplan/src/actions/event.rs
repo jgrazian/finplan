@@ -968,7 +968,7 @@ fn create_social_security_template(state: &AppState) -> EventData {
         },
         effects: vec![EffectData::Income {
             to: AccountTag(dest),
-            amount: AmountData::Fixed(2000.0), // Placeholder - user should customize
+            amount: AmountData::fixed(2000.0), // Placeholder - user should customize
             gross: true,
             taxable: true, // SS is partially taxable at higher incomes
         }],
@@ -1016,7 +1016,7 @@ fn create_medicare_template(state: &AppState) -> EventData {
         },
         effects: vec![EffectData::Expense {
             from: AccountTag(source),
-            amount: AmountData::Fixed(174.70), // 2024 standard Part B premium
+            amount: AmountData::fixed(174.70), // 2024 standard Part B premium
         }],
         once: false,
         enabled: true,

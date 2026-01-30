@@ -469,6 +469,9 @@ impl App {
                 ModalResult::Cancelled => {
                     self.state.modal = ModalState::None;
                 }
+                ModalResult::AmountFieldActivated(field_idx) => {
+                    self.handle_amount_field_activated(field_idx);
+                }
                 ModalResult::Continue | ModalResult::FieldChanged(_) => {}
             }
             return;
@@ -573,6 +576,63 @@ impl App {
                 self.state.set_error(msg);
                 self.state.modal = ModalState::None;
             }
+        }
+    }
+
+    /// Handle when an Amount field is activated in a form
+    fn handle_amount_field_activated(&mut self, field_idx: usize) {
+        use crate::actions::launch_amount_picker;
+        use crate::modals::context::{EffectContext, ModalContext};
+
+        // Get the current form's context to determine what effect we're editing
+        let ModalState::Form(form) = &self.state.modal else {
+            return;
+        };
+
+        // Extract effect context from the form
+        let Some(ModalContext::Effect(effect_ctx)) = &form.context else {
+            return;
+        };
+
+        // Get event/effect indices and effect type
+        let (event_idx, effect_idx, effect_type) = match effect_ctx {
+            EffectContext::Edit {
+                event,
+                effect,
+                effect_type,
+            } => (*event, *effect, effect_type.clone()),
+            EffectContext::Add { event, effect_type } => (*event, 0, effect_type.clone()),
+            EffectContext::Existing { .. } => {
+                // For existing context, we don't have the effect type
+                // This shouldn't normally happen for amount editing
+                return;
+            }
+        };
+
+        // Get the current amount from the field
+        let current_amount = form
+            .fields
+            .get(field_idx)
+            .and_then(|f| f.as_amount())
+            .cloned()
+            .unwrap_or_else(|| crate::data::events_data::AmountData::fixed(0.0));
+
+        // Store the current form so we can restore it after amount editing
+        self.state.pending_effect_form = Some(form.clone());
+
+        // Launch the amount picker
+        let result = launch_amount_picker(
+            &self.state,
+            event_idx,
+            effect_idx,
+            field_idx,
+            effect_type,
+            &current_amount,
+        );
+
+        // Apply the result
+        if let ActionResult::Done(Some(modal)) = result {
+            self.state.modal = modal;
         }
     }
 }

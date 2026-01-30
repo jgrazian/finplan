@@ -3,9 +3,7 @@
 //! Renders the event list with selection and filtering.
 
 use crate::components::EventResult;
-use crate::data::events_data::{
-    AmountData, EffectData, EventTag, IntervalData, SpecialAmount, TriggerData,
-};
+use crate::data::events_data::{AmountData, EffectData, EventTag, IntervalData, TriggerData};
 use crate::modals::{
     ConfirmModal, FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal,
 };
@@ -335,22 +333,35 @@ impl EventListPanel {
     /// Format amount in short form.
     pub fn format_amount_short(amount: &AmountData) -> String {
         match amount {
-            AmountData::Fixed(val) => {
-                if *val >= 1_000_000.0 {
-                    format!("${:.1}M", val / 1_000_000.0)
-                } else if *val >= 1_000.0 {
-                    format!("${:.0}K", val / 1_000.0)
-                } else {
-                    format!("${:.0}", val)
-                }
+            AmountData::Fixed { value } => Self::format_fixed_value(*value),
+            AmountData::InflationAdjusted { inner } => {
+                format!("{} (infl-adj)", Self::format_amount_short(inner))
             }
-            AmountData::Special(special) => match special {
-                SpecialAmount::SourceBalance => "SrcBal".to_string(),
-                SpecialAmount::ZeroTargetBalance => "ZeroTgt".to_string(),
-                SpecialAmount::TargetToBalance { .. } => "TgtBal".to_string(),
-                SpecialAmount::AccountBalance { .. } => "AcctBal".to_string(),
-                SpecialAmount::AccountCashBalance { .. } => "CashBal".to_string(),
-            },
+            AmountData::Scale { multiplier, inner } => {
+                format!(
+                    "{:.0}% of {}",
+                    multiplier * 100.0,
+                    Self::format_amount_short(inner)
+                )
+            }
+            AmountData::SourceBalance => "SrcBal".to_string(),
+            AmountData::ZeroTargetBalance => "ZeroTgt".to_string(),
+            AmountData::TargetToBalance { target } => {
+                format!("TgtBal({})", Self::format_fixed_value(*target))
+            }
+            AmountData::AccountBalance { account } => format!("Bal:{}", account.0),
+            AmountData::AccountCashBalance { account } => format!("Cash:{}", account.0),
+        }
+    }
+
+    /// Format a fixed dollar value in short form.
+    fn format_fixed_value(val: f64) -> String {
+        if val >= 1_000_000.0 {
+            format!("${:.1}M", val / 1_000_000.0)
+        } else if val >= 1_000.0 {
+            format!("${:.0}K", val / 1_000.0)
+        } else {
+            format!("${:.0}", val)
         }
     }
 

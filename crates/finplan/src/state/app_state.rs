@@ -19,7 +19,7 @@ use super::screen_state::{
     ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
 };
 use super::tabs::TabId;
-use crate::modals::ModalState;
+use crate::modals::{FormModal, ModalState};
 
 // ========== SimulationResult ==========
 // Simplified result structure for TUI display
@@ -177,6 +177,10 @@ pub struct AppState {
     pub modal: ModalState,
     pub error_message: Option<String>,
     pub exit: bool,
+
+    /// Pending effect form when editing an amount field
+    /// Stored temporarily while the amount editor modal is active
+    pub pending_effect_form: Option<FormModal>,
 }
 
 impl Default for AppState {
@@ -208,6 +212,7 @@ impl Default for AppState {
             modal: ModalState::None,
             error_message: None,
             exit: false,
+            pending_effect_form: None,
         }
     }
 }

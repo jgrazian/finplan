@@ -3,10 +3,11 @@ use crate::components::collapsible::CollapsiblePanel;
 use crate::components::panels::EventListPanel;
 use crate::components::{Component, EventResult};
 use crate::data::events_data::{
-    AmountData, EffectData, EventData, IntervalData, OffsetData, SpecialAmount, ThresholdData,
-    TriggerData,
+    AmountData, EffectData, EventData, IntervalData, OffsetData, ThresholdData, TriggerData,
 };
-use crate::modals::{ConfirmedValue, EffectAction, EventAction, ModalAction, ModalState};
+use crate::modals::{
+    AmountAction, ConfirmedValue, EffectAction, EventAction, ModalAction, ModalState,
+};
 use crate::state::{AppState, EventsPanel};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -564,18 +565,22 @@ impl EventsScreen {
 
     fn format_amount(amount: &AmountData) -> String {
         match amount {
-            AmountData::Fixed(val) => format!("${:.2}", val),
-            AmountData::Special(special) => match special {
-                SpecialAmount::SourceBalance => "Source Balance".to_string(),
-                SpecialAmount::ZeroTargetBalance => "Zero Target Balance".to_string(),
-                SpecialAmount::TargetToBalance { target } => format!("Target to ${:.2}", target),
-                SpecialAmount::AccountBalance { account } => {
-                    format!("\"{}\" Balance", account.0)
-                }
-                SpecialAmount::AccountCashBalance { account } => {
-                    format!("\"{}\" Cash Balance", account.0)
-                }
-            },
+            AmountData::Fixed { value } => format!("${:.2}", value),
+            AmountData::InflationAdjusted { inner } => {
+                format!("{} (inflation-adjusted)", Self::format_amount(inner))
+            }
+            AmountData::Scale { multiplier, inner } => {
+                format!("{}% of {}", multiplier * 100.0, Self::format_amount(inner))
+            }
+            AmountData::SourceBalance => "Source Balance".to_string(),
+            AmountData::ZeroTargetBalance => "Zero Target Balance".to_string(),
+            AmountData::TargetToBalance { target } => format!("Target to ${:.2}", target),
+            AmountData::AccountBalance { account } => {
+                format!("\"{}\" Balance", account.0)
+            }
+            AmountData::AccountCashBalance { account } => {
+                format!("\"{}\" Cash Balance", account.0)
+            }
         }
     }
 
@@ -831,7 +836,10 @@ impl Screen for EventsScreen {
 
 impl super::ModalHandler for EventsScreen {
     fn handles(&self, action: &ModalAction) -> bool {
-        matches!(action, ModalAction::Event(_) | ModalAction::Effect(_))
+        matches!(
+            action,
+            ModalAction::Event(_) | ModalAction::Effect(_) | ModalAction::Amount(_)
+        )
     }
 
     fn handle_modal_result(
@@ -906,6 +914,27 @@ impl super::ModalHandler for EventsScreen {
             ModalAction::Effect(EffectAction::Add) => actions::handle_add_effect(state, ctx),
             ModalAction::Effect(EffectAction::Edit) => actions::handle_edit_effect(state, ctx),
             ModalAction::Effect(EffectAction::Delete) => actions::handle_delete_effect(state, ctx),
+
+            // Amount actions (editing amounts within effect forms)
+            ModalAction::Amount(AmountAction::PickType) => {
+                actions::handle_amount_type_pick(state, value.as_str().unwrap_or_default(), ctx)
+            }
+            ModalAction::Amount(AmountAction::FixedForm) => {
+                actions::handle_fixed_amount_form(state, ctx)
+            }
+            ModalAction::Amount(AmountAction::InflationForm) => {
+                actions::handle_inflation_form(state, ctx)
+            }
+            ModalAction::Amount(AmountAction::ScaleForm) => actions::handle_scale_form(state, ctx),
+            ModalAction::Amount(AmountAction::TargetForm) => {
+                actions::handle_target_form(state, ctx)
+            }
+            ModalAction::Amount(AmountAction::AccountBalanceForm) => {
+                actions::handle_account_balance_form(state, ctx)
+            }
+            ModalAction::Amount(AmountAction::CashBalanceForm) => {
+                actions::handle_cash_balance_form(state, ctx)
+            }
 
             // This shouldn't happen if handles() is correct
             _ => ActionResult::close(),
