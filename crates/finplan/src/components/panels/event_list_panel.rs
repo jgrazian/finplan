@@ -208,7 +208,7 @@ impl EventListPanel {
                                 yes_no,
                                 if event.enabled { "Yes" } else { "No" },
                             ),
-                            FormField::read_only("Trigger", &trigger_summary),
+                            FormField::trigger("Trigger", &trigger_summary),
                             FormField::read_only("Effects", &effects_summary),
                         ],
                         ModalAction::EDIT_EVENT,

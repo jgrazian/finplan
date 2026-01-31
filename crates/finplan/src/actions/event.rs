@@ -260,6 +260,10 @@ pub fn handle_create_event(state: &mut AppState, ctx: ActionContext) -> ActionRe
             // Repeating events use the separate finalize flow
             return ActionResult::close();
         }
+        // Edit contexts are handled by different actions (UpdateTrigger)
+        Some(TriggerContext::Edit { .. }) | Some(TriggerContext::EditStart { .. }) => {
+            return ActionResult::close();
+        }
         None => return ActionResult::close(),
     };
 
@@ -295,7 +299,8 @@ pub fn handle_edit_event(state: &mut AppState, ctx: ActionContext) -> ActionResu
     };
 
     if let Some(event) = state.data_mut().events.get_mut(idx) {
-        // Fields: [name, description, once, enabled, trigger (ro), effects (ro)]
+        // Fields: [name, description, once, enabled, trigger, effects (ro)]
+        // Note: trigger editing is handled separately via Enter on the Trigger field
         if let Some(name) = form.get_str_non_empty(0) {
             event.name = EventTag(name.to_string());
         }
@@ -750,6 +755,22 @@ pub fn handle_complete_child_trigger(_state: &mut AppState, ctx: ActionContext) 
 
 /// Show the final form for entering event name and description
 fn show_finalize_form(builder: TriggerBuilderState) -> ActionResult {
+    // If we're editing, skip the name/description form and finalize directly
+    if builder.is_editing() {
+        // Create a minimal form just to trigger the finalize action
+        // The actual update happens in handle_finalize_repeating
+        return ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Confirm Trigger Update",
+                vec![FormField::read_only("Info", "Press Enter to confirm")],
+                ModalAction::FINALIZE_REPEATING,
+            )
+            .with_typed_context(ModalContext::Trigger(
+                TriggerContext::RepeatingBuilder(builder),
+            )),
+        ));
+    }
+
     // Get interval display name
     let interval_name = if let PartialTrigger::Repeating { interval, .. } = &builder.current {
         match interval {
@@ -779,13 +800,31 @@ fn show_finalize_form(builder: TriggerBuilderState) -> ActionResult {
     ))
 }
 
-/// Handle finalizing a repeating event (create the actual event)
+/// Handle finalizing a repeating event (create the actual event or update if editing)
 pub fn handle_finalize_repeating(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     let builder = match ctx.trigger_builder() {
         Some(b) => b.clone(),
         None => return ActionResult::error("Missing trigger builder context"),
     };
 
+    // Check if we're editing an existing event's trigger
+    if let Some(event_index) = builder.editing_event_index {
+        // Convert the builder state to TriggerData
+        let trigger = match convert_partial_to_trigger(&builder.current) {
+            Some(t) => t,
+            None => return ActionResult::error("Failed to build trigger"),
+        };
+
+        // Update the event's trigger
+        if let Some(event) = state.data_mut().events.get_mut(event_index) {
+            event.trigger = trigger;
+            return ActionResult::modified();
+        } else {
+            return ActionResult::error("Event not found");
+        }
+    }
+
+    // Creating a new event
     let form = match ctx.form() {
         Some(f) => f,
         None => return ActionResult::error("Missing form data"),
@@ -1020,5 +1059,319 @@ fn create_medicare_template(state: &AppState) -> EventData {
         }],
         once: false,
         enabled: true,
+    }
+}
+
+// =============================================================================
+// Trigger Editing (for existing events)
+// =============================================================================
+
+/// Handle trigger type selection when editing an existing event's trigger
+pub fn handle_edit_trigger_type_pick(
+    state: &AppState,
+    trigger_type: &str,
+    ctx: ActionContext,
+) -> ActionResult {
+    // Get the event index from context
+    let event_index = match ctx.typed_context() {
+        Some(ModalContext::Trigger(TriggerContext::EditStart { event_index })) => *event_index,
+        _ => return ActionResult::error("Missing edit trigger context"),
+    };
+
+    match trigger_type {
+        "Date" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Edit Trigger - Date",
+                vec![FormField::text("Date (YYYY-MM-DD)", "2025-01-01")],
+                ModalAction::UPDATE_TRIGGER,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
+                event_index,
+                inner: Box::new(TriggerContext::Date),
+            }))
+            .start_editing(),
+        )),
+        "Age" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Edit Trigger - Age",
+                vec![FormField::text("Age (years)", "65")],
+                ModalAction::UPDATE_TRIGGER,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
+                event_index,
+                inner: Box::new(TriggerContext::Age),
+            }))
+            .start_editing(),
+        )),
+        "Repeating" => {
+            // Show interval picker first
+            let intervals = vec![
+                "Weekly".to_string(),
+                "Bi-Weekly".to_string(),
+                "Monthly".to_string(),
+                "Quarterly".to_string(),
+                "Yearly".to_string(),
+            ];
+            ActionResult::modal(ModalState::Picker(
+                PickerModal::new(
+                    "Select Repeat Interval",
+                    intervals,
+                    ModalAction::PICK_INTERVAL,
+                )
+                .with_typed_context(ModalContext::Trigger(
+                    TriggerContext::EditStart { event_index },
+                )),
+            ))
+        }
+        "Manual" => {
+            // Manual trigger has no parameters, just update directly
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "Edit Trigger - Manual",
+                    vec![FormField::read_only(
+                        "Info",
+                        "Manual triggers are activated by other events",
+                    )],
+                    ModalAction::UPDATE_TRIGGER,
+                )
+                .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
+                    event_index,
+                    inner: Box::new(TriggerContext::Manual),
+                })),
+            ))
+        }
+        "Account Balance" => {
+            // Get account list
+            let accounts = EventsScreen::get_account_names(state);
+            if accounts.is_empty() {
+                return ActionResult::error("No accounts available. Create an account first.");
+            }
+            ActionResult::modal(ModalState::Picker(
+                PickerModal::new(
+                    "Select Account for Balance Trigger",
+                    accounts,
+                    ModalAction::PICK_ACCOUNT_FOR_EFFECT,
+                )
+                .with_typed_context(ModalContext::Trigger(
+                    TriggerContext::EditStart { event_index },
+                )),
+            ))
+        }
+        "Net Worth" => ActionResult::modal(ModalState::Form(
+            FormModal::new(
+                "Edit Trigger - Net Worth",
+                vec![
+                    FormField::currency("Threshold", 1000000.0),
+                    FormField::select(
+                        "Trigger When",
+                        balance_comparison_options(),
+                        "Balance rises to or above",
+                    ),
+                ],
+                ModalAction::UPDATE_TRIGGER,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
+                event_index,
+                inner: Box::new(TriggerContext::NetWorth),
+            }))
+            .start_editing(),
+        )),
+        "Relative to Event" => {
+            // Get event list
+            let events = EventsScreen::get_event_names(state);
+            if events.is_empty() {
+                return ActionResult::error("No events available. Create an event first.");
+            }
+            ActionResult::modal(ModalState::Picker(
+                PickerModal::new(
+                    "Select Reference Event",
+                    events,
+                    ModalAction::PICK_EVENT_REFERENCE,
+                )
+                .with_typed_context(ModalContext::Trigger(
+                    TriggerContext::EditStart { event_index },
+                )),
+            ))
+        }
+        _ => ActionResult::close(),
+    }
+}
+
+/// Handle account selection for balance trigger when editing
+pub fn handle_edit_account_for_trigger(event_index: usize, account: &str) -> ActionResult {
+    ActionResult::modal(ModalState::Form(
+        FormModal::new(
+            "Edit Trigger - Account Balance",
+            vec![
+                FormField::read_only("Account", account),
+                FormField::currency("Threshold", 100000.0),
+                FormField::select(
+                    "Trigger When",
+                    balance_comparison_options(),
+                    "Balance drops to or below",
+                ),
+            ],
+            ModalAction::UPDATE_TRIGGER,
+        )
+        .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
+            event_index,
+            inner: Box::new(TriggerContext::AccountBalance(account.to_string())),
+        }))
+        .start_editing(),
+    ))
+}
+
+/// Handle event reference selection for relative trigger when editing
+pub fn handle_edit_event_reference(event_index: usize, event_ref: &str) -> ActionResult {
+    ActionResult::modal(ModalState::Form(
+        FormModal::new(
+            "Edit Trigger - Relative to Event",
+            vec![
+                FormField::read_only("Reference Event", event_ref),
+                FormField::text("Offset Years", "0"),
+                FormField::text("Offset Months", "0"),
+            ],
+            ModalAction::UPDATE_TRIGGER,
+        )
+        .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
+            event_index,
+            inner: Box::new(TriggerContext::RelativeToEvent(event_ref.to_string())),
+        }))
+        .start_editing(),
+    ))
+}
+
+/// Handle interval selection for repeating events when editing
+pub fn handle_edit_interval_pick(event_index: usize, interval: &str) -> ActionResult {
+    let interval_data = match interval {
+        "Weekly" => IntervalData::Weekly,
+        "Bi-Weekly" => IntervalData::BiWeekly,
+        "Monthly" => IntervalData::Monthly,
+        "Quarterly" => IntervalData::Quarterly,
+        "Yearly" => IntervalData::Yearly,
+        _ => IntervalData::Monthly,
+    };
+
+    let builder = TriggerBuilderState::new_repeating_edit(interval_data, event_index);
+
+    // Show start condition type picker
+    show_child_trigger_type_picker(builder, TriggerChildSlot::Start)
+}
+
+/// Handle updating an existing event's trigger (simple triggers)
+pub fn handle_update_trigger(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
+
+    // Extract event index and trigger type from context
+    let (event_index, trigger_ctx) = match ctx.typed_context() {
+        Some(ModalContext::Trigger(TriggerContext::Edit { event_index, inner })) => {
+            (*event_index, inner.as_ref())
+        }
+        _ => return ActionResult::error("Missing edit trigger context"),
+    };
+
+    // Parse the new trigger based on type
+    let trigger = match trigger_ctx {
+        TriggerContext::Date => {
+            let date = form.get_str(0).unwrap_or("2025-01-01").to_string();
+            TriggerData::Date { date }
+        }
+        TriggerContext::Age => {
+            let years: u8 = form.get_int_or(0, 65);
+            TriggerData::Age {
+                years,
+                months: None,
+            }
+        }
+        TriggerContext::Manual => TriggerData::Manual,
+        TriggerContext::NetWorth => {
+            let threshold_val = form.get_currency_or(0, 1000000.0);
+            let comparison = form.get_str(1).unwrap_or("Balance rises to or above");
+            let threshold = if comparison.contains("drops") || comparison.contains("<=") {
+                ThresholdData::LessThanOrEqual {
+                    value: threshold_val,
+                }
+            } else {
+                ThresholdData::GreaterThanOrEqual {
+                    value: threshold_val,
+                }
+            };
+            TriggerData::NetWorth { threshold }
+        }
+        TriggerContext::AccountBalance(account) => {
+            // Skip field 0 (read-only account name)
+            let threshold_val = form.get_currency_or(1, 100000.0);
+            let comparison = form.get_str(2).unwrap_or("Balance drops to or below");
+            let threshold = if comparison.contains("drops") || comparison.contains("<=") {
+                ThresholdData::LessThanOrEqual {
+                    value: threshold_val,
+                }
+            } else {
+                ThresholdData::GreaterThanOrEqual {
+                    value: threshold_val,
+                }
+            };
+            TriggerData::AccountBalance {
+                account: AccountTag(account.clone()),
+                threshold,
+            }
+        }
+        TriggerContext::RelativeToEvent(event_ref) => {
+            // Skip field 0 (read-only event ref)
+            let offset_years: i32 = form.get_int_or(1, 0);
+            let offset_months: i32 = form.get_int_or(2, 0);
+            let offset = if offset_years != 0 {
+                OffsetData::Years {
+                    value: offset_years,
+                }
+            } else {
+                OffsetData::Months {
+                    value: offset_months,
+                }
+            };
+            TriggerData::RelativeToEvent {
+                event: EventTag(event_ref.clone()),
+                offset,
+            }
+        }
+        _ => return ActionResult::error("Unsupported trigger type for update"),
+    };
+
+    // Update the event's trigger
+    if let Some(event) = state.data_mut().events.get_mut(event_index) {
+        event.trigger = trigger;
+        ActionResult::modified()
+    } else {
+        ActionResult::error("Event not found")
+    }
+}
+
+/// Handle finalizing a repeating trigger when editing (update instead of create)
+pub fn handle_update_repeating(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    let builder = match ctx.trigger_builder() {
+        Some(b) => b.clone(),
+        None => return ActionResult::error("Missing trigger builder context"),
+    };
+
+    let event_index = match builder.editing_event_index {
+        Some(idx) => idx,
+        None => return ActionResult::error("Missing event index for update"),
+    };
+
+    // Convert the builder state to TriggerData
+    let trigger = match convert_partial_to_trigger(&builder.current) {
+        Some(t) => t,
+        None => return ActionResult::error("Failed to build trigger"),
+    };
+
+    // Update the event's trigger
+    if let Some(event) = state.data_mut().events.get_mut(event_index) {
+        event.trigger = trigger;
+        ActionResult::modified()
+    } else {
+        ActionResult::error("Event not found")
     }
 }

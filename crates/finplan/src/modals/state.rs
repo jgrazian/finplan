@@ -240,6 +240,9 @@ pub enum FieldType {
     Select,
     /// Complex amount with recursive structure (displayed as summary, edited via modal)
     Amount(Box<AmountData>),
+    /// Trigger field - displays summary, Enter opens trigger editor
+    /// Stores the trigger summary string for display
+    Trigger,
 }
 
 #[derive(Debug, Clone)]
@@ -319,6 +322,17 @@ impl FormField {
         match &self.field_type {
             FieldType::Amount(amount) => Some(amount),
             _ => None,
+        }
+    }
+
+    /// Create a trigger field that shows the trigger summary and opens editor on Enter
+    pub fn trigger(label: &str, summary: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            field_type: FieldType::Trigger,
+            value: summary.to_string(),
+            cursor_pos: 0,
+            options: Vec::new(),
         }
     }
 

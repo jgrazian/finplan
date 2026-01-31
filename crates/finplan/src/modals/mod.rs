@@ -82,6 +82,9 @@ pub enum ModalResult {
     /// An Amount field was activated and needs the amount editor launched
     /// Contains the field index
     AmountFieldActivated(usize),
+    /// A Trigger field was activated and needs the trigger editor launched
+    /// Contains the field index
+    TriggerFieldActivated(usize),
 }
 
 /// Render the active modal as an overlay

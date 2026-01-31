@@ -472,6 +472,9 @@ impl App {
                 ModalResult::AmountFieldActivated(field_idx) => {
                     self.handle_amount_field_activated(field_idx);
                 }
+                ModalResult::TriggerFieldActivated(_field_idx) => {
+                    self.handle_trigger_field_activated();
+                }
                 ModalResult::Continue | ModalResult::FieldChanged(_) => {}
             }
             return;
@@ -634,5 +637,44 @@ impl App {
         if let ActionResult::Done(Some(modal)) = result {
             self.state.modal = modal;
         }
+    }
+
+    /// Handle when a Trigger field is activated in a form
+    fn handle_trigger_field_activated(&mut self) {
+        use crate::modals::context::{IndexContext, ModalContext, TriggerContext};
+        use crate::modals::{ModalAction, PickerModal};
+
+        // Get the current form's context to determine what event we're editing
+        let ModalState::Form(form) = &self.state.modal else {
+            return;
+        };
+
+        // Extract event index from the form context
+        let event_index = match &form.context {
+            Some(ModalContext::Index(IndexContext::Event(idx))) => *idx,
+            _ => return,
+        };
+
+        // Close the current form and open the trigger type picker
+        let trigger_types = vec![
+            "Date".to_string(),
+            "Age".to_string(),
+            "Repeating".to_string(),
+            "Manual".to_string(),
+            "Account Balance".to_string(),
+            "Net Worth".to_string(),
+            "Relative to Event".to_string(),
+        ];
+
+        self.state.modal = ModalState::Picker(
+            PickerModal::new(
+                "Select New Trigger Type",
+                trigger_types,
+                ModalAction::EDIT_TRIGGER_TYPE_PICK,
+            )
+            .with_typed_context(ModalContext::Trigger(TriggerContext::EditStart {
+                event_index,
+            })),
+        );
     }
 }

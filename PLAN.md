@@ -563,6 +563,37 @@ Amount: $[7,000.00]
 
 ---
 
+## Completed: Editable Event Triggers (2026-01-31)
+
+**Goal:** Allow users to edit event triggers after creation within the edit modal.
+
+**Status:** Complete
+
+### Implementation
+
+Added a new `FieldType::Trigger` that displays the trigger summary and opens the trigger editor when the user presses Enter. This follows the same pattern as `FieldType::Amount`.
+
+**User Flow:**
+1. Open Edit Event modal (press 'e' on an event)
+2. Navigate to the Trigger field
+3. Press Enter to open the trigger type picker
+4. Select a new trigger type and configure it
+5. Event's trigger is updated
+
+### Files Modified
+
+- `crates/finplan/src/modals/state.rs` - Added `FieldType::Trigger` and `FormField::trigger()` constructor
+- `crates/finplan/src/modals/mod.rs` - Added `ModalResult::TriggerFieldActivated`
+- `crates/finplan/src/modals/form.rs` - Added rendering and key handling for Trigger fields
+- `crates/finplan/src/modals/action.rs` - Added `EditTriggerTypePick`, `UpdateTrigger`, `UpdateRepeating` actions
+- `crates/finplan/src/modals/context.rs` - Added `TriggerContext::Edit` and `TriggerContext::EditStart` variants, added `editing_event_index` to `TriggerBuilderState`
+- `crates/finplan/src/components/panels/event_list_panel.rs` - Use `FormField::trigger()` for trigger field
+- `crates/finplan/src/actions/event.rs` - Added trigger editing handlers (`handle_edit_trigger_type_pick`, `handle_update_trigger`, etc.)
+- `crates/finplan/src/screens/events.rs` - Added routing for new actions
+- `crates/finplan/src/app.rs` - Added `handle_trigger_field_activated()` handler
+
+---
+
 ## Success Criteria
 
 - [ ] Users can create inflation-adjusted expenses in the TUI

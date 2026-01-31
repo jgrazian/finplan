@@ -248,6 +248,8 @@ pub struct TriggerBuilderState {
     /// Event metadata
     pub event_name: Option<String>,
     pub event_description: Option<String>,
+    /// If set, we're editing an existing event's trigger (not creating new)
+    pub editing_event_index: Option<usize>,
 }
 
 impl TriggerBuilderState {
@@ -262,7 +264,28 @@ impl TriggerBuilderState {
             parent_stack: Vec::new(),
             event_name: None,
             event_description: None,
+            editing_event_index: None,
         }
+    }
+
+    /// Create a new builder for editing an existing event's repeating trigger
+    pub fn new_repeating_edit(interval: IntervalData, event_index: usize) -> Self {
+        Self {
+            current: PartialTrigger::Repeating {
+                interval,
+                start: None,
+                end: None,
+            },
+            parent_stack: Vec::new(),
+            event_name: None,
+            event_description: None,
+            editing_event_index: Some(event_index),
+        }
+    }
+
+    /// Check if we're editing an existing event's trigger
+    pub fn is_editing(&self) -> bool {
+        self.editing_event_index.is_some()
     }
 
     /// Push into a child slot (start building nested trigger)
@@ -347,6 +370,13 @@ pub enum TriggerContext {
     RelativeToEvent(String),
     /// Full builder state for recursive trigger construction
     RepeatingBuilder(TriggerBuilderState),
+    /// Editing an existing event's trigger - wraps inner context with event index
+    Edit {
+        event_index: usize,
+        inner: Box<TriggerContext>,
+    },
+    /// Starting to edit a trigger - just the event index, no trigger type yet
+    EditStart { event_index: usize },
 }
 
 impl TriggerContext {
@@ -361,6 +391,8 @@ impl TriggerContext {
             Self::AccountBalance(_) => "Account Balance",
             Self::RelativeToEvent(_) => "Relative to Event",
             Self::RepeatingBuilder(_) => "Repeating",
+            Self::Edit { inner, .. } => inner.type_name(),
+            Self::EditStart { .. } => "Edit",
         }
     }
 }

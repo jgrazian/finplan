@@ -124,7 +124,7 @@ fn render_field(
         FieldType::Select if is_focused => {
             label_spans.push(Span::styled(" [</>]", Style::default().fg(Color::Cyan)));
         }
-        FieldType::Amount(_) if is_focused => {
+        FieldType::Amount(_) | FieldType::Trigger if is_focused => {
             label_spans.push(Span::styled(
                 " [Enter to edit]",
                 Style::default().fg(Color::Cyan),
@@ -154,7 +154,9 @@ fn render_field(
     let (border_color, border_modifier, fg_color) = match &field.field_type {
         FieldType::ReadOnly => (Color::DarkGray, Modifier::empty(), Color::DarkGray),
         FieldType::Select if is_focused => (Color::Yellow, Modifier::empty(), Color::Cyan),
-        FieldType::Amount(_) if is_focused => (Color::Yellow, Modifier::empty(), Color::Cyan),
+        FieldType::Amount(_) | FieldType::Trigger if is_focused => {
+            (Color::Yellow, Modifier::empty(), Color::Cyan)
+        }
         _ if is_focused && is_editing => (Color::Cyan, Modifier::BOLD, Color::White), // Bold border when editing
         _ if is_focused => (Color::Yellow, Modifier::empty(), Color::White),
         _ => (Color::DarkGray, Modifier::empty(), Color::White),
@@ -174,6 +176,8 @@ fn render_field(
         render_select_value(frame, input_inner, field, is_focused, fg_color);
     } else if matches!(field.field_type, FieldType::Amount(_)) {
         render_amount_value(frame, input_inner, field, is_focused, fg_color);
+    } else if field.field_type == FieldType::Trigger {
+        render_trigger_value(frame, input_inner, field, is_focused, fg_color);
     } else if is_focused && is_editing && field.field_type != FieldType::ReadOnly {
         render_editing_value(frame, input_inner, field);
     } else {
@@ -253,6 +257,43 @@ fn render_amount_value(
     frame.render_widget(Paragraph::new(line), area);
 }
 
+fn render_trigger_value(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    field: &FormField,
+    is_focused: bool,
+    fg_color: Color,
+) {
+    // Trigger fields show their summary value (stored in field.value)
+    // with a hint to press Enter to edit
+    let line = if is_focused {
+        // Truncate if too long for the display area
+        let max_len = area.width.saturating_sub(8) as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(vec![
+            Span::styled(display_val, Style::default().fg(fg_color)),
+            Span::styled(" [Edit]", Style::default().fg(Color::DarkGray)),
+        ])
+    } else if field.value.is_empty() {
+        Line::from(Span::styled("(none)", Style::default().fg(Color::DarkGray)))
+    } else {
+        // Truncate for non-focused display too
+        let max_len = area.width as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(Span::styled(display_val, Style::default().fg(fg_color)))
+    };
+
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn render_editing_value(frame: &mut Frame, area: ratatui::layout::Rect, field: &FormField) {
     let input_width = (area.width as usize).saturating_sub(1);
     let scrolled = calculate_scroll(&field.value, field.cursor_pos, input_width + 2);
@@ -311,6 +352,51 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
     }
 
     let field = &mut modal.fields[modal.focused_field];
+
+    // Handle Trigger fields - Enter opens the trigger editor
+    if field.field_type == FieldType::Trigger {
+        match key.code {
+            KeyCode::Enter => {
+                return ModalResult::TriggerFieldActivated(modal.focused_field);
+            }
+            KeyCode::Tab | KeyCode::Down => {
+                // Move to next field
+                let start = modal.focused_field;
+                loop {
+                    modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+                    if !matches!(
+                        modal.fields[modal.focused_field].field_type,
+                        FieldType::ReadOnly
+                    ) || modal.focused_field == start
+                    {
+                        break;
+                    }
+                }
+                return ModalResult::Continue;
+            }
+            KeyCode::BackTab | KeyCode::Up => {
+                // Move to previous field
+                let start = modal.focused_field;
+                loop {
+                    if modal.focused_field == 0 {
+                        modal.focused_field = modal.fields.len() - 1;
+                    } else {
+                        modal.focused_field -= 1;
+                    }
+                    if !matches!(
+                        modal.fields[modal.focused_field].field_type,
+                        FieldType::ReadOnly
+                    ) || modal.focused_field == start
+                    {
+                        break;
+                    }
+                }
+                return ModalResult::Continue;
+            }
+            KeyCode::Esc => return ModalResult::Cancelled,
+            _ => return ModalResult::Continue,
+        }
+    }
 
     // Handle Amount fields - Enter opens the amount editor
     if matches!(field.field_type, FieldType::Amount(_)) {
@@ -499,7 +585,10 @@ fn handle_editing_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
                     c.is_ascii_digit() || c == '.' || c == '-'
                 }
                 FieldType::Text => true,
-                FieldType::ReadOnly | FieldType::Select | FieldType::Amount(_) => false,
+                FieldType::ReadOnly
+                | FieldType::Select
+                | FieldType::Amount(_)
+                | FieldType::Trigger => false,
             };
 
             if valid {
@@ -547,6 +636,10 @@ fn handle_navigation_key(key: KeyEvent, modal: &mut FormModal) -> ModalResult {
         KeyCode::Enter | KeyCode::Char('e') => {
             // Handle different field types
             match current_field_type {
+                // Trigger fields open a nested modal for editing
+                FieldType::Trigger => {
+                    return ModalResult::TriggerFieldActivated(modal.focused_field);
+                }
                 // Amount fields open a nested modal for editing
                 FieldType::Amount(_) => {
                     return ModalResult::AmountFieldActivated(modal.focused_field);

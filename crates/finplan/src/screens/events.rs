@@ -6,7 +6,8 @@ use crate::data::events_data::{
     AmountData, EffectData, EventData, IntervalData, OffsetData, ThresholdData, TriggerData,
 };
 use crate::modals::{
-    AmountAction, ConfirmedValue, EffectAction, EventAction, ModalAction, ModalState,
+    AmountAction, ConfirmedValue, EffectAction, EventAction, ModalAction, ModalContext, ModalState,
+    context::TriggerContext,
 };
 use crate::state::{AppState, EventsPanel};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -864,10 +865,30 @@ impl super::ModalHandler for EventsScreen {
                 actions::handle_trigger_type_pick(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Event(EventAction::PickEventReference) => {
-                actions::handle_event_reference_pick(value.as_str().unwrap_or_default())
+                // Check if we're editing a trigger or creating a new event
+                if let Some(ModalContext::Trigger(TriggerContext::EditStart { event_index })) =
+                    modal_context.as_ref()
+                {
+                    actions::handle_edit_event_reference(
+                        *event_index,
+                        value.as_str().unwrap_or_default(),
+                    )
+                } else {
+                    actions::handle_event_reference_pick(value.as_str().unwrap_or_default())
+                }
             }
             ModalAction::Event(EventAction::PickInterval) => {
-                actions::handle_interval_pick(value.as_str().unwrap_or_default())
+                // Check if we're editing a trigger or creating a new event
+                if let Some(ModalContext::Trigger(TriggerContext::EditStart { event_index })) =
+                    modal_context.as_ref()
+                {
+                    actions::handle_edit_interval_pick(
+                        *event_index,
+                        value.as_str().unwrap_or_default(),
+                    )
+                } else {
+                    actions::handle_interval_pick(value.as_str().unwrap_or_default())
+                }
             }
             ModalAction::Event(EventAction::Create) => actions::handle_create_event(state, ctx),
             ModalAction::Event(EventAction::Edit) => actions::handle_edit_event(state, ctx),
@@ -892,6 +913,20 @@ impl super::ModalHandler for EventsScreen {
             ModalAction::Event(EventAction::PickQuickEvent) => {
                 actions::handle_quick_event_pick(state, value.as_str().unwrap_or_default())
             }
+            // Trigger editing actions
+            ModalAction::Event(EventAction::EditTriggerTypePick) => {
+                actions::handle_edit_trigger_type_pick(
+                    state,
+                    value.as_str().unwrap_or_default(),
+                    ctx,
+                )
+            }
+            ModalAction::Event(EventAction::UpdateTrigger) => {
+                actions::handle_update_trigger(state, ctx)
+            }
+            ModalAction::Event(EventAction::UpdateRepeating) => {
+                actions::handle_update_repeating(state, ctx)
+            }
 
             // Effect actions
             ModalAction::Effect(EffectAction::Manage) => {
@@ -902,7 +937,17 @@ impl super::ModalHandler for EventsScreen {
                 actions::handle_effect_type_for_add(state, value.as_str().unwrap_or_default())
             }
             ModalAction::Effect(EffectAction::PickAccountForEffect) => {
-                actions::handle_account_for_effect_pick(value.as_str().unwrap_or_default())
+                // Check if we're editing a trigger or creating a new event/effect
+                if let Some(ModalContext::Trigger(TriggerContext::EditStart { event_index })) =
+                    modal_context.as_ref()
+                {
+                    actions::handle_edit_account_for_trigger(
+                        *event_index,
+                        value.as_str().unwrap_or_default(),
+                    )
+                } else {
+                    actions::handle_account_for_effect_pick(value.as_str().unwrap_or_default())
+                }
             }
             ModalAction::Effect(EffectAction::PickActionForEffect) => {
                 actions::handle_action_for_effect_pick(
