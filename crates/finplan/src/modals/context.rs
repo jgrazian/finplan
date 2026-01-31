@@ -194,6 +194,8 @@ pub enum PartialTrigger {
         interval: IntervalData,
         start: Option<Box<PartialTrigger>>,
         end: Option<Box<PartialTrigger>>,
+        /// Maximum number of times this event can trigger (optional)
+        max_occurrences: Option<u32>,
     },
 }
 
@@ -260,6 +262,7 @@ impl TriggerBuilderState {
                 interval,
                 start: None,
                 end: None,
+                max_occurrences: None,
             },
             parent_stack: Vec::new(),
             event_name: None,
@@ -275,6 +278,7 @@ impl TriggerBuilderState {
                 interval,
                 start: None,
                 end: None,
+                max_occurrences: None,
             },
             parent_stack: Vec::new(),
             event_name: None,
@@ -430,6 +434,7 @@ pub enum EffectTypeContext {
     ApplyRmd,
     AdjustBalance,
     CashTransfer,
+    Random,
 }
 
 impl FromStr for EffectTypeContext {
@@ -449,6 +454,7 @@ impl FromStr for EffectTypeContext {
             "ApplyRmd" | "Apply RMD" => Ok(Self::ApplyRmd),
             "AdjustBalance" | "Adjust Balance" => Ok(Self::AdjustBalance),
             "CashTransfer" | "Cash Transfer" => Ok(Self::CashTransfer),
+            "Random" => Ok(Self::Random),
             _ => Err(()),
         }
     }
@@ -469,6 +475,7 @@ impl EffectTypeContext {
             Self::ApplyRmd => "Apply RMD",
             Self::AdjustBalance => "Adjust Balance",
             Self::CashTransfer => "Cash Transfer",
+            Self::Random => "Random",
         }
     }
 }

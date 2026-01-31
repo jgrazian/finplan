@@ -88,6 +88,9 @@ pub enum TriggerData {
         start: Option<Box<TriggerData>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         end: Option<Box<TriggerData>>,
+        /// Maximum number of times this event can trigger (optional)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_occurrences: Option<u32>,
     },
 
     /// Manual trigger (only triggered by other events)
@@ -494,6 +497,18 @@ pub enum EffectData {
         to: AccountTag,
         amount: AmountData,
     },
+
+    /// Randomly execute effects based on probability
+    /// Triggers on_true event if random roll < probability, otherwise on_false
+    Random {
+        /// Probability threshold (0.0 to 1.0)
+        probability: f64,
+        /// Event to trigger on success
+        on_true: EventTag,
+        /// Event to trigger on failure (optional)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        on_false: Option<EventTag>,
+    },
 }
 
 fn default_true() -> bool {
@@ -532,6 +547,7 @@ mod tests {
                     years: 65,
                     months: None,
                 })),
+                max_occurrences: None,
             },
             effects: vec![EffectData::Income {
                 to: AccountTag("Checking".to_string()),

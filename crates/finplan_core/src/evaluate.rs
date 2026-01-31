@@ -1,4 +1,5 @@
 use jiff::civil::Date;
+use rand::Rng;
 use rustc_hash::FxHashMap;
 
 use crate::error::{
@@ -230,6 +231,7 @@ pub fn evaluate_trigger(
             interval,
             start_condition,
             end_condition,
+            max_occurrences,
         } => {
             // Check if this repeating event has been started and its active status (O(1) lookup)
             let active_status = state.event_state.repeating_active(*event_id);
@@ -247,6 +249,14 @@ pub fn evaluate_trigger(
                 && let TriggerEvent::Triggered = evaluate_trigger(event_id, end_cond, state)?
             {
                 return Ok(TriggerEvent::StopRepeating);
+            }
+
+            // Check if max_occurrences limit has been reached
+            if let Some(max) = max_occurrences {
+                let current_count = state.event_state.occurrence_count(*event_id);
+                if current_count >= *max {
+                    return Ok(TriggerEvent::StopRepeating);
+                }
             }
 
             if !is_started {
@@ -970,6 +980,26 @@ pub fn evaluate_effect_into(
                     });
                     Ok(())
                 }
+            }
+        }
+
+        EventEffect::Random {
+            probability,
+            on_true,
+            on_false,
+        } => {
+            // Sample from the simulation's RNG
+            let roll: f64 = state.rng.borrow_mut().random();
+
+            if roll < *probability {
+                // Random check passed - execute on_true effect
+                evaluate_effect_into(on_true, state, out)
+            } else if let Some(false_effect) = on_false {
+                // Random check failed and we have an on_false effect
+                evaluate_effect_into(false_effect, state, out)
+            } else {
+                // Random check failed, no on_false effect - do nothing
+                Ok(())
             }
         }
     }

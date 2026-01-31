@@ -573,6 +573,8 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 state
                     .event_state
                     .set_next_possible_trigger(event_id, next_date);
+                // Increment occurrence count for max_occurrences tracking
+                state.event_state.increment_occurrence_count(event_id);
                 true // Trigger immediately on activation
             }
             TriggerEvent::TriggerRepeating(next_date) => {
@@ -582,6 +584,8 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 state
                     .event_state
                     .set_next_possible_trigger(event_id, next_date);
+                // Increment occurrence count for max_occurrences tracking
+                state.event_state.increment_occurrence_count(event_id);
                 true
             }
             TriggerEvent::StopRepeating => {

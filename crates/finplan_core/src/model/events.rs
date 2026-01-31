@@ -410,6 +410,10 @@ pub enum EventTrigger {
         /// Optional: stop repeating when this condition is met
         #[serde(default)]
         end_condition: Option<Box<EventTrigger>>,
+        /// Optional: maximum number of times this event can trigger
+        /// After reaching this count, the event stops repeating (equivalent to StopRepeating)
+        #[serde(default)]
+        max_occurrences: Option<u32>,
     },
 
     // TODO: Add account limits triggers
@@ -531,6 +535,26 @@ pub enum EventEffect {
     ApplyRmd {
         destination: AccountId,
         lot_method: LotMethod,
+    },
+
+    // === Stochastic Effects ===
+    /// Randomly execute one of two effects based on a probability threshold
+    /// Useful for modeling uncertain events like job loss, medical expenses, inheritance, etc.
+    ///
+    /// The probability is checked against the simulation's RNG:
+    /// - If random value < probability: execute `on_true`
+    /// - Otherwise: execute `on_false` (if provided)
+    ///
+    /// Each Monte Carlo iteration will get different random outcomes based on its seed,
+    /// making this suitable for modeling uncertainty in financial plans.
+    Random {
+        /// Probability threshold (0.0 to 1.0). E.g., 0.1 = 10% chance of on_true
+        probability: f64,
+        /// Effect to execute if random check passes
+        on_true: Box<EventEffect>,
+        /// Optional effect to execute if random check fails
+        #[serde(default)]
+        on_false: Option<Box<EventEffect>>,
     },
 }
 

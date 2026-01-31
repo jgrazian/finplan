@@ -109,6 +109,7 @@ fn test_account_balance_trigger_safe() {
             interval: RepeatInterval::Monthly,
             start_condition: None,
             end_condition: None,
+            max_occurrences: None,
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
@@ -275,6 +276,7 @@ fn test_event_count_scaling() {
                 interval: RepeatInterval::Monthly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),
@@ -301,6 +303,7 @@ fn test_event_count_scaling() {
                 interval: RepeatInterval::Monthly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),
@@ -423,6 +426,7 @@ fn test_high_frequency_events() {
                 interval: RepeatInterval::Monthly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),

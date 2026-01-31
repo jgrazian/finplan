@@ -20,7 +20,7 @@ pub fn handle_manage_effects(state: &AppState, selected: &str) -> ActionResult {
     let event_idx = state.events_state.selected_event_index;
 
     if selected == "[ + Add New Effect ]" {
-        // Show effect type picker with all 10 effect types
+        // Show effect type picker with all effect types
         let effect_types = vec![
             "Income".to_string(),
             "Expense".to_string(),
@@ -34,6 +34,7 @@ pub fn handle_manage_effects(state: &AppState, selected: &str) -> ActionResult {
             "Adjust Balance".to_string(),
             "Cash Transfer".to_string(),
             "Apply RMD".to_string(),
+            "Random".to_string(),
         ];
         return ActionResult::modal(ModalState::Picker(PickerModal::new(
             "Select Effect Type",
@@ -411,6 +412,34 @@ fn build_edit_form_for_effect(
             ))
             .start_editing(),
         )),
+
+        EffectData::Random {
+            probability,
+            on_true,
+            on_false,
+        } => {
+            let prob_percent = format!("{:.0}", probability * 100.0);
+            let on_false_str = on_false.as_ref().map(|e| e.0.as_str()).unwrap_or("None");
+            let mut events_with_none = vec!["None".to_string()];
+            events_with_none.extend(events.clone());
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "Edit Random Effect",
+                    vec![
+                        FormField::text("Probability (%)", &prob_percent),
+                        FormField::select("On True (trigger event)", events, &on_true.0),
+                        FormField::select("On False (optional)", events_with_none, on_false_str),
+                    ],
+                    ModalAction::EDIT_EFFECT,
+                )
+                .with_typed_context(ModalContext::effect_edit(
+                    event_idx,
+                    effect_idx,
+                    EffectTypeContext::Random,
+                ))
+                .start_editing(),
+            ))
+        }
     }
 }
 
@@ -789,6 +818,31 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                 .start_editing(),
             ))
         }
+        "Random" => {
+            if events.is_empty() {
+                return ActionResult::error(
+                    "No events available. Create at least one event to trigger.",
+                );
+            }
+            let mut events_with_none = vec!["None".to_string()];
+            events_with_none.extend(events.clone());
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "New Random Effect",
+                    vec![
+                        FormField::text("Probability (%)", "50"),
+                        FormField::select("On True (trigger event)", events, &first_event),
+                        FormField::select("On False (optional)", events_with_none, "None"),
+                    ],
+                    ModalAction::ADD_EFFECT,
+                )
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::Random,
+                ))
+                .start_editing(),
+            ))
+        }
         _ => ActionResult::close(),
     }
 }
@@ -931,6 +985,26 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 from: AccountTag(from_account),
                 to: AccountTag(to_account),
                 amount,
+            }
+        }
+        EffectTypeContext::Random => {
+            let prob_str = form.get_str(0).unwrap_or("50");
+            let probability = prob_str
+                .parse::<f64>()
+                .map(|p| (p / 100.0).clamp(0.0, 1.0))
+                .unwrap_or(0.5);
+            let on_true = form.get_str(1).unwrap_or("").to_string();
+            let on_false_str = form.get_str(2).unwrap_or("None");
+            let on_false = if on_false_str == "None" || on_false_str.is_empty() {
+                None
+            } else {
+                Some(EventTag(on_false_str.to_string()))
+            };
+
+            EffectData::Random {
+                probability,
+                on_true: EventTag(on_true),
+                on_false,
             }
         }
     };
@@ -1104,6 +1178,26 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 from: AccountTag(from_account),
                 to: AccountTag(to_account),
                 amount,
+            })
+        }
+        EffectTypeContext::Random => {
+            let prob_str = form.get_str(0).unwrap_or("50");
+            let probability = prob_str
+                .parse::<f64>()
+                .map(|p| (p / 100.0).clamp(0.0, 1.0))
+                .unwrap_or(0.5);
+            let on_true = form.get_str(1).unwrap_or("").to_string();
+            let on_false_str = form.get_str(2).unwrap_or("None");
+            let on_false = if on_false_str == "None" || on_false_str.is_empty() {
+                None
+            } else {
+                Some(EventTag(on_false_str.to_string()))
+            };
+
+            Some(EffectData::Random {
+                probability,
+                on_true: EventTag(on_true),
+                on_false,
             })
         }
     };

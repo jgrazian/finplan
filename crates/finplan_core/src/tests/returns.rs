@@ -708,6 +708,7 @@ fn test_inflation_adjusted_expense() {
                 interval: RepeatInterval::Yearly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(1),
@@ -787,6 +788,7 @@ fn test_scale_transfer_amount() {
                 interval: RepeatInterval::Yearly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(1),

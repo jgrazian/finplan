@@ -318,6 +318,13 @@ impl EventListPanel {
                     Self::format_amount_short(amount)
                 )
             }
+            EffectData::Random {
+                probability,
+                on_true,
+                ..
+            } => {
+                format!("Random {}%: {}", (probability * 100.0) as u32, on_true.0)
+            }
         }
     }
 

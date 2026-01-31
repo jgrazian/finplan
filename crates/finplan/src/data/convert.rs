@@ -479,6 +479,7 @@ fn convert_trigger(
             interval,
             start,
             end,
+            max_occurrences,
         } => {
             let start_condition = match start {
                 Some(t) => Some(Box::new(convert_trigger(t, ctx)?)),
@@ -493,6 +494,7 @@ fn convert_trigger(
                 interval: convert_interval(interval),
                 start_condition,
                 end_condition,
+                max_occurrences: *max_occurrences,
             })
         }
 
@@ -658,6 +660,26 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
                 from: from_id,
                 to: to_id,
                 amount: convert_amount(amount, ctx),
+            })
+        }
+
+        EffectData::Random {
+            probability,
+            on_true,
+            on_false,
+        } => {
+            let on_true_id = resolve_event(on_true, ctx)?;
+            let on_false_effect = match on_false {
+                Some(event_tag) => {
+                    let event_id = resolve_event(event_tag, ctx)?;
+                    Some(Box::new(EventEffect::TriggerEvent(event_id)))
+                }
+                None => None,
+            };
+            Ok(EventEffect::Random {
+                probability: *probability,
+                on_true: Box::new(EventEffect::TriggerEvent(on_true_id)),
+                on_false: on_false_effect,
             })
         }
     }

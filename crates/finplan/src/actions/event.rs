@@ -789,6 +789,7 @@ fn show_finalize_form(builder: TriggerBuilderState) -> ActionResult {
     let fields = vec![
         FormField::text("Event Name", ""),
         FormField::text("Description", ""),
+        FormField::text("Max Occurrences (optional)", ""), // Empty = unlimited
     ];
 
     ActionResult::modal(ModalState::Form(
@@ -802,7 +803,7 @@ fn show_finalize_form(builder: TriggerBuilderState) -> ActionResult {
 
 /// Handle finalizing a repeating event (create the actual event or update if editing)
 pub fn handle_finalize_repeating(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let builder = match ctx.trigger_builder() {
+    let mut builder = match ctx.trigger_builder() {
         Some(b) => b.clone(),
         None => return ActionResult::error("Missing trigger builder context"),
     };
@@ -832,9 +833,30 @@ pub fn handle_finalize_repeating(state: &mut AppState, ctx: ActionContext) -> Ac
 
     let name = form.get_str(0).unwrap_or("").to_string();
     let description = form.get_optional_str(1);
+    let max_occurrences_str = form.get_str(2).unwrap_or("");
 
     if name.is_empty() {
         return ActionResult::error("Event name cannot be empty");
+    }
+
+    // Parse max_occurrences if provided (empty string = None/unlimited)
+    let max_occurrences: Option<u32> = if max_occurrences_str.is_empty() {
+        None
+    } else {
+        match max_occurrences_str.parse::<u32>() {
+            Ok(0) => None, // 0 means unlimited
+            Ok(n) => Some(n),
+            Err(_) => return ActionResult::error("Max Occurrences must be a positive number"),
+        }
+    };
+
+    // Update the builder's max_occurrences before converting
+    if let PartialTrigger::Repeating {
+        max_occurrences: ref mut max_occ,
+        ..
+    } = builder.current
+    {
+        *max_occ = max_occurrences;
     }
 
     // Convert the builder state to TriggerData
@@ -932,6 +954,7 @@ fn convert_partial_to_trigger(partial: &PartialTrigger) -> Option<TriggerData> {
             interval,
             start,
             end,
+            max_occurrences,
         } => {
             let start_trigger = start
                 .as_ref()
@@ -945,6 +968,7 @@ fn convert_partial_to_trigger(partial: &PartialTrigger) -> Option<TriggerData> {
                 interval: *interval,
                 start: start_trigger,
                 end: end_trigger,
+                max_occurrences: *max_occurrences,
             })
         }
     }
@@ -1004,6 +1028,7 @@ fn create_social_security_template(state: &AppState) -> EventData {
                 months: None,
             })),
             end: None,
+            max_occurrences: None,
         },
         effects: vec![EffectData::Income {
             to: AccountTag(dest),
@@ -1029,6 +1054,7 @@ fn create_rmd_template(state: &AppState) -> EventData {
                 months: None,
             })),
             end: None,
+            max_occurrences: None,
         },
         effects: vec![EffectData::ApplyRmd {
             destination: AccountTag(dest),
@@ -1052,6 +1078,7 @@ fn create_medicare_template(state: &AppState) -> EventData {
                 months: None,
             })),
             end: None,
+            max_occurrences: None,
         },
         effects: vec![EffectData::Expense {
             from: AccountTag(source),

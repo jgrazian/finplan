@@ -480,10 +480,12 @@ impl SimulationBuilder {
                 interval,
                 start,
                 end,
+                max_occurrences,
             } => EventTrigger::Repeating {
                 interval: *interval,
                 start_condition: start.as_ref().map(|s| Box::new(self.resolve_trigger(s))),
                 end_condition: end.as_ref().map(|e| Box::new(self.resolve_trigger(e))),
+                max_occurrences: *max_occurrences,
             },
         }
     }

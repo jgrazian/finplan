@@ -417,6 +417,7 @@ impl EventsScreen {
                 interval,
                 start,
                 end,
+                max_occurrences,
             } => {
                 lines.push(Line::from(format!("{}Type: Repeating", prefix)));
                 lines.push(Line::from(format!(
@@ -445,6 +446,9 @@ impl EventsScreen {
                     ]));
                 } else {
                     lines.push(Line::from(format!("{}End: Never", prefix)));
+                }
+                if let Some(max) = max_occurrences {
+                    lines.push(Line::from(format!("{}Max occurrences: {}", prefix, max)));
                 }
             }
             TriggerData::Manual => {
@@ -670,6 +674,21 @@ impl EventsScreen {
                     to.0,
                     Self::format_amount(amount)
                 )
+            }
+            EffectData::Random {
+                probability,
+                on_true,
+                on_false,
+            } => {
+                let prob_pct = (probability * 100.0) as u32;
+                if let Some(on_false) = on_false {
+                    format!(
+                        "Random ({}%): \"{}\" / \"{}\"",
+                        prob_pct, on_true.0, on_false.0
+                    )
+                } else {
+                    format!("Random ({}%): \"{}\"", prob_pct, on_true.0)
+                }
             }
         }
     }

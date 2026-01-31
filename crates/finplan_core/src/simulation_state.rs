@@ -8,6 +8,7 @@ use crate::model::{
 use jiff::ToSpan;
 use rand::SeedableRng;
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 
 /// Pre-computed spans for common intervals to avoid repeated jiff ToSpan calls.
 /// These are computed once at module load time.
@@ -29,7 +30,7 @@ pub struct AssetPrice {
 }
 
 /// Runtime state for the simulation, mutated as events trigger
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SimulationState {
     pub timeline: SimTimeline,
     pub portfolio: SimPortfolio,
@@ -42,6 +43,10 @@ pub struct SimulationState {
 
     /// Non-fatal warnings collected during simulation
     pub warnings: Vec<SimulationWarning>,
+
+    /// Random number generator for stochastic effects (e.g., Random EventEffect)
+    /// Uses RefCell for interior mutability since evaluate_effect takes &SimulationState
+    pub rng: RefCell<rand::rngs::SmallRng>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +132,9 @@ pub struct SimEventState {
     /// Next possible trigger date for each event (dense Vec indexed by EventId.0)
     /// Used for early-skip optimization: if current_date < next_possible_trigger, skip evaluation
     pub next_possible_trigger: Vec<Option<jiff::civil::Date>>,
+
+    /// How many times each repeating event has triggered (for max_occurrences support)
+    pub repeating_occurrence_count: Vec<u32>,
 
     /// Accumulated values for event flow limits (less hot, keep as HashMap)
     pub event_flow_ytd: FxHashMap<EventId, f64>,
@@ -259,6 +267,23 @@ impl SimEventState {
             .and_then(|o| *o)
     }
 
+    /// Get how many times a repeating event has triggered
+    #[inline]
+    pub fn occurrence_count(&self, id: EventId) -> u32 {
+        self.repeating_occurrence_count
+            .get(id.0 as usize)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Increment the occurrence count for a repeating event
+    #[inline]
+    pub fn increment_occurrence_count(&mut self, id: EventId) {
+        if let Some(count) = self.repeating_occurrence_count.get_mut(id.0 as usize) {
+            *count += 1;
+        }
+    }
+
     /// Iterate over all events
     #[inline]
     pub fn iter_events(&self) -> impl Iterator<Item = &Event> {
@@ -296,6 +321,7 @@ fn collect_trigger_cache_values(
             interval,
             start_condition,
             end_condition,
+            max_occurrences: _, // Not cached, checked at runtime
         } => {
             // Cache this Repeating's interval span
             repeating_spans.push(interval.span());
@@ -445,6 +471,10 @@ impl SimulationState {
             events[event.event_id.0 as usize] = Some(event.clone());
         }
 
+        // Create a separate RNG for stochastic effects (using a derived seed)
+        // This ensures market sampling and effect randomness are independent
+        let effect_rng = rand::rngs::SmallRng::seed_from_u64(seed.wrapping_add(0x005E_ED0F_F5E7));
+
         Ok(Self {
             timeline: SimTimeline {
                 current_date: start_date,
@@ -473,6 +503,7 @@ impl SimulationState {
                 event_flow_ytd: FxHashMap::default(),
                 event_flow_lifetime: FxHashMap::default(),
                 event_flow_last_period_key: FxHashMap::default(),
+                repeating_occurrence_count: vec![0; vec_size],
             },
             taxes: SimTaxState {
                 ytd_tax: TaxSummary {
@@ -485,6 +516,7 @@ impl SimulationState {
             history: SimHistory { ledger: Vec::new() },
             pending_triggers: Vec::new(),
             warnings: Vec::new(),
+            rng: RefCell::new(effect_rng),
         })
     }
 

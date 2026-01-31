@@ -169,6 +169,7 @@ mod tests {
                             years: 65,
                             months: None,
                         })),
+                        max_occurrences: None,
                     },
                     effects: vec![EffectData::Income {
                         to: AccountTag("Checking".to_string()),
@@ -186,6 +187,7 @@ mod tests {
                         interval: IntervalData::Monthly,
                         start: None,
                         end: None,
+                        max_occurrences: None,
                     },
                     effects: vec![EffectData::Expense {
                         from: AccountTag("Checking".to_string()),
