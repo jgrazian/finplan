@@ -183,6 +183,10 @@ pub struct AppState {
     /// Stored temporarily while the amount editor modal is active
     pub pending_effect_form: Option<FormModal>,
 
+    /// Pending repeating trigger form when editing start/end conditions
+    /// Stored temporarily while the child trigger editor is active
+    pub pending_repeating_form: Option<FormModal>,
+
     /// Keybindings configuration (loaded from ~/.finplan/keybindings.yaml)
     pub keybindings: KeybindingsConfig,
 }
@@ -217,6 +221,7 @@ impl Default for AppState {
             error_message: None,
             exit: false,
             pending_effect_form: None,
+            pending_repeating_form: None,
             keybindings: KeybindingsConfig::default(),
         }
     }

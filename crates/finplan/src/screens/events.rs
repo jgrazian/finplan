@@ -927,6 +927,9 @@ impl super::ModalHandler for EventsScreen {
             ModalAction::Event(EventAction::FinalizeRepeating) => {
                 actions::handle_finalize_repeating(state, ctx)
             }
+            ModalAction::Event(EventAction::CreateRepeatingUnified) => {
+                actions::handle_create_repeating_unified(state, ctx)
+            }
             ModalAction::Event(EventAction::PickQuickEvent) => {
                 actions::handle_quick_event_pick(state, value.as_str().unwrap_or_default())
             }

@@ -473,8 +473,8 @@ impl App {
                 ModalResult::AmountFieldActivated(field_idx) => {
                     self.handle_amount_field_activated(field_idx);
                 }
-                ModalResult::TriggerFieldActivated(_field_idx) => {
-                    self.handle_trigger_field_activated();
+                ModalResult::TriggerFieldActivated(field_idx) => {
+                    self.handle_trigger_field_activated(field_idx);
                 }
                 ModalResult::Continue | ModalResult::FieldChanged(_) => {}
             }
@@ -634,41 +634,93 @@ impl App {
     }
 
     /// Handle when a Trigger field is activated in a form
-    fn handle_trigger_field_activated(&mut self) {
-        use crate::modals::context::{IndexContext, ModalContext, TriggerContext};
+    fn handle_trigger_field_activated(&mut self, field_idx: usize) {
+        use crate::modals::context::{
+            IndexContext, ModalContext, TriggerChildSlot, TriggerContext,
+        };
         use crate::modals::{ModalAction, PickerModal};
 
-        // Get the current form's context to determine what event we're editing
+        // Get the current form's context
         let ModalState::Form(form) = &self.state.modal else {
             return;
         };
 
-        // Extract event index from the form context
-        let event_index = match &form.context {
-            Some(ModalContext::Index(IndexContext::Event(idx))) => *idx,
-            _ => return,
-        };
+        match &form.context {
+            // Case 1: Editing an existing event's trigger
+            Some(ModalContext::Index(IndexContext::Event(idx))) => {
+                let event_index = *idx;
 
-        // Close the current form and open the trigger type picker
-        let trigger_types = vec![
-            "Date".to_string(),
-            "Age".to_string(),
-            "Repeating".to_string(),
-            "Manual".to_string(),
-            "Account Balance".to_string(),
-            "Net Worth".to_string(),
-            "Relative to Event".to_string(),
-        ];
+                // Close the current form and open the trigger type picker
+                let trigger_types = vec![
+                    "Date".to_string(),
+                    "Age".to_string(),
+                    "Repeating".to_string(),
+                    "Manual".to_string(),
+                    "Account Balance".to_string(),
+                    "Net Worth".to_string(),
+                    "Relative to Event".to_string(),
+                ];
 
-        self.state.modal = ModalState::Picker(
-            PickerModal::new(
-                "Select New Trigger Type",
-                trigger_types,
-                ModalAction::EDIT_TRIGGER_TYPE_PICK,
-            )
-            .with_typed_context(ModalContext::Trigger(TriggerContext::EditStart {
-                event_index,
-            })),
-        );
+                self.state.modal = ModalState::Picker(
+                    PickerModal::new(
+                        "Select New Trigger Type",
+                        trigger_types,
+                        ModalAction::EDIT_TRIGGER_TYPE_PICK,
+                    )
+                    .with_typed_context(ModalContext::Trigger(
+                        TriggerContext::EditStart { event_index },
+                    )),
+                );
+            }
+
+            // Case 2: Unified repeating form - editing start/end conditions
+            Some(ModalContext::Trigger(TriggerContext::RepeatingBuilder(builder)))
+                if builder.unified_form_mode =>
+            {
+                // Field 3 = Start, Field 4 = End
+                let slot = match field_idx {
+                    3 => TriggerChildSlot::Start,
+                    4 => TriggerChildSlot::End,
+                    _ => return, // Unknown field
+                };
+
+                // Store the current form so we can return to it after editing
+                let form_clone = form.clone();
+                self.state.pending_repeating_form = Some(form_clone);
+
+                // Update builder to track which slot we're editing
+                let mut builder = builder.clone();
+                builder.editing_slot = Some(slot);
+
+                // Show child trigger type picker
+                let title = match slot {
+                    TriggerChildSlot::Start => "Select Start Condition",
+                    TriggerChildSlot::End => "Select End Condition",
+                };
+
+                let none_option = match slot {
+                    TriggerChildSlot::Start => "None (Start Immediately)",
+                    TriggerChildSlot::End => "None (Run Forever)",
+                };
+
+                let options = vec![
+                    none_option.to_string(),
+                    "Date".to_string(),
+                    "Age".to_string(),
+                    "Account Balance".to_string(),
+                    "Net Worth".to_string(),
+                    "Relative to Event".to_string(),
+                ];
+
+                self.state.modal = ModalState::Picker(
+                    PickerModal::new(title, options, ModalAction::PICK_CHILD_TRIGGER_TYPE)
+                        .with_typed_context(ModalContext::Trigger(
+                            TriggerContext::RepeatingBuilder(builder),
+                        )),
+                );
+            }
+
+            _ => {}
+        }
     }
 }

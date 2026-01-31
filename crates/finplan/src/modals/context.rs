@@ -238,6 +238,79 @@ impl PartialTrigger {
             PartialTrigger::Repeating { .. } => "Repeating",
         }
     }
+
+    /// Get a short summary string for display in forms
+    pub fn summary(&self) -> String {
+        match self {
+            PartialTrigger::None => "None".to_string(),
+            PartialTrigger::Date { date } => date
+                .as_ref()
+                .map_or("Date: (not set)".to_string(), |d| format!("Date: {}", d)),
+            PartialTrigger::Age { years, months } => {
+                let y = years.unwrap_or(0);
+                match months {
+                    Some(m) if *m > 0 => format!("Age: {}y {}m", y, m),
+                    _ => format!("Age: {}", y),
+                }
+            }
+            PartialTrigger::Manual => "Manual".to_string(),
+            PartialTrigger::NetWorth {
+                threshold,
+                comparison,
+            } => {
+                let t = threshold.map_or("?".to_string(), |v| format!("${:.0}", v));
+                let c = comparison.as_ref().map_or("", |s| {
+                    if s.contains("drops") || s.contains("<=") {
+                        "≤"
+                    } else {
+                        "≥"
+                    }
+                });
+                format!("Net Worth {} {}", c, t)
+            }
+            PartialTrigger::AccountBalance {
+                account,
+                threshold,
+                comparison,
+            } => {
+                let t = threshold.map_or("?".to_string(), |v| format!("${:.0}", v));
+                let c = comparison.as_ref().map_or("", |s| {
+                    if s.contains("drops") || s.contains("<=") {
+                        "≤"
+                    } else {
+                        "≥"
+                    }
+                });
+                format!("{} {} {}", account, c, t)
+            }
+            PartialTrigger::RelativeToEvent {
+                event,
+                offset_years,
+                offset_months,
+            } => {
+                let y = offset_years.unwrap_or(0);
+                let m = offset_months.unwrap_or(0);
+                if y != 0 {
+                    format!("{} + {}y", event, y)
+                } else if m != 0 {
+                    format!("{} + {}m", event, m)
+                } else {
+                    format!("After: {}", event)
+                }
+            }
+            PartialTrigger::Repeating { interval, .. } => {
+                let interval_name = match interval {
+                    crate::data::events_data::IntervalData::Never => "Never",
+                    crate::data::events_data::IntervalData::Weekly => "Weekly",
+                    crate::data::events_data::IntervalData::BiWeekly => "Bi-Weekly",
+                    crate::data::events_data::IntervalData::Monthly => "Monthly",
+                    crate::data::events_data::IntervalData::Quarterly => "Quarterly",
+                    crate::data::events_data::IntervalData::Yearly => "Yearly",
+                };
+                format!("Repeating: {}", interval_name)
+            }
+        }
+    }
 }
 
 /// Builder state for constructing triggers recursively
@@ -252,10 +325,15 @@ pub struct TriggerBuilderState {
     pub event_description: Option<String>,
     /// If set, we're editing an existing event's trigger (not creating new)
     pub editing_event_index: Option<usize>,
+    /// If true, we're using the unified form mode where all fields are shown together
+    /// and we should return to the form after configuring child triggers
+    pub unified_form_mode: bool,
+    /// Which slot we're currently editing in unified form mode
+    pub editing_slot: Option<TriggerChildSlot>,
 }
 
 impl TriggerBuilderState {
-    /// Create a new builder for a repeating trigger
+    /// Create a new builder for a repeating trigger (legacy multi-modal flow)
     pub fn new_repeating(interval: IntervalData) -> Self {
         Self {
             current: PartialTrigger::Repeating {
@@ -268,6 +346,27 @@ impl TriggerBuilderState {
             event_name: None,
             event_description: None,
             editing_event_index: None,
+            unified_form_mode: false,
+            editing_slot: None,
+        }
+    }
+
+    /// Create a new builder for the unified form mode
+    /// All fields are shown together and we return to the form after configuring child triggers
+    pub fn new_repeating_unified(interval: IntervalData) -> Self {
+        Self {
+            current: PartialTrigger::Repeating {
+                interval,
+                start: Some(Box::new(PartialTrigger::None)),
+                end: Some(Box::new(PartialTrigger::None)),
+                max_occurrences: None,
+            },
+            parent_stack: Vec::new(),
+            event_name: None,
+            event_description: None,
+            editing_event_index: None,
+            unified_form_mode: true,
+            editing_slot: None,
         }
     }
 
@@ -284,6 +383,8 @@ impl TriggerBuilderState {
             event_name: None,
             event_description: None,
             editing_event_index: Some(event_index),
+            unified_form_mode: false,
+            editing_slot: None,
         }
     }
 
@@ -351,6 +452,87 @@ impl TriggerBuilderState {
             }
         } else {
             None
+        }
+    }
+
+    /// Get the summary string for the start condition (for unified form display)
+    pub fn start_summary(&self) -> String {
+        if let PartialTrigger::Repeating { start, .. } = &self.current {
+            match start {
+                Some(trigger) if !matches!(trigger.as_ref(), PartialTrigger::None) => {
+                    trigger.summary()
+                }
+                _ => "None (Start Immediately)".to_string(),
+            }
+        } else {
+            "None".to_string()
+        }
+    }
+
+    /// Get the summary string for the end condition (for unified form display)
+    pub fn end_summary(&self) -> String {
+        if let PartialTrigger::Repeating { end, .. } = &self.current {
+            match end {
+                Some(trigger) if !matches!(trigger.as_ref(), PartialTrigger::None) => {
+                    trigger.summary()
+                }
+                _ => "None (Run Forever)".to_string(),
+            }
+        } else {
+            "None".to_string()
+        }
+    }
+
+    /// Set a child trigger directly (for unified form mode)
+    pub fn set_child(&mut self, slot: TriggerChildSlot, child: PartialTrigger) {
+        if let PartialTrigger::Repeating { start, end, .. } = &mut self.current {
+            let boxed = if matches!(child, PartialTrigger::None) {
+                Some(Box::new(PartialTrigger::None))
+            } else {
+                Some(Box::new(child))
+            };
+            match slot {
+                TriggerChildSlot::Start => *start = boxed,
+                TriggerChildSlot::End => *end = boxed,
+            }
+        }
+    }
+
+    /// Get the interval from the repeating trigger
+    pub fn interval(&self) -> Option<IntervalData> {
+        if let PartialTrigger::Repeating { interval, .. } = &self.current {
+            Some(*interval)
+        } else {
+            None
+        }
+    }
+
+    /// Set the interval for the repeating trigger
+    pub fn set_interval(&mut self, new_interval: IntervalData) {
+        if let PartialTrigger::Repeating { interval, .. } = &mut self.current {
+            *interval = new_interval;
+        }
+    }
+
+    /// Get the max_occurrences from the repeating trigger
+    pub fn max_occurrences(&self) -> Option<u32> {
+        if let PartialTrigger::Repeating {
+            max_occurrences, ..
+        } = &self.current
+        {
+            *max_occurrences
+        } else {
+            None
+        }
+    }
+
+    /// Set the max_occurrences for the repeating trigger
+    pub fn set_max_occurrences(&mut self, max: Option<u32>) {
+        if let PartialTrigger::Repeating {
+            max_occurrences, ..
+        } = &mut self.current
+        {
+            *max_occurrences = max;
         }
     }
 }
