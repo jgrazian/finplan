@@ -731,6 +731,24 @@ impl Component for PortfolioProfilesScreen {
                     state.portfolio_profiles_state.focused_panel.prev();
                 EventResult::Handled
             }
+            // Tab-global: Toggle between Parametric and Historical mode
+            KeyCode::Char('y') => {
+                let current_mode = state.data().parameters.returns_mode;
+                let new_mode = match current_mode {
+                    ReturnsMode::Parametric => {
+                        // Auto-map historical assets if switching to Historical for the first time
+                        if state.data().historical_assets.is_empty() {
+                            ProfilesPanel::auto_map_historical_assets(state);
+                        }
+                        ReturnsMode::Historical
+                    }
+                    ReturnsMode::Historical => ReturnsMode::Parametric,
+                };
+                state.data_mut().parameters.returns_mode = new_mode;
+                state.portfolio_profiles_state.selected_profile_index = 0;
+                state.mark_modified();
+                EventResult::Handled
+            }
             _ => {
                 // Delegate to focused panel handler
                 match state.portfolio_profiles_state.focused_panel {

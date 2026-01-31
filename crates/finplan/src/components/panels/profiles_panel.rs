@@ -44,9 +44,9 @@ impl ProfilesPanel {
         };
 
         let help_text = if is_historical {
-            " [b]lock size [h] parametric "
+            " [b]lock size "
         } else {
-            " [a]dd [e]dit [d]el [h]istorical [Shift+J/K] Reorder "
+            " [a]dd [e]dit [d]el [Shift+J/K] Reorder "
         };
 
         let block = focused_block_with_help(title, is_focused, help_text);
@@ -442,23 +442,6 @@ impl ProfilesPanel {
         let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
-            // Toggle between Parametric and Historical mode
-            KeyCode::Char('h') => {
-                let current_mode = state.data().parameters.returns_mode;
-                let new_mode = match current_mode {
-                    ReturnsMode::Parametric => {
-                        if state.data().historical_assets.is_empty() {
-                            Self::auto_map_historical_assets(state);
-                        }
-                        ReturnsMode::Historical
-                    }
-                    ReturnsMode::Historical => ReturnsMode::Parametric,
-                };
-                state.data_mut().parameters.returns_mode = new_mode;
-                state.portfolio_profiles_state.selected_profile_index = 0;
-                state.mark_modified();
-                EventResult::Handled
-            }
             // Block size picker (Historical mode only)
             KeyCode::Char('b') if is_historical => {
                 let options = vec![

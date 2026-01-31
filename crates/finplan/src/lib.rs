@@ -2,6 +2,7 @@ pub mod actions;
 pub mod app;
 pub mod components;
 pub mod data;
+pub mod keybindings;
 pub mod logging;
 pub mod modals;
 pub mod screens;

@@ -6,6 +6,7 @@ use rand::RngCore;
 
 use crate::data::app_data::{AppData, SimulationData};
 use crate::data::convert::{ConvertError, to_simulation_config, to_tui_result};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::util::common::cpu_parallel_batches;
 use crate::util::percentiles::{
     PERCENTILE_TOLERANCE, PercentileSet, find_percentile_result, find_percentile_result_pair,
@@ -181,6 +182,9 @@ pub struct AppState {
     /// Pending effect form when editing an amount field
     /// Stored temporarily while the amount editor modal is active
     pub pending_effect_form: Option<FormModal>,
+
+    /// Keybindings configuration (loaded from ~/.finplan/keybindings.yaml)
+    pub keybindings: KeybindingsConfig,
 }
 
 impl Default for AppState {
@@ -213,6 +217,7 @@ impl Default for AppState {
             error_message: None,
             exit: false,
             pending_effect_form: None,
+            keybindings: KeybindingsConfig::default(),
         }
     }
 }
@@ -288,6 +293,7 @@ impl AppState {
             app_data: result.app_data,
             current_scenario: result.current_scenario,
             data_dir: Some(data_dir),
+            keybindings: result.keybindings,
             ..Default::default()
         };
 

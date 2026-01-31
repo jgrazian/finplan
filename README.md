@@ -55,6 +55,69 @@ Scenarios are saved to `~/.finplan/scenarios/`.
 - Historical S&P 500 presets
 - Configurable inflation profiles
 
+## Keyboard Shortcuts
+
+The TUI uses vim-style navigation by default:
+
+| Key | Action |
+|-----|--------|
+| `j/k` | Navigate up/down |
+| `Tab` | Switch panels |
+| `1-5` | Switch tabs |
+| `a/e/d` | Add/Edit/Delete |
+| `Ctrl+S` | Save |
+| `q` | Quit |
+
+### Custom Keybindings
+
+You can customize keyboard shortcuts by creating `~/.finplan/keybindings.yaml`:
+
+```yaml
+# Global keybindings (work everywhere)
+global:
+  quit: ["q", "ctrl+c"]
+  save: ["ctrl+s"]
+  cancel: ["esc"]
+  tab_1: ["1"]
+  tab_2: ["2"]
+  tab_3: ["3"]
+  tab_4: ["4"]
+  tab_5: ["5"]
+
+# Navigation (consistent across all panels)
+navigation:
+  up: ["k", "up"]
+  down: ["j", "down"]
+  left: ["h", "left"]
+  right: ["l", "right"]
+  next_panel: ["tab"]
+  prev_panel: ["shift+tab"]
+  reorder_up: ["shift+k", "shift+up"]
+  reorder_down: ["shift+j", "shift+down"]
+  confirm: ["enter"]
+
+# Tab-specific bindings
+tabs:
+  events:
+    add: ["a"]
+    edit: ["e"]
+    delete: ["d"]
+    copy: ["c"]
+    toggle: ["t"]
+    effects: ["f"]
+
+  scenario:
+    run: ["r"]
+    monte_carlo: ["m"]
+    run_all: ["shift+r"]
+    new: ["n"]
+    copy: ["c"]
+```
+
+Key format: `[modifier+]key` where modifier is `ctrl`, `shift`, or `alt`.
+
+Examples: `"a"`, `"ctrl+s"`, `"shift+j"`, `"enter"`, `"f1"`
+
 ## Project Structure
 
 ```

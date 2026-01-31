@@ -138,7 +138,7 @@ impl Component for ScenarioScreen {
             }
 
             // Duplicate scenario
-            KeyCode::Char('d') => {
+            KeyCode::Char('c') => {
                 if let Some(selected_name) = self.get_selected_scenario_name(state) {
                     let new_name = format!("{} (copy)", selected_name);
                     let form = FormModal::new(
@@ -451,12 +451,12 @@ impl ScenarioScreen {
             ),
             Span::raw("ew "),
             Span::styled(
-                "[d]",
+                "[c]",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw("up "),
+            Span::raw("opy "),
             Span::styled(
                 "[Del]",
                 Style::default()
