@@ -9,6 +9,7 @@ use crate::modals::{
     ConfirmModal, FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal,
 };
 use crate::state::{AppState, EventsPanel};
+use crate::util::format::format_compact_currency;
 use crate::util::styles::focused_block_with_help;
 use crossterm::event::KeyEvent;
 use ratatui::{
@@ -323,7 +324,7 @@ impl EventListPanel {
     /// Format amount in short form.
     pub fn format_amount_short(amount: &AmountData) -> String {
         match amount {
-            AmountData::Fixed { value } => Self::format_fixed_value(*value),
+            AmountData::Fixed { value } => format_compact_currency(*value),
             AmountData::InflationAdjusted { inner } => {
                 format!("{} (infl-adj)", Self::format_amount_short(inner))
             }
@@ -337,21 +338,10 @@ impl EventListPanel {
             AmountData::SourceBalance => "SrcBal".to_string(),
             AmountData::ZeroTargetBalance => "ZeroTgt".to_string(),
             AmountData::TargetToBalance { target } => {
-                format!("TgtBal({})", Self::format_fixed_value(*target))
+                format!("TgtBal({})", format_compact_currency(*target))
             }
             AmountData::AccountBalance { account } => format!("Bal:{}", account.0),
             AmountData::AccountCashBalance { account } => format!("Cash:{}", account.0),
-        }
-    }
-
-    /// Format a fixed dollar value in short form.
-    fn format_fixed_value(val: f64) -> String {
-        if val >= 1_000_000.0 {
-            format!("${:.1}M", val / 1_000_000.0)
-        } else if val >= 1_000.0 {
-            format!("${:.0}K", val / 1_000.0)
-        } else {
-            format!("${:.0}", val)
         }
     }
 

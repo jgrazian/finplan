@@ -2,6 +2,7 @@ use super::{Component, EventResult};
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::portfolio_data::AccountType;
 use crate::state::{AppState, TabId};
+use crate::util::format::format_compact_currency;
 use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
@@ -126,20 +127,6 @@ impl TabBar {
             .sum()
     }
 
-    /// Format net worth in a compact way (e.g., $2.1M, $450K, $50K)
-    fn format_compact_currency(&self, value: f64) -> String {
-        let abs_value = value.abs();
-        let sign = if value < 0.0 { "-" } else { "" };
-
-        if abs_value >= 1_000_000.0 {
-            format!("{}${:.1}M", sign, abs_value / 1_000_000.0)
-        } else if abs_value >= 1_000.0 {
-            format!("{}${:.0}K", sign, abs_value / 1_000.0)
-        } else {
-            format!("{}${:.0}", sign, abs_value)
-        }
-    }
-
     /// Build the status line showing scenario, net worth, and success rate
     fn build_status_line(&self, state: &AppState) -> Line<'static> {
         let mut spans = Vec::new();
@@ -167,7 +154,7 @@ impl TabBar {
             Color::Red
         };
         spans.push(Span::styled(
-            self.format_compact_currency(net_worth),
+            format_compact_currency(net_worth),
             Style::default().fg(nw_color),
         ));
 

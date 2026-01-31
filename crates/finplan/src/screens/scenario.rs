@@ -7,7 +7,7 @@ use crate::modals::{
 };
 use crate::modals::{ScenarioAction, ScenarioPickerModal};
 use crate::state::{AppState, ScenarioPanel, ValueDisplayMode};
-use crate::util::format::{format_currency, format_currency_short};
+use crate::util::format::{format_compact_currency, format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
 use jiff::civil::Date;
 use ratatui::{
@@ -861,7 +861,7 @@ impl ScenarioScreen {
                 Bar::default()
                     .value(scaled)
                     .label(Line::from(short_name))
-                    .text_value(format_currency_short(final_value))
+                    .text_value(format_compact_currency(final_value))
                     .style(Style::default().fg(color))
                     .value_style(Style::default().fg(color).reversed())
             })
