@@ -5,6 +5,7 @@ use crate::components::{Component, EventResult};
 use crate::data::events_data::{
     AmountData, EffectData, EventData, IntervalData, OffsetData, ThresholdData, TriggerData,
 };
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{
     AmountAction, ConfirmedValue, EffectAction, EventAction, ModalAction, ModalContext, ModalState,
     context::TriggerContext,
@@ -711,90 +712,87 @@ impl EventsScreen {
 
 impl Component for EventsScreen {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
-        match key.code {
-            // Tab cycling through panels
-            KeyCode::Tab if key.modifiers.is_empty() => {
-                state.events_state.focused_panel = state.events_state.focused_panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.events_state.focused_panel = state.events_state.focused_panel.prev();
-                EventResult::Handled
-            }
-            _ => {
-                // Delegate to focused panel handler
-                match state.events_state.focused_panel {
-                    EventsPanel::EventList => EventListPanel::handle_key(key, state),
-                    EventsPanel::Details => {
-                        // Details panel - navigation and forwarding
-                        match key.code {
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                let events_len = state.data().events.len();
-                                if events_len > 0 {
-                                    state.events_state.selected_event_index =
-                                        (state.events_state.selected_event_index + 1) % events_len;
-                                }
-                                EventResult::Handled
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                let events_len = state.data().events.len();
-                                if events_len > 0 {
-                                    if state.events_state.selected_event_index == 0 {
-                                        state.events_state.selected_event_index = events_len - 1;
-                                    } else {
-                                        state.events_state.selected_event_index -= 1;
-                                    }
-                                }
-                                EventResult::Handled
-                            }
-                            // Allow t/a/e/d/c/f even when not on event list
-                            KeyCode::Char('t')
-                            | KeyCode::Char('a')
-                            | KeyCode::Char('e')
-                            | KeyCode::Char('d')
-                            | KeyCode::Char('c')
-                            | KeyCode::Char('f') => EventListPanel::handle_key(key, state),
-                            _ => EventResult::NotHandled,
+        // Panel navigation using configurable keybindings
+        if KeybindingsConfig::matches(&key, &state.keybindings.navigation.next_panel) {
+            state.events_state.focused_panel = state.events_state.focused_panel.next();
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &state.keybindings.navigation.prev_panel) {
+            state.events_state.focused_panel = state.events_state.focused_panel.prev();
+            return EventResult::Handled;
+        }
+
+        // Delegate to focused panel handler
+        match state.events_state.focused_panel {
+            EventsPanel::EventList => EventListPanel::handle_key(key, state),
+            EventsPanel::Details => {
+                // Details panel - navigation and forwarding
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        let events_len = state.data().events.len();
+                        if events_len > 0 {
+                            state.events_state.selected_event_index =
+                                (state.events_state.selected_event_index + 1) % events_len;
                         }
+                        EventResult::Handled
                     }
-                    EventsPanel::Timeline => {
-                        // Timeline panel - navigation and collapse toggle
-                        match key.code {
-                            KeyCode::Char(' ') => {
-                                // Toggle timeline collapse
-                                state.events_state.timeline_collapsed =
-                                    !state.events_state.timeline_collapsed;
-                                EventResult::Handled
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        let events_len = state.data().events.len();
+                        if events_len > 0 {
+                            if state.events_state.selected_event_index == 0 {
+                                state.events_state.selected_event_index = events_len - 1;
+                            } else {
+                                state.events_state.selected_event_index -= 1;
                             }
-                            KeyCode::Char('j') | KeyCode::Down => {
-                                let events_len = state.data().events.len();
-                                if events_len > 0 {
-                                    state.events_state.selected_event_index =
-                                        (state.events_state.selected_event_index + 1) % events_len;
-                                }
-                                EventResult::Handled
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                let events_len = state.data().events.len();
-                                if events_len > 0 {
-                                    if state.events_state.selected_event_index == 0 {
-                                        state.events_state.selected_event_index = events_len - 1;
-                                    } else {
-                                        state.events_state.selected_event_index -= 1;
-                                    }
-                                }
-                                EventResult::Handled
-                            }
-                            // Allow t/a/e/d/c/f even when not on event list
-                            KeyCode::Char('t')
-                            | KeyCode::Char('a')
-                            | KeyCode::Char('e')
-                            | KeyCode::Char('d')
-                            | KeyCode::Char('c')
-                            | KeyCode::Char('f') => EventListPanel::handle_key(key, state),
-                            _ => EventResult::NotHandled,
                         }
+                        EventResult::Handled
                     }
+                    // Allow t/a/e/d/c/f even when not on event list
+                    KeyCode::Char('t')
+                    | KeyCode::Char('a')
+                    | KeyCode::Char('e')
+                    | KeyCode::Char('d')
+                    | KeyCode::Char('c')
+                    | KeyCode::Char('f') => EventListPanel::handle_key(key, state),
+                    _ => EventResult::NotHandled,
+                }
+            }
+            EventsPanel::Timeline => {
+                // Timeline panel - navigation and collapse toggle
+                match key.code {
+                    KeyCode::Char(' ') => {
+                        // Toggle timeline collapse
+                        state.events_state.timeline_collapsed =
+                            !state.events_state.timeline_collapsed;
+                        EventResult::Handled
+                    }
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        let events_len = state.data().events.len();
+                        if events_len > 0 {
+                            state.events_state.selected_event_index =
+                                (state.events_state.selected_event_index + 1) % events_len;
+                        }
+                        EventResult::Handled
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        let events_len = state.data().events.len();
+                        if events_len > 0 {
+                            if state.events_state.selected_event_index == 0 {
+                                state.events_state.selected_event_index = events_len - 1;
+                            } else {
+                                state.events_state.selected_event_index -= 1;
+                            }
+                        }
+                        EventResult::Handled
+                    }
+                    // Allow t/a/e/d/c/f even when not on event list
+                    KeyCode::Char('t')
+                    | KeyCode::Char('a')
+                    | KeyCode::Char('e')
+                    | KeyCode::Char('d')
+                    | KeyCode::Char('c')
+                    | KeyCode::Char('f') => EventListPanel::handle_key(key, state),
+                    _ => EventResult::NotHandled,
                 }
             }
         }

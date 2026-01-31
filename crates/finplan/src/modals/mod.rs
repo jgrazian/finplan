@@ -114,15 +114,16 @@ pub fn render_modal(frame: &mut Frame, state: &AppState) {
 
 /// Handle key events for the active modal
 pub fn handle_modal_key(key: KeyEvent, state: &mut AppState) -> ModalResult {
+    let keybindings = &state.keybindings;
     let result = match &mut state.modal {
         ModalState::None => ModalResult::Continue,
         ModalState::TextInput(modal) => text_input::handle_text_input_key(key, modal),
         ModalState::Message(_) => message::handle_message_key(key),
         ModalState::ScenarioPicker(modal) => {
-            scenario_picker::handle_scenario_picker_key(key, modal)
+            scenario_picker::handle_scenario_picker_key(key, modal, keybindings)
         }
-        ModalState::Picker(modal) => picker::handle_picker_key(key, modal),
-        ModalState::Form(modal) => form::handle_form_key(key, modal),
+        ModalState::Picker(modal) => picker::handle_picker_key(key, modal, keybindings),
+        ModalState::Form(modal) => form::handle_form_key(key, modal, keybindings),
         ModalState::Confirm(modal) => confirm::handle_confirm_key(key, modal),
     };
 

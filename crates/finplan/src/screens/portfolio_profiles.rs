@@ -5,6 +5,7 @@ use crate::components::lists::calculate_centered_scroll;
 use crate::components::panels::{AccountsPanel, ProfilesPanel};
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::parameters_data::{FederalBracketsPreset, InflationData, ReturnsMode};
 use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileTag};
@@ -401,299 +402,318 @@ impl PortfolioProfilesScreen {
     fn handle_mappings_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let unique_assets = Self::get_unique_assets(state);
         let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
+        let kb = &state.keybindings;
 
-        match key.code {
-            KeyCode::Char(' ') => {
-                // Collapse both secondary panels and return to main panel
-                state.portfolio_profiles_state.mappings_collapsed =
-                    !state.portfolio_profiles_state.mappings_collapsed;
-                state.portfolio_profiles_state.config_collapsed =
-                    !state.portfolio_profiles_state.config_collapsed;
-                EventResult::Handled
+        // Space toggle for collapse - keep hardcoded as space bar is intuitive
+        if key.code == KeyCode::Char(' ') {
+            // Collapse both secondary panels and return to main panel
+            state.portfolio_profiles_state.mappings_collapsed =
+                !state.portfolio_profiles_state.mappings_collapsed;
+            state.portfolio_profiles_state.config_collapsed =
+                !state.portfolio_profiles_state.config_collapsed;
+            return EventResult::Handled;
+        }
+
+        // Navigation: down
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            if !unique_assets.is_empty() {
+                state.portfolio_profiles_state.selected_mapping_index =
+                    (state.portfolio_profiles_state.selected_mapping_index + 1)
+                        % unique_assets.len();
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if !unique_assets.is_empty() {
-                    state.portfolio_profiles_state.selected_mapping_index =
-                        (state.portfolio_profiles_state.selected_mapping_index + 1)
-                            % unique_assets.len();
+            return EventResult::Handled;
+        }
+
+        // Navigation: up
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            if !unique_assets.is_empty() {
+                if state.portfolio_profiles_state.selected_mapping_index == 0 {
+                    state.portfolio_profiles_state.selected_mapping_index = unique_assets.len() - 1;
+                } else {
+                    state.portfolio_profiles_state.selected_mapping_index -= 1;
                 }
-                EventResult::Handled
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if !unique_assets.is_empty() {
-                    if state.portfolio_profiles_state.selected_mapping_index == 0 {
-                        state.portfolio_profiles_state.selected_mapping_index =
-                            unique_assets.len() - 1;
+            return EventResult::Handled;
+        }
+
+        // Map action (m key or confirm/enter)
+        if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.map)
+            || KeybindingsConfig::matches(&key, &kb.navigation.confirm)
+        {
+            // Map the selected asset to a profile
+            if let Some(asset) =
+                unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
+            {
+                if is_historical {
+                    // Historical mode: cycle through preset profiles
+                    let mappings = &state.data().historical_assets;
+                    let current_mapping = mappings.get(asset);
+                    let current_idx = current_mapping
+                        .and_then(|tag| {
+                            HISTORICAL_PRESETS
+                                .iter()
+                                .position(|(_, name, _)| *name == tag.0)
+                        })
+                        .unwrap_or(HISTORICAL_PRESETS.len());
+
+                    let next_idx = if current_idx >= HISTORICAL_PRESETS.len() - 1 {
+                        0
                     } else {
-                        state.portfolio_profiles_state.selected_mapping_index -= 1;
-                    }
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('m') | KeyCode::Enter => {
-                // Map the selected asset to a profile
-                if let Some(asset) =
-                    unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
-                {
-                    if is_historical {
-                        // Historical mode: cycle through preset profiles
-                        let mappings = &state.data().historical_assets;
-                        let current_mapping = mappings.get(asset);
-                        let current_idx = current_mapping
-                            .and_then(|tag| {
-                                HISTORICAL_PRESETS
-                                    .iter()
-                                    .position(|(_, name, _)| *name == tag.0)
-                            })
-                            .unwrap_or(HISTORICAL_PRESETS.len());
+                        current_idx + 1
+                    };
 
-                        let next_idx = if current_idx >= HISTORICAL_PRESETS.len() - 1 {
+                    let (_, display_name, _) = HISTORICAL_PRESETS[next_idx];
+                    let new_profile = ReturnProfileTag(display_name.to_string());
+                    let asset_clone = asset.clone();
+                    state
+                        .data_mut()
+                        .historical_assets
+                        .insert(asset_clone, new_profile);
+                    state.mark_modified();
+                } else {
+                    // Parametric mode: cycle through user-defined profiles
+                    let profiles = &state.data().profiles;
+                    if !profiles.is_empty() {
+                        let current_mapping = state.data().assets.get(asset);
+                        let current_idx = current_mapping
+                            .and_then(|tag| profiles.iter().position(|p| &p.name == tag))
+                            .unwrap_or(profiles.len());
+
+                        let next_idx = if current_idx >= profiles.len() - 1 {
                             0
                         } else {
                             current_idx + 1
                         };
 
-                        let (_, display_name, _) = HISTORICAL_PRESETS[next_idx];
-                        let new_profile = ReturnProfileTag(display_name.to_string());
+                        let new_profile = profiles[next_idx].name.clone();
                         let asset_clone = asset.clone();
+                        state.data_mut().assets.insert(asset_clone, new_profile);
+                        state.mark_modified();
+                    } else {
+                        state.set_error(
+                            "No return profiles defined. Add a profile first.".to_string(),
+                        );
+                    }
+                }
+            }
+            return EventResult::Handled;
+        }
+
+        // Suggest profile for selected asset (a key - uses portfolio.suggest)
+        if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.suggest) {
+            if let Some(asset) =
+                unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
+            {
+                if is_historical {
+                    // Historical mode: check historical_assets
+                    if state.data().historical_assets.contains_key(asset) {
+                        state.set_error(format!("{} is already mapped", asset.0));
+                        return EventResult::Handled;
+                    }
+
+                    // Look up historical suggestion
+                    if let Some((_, display_name)) =
+                        ticker_profiles::get_historical_suggestion(&asset.0)
+                    {
+                        let profile_tag = ReturnProfileTag(display_name.to_string());
                         state
                             .data_mut()
                             .historical_assets
-                            .insert(asset_clone, new_profile);
+                            .insert(asset.clone(), profile_tag);
                         state.mark_modified();
                     } else {
-                        // Parametric mode: cycle through user-defined profiles
-                        let profiles = &state.data().profiles;
-                        if !profiles.is_empty() {
-                            let current_mapping = state.data().assets.get(asset);
-                            let current_idx = current_mapping
-                                .and_then(|tag| profiles.iter().position(|p| &p.name == tag))
-                                .unwrap_or(profiles.len());
-
-                            let next_idx = if current_idx >= profiles.len() - 1 {
-                                0
-                            } else {
-                                current_idx + 1
-                            };
-
-                            let new_profile = profiles[next_idx].name.clone();
-                            let asset_clone = asset.clone();
-                            state.data_mut().assets.insert(asset_clone, new_profile);
-                            state.mark_modified();
-                        } else {
-                            state.set_error(
-                                "No return profiles defined. Add a profile first.".to_string(),
-                            );
-                        }
+                        state.set_error(format!("No historical suggestion for {}", asset.0));
                     }
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('a') => {
-                // Suggest profile for the selected asset
-                if let Some(asset) =
-                    unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
-                {
-                    if is_historical {
-                        // Historical mode: check historical_assets
-                        if state.data().historical_assets.contains_key(asset) {
-                            state.set_error(format!("{} is already mapped", asset.0));
-                            return EventResult::Handled;
-                        }
-
-                        // Look up historical suggestion
-                        if let Some((_, display_name)) =
-                            ticker_profiles::get_historical_suggestion(&asset.0)
-                        {
-                            let profile_tag = ReturnProfileTag(display_name.to_string());
-                            state
-                                .data_mut()
-                                .historical_assets
-                                .insert(asset.clone(), profile_tag);
-                            state.mark_modified();
-                        } else {
-                            state.set_error(format!("No historical suggestion for {}", asset.0));
-                        }
-                    } else {
-                        // Parametric mode: check regular assets
-                        if state.data().assets.contains_key(asset) {
-                            state.set_error(format!("{} is already mapped", asset.0));
-                            return EventResult::Handled;
-                        }
-
-                        // Look up suggestion
-                        if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
-                            // Create profile if it doesn't exist
-                            let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
-                            if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
-                                state.data_mut().profiles.push(ProfileData {
-                                    name: profile_tag.clone(),
-                                    description: Some(format!(
-                                        "Auto-generated from ticker {}",
-                                        asset.0
-                                    )),
-                                    profile: suggestion.profile_data.clone(),
-                                });
-                            }
-                            // Add the mapping
-                            state.data_mut().assets.insert(asset.clone(), profile_tag);
-                            state.mark_modified();
-                        } else {
-                            state.set_error(format!("No suggestion available for {}", asset.0));
-                        }
-                    }
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('A') => {
-                // Suggest profiles for ALL unmapped known tickers
-                let mut suggestions_applied = 0;
-                for asset in &unique_assets {
-                    if is_historical {
-                        // Historical mode
-                        if state.data().historical_assets.contains_key(asset) {
-                            continue;
-                        }
-                        if let Some((_, display_name)) =
-                            ticker_profiles::get_historical_suggestion(&asset.0)
-                        {
-                            let profile_tag = ReturnProfileTag(display_name.to_string());
-                            state
-                                .data_mut()
-                                .historical_assets
-                                .insert(asset.clone(), profile_tag);
-                            suggestions_applied += 1;
-                        }
-                    } else {
-                        // Parametric mode
-                        if state.data().assets.contains_key(asset) {
-                            continue;
-                        }
-                        if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
-                            let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
-                            if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
-                                state.data_mut().profiles.push(ProfileData {
-                                    name: profile_tag.clone(),
-                                    description: Some(
-                                        "Auto-generated from ticker suggestion".to_string(),
-                                    ),
-                                    profile: suggestion.profile_data.clone(),
-                                });
-                            }
-                            state.data_mut().assets.insert(asset.clone(), profile_tag);
-                            suggestions_applied += 1;
-                        }
-                    }
-                }
-                if suggestions_applied > 0 {
-                    state.mark_modified();
-                    // Success - mappings will be visible immediately in the UI
                 } else {
-                    state.set_error("No suggestions available for unmapped assets".to_string());
+                    // Parametric mode: check regular assets
+                    if state.data().assets.contains_key(asset) {
+                        state.set_error(format!("{} is already mapped", asset.0));
+                        return EventResult::Handled;
+                    }
+
+                    // Look up suggestion
+                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                        // Create profile if it doesn't exist
+                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                            state.data_mut().profiles.push(ProfileData {
+                                name: profile_tag.clone(),
+                                description: Some(format!(
+                                    "Auto-generated from ticker {}",
+                                    asset.0
+                                )),
+                                profile: suggestion.profile_data.clone(),
+                            });
+                        }
+                        // Add the mapping
+                        state.data_mut().assets.insert(asset.clone(), profile_tag);
+                        state.mark_modified();
+                    } else {
+                        state.set_error(format!("No suggestion available for {}", asset.0));
+                    }
                 }
-                EventResult::Handled
             }
-            _ => EventResult::NotHandled,
+            return EventResult::Handled;
         }
+
+        // Suggest profiles for ALL unmapped known tickers (Shift+A)
+        if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.suggest_all) {
+            let mut suggestions_applied = 0;
+            for asset in &unique_assets {
+                if is_historical {
+                    // Historical mode
+                    if state.data().historical_assets.contains_key(asset) {
+                        continue;
+                    }
+                    if let Some((_, display_name)) =
+                        ticker_profiles::get_historical_suggestion(&asset.0)
+                    {
+                        let profile_tag = ReturnProfileTag(display_name.to_string());
+                        state
+                            .data_mut()
+                            .historical_assets
+                            .insert(asset.clone(), profile_tag);
+                        suggestions_applied += 1;
+                    }
+                } else {
+                    // Parametric mode
+                    if state.data().assets.contains_key(asset) {
+                        continue;
+                    }
+                    if let Some(suggestion) = ticker_profiles::get_suggestion(&asset.0) {
+                        let profile_tag = ReturnProfileTag(suggestion.profile_name.to_string());
+                        if !state.data().profiles.iter().any(|p| p.name == profile_tag) {
+                            state.data_mut().profiles.push(ProfileData {
+                                name: profile_tag.clone(),
+                                description: Some(
+                                    "Auto-generated from ticker suggestion".to_string(),
+                                ),
+                                profile: suggestion.profile_data.clone(),
+                            });
+                        }
+                        state.data_mut().assets.insert(asset.clone(), profile_tag);
+                        suggestions_applied += 1;
+                    }
+                }
+            }
+            if suggestions_applied > 0 {
+                state.mark_modified();
+                // Success - mappings will be visible immediately in the UI
+            } else {
+                state.set_error("No suggestions available for unmapped assets".to_string());
+            }
+            return EventResult::Handled;
+        }
+
+        EventResult::NotHandled
     }
 
     fn handle_config_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         const CONFIG_ITEMS: usize = 4; // Federal, State, Cap Gains, Inflation
-        match key.code {
-            KeyCode::Char(' ') => {
-                // Collapse both secondary panels and return to main panel
-                state.portfolio_profiles_state.mappings_collapsed =
-                    !state.portfolio_profiles_state.mappings_collapsed;
-                state.portfolio_profiles_state.config_collapsed =
-                    !state.portfolio_profiles_state.config_collapsed;
-                EventResult::Handled
+        let kb = &state.keybindings;
+
+        // Space toggle for collapse - keep hardcoded as space bar is intuitive
+        if key.code == KeyCode::Char(' ') {
+            // Collapse both secondary panels and return to main panel
+            state.portfolio_profiles_state.mappings_collapsed =
+                !state.portfolio_profiles_state.mappings_collapsed;
+            state.portfolio_profiles_state.config_collapsed =
+                !state.portfolio_profiles_state.config_collapsed;
+            return EventResult::Handled;
+        }
+
+        // Navigation: down
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            state.portfolio_profiles_state.selected_config_index =
+                (state.portfolio_profiles_state.selected_config_index + 1) % CONFIG_ITEMS;
+            return EventResult::Handled;
+        }
+
+        // Navigation: up
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            if state.portfolio_profiles_state.selected_config_index == 0 {
+                state.portfolio_profiles_state.selected_config_index = CONFIG_ITEMS - 1;
+            } else {
+                state.portfolio_profiles_state.selected_config_index -= 1;
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                state.portfolio_profiles_state.selected_config_index =
-                    (state.portfolio_profiles_state.selected_config_index + 1) % CONFIG_ITEMS;
-                EventResult::Handled
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if state.portfolio_profiles_state.selected_config_index == 0 {
-                    state.portfolio_profiles_state.selected_config_index = CONFIG_ITEMS - 1;
-                } else {
-                    state.portfolio_profiles_state.selected_config_index -= 1;
+            return EventResult::Handled;
+        }
+
+        // Edit action (e key or confirm/enter)
+        if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.edit)
+            || KeybindingsConfig::matches(&key, &kb.navigation.confirm)
+        {
+            // Edit the selected config item
+            match state.portfolio_profiles_state.selected_config_index {
+                0 => {
+                    // Federal Brackets - picker
+                    let options = vec!["2024 Single".to_string(), "2024 Married Joint".to_string()];
+                    state.modal = ModalState::Picker(PickerModal::new(
+                        "Federal Tax Brackets",
+                        options,
+                        ModalAction::PICK_FEDERAL_BRACKETS,
+                    ));
                 }
-                EventResult::Handled
-            }
-            KeyCode::Char('e') | KeyCode::Enter => {
-                // Edit the selected config item
-                match state.portfolio_profiles_state.selected_config_index {
-                    0 => {
-                        // Federal Brackets - picker
-                        let options =
-                            vec!["2024 Single".to_string(), "2024 Married Joint".to_string()];
+                1 => {
+                    // State Rate - form
+                    let rate = state.data().parameters.tax_config.state_rate;
+                    state.modal = ModalState::Form(
+                        FormModal::new(
+                            "Edit State Tax Rate",
+                            vec![FormField::percentage("State Rate", rate)],
+                            ModalAction::EDIT_TAX_CONFIG,
+                        )
+                        .with_typed_context(ModalContext::Config(
+                            ConfigContext::Tax(TaxConfigContext::StateRate),
+                        )),
+                    );
+                }
+                2 => {
+                    // Capital Gains Rate - form
+                    let rate = state.data().parameters.tax_config.capital_gains_rate;
+                    state.modal = ModalState::Form(
+                        FormModal::new(
+                            "Edit Capital Gains Rate",
+                            vec![FormField::percentage("Capital Gains Rate", rate)],
+                            ModalAction::EDIT_TAX_CONFIG,
+                        )
+                        .with_typed_context(ModalContext::Config(
+                            ConfigContext::Tax(TaxConfigContext::CapGainsRate),
+                        )),
+                    );
+                }
+                3 => {
+                    // Inflation - picker for type (disabled in Historical mode)
+                    let is_historical =
+                        state.data().parameters.returns_mode == ReturnsMode::Historical;
+                    if is_historical {
+                        // In Historical mode, inflation is auto-set to US Historical Bootstrap
+                        // Show info message instead of edit picker
+                        state.modal = ModalState::Message(MessageModal::info(
+                            "Inflation (Historical Mode)",
+                            "In Historical mode, inflation is automatically set to US Historical Bootstrap sampling with the same block size as returns.\n\nSwitch to Parametric mode to customize inflation settings.",
+                        ));
+                    } else {
+                        let options = vec![
+                            "None".to_string(),
+                            "Fixed".to_string(),
+                            "Normal".to_string(),
+                            "Log-Normal".to_string(),
+                            "US Historical".to_string(),
+                        ];
                         state.modal = ModalState::Picker(PickerModal::new(
-                            "Federal Tax Brackets",
+                            "Inflation Type",
                             options,
-                            ModalAction::PICK_FEDERAL_BRACKETS,
+                            ModalAction::PICK_INFLATION_TYPE,
                         ));
                     }
-                    1 => {
-                        // State Rate - form
-                        let rate = state.data().parameters.tax_config.state_rate;
-                        state.modal = ModalState::Form(
-                            FormModal::new(
-                                "Edit State Tax Rate",
-                                vec![FormField::percentage("State Rate", rate)],
-                                ModalAction::EDIT_TAX_CONFIG,
-                            )
-                            .with_typed_context(ModalContext::Config(
-                                ConfigContext::Tax(TaxConfigContext::StateRate),
-                            )),
-                        );
-                    }
-                    2 => {
-                        // Capital Gains Rate - form
-                        let rate = state.data().parameters.tax_config.capital_gains_rate;
-                        state.modal = ModalState::Form(
-                            FormModal::new(
-                                "Edit Capital Gains Rate",
-                                vec![FormField::percentage("Capital Gains Rate", rate)],
-                                ModalAction::EDIT_TAX_CONFIG,
-                            )
-                            .with_typed_context(ModalContext::Config(
-                                ConfigContext::Tax(TaxConfigContext::CapGainsRate),
-                            )),
-                        );
-                    }
-                    3 => {
-                        // Inflation - picker for type (disabled in Historical mode)
-                        let is_historical =
-                            state.data().parameters.returns_mode == ReturnsMode::Historical;
-                        if is_historical {
-                            // In Historical mode, inflation is auto-set to US Historical Bootstrap
-                            // Show info message instead of edit picker
-                            state.modal = ModalState::Message(MessageModal::info(
-                                "Inflation (Historical Mode)",
-                                "In Historical mode, inflation is automatically set to US Historical Bootstrap sampling with the same block size as returns.\n\nSwitch to Parametric mode to customize inflation settings.",
-                            ));
-                        } else {
-                            let options = vec![
-                                "None".to_string(),
-                                "Fixed".to_string(),
-                                "Normal".to_string(),
-                                "Log-Normal".to_string(),
-                                "US Historical".to_string(),
-                            ];
-                            state.modal = ModalState::Picker(PickerModal::new(
-                                "Inflation Type",
-                                options,
-                                ModalAction::PICK_INFLATION_TYPE,
-                            ));
-                        }
-                    }
-                    _ => {}
                 }
-                EventResult::Handled
+                _ => {}
             }
-            _ => EventResult::NotHandled,
+            return EventResult::Handled;
         }
+
+        EventResult::NotHandled
     }
 }
 
@@ -718,46 +738,47 @@ fn get_account_value(account: &AccountData) -> f64 {
 impl Component for PortfolioProfilesScreen {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         // Holdings editing is now handled by AccountsPanel directly
+        let kb = &state.keybindings;
 
-        match key.code {
-            // Tab cycling through all panels
-            KeyCode::Tab if key.modifiers.is_empty() => {
-                state.portfolio_profiles_state.focused_panel =
-                    state.portfolio_profiles_state.focused_panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.portfolio_profiles_state.focused_panel =
-                    state.portfolio_profiles_state.focused_panel.prev();
-                EventResult::Handled
-            }
-            // Tab-global: Toggle between Parametric and Historical mode
-            KeyCode::Char('y') => {
-                let current_mode = state.data().parameters.returns_mode;
-                let new_mode = match current_mode {
-                    ReturnsMode::Parametric => {
-                        // Auto-map historical assets if switching to Historical for the first time
-                        if state.data().historical_assets.is_empty() {
-                            ProfilesPanel::auto_map_historical_assets(state);
-                        }
-                        ReturnsMode::Historical
+        // Tab cycling through all panels: next_panel
+        if KeybindingsConfig::matches(&key, &kb.navigation.next_panel) {
+            state.portfolio_profiles_state.focused_panel =
+                state.portfolio_profiles_state.focused_panel.next();
+            return EventResult::Handled;
+        }
+
+        // Tab cycling through all panels: prev_panel
+        if KeybindingsConfig::matches(&key, &kb.navigation.prev_panel) {
+            state.portfolio_profiles_state.focused_panel =
+                state.portfolio_profiles_state.focused_panel.prev();
+            return EventResult::Handled;
+        }
+
+        // Tab-global: Toggle between Parametric and Historical mode
+        if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.history_mode) {
+            let current_mode = state.data().parameters.returns_mode;
+            let new_mode = match current_mode {
+                ReturnsMode::Parametric => {
+                    // Auto-map historical assets if switching to Historical for the first time
+                    if state.data().historical_assets.is_empty() {
+                        ProfilesPanel::auto_map_historical_assets(state);
                     }
-                    ReturnsMode::Historical => ReturnsMode::Parametric,
-                };
-                state.data_mut().parameters.returns_mode = new_mode;
-                state.portfolio_profiles_state.selected_profile_index = 0;
-                state.mark_modified();
-                EventResult::Handled
-            }
-            _ => {
-                // Delegate to focused panel handler
-                match state.portfolio_profiles_state.focused_panel {
-                    PortfolioProfilesPanel::Accounts => AccountsPanel::handle_key(key, state),
-                    PortfolioProfilesPanel::Profiles => ProfilesPanel::handle_key(key, state),
-                    PortfolioProfilesPanel::AssetMappings => self.handle_mappings_keys(key, state),
-                    PortfolioProfilesPanel::Config => self.handle_config_keys(key, state),
+                    ReturnsMode::Historical
                 }
-            }
+                ReturnsMode::Historical => ReturnsMode::Parametric,
+            };
+            state.data_mut().parameters.returns_mode = new_mode;
+            state.portfolio_profiles_state.selected_profile_index = 0;
+            state.mark_modified();
+            return EventResult::Handled;
+        }
+
+        // Delegate to focused panel handler
+        match state.portfolio_profiles_state.focused_panel {
+            PortfolioProfilesPanel::Accounts => AccountsPanel::handle_key(key, state),
+            PortfolioProfilesPanel::Profiles => ProfilesPanel::handle_key(key, state),
+            PortfolioProfilesPanel::AssetMappings => self.handle_mappings_keys(key, state),
+            PortfolioProfilesPanel::Config => self.handle_config_keys(key, state),
         }
     }
 

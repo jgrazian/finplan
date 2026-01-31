@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::components::panels::LedgerPanel;
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::state::{AppState, PercentileView, ResultsPanel, SimulationResult, ValueDisplayMode};
 use crate::util::format::{format_currency, format_currency_short};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -594,169 +595,167 @@ impl ResultsScreen {
 impl Component for ResultsScreen {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let panel = state.results_state.focused_panel;
+        let kb = &state.keybindings;
 
-        match key.code {
-            // Panel navigation
-            KeyCode::Tab => {
-                state.results_state.focused_panel = panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.results_state.focused_panel = panel.prev();
-                EventResult::Handled
-            }
-
-            // j/k scrolling for YearlyBreakdown and Ledger
-            KeyCode::Char('j') | KeyCode::Down => {
-                match panel {
-                    ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years_current(state);
-                        if state.results_state.selected_year_index + 1 < years.len() {
-                            state.results_state.selected_year_index += 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    ResultsPanel::Ledger => {
-                        let filtered_count = LedgerPanel::get_filtered_count(state);
-                        if state.results_state.ledger_scroll_offset + 1 < filtered_count {
-                            state.results_state.ledger_scroll_offset += 1;
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                match panel {
-                    ResultsPanel::YearlyBreakdown => {
-                        if state.results_state.selected_year_index > 0 {
-                            state.results_state.selected_year_index -= 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    ResultsPanel::Ledger => {
-                        if state.results_state.ledger_scroll_offset > 0 {
-                            state.results_state.ledger_scroll_offset -= 1;
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-
-            // h/l or Left/Right for year selection (works in NetWorthChart, AccountChart, YearlyBreakdown)
-            KeyCode::Char('h') | KeyCode::Left => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        if state.results_state.selected_year_index > 0 {
-                            state.results_state.selected_year_index -= 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years_current(state);
-                        if state.results_state.selected_year_index + 1 < years.len() {
-                            state.results_state.selected_year_index += 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-
-            // Home/End for first/last year (works in NetWorthChart, AccountChart, YearlyBreakdown)
-            KeyCode::Home => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        state.results_state.selected_year_index = 0;
-                        // Scroll offset is calculated in render, not here
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-            KeyCode::End => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years_current(state);
-                        state.results_state.selected_year_index = years.len().saturating_sub(1);
-                        // Scroll offset is calculated in render, not here
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-
-            // PageUp/PageDown for fast ledger scrolling
-            KeyCode::PageDown => {
-                if panel == ResultsPanel::Ledger {
-                    let filtered_count = LedgerPanel::get_filtered_count(state);
-                    let new_offset = state.results_state.ledger_scroll_offset + 10;
-                    state.results_state.ledger_scroll_offset =
-                        new_offset.min(filtered_count.saturating_sub(1));
-                }
-                EventResult::Handled
-            }
-            KeyCode::PageUp => {
-                if panel == ResultsPanel::Ledger {
-                    state.results_state.ledger_scroll_offset =
-                        state.results_state.ledger_scroll_offset.saturating_sub(10);
-                }
-                EventResult::Handled
-            }
-
-            // f for cycling ledger filter
-            KeyCode::Char('f') => {
-                if panel == ResultsPanel::Ledger {
-                    state.results_state.ledger_filter = state.results_state.ledger_filter.next();
-                    state.results_state.ledger_scroll_offset = 0; // Reset scroll when filter changes
-                }
-                EventResult::Handled
-            }
-
-            // v for cycling percentile view (Monte Carlo only)
-            KeyCode::Char('v') => {
-                if state.results_state.viewing_monte_carlo {
-                    state.results_state.percentile_view =
-                        state.results_state.percentile_view.next();
-                }
-                EventResult::Handled
-            }
-
-            // r for toggling between nominal and real (inflation-adjusted) values
-            KeyCode::Char('$') => {
-                state.results_state.value_display_mode =
-                    state.results_state.value_display_mode.toggle();
-                EventResult::Handled
-            }
-
-            // Legacy keys for export (not yet implemented)
-            KeyCode::Char('e') => {
-                state.set_error("Export CSV not yet implemented".to_string());
-                EventResult::Handled
-            }
-            KeyCode::Char('p') => {
-                state.set_error("PDF report not yet implemented".to_string());
-                EventResult::Handled
-            }
-
-            _ => EventResult::NotHandled,
+        // Panel navigation
+        if KeybindingsConfig::matches(&key, &kb.navigation.next_panel) {
+            state.results_state.focused_panel = panel.next();
+            return EventResult::Handled;
         }
+        if KeybindingsConfig::matches(&key, &kb.navigation.prev_panel) {
+            state.results_state.focused_panel = panel.prev();
+            return EventResult::Handled;
+        }
+
+        // j/k (down/up) scrolling for YearlyBreakdown and Ledger
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            match panel {
+                ResultsPanel::YearlyBreakdown => {
+                    let years = Self::get_years_current(state);
+                    if state.results_state.selected_year_index + 1 < years.len() {
+                        state.results_state.selected_year_index += 1;
+                        // Scroll offset is calculated in render, not here
+                    }
+                }
+                ResultsPanel::Ledger => {
+                    let filtered_count = LedgerPanel::get_filtered_count(state);
+                    if state.results_state.ledger_scroll_offset + 1 < filtered_count {
+                        state.results_state.ledger_scroll_offset += 1;
+                    }
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            match panel {
+                ResultsPanel::YearlyBreakdown => {
+                    if state.results_state.selected_year_index > 0 {
+                        state.results_state.selected_year_index -= 1;
+                        // Scroll offset is calculated in render, not here
+                    }
+                }
+                ResultsPanel::Ledger => {
+                    if state.results_state.ledger_scroll_offset > 0 {
+                        state.results_state.ledger_scroll_offset -= 1;
+                    }
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+
+        // h/l (prev/next year) for year selection (works in NetWorthChart, AccountChart, YearlyBreakdown)
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.prev_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    if state.results_state.selected_year_index > 0 {
+                        state.results_state.selected_year_index -= 1;
+                        // Scroll offset is calculated in render, not here
+                    }
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.next_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    let years = Self::get_years_current(state);
+                    if state.results_state.selected_year_index + 1 < years.len() {
+                        state.results_state.selected_year_index += 1;
+                        // Scroll offset is calculated in render, not here
+                    }
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+
+        // Home/End for first/last year (works in NetWorthChart, AccountChart, YearlyBreakdown)
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.first_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    state.results_state.selected_year_index = 0;
+                    // Scroll offset is calculated in render, not here
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.last_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    let years = Self::get_years_current(state);
+                    state.results_state.selected_year_index = years.len().saturating_sub(1);
+                    // Scroll offset is calculated in render, not here
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+
+        // PageUp/PageDown for fast ledger scrolling
+        if key.code == KeyCode::PageDown {
+            if panel == ResultsPanel::Ledger {
+                let filtered_count = LedgerPanel::get_filtered_count(state);
+                let new_offset = state.results_state.ledger_scroll_offset + 10;
+                state.results_state.ledger_scroll_offset =
+                    new_offset.min(filtered_count.saturating_sub(1));
+            }
+            return EventResult::Handled;
+        }
+        if key.code == KeyCode::PageUp {
+            if panel == ResultsPanel::Ledger {
+                state.results_state.ledger_scroll_offset =
+                    state.results_state.ledger_scroll_offset.saturating_sub(10);
+            }
+            return EventResult::Handled;
+        }
+
+        // f for cycling ledger filter
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.cycle_filter) {
+            if panel == ResultsPanel::Ledger {
+                state.results_state.ledger_filter = state.results_state.ledger_filter.next();
+                state.results_state.ledger_scroll_offset = 0; // Reset scroll when filter changes
+            }
+            return EventResult::Handled;
+        }
+
+        // v for cycling percentile view (Monte Carlo only)
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.cycle_percentile) {
+            if state.results_state.viewing_monte_carlo {
+                state.results_state.percentile_view = state.results_state.percentile_view.next();
+            }
+            return EventResult::Handled;
+        }
+
+        // $ for toggling between nominal and real (inflation-adjusted) values
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.toggle_real) {
+            state.results_state.value_display_mode =
+                state.results_state.value_display_mode.toggle();
+            return EventResult::Handled;
+        }
+
+        // Legacy keys for export (not yet implemented)
+        if key.code == KeyCode::Char('e') {
+            state.set_error("Export CSV not yet implemented".to_string());
+            return EventResult::Handled;
+        }
+        if key.code == KeyCode::Char('p') {
+            state.set_error("PDF report not yet implemented".to_string());
+            return EventResult::Handled;
+        }
+
+        EventResult::NotHandled
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {

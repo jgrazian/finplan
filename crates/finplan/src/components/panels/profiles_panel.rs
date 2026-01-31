@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use crate::components::EventResult;
 use crate::components::charts::render_distribution;
 use crate::components::lists::calculate_centered_scroll;
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::parameters_data::ReturnsMode;
 use crate::data::portfolio_data::{AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileData, ReturnProfileTag};
@@ -17,7 +18,7 @@ use crate::modals::{
 use crate::state::{AppState, PortfolioProfilesPanel};
 use crate::util::format::format_percentage;
 use crate::util::styles::focused_block_with_help;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -439,133 +440,128 @@ impl ProfilesPanel {
         } else {
             state.data().profiles.len()
         };
-        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let kb = &state.keybindings;
 
+        // Block size picker (Historical mode only)
+        if is_historical && KeybindingsConfig::matches(&key, &kb.tabs.portfolio.block_size) {
+            let options = vec![
+                "1 (i.i.d. sampling)".to_string(),
+                "3 (short-term momentum)".to_string(),
+                "5 (medium-term cycles)".to_string(),
+                "10 (long-term trends)".to_string(),
+            ];
+            state.modal = ModalState::Picker(PickerModal::new(
+                "Select Block Size",
+                options,
+                ModalAction::PICK_BLOCK_SIZE,
+            ));
+            return EventResult::Handled;
+        }
+
+        // Reorder down (Shift+J or Shift+Down) - Parametric only
+        if !is_historical && KeybindingsConfig::matches(&key, &kb.navigation.reorder_down) {
+            let idx = state.portfolio_profiles_state.selected_profile_index;
+            if list_len >= 2 && idx < list_len - 1 {
+                state.data_mut().profiles.swap(idx, idx + 1);
+                state.portfolio_profiles_state.selected_profile_index = idx + 1;
+                state.mark_modified();
+            }
+            return EventResult::Handled;
+        }
+
+        // Reorder up (Shift+K or Shift+Up) - Parametric only
+        if !is_historical && KeybindingsConfig::matches(&key, &kb.navigation.reorder_up) {
+            let idx = state.portfolio_profiles_state.selected_profile_index;
+            if list_len >= 2 && idx > 0 {
+                state.data_mut().profiles.swap(idx, idx - 1);
+                state.portfolio_profiles_state.selected_profile_index = idx - 1;
+                state.mark_modified();
+            }
+            return EventResult::Handled;
+        }
+
+        // Navigation: down
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            if list_len > 0 {
+                state.portfolio_profiles_state.selected_profile_index =
+                    (state.portfolio_profiles_state.selected_profile_index + 1) % list_len;
+            }
+            return EventResult::Handled;
+        }
+
+        // Navigation: up
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            if list_len > 0 {
+                if state.portfolio_profiles_state.selected_profile_index == 0 {
+                    state.portfolio_profiles_state.selected_profile_index = list_len - 1;
+                } else {
+                    state.portfolio_profiles_state.selected_profile_index -= 1;
+                }
+            }
+            return EventResult::Handled;
+        }
+
+        // Add profile (Parametric only)
+        if !is_historical && KeybindingsConfig::matches(&key, &kb.tabs.portfolio.add) {
+            let types = vec![
+                "None".to_string(),
+                "Fixed Rate".to_string(),
+                "Normal Distribution".to_string(),
+                "Log-Normal Distribution".to_string(),
+                "Student's t Distribution".to_string(),
+                "Regime Switching (Normal)".to_string(),
+                "Regime Switching (Student-t)".to_string(),
+            ];
+            state.modal = ModalState::Picker(PickerModal::new(
+                "Select Profile Type",
+                types,
+                ModalAction::PICK_PROFILE_TYPE,
+            ));
+            return EventResult::Handled;
+        }
+
+        // Edit profile (Parametric only)
+        if !is_historical && KeybindingsConfig::matches(&key, &kb.tabs.portfolio.edit) {
+            if let Some(profile_data) = state
+                .data()
+                .profiles
+                .get(state.portfolio_profiles_state.selected_profile_index)
+            {
+                let form = Self::create_profile_edit_form(profile_data);
+                state.modal =
+                    ModalState::Form(form.with_typed_context(ModalContext::profile_index(
+                        state.portfolio_profiles_state.selected_profile_index,
+                    )));
+            }
+            return EventResult::Handled;
+        }
+
+        // Delete profile (Parametric only)
+        if !is_historical && KeybindingsConfig::matches(&key, &kb.tabs.portfolio.delete) {
+            if let Some(profile_data) = state
+                .data()
+                .profiles
+                .get(state.portfolio_profiles_state.selected_profile_index)
+            {
+                state.modal = ModalState::Confirm(
+                    ConfirmModal::new(
+                        "Delete Profile",
+                        &format!(
+                            "Delete profile '{}'?\n\nThis cannot be undone.",
+                            profile_data.name.0
+                        ),
+                        ModalAction::DELETE_PROFILE,
+                    )
+                    .with_typed_context(ModalContext::profile_index(
+                        state.portfolio_profiles_state.selected_profile_index,
+                    )),
+                );
+            }
+            return EventResult::Handled;
+        }
+
+        // Preset shortcuts (Parametric only) - keep hardcoded as they use number keys
         match key.code {
-            // Block size picker (Historical mode only)
-            KeyCode::Char('b') if is_historical => {
-                let options = vec![
-                    "1 (i.i.d. sampling)".to_string(),
-                    "3 (short-term momentum)".to_string(),
-                    "5 (medium-term cycles)".to_string(),
-                    "10 (long-term trends)".to_string(),
-                ];
-                state.modal = ModalState::Picker(PickerModal::new(
-                    "Select Block Size",
-                    options,
-                    ModalAction::PICK_BLOCK_SIZE,
-                ));
-                EventResult::Handled
-            }
-            // Move down (Shift+J or Shift+Down) - Parametric only
-            KeyCode::Char('J') if has_shift && !is_historical => {
-                let idx = state.portfolio_profiles_state.selected_profile_index;
-                if list_len >= 2 && idx < list_len - 1 {
-                    state.data_mut().profiles.swap(idx, idx + 1);
-                    state.portfolio_profiles_state.selected_profile_index = idx + 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
-            }
-            KeyCode::Down if has_shift && !is_historical => {
-                let idx = state.portfolio_profiles_state.selected_profile_index;
-                if list_len >= 2 && idx < list_len - 1 {
-                    state.data_mut().profiles.swap(idx, idx + 1);
-                    state.portfolio_profiles_state.selected_profile_index = idx + 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
-            }
-            // Move up (Shift+K or Shift+Up) - Parametric only
-            KeyCode::Char('K') if has_shift && !is_historical => {
-                let idx = state.portfolio_profiles_state.selected_profile_index;
-                if list_len >= 2 && idx > 0 {
-                    state.data_mut().profiles.swap(idx, idx - 1);
-                    state.portfolio_profiles_state.selected_profile_index = idx - 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
-            }
-            KeyCode::Up if has_shift && !is_historical => {
-                let idx = state.portfolio_profiles_state.selected_profile_index;
-                if list_len >= 2 && idx > 0 {
-                    state.data_mut().profiles.swap(idx, idx - 1);
-                    state.portfolio_profiles_state.selected_profile_index = idx - 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if list_len > 0 {
-                    state.portfolio_profiles_state.selected_profile_index =
-                        (state.portfolio_profiles_state.selected_profile_index + 1) % list_len;
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if list_len > 0 {
-                    if state.portfolio_profiles_state.selected_profile_index == 0 {
-                        state.portfolio_profiles_state.selected_profile_index = list_len - 1;
-                    } else {
-                        state.portfolio_profiles_state.selected_profile_index -= 1;
-                    }
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('a') if !is_historical => {
-                let types = vec![
-                    "None".to_string(),
-                    "Fixed Rate".to_string(),
-                    "Normal Distribution".to_string(),
-                    "Log-Normal Distribution".to_string(),
-                    "Student's t Distribution".to_string(),
-                    "Regime Switching (Normal)".to_string(),
-                    "Regime Switching (Student-t)".to_string(),
-                ];
-                state.modal = ModalState::Picker(PickerModal::new(
-                    "Select Profile Type",
-                    types,
-                    ModalAction::PICK_PROFILE_TYPE,
-                ));
-                EventResult::Handled
-            }
-            KeyCode::Char('e') if !is_historical => {
-                if let Some(profile_data) = state
-                    .data()
-                    .profiles
-                    .get(state.portfolio_profiles_state.selected_profile_index)
-                {
-                    let form = Self::create_profile_edit_form(profile_data);
-                    state.modal =
-                        ModalState::Form(form.with_typed_context(ModalContext::profile_index(
-                            state.portfolio_profiles_state.selected_profile_index,
-                        )));
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('d') if !is_historical => {
-                if let Some(profile_data) = state
-                    .data()
-                    .profiles
-                    .get(state.portfolio_profiles_state.selected_profile_index)
-                {
-                    state.modal = ModalState::Confirm(
-                        ConfirmModal::new(
-                            "Delete Profile",
-                            &format!(
-                                "Delete profile '{}'?\n\nThis cannot be undone.",
-                                profile_data.name.0
-                            ),
-                            ModalAction::DELETE_PROFILE,
-                        )
-                        .with_typed_context(ModalContext::profile_index(
-                            state.portfolio_profiles_state.selected_profile_index,
-                        )),
-                    );
-                }
-                EventResult::Handled
-            }
-            // Preset shortcuts (Parametric only)
             KeyCode::Char('1') if !is_historical => {
                 let idx = state.portfolio_profiles_state.selected_profile_index;
                 if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
@@ -631,6 +627,7 @@ impl ProfilesPanel {
                 }
                 EventResult::Handled
             }
+            // Space toggle for collapse - keep hardcoded as space bar is intuitive
             KeyCode::Char(' ') => {
                 let expanding = state.portfolio_profiles_state.config_collapsed;
                 state.portfolio_profiles_state.mappings_collapsed = !expanding;

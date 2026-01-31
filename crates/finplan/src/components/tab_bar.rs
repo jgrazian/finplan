@@ -1,7 +1,8 @@
 use super::{Component, EventResult};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::portfolio_data::AccountType;
 use crate::state::{AppState, TabId};
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -24,28 +25,24 @@ impl Component for TabBar {
             return EventResult::NotHandled;
         }
 
-        match key.code {
-            KeyCode::Char('1') => {
-                state.switch_tab(TabId::PortfolioProfiles);
-                EventResult::Handled
-            }
-            KeyCode::Char('2') => {
-                state.switch_tab(TabId::Events);
-                EventResult::Handled
-            }
-            KeyCode::Char('3') => {
-                state.switch_tab(TabId::Scenario);
-                EventResult::Handled
-            }
-            KeyCode::Char('4') => {
-                state.switch_tab(TabId::Results);
-                EventResult::Handled
-            }
-            KeyCode::Char('5') => {
-                state.switch_tab(TabId::Optimize);
-                EventResult::Handled
-            }
-            _ => EventResult::NotHandled,
+        let kb = &state.keybindings.global;
+        if KeybindingsConfig::matches(&key, &kb.tab_1) {
+            state.switch_tab(TabId::PortfolioProfiles);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_2) {
+            state.switch_tab(TabId::Events);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_3) {
+            state.switch_tab(TabId::Scenario);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_4) {
+            state.switch_tab(TabId::Results);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_5) {
+            state.switch_tab(TabId::Optimize);
+            EventResult::Handled
+        } else {
+            EventResult::NotHandled
         }
     }
 

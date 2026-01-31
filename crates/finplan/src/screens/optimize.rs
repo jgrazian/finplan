@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -11,6 +11,7 @@ use super::Screen;
 use crate::actions::ActionResult;
 use crate::actions::optimize::{handle_optimize_action, show_objective_picker, show_settings_form};
 use crate::components::{Component, EventResult};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{ConfirmedValue, ModalAction, ModalState, OptimizeAction};
 use crate::state::{AppState, OptimizePanel};
 use crate::util::format::format_currency;
@@ -593,48 +594,93 @@ impl OptimizeScreen {
 impl Component for OptimizeScreen {
     fn handle_key(&mut self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let panel = state.optimize_state.focused_panel;
+        let kb = &state.keybindings;
 
         // Don't handle keys if optimization is running
         if state.optimize_state.running {
             return EventResult::NotHandled;
         }
 
-        match key.code {
-            // Panel navigation
-            KeyCode::Tab => {
-                state.optimize_state.focused_panel = panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.optimize_state.focused_panel = panel.prev();
-                EventResult::Handled
-            }
+        // Panel navigation
+        if KeybindingsConfig::matches(&key, &kb.navigation.next_panel) {
+            state.optimize_state.focused_panel = panel.next();
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.navigation.prev_panel) {
+            state.optimize_state.focused_panel = panel.prev();
+            return EventResult::Handled;
+        }
 
-            // r: Run optimization (from any panel)
-            KeyCode::Char('r') => {
-                let result = crate::actions::optimize::handle_optimize_action(
-                    state,
-                    OptimizeAction::RunOptimization,
-                    "",
-                );
-                match result {
-                    crate::actions::ActionResult::Done(modal) => {
-                        state.modal = modal.unwrap_or(ModalState::None);
-                    }
-                    crate::actions::ActionResult::Modified(modal) => {
-                        state.mark_modified();
-                        state.modal = modal.unwrap_or(ModalState::None);
-                    }
-                    crate::actions::ActionResult::Error(msg) => {
-                        state.set_error(msg);
+        // r: Run optimization (from any panel)
+        if KeybindingsConfig::matches(&key, &kb.tabs.optimize.run) {
+            let result = crate::actions::optimize::handle_optimize_action(
+                state,
+                OptimizeAction::RunOptimization,
+                "",
+            );
+            match result {
+                crate::actions::ActionResult::Done(modal) => {
+                    state.modal = modal.unwrap_or(ModalState::None);
+                }
+                crate::actions::ActionResult::Modified(modal) => {
+                    state.mark_modified();
+                    state.modal = modal.unwrap_or(ModalState::None);
+                }
+                crate::actions::ActionResult::Error(msg) => {
+                    state.set_error(msg);
+                }
+            }
+            return EventResult::Handled;
+        }
+
+        // s: Settings (from any panel)
+        if KeybindingsConfig::matches(&key, &kb.tabs.optimize.settings) {
+            let result = show_settings_form(state);
+            match result {
+                crate::actions::ActionResult::Done(modal)
+                | crate::actions::ActionResult::Modified(modal) => {
+                    state.modal = modal.unwrap_or(ModalState::None);
+                }
+                crate::actions::ActionResult::Error(msg) => {
+                    state.set_error(msg);
+                }
+            }
+            return EventResult::Handled;
+        }
+
+        // Parameter list navigation (j/k or Up/Down in Parameters panel)
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            if panel == OptimizePanel::Parameters {
+                let param_count = state.optimize_state.selected_parameters.len();
+                if param_count > 0 {
+                    state.optimize_state.selected_param_index =
+                        (state.optimize_state.selected_param_index + 1) % param_count;
+                }
+            }
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            if panel == OptimizePanel::Parameters {
+                let param_count = state.optimize_state.selected_parameters.len();
+                if param_count > 0 {
+                    if state.optimize_state.selected_param_index == 0 {
+                        state.optimize_state.selected_param_index = param_count - 1;
+                    } else {
+                        state.optimize_state.selected_param_index -= 1;
                     }
                 }
-                EventResult::Handled
             }
+            return EventResult::Handled;
+        }
 
-            // s: Settings (from any panel)
-            KeyCode::Char('s') => {
-                let result = show_settings_form(state);
+        // a: Add parameter
+        if KeybindingsConfig::matches(&key, &kb.tabs.optimize.add_param) {
+            if panel == OptimizePanel::Parameters {
+                let result = crate::actions::optimize::handle_optimize_action(
+                    state,
+                    OptimizeAction::AddParameter,
+                    "",
+                );
                 match result {
                     crate::actions::ActionResult::Done(modal)
                     | crate::actions::ActionResult::Modified(modal) => {
@@ -644,115 +690,56 @@ impl Component for OptimizeScreen {
                         state.set_error(msg);
                     }
                 }
-                EventResult::Handled
             }
+            return EventResult::Handled;
+        }
 
-            // Parameter list navigation (j/k or Up/Down in Parameters panel)
-            KeyCode::Char('j') | KeyCode::Down => {
-                if panel == OptimizePanel::Parameters {
-                    let param_count = state.optimize_state.selected_parameters.len();
-                    if param_count > 0 {
-                        state.optimize_state.selected_param_index =
-                            (state.optimize_state.selected_param_index + 1) % param_count;
+        // d: Delete selected parameter
+        if KeybindingsConfig::matches(&key, &kb.tabs.optimize.delete_param) {
+            if panel == OptimizePanel::Parameters {
+                let params = &mut state.optimize_state.selected_parameters;
+                let idx = state.optimize_state.selected_param_index;
+                if idx < params.len() {
+                    params.remove(idx);
+                    // Adjust selection index if needed
+                    if state.optimize_state.selected_param_index >= params.len()
+                        && !params.is_empty()
+                    {
+                        state.optimize_state.selected_param_index = params.len() - 1;
                     }
                 }
-                EventResult::Handled
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if panel == OptimizePanel::Parameters {
-                    let param_count = state.optimize_state.selected_parameters.len();
-                    if param_count > 0 {
-                        if state.optimize_state.selected_param_index == 0 {
-                            state.optimize_state.selected_param_index = param_count - 1;
-                        } else {
-                            state.optimize_state.selected_param_index -= 1;
-                        }
-                    }
-                }
-                EventResult::Handled
-            }
+            return EventResult::Handled;
+        }
 
-            // a: Add parameter
-            KeyCode::Char('a') => {
-                if panel == OptimizePanel::Parameters {
-                    let result = crate::actions::optimize::handle_optimize_action(
-                        state,
-                        OptimizeAction::AddParameter,
-                        "",
-                    );
-                    match result {
-                        crate::actions::ActionResult::Done(modal)
-                        | crate::actions::ActionResult::Modified(modal) => {
-                            state.modal = modal.unwrap_or(ModalState::None);
-                        }
-                        crate::actions::ActionResult::Error(msg) => {
-                            state.set_error(msg);
-                        }
-                    }
-                }
-                EventResult::Handled
-            }
-
-            // d: Delete selected parameter
-            KeyCode::Char('d') => {
-                if panel == OptimizePanel::Parameters {
-                    let params = &mut state.optimize_state.selected_parameters;
-                    let idx = state.optimize_state.selected_param_index;
-                    if idx < params.len() {
-                        params.remove(idx);
-                        // Adjust selection index if needed
-                        if state.optimize_state.selected_param_index >= params.len()
-                            && !params.is_empty()
-                        {
-                            state.optimize_state.selected_param_index = params.len() - 1;
-                        }
-                    }
-                }
-                EventResult::Handled
-            }
-
-            // Enter: Configure based on panel
-            KeyCode::Enter => {
-                match panel {
-                    OptimizePanel::Parameters => {
-                        // Edit selected parameter (if any)
-                        if !state.optimize_state.selected_parameters.is_empty() {
-                            // For now, just show add dialog since editing is complex
-                            let result = crate::actions::optimize::handle_optimize_action(
-                                state,
-                                OptimizeAction::AddParameter,
-                                "",
-                            );
-                            match result {
-                                crate::actions::ActionResult::Done(modal)
-                                | crate::actions::ActionResult::Modified(modal) => {
-                                    state.modal = modal.unwrap_or(ModalState::None);
-                                }
-                                crate::actions::ActionResult::Error(msg) => {
-                                    state.set_error(msg);
-                                }
+        // Enter: Configure based on panel
+        if KeybindingsConfig::matches(&key, &kb.navigation.confirm) {
+            match panel {
+                OptimizePanel::Parameters => {
+                    // Edit selected parameter (if any)
+                    if !state.optimize_state.selected_parameters.is_empty() {
+                        // For now, just show add dialog since editing is complex
+                        let result = crate::actions::optimize::handle_optimize_action(
+                            state,
+                            OptimizeAction::AddParameter,
+                            "",
+                        );
+                        match result {
+                            crate::actions::ActionResult::Done(modal)
+                            | crate::actions::ActionResult::Modified(modal) => {
+                                state.modal = modal.unwrap_or(ModalState::None);
                             }
-                        } else {
-                            // No parameters, show add dialog
-                            let result = crate::actions::optimize::handle_optimize_action(
-                                state,
-                                OptimizeAction::AddParameter,
-                                "",
-                            );
-                            match result {
-                                crate::actions::ActionResult::Done(modal)
-                                | crate::actions::ActionResult::Modified(modal) => {
-                                    state.modal = modal.unwrap_or(ModalState::None);
-                                }
-                                crate::actions::ActionResult::Error(msg) => {
-                                    state.set_error(msg);
-                                }
+                            crate::actions::ActionResult::Error(msg) => {
+                                state.set_error(msg);
                             }
                         }
-                    }
-                    OptimizePanel::Objective => {
-                        // Show objective picker
-                        let result = show_objective_picker(state);
+                    } else {
+                        // No parameters, show add dialog
+                        let result = crate::actions::optimize::handle_optimize_action(
+                            state,
+                            OptimizeAction::AddParameter,
+                            "",
+                        );
                         match result {
                             crate::actions::ActionResult::Done(modal)
                             | crate::actions::ActionResult::Modified(modal) => {
@@ -763,35 +750,48 @@ impl Component for OptimizeScreen {
                             }
                         }
                     }
-                    OptimizePanel::Progress => {
-                        // Run optimization
-                        let result = crate::actions::optimize::handle_optimize_action(
-                            state,
-                            OptimizeAction::RunOptimization,
-                            "",
-                        );
-                        match result {
-                            crate::actions::ActionResult::Done(modal) => {
-                                state.modal = modal.unwrap_or(ModalState::None);
-                            }
-                            crate::actions::ActionResult::Modified(modal) => {
-                                state.mark_modified();
-                                state.modal = modal.unwrap_or(ModalState::None);
-                            }
-                            crate::actions::ActionResult::Error(msg) => {
-                                state.set_error(msg);
-                            }
+                }
+                OptimizePanel::Objective => {
+                    // Show objective picker
+                    let result = show_objective_picker(state);
+                    match result {
+                        crate::actions::ActionResult::Done(modal)
+                        | crate::actions::ActionResult::Modified(modal) => {
+                            state.modal = modal.unwrap_or(ModalState::None);
+                        }
+                        crate::actions::ActionResult::Error(msg) => {
+                            state.set_error(msg);
                         }
                     }
-                    OptimizePanel::Results => {
-                        // Nothing to configure in results
+                }
+                OptimizePanel::Progress => {
+                    // Run optimization
+                    let result = crate::actions::optimize::handle_optimize_action(
+                        state,
+                        OptimizeAction::RunOptimization,
+                        "",
+                    );
+                    match result {
+                        crate::actions::ActionResult::Done(modal) => {
+                            state.modal = modal.unwrap_or(ModalState::None);
+                        }
+                        crate::actions::ActionResult::Modified(modal) => {
+                            state.mark_modified();
+                            state.modal = modal.unwrap_or(ModalState::None);
+                        }
+                        crate::actions::ActionResult::Error(msg) => {
+                            state.set_error(msg);
+                        }
                     }
                 }
-                EventResult::Handled
+                OptimizePanel::Results => {
+                    // Nothing to configure in results
+                }
             }
-
-            _ => EventResult::NotHandled,
+            return EventResult::Handled;
         }
+
+        EventResult::NotHandled
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {

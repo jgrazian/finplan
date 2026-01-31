@@ -2,7 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
 use rand::RngCore;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -11,6 +11,7 @@ use ratatui::{
 
 use crate::actions::ActionResult;
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::storage::DataDirectory;
 use crate::modals::{
     ConfirmedValue, MessageModal, ModalAction, ModalResult, ModalState, handle_modal_key,
@@ -480,43 +481,36 @@ impl App {
             return;
         }
 
-        // Global key bindings
-        match key_event.code {
-            KeyCode::Char('q') if key_event.modifiers.is_empty() => {
-                self.state.exit = true;
+        // Global key bindings (using configurable keybindings)
+        if KeybindingsConfig::matches(&key_event, &self.state.keybindings.global.quit) {
+            self.state.exit = true;
+            return;
+        }
+        if KeybindingsConfig::matches(&key_event, &self.state.keybindings.global.save) {
+            // Ctrl+S: Save all dirty scenarios
+            self.save_all();
+            return;
+        }
+        if KeybindingsConfig::matches(&key_event, &self.state.keybindings.global.cancel) {
+            // Cancel running simulation first
+            if self.state.simulation_status.is_running() {
+                self.worker.cancel();
+                self.state.simulation_status = SimulationStatus::Idle;
                 return;
             }
-            KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.state.exit = true;
+            // Let holdings editing mode handle Esc first
+            if self
+                .state
+                .portfolio_profiles_state
+                .account_mode
+                .is_editing_holdings()
+            {
+                // Fall through to screen handler
+            } else {
+                // Clear error message on Esc
+                self.state.clear_error();
                 return;
             }
-            KeyCode::Char('s') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Ctrl+S: Save all dirty scenarios
-                self.save_all();
-                return;
-            }
-            KeyCode::Esc => {
-                // Cancel running simulation first
-                if self.state.simulation_status.is_running() {
-                    self.worker.cancel();
-                    self.state.simulation_status = SimulationStatus::Idle;
-                    return;
-                }
-                // Let holdings editing mode handle Esc first
-                if self
-                    .state
-                    .portfolio_profiles_state
-                    .account_mode
-                    .is_editing_holdings()
-                {
-                    // Fall through to screen handler
-                } else {
-                    // Clear error message on Esc
-                    self.state.clear_error();
-                    return;
-                }
-            }
-            _ => {}
         }
 
         // Try tab bar first

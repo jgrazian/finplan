@@ -1,5 +1,6 @@
 use crate::actions::{self, ActionContext};
 use crate::components::{Component, EventResult};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::portfolio_data::AccountType;
 use crate::modals::{
     ConfirmModal, FieldType, FormField, FormModal, MessageModal, ModalAction, ModalState,
@@ -84,231 +85,231 @@ impl Component for ScenarioScreen {
         let panel = state.scenario_state.focused_panel;
         let scenarios = state.get_scenario_list_with_summaries();
         let num_scenarios = scenarios.len();
+        let kb = &state.keybindings;
 
-        match key.code {
-            // Panel navigation
-            KeyCode::Tab => {
-                state.scenario_state.focused_panel = panel.next();
-                EventResult::Handled
-            }
-            KeyCode::BackTab => {
-                state.scenario_state.focused_panel = panel.prev();
-                EventResult::Handled
-            }
-
-            // Scenario list navigation (j/k or up/down)
-            KeyCode::Char('j') | KeyCode::Down => {
-                if panel.is_left_panel() && num_scenarios > 0 {
-                    state.scenario_state.selected_index =
-                        (state.scenario_state.selected_index + 1) % num_scenarios;
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if panel.is_left_panel() && num_scenarios > 0 {
-                    state.scenario_state.selected_index = state
-                        .scenario_state
-                        .selected_index
-                        .checked_sub(1)
-                        .unwrap_or(num_scenarios - 1);
-                }
-                EventResult::Handled
-            }
-
-            // Enter to switch to selected scenario
-            KeyCode::Enter => {
-                if panel.is_left_panel()
-                    && let Some(selected_name) = self.get_selected_scenario_name(state)
-                {
-                    state.switch_scenario(&selected_name);
-                }
-                EventResult::Handled
-            }
-
-            // New scenario
-            KeyCode::Char('n') => {
-                let form = FormModal::new(
-                    "New Scenario",
-                    vec![FormField::new("Scenario Name", FieldType::Text, "")],
-                    ModalAction::NEW_SCENARIO,
-                )
-                .start_editing();
-                state.modal = ModalState::Form(form);
-                EventResult::Handled
-            }
-
-            // Duplicate scenario
-            KeyCode::Char('c') => {
-                if let Some(selected_name) = self.get_selected_scenario_name(state) {
-                    let new_name = format!("{} (copy)", selected_name);
-                    let form = FormModal::new(
-                        "Duplicate Scenario",
-                        vec![FormField::new("New Name", FieldType::Text, &new_name)],
-                        ModalAction::DUPLICATE_SCENARIO,
-                    )
-                    .start_editing();
-                    state.modal = ModalState::Form(form);
-                }
-                EventResult::Handled
-            }
-
-            // Delete scenario
-            KeyCode::Delete | KeyCode::Backspace => {
-                if num_scenarios > 1 {
-                    if let Some(selected_name) = self.get_selected_scenario_name(state) {
-                        state.modal = ModalState::Confirm(ConfirmModal::new(
-                            "Delete Scenario",
-                            &format!(
-                                "Delete scenario '{}'?\n\nThis cannot be undone.",
-                                selected_name
-                            ),
-                            ModalAction::DELETE_SCENARIO,
-                        ));
-                    }
-                } else {
-                    state.set_error("Cannot delete the last scenario".to_string());
-                }
-                EventResult::Handled
-            }
-
-            // Run Monte Carlo on current scenario (background)
-            KeyCode::Char('m') => {
-                if !state.simulation_status.is_running() {
-                    state.request_monte_carlo(1000);
-                }
-                EventResult::Handled
-            }
-
-            // Run All scenarios (background)
-            KeyCode::Char('R') => {
-                if !state.simulation_status.is_running() {
-                    state.request_batch_monte_carlo(1000);
-                }
-                EventResult::Handled
-            }
-
-            // Run single simulation and switch to results (background)
-            KeyCode::Char('r') => {
-                // Check if Shift is held (for toggle mode) - use lowercase 'r' for run
-                if !state.simulation_status.is_running() {
-                    state.request_simulation();
-                }
-                EventResult::Handled
-            }
-
-            // Toggle between nominal and real (inflation-adjusted) value display
-            KeyCode::Char('$') => {
-                state.results_state.value_display_mode =
-                    state.results_state.value_display_mode.toggle();
-                EventResult::Handled
-            }
-
-            // Preview projection
-            KeyCode::Char('p') => {
-                if let Err(e) = state.run_projection_preview() {
-                    state.set_error(format!("Projection failed: {}", e));
-                }
-                EventResult::Handled
-            }
-
-            // Save scenario
-            KeyCode::Char('s') => {
-                let scenarios = state.scenario_names();
-                state.modal = ModalState::ScenarioPicker(ScenarioPickerModal::new(
-                    "Save Scenario As",
-                    scenarios,
-                    ModalAction::SAVE_AS,
-                ));
-                EventResult::Handled
-            }
-
-            // Load scenario
-            KeyCode::Char('l') => {
-                let scenarios = state.scenario_names();
-                if scenarios.is_empty() {
-                    state.modal = ModalState::Message(MessageModal::info(
-                        "No Scenarios",
-                        "No scenarios available to load.",
-                    ));
-                } else {
-                    state.modal = ModalState::ScenarioPicker(ScenarioPickerModal::new(
-                        "Load Scenario",
-                        scenarios,
-                        ModalAction::LOAD,
-                    ));
-                }
-                EventResult::Handled
-            }
-
-            // Edit parameters
-            KeyCode::Char('e') => {
-                let params = &state.data().parameters;
-
-                let start_date = if params.start_date.is_empty() {
-                    jiff::Zoned::now().date().strftime("%Y-%m-%d").to_string()
-                } else {
-                    params.start_date.clone()
-                };
-
-                let form = FormModal::new(
-                    "Edit Simulation Parameters",
-                    vec![
-                        FormField::new("Start Date (YYYY-MM-DD)", FieldType::Text, &start_date),
-                        FormField::new(
-                            "Birth Date (YYYY-MM-DD)",
-                            FieldType::Text,
-                            &params.birth_date,
-                        ),
-                        FormField::new(
-                            "Duration (years)",
-                            FieldType::Text,
-                            &params.duration_years.to_string(),
-                        ),
-                    ],
-                    ModalAction::EDIT_PARAMETERS,
-                );
-                state.modal = ModalState::Form(form);
-                EventResult::Handled
-            }
-
-            // Import scenario
-            KeyCode::Char('i') => {
-                let default_path = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join("scenario.yaml")
-                    .to_string_lossy()
-                    .to_string();
-
-                let form = FormModal::new(
-                    "Import Scenario",
-                    vec![FormField::new("File path", FieldType::Text, &default_path)],
-                    ModalAction::IMPORT,
-                )
-                .start_editing();
-                state.modal = ModalState::Form(form);
-                EventResult::Handled
-            }
-
-            // Export scenario
-            KeyCode::Char('x') => {
-                let default_path = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join(format!("{}.yaml", state.current_scenario))
-                    .to_string_lossy()
-                    .to_string();
-
-                let form = FormModal::new(
-                    "Export Scenario",
-                    vec![FormField::new("File path", FieldType::Text, &default_path)],
-                    ModalAction::EXPORT,
-                )
-                .start_editing();
-                state.modal = ModalState::Form(form);
-                EventResult::Handled
-            }
-
-            _ => EventResult::NotHandled,
+        // Panel navigation
+        if KeybindingsConfig::matches(&key, &kb.navigation.next_panel) {
+            state.scenario_state.focused_panel = panel.next();
+            return EventResult::Handled;
         }
+
+        if KeybindingsConfig::matches(&key, &kb.navigation.prev_panel) {
+            state.scenario_state.focused_panel = panel.prev();
+            return EventResult::Handled;
+        }
+
+        // Scenario list navigation (j/k or up/down)
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            if panel.is_left_panel() && num_scenarios > 0 {
+                state.scenario_state.selected_index =
+                    (state.scenario_state.selected_index + 1) % num_scenarios;
+            }
+            return EventResult::Handled;
+        }
+
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            if panel.is_left_panel() && num_scenarios > 0 {
+                state.scenario_state.selected_index = state
+                    .scenario_state
+                    .selected_index
+                    .checked_sub(1)
+                    .unwrap_or(num_scenarios - 1);
+            }
+            return EventResult::Handled;
+        }
+
+        // Enter to switch to selected scenario
+        if KeybindingsConfig::matches(&key, &kb.navigation.confirm) {
+            if panel.is_left_panel()
+                && let Some(selected_name) = self.get_selected_scenario_name(state)
+            {
+                state.switch_scenario(&selected_name);
+            }
+            return EventResult::Handled;
+        }
+
+        // New scenario
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.new) {
+            let form = FormModal::new(
+                "New Scenario",
+                vec![FormField::new("Scenario Name", FieldType::Text, "")],
+                ModalAction::NEW_SCENARIO,
+            )
+            .start_editing();
+            state.modal = ModalState::Form(form);
+            return EventResult::Handled;
+        }
+
+        // Duplicate scenario
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.copy) {
+            if let Some(selected_name) = self.get_selected_scenario_name(state) {
+                let new_name = format!("{} (copy)", selected_name);
+                let form = FormModal::new(
+                    "Duplicate Scenario",
+                    vec![FormField::new("New Name", FieldType::Text, &new_name)],
+                    ModalAction::DUPLICATE_SCENARIO,
+                )
+                .start_editing();
+                state.modal = ModalState::Form(form);
+            }
+            return EventResult::Handled;
+        }
+
+        // Delete scenario (hardcoded - no keybinding for delete in scenario tab)
+        if matches!(key.code, KeyCode::Delete | KeyCode::Backspace) {
+            if num_scenarios > 1 {
+                if let Some(selected_name) = self.get_selected_scenario_name(state) {
+                    state.modal = ModalState::Confirm(ConfirmModal::new(
+                        "Delete Scenario",
+                        &format!(
+                            "Delete scenario '{}'?\n\nThis cannot be undone.",
+                            selected_name
+                        ),
+                        ModalAction::DELETE_SCENARIO,
+                    ));
+                }
+            } else {
+                state.set_error("Cannot delete the last scenario".to_string());
+            }
+            return EventResult::Handled;
+        }
+
+        // Run Monte Carlo on current scenario (background)
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.monte_carlo) {
+            if !state.simulation_status.is_running() {
+                state.request_monte_carlo(1000);
+            }
+            return EventResult::Handled;
+        }
+
+        // Run All scenarios (background)
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.run_all) {
+            if !state.simulation_status.is_running() {
+                state.request_batch_monte_carlo(1000);
+            }
+            return EventResult::Handled;
+        }
+
+        // Run single simulation and switch to results (background)
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.run) {
+            if !state.simulation_status.is_running() {
+                state.request_simulation();
+            }
+            return EventResult::Handled;
+        }
+
+        // Toggle between nominal and real (inflation-adjusted) value display
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.toggle_real) {
+            state.results_state.value_display_mode =
+                state.results_state.value_display_mode.toggle();
+            return EventResult::Handled;
+        }
+
+        // Preview projection
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.preview) {
+            if let Err(e) = state.run_projection_preview() {
+                state.set_error(format!("Projection failed: {}", e));
+            }
+            return EventResult::Handled;
+        }
+
+        // Save scenario
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.save_as) {
+            let scenarios = state.scenario_names();
+            state.modal = ModalState::ScenarioPicker(ScenarioPickerModal::new(
+                "Save Scenario As",
+                scenarios,
+                ModalAction::SAVE_AS,
+            ));
+            return EventResult::Handled;
+        }
+
+        // Load scenario
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.load) {
+            let scenarios = state.scenario_names();
+            if scenarios.is_empty() {
+                state.modal = ModalState::Message(MessageModal::info(
+                    "No Scenarios",
+                    "No scenarios available to load.",
+                ));
+            } else {
+                state.modal = ModalState::ScenarioPicker(ScenarioPickerModal::new(
+                    "Load Scenario",
+                    scenarios,
+                    ModalAction::LOAD,
+                ));
+            }
+            return EventResult::Handled;
+        }
+
+        // Edit parameters
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.edit_params) {
+            let params = &state.data().parameters;
+
+            let start_date = if params.start_date.is_empty() {
+                jiff::Zoned::now().date().strftime("%Y-%m-%d").to_string()
+            } else {
+                params.start_date.clone()
+            };
+
+            let form = FormModal::new(
+                "Edit Simulation Parameters",
+                vec![
+                    FormField::new("Start Date (YYYY-MM-DD)", FieldType::Text, &start_date),
+                    FormField::new(
+                        "Birth Date (YYYY-MM-DD)",
+                        FieldType::Text,
+                        &params.birth_date,
+                    ),
+                    FormField::new(
+                        "Duration (years)",
+                        FieldType::Text,
+                        &params.duration_years.to_string(),
+                    ),
+                ],
+                ModalAction::EDIT_PARAMETERS,
+            );
+            state.modal = ModalState::Form(form);
+            return EventResult::Handled;
+        }
+
+        // Import scenario
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.import) {
+            let default_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("scenario.yaml")
+                .to_string_lossy()
+                .to_string();
+
+            let form = FormModal::new(
+                "Import Scenario",
+                vec![FormField::new("File path", FieldType::Text, &default_path)],
+                ModalAction::IMPORT,
+            )
+            .start_editing();
+            state.modal = ModalState::Form(form);
+            return EventResult::Handled;
+        }
+
+        // Export scenario
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.export) {
+            let default_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(format!("{}.yaml", state.current_scenario))
+                .to_string_lossy()
+                .to_string();
+
+            let form = FormModal::new(
+                "Export Scenario",
+                vec![FormField::new("File path", FieldType::Text, &default_path)],
+                ModalAction::EXPORT,
+            )
+            .start_editing();
+            state.modal = ModalState::Form(form);
+            return EventResult::Handled;
+        }
+
+        EventResult::NotHandled
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {

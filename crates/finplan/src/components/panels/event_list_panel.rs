@@ -4,12 +4,13 @@
 
 use crate::components::EventResult;
 use crate::data::events_data::{AmountData, EffectData, EventTag, IntervalData, TriggerData};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{
     ConfirmModal, FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal,
 };
 use crate::state::{AppState, EventsPanel};
 use crate::util::styles::focused_block_with_help;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -93,190 +94,179 @@ impl EventListPanel {
     /// Handle key events for the event list panel.
     pub fn handle_key(key: KeyEvent, state: &mut AppState) -> EventResult {
         let events_len = state.data().events.len();
-        let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let kb = &state.keybindings;
 
-        match key.code {
-            // Move down (Shift+J or Shift+Down)
-            KeyCode::Char('J') if has_shift => {
-                let idx = state.events_state.selected_event_index;
-                if events_len >= 2 && idx < events_len - 1 {
-                    state.data_mut().events.swap(idx, idx + 1);
-                    state.events_state.selected_event_index = idx + 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
+        // Reorder down (Shift+J or Shift+Down)
+        if KeybindingsConfig::matches(&key, &kb.navigation.reorder_down) {
+            let idx = state.events_state.selected_event_index;
+            if events_len >= 2 && idx < events_len - 1 {
+                state.data_mut().events.swap(idx, idx + 1);
+                state.events_state.selected_event_index = idx + 1;
+                state.mark_modified();
             }
-            KeyCode::Down if has_shift => {
-                let idx = state.events_state.selected_event_index;
-                if events_len >= 2 && idx < events_len - 1 {
-                    state.data_mut().events.swap(idx, idx + 1);
-                    state.events_state.selected_event_index = idx + 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
+            return EventResult::Handled;
+        }
+
+        // Reorder up (Shift+K or Shift+Up)
+        if KeybindingsConfig::matches(&key, &kb.navigation.reorder_up) {
+            let idx = state.events_state.selected_event_index;
+            if events_len >= 2 && idx > 0 {
+                state.data_mut().events.swap(idx, idx - 1);
+                state.events_state.selected_event_index = idx - 1;
+                state.mark_modified();
             }
-            // Move up (Shift+K or Shift+Up)
-            KeyCode::Char('K') if has_shift => {
-                let idx = state.events_state.selected_event_index;
-                if events_len >= 2 && idx > 0 {
-                    state.data_mut().events.swap(idx, idx - 1);
-                    state.events_state.selected_event_index = idx - 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
+            return EventResult::Handled;
+        }
+
+        // Navigate down
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            if events_len > 0 {
+                state.events_state.selected_event_index =
+                    (state.events_state.selected_event_index + 1) % events_len;
             }
-            KeyCode::Up if has_shift => {
-                let idx = state.events_state.selected_event_index;
-                if events_len >= 2 && idx > 0 {
-                    state.data_mut().events.swap(idx, idx - 1);
-                    state.events_state.selected_event_index = idx - 1;
-                    state.mark_modified();
+            return EventResult::Handled;
+        }
+
+        // Navigate up
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            if events_len > 0 {
+                if state.events_state.selected_event_index == 0 {
+                    state.events_state.selected_event_index = events_len - 1;
+                } else {
+                    state.events_state.selected_event_index -= 1;
                 }
-                EventResult::Handled
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                if events_len > 0 {
-                    state.events_state.selected_event_index =
-                        (state.events_state.selected_event_index + 1) % events_len;
-                }
-                EventResult::Handled
+            return EventResult::Handled;
+        }
+
+        // Toggle enabled status
+        if KeybindingsConfig::matches(&key, &kb.tabs.events.toggle) {
+            let idx = state.events_state.selected_event_index;
+            if let Some(event) = state.data_mut().events.get_mut(idx) {
+                event.enabled = !event.enabled;
+                state.mark_modified();
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if events_len > 0 {
-                    if state.events_state.selected_event_index == 0 {
-                        state.events_state.selected_event_index = events_len - 1;
-                    } else {
-                        state.events_state.selected_event_index -= 1;
-                    }
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('t') => {
-                // Toggle enabled status
-                let idx = state.events_state.selected_event_index;
-                if let Some(event) = state.data_mut().events.get_mut(idx) {
-                    event.enabled = !event.enabled;
-                    state.mark_modified();
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('a') => {
-                // Add new event - show trigger type picker
-                let trigger_types = vec![
-                    "Date".to_string(),
-                    "Age".to_string(),
-                    "Repeating".to_string(),
-                    "Manual".to_string(),
-                    "Account Balance".to_string(),
-                    "Net Worth".to_string(),
-                    "Relative to Event".to_string(),
-                    "Quick Events".to_string(),
-                ];
-                state.modal = ModalState::Picker(PickerModal::new(
-                    "Select Trigger Type",
-                    trigger_types,
-                    ModalAction::PICK_TRIGGER_TYPE,
+            return EventResult::Handled;
+        }
+
+        // Add new event - show trigger type picker
+        if KeybindingsConfig::matches(&key, &kb.tabs.events.add) {
+            let trigger_types = vec![
+                "Date".to_string(),
+                "Age".to_string(),
+                "Repeating".to_string(),
+                "Manual".to_string(),
+                "Account Balance".to_string(),
+                "Net Worth".to_string(),
+                "Relative to Event".to_string(),
+                "Quick Events".to_string(),
+            ];
+            state.modal = ModalState::Picker(PickerModal::new(
+                "Select Trigger Type",
+                trigger_types,
+                ModalAction::PICK_TRIGGER_TYPE,
+            ));
+            return EventResult::Handled;
+        }
+
+        // Edit selected event
+        if KeybindingsConfig::matches(&key, &kb.tabs.events.edit) {
+            if let Some(event) = state
+                .data()
+                .events
+                .get(state.events_state.selected_event_index)
+            {
+                let trigger_summary = Self::format_trigger_short(&event.trigger);
+                let effects_summary = format!("{} effect(s)", event.effects.len());
+
+                let yes_no = vec!["No".to_string(), "Yes".to_string()];
+                let form = FormModal::new(
+                    "Edit Event",
+                    vec![
+                        FormField::text("Name", &event.name.0),
+                        FormField::text("Description", event.description.as_deref().unwrap_or("")),
+                        FormField::select(
+                            "Once Only",
+                            yes_no.clone(),
+                            if event.once { "Yes" } else { "No" },
+                        ),
+                        FormField::select(
+                            "Enabled",
+                            yes_no,
+                            if event.enabled { "Yes" } else { "No" },
+                        ),
+                        FormField::trigger("Trigger", &trigger_summary),
+                        FormField::read_only("Effects", &effects_summary),
+                    ],
+                    ModalAction::EDIT_EVENT,
+                )
+                .with_typed_context(ModalContext::event_index(
+                    state.events_state.selected_event_index,
                 ));
-                EventResult::Handled
-            }
-            KeyCode::Char('e') => {
-                // Edit selected event
-                if let Some(event) = state
-                    .data()
-                    .events
-                    .get(state.events_state.selected_event_index)
-                {
-                    let trigger_summary = Self::format_trigger_short(&event.trigger);
-                    let effects_summary = format!("{} effect(s)", event.effects.len());
 
-                    let yes_no = vec!["No".to_string(), "Yes".to_string()];
-                    let form = FormModal::new(
-                        "Edit Event",
-                        vec![
-                            FormField::text("Name", &event.name.0),
-                            FormField::text(
-                                "Description",
-                                event.description.as_deref().unwrap_or(""),
-                            ),
-                            FormField::select(
-                                "Once Only",
-                                yes_no.clone(),
-                                if event.once { "Yes" } else { "No" },
-                            ),
-                            FormField::select(
-                                "Enabled",
-                                yes_no,
-                                if event.enabled { "Yes" } else { "No" },
-                            ),
-                            FormField::trigger("Trigger", &trigger_summary),
-                            FormField::read_only("Effects", &effects_summary),
-                        ],
-                        ModalAction::EDIT_EVENT,
+                state.modal = ModalState::Form(form);
+            }
+            return EventResult::Handled;
+        }
+
+        // Delete selected event with confirmation
+        if KeybindingsConfig::matches(&key, &kb.tabs.events.delete) {
+            if let Some(event) = state
+                .data()
+                .events
+                .get(state.events_state.selected_event_index)
+            {
+                state.modal = ModalState::Confirm(
+                    ConfirmModal::new(
+                        "Delete Event",
+                        &format!("Delete event '{}'?\n\nThis cannot be undone.", event.name.0),
+                        ModalAction::DELETE_EVENT,
                     )
                     .with_typed_context(ModalContext::event_index(
                         state.events_state.selected_event_index,
-                    ));
-
-                    state.modal = ModalState::Form(form);
-                }
-                EventResult::Handled
+                    )),
+                );
             }
-            KeyCode::Char('d') => {
-                // Delete selected event with confirmation
-                if let Some(event) = state
-                    .data()
-                    .events
-                    .get(state.events_state.selected_event_index)
-                {
-                    state.modal = ModalState::Confirm(
-                        ConfirmModal::new(
-                            "Delete Event",
-                            &format!("Delete event '{}'?\n\nThis cannot be undone.", event.name.0),
-                            ModalAction::DELETE_EVENT,
-                        )
-                        .with_typed_context(ModalContext::event_index(
-                            state.events_state.selected_event_index,
-                        )),
-                    );
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('c') => {
-                // Copy selected event
-                let idx = state.events_state.selected_event_index;
-                if let Some(event) = state.data().events.get(idx).cloned() {
-                    let mut new_event = event;
-                    new_event.name = EventTag(format!("{} (Copy)", new_event.name.0));
-                    state.data_mut().events.push(new_event);
-                    // Select the newly copied event
-                    state.events_state.selected_event_index = state.data().events.len() - 1;
-                    state.mark_modified();
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('f') => {
-                // Manage effects for selected event
-                let event_idx = state.events_state.selected_event_index;
-                if let Some(event) = state.data().events.get(event_idx) {
-                    // Build list of current effects + add option
-                    let mut options: Vec<String> = event
-                        .effects
-                        .iter()
-                        .enumerate()
-                        .map(|(i, effect)| format!("{}. {}", i + 1, Self::format_effect(effect)))
-                        .collect();
-                    options.push("[ + Add New Effect ]".to_string());
-
-                    state.modal = ModalState::Picker(PickerModal::new(
-                        &format!("Manage Effects - {}", event.name.0),
-                        options,
-                        ModalAction::MANAGE_EFFECTS,
-                    ));
-                }
-                EventResult::Handled
-            }
-            _ => EventResult::NotHandled,
+            return EventResult::Handled;
         }
+
+        // Copy selected event
+        if KeybindingsConfig::matches(&key, &kb.tabs.events.copy) {
+            let idx = state.events_state.selected_event_index;
+            if let Some(event) = state.data().events.get(idx).cloned() {
+                let mut new_event = event;
+                new_event.name = EventTag(format!("{} (Copy)", new_event.name.0));
+                state.data_mut().events.push(new_event);
+                // Select the newly copied event
+                state.events_state.selected_event_index = state.data().events.len() - 1;
+                state.mark_modified();
+            }
+            return EventResult::Handled;
+        }
+
+        // Manage effects for selected event
+        if KeybindingsConfig::matches(&key, &kb.tabs.events.effects) {
+            let event_idx = state.events_state.selected_event_index;
+            if let Some(event) = state.data().events.get(event_idx) {
+                // Build list of current effects + add option
+                let mut options: Vec<String> = event
+                    .effects
+                    .iter()
+                    .enumerate()
+                    .map(|(i, effect)| format!("{}. {}", i + 1, Self::format_effect(effect)))
+                    .collect();
+                options.push("[ + Add New Effect ]".to_string());
+
+                state.modal = ModalState::Picker(PickerModal::new(
+                    &format!("Manage Effects - {}", event.name.0),
+                    options,
+                    ModalAction::MANAGE_EFFECTS,
+                ));
+            }
+            return EventResult::Handled;
+        }
+
+        EventResult::NotHandled
     }
 
     // ========== Helper Functions ==========
