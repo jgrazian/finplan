@@ -1,3 +1,11 @@
+// Modal state types
+mod action;
+pub mod amount_builder;
+pub mod context;
+mod handler;
+mod state;
+
+// Modal UI components
 mod confirm;
 mod form;
 pub mod helpers;
@@ -10,11 +18,15 @@ use crate::event::AppKeyEvent;
 use ratatui::{Frame, layout::Rect};
 
 use crate::actions::{get_assets_for_account, get_assets_for_sale};
-use crate::state::{
-    AppState, FormKind, FormModal, ModalAction, ModalState, asset_purchase_fields,
-    asset_sale_fields,
-};
+use crate::state::AppState;
 
+// Re-export modal types
+pub use action::*;
+pub use context::ModalContext;
+pub use handler::ModalHandler;
+pub use state::*;
+
+// Re-export modal UI rendering functions
 pub use confirm::render_confirm_modal;
 pub use form::{
     format_currency_for_edit, format_percentage_for_edit, parse_currency, parse_percentage,
@@ -28,8 +40,8 @@ pub use text_input::render_text_input_modal;
 /// Typed value returned when a modal is confirmed
 #[derive(Debug, Clone)]
 pub enum ConfirmedValue {
-    /// Form modal with typed field access
-    Form(FormModal),
+    /// Form modal with typed field access (boxed to reduce enum size)
+    Form(Box<FormModal>),
     /// Picker modal - selected option string
     Picker(String),
     /// Text input modal - entered text
@@ -54,20 +66,6 @@ impl ConfirmedValue {
             _ => None,
         }
     }
-
-    /// Get string representation (for backwards compatibility during migration)
-    pub fn to_legacy_string(&self) -> String {
-        match self {
-            ConfirmedValue::Form(form) => form
-                .fields
-                .iter()
-                .map(|f| f.value.clone())
-                .collect::<Vec<_>>()
-                .join("|"),
-            ConfirmedValue::Picker(s) | ConfirmedValue::Text(s) => s.clone(),
-            ConfirmedValue::Confirm => String::new(),
-        }
-    }
 }
 
 /// Result of handling a modal key event
@@ -81,6 +79,12 @@ pub enum ModalResult {
     Continue,
     /// A field value changed, may need to update dependent fields
     FieldChanged(usize),
+    /// An Amount field was activated and needs the amount editor launched
+    /// Contains the field index
+    AmountFieldActivated(usize),
+    /// A Trigger field was activated and needs the trigger editor launched
+    /// Contains the field index
+    TriggerFieldActivated(usize),
 }
 
 /// Render the active modal as an overlay
@@ -110,15 +114,16 @@ pub fn render_modal(frame: &mut Frame, state: &AppState) {
 
 /// Handle key events for the active modal
 pub fn handle_modal_key(key: AppKeyEvent, state: &mut AppState) -> ModalResult {
+    let keybindings = &state.keybindings;
     let result = match &mut state.modal {
         ModalState::None => ModalResult::Continue,
         ModalState::TextInput(modal) => text_input::handle_text_input_key(key, modal),
         ModalState::Message(_) => message::handle_message_key(key),
         ModalState::ScenarioPicker(modal) => {
-            scenario_picker::handle_scenario_picker_key(key, modal)
+            scenario_picker::handle_scenario_picker_key(key, modal, keybindings)
         }
-        ModalState::Picker(modal) => picker::handle_picker_key(key, modal),
-        ModalState::Form(modal) => form::handle_form_key(key, modal),
+        ModalState::Picker(modal) => picker::handle_picker_key(key, modal, keybindings),
+        ModalState::Form(modal) => form::handle_form_key(key, modal, keybindings),
         ModalState::Confirm(modal) => confirm::handle_confirm_key(key, modal),
     };
 

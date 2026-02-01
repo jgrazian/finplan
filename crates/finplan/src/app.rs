@@ -11,17 +11,18 @@ use ratatui::{
 
 use crate::actions::ActionResult;
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::storage::DataDirectory;
-use crate::event::{AppKeyEvent, KeyCode};
-use crate::modals::{ConfirmedValue, ModalResult, handle_modal_key, render_modal};
+use crate::event::AppKeyEvent;
+use crate::modals::{
+    ConfirmedValue, MessageModal, ModalAction, ModalResult, ModalState, handle_modal_key,
+    render_modal,
+};
 use crate::screens::{
     ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
     portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
 };
-use crate::state::{
-    AppState, MessageModal, ModalAction, ModalState, PercentileView, ResultsState,
-    SimulationStatus, TabId,
-};
+use crate::state::{AppState, PercentileView, ResultsState, SimulationStatus, TabId};
 use crate::worker::{SimulationResponse, SimulationWorker};
 
 pub struct App {
@@ -304,7 +305,9 @@ impl App {
         let pending = self.state.pending_simulation.take();
         if let Some(request) = pending {
             match request {
-                PendingSimulation::Single | PendingSimulation::MonteCarlo { .. } => {
+                PendingSimulation::Single
+                | PendingSimulation::MonteCarlo { .. }
+                | PendingSimulation::MonteCarloConvergence { .. } => {
                     // Build simulation config for current scenario
                     let config = match self.state.to_simulation_config() {
                         Ok(c) => c,
@@ -332,6 +335,22 @@ impl App {
                             self.worker.send(SimulationRequest::MonteCarlo {
                                 config,
                                 iterations,
+                                birth_date,
+                                start_date,
+                            });
+                        }
+                        PendingSimulation::MonteCarloConvergence {
+                            min_iterations,
+                            max_iterations,
+                            relative_threshold,
+                            metric,
+                        } => {
+                            self.worker.send(SimulationRequest::MonteCarloConvergence {
+                                config,
+                                min_iterations,
+                                max_iterations,
+                                relative_threshold,
+                                metric,
                                 birth_date,
                                 start_date,
                             });
@@ -396,12 +415,12 @@ impl App {
         match self.state.save_all_dirty() {
             Ok(count) => {
                 if count > 0 {
-                    self.state.modal = ModalState::Message(crate::state::MessageModal::info(
+                    self.state.modal = ModalState::Message(MessageModal::info(
                         "Saved",
                         &format!("Saved {} scenario(s)", count),
                     ));
                 } else {
-                    self.state.modal = ModalState::Message(crate::state::MessageModal::info(
+                    self.state.modal = ModalState::Message(MessageModal::info(
                         "No Changes",
                         "No unsaved changes to save",
                     ));
@@ -473,48 +492,47 @@ impl App {
                 ModalResult::Cancelled => {
                     self.state.modal = ModalState::None;
                 }
+                ModalResult::AmountFieldActivated(field_idx) => {
+                    self.handle_amount_field_activated(field_idx);
+                }
+                ModalResult::TriggerFieldActivated(field_idx) => {
+                    self.handle_trigger_field_activated(field_idx);
+                }
                 ModalResult::Continue | ModalResult::FieldChanged(_) => {}
             }
             return;
         }
 
-        // Global key bindings
-        match key.code {
-            KeyCode::Char('q') if key.no_modifiers() => {
-                self.state.exit = true;
+        // Global key bindings (using configurable keybindings)
+        if KeybindingsConfig::matches(&key, &self.state.keybindings.global.quit) {
+            self.state.exit = true;
+            return;
+        }
+        if KeybindingsConfig::matches(&key, &self.state.keybindings.global.save) {
+            // Ctrl+S: Save all dirty scenarios
+            self.save_all();
+            return;
+        }
+        if KeybindingsConfig::matches(&key, &self.state.keybindings.global.cancel) {
+            // Cancel running simulation first
+            if self.state.simulation_status.is_running() {
+                self.worker.cancel();
+                self.state.simulation_status = SimulationStatus::Idle;
                 return;
             }
-            KeyCode::Char('c') if key.ctrl() => {
-                self.state.exit = true;
+            // Let holdings editing mode handle Esc first
+            if self
+                .state
+                .portfolio_profiles_state
+                .account_mode
+                .is_editing_holdings()
+            {
+                // Fall through to screen handler
+            } else {
+                // Clear error message on Esc
+                self.state.clear_error();
                 return;
             }
-            KeyCode::Char('s') if key.ctrl() => {
-                // Ctrl+S: Save all dirty scenarios
-                self.save_all();
-                return;
-            }
-            KeyCode::Esc => {
-                // Cancel running simulation first
-                if self.state.simulation_status.is_running() {
-                    self.worker.cancel();
-                    self.state.simulation_status = SimulationStatus::Idle;
-                    return;
-                }
-                // Let holdings editing mode handle Esc first
-                if self
-                    .state
-                    .portfolio_profiles_state
-                    .account_mode
-                    .is_editing_holdings()
-                {
-                    // Fall through to screen handler
-                } else {
-                    // Clear error message on Esc
-                    self.state.clear_error();
-                    return;
-                }
-            }
-            _ => {}
         }
 
         // Try tab bar first
@@ -540,27 +558,20 @@ impl App {
     }
 
     fn handle_modal_result(&mut self, action: ModalAction, value: ConfirmedValue) {
-        // Legacy string value for handlers not yet migrated
-        let legacy_value = value.to_legacy_string();
-
         // Delegate to screen-specific handlers based on action type
         // Each screen handles its own domain actions
         let result = if self.portfolio_profiles_screen.handles(&action) {
-            self.portfolio_profiles_screen.handle_modal_result(
-                &mut self.state,
-                action,
-                &value,
-                &legacy_value,
-            )
+            self.portfolio_profiles_screen
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.events_screen.handles(&action) {
             self.events_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.scenario_screen.handles(&action) {
             self.scenario_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.optimize_screen.handles(&action) {
             self.optimize_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else {
             // No handler found - this shouldn't happen with proper coverage
             ActionResult::close()
@@ -584,6 +595,154 @@ impl App {
                 self.state.set_error(msg);
                 self.state.modal = ModalState::None;
             }
+        }
+    }
+
+    /// Handle when an Amount field is activated in a form
+    fn handle_amount_field_activated(&mut self, field_idx: usize) {
+        use crate::actions::launch_amount_picker;
+        use crate::modals::context::{EffectContext, ModalContext};
+
+        // Get the current form's context to determine what effect we're editing
+        let ModalState::Form(form) = &self.state.modal else {
+            return;
+        };
+
+        // Extract effect context from the form
+        let Some(ModalContext::Effect(effect_ctx)) = &form.context else {
+            return;
+        };
+
+        // Get event/effect indices and effect type
+        let (event_idx, effect_idx, effect_type) = match effect_ctx {
+            EffectContext::Edit {
+                event,
+                effect,
+                effect_type,
+            } => (*event, *effect, effect_type.clone()),
+            EffectContext::Add { event, effect_type } => (*event, 0, effect_type.clone()),
+            EffectContext::Existing { .. } => {
+                // For existing context, we don't have the effect type
+                // This shouldn't normally happen for amount editing
+                return;
+            }
+        };
+
+        // Get the current amount from the field
+        let current_amount = form
+            .fields
+            .get(field_idx)
+            .and_then(|f| f.as_amount())
+            .cloned()
+            .unwrap_or_else(|| crate::data::events_data::AmountData::fixed(0.0));
+
+        // Store the current form so we can restore it after amount editing
+        self.state.pending_effect_form = Some(form.clone());
+
+        // Launch the amount picker
+        let result = launch_amount_picker(
+            &self.state,
+            event_idx,
+            effect_idx,
+            field_idx,
+            effect_type,
+            &current_amount,
+        );
+
+        // Apply the result
+        if let ActionResult::Done(Some(modal)) = result {
+            self.state.modal = modal;
+        }
+    }
+
+    /// Handle when a Trigger field is activated in a form
+    fn handle_trigger_field_activated(&mut self, field_idx: usize) {
+        use crate::modals::context::{
+            IndexContext, ModalContext, TriggerChildSlot, TriggerContext,
+        };
+        use crate::modals::{ModalAction, PickerModal};
+
+        // Get the current form's context
+        let ModalState::Form(form) = &self.state.modal else {
+            return;
+        };
+
+        match &form.context {
+            // Case 1: Editing an existing event's trigger
+            Some(ModalContext::Index(IndexContext::Event(idx))) => {
+                let event_index = *idx;
+
+                // Close the current form and open the trigger type picker
+                let trigger_types = vec![
+                    "Date".to_string(),
+                    "Age".to_string(),
+                    "Repeating".to_string(),
+                    "Manual".to_string(),
+                    "Account Balance".to_string(),
+                    "Net Worth".to_string(),
+                    "Relative to Event".to_string(),
+                ];
+
+                self.state.modal = ModalState::Picker(
+                    PickerModal::new(
+                        "Select New Trigger Type",
+                        trigger_types,
+                        ModalAction::EDIT_TRIGGER_TYPE_PICK,
+                    )
+                    .with_typed_context(ModalContext::Trigger(
+                        TriggerContext::EditStart { event_index },
+                    )),
+                );
+            }
+
+            // Case 2: Unified repeating form - editing start/end conditions
+            Some(ModalContext::Trigger(TriggerContext::RepeatingBuilder(builder)))
+                if builder.unified_form_mode =>
+            {
+                // Field 3 = Start, Field 4 = End
+                let slot = match field_idx {
+                    3 => TriggerChildSlot::Start,
+                    4 => TriggerChildSlot::End,
+                    _ => return, // Unknown field
+                };
+
+                // Store the current form so we can return to it after editing
+                let form_clone = form.clone();
+                self.state.pending_repeating_form = Some(form_clone);
+
+                // Update builder to track which slot we're editing
+                let mut builder = builder.clone();
+                builder.editing_slot = Some(slot);
+
+                // Show child trigger type picker
+                let title = match slot {
+                    TriggerChildSlot::Start => "Select Start Condition",
+                    TriggerChildSlot::End => "Select End Condition",
+                };
+
+                let none_option = match slot {
+                    TriggerChildSlot::Start => "None (Start Immediately)",
+                    TriggerChildSlot::End => "None (Run Forever)",
+                };
+
+                let options = vec![
+                    none_option.to_string(),
+                    "Date".to_string(),
+                    "Age".to_string(),
+                    "Account Balance".to_string(),
+                    "Net Worth".to_string(),
+                    "Relative to Event".to_string(),
+                ];
+
+                self.state.modal = ModalState::Picker(
+                    PickerModal::new(title, options, ModalAction::PICK_CHILD_TRIGGER_TYPE)
+                        .with_typed_context(ModalContext::Trigger(
+                            TriggerContext::RepeatingBuilder(builder),
+                        )),
+                );
+            }
+
+            _ => {}
         }
     }
 }

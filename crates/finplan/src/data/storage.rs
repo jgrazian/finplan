@@ -21,6 +21,7 @@ use crate::state::ScenarioSummary;
 
 #[cfg(feature = "native")]
 use super::app_data::{AppData, SimulationData};
+use super::keybindings_data::KeybindingsConfig;
 
 /// Configuration stored in config.yaml
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -56,6 +57,7 @@ pub struct LoadResult {
     pub app_data: AppData,
     pub current_scenario: String,
     pub scenario_summaries: HashMap<String, ScenarioSummary>,
+    pub keybindings: KeybindingsConfig,
 }
 
 /// Manages the data directory for per-scenario file storage (native only)
@@ -168,6 +170,16 @@ impl DataDirectory {
             .map_err(|e| StorageError::Io(format!("Failed to write summaries: {}", e)))
     }
 
+    /// Load keybindings from keybindings.yaml
+    pub fn load_keybindings(&self) -> KeybindingsConfig {
+        KeybindingsConfig::load_or_default(&self.root)
+    }
+
+    /// Save keybindings to keybindings.yaml
+    pub fn save_keybindings(&self, keybindings: &KeybindingsConfig) -> Result<(), StorageError> {
+        keybindings.save(&self.root)
+    }
+
     /// Load all scenarios from the scenarios directory
     pub fn load(&self) -> Result<LoadResult, StorageError> {
         if !self.exists() {
@@ -224,10 +236,14 @@ impl DataDirectory {
         // Load cached summaries
         let scenario_summaries = self.load_summaries().unwrap_or_default();
 
+        // Load keybindings
+        let keybindings = self.load_keybindings();
+
         Ok(LoadResult {
             app_data,
             current_scenario,
             scenario_summaries,
+            keybindings,
         })
     }
 

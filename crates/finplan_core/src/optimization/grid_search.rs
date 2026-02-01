@@ -97,6 +97,7 @@ pub fn optimize_grid_search(
         iterations: opt_config.monte_carlo_iterations,
         percentiles: vec![0.05, 0.50, 0.95],
         compute_mean: true,
+        ..Default::default()
     };
 
     // Parallel evaluation of all grid points

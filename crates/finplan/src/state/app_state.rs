@@ -6,17 +6,23 @@ use rand::RngCore;
 
 use crate::data::app_data::{AppData, SimulationData};
 use crate::data::convert::{ConvertError, to_simulation_config, to_tui_result};
+use crate::data::keybindings_data::KeybindingsConfig;
+use crate::util::common::cpu_parallel_batches;
+use crate::util::percentiles::{
+    PERCENTILE_TOLERANCE, PercentileSet, find_percentile_result, find_percentile_result_pair,
+    standard::P50,
+};
 
 use super::cache::CachedValue;
 use super::errors::SimulationError;
 #[cfg(feature = "native")]
 use super::errors::{LoadError, SaveError};
-use super::modal::ModalState;
 use super::screen_state::{
     EventsState, MonteCarloPreviewSummary, OptimizeState, PercentileView, PortfolioProfilesState,
     ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
 };
 use super::tabs::TabId;
+use crate::modals::{FormModal, ModalState};
 
 // ========== SimulationResult ==========
 // Simplified result structure for TUI display
@@ -70,7 +76,7 @@ impl MonteCarloStoredResult {
     pub fn get_percentile_tui(&self, percentile: f64) -> Option<&SimulationResult> {
         self.percentile_results
             .iter()
-            .find(|(p, _, _)| (*p - percentile).abs() < 0.001)
+            .find(|(p, _, _)| (*p - percentile).abs() < PERCENTILE_TOLERANCE)
             .map(|(_, tui, _)| tui)
     }
 
@@ -81,7 +87,7 @@ impl MonteCarloStoredResult {
     ) -> Option<&finplan_core::model::SimulationResult> {
         self.percentile_results
             .iter()
-            .find(|(p, _, _)| (*p - percentile).abs() < 0.001)
+            .find(|(p, _, _)| (*p - percentile).abs() < PERCENTILE_TOLERANCE)
             .map(|(_, _, core)| core)
     }
 }
@@ -129,6 +135,13 @@ pub enum PendingSimulation {
     MonteCarlo { iterations: usize },
     /// Run Monte Carlo on all scenarios
     Batch { iterations: usize },
+    /// Run Monte Carlo with convergence-based stopping
+    MonteCarloConvergence {
+        min_iterations: usize,
+        max_iterations: usize,
+        relative_threshold: f64,
+        metric: finplan_core::model::ConvergenceMetric,
+    },
 }
 
 // ========== AppState ==========
@@ -174,6 +187,17 @@ pub struct AppState {
     pub modal: ModalState,
     pub error_message: Option<String>,
     pub exit: bool,
+
+    /// Pending effect form when editing an amount field
+    /// Stored temporarily while the amount editor modal is active
+    pub pending_effect_form: Option<FormModal>,
+
+    /// Pending repeating trigger form when editing start/end conditions
+    /// Stored temporarily while the child trigger editor is active
+    pub pending_repeating_form: Option<FormModal>,
+
+    /// Keybindings configuration (loaded from ~/.finplan/keybindings.yaml)
+    pub keybindings: KeybindingsConfig,
 }
 
 impl Default for AppState {
@@ -205,6 +229,9 @@ impl Default for AppState {
             modal: ModalState::None,
             error_message: None,
             exit: false,
+            pending_effect_form: None,
+            pending_repeating_form: None,
+            keybindings: KeybindingsConfig::default(),
         }
     }
 }
@@ -281,6 +308,7 @@ impl AppState {
             app_data: result.app_data,
             current_scenario: result.current_scenario,
             data_dir: Some(data_dir),
+            keybindings: result.keybindings,
             ..Default::default()
         };
 
@@ -522,6 +550,29 @@ impl AppState {
         self.scenario_state.batch_running = true;
     }
 
+    /// Request Monte Carlo simulation with convergence-based stopping
+    /// Runs at least min_iterations, then continues until the specified metric
+    /// converges below relative_threshold or max_iterations is reached.
+    pub fn request_monte_carlo_convergence(
+        &mut self,
+        min_iterations: usize,
+        max_iterations: usize,
+        relative_threshold: f64,
+        metric: finplan_core::model::ConvergenceMetric,
+    ) {
+        self.pending_simulation = Some(PendingSimulation::MonteCarloConvergence {
+            min_iterations,
+            max_iterations,
+            relative_threshold,
+            metric,
+        });
+        // Show max iterations as the target since we don't know when it will converge
+        self.simulation_status = SimulationStatus::RunningMonteCarlo {
+            current: 0,
+            total: max_iterations,
+        };
+    }
+
     /// Run the simulation and store results (synchronous, blocks UI)
     /// Use request_simulation() for background execution
     pub fn run_simulation(&mut self) -> Result<(), SimulationError> {
@@ -564,11 +615,13 @@ impl AppState {
             .to_simulation_config()
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
-        // Configure Monte Carlo simulation
+        // Configure Monte Carlo simulation with CPU-based parallelism
         let mc_config = finplan_core::model::MonteCarloConfig {
             iterations: num_iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: true,
+            parallel_batches: cpu_parallel_batches(),
+            ..Default::default()
         };
 
         // Run the Monte Carlo simulation using memory-efficient API
@@ -598,44 +651,21 @@ impl AppState {
             };
 
         // Store the P50 run as the default simulation result
-        if let Some((_, tui, core)) = percentile_results
-            .iter()
-            .find(|(p, _, _)| (*p - 0.50).abs() < 0.001)
-        {
+        if let Some((tui, core)) = find_percentile_result_pair(&percentile_results, P50) {
             self.simulation_result = Some(tui.clone());
             self.core_simulation_result = Some(core.clone());
         }
 
         // Update scenario preview with MC summary
         if let Some(preview) = &mut self.scenario_state.projection_preview {
-            let p5_final = mc_summary
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p50_final = mc_summary
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p95_final = mc_summary
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+            let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
 
             preview.mc_summary = Some(MonteCarloPreviewSummary {
                 num_iterations: mc_summary.stats.num_iterations,
                 success_rate: mc_summary.stats.success_rate,
-                p5_final,
-                p50_final,
-                p95_final,
+                p5_final: pset.p5,
+                p50_final: pset.p50,
+                p95_final: pset.p95,
             });
         }
 
@@ -738,30 +768,11 @@ impl AppState {
     /// Update scenario summary for the current scenario after a Monte Carlo run
     pub fn update_current_scenario_summary(&mut self) {
         if let Some(mc) = &self.monte_carlo_result {
-            let p5 = mc
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p50 = mc
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
-            let p95 = mc
-                .stats
-                .percentile_values
-                .iter()
-                .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-                .map(|(_, v)| *v)
-                .unwrap_or(0.0);
+            let pset = PercentileSet::from_values_or_default(&mc.stats.percentile_values);
+            let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
 
             // Get yearly net worth (nominal and real) from P50 TUI result
-            let p50_tui = mc.get_percentile_tui(0.50);
+            let p50_tui = mc.get_percentile_tui(P50);
             let yearly_nw = p50_tui.map(|tui| {
                 tui.years
                     .iter()
@@ -862,11 +873,13 @@ impl AppState {
         let sim_config = to_simulation_config(&scenario_data)
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
-        // Configure Monte Carlo simulation
+        // Configure Monte Carlo simulation with CPU-based parallelism
         let mc_config = finplan_core::model::MonteCarloConfig {
             iterations: num_iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: false, // Don't need mean for summary
+            parallel_batches: cpu_parallel_batches(),
+            ..Default::default()
         };
 
         // Run the Monte Carlo simulation
@@ -875,36 +888,14 @@ impl AppState {
                 .map_err(|e| SimulationError::Config(e.to_string()))?;
 
         // Extract summary data
-        let p5 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p50 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p95 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
+        let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
+        let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
 
         // Get yearly net worth (nominal and real) from P50 run
         let birth_date = &scenario_data.parameters.birth_date;
         let start_date = &scenario_data.parameters.start_date;
-        let p50_tui = mc_summary
-            .percentile_runs
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .and_then(|(_, core_result)| to_tui_result(core_result, birth_date, start_date).ok());
+        let p50_tui = find_percentile_result(&mc_summary.percentile_runs, P50)
+            .and_then(|core_result| to_tui_result(core_result, birth_date, start_date).ok());
 
         let yearly_nw = p50_tui
             .as_ref()

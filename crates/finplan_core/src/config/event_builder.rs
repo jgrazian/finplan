@@ -132,6 +132,7 @@ pub enum TriggerSpec {
         interval: RepeatInterval,
         start: Option<Box<TriggerSpec>>,
         end: Option<Box<TriggerSpec>>,
+        max_occurrences: Option<u32>,
     },
 }
 
@@ -517,6 +518,7 @@ impl EventBuilder {
             interval: RepeatInterval::Weekly,
             start: self.get_start_condition(),
             end: None,
+            max_occurrences: None,
         };
         self
     }
@@ -527,6 +529,7 @@ impl EventBuilder {
             interval: RepeatInterval::BiWeekly,
             start: self.get_start_condition(),
             end: None,
+            max_occurrences: None,
         };
         self
     }
@@ -537,6 +540,7 @@ impl EventBuilder {
             interval: RepeatInterval::Monthly,
             start: self.get_start_condition(),
             end: None,
+            max_occurrences: None,
         };
         self
     }
@@ -547,6 +551,7 @@ impl EventBuilder {
             interval: RepeatInterval::Quarterly,
             start: self.get_start_condition(),
             end: None,
+            max_occurrences: None,
         };
         self
     }
@@ -557,6 +562,7 @@ impl EventBuilder {
             interval: RepeatInterval::Yearly,
             start: self.get_start_condition(),
             end: None,
+            max_occurrences: None,
         };
         self
     }
@@ -571,6 +577,7 @@ impl EventBuilder {
                 interval: RepeatInterval::Monthly,
                 start: Some(Box::new(TriggerSpec::Date(date))),
                 end: None,
+                max_occurrences: None,
             };
         }
         self
@@ -591,6 +598,7 @@ impl EventBuilder {
                     months: None,
                 })),
                 end: None,
+                max_occurrences: None,
             };
         }
         self
@@ -611,6 +619,17 @@ impl EventBuilder {
                 years,
                 months: None,
             }));
+        }
+        self
+    }
+
+    /// Stop repeating after N occurrences
+    pub fn max_occurrences(mut self, count: u32) -> Self {
+        if let TriggerSpec::Repeating {
+            max_occurrences, ..
+        } = &mut self.trigger
+        {
+            *max_occurrences = Some(count);
         }
         self
     }

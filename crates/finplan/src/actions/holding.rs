@@ -1,7 +1,6 @@
 // Holding actions - CRUD operations for asset holdings in investment accounts
 
 use crate::data::portfolio_data::{AccountType, AssetTag, AssetValue};
-use crate::modals::parse_currency;
 use crate::state::AppState;
 
 use super::{ActionContext, ActionResult};
@@ -13,12 +12,13 @@ pub fn handle_add_holding(state: &mut AppState, ctx: ActionContext) -> ActionRes
         None => return ActionResult::close(),
     };
 
-    let parts = ctx.value_parts();
-    let asset_name = parts.first().unwrap_or(&"").to_string();
-    let asset_value = parts
-        .get(1)
-        .and_then(|s| parse_currency(s).ok())
-        .unwrap_or(0.0);
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
+
+    let asset_name = form.get_str_non_empty(0).unwrap_or("").to_string();
+    let asset_value = form.get_currency_or(1, 0.0);
 
     if asset_name.is_empty() {
         return ActionResult::error("Asset name cannot be empty");
@@ -52,7 +52,11 @@ pub fn handle_edit_holding(state: &mut AppState, ctx: ActionContext) -> ActionRe
         Some(indices) => indices,
         None => return ActionResult::close(),
     };
-    let parts = ctx.value_parts();
+
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     if let Some(account) = state.data_mut().portfolios.accounts.get_mut(account_idx) {
         let assets = match &mut account.account_type {
@@ -67,10 +71,10 @@ pub fn handle_edit_holding(state: &mut AppState, ctx: ActionContext) -> ActionRe
         if let Some(assets) = assets
             && let Some(holding) = assets.get_mut(holding_idx)
         {
-            if let Some(name) = parts.first() {
+            if let Some(name) = form.get_str_non_empty(0) {
                 holding.asset = AssetTag(name.to_string());
             }
-            if let Some(val) = parts.get(1).and_then(|s| parse_currency(s).ok()) {
+            if let Some(val) = form.get_currency(1) {
                 holding.value = val;
             }
             return ActionResult::modified();

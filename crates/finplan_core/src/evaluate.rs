@@ -1,4 +1,5 @@
 use jiff::civil::Date;
+use rand::Rng;
 use rustc_hash::FxHashMap;
 
 use crate::error::{
@@ -22,6 +23,22 @@ fn evaluate_transfer_amount(
 ) -> Result<f64, TransferEvaluationError> {
     match amount {
         TransferAmount::Fixed(amt) => Ok(*amt),
+
+        TransferAmount::InflationAdjusted(inner) => {
+            // First evaluate the inner amount (in "real" start-of-sim dollars)
+            let base_amount = evaluate_transfer_amount(inner, from, to, state)?;
+
+            // Then adjust for cumulative inflation
+            state
+                .portfolio
+                .market
+                .get_inflation_adjusted_value(
+                    state.timeline.start_date,
+                    state.timeline.current_date,
+                    base_amount,
+                )
+                .ok_or(TransferEvaluationError::InflationDataUnavailable)
+        }
 
         TransferAmount::SourceBalance => match from {
             TransferEndpoint::Asset { asset_coord } => Ok(state.asset_balance(*asset_coord)?),
@@ -83,6 +100,11 @@ fn evaluate_transfer_amount(
             let left_val = evaluate_transfer_amount(left, from, to, state)?;
             let right_val = evaluate_transfer_amount(right, from, to, state)?;
             Ok(left_val * right_val)
+        }
+
+        TransferAmount::Scale(multiplier, inner) => {
+            let inner_val = evaluate_transfer_amount(inner, from, to, state)?;
+            Ok(multiplier * inner_val)
         }
     }
 }
@@ -209,6 +231,7 @@ pub fn evaluate_trigger(
             interval,
             start_condition,
             end_condition,
+            max_occurrences,
         } => {
             // Check if this repeating event has been started and its active status (O(1) lookup)
             let active_status = state.event_state.repeating_active(*event_id);
@@ -226,6 +249,14 @@ pub fn evaluate_trigger(
                 && let TriggerEvent::Triggered = evaluate_trigger(event_id, end_cond, state)?
             {
                 return Ok(TriggerEvent::StopRepeating);
+            }
+
+            // Check if max_occurrences limit has been reached
+            if let Some(max) = max_occurrences {
+                let current_count = state.event_state.occurrence_count(*event_id);
+                if current_count >= *max {
+                    return Ok(TriggerEvent::StopRepeating);
+                }
             }
 
             if !is_started {
@@ -949,6 +980,26 @@ pub fn evaluate_effect_into(
                     });
                     Ok(())
                 }
+            }
+        }
+
+        EventEffect::Random {
+            probability,
+            on_true,
+            on_false,
+        } => {
+            // Sample from the simulation's RNG
+            let roll: f64 = state.rng.borrow_mut().random();
+
+            if roll < *probability {
+                // Random check passed - execute on_true effect
+                evaluate_effect_into(on_true, state, out)
+            } else if let Some(false_effect) = on_false {
+                // Random check failed and we have an on_false effect
+                evaluate_effect_into(false_effect, state, out)
+            } else {
+                // Random check failed, no on_false effect - do nothing
+                Ok(())
             }
         }
     }

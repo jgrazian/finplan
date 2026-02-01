@@ -1,4 +1,4 @@
-use crate::util::format::format_currency;
+use crate::util::format::format_currency_short;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -142,7 +142,7 @@ impl<'a> PortfolioOverviewChart<'a> {
             let line = if self.value_overlay {
                 // Overlay mode: value displayed on top of the bar (left-justified)
                 // Layout: name (12) + space + bar (with value overlay) + space + percentage (5)
-                let value_str = format_currency(value);
+                let value_str = format_currency_short(value);
                 let pct_str = format!("{:>4}%", percentage);
 
                 // Calculate bar width: total - name(12) - spaces(2) - pct(5)
@@ -256,7 +256,7 @@ impl<'a> PortfolioOverviewChart<'a> {
                     Span::styled(bar_empty, Style::default().bg(DARK_GREY)),
                     Span::raw(format!(" {:>4}% ", percentage)),
                     Span::styled(
-                        format_currency(value),
+                        format_currency_short(value),
                         Style::default().fg(if value >= 0.0 {
                             Color::Rgb(100, 100, 100)
                         } else {

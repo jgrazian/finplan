@@ -25,9 +25,10 @@ pub use market::{
 };
 pub use records::{Record, RecordKind, TaxInfo, TransactionSource};
 pub use results::{
-    MeanAccumulators, MonteCarloConfig, MonteCarloProgress, MonteCarloResult, MonteCarloStats,
-    MonteCarloSummary, SimulationResult, SimulationWarning, SnapshotMeanAccumulator,
-    TaxMeanAccumulator, WarningKind, WealthSnapshot, YearlyCashFlowSummary, final_net_worth,
+    ConvergenceConfig, ConvergenceMetric, MeanAccumulators, MonteCarloConfig, MonteCarloProgress,
+    MonteCarloResult, MonteCarloStats, MonteCarloSummary, SimulationResult, SimulationWarning,
+    SnapshotMeanAccumulator, TaxMeanAccumulator, WarningKind, WealthSnapshot,
+    YearlyCashFlowSummary, final_net_worth,
 };
 pub use rmd::{RmdTable, RmdTableEntry};
 pub use state_event::{CashFlowKind, LedgerEntry, StateEvent};

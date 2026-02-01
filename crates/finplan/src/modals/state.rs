@@ -1,6 +1,8 @@
 /// Modal types for forms, pickers, and confirmations.
-use super::ModalAction;
+use super::action::ModalAction;
+use super::amount_builder::format_amount_summary;
 use super::context::ModalContext;
+use crate::data::events_data::AmountData;
 
 #[derive(Debug)]
 pub enum ModalState {
@@ -228,7 +230,7 @@ pub mod asset_sale_fields {
     pub const ALL_ASSETS: &str = "[All]";
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum FieldType {
     Text,
     Currency,
@@ -236,6 +238,11 @@ pub enum FieldType {
     ReadOnly,
     /// Select from a list of options (options stored in FormField.options)
     Select,
+    /// Complex amount with recursive structure (displayed as summary, edited via modal)
+    Amount(Box<AmountData>),
+    /// Trigger field - displays summary, Enter opens trigger editor
+    /// Stores the trigger summary string for display
+    Trigger,
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +302,44 @@ impl FormField {
             cursor_pos: 0,
             options,
         }
+    }
+
+    /// Create an amount field with recursive AmountData structure.
+    /// The value is displayed as a summary; editing opens a nested modal.
+    pub fn amount(label: &str, amount: AmountData) -> Self {
+        let value = format_amount_summary(&amount);
+        Self {
+            label: label.to_string(),
+            field_type: FieldType::Amount(Box::new(amount)),
+            value,
+            cursor_pos: 0,
+            options: Vec::new(),
+        }
+    }
+
+    /// Get the AmountData if this is an Amount field
+    pub fn as_amount(&self) -> Option<&AmountData> {
+        match &self.field_type {
+            FieldType::Amount(amount) => Some(amount),
+            _ => None,
+        }
+    }
+
+    /// Create a trigger field that shows the trigger summary and opens editor on Enter
+    pub fn trigger(label: &str, summary: &str) -> Self {
+        Self {
+            label: label.to_string(),
+            field_type: FieldType::Trigger,
+            value: summary.to_string(),
+            cursor_pos: 0,
+            options: Vec::new(),
+        }
+    }
+
+    /// Update the amount data (for Amount fields)
+    pub fn set_amount(&mut self, amount: AmountData) {
+        self.value = format_amount_summary(&amount);
+        self.field_type = FieldType::Amount(Box::new(amount));
     }
 
     /// Get the index of the currently selected option (for Select fields)
@@ -460,9 +505,113 @@ impl FormModal {
         self.get_int(index).unwrap_or(default)
     }
 
+    /// Get an AmountData value from a field by index
+    pub fn get_amount(&self, index: usize) -> Option<AmountData> {
+        self.fields.get(index).and_then(|f| match &f.field_type {
+            FieldType::Amount(amount) => Some((**amount).clone()),
+            _ => None,
+        })
+    }
+
+    /// Get an AmountData value with a default if not found or not an Amount field
+    pub fn get_amount_or(&self, index: usize, default: AmountData) -> AmountData {
+        self.get_amount(index).unwrap_or(default)
+    }
+
     /// Get all field values as a FormValues helper for convenient access
     pub fn values(&self) -> FormValues<'_> {
         FormValues { form: self }
+    }
+
+    // ========== Label-Based Field Access ==========
+    //
+    // These methods access fields by label instead of index, making code
+    // more readable and resistant to field reordering.
+
+    /// Find a field by its label
+    fn field_by_label(&self, label: &str) -> Option<&FormField> {
+        self.fields.iter().find(|f| f.label == label)
+    }
+
+    /// Get a string value from a field by label
+    pub fn str(&self, label: &str) -> Option<&str> {
+        self.field_by_label(label).map(|f| f.value.as_str())
+    }
+
+    /// Get a non-empty string value by label (returns None if empty)
+    pub fn str_non_empty(&self, label: &str) -> Option<&str> {
+        self.field_by_label(label)
+            .map(|f| f.value.as_str())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Get an optional string by label (returns Some only if non-empty)
+    pub fn optional_str(&self, label: &str) -> Option<String> {
+        self.str_non_empty(label).map(|s| s.to_string())
+    }
+
+    /// Get a currency value by label. Handles $ prefix and commas.
+    pub fn currency(&self, label: &str) -> Option<f64> {
+        self.field_by_label(label).and_then(|f| {
+            let s = f.value.trim().trim_start_matches('$').replace(',', "");
+            s.parse().ok()
+        })
+    }
+
+    /// Get a currency value by label with a default
+    pub fn currency_or(&self, label: &str, default: f64) -> f64 {
+        self.currency(label).unwrap_or(default)
+    }
+
+    /// Get a percentage value by label as a decimal (e.g., "5.0" -> 0.05)
+    pub fn percentage(&self, label: &str) -> Option<f64> {
+        self.field_by_label(label).and_then(|f| {
+            let s = f.value.trim().trim_end_matches('%');
+            s.parse::<f64>().ok().map(|v| v / 100.0)
+        })
+    }
+
+    /// Get a percentage value by label with a default
+    pub fn percentage_or(&self, label: &str, default: f64) -> f64 {
+        self.percentage(label).unwrap_or(default)
+    }
+
+    /// Get a boolean value by label (Y/N, Yes/No, true/false)
+    pub fn bool(&self, label: &str) -> Option<bool> {
+        self.field_by_label(label).map(|f| {
+            let s = f.value.to_uppercase();
+            s.starts_with('Y') || s == "TRUE" || s == "1"
+        })
+    }
+
+    /// Get a boolean value by label with a default
+    pub fn bool_or(&self, label: &str, default: bool) -> bool {
+        self.bool(label).unwrap_or(default)
+    }
+
+    /// Get an integer value by label
+    pub fn int<T: std::str::FromStr>(&self, label: &str) -> Option<T> {
+        self.field_by_label(label)
+            .and_then(|f| f.value.trim().parse().ok())
+    }
+
+    /// Get an integer value by label with a default
+    pub fn int_or<T: std::str::FromStr>(&self, label: &str, default: T) -> T {
+        self.int(label).unwrap_or(default)
+    }
+
+    /// Get an AmountData value by label
+    pub fn amount(&self, label: &str) -> Option<AmountData> {
+        self.field_by_label(label)
+            .and_then(|f| match &f.field_type {
+                FieldType::Amount(amount) => Some((**amount).clone()),
+                _ => None,
+            })
+    }
+
+    /// Get an AmountData value by label with a default
+    pub fn amount_or(&self, label: &str, default: AmountData) -> AmountData {
+        self.amount(label).unwrap_or(default)
     }
 }
 
@@ -595,5 +744,48 @@ mod tests {
         assert_eq!(values.currency(1, 0.0), 500.0);
         assert!((values.percentage(2, 0.0) - 0.05).abs() < 0.0001);
         assert!(!values.bool(3, true));
+    }
+
+    #[test]
+    fn test_label_based_access() {
+        let form = FormModal::new(
+            "Test",
+            vec![
+                FormField::text("Name", "John Doe"),
+                FormField::text("Description", ""),
+                FormField::currency("Amount", 1234.56),
+                FormField::percentage("Rate", 0.075),
+                FormField::select("Active", vec!["Yes".to_string(), "No".to_string()], "Yes"),
+                FormField::text("Age", "25"),
+            ],
+            ModalAction::CREATE_ACCOUNT,
+        );
+
+        // String access by label
+        assert_eq!(form.str("Name"), Some("John Doe"));
+        assert_eq!(form.str("Description"), Some("")); // Empty but exists
+        assert_eq!(form.str_non_empty("Name"), Some("John Doe"));
+        assert_eq!(form.str_non_empty("Description"), None); // Empty returns None
+        assert_eq!(form.optional_str("Name"), Some("John Doe".to_string()));
+        assert_eq!(form.optional_str("Description"), None);
+        assert_eq!(form.str("NonExistent"), None); // Missing field
+
+        // Currency by label
+        assert_eq!(form.currency("Amount"), Some(1234.56));
+        assert_eq!(form.currency_or("Amount", 0.0), 1234.56);
+        assert_eq!(form.currency_or("NonExistent", 99.0), 99.0);
+
+        // Percentage by label
+        assert!((form.percentage("Rate").unwrap() - 0.075).abs() < 0.0001);
+        assert!((form.percentage_or("Rate", 0.0) - 0.075).abs() < 0.0001);
+
+        // Boolean by label
+        assert_eq!(form.bool("Active"), Some(true));
+        assert!(form.bool_or("Active", false));
+
+        // Integer by label
+        assert_eq!(form.int::<u32>("Age"), Some(25));
+        assert_eq!(form.int_or::<u32>("Age", 0), 25);
+        assert_eq!(form.int_or::<u32>("NonExistent", 42), 42);
     }
 }

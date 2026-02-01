@@ -7,7 +7,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::state::{FieldType, FormField, FormModal};
+use crate::data::keybindings_data::KeybindingsConfig;
+use crate::modals::{FieldType, FormField, FormModal};
 
 use super::helpers::{HelpText, MultiLineHelp, calculate_scroll, render_cursor_line};
 use super::{ConfirmedValue, ModalResult, centered_rect};
@@ -114,7 +115,7 @@ fn render_field(
     let mut label_spans = vec![Span::styled(&field.label, label_style)];
 
     // Add inline hints based on field type and state
-    match field.field_type {
+    match &field.field_type {
         FieldType::ReadOnly => {
             label_spans.push(Span::styled(
                 " (read-only)",
@@ -123,6 +124,12 @@ fn render_field(
         }
         FieldType::Select if is_focused => {
             label_spans.push(Span::styled(" [</>]", Style::default().fg(Color::Cyan)));
+        }
+        FieldType::Amount(_) | FieldType::Trigger if is_focused => {
+            label_spans.push(Span::styled(
+                " [Enter to edit]",
+                Style::default().fg(Color::Cyan),
+            ));
         }
         _ if is_focused && is_editing => {
             label_spans.push(Span::styled(
@@ -145,9 +152,12 @@ fn render_field(
     frame.render_widget(label, chunks[0]);
 
     // Render input field with enhanced styling for edit mode
-    let (border_color, border_modifier, fg_color) = match field.field_type {
+    let (border_color, border_modifier, fg_color) = match &field.field_type {
         FieldType::ReadOnly => (Color::DarkGray, Modifier::empty(), Color::DarkGray),
         FieldType::Select if is_focused => (Color::Yellow, Modifier::empty(), Color::Cyan),
+        FieldType::Amount(_) | FieldType::Trigger if is_focused => {
+            (Color::Yellow, Modifier::empty(), Color::Cyan)
+        }
         _ if is_focused && is_editing => (Color::Cyan, Modifier::BOLD, Color::White), // Bold border when editing
         _ if is_focused => (Color::Yellow, Modifier::empty(), Color::White),
         _ => (Color::DarkGray, Modifier::empty(), Color::White),
@@ -165,6 +175,10 @@ fn render_field(
     // Render value based on field type
     if field.field_type == FieldType::Select {
         render_select_value(frame, input_inner, field, is_focused, fg_color);
+    } else if matches!(field.field_type, FieldType::Amount(_)) {
+        render_amount_value(frame, input_inner, field, is_focused, fg_color);
+    } else if field.field_type == FieldType::Trigger {
+        render_trigger_value(frame, input_inner, field, is_focused, fg_color);
     } else if is_focused && is_editing && field.field_type != FieldType::ReadOnly {
         render_editing_value(frame, input_inner, field);
     } else {
@@ -207,6 +221,80 @@ fn render_select_value(
     frame.render_widget(Paragraph::new(line), area);
 }
 
+fn render_amount_value(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    field: &FormField,
+    is_focused: bool,
+    fg_color: Color,
+) {
+    // Amount fields show their summary value (stored in field.value)
+    // with a hint to press Enter to edit
+    let line = if is_focused {
+        // Truncate if too long for the display area
+        let max_len = area.width.saturating_sub(8) as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(vec![
+            Span::styled(display_val, Style::default().fg(fg_color)),
+            Span::styled(" [Edit]", Style::default().fg(Color::DarkGray)),
+        ])
+    } else if field.value.is_empty() {
+        Line::from(Span::styled("$0.00", Style::default().fg(Color::DarkGray)))
+    } else {
+        // Truncate for non-focused display too
+        let max_len = area.width as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(Span::styled(display_val, Style::default().fg(fg_color)))
+    };
+
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+fn render_trigger_value(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    field: &FormField,
+    is_focused: bool,
+    fg_color: Color,
+) {
+    // Trigger fields show their summary value (stored in field.value)
+    // with a hint to press Enter to edit
+    let line = if is_focused {
+        // Truncate if too long for the display area
+        let max_len = area.width.saturating_sub(8) as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(vec![
+            Span::styled(display_val, Style::default().fg(fg_color)),
+            Span::styled(" [Edit]", Style::default().fg(Color::DarkGray)),
+        ])
+    } else if field.value.is_empty() {
+        Line::from(Span::styled("(none)", Style::default().fg(Color::DarkGray)))
+    } else {
+        // Truncate for non-focused display too
+        let max_len = area.width as usize;
+        let display_val = if field.value.len() > max_len {
+            format!("{}...", &field.value[..max_len.saturating_sub(3)])
+        } else {
+            field.value.clone()
+        };
+        Line::from(Span::styled(display_val, Style::default().fg(fg_color)))
+    };
+
+    frame.render_widget(Paragraph::new(line), area);
+}
+
 fn render_editing_value(frame: &mut Frame, area: ratatui::layout::Rect, field: &FormField) {
     let input_width = (area.width as usize).saturating_sub(1);
     let scrolled = calculate_scroll(&field.value, field.cursor_pos, input_width + 2);
@@ -241,28 +329,65 @@ fn format_display_value(field: &FormField) -> String {
 }
 
 /// Handle key events for form modal
-pub fn handle_form_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
+pub fn handle_form_key(
+    key: AppKeyEvent,
+    modal: &mut FormModal,
+    keybindings: &KeybindingsConfig,
+) -> ModalResult {
     if modal.editing {
-        handle_editing_key(key, modal)
+        handle_editing_key(key, modal, keybindings)
     } else {
-        handle_navigation_key(key, modal)
+        handle_navigation_key(key, modal, keybindings)
     }
 }
 
-fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
+fn handle_editing_key(
+    key: AppKeyEvent,
+    modal: &mut FormModal,
+    keybindings: &KeybindingsConfig,
+) -> ModalResult {
     // In editing mode, only F10 submits (since 's' types the character)
     if matches!(key.code, KeyCode::F(10)) {
-        return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
+        return ModalResult::Confirmed(
+            modal.action,
+            Box::new(ConfirmedValue::Form(Box::new(modal.clone()))),
+        );
     }
 
     let field = &mut modal.fields[modal.focused_field];
 
-    // Handle Select fields specially - use Left/Right for option cycling
-    if field.field_type == FieldType::Select {
-        let field_index = modal.focused_field;
-
-        // Handle back-tab first (Shift+Tab on web, BackTab on native)
-        if key.is_back_tab() || matches!(key.code, KeyCode::Up) {
+    // Handle Trigger fields - Enter opens the trigger editor
+    if field.field_type == FieldType::Trigger {
+        // Confirm opens the trigger editor
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm) {
+            return ModalResult::TriggerFieldActivated(modal.focused_field);
+        }
+        // Cancel closes the modal
+        if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
+            return ModalResult::Cancelled;
+        }
+        // Navigate down (also Tab)
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.down)
+            || KeybindingsConfig::matches(&key, &keybindings.navigation.next_panel)
+        {
+            // Move to next field
+            let start = modal.focused_field;
+            loop {
+                modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
+                {
+                    break;
+                }
+            }
+            return ModalResult::Continue;
+        }
+        // Navigate up (also Shift+Tab)
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.up)
+            || KeybindingsConfig::matches(&key, &keybindings.navigation.prev_panel)
+        {
             // Move to previous field
             let start = modal.focused_field;
             loop {
@@ -271,63 +396,136 @@ fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
                 } else {
                     modal.focused_field -= 1;
                 }
-                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                    || modal.focused_field == start
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
                 {
                     break;
                 }
             }
             return ModalResult::Continue;
         }
-
-        match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
-                field.select_prev();
-                return ModalResult::FieldChanged(field_index);
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                field.select_next();
-                return ModalResult::FieldChanged(field_index);
-            }
-            KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
-                // Move to next field
-                let start = modal.focused_field;
-                loop {
-                    modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                    if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                        || modal.focused_field == start
-                    {
-                        break;
-                    }
-                }
-                return ModalResult::Continue;
-            }
-            KeyCode::Esc => return ModalResult::Cancelled,
-            _ => return ModalResult::Continue,
-        }
+        return ModalResult::Continue;
     }
 
-    // Handle back-tab first (Shift+Tab on web, BackTab on native)
-    if key.is_back_tab() || matches!(key.code, KeyCode::Up) {
-        // Exit edit mode and move to previous field
-        modal.editing = false;
-        modal.editing_original_value = None;
-        let start = modal.focused_field;
-        loop {
-            if modal.focused_field == 0 {
-                modal.focused_field = modal.fields.len() - 1;
-            } else {
-                modal.focused_field -= 1;
+    // Handle Amount fields - Enter opens the amount editor
+    if matches!(field.field_type, FieldType::Amount(_)) {
+        // Confirm opens the amount editor
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm) {
+            return ModalResult::AmountFieldActivated(modal.focused_field);
+        }
+        // Cancel closes the modal
+        if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
+            return ModalResult::Cancelled;
+        }
+        // Navigate down (also Tab)
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.down)
+            || KeybindingsConfig::matches(&key, &keybindings.navigation.next_panel)
+        {
+            // Move to next field
+            let start = modal.focused_field;
+            loop {
+                modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
+                {
+                    break;
+                }
             }
-            if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                || modal.focused_field == start
-            {
-                break;
+            return ModalResult::Continue;
+        }
+        // Navigate up (also Shift+Tab)
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.up)
+            || KeybindingsConfig::matches(&key, &keybindings.navigation.prev_panel)
+        {
+            // Move to previous field
+            let start = modal.focused_field;
+            loop {
+                if modal.focused_field == 0 {
+                    modal.focused_field = modal.fields.len() - 1;
+                } else {
+                    modal.focused_field -= 1;
+                }
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
+                {
+                    break;
+                }
             }
+            return ModalResult::Continue;
         }
         return ModalResult::Continue;
     }
 
+    // Handle Select fields specially - use Left/Right for option cycling
+    if field.field_type == FieldType::Select {
+        let field_index = modal.focused_field;
+        // Left navigation for select
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.left) {
+            field.select_prev();
+            return ModalResult::FieldChanged(field_index);
+        }
+        // Right navigation for select
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.right) {
+            field.select_next();
+            return ModalResult::FieldChanged(field_index);
+        }
+        // Confirm or navigate down moves to next field
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm)
+            || KeybindingsConfig::matches(&key, &keybindings.navigation.down)
+            || KeybindingsConfig::matches(&key, &keybindings.navigation.next_panel)
+        {
+            // Move to next field
+            let start = modal.focused_field;
+            loop {
+                modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
+                {
+                    break;
+                }
+            }
+            return ModalResult::Continue;
+        }
+        // Navigate up (also Shift+Tab)
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.up)
+            || KeybindingsConfig::matches(&key, &keybindings.navigation.prev_panel)
+        {
+            // Move to previous field
+            let start = modal.focused_field;
+            loop {
+                if modal.focused_field == 0 {
+                    modal.focused_field = modal.fields.len() - 1;
+                } else {
+                    modal.focused_field -= 1;
+                }
+                if !matches!(
+                    modal.fields[modal.focused_field].field_type,
+                    FieldType::ReadOnly
+                ) || modal.focused_field == start
+                {
+                    break;
+                }
+            }
+            return ModalResult::Continue;
+        }
+        // Cancel closes the modal
+        if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
+            return ModalResult::Cancelled;
+        }
+        return ModalResult::Continue;
+    }
+
+    // For text editing fields, we need to be careful about keybindings
+    // since j/k are valid text input characters. Use hardcoded navigation
+    // keys (Tab, Shift+Tab, arrow keys) for text editing mode.
     match key.code {
         KeyCode::Enter => {
             // Exit edit mode, keep changes
@@ -395,12 +593,15 @@ fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
         }
         KeyCode::Char(c) => {
             // Validate character based on field type
-            let valid = match field.field_type {
+            let valid = match &field.field_type {
                 FieldType::Currency | FieldType::Percentage => {
                     c.is_ascii_digit() || c == '.' || c == '-'
                 }
                 FieldType::Text => true,
-                FieldType::ReadOnly | FieldType::Select => false,
+                FieldType::ReadOnly
+                | FieldType::Select
+                | FieldType::Amount(_)
+                | FieldType::Trigger => false,
             };
 
             if valid {
@@ -413,53 +614,49 @@ fn handle_editing_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
     }
 }
 
-fn handle_navigation_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult {
+fn handle_navigation_key(
+    key: AppKeyEvent,
+    modal: &mut FormModal,
+    keybindings: &KeybindingsConfig,
+) -> ModalResult {
     // In navigation mode, 's' or F10 submits
     if matches!(key.code, KeyCode::Char('s') | KeyCode::F(10)) {
-        return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Form(modal.clone())));
+        return ModalResult::Confirmed(
+            modal.action,
+            Box::new(ConfirmedValue::Form(Box::new(modal.clone()))),
+        );
     }
 
-    let current_field_type = modal.fields[modal.focused_field].field_type;
+    let current_field_type = &modal.fields[modal.focused_field].field_type;
 
     // Handle Select field navigation with left/right
-    if current_field_type == FieldType::Select {
-        match key.code {
-            KeyCode::Left | KeyCode::Char('h') => {
-                modal.fields[modal.focused_field].select_prev();
-                return ModalResult::Continue;
-            }
-            KeyCode::Right | KeyCode::Char('l') => {
-                modal.fields[modal.focused_field].select_next();
-                return ModalResult::Continue;
-            }
-            _ => {}
+    if matches!(current_field_type, FieldType::Select) {
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.left) {
+            modal.fields[modal.focused_field].select_prev();
+            return ModalResult::Continue;
+        }
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.right) {
+            modal.fields[modal.focused_field].select_next();
+            return ModalResult::Continue;
         }
     }
 
-    // Handle back-tab first (Shift+Tab on web, BackTab on native)
-    if key.is_back_tab() || matches!(key.code, KeyCode::Char('k') | KeyCode::Up) {
-        // Skip read-only fields when navigating
-        let start = modal.focused_field;
-        loop {
-            if modal.focused_field == 0 {
-                modal.focused_field = modal.fields.len() - 1;
-            } else {
-                modal.focused_field -= 1;
+    // Check for confirm or 'e' for edit
+    if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm)
+        || KeybindingsConfig::matches(&key, &keybindings.tabs.portfolio.edit)
+    {
+        // Handle different field types
+        match current_field_type {
+            // Trigger fields open a nested modal for editing
+            FieldType::Trigger => {
+                return ModalResult::TriggerFieldActivated(modal.focused_field);
             }
-            if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                || modal.focused_field == start
-            {
-                break;
+            // Amount fields open a nested modal for editing
+            FieldType::Amount(_) => {
+                return ModalResult::AmountFieldActivated(modal.focused_field);
             }
-        }
-        return ModalResult::Continue;
-    }
-
-    match key.code {
-        KeyCode::Enter | KeyCode::Char('e') => {
-            // Enter edit mode for current field if not read-only and not a Select
-            if current_field_type != FieldType::ReadOnly && current_field_type != FieldType::Select
-            {
+            // Text, Currency, Percentage fields enter inline edit mode
+            FieldType::Text | FieldType::Currency | FieldType::Percentage => {
                 modal.editing = true;
                 // Store original value for Esc to revert
                 modal.editing_original_value =
@@ -468,24 +665,60 @@ fn handle_navigation_key(key: AppKeyEvent, modal: &mut FormModal) -> ModalResult
                 let field = &mut modal.fields[modal.focused_field];
                 field.cursor_pos = field.value.len();
             }
-            ModalResult::Continue
+            // ReadOnly and Select don't enter edit mode on Enter
+            FieldType::ReadOnly | FieldType::Select => {}
         }
-        KeyCode::Esc => ModalResult::Cancelled,
-        KeyCode::Tab | KeyCode::Char('j') | KeyCode::Down => {
-            // Skip read-only fields when navigating
-            let start = modal.focused_field;
-            loop {
-                modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                if modal.fields[modal.focused_field].field_type != FieldType::ReadOnly
-                    || modal.focused_field == start
-                {
-                    break;
-                }
-            }
-            ModalResult::Continue
-        }
-        _ => ModalResult::Continue,
+        return ModalResult::Continue;
     }
+
+    // Check for cancel
+    if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
+        return ModalResult::Cancelled;
+    }
+
+    // Check for navigation down (also Tab)
+    if KeybindingsConfig::matches(&key, &keybindings.navigation.down)
+        || KeybindingsConfig::matches(&key, &keybindings.navigation.next_panel)
+    {
+        // Skip read-only fields when navigating
+        let start = modal.focused_field;
+        loop {
+            modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
+            if !matches!(
+                modal.fields[modal.focused_field].field_type,
+                FieldType::ReadOnly
+            ) || modal.focused_field == start
+            {
+                break;
+            }
+        }
+        return ModalResult::Continue;
+    }
+
+    // Check for navigation up (also Shift+Tab)
+    if KeybindingsConfig::matches(&key, &keybindings.navigation.up)
+        || KeybindingsConfig::matches(&key, &keybindings.navigation.prev_panel)
+    {
+        // Skip read-only fields when navigating
+        let start = modal.focused_field;
+        loop {
+            if modal.focused_field == 0 {
+                modal.focused_field = modal.fields.len() - 1;
+            } else {
+                modal.focused_field -= 1;
+            }
+            if !matches!(
+                modal.fields[modal.focused_field].field_type,
+                FieldType::ReadOnly
+            ) || modal.focused_field == start
+            {
+                break;
+            }
+        }
+        return ModalResult::Continue;
+    }
+
+    ModalResult::Continue
 }
 
 // ========== Validation Helpers ==========

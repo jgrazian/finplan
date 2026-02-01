@@ -4,6 +4,7 @@
 // domain-specific files, reducing the size of app.rs.
 
 mod account;
+pub mod amount;
 mod config;
 mod effect;
 mod event;
@@ -14,6 +15,7 @@ mod scenario;
 pub mod wizard;
 
 pub use account::*;
+pub use amount::*;
 pub use config::*;
 pub use effect::*;
 pub use event::*;
@@ -21,9 +23,10 @@ pub use holding::*;
 pub use profile::*;
 pub use scenario::*;
 
-use crate::modals::ConfirmedValue;
-use crate::state::context::{ModalContext, TriggerBuilderState, TriggerContext};
-use crate::state::{FormModal, ModalState};
+use crate::modals::{
+    ConfirmedValue, FormModal, ModalContext, ModalState,
+    context::{TriggerBuilderState, TriggerContext},
+};
 
 /// Result of an action handler
 ///
@@ -71,8 +74,6 @@ pub struct ActionContext<'a> {
     pub typed_modal_context: Option<&'a ModalContext>,
     /// The typed value submitted from the modal
     confirmed_value: &'a ConfirmedValue,
-    /// Legacy string value for backwards compatibility
-    legacy_value: String,
 }
 
 impl<'a> ActionContext<'a> {
@@ -80,11 +81,9 @@ impl<'a> ActionContext<'a> {
         modal_context: Option<&'a ModalContext>,
         confirmed_value: &'a ConfirmedValue,
     ) -> Self {
-        let legacy_value = confirmed_value.to_legacy_string();
         Self {
             typed_modal_context: modal_context,
             confirmed_value,
-            legacy_value,
         }
     }
 
@@ -101,18 +100,6 @@ impl<'a> ActionContext<'a> {
     /// Get the confirmed value
     pub fn confirmed_value(&self) -> &ConfirmedValue {
         self.confirmed_value
-    }
-
-    /// Get the legacy string value (for backwards compatibility during migration)
-    /// This will be removed once all handlers are migrated to typed extraction
-    pub fn value(&self) -> &str {
-        &self.legacy_value
-    }
-
-    /// Split the legacy value by pipe delimiter (for backwards compatibility)
-    /// This will be removed once all handlers are migrated to typed extraction
-    pub fn value_parts(&self) -> Vec<&str> {
-        self.legacy_value.split('|').collect()
     }
 
     /// Parse the context as an index (from typed or legacy context)
@@ -161,5 +148,19 @@ impl<'a> ActionContext<'a> {
                 None
             }
         })
+    }
+
+    /// Get form field values as strings for legacy code that expects Vec<&str>
+    /// This is a bridge method to help migrate code from ctx.value() to typed extraction
+    pub fn value_parts(&self) -> Vec<&str> {
+        self.form()
+            .map(|f| f.fields.iter().map(|field| field.value.as_str()).collect())
+            .unwrap_or_default()
+    }
+
+    /// Get the string value (for legacy code compatibility during migration)
+    /// This is a bridge method - prefer using selected() or form() for new code
+    pub fn value(&self) -> &str {
+        self.selected().unwrap_or("")
     }
 }

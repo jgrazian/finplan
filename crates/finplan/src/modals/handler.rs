@@ -3,8 +3,9 @@
 /// This allows screens to handle modal results locally instead of going through
 /// the central dispatch in app.rs, making the code more modular and easier to extend.
 use crate::actions::ActionResult;
-use crate::modals::ConfirmedValue;
-use crate::state::{AppState, ModalAction};
+use crate::state::AppState;
+
+use super::{ConfirmedValue, ModalAction};
 
 /// Trait for handling modal results within a screen
 pub trait ModalHandler {
@@ -13,13 +14,11 @@ pub trait ModalHandler {
 
     /// Handle the modal result, returning the action result
     ///
-    /// The legacy_value parameter provides backwards compatibility during migration.
-    /// New handlers should use the typed ConfirmedValue directly.
+    /// Use `value.as_str()` for picker/text modals and `value.as_form()` for form modals.
     fn handle_modal_result(
         &self,
         state: &mut AppState,
         action: ModalAction,
         value: &ConfirmedValue,
-        legacy_value: &str,
     ) -> ActionResult;
 }

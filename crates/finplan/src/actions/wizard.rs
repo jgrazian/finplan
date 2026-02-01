@@ -12,9 +12,7 @@
 // Effect Addition:
 //   ManageEffects → PickEffectTypeForAdd → AddEffect
 
-use crate::state::{
-    FormField, FormModal, ModalAction, ModalState, PickerModal, context::ModalContext,
-};
+use crate::modals::{FormField, FormModal, ModalAction, ModalContext, ModalState, PickerModal};
 
 /// A wizard step builder for creating form modals
 pub struct FormWizard {
@@ -161,15 +159,14 @@ pub mod shortcuts {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modals::context::AccountTypeContext;
 
     #[test]
     fn test_form_wizard_builder() {
         let modal = FormWizard::new("Test Form", ModalAction::CREATE_ACCOUNT)
             .text("Name", "Default")
             .currency("Amount", 100.0)
-            .context(ModalContext::AccountType(
-                crate::state::context::AccountTypeContext::Brokerage,
-            ))
+            .context(ModalContext::AccountType(AccountTypeContext::Brokerage))
             .editing()
             .build();
 

@@ -6,11 +6,18 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{self, JoinHandle};
 
 use finplan_core::config::SimulationConfig;
-use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, SimulationResult as CoreResult};
+use finplan_core::model::{
+    ConvergenceConfig, ConvergenceMetric, MonteCarloConfig, MonteCarloProgress,
+    SimulationResult as CoreResult,
+};
 
 use crate::data::convert::to_tui_result;
 use crate::state::{
     MonteCarloPreviewSummary, MonteCarloStoredResult, ScenarioSummary, SimulationResult,
+};
+use crate::util::common::cpu_parallel_batches;
+use crate::util::percentiles::{
+    PercentileSet, find_percentile_result, find_percentile_result_pair, standard::P50,
 };
 
 /// Request sent to the background worker
@@ -27,6 +34,16 @@ pub enum SimulationRequest {
     MonteCarlo {
         config: SimulationConfig,
         iterations: usize,
+        birth_date: String,
+        start_date: String,
+    },
+    /// Run Monte Carlo with convergence-based stopping
+    MonteCarloConvergence {
+        config: SimulationConfig,
+        min_iterations: usize,
+        max_iterations: usize,
+        relative_threshold: f64,
+        metric: ConvergenceMetric,
         birth_date: String,
         start_date: String,
     },
@@ -227,6 +244,47 @@ fn worker_loop(
                 match run_monte_carlo_simulation(
                     &config,
                     iterations,
+                    None, // No convergence config
+                    &birth_date,
+                    &start_date,
+                    &cancel_flag,
+                    &progress,
+                    &response_tx,
+                ) {
+                    Ok(Some(result)) => {
+                        let _ = response_tx.send(result);
+                    }
+                    Ok(None) => {
+                        // Cancelled
+                        let _ = response_tx.send(SimulationResponse::Cancelled);
+                    }
+                    Err(e) => {
+                        let _ = response_tx.send(SimulationResponse::Error(e));
+                    }
+                }
+            }
+
+            SimulationRequest::MonteCarloConvergence {
+                config,
+                min_iterations,
+                max_iterations,
+                relative_threshold,
+                metric,
+                birth_date,
+                start_date,
+            } => {
+                progress.store(0, Ordering::SeqCst);
+
+                let convergence = Some(ConvergenceConfig {
+                    metric,
+                    relative_threshold,
+                    max_iterations,
+                });
+
+                match run_monte_carlo_simulation(
+                    &config,
+                    min_iterations,
+                    convergence,
                     &birth_date,
                     &start_date,
                     &cancel_flag,
@@ -295,6 +353,7 @@ fn run_single_simulation(
 fn run_monte_carlo_simulation(
     config: &SimulationConfig,
     iterations: usize,
+    convergence: Option<ConvergenceConfig>,
     birth_date: &str,
     start_date: &str,
     cancel_flag: &Arc<AtomicBool>,
@@ -306,11 +365,14 @@ fn run_monte_carlo_simulation(
         return Ok(None);
     }
 
-    // Configure Monte Carlo simulation
+    // Configure Monte Carlo simulation with CPU-based parallelism
     let mc_config = MonteCarloConfig {
         iterations,
         percentiles: vec![0.05, 0.50, 0.95],
         compute_mean: true,
+        convergence,
+        parallel_batches: cpu_parallel_batches(),
+        ..Default::default()
     };
 
     // Create progress tracker from existing atomics for real-time progress updates
@@ -356,41 +418,20 @@ fn run_monte_carlo_simulation(
     };
 
     // Extract P50 as default result
-    let (default_tui_result, default_core_result) = percentile_results
-        .iter()
-        .find(|(p, _, _)| (*p - 0.50).abs() < 0.001)
-        .map(|(_, tui, core)| (tui.clone(), core.clone()))
-        .ok_or_else(|| "Missing P50 result".to_string())?;
+    let (default_tui_result, default_core_result) =
+        find_percentile_result_pair(&percentile_results, P50)
+            .map(|(tui, core)| (tui.clone(), core.clone()))
+            .ok_or_else(|| "Missing P50 result".to_string())?;
 
     // Build preview summary
-    let p5_final = mc_summary
-        .stats
-        .percentile_values
-        .iter()
-        .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-        .map(|(_, v)| *v)
-        .unwrap_or(0.0);
-    let p50_final = mc_summary
-        .stats
-        .percentile_values
-        .iter()
-        .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-        .map(|(_, v)| *v)
-        .unwrap_or(0.0);
-    let p95_final = mc_summary
-        .stats
-        .percentile_values
-        .iter()
-        .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-        .map(|(_, v)| *v)
-        .unwrap_or(0.0);
+    let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
 
     let preview_summary = MonteCarloPreviewSummary {
         num_iterations: mc_summary.stats.num_iterations,
         success_rate: mc_summary.stats.success_rate,
-        p5_final,
-        p50_final,
-        p95_final,
+        p5_final: pset.p5,
+        p50_final: pset.p50,
+        p95_final: pset.p95,
     };
 
     // Build stored result
@@ -436,6 +477,8 @@ fn run_batch_monte_carlo(
             iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: false,
+            parallel_batches: cpu_parallel_batches(),
+            ..Default::default()
         };
 
         // Create progress tracker for this scenario
@@ -459,34 +502,12 @@ fn run_batch_monte_carlo(
         };
 
         // Extract summary data
-        let p5 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.05).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p50 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
-        let p95 = mc_summary
-            .stats
-            .percentile_values
-            .iter()
-            .find(|(p, _)| (*p - 0.95).abs() < 0.001)
-            .map(|(_, v)| *v)
-            .unwrap_or(0.0);
+        let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
+        let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
 
         // Get yearly net worth (nominal and real) from P50 run
-        let p50_tui = mc_summary
-            .percentile_runs
-            .iter()
-            .find(|(p, _)| (*p - 0.50).abs() < 0.001)
-            .and_then(|(_, core_result)| to_tui_result(core_result, &birth_date, &start_date).ok());
+        let p50_tui = find_percentile_result(&mc_summary.percentile_runs, P50)
+            .and_then(|core_result| to_tui_result(core_result, &birth_date, &start_date).ok());
 
         let yearly_nw = p50_tui
             .as_ref()

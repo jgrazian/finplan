@@ -52,6 +52,17 @@ pub enum TransferAmount {
     /// Fixed dollar amount
     Fixed(f64),
 
+    /// Adjusts the inner amount for cumulative inflation from simulation start.
+    /// The inner value represents "real" (constant purchasing power) dollars;
+    /// the result is the equivalent "nominal" (current) dollars.
+    ///
+    /// Sensible for: Fixed, TargetToBalance, arithmetic on fixed amounts
+    /// Nonsensical for: SourceBalance, AccountTotalBalance (already nominal)
+    ///
+    /// Example: InflationAdjusted(Fixed(7000.0)) means "$7000 in today's dollars"
+    /// If inflation averages 3%/year, this becomes ~$7,210 after year 1, ~$7,426 after year 2, etc.
+    InflationAdjusted(Box<TransferAmount>),
+
     /// Transfer entire source balance
     SourceBalance,
 
@@ -93,6 +104,13 @@ pub enum TransferAmount {
 
     /// Multiply: left * right
     Mul(Box<TransferAmount>, Box<TransferAmount>),
+
+    /// Multiply inner amount by a fixed scalar
+    ///
+    /// More ergonomic than `Mul(Fixed(rate), inner)` for percentage-based calculations.
+    ///
+    /// Example: `Scale(0.04, AccountTotalBalance { account_id })` = 4% of account balance
+    Scale(f64, Box<TransferAmount>),
 }
 
 impl TransferAmount {
@@ -112,6 +130,31 @@ impl TransferAmount {
                 Box::new(TransferAmount::SourceBalance),
                 Box::new(TransferAmount::Fixed(reserve)),
             )),
+        )
+    }
+
+    /// Create an inflation-adjusted fixed amount (maintains purchasing power over time)
+    ///
+    /// Example: `TransferAmount::inflation_adjusted(7000.0)` means "$7000 in start-of-simulation dollars"
+    pub fn inflation_adjusted(base_amount: f64) -> Self {
+        TransferAmount::InflationAdjusted(Box::new(TransferAmount::Fixed(base_amount)))
+    }
+
+    /// Scale an amount by a fixed multiplier (useful for percentages)
+    ///
+    /// Example: `TransferAmount::scaled(0.04, TransferAmount::AccountTotalBalance { account_id })`
+    /// means "4% of account balance"
+    pub fn scaled(multiplier: f64, base: TransferAmount) -> Self {
+        TransferAmount::Scale(multiplier, Box::new(base))
+    }
+
+    /// Convenience for percentage of account balance
+    ///
+    /// Example: `TransferAmount::percent_of_account(0.04, account_id)` = 4% of account balance
+    pub fn percent_of_account(rate: f64, account_id: AccountId) -> Self {
+        TransferAmount::Scale(
+            rate,
+            Box::new(TransferAmount::AccountTotalBalance { account_id }),
         )
     }
 }
@@ -367,6 +410,10 @@ pub enum EventTrigger {
         /// Optional: stop repeating when this condition is met
         #[serde(default)]
         end_condition: Option<Box<EventTrigger>>,
+        /// Optional: maximum number of times this event can trigger
+        /// After reaching this count, the event stops repeating (equivalent to StopRepeating)
+        #[serde(default)]
+        max_occurrences: Option<u32>,
     },
 
     // TODO: Add account limits triggers
@@ -488,6 +535,26 @@ pub enum EventEffect {
     ApplyRmd {
         destination: AccountId,
         lot_method: LotMethod,
+    },
+
+    // === Stochastic Effects ===
+    /// Randomly execute one of two effects based on a probability threshold
+    /// Useful for modeling uncertain events like job loss, medical expenses, inheritance, etc.
+    ///
+    /// The probability is checked against the simulation's RNG:
+    /// - If random value < probability: execute `on_true`
+    /// - Otherwise: execute `on_false` (if provided)
+    ///
+    /// Each Monte Carlo iteration will get different random outcomes based on its seed,
+    /// making this suitable for modeling uncertainty in financial plans.
+    Random {
+        /// Probability threshold (0.0 to 1.0). E.g., 0.1 = 10% chance of on_true
+        probability: f64,
+        /// Effect to execute if random check passes
+        on_true: Box<EventEffect>,
+        /// Optional effect to execute if random check fails
+        #[serde(default)]
+        on_false: Option<Box<EventEffect>>,
     },
 }
 

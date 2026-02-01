@@ -109,6 +109,7 @@ fn test_account_balance_trigger_safe() {
             interval: RepeatInterval::Monthly,
             start_condition: None,
             end_condition: None,
+            max_occurrences: None,
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
@@ -275,6 +276,7 @@ fn test_event_count_scaling() {
                 interval: RepeatInterval::Monthly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),
@@ -301,6 +303,7 @@ fn test_event_count_scaling() {
                 interval: RepeatInterval::Monthly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),
@@ -339,6 +342,7 @@ fn test_monte_carlo_memory_efficiency() {
         iterations: 100,
         percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
         compute_mean: true,
+        ..Default::default()
     };
 
     let start = std::time::Instant::now();
@@ -422,6 +426,7 @@ fn test_high_frequency_events() {
                 interval: RepeatInterval::Monthly,
                 start_condition: None,
                 end_condition: None,
+                max_occurrences: None,
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),

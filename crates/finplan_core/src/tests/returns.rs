@@ -676,3 +676,154 @@ fn test_mid_simulation_cash_deposit() {
         "Bug detected: Cash appears to be getting returns from start date rather than deposit date"
     );
 }
+
+/// Test that inflation-adjusted expenses grow with inflation
+#[test]
+fn test_inflation_adjusted_expense() {
+    use crate::model::{Event, EventEffect, EventId, EventTrigger, RepeatInterval, TransferAmount};
+
+    let start_date = jiff::civil::date(2020, 1, 1);
+    let initial_balance = 100_000.0;
+    let monthly_expense = 1_000.0; // $1000/month in year-1 dollars
+    let inflation_rate = 0.03; // 3% annual inflation
+    let years = 5;
+
+    let params = SimulationConfig {
+        start_date: Some(start_date),
+        duration_years: years,
+        birth_date: None,
+        inflation_profile: InflationProfile::Fixed(inflation_rate),
+        return_profiles: HashMap::new(),
+        asset_returns: HashMap::new(),
+        accounts: vec![Account {
+            account_id: AccountId(1),
+            flavor: AccountFlavor::Bank(Cash {
+                value: initial_balance,
+                return_profile_id: ReturnProfileId(999), // No returns
+            }),
+        }],
+        events: vec![Event {
+            event_id: EventId(1),
+            trigger: EventTrigger::Repeating {
+                interval: RepeatInterval::Yearly,
+                start_condition: None,
+                end_condition: None,
+                max_occurrences: None,
+            },
+            effects: vec![EventEffect::Expense {
+                from: AccountId(1),
+                amount: TransferAmount::InflationAdjusted(Box::new(TransferAmount::Fixed(
+                    monthly_expense * 12.0,
+                ))), // $12k/year in start dollars
+            }],
+            once: false,
+        }],
+        ..Default::default()
+    };
+
+    let result = simulate(&params, 42).unwrap();
+    let final_balance = result.final_account_balance(AccountId(1)).unwrap();
+
+    // Calculate expected withdrawals with inflation:
+    // Year 1: $12,000 * 1.03^0 = $12,000
+    // Year 2: $12,000 * 1.03^1 = $12,360
+    // Year 3: $12,000 * 1.03^2 = $12,730.80
+    // Year 4: $12,000 * 1.03^3 = $13,112.72
+    // Year 5: $12,000 * 1.03^4 = $13,506.10
+    // Total: ~$63,709.62
+    let base_annual = monthly_expense * 12.0;
+    let expected_total_expenses: f64 = (0..years)
+        .map(|y| base_annual * (1.0 + inflation_rate).powi(y as i32))
+        .sum();
+    let expected_balance = initial_balance - expected_total_expenses;
+
+    // Allow some tolerance for timing differences
+    assert!(
+        (final_balance - expected_balance).abs() < 500.0,
+        "Expected final balance ~${:.2}, got ${:.2}. \
+         Total inflation-adjusted expenses should be ~${:.2}",
+        expected_balance,
+        final_balance,
+        expected_total_expenses
+    );
+
+    // Verify it's NOT using fixed expenses (which would be exactly $60,000 total)
+    let fixed_expense_balance = initial_balance - (base_annual * years as f64);
+    assert!(
+        final_balance < fixed_expense_balance - 1000.0,
+        "Expenses don't appear to be inflation-adjusted. \
+         Fixed expenses would leave ${:.2}, but we have ${:.2}",
+        fixed_expense_balance,
+        final_balance
+    );
+}
+
+/// Test that Scale transfer amount correctly multiplies by a scalar (for percentages)
+#[test]
+fn test_scale_transfer_amount() {
+    use crate::model::{Event, EventEffect, EventId, EventTrigger, RepeatInterval, TransferAmount};
+
+    let start_date = jiff::civil::date(2020, 1, 1);
+    let initial_balance = 100_000.0;
+    let withdrawal_rate = 0.04; // 4% withdrawal rate
+    let years = 3;
+
+    let params = SimulationConfig {
+        start_date: Some(start_date),
+        duration_years: years,
+        birth_date: None,
+        inflation_profile: InflationProfile::None,
+        return_profiles: HashMap::new(),
+        asset_returns: HashMap::new(),
+        accounts: vec![Account {
+            account_id: AccountId(1),
+            flavor: AccountFlavor::Bank(Cash {
+                value: initial_balance,
+                return_profile_id: ReturnProfileId(999), // No returns
+            }),
+        }],
+        events: vec![Event {
+            event_id: EventId(1),
+            trigger: EventTrigger::Repeating {
+                interval: RepeatInterval::Yearly,
+                start_condition: None,
+                end_condition: None,
+                max_occurrences: None,
+            },
+            effects: vec![EventEffect::Expense {
+                from: AccountId(1),
+                // Withdraw 4% of current account balance each year
+                amount: TransferAmount::percent_of_account(withdrawal_rate, AccountId(1)),
+            }],
+            once: false,
+        }],
+        ..Default::default()
+    };
+
+    let result = simulate(&params, 42).unwrap();
+    let final_balance = result.final_account_balance(AccountId(1)).unwrap();
+
+    // Each year we withdraw 4% of CURRENT balance, so balance decreases:
+    // Year 1: $100,000 - 4% = $100,000 * 0.96 = $96,000
+    // Year 2: $96,000 * 0.96 = $92,160
+    // Year 3: $92,160 * 0.96 = $88,473.60
+    let expected = initial_balance * (1.0 - withdrawal_rate).powi(years as i32);
+
+    assert!(
+        (final_balance - expected).abs() < 10.0,
+        "Expected final balance ~${:.2} after 4% annual withdrawals, got ${:.2}",
+        expected,
+        final_balance
+    );
+
+    // Verify it's NOT using a fixed withdrawal (which would be 4% of initial = $4k/year)
+    let fixed_withdrawal_balance =
+        initial_balance - (initial_balance * withdrawal_rate * years as f64);
+    assert!(
+        (final_balance - fixed_withdrawal_balance).abs() > 100.0,
+        "Scale should use current balance, not initial. \
+         Fixed 4% would leave ${:.2}, but we have ${:.2}",
+        fixed_withdrawal_balance,
+        final_balance
+    );
+}

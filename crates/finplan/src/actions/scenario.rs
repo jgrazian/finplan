@@ -3,7 +3,8 @@
 #[cfg(feature = "native")]
 use std::path::Path;
 
-use crate::state::{AppState, MessageModal, ModalState};
+use crate::modals::{MessageModal, ModalState};
+use crate::state::AppState;
 
 use super::{ActionContext, ActionResult};
 
@@ -42,16 +43,15 @@ pub fn handle_switch_to(state: &mut AppState, name: &str) -> ActionResult {
 
 /// Handle editing simulation parameters (start date, birth date, duration)
 pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    // Parse form values: "start_date|birth_date|duration"
-    let values: Vec<&str> = ctx.value().split('|').collect();
+    // Extract form fields
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
 
-    if values.len() < 3 {
-        return ActionResult::Error("Invalid form data".to_string());
-    }
-
-    let start_date = values[0].trim();
-    let birth_date = values[1].trim();
-    let duration_str = values[2].trim();
+    let start_date = form.get_str(0).unwrap_or("").trim();
+    let birth_date = form.get_str(1).unwrap_or("").trim();
+    let duration_str = form.get_str(2).unwrap_or("").trim();
 
     // Validate start_date format (YYYY-MM-DD)
     if !start_date.is_empty() && start_date.parse::<jiff::civil::Date>().is_err() {
@@ -98,7 +98,7 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
 /// Handle importing a scenario from an external file (native only - uses filesystem)
 #[cfg(feature = "native")]
 pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let path_str = ctx.value().trim();
+    let path_str = ctx.selected().unwrap_or_default().trim();
     if path_str.is_empty() {
         return ActionResult::Error("File path cannot be empty".to_string());
     }
@@ -124,7 +124,7 @@ pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
 /// Handle exporting the current scenario to an external file (native only - uses filesystem)
 #[cfg(feature = "native")]
 pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
-    let path_str = ctx.value().trim();
+    let path_str = ctx.selected().unwrap_or_default().trim();
     if path_str.is_empty() {
         return ActionResult::Error("File path cannot be empty".to_string());
     }
@@ -142,7 +142,7 @@ pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
 
 /// Handle creating a new empty scenario
 pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let name = ctx.value().trim();
+    let name = ctx.selected().unwrap_or_default().trim();
     if name.is_empty() {
         return ActionResult::Error("Scenario name cannot be empty".to_string());
     }
@@ -163,7 +163,7 @@ pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionRe
 
 /// Handle duplicating an existing scenario
 pub fn handle_duplicate_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let new_name = ctx.value().trim();
+    let new_name = ctx.selected().unwrap_or_default().trim();
     if new_name.is_empty() {
         return ActionResult::Error("Scenario name cannot be empty".to_string());
     }
@@ -220,4 +220,74 @@ pub fn handle_delete_scenario(state: &mut AppState) -> ActionResult {
     } else {
         ActionResult::Error("No scenario selected".to_string())
     }
+}
+
+/// Handle Monte Carlo with convergence-based stopping
+pub fn handle_monte_carlo_convergence(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    use finplan_core::model::ConvergenceMetric;
+
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
+
+    let metric_str = form.get_str(0).unwrap_or("").trim();
+    let min_str = form.get_str(1).unwrap_or("").trim();
+    let max_str = form.get_str(2).unwrap_or("").trim();
+    let threshold_str = form.get_str(3).unwrap_or("").trim();
+
+    // Parse convergence metric
+    let metric = match metric_str {
+        "Median" => ConvergenceMetric::Median,
+        "Success Rate" => ConvergenceMetric::SuccessRate,
+        "Percentiles" => ConvergenceMetric::Percentiles,
+        "Mean" => ConvergenceMetric::Mean,
+        _ => {
+            return ActionResult::Error(format!("Unknown convergence metric: '{}'", metric_str));
+        }
+    };
+
+    // Parse minimum iterations
+    let min_iterations: usize = match min_str.parse() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            return ActionResult::Error(format!(
+                "Invalid min iterations: '{}'. Must be a positive number",
+                min_str
+            ));
+        }
+    };
+
+    // Parse maximum iterations
+    let max_iterations: usize = match max_str.parse() {
+        Ok(n) if n > min_iterations => n,
+        _ => {
+            return ActionResult::Error(format!(
+                "Invalid max iterations: '{}'. Must be greater than min ({})",
+                max_str, min_iterations
+            ));
+        }
+    };
+
+    // Parse convergence threshold (as percentage, convert to decimal)
+    let threshold_pct: f64 = match threshold_str.parse() {
+        Ok(n) if n > 0.0 && n <= 100.0 => n,
+        _ => {
+            return ActionResult::Error(format!(
+                "Invalid threshold: '{}'. Must be between 0 and 100",
+                threshold_str
+            ));
+        }
+    };
+    let relative_threshold = threshold_pct / 100.0;
+
+    // Request the convergence-based Monte Carlo simulation
+    state.request_monte_carlo_convergence(
+        min_iterations,
+        max_iterations,
+        relative_threshold,
+        metric,
+    );
+
+    ActionResult::close()
 }

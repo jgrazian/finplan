@@ -6,10 +6,14 @@ use finplan_core::optimization::{
     OptimizationObjective,
 };
 
-use crate::state::context::{ModalContext, OptimizeContext};
+use crate::modals::context::OptimizeContext;
+use crate::modals::{
+    FieldType, FormField, FormModal, ModalAction, ModalContext, ModalState, OptimizeAction,
+    PickerModal,
+};
 use crate::state::{
-    AppState, FieldType, FormField, FormModal, ModalState, OptimizationObjectiveSelection,
-    OptimizationResultDisplay, OptimizeAction, ParameterType, PickerModal, SelectedParameter,
+    AppState, OptimizationObjectiveSelection, OptimizationResultDisplay, ParameterType,
+    SelectedParameter,
 };
 
 use super::ActionResult;
@@ -48,7 +52,7 @@ fn handle_add_parameter(state: &mut AppState, value: &str) -> ActionResult {
     let picker = PickerModal::new(
         "Select Parameter Type",
         options,
-        crate::state::ModalAction::ADD_OPTIMIZE_PARAMETER,
+        ModalAction::ADD_OPTIMIZE_PARAMETER,
     )
     .with_typed_context(ModalContext::Optimize(OptimizeContext::Parameter {
         index: state.optimize_state.selected_parameters.len(),
@@ -104,8 +108,7 @@ pub fn handle_parameter_type_selected(state: &mut AppState, type_name: &str) -> 
     };
 
     let next_idx = state.optimize_state.selected_parameters.len();
-    let action =
-        crate::state::ModalAction::Optimize(OptimizeAction::ConfigureParameter { index: next_idx });
+    let action = ModalAction::Optimize(OptimizeAction::ConfigureParameter { index: next_idx });
     let form = FormModal::new(title, fields, action)
         .with_typed_context(ModalContext::Optimize(OptimizeContext::Parameter {
             index: next_idx,
@@ -231,12 +234,8 @@ pub fn show_objective_picker(_state: &mut AppState) -> ActionResult {
         "Minimize Lifetime Taxes".to_string(),
     ];
 
-    let picker = PickerModal::new(
-        "Select Objective",
-        options,
-        crate::state::ModalAction::SELECT_OBJECTIVE,
-    )
-    .with_typed_context(ModalContext::Optimize(OptimizeContext::Objective));
+    let picker = PickerModal::new("Select Objective", options, ModalAction::SELECT_OBJECTIVE)
+        .with_typed_context(ModalContext::Optimize(OptimizeContext::Objective));
 
     ActionResult::modal(ModalState::Picker(picker))
 }
@@ -254,7 +253,7 @@ fn handle_select_objective(state: &mut AppState, value: &str) -> ActionResult {
             let form = FormModal::new(
                 "Configure Retirement Objective",
                 fields,
-                crate::state::ModalAction::SELECT_OBJECTIVE,
+                ModalAction::SELECT_OBJECTIVE,
             )
             .with_typed_context(ModalContext::Optimize(OptimizeContext::Objective))
             .start_editing();
@@ -270,7 +269,7 @@ fn handle_select_objective(state: &mut AppState, value: &str) -> ActionResult {
             let form = FormModal::new(
                 "Configure Sustainable Withdrawal",
                 fields,
-                crate::state::ModalAction::SELECT_OBJECTIVE,
+                ModalAction::SELECT_OBJECTIVE,
             )
             .with_typed_context(ModalContext::Optimize(OptimizeContext::Objective))
             .start_editing();
@@ -334,7 +333,7 @@ pub fn show_settings_form(state: &mut AppState) -> ActionResult {
     let form = FormModal::new(
         "Optimization Settings",
         fields,
-        crate::state::ModalAction::CONFIGURE_OPTIMIZE_SETTINGS,
+        ModalAction::CONFIGURE_OPTIMIZE_SETTINGS,
     )
     .with_typed_context(ModalContext::Optimize(OptimizeContext::Settings))
     .start_editing();

@@ -157,6 +157,7 @@ fn test_yearly_contribution_limit() {
                     interval: RepeatInterval::Monthly,
                     start_condition: Some(Box::new(EventTrigger::Date(start_date))),
                     end_condition: None,
+                    max_occurrences: None,
                 },
                 effects: vec![EventEffect::Income {
                     to: roth_401k,

@@ -1,15 +1,13 @@
 use std::collections::HashMap;
 
+use crate::components::panels::LedgerPanel;
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::event::{AppKeyEvent, KeyCode};
-use crate::state::{
-    AppState, LedgerFilter, PercentileView, ResultsPanel, SimulationResult, ValueDisplayMode,
-};
+use crate::state::{AppState, PercentileView, ResultsPanel, SimulationResult, ValueDisplayMode};
 use crate::util::format::{format_currency, format_currency_short};
-use finplan_core::model::{
-    AccountId, AccountSnapshotFlavor, EventId, LedgerEntry, StateEvent, WealthSnapshot,
-};
+use finplan_core::model::{AccountId, AccountSnapshotFlavor, WealthSnapshot};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -31,302 +29,6 @@ impl ResultsScreen {
             map.insert(id, account.name.clone());
         }
         map
-    }
-
-    /// Build a map of EventId to event names from the current simulation data
-    fn build_event_name_map(state: &AppState) -> HashMap<EventId, String> {
-        let mut map = HashMap::new();
-        for (idx, event) in state.data().events.iter().enumerate() {
-            let id = EventId((idx + 1) as u16);
-            map.insert(id, event.name.0.clone());
-        }
-        map
-    }
-
-    /// Format a StateEvent for display in the ledger
-    fn format_state_event(
-        event: &StateEvent,
-        account_names: &HashMap<AccountId, String>,
-        event_names: &HashMap<EventId, String>,
-    ) -> String {
-        match event {
-            StateEvent::TimeAdvance {
-                from_date,
-                to_date,
-                days_elapsed,
-            } => {
-                format!("Time: {} -> {} ({} days)", from_date, to_date, days_elapsed)
-            }
-            StateEvent::CreateAccount(account) => {
-                let name = account_names
-                    .get(&account.account_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!("Create account: {}", name)
-            }
-            StateEvent::DeleteAccount(id) => {
-                let name = account_names
-                    .get(id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!("Delete account: {}", name)
-            }
-            StateEvent::CashCredit { to, amount, kind } => {
-                let name = account_names
-                    .get(to)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                let kind_str = match kind {
-                    finplan_core::model::CashFlowKind::Income => "Income",
-                    finplan_core::model::CashFlowKind::LiquidationProceeds => "Withdrawal",
-                    finplan_core::model::CashFlowKind::Appreciation => "Interest",
-                    finplan_core::model::CashFlowKind::RmdWithdrawal => "RMD",
-                    finplan_core::model::CashFlowKind::Transfer => "Transfer",
-                    _ => "Credit",
-                };
-                format!("{}: {} to {}", kind_str, format_currency(*amount), name)
-            }
-            StateEvent::CashDebit { from, amount, kind } => {
-                let name = account_names
-                    .get(from)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                let kind_str = match kind {
-                    finplan_core::model::CashFlowKind::Expense => "Expense",
-                    finplan_core::model::CashFlowKind::Contribution => "Contribution",
-                    finplan_core::model::CashFlowKind::InvestmentPurchase => "Purchase",
-                    finplan_core::model::CashFlowKind::Transfer => "Transfer",
-                    _ => "Debit",
-                };
-                format!("{}: {} from {}", kind_str, format_currency(*amount), name)
-            }
-            StateEvent::CashAppreciation {
-                account_id,
-                previous_value,
-                new_value,
-                return_rate,
-                ..
-            } => {
-                let name = account_names
-                    .get(account_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                let gain = new_value - previous_value;
-                format!(
-                    "{}: {} appreciation ({:.2}%)",
-                    name,
-                    format_currency(gain),
-                    return_rate * 100.0
-                )
-            }
-            StateEvent::LiabilityInterestAccrual {
-                account_id,
-                previous_principal,
-                new_principal,
-                interest_rate,
-                ..
-            } => {
-                let name = account_names
-                    .get(account_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                let interest = new_principal - previous_principal;
-                format!(
-                    "{}: {} interest accrued ({:.2}%)",
-                    name,
-                    format_currency(interest),
-                    interest_rate * 100.0
-                )
-            }
-            StateEvent::AssetPurchase {
-                account_id,
-                units,
-                cost_basis,
-                ..
-            } => {
-                let name = account_names
-                    .get(account_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!(
-                    "{}: Buy {:.2} units for {}",
-                    name,
-                    units,
-                    format_currency(*cost_basis)
-                )
-            }
-            StateEvent::AssetSale {
-                account_id,
-                units,
-                proceeds,
-                short_term_gain,
-                long_term_gain,
-                ..
-            } => {
-                let name = account_names
-                    .get(account_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                let total_gain = short_term_gain + long_term_gain;
-                format!(
-                    "{}: Sell {:.2} units for {} (gain: {})",
-                    name,
-                    units,
-                    format_currency(*proceeds),
-                    format_currency(total_gain)
-                )
-            }
-            StateEvent::IncomeTax {
-                gross_amount,
-                federal_tax,
-                state_tax,
-            } => {
-                let total = federal_tax + state_tax;
-                format!(
-                    "Income tax on {}: {} (Fed: {}, State: {})",
-                    format_currency(*gross_amount),
-                    format_currency(total),
-                    format_currency(*federal_tax),
-                    format_currency(*state_tax)
-                )
-            }
-            StateEvent::ShortTermCapitalGainsTax {
-                gross_gain,
-                federal_tax,
-                state_tax,
-            } => {
-                let total = federal_tax + state_tax;
-                format!(
-                    "ST Cap Gains tax on {}: {}",
-                    format_currency(*gross_gain),
-                    format_currency(total)
-                )
-            }
-            StateEvent::LongTermCapitalGainsTax {
-                gross_gain,
-                federal_tax,
-                state_tax,
-            } => {
-                let total = federal_tax + state_tax;
-                format!(
-                    "LT Cap Gains tax on {}: {}",
-                    format_currency(*gross_gain),
-                    format_currency(total)
-                )
-            }
-            StateEvent::EarlyWithdrawalPenalty {
-                gross_amount,
-                penalty_amount,
-                penalty_rate,
-            } => {
-                format!(
-                    "Early withdrawal penalty on {}: {} ({:.0}%)",
-                    format_currency(*gross_amount),
-                    format_currency(*penalty_amount),
-                    penalty_rate * 100.0
-                )
-            }
-            StateEvent::EventTriggered { event_id } => {
-                let name = event_names
-                    .get(event_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!("Event triggered: {}", name)
-            }
-            StateEvent::EventPaused { event_id } => {
-                let name = event_names
-                    .get(event_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!("Event paused: {}", name)
-            }
-            StateEvent::EventResumed { event_id } => {
-                let name = event_names
-                    .get(event_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!("Event resumed: {}", name)
-            }
-            StateEvent::EventTerminated { event_id } => {
-                let name = event_names
-                    .get(event_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!("Event terminated: {}", name)
-            }
-            StateEvent::YearRollover { from_year, to_year } => {
-                format!("Year rollover: {} -> {}", from_year, to_year)
-            }
-            StateEvent::RmdWithdrawal {
-                account_id,
-                age,
-                required_amount,
-                actual_amount,
-                ..
-            } => {
-                let name = account_names
-                    .get(account_id)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                format!(
-                    "{}: RMD at age {} - required {}, withdrew {}",
-                    name,
-                    age,
-                    format_currency(*required_amount),
-                    format_currency(*actual_amount)
-                )
-            }
-            StateEvent::BalanceAdjusted {
-                account,
-                previous_balance,
-                new_balance,
-                delta,
-            } => {
-                let name = account_names
-                    .get(account)
-                    .map(|s| s.as_str())
-                    .unwrap_or("Unknown");
-                let direction = if *delta >= 0.0 {
-                    "increased"
-                } else {
-                    "decreased"
-                };
-                format!(
-                    "{}: Balance {} by {} ({} -> {})",
-                    name,
-                    direction,
-                    format_currency(delta.abs()),
-                    format_currency(*previous_balance),
-                    format_currency(*new_balance)
-                )
-            }
-        }
-    }
-
-    /// Check if a ledger entry matches the current filter
-    fn matches_ledger_filter(entry: &LedgerEntry, filter: LedgerFilter) -> bool {
-        match filter {
-            LedgerFilter::All => true,
-            LedgerFilter::CashOnly => entry.event.is_cash_event(),
-            LedgerFilter::AssetsOnly => entry.event.is_asset_event(),
-            LedgerFilter::TaxesOnly => entry.event.is_tax_event(),
-            LedgerFilter::EventsOnly => entry.event.is_event_management(),
-        }
-    }
-
-    /// Get the color for a ledger entry based on its type
-    fn get_event_color(event: &StateEvent) -> Color {
-        if event.is_cash_event() {
-            Color::Cyan
-        } else if event.is_asset_event() {
-            Color::Magenta
-        } else if event.is_tax_event() {
-            Color::Red
-        } else if event.is_event_management() {
-            Color::Yellow
-        } else {
-            Color::Gray
-        }
     }
 
     /// Get the current TUI result based on viewing mode (Monte Carlo percentile or single run)
@@ -888,271 +590,172 @@ impl ResultsScreen {
             frame.render_widget(paragraph, area);
         }
     }
-
-    fn render_ledger(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let filter = state.results_state.ledger_filter;
-
-        // Build title with percentile indicator if viewing Monte Carlo
-        let title = if state.results_state.viewing_monte_carlo {
-            let pct = state.results_state.percentile_view.short_label();
-            if focused {
-                format!(
-                    " LEDGER [{}] ({}) [j/k scroll, f filter, v view] ",
-                    filter.label(),
-                    pct
-                )
-            } else {
-                format!(" LEDGER [{}] ({}) ", filter.label(), pct)
-            }
-        } else if focused {
-            format!(" LEDGER [{}] [j/k scroll, f filter] ", filter.label())
-        } else {
-            format!(" LEDGER [{}] ", filter.label())
-        };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
-
-        if let Some(core_result) = Self::get_current_core_result(state) {
-            let account_names = Self::build_account_name_map(state);
-            let event_names = Self::build_event_name_map(state);
-
-            // Filter entries
-            let filtered_entries: Vec<&LedgerEntry> = core_result
-                .ledger
-                .iter()
-                .filter(|entry| Self::matches_ledger_filter(entry, filter))
-                .collect();
-
-            if filtered_entries.is_empty() {
-                let paragraph = Paragraph::new("No matching entries").block(block);
-                frame.render_widget(paragraph, area);
-                return;
-            }
-
-            let visible_count = (area.height as usize).saturating_sub(2);
-            let scroll_offset = state
-                .results_state
-                .ledger_scroll_offset
-                .min(filtered_entries.len().saturating_sub(1));
-
-            let items: Vec<ListItem> = filtered_entries
-                .iter()
-                .skip(scroll_offset)
-                .take(visible_count)
-                .map(|entry| {
-                    let color = Self::get_event_color(&entry.event);
-                    let text = Self::format_state_event(&entry.event, &account_names, &event_names);
-                    let line = Line::from(vec![
-                        Span::styled(
-                            format!("[{}] ", entry.date),
-                            Style::default().fg(Color::DarkGray),
-                        ),
-                        Span::styled(text, Style::default().fg(color)),
-                    ]);
-                    ListItem::new(line)
-                })
-                .collect();
-
-            let list = List::new(items).block(block);
-            frame.render_widget(list, area);
-        } else {
-            let paragraph = Paragraph::new("No simulation data").block(block);
-            frame.render_widget(paragraph, area);
-        }
-    }
 }
 
 impl Component for ResultsScreen {
     fn handle_key(&mut self, key: AppKeyEvent, state: &mut AppState) -> EventResult {
         let panel = state.results_state.focused_panel;
+        let kb = &state.keybindings;
 
-        // Handle back-tab first (Shift+Tab on web, BackTab on native)
-        if key.is_back_tab() {
+        // Panel navigation
+        if KeybindingsConfig::matches(&key, &kb.navigation.next_panel) {
+            state.results_state.focused_panel = panel.next();
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.navigation.prev_panel) {
             state.results_state.focused_panel = panel.prev();
             return EventResult::Handled;
         }
 
-        match key.code {
-            // Panel navigation
-            KeyCode::Tab => {
-                state.results_state.focused_panel = panel.next();
-                EventResult::Handled
-            }
-
-            // j/k scrolling for YearlyBreakdown and Ledger
-            KeyCode::Char('j') | KeyCode::Down => {
-                match panel {
-                    ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years_current(state);
-                        if state.results_state.selected_year_index + 1 < years.len() {
-                            state.results_state.selected_year_index += 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    ResultsPanel::Ledger => {
-                        if let Some(core_result) = Self::get_current_core_result(state) {
-                            let filter = state.results_state.ledger_filter;
-                            let filtered_count = core_result
-                                .ledger
-                                .iter()
-                                .filter(|e| Self::matches_ledger_filter(e, filter))
-                                .count();
-                            if state.results_state.ledger_scroll_offset + 1 < filtered_count {
-                                state.results_state.ledger_scroll_offset += 1;
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                match panel {
-                    ResultsPanel::YearlyBreakdown => {
-                        if state.results_state.selected_year_index > 0 {
-                            state.results_state.selected_year_index -= 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    ResultsPanel::Ledger => {
-                        if state.results_state.ledger_scroll_offset > 0 {
-                            state.results_state.ledger_scroll_offset -= 1;
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-
-            // h/l or Left/Right for year selection (works in NetWorthChart, AccountChart, YearlyBreakdown)
-            KeyCode::Char('h') | KeyCode::Left => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        if state.results_state.selected_year_index > 0 {
-                            state.results_state.selected_year_index -= 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years_current(state);
-                        if state.results_state.selected_year_index + 1 < years.len() {
-                            state.results_state.selected_year_index += 1;
-                            // Scroll offset is calculated in render, not here
-                        }
-                    }
-                    _ => {}
-                }
-                EventResult::Handled
-            }
-
-            // Home/End for first/last year (works in NetWorthChart, AccountChart, YearlyBreakdown)
-            KeyCode::Home => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        state.results_state.selected_year_index = 0;
+        // j/k (down/up) scrolling for YearlyBreakdown and Ledger
+        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
+            match panel {
+                ResultsPanel::YearlyBreakdown => {
+                    let years = Self::get_years_current(state);
+                    if state.results_state.selected_year_index + 1 < years.len() {
+                        state.results_state.selected_year_index += 1;
                         // Scroll offset is calculated in render, not here
                     }
-                    _ => {}
                 }
-                EventResult::Handled
-            }
-            KeyCode::End => {
-                match panel {
-                    ResultsPanel::NetWorthChart
-                    | ResultsPanel::AccountChart
-                    | ResultsPanel::YearlyBreakdown => {
-                        let years = Self::get_years_current(state);
-                        state.results_state.selected_year_index = years.len().saturating_sub(1);
-                        // Scroll offset is calculated in render, not here
+                ResultsPanel::Ledger => {
+                    let filtered_count = LedgerPanel::get_filtered_count(state);
+                    if state.results_state.ledger_scroll_offset + 1 < filtered_count {
+                        state.results_state.ledger_scroll_offset += 1;
                     }
-                    _ => {}
                 }
-                EventResult::Handled
+                _ => {}
             }
-
-            // PageUp/PageDown for fast ledger scrolling
-            KeyCode::PageDown => {
-                if panel == ResultsPanel::Ledger
-                    && let Some(core_result) = Self::get_current_core_result(state)
-                {
-                    let filter = state.results_state.ledger_filter;
-                    let filtered_count = core_result
-                        .ledger
-                        .iter()
-                        .filter(|e| Self::matches_ledger_filter(e, filter))
-                        .count();
-                    let new_offset = state.results_state.ledger_scroll_offset + 10;
-                    state.results_state.ledger_scroll_offset =
-                        new_offset.min(filtered_count.saturating_sub(1));
-                }
-                EventResult::Handled
-            }
-            KeyCode::PageUp => {
-                if panel == ResultsPanel::Ledger {
-                    state.results_state.ledger_scroll_offset =
-                        state.results_state.ledger_scroll_offset.saturating_sub(10);
-                }
-                EventResult::Handled
-            }
-
-            // f for cycling ledger filter
-            KeyCode::Char('f') => {
-                if panel == ResultsPanel::Ledger {
-                    state.results_state.ledger_filter = state.results_state.ledger_filter.next();
-                    state.results_state.ledger_scroll_offset = 0; // Reset scroll when filter changes
-                }
-                EventResult::Handled
-            }
-
-            // v for cycling percentile view (Monte Carlo only)
-            KeyCode::Char('v') => {
-                if state.results_state.viewing_monte_carlo {
-                    state.results_state.percentile_view =
-                        state.results_state.percentile_view.next();
-                }
-                EventResult::Handled
-            }
-
-            // r for toggling between nominal and real (inflation-adjusted) values
-            KeyCode::Char('$') => {
-                state.results_state.value_display_mode =
-                    state.results_state.value_display_mode.toggle();
-                EventResult::Handled
-            }
-
-            // Legacy keys for export (not yet implemented)
-            KeyCode::Char('e') => {
-                state.set_error("Export CSV not yet implemented".to_string());
-                EventResult::Handled
-            }
-            KeyCode::Char('p') => {
-                state.set_error("PDF report not yet implemented".to_string());
-                EventResult::Handled
-            }
-
-            _ => EventResult::NotHandled,
+            return EventResult::Handled;
         }
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
+            match panel {
+                ResultsPanel::YearlyBreakdown => {
+                    if state.results_state.selected_year_index > 0 {
+                        state.results_state.selected_year_index -= 1;
+                        // Scroll offset is calculated in render, not here
+                    }
+                }
+                ResultsPanel::Ledger => {
+                    if state.results_state.ledger_scroll_offset > 0 {
+                        state.results_state.ledger_scroll_offset -= 1;
+                    }
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+
+        // h/l (prev/next year) for year selection (works in NetWorthChart, AccountChart, YearlyBreakdown)
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.prev_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    if state.results_state.selected_year_index > 0 {
+                        state.results_state.selected_year_index -= 1;
+                        // Scroll offset is calculated in render, not here
+                    }
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.next_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    let years = Self::get_years_current(state);
+                    if state.results_state.selected_year_index + 1 < years.len() {
+                        state.results_state.selected_year_index += 1;
+                        // Scroll offset is calculated in render, not here
+                    }
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+
+        // Home/End for first/last year (works in NetWorthChart, AccountChart, YearlyBreakdown)
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.first_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    state.results_state.selected_year_index = 0;
+                    // Scroll offset is calculated in render, not here
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.last_year) {
+            match panel {
+                ResultsPanel::NetWorthChart
+                | ResultsPanel::AccountChart
+                | ResultsPanel::YearlyBreakdown => {
+                    let years = Self::get_years_current(state);
+                    state.results_state.selected_year_index = years.len().saturating_sub(1);
+                    // Scroll offset is calculated in render, not here
+                }
+                _ => {}
+            }
+            return EventResult::Handled;
+        }
+
+        // PageUp/PageDown for fast ledger scrolling
+        if key.code == KeyCode::PageDown {
+            if panel == ResultsPanel::Ledger {
+                let filtered_count = LedgerPanel::get_filtered_count(state);
+                let new_offset = state.results_state.ledger_scroll_offset + 10;
+                state.results_state.ledger_scroll_offset =
+                    new_offset.min(filtered_count.saturating_sub(1));
+            }
+            return EventResult::Handled;
+        }
+        if key.code == KeyCode::PageUp {
+            if panel == ResultsPanel::Ledger {
+                state.results_state.ledger_scroll_offset =
+                    state.results_state.ledger_scroll_offset.saturating_sub(10);
+            }
+            return EventResult::Handled;
+        }
+
+        // f for cycling ledger filter
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.cycle_filter) {
+            if panel == ResultsPanel::Ledger {
+                state.results_state.ledger_filter = state.results_state.ledger_filter.next();
+                state.results_state.ledger_scroll_offset = 0; // Reset scroll when filter changes
+            }
+            return EventResult::Handled;
+        }
+
+        // v for cycling percentile view (Monte Carlo only)
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.cycle_percentile) {
+            if state.results_state.viewing_monte_carlo {
+                state.results_state.percentile_view = state.results_state.percentile_view.next();
+            }
+            return EventResult::Handled;
+        }
+
+        // $ for toggling between nominal and real (inflation-adjusted) values
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.toggle_real) {
+            state.results_state.value_display_mode =
+                state.results_state.value_display_mode.toggle();
+            return EventResult::Handled;
+        }
+
+        // Legacy keys for export (not yet implemented)
+        if key.code == KeyCode::Char('e') {
+            state.set_error("Export CSV not yet implemented".to_string());
+            return EventResult::Handled;
+        }
+        if key.code == KeyCode::Char('p') {
+            state.set_error("PDF report not yet implemented".to_string());
+            return EventResult::Handled;
+        }
+
+        EventResult::NotHandled
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
@@ -1231,7 +834,7 @@ impl Component for ResultsScreen {
             state,
             panel == ResultsPanel::YearlyBreakdown,
         );
-        self.render_ledger(frame, bottom_cols[1], state, panel == ResultsPanel::Ledger);
+        LedgerPanel::render(frame, bottom_cols[1], state, panel == ResultsPanel::Ledger);
     }
 }
 

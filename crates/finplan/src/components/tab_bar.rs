@@ -1,7 +1,9 @@
 use super::{Component, EventResult};
+use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::portfolio_data::AccountType;
-use crate::event::{AppKeyEvent, KeyCode};
+use crate::event::AppKeyEvent;
 use crate::state::{AppState, TabId};
+use crate::util::format::format_compact_currency;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -24,28 +26,24 @@ impl Component for TabBar {
             return EventResult::NotHandled;
         }
 
-        match key.code {
-            KeyCode::Char('1') => {
-                state.switch_tab(TabId::PortfolioProfiles);
-                EventResult::Handled
-            }
-            KeyCode::Char('2') => {
-                state.switch_tab(TabId::Events);
-                EventResult::Handled
-            }
-            KeyCode::Char('3') => {
-                state.switch_tab(TabId::Scenario);
-                EventResult::Handled
-            }
-            KeyCode::Char('4') => {
-                state.switch_tab(TabId::Results);
-                EventResult::Handled
-            }
-            KeyCode::Char('5') => {
-                state.switch_tab(TabId::Optimize);
-                EventResult::Handled
-            }
-            _ => EventResult::NotHandled,
+        let kb = &state.keybindings.global;
+        if KeybindingsConfig::matches(&key, &kb.tab_1) {
+            state.switch_tab(TabId::PortfolioProfiles);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_2) {
+            state.switch_tab(TabId::Events);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_3) {
+            state.switch_tab(TabId::Scenario);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_4) {
+            state.switch_tab(TabId::Results);
+            EventResult::Handled
+        } else if KeybindingsConfig::matches(&key, &kb.tab_5) {
+            state.switch_tab(TabId::Optimize);
+            EventResult::Handled
+        } else {
+            EventResult::NotHandled
         }
     }
 
@@ -129,20 +127,6 @@ impl TabBar {
             .sum()
     }
 
-    /// Format net worth in a compact way (e.g., $2.1M, $450K, $50K)
-    fn format_compact_currency(&self, value: f64) -> String {
-        let abs_value = value.abs();
-        let sign = if value < 0.0 { "-" } else { "" };
-
-        if abs_value >= 1_000_000.0 {
-            format!("{}${:.1}M", sign, abs_value / 1_000_000.0)
-        } else if abs_value >= 1_000.0 {
-            format!("{}${:.0}K", sign, abs_value / 1_000.0)
-        } else {
-            format!("{}${:.0}", sign, abs_value)
-        }
-    }
-
     /// Build the status line showing scenario, net worth, and success rate
     fn build_status_line(&self, state: &AppState) -> Line<'static> {
         let mut spans = Vec::new();
@@ -170,7 +154,7 @@ impl TabBar {
             Color::Red
         };
         spans.push(Span::styled(
-            self.format_compact_currency(net_worth),
+            format_compact_currency(net_worth),
             Style::default().fg(nw_color),
         ));
 

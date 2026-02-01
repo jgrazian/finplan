@@ -15,7 +15,7 @@ use super::{
     app_data::SimulationData,
     events_data::{
         AccountTag, AmountData, EffectData, EventTag, IntervalData, LotMethodData, OffsetData,
-        SpecialAmount, ThresholdData, TriggerData, WithdrawalStrategyData,
+        ThresholdData, TriggerData, WithdrawalStrategyData,
     },
     parameters_data::{ParametersData, ReturnsMode},
     portfolio_data::{AccountData, AccountType, AssetTag},
@@ -479,6 +479,7 @@ fn convert_trigger(
             interval,
             start,
             end,
+            max_occurrences,
         } => {
             let start_condition = match start {
                 Some(t) => Some(Box::new(convert_trigger(t, ctx)?)),
@@ -493,6 +494,7 @@ fn convert_trigger(
                 interval: convert_interval(interval),
                 start_condition,
                 end_condition,
+                max_occurrences: *max_occurrences,
             })
         }
 
@@ -511,7 +513,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             let to_id = resolve_account(to, ctx)?;
             Ok(EventEffect::Income {
                 to: to_id,
-                amount: convert_amount(amount),
+                amount: convert_amount(amount, ctx),
                 amount_mode: if *gross {
                     AmountMode::Gross
                 } else {
@@ -529,7 +531,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             let from_id = resolve_account(from, ctx)?;
             Ok(EventEffect::Expense {
                 from: from_id,
-                amount: convert_amount(amount),
+                amount: convert_amount(amount, ctx),
             })
         }
 
@@ -544,7 +546,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             Ok(EventEffect::AssetPurchase {
                 from: from_id,
                 to: to_coord,
-                amount: convert_amount(amount),
+                amount: convert_amount(amount, ctx),
             })
         }
 
@@ -566,7 +568,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             Ok(EventEffect::AssetSale {
                 from: from_id,
                 asset_id,
-                amount: convert_amount(amount),
+                amount: convert_amount(amount, ctx),
                 amount_mode: if *gross {
                     AmountMode::Gross
                 } else {
@@ -597,7 +599,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
                     exclude_accounts: exclude,
                 },
                 to: to_id,
-                amount: convert_amount(amount),
+                amount: convert_amount(amount, ctx),
                 amount_mode: if *gross {
                     AmountMode::Gross
                 } else {
@@ -647,7 +649,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             let account_id = resolve_account(account, ctx)?;
             Ok(EventEffect::AdjustBalance {
                 account: account_id,
-                amount: convert_amount(amount),
+                amount: convert_amount(amount, ctx),
             })
         }
 
@@ -657,7 +659,27 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             Ok(EventEffect::CashTransfer {
                 from: from_id,
                 to: to_id,
-                amount: convert_amount(amount),
+                amount: convert_amount(amount, ctx),
+            })
+        }
+
+        EffectData::Random {
+            probability,
+            on_true,
+            on_false,
+        } => {
+            let on_true_id = resolve_event(on_true, ctx)?;
+            let on_false_effect = match on_false {
+                Some(event_tag) => {
+                    let event_id = resolve_event(event_tag, ctx)?;
+                    Some(Box::new(EventEffect::TriggerEvent(event_id)))
+                }
+                None => None,
+            };
+            Ok(EventEffect::Random {
+                probability: *probability,
+                on_true: Box::new(EventEffect::TriggerEvent(on_true_id)),
+                on_false: on_false_effect,
             })
         }
     }
@@ -698,22 +720,34 @@ fn resolve_event(tag: &EventTag, ctx: &ResolveContext) -> Result<EventId, Conver
         .ok_or_else(|| ConvertError::EventNotFound(tag.0.clone()))
 }
 
-fn convert_amount(amount: &AmountData) -> TransferAmount {
+fn convert_amount(amount: &AmountData, ctx: &ResolveContext) -> TransferAmount {
     match amount {
-        AmountData::Fixed(v) => TransferAmount::Fixed(*v),
-        AmountData::Special(special) => match special {
-            SpecialAmount::SourceBalance => TransferAmount::SourceBalance,
-            SpecialAmount::ZeroTargetBalance => TransferAmount::ZeroTargetBalance,
-            SpecialAmount::TargetToBalance { target } => TransferAmount::TargetToBalance(*target),
-            SpecialAmount::AccountBalance { account: _ } => TransferAmount::AccountTotalBalance {
-                account_id: AccountId(0), // Would need proper resolution
-            },
-            SpecialAmount::AccountCashBalance { account: _ } => {
-                TransferAmount::AccountCashBalance {
-                    account_id: AccountId(0), // Would need proper resolution
-                }
-            }
-        },
+        AmountData::Fixed { value } => TransferAmount::Fixed(*value),
+        AmountData::InflationAdjusted { inner } => {
+            TransferAmount::InflationAdjusted(Box::new(convert_amount(inner, ctx)))
+        }
+        AmountData::Scale { multiplier, inner } => {
+            TransferAmount::Scale(*multiplier, Box::new(convert_amount(inner, ctx)))
+        }
+        AmountData::SourceBalance => TransferAmount::SourceBalance,
+        AmountData::ZeroTargetBalance => TransferAmount::ZeroTargetBalance,
+        AmountData::TargetToBalance { target } => TransferAmount::TargetToBalance(*target),
+        AmountData::AccountBalance { account } => {
+            let account_id = ctx
+                .account_ids
+                .get(&account.0)
+                .copied()
+                .unwrap_or(AccountId(0));
+            TransferAmount::AccountTotalBalance { account_id }
+        }
+        AmountData::AccountCashBalance { account } => {
+            let account_id = ctx
+                .account_ids
+                .get(&account.0)
+                .copied()
+                .unwrap_or(AccountId(0));
+            TransferAmount::AccountCashBalance { account_id }
+        }
     }
 }
 

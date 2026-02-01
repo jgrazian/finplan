@@ -7,7 +7,8 @@ use ratatui::{
     widgets::{List, ListItem, Paragraph},
 };
 
-use crate::state::{ModalAction, ScenarioPickerModal};
+use crate::data::keybindings_data::KeybindingsConfig;
+use crate::modals::{ModalAction, ScenarioPickerModal};
 
 use super::helpers::{HelpText, render_modal_frame};
 use super::{ConfirmedValue, ModalResult};
@@ -132,9 +133,10 @@ pub fn render_scenario_picker_modal(frame: &mut Frame, modal: &ScenarioPickerMod
 pub fn handle_scenario_picker_key(
     key: AppKeyEvent,
     modal: &mut ScenarioPickerModal,
+    keybindings: &KeybindingsConfig,
 ) -> ModalResult {
     if modal.editing_new_name {
-        // Text input mode for new scenario name
+        // Text input mode for new scenario name - use hardcoded keys for text editing
         match key.code {
             KeyCode::Enter => {
                 if let Some(name) = &modal.new_name
@@ -170,29 +172,37 @@ pub fn handle_scenario_picker_key(
             _ => ModalResult::Continue,
         }
     } else {
-        // Navigation mode
-        match key.code {
-            KeyCode::Enter => {
-                if modal.is_new_scenario_selected() {
-                    // Switch to text input mode for new name
-                    modal.editing_new_name = true;
-                    ModalResult::Continue
-                } else if let Some(name) = modal.selected_name() {
-                    ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Text(name)))
-                } else {
-                    ModalResult::Continue
-                }
+        // Navigation mode - use configurable keybindings
+        // Check for confirm
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm) {
+            if modal.is_new_scenario_selected() {
+                // Switch to text input mode for new name
+                modal.editing_new_name = true;
+                return ModalResult::Continue;
+            } else if let Some(name) = modal.selected_name() {
+                return ModalResult::Confirmed(modal.action, Box::new(ConfirmedValue::Text(name)));
+            } else {
+                return ModalResult::Continue;
             }
-            KeyCode::Esc => ModalResult::Cancelled,
-            KeyCode::Char('j') | KeyCode::Down => {
-                modal.move_down();
-                ModalResult::Continue
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                modal.move_up();
-                ModalResult::Continue
-            }
-            _ => ModalResult::Continue,
         }
+
+        // Check for cancel
+        if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
+            return ModalResult::Cancelled;
+        }
+
+        // Check for navigation down
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.down) {
+            modal.move_down();
+            return ModalResult::Continue;
+        }
+
+        // Check for navigation up
+        if KeybindingsConfig::matches(&key, &keybindings.navigation.up) {
+            modal.move_up();
+            return ModalResult::Continue;
+        }
+
+        ModalResult::Continue
     }
 }

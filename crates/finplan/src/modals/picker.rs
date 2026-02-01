@@ -7,7 +7,8 @@ use ratatui::{
     widgets::{List, ListItem},
 };
 
-use crate::state::PickerModal;
+use crate::data::keybindings_data::KeybindingsConfig;
+use crate::modals::PickerModal;
 
 use super::helpers::{HelpText, MultiLineHelp, render_modal_frame};
 use super::{ConfirmedValue, ModalResult};
@@ -76,35 +77,50 @@ pub fn render_picker_modal(frame: &mut Frame, modal: &PickerModal) {
 }
 
 /// Handle key events for picker modal
-pub fn handle_picker_key(key: AppKeyEvent, modal: &mut PickerModal) -> ModalResult {
-    match key.code {
-        KeyCode::Enter => {
-            if let Some(selected) = modal.options.get(modal.selected_index) {
-                ModalResult::Confirmed(
-                    modal.action,
-                    Box::new(ConfirmedValue::Picker(selected.clone())),
-                )
+pub fn handle_picker_key(
+    key: AppKeyEvent,
+    modal: &mut PickerModal,
+    keybindings: &KeybindingsConfig,
+) -> ModalResult {
+    // Check for confirm
+    if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm) {
+        if let Some(selected) = modal.options.get(modal.selected_index) {
+            return ModalResult::Confirmed(
+                modal.action,
+                Box::new(ConfirmedValue::Picker(selected.clone())),
+            );
+        } else {
+            return ModalResult::Cancelled;
+        }
+    }
+
+    // Check for cancel
+    if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
+        return ModalResult::Cancelled;
+    }
+
+    // Check for navigation down
+    if KeybindingsConfig::matches(&key, &keybindings.navigation.down) {
+        if !modal.options.is_empty() {
+            modal.selected_index = (modal.selected_index + 1) % modal.options.len();
+        }
+        return ModalResult::Continue;
+    }
+
+    // Check for navigation up
+    if KeybindingsConfig::matches(&key, &keybindings.navigation.up) {
+        if !modal.options.is_empty() {
+            if modal.selected_index == 0 {
+                modal.selected_index = modal.options.len() - 1;
             } else {
-                ModalResult::Cancelled
+                modal.selected_index -= 1;
             }
         }
-        KeyCode::Esc => ModalResult::Cancelled,
-        KeyCode::Char('j') | KeyCode::Down => {
-            if !modal.options.is_empty() {
-                modal.selected_index = (modal.selected_index + 1) % modal.options.len();
-            }
-            ModalResult::Continue
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if !modal.options.is_empty() {
-                if modal.selected_index == 0 {
-                    modal.selected_index = modal.options.len() - 1;
-                } else {
-                    modal.selected_index -= 1;
-                }
-            }
-            ModalResult::Continue
-        }
+        return ModalResult::Continue;
+    }
+
+    // Home/End navigation (keep hardcoded as they're standard terminal keys)
+    match key.code {
         KeyCode::Home => {
             modal.selected_index = 0;
             ModalResult::Continue

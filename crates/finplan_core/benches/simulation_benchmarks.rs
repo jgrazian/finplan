@@ -67,6 +67,7 @@ fn create_monthly_events_config() -> SimulationConfig {
             interval: RepeatInterval::Monthly,
             start_condition: None,
             end_condition: None,
+            max_occurrences: None,
         },
         effects: vec![EventEffect::Income {
             to: AccountId(2),
@@ -84,6 +85,7 @@ fn create_monthly_events_config() -> SimulationConfig {
             interval: RepeatInterval::Monthly,
             start_condition: None,
             end_condition: None,
+            max_occurrences: None,
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
@@ -122,6 +124,7 @@ fn create_account_balance_trigger_safe_config() -> SimulationConfig {
             interval: RepeatInterval::Monthly,
             start_condition: None,
             end_condition: None,
+            max_occurrences: None,
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
@@ -222,6 +225,7 @@ fn bench_monte_carlo(c: &mut Criterion) {
             iterations: *iterations,
             percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
             compute_mean: true,
+            ..Default::default()
         };
 
         group.bench_with_input(

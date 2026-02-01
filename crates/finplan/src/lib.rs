@@ -1,6 +1,7 @@
 // Shared modules (available on all platforms)
 pub mod data;
 pub mod event;
+pub mod keybindings;
 pub mod logging;
 pub mod platform;
 pub mod state;

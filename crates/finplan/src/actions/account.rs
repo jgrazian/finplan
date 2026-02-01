@@ -2,9 +2,11 @@
 
 use crate::data::portfolio_data::{AccountData, AccountType, AssetAccount, Debt, Property};
 use crate::data::profiles_data::ReturnProfileTag;
-use crate::modals::{parse_currency, parse_percentage};
-use crate::state::context::{AccountTypeContext, ModalContext};
-use crate::state::{AppState, FormField, FormModal, ModalAction, ModalState, PickerModal};
+use crate::modals::{
+    FormField, FormModal, ModalAction, ModalState, PickerModal,
+    context::{AccountTypeContext, ModalContext},
+};
+use crate::state::AppState;
 
 use super::{ActionContext, ActionResult};
 
@@ -107,7 +109,10 @@ pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
 
 /// Handle account creation
 pub fn handle_create_account(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     // Get typed account type context
     let account_type_ctx = ctx
@@ -117,35 +122,39 @@ pub fn handle_create_account(state: &mut AppState, ctx: ActionContext) -> Action
 
     let account = match account_type_ctx {
         Some(AccountTypeContext::Brokerage) => {
-            create_investment_account(&parts, AccountType::Brokerage)
+            create_investment_account_typed(form, AccountType::Brokerage)
         }
         Some(AccountTypeContext::Traditional401k) => {
-            create_investment_account(&parts, AccountType::Traditional401k)
+            create_investment_account_typed(form, AccountType::Traditional401k)
         }
         Some(AccountTypeContext::Roth401k) => {
-            create_investment_account(&parts, AccountType::Roth401k)
+            create_investment_account_typed(form, AccountType::Roth401k)
         }
         Some(AccountTypeContext::TraditionalIRA) => {
-            create_investment_account(&parts, AccountType::TraditionalIRA)
+            create_investment_account_typed(form, AccountType::TraditionalIRA)
         }
         Some(AccountTypeContext::RothIRA) => {
-            create_investment_account(&parts, AccountType::RothIRA)
+            create_investment_account_typed(form, AccountType::RothIRA)
         }
         Some(AccountTypeContext::Checking) => {
-            create_property_account(&parts, AccountType::Checking)
+            create_property_account_typed(form, AccountType::Checking)
         }
-        Some(AccountTypeContext::Savings) => create_property_account(&parts, AccountType::Savings),
-        Some(AccountTypeContext::HSA) => create_property_account(&parts, AccountType::HSA),
+        Some(AccountTypeContext::Savings) => {
+            create_property_account_typed(form, AccountType::Savings)
+        }
+        Some(AccountTypeContext::HSA) => create_property_account_typed(form, AccountType::HSA),
         Some(AccountTypeContext::Property) => {
-            create_property_account(&parts, AccountType::Property)
+            create_property_account_typed(form, AccountType::Property)
         }
         Some(AccountTypeContext::Collectible) => {
-            create_property_account(&parts, AccountType::Collectible)
+            create_property_account_typed(form, AccountType::Collectible)
         }
-        Some(AccountTypeContext::Mortgage) => create_debt_account(&parts, AccountType::Mortgage),
-        Some(AccountTypeContext::Loan) => create_debt_account(&parts, AccountType::LoanDebt),
+        Some(AccountTypeContext::Mortgage) => {
+            create_debt_account_typed(form, AccountType::Mortgage)
+        }
+        Some(AccountTypeContext::Loan) => create_debt_account_typed(form, AccountType::LoanDebt),
         Some(AccountTypeContext::StudentLoan) => {
-            create_debt_account(&parts, AccountType::StudentLoanDebt)
+            create_debt_account_typed(form, AccountType::StudentLoanDebt)
         }
         None => None,
     };
@@ -165,7 +174,10 @@ pub fn handle_edit_account(state: &mut AppState, ctx: ActionContext) -> ActionRe
         None => return ActionResult::close(),
     };
 
-    let parts = ctx.value_parts();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::close(),
+    };
 
     if let Some(account) = state.data_mut().portfolios.accounts.get_mut(idx) {
         match &mut account.account_type {
@@ -174,38 +186,28 @@ pub fn handle_edit_account(state: &mut AppState, ctx: ActionContext) -> ActionRe
             | AccountType::HSA(prop)
             | AccountType::Property(prop)
             | AccountType::Collectible(prop) => {
-                // Parts: [type, name, description, value, profile]
-                if let Some(name) = parts.get(1) {
+                // Fields: [Name, Description, Value, Return Profile]
+                if let Some(name) = form.get_str(0) {
                     account.name = name.to_string();
                 }
-                account.description = parts
-                    .get(2)
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.is_empty());
-                if let Some(val) = parts.get(3).and_then(|s| parse_currency(s).ok()) {
+                account.description = form.get_optional_str(1);
+                if let Some(val) = form.get_currency(2) {
                     prop.value = val;
                 }
-                prop.return_profile = parts
-                    .get(4)
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.is_empty())
-                    .map(ReturnProfileTag);
+                prop.return_profile = form.get_optional_str(3).map(ReturnProfileTag);
             }
             AccountType::Mortgage(debt)
             | AccountType::LoanDebt(debt)
             | AccountType::StudentLoanDebt(debt) => {
-                // Parts: [type, name, description, balance, rate]
-                if let Some(name) = parts.get(1) {
+                // Fields: [Name, Description, Balance, Interest Rate]
+                if let Some(name) = form.get_str(0) {
                     account.name = name.to_string();
                 }
-                account.description = parts
-                    .get(2)
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.is_empty());
-                if let Some(bal) = parts.get(3).and_then(|s| parse_currency(s).ok()) {
+                account.description = form.get_optional_str(1);
+                if let Some(bal) = form.get_currency(2) {
                     debt.balance = bal;
                 }
-                if let Some(rate) = parts.get(4).and_then(|s| parse_percentage(s).ok()) {
+                if let Some(rate) = form.get_percentage(3) {
                     debt.interest_rate = rate;
                 }
             }
@@ -214,14 +216,11 @@ pub fn handle_edit_account(state: &mut AppState, ctx: ActionContext) -> ActionRe
             | AccountType::Roth401k(_)
             | AccountType::TraditionalIRA(_)
             | AccountType::RothIRA(_) => {
-                // Parts: [type, name, description]
-                if let Some(name) = parts.get(1) {
+                // Fields: [Name, Description]
+                if let Some(name) = form.get_str(0) {
                     account.name = name.to_string();
                 }
-                account.description = parts
-                    .get(2)
-                    .map(|s| s.to_string())
-                    .filter(|s| !s.is_empty());
+                account.description = form.get_optional_str(1);
             }
         }
         ActionResult::modified()
@@ -247,17 +246,68 @@ pub fn handle_delete_account(state: &mut AppState, ctx: ActionContext) -> Action
     ActionResult::close()
 }
 
+/// Create an edit form for an existing account
+pub fn create_edit_account_form(account: &AccountData) -> FormModal {
+    match &account.account_type {
+        AccountType::Brokerage(_)
+        | AccountType::Traditional401k(_)
+        | AccountType::Roth401k(_)
+        | AccountType::TraditionalIRA(_)
+        | AccountType::RothIRA(_) => FormModal::new(
+            "Edit Investment Account",
+            vec![
+                FormField::text("Name", &account.name),
+                FormField::text("Description", account.description.as_deref().unwrap_or("")),
+            ],
+            ModalAction::EDIT_ACCOUNT,
+        )
+        .start_editing(),
+        AccountType::Checking(prop)
+        | AccountType::Savings(prop)
+        | AccountType::HSA(prop)
+        | AccountType::Property(prop)
+        | AccountType::Collectible(prop) => FormModal::new(
+            "Edit Cash/Property Account",
+            vec![
+                FormField::text("Name", &account.name),
+                FormField::text("Description", account.description.as_deref().unwrap_or("")),
+                FormField::currency("Value", prop.value),
+                FormField::text(
+                    "Return Profile",
+                    prop.return_profile
+                        .as_ref()
+                        .map(|p| p.0.as_str())
+                        .unwrap_or(""),
+                ),
+            ],
+            ModalAction::EDIT_ACCOUNT,
+        )
+        .start_editing(),
+        AccountType::Mortgage(debt)
+        | AccountType::LoanDebt(debt)
+        | AccountType::StudentLoanDebt(debt) => FormModal::new(
+            "Edit Debt Account",
+            vec![
+                FormField::text("Name", &account.name),
+                FormField::text("Description", account.description.as_deref().unwrap_or("")),
+                FormField::currency("Balance", debt.balance),
+                FormField::percentage("Interest Rate", debt.interest_rate),
+            ],
+            ModalAction::EDIT_ACCOUNT,
+        )
+        .start_editing(),
+    }
+}
+
 // Helper functions for account creation
 
-fn create_investment_account<F>(parts: &[&str], make_type: F) -> Option<AccountData>
+/// Create an investment account from typed form fields
+fn create_investment_account_typed<F>(form: &FormModal, make_type: F) -> Option<AccountData>
 where
     F: FnOnce(AssetAccount) -> AccountType,
 {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
     Some(AccountData {
         name,
         description: desc,
@@ -265,23 +315,15 @@ where
     })
 }
 
-fn create_property_account<F>(parts: &[&str], make_type: F) -> Option<AccountData>
+/// Create a property account from typed form fields
+fn create_property_account_typed<F>(form: &FormModal, make_type: F) -> Option<AccountData>
 where
     F: FnOnce(Property) -> AccountType,
 {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    let value = parts
-        .get(2)
-        .and_then(|s| parse_currency(s).ok())
-        .unwrap_or(0.0);
-    let profile = parts
-        .get(3)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    let value = form.get_currency_or(2, 0.0);
+    let profile = form.get_optional_str(3);
 
     let prop = Property {
         value,
@@ -295,23 +337,15 @@ where
     })
 }
 
-fn create_debt_account<F>(parts: &[&str], make_type: F) -> Option<AccountData>
+/// Create a debt account from typed form fields
+fn create_debt_account_typed<F>(form: &FormModal, make_type: F) -> Option<AccountData>
 where
     F: FnOnce(Debt) -> AccountType,
 {
-    let name = parts.first().unwrap_or(&"").to_string();
-    let desc = parts
-        .get(1)
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty());
-    let balance = parts
-        .get(2)
-        .and_then(|s| parse_currency(s).ok())
-        .unwrap_or(0.0);
-    let rate = parts
-        .get(3)
-        .and_then(|s| parse_percentage(s).ok())
-        .unwrap_or(0.0);
+    let name = form.get_str(0).unwrap_or("").to_string();
+    let desc = form.get_optional_str(1);
+    let balance = form.get_currency_or(2, 0.0);
+    let rate = form.get_percentage_or(3, 0.0);
 
     let debt = Debt {
         balance,

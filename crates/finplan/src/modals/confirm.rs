@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
-use crate::state::ConfirmModal;
+use crate::modals::ConfirmModal;
 
 use super::helpers::{HelpText, render_modal_frame};
 use super::{ConfirmedValue, ModalResult};

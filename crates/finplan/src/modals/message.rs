@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
-use crate::state::MessageModal;
+use crate::modals::MessageModal;
 
 use super::ModalResult;
 use super::helpers::{HelpText, render_modal_frame};

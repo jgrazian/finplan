@@ -1,9 +1,37 @@
+use crate::components::PanelNavigable;
+
 /// Panel focus enums for different screens.
 /// Generic left/right focus for two-panel layouts
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusedPanel {
     Left,
     Right,
+}
+
+impl FocusedPanel {
+    pub fn next(self) -> Self {
+        <Self as PanelNavigable>::next(self)
+    }
+
+    pub fn prev(self) -> Self {
+        <Self as PanelNavigable>::prev(self)
+    }
+}
+
+impl PanelNavigable for FocusedPanel {
+    fn next(self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
 }
 
 /// Focused panel for the consolidated Portfolio & Profiles tab
@@ -16,8 +44,23 @@ pub enum PortfolioProfilesPanel {
 }
 
 impl PortfolioProfilesPanel {
+    pub fn is_secondary(self) -> bool {
+        matches!(self, Self::AssetMappings | Self::Config)
+    }
+
     /// Cycle through all panels: Accounts -> Profiles -> AssetMappings -> Config -> Accounts
     pub fn next(self) -> Self {
+        <Self as PanelNavigable>::next(self)
+    }
+
+    pub fn prev(self) -> Self {
+        <Self as PanelNavigable>::prev(self)
+    }
+}
+
+impl PanelNavigable for PortfolioProfilesPanel {
+    /// Cycle through all panels: Accounts -> Profiles -> AssetMappings -> Config -> Accounts
+    fn next(self) -> Self {
         match self {
             Self::Accounts => Self::Profiles,
             Self::Profiles => Self::AssetMappings,
@@ -26,17 +69,13 @@ impl PortfolioProfilesPanel {
         }
     }
 
-    pub fn prev(self) -> Self {
+    fn prev(self) -> Self {
         match self {
             Self::Accounts => Self::Config,
             Self::Profiles => Self::Accounts,
             Self::AssetMappings => Self::Profiles,
             Self::Config => Self::AssetMappings,
         }
-    }
-
-    pub fn is_secondary(self) -> bool {
-        matches!(self, Self::AssetMappings | Self::Config)
     }
 }
 
@@ -50,6 +89,16 @@ pub enum EventsPanel {
 
 impl EventsPanel {
     pub fn next(self) -> Self {
+        <Self as PanelNavigable>::next(self)
+    }
+
+    pub fn prev(self) -> Self {
+        <Self as PanelNavigable>::prev(self)
+    }
+}
+
+impl PanelNavigable for EventsPanel {
+    fn next(self) -> Self {
         match self {
             Self::EventList => Self::Details,
             Self::Details => Self::Timeline,
@@ -57,7 +106,7 @@ impl EventsPanel {
         }
     }
 
-    pub fn prev(self) -> Self {
+    fn prev(self) -> Self {
         match self {
             Self::EventList => Self::Timeline,
             Self::Details => Self::EventList,
@@ -77,7 +126,21 @@ pub enum ScenarioPanel {
 }
 
 impl ScenarioPanel {
+    pub fn is_left_panel(self) -> bool {
+        matches!(self, Self::ScenarioList | Self::ScenarioDetails)
+    }
+
     pub fn next(self) -> Self {
+        <Self as PanelNavigable>::next(self)
+    }
+
+    pub fn prev(self) -> Self {
+        <Self as PanelNavigable>::prev(self)
+    }
+}
+
+impl PanelNavigable for ScenarioPanel {
+    fn next(self) -> Self {
         match self {
             Self::ScenarioList => Self::ScenarioDetails,
             Self::ScenarioDetails => Self::ComparisonTable,
@@ -86,17 +149,13 @@ impl ScenarioPanel {
         }
     }
 
-    pub fn prev(self) -> Self {
+    fn prev(self) -> Self {
         match self {
             Self::ScenarioList => Self::OverlayChart,
             Self::ScenarioDetails => Self::ScenarioList,
             Self::ComparisonTable => Self::ScenarioDetails,
             Self::OverlayChart => Self::ComparisonTable,
         }
-    }
-
-    pub fn is_left_panel(self) -> bool {
-        matches!(self, Self::ScenarioList | Self::ScenarioDetails)
     }
 }
 
@@ -112,6 +171,16 @@ pub enum ResultsPanel {
 
 impl ResultsPanel {
     pub fn next(self) -> Self {
+        <Self as PanelNavigable>::next(self)
+    }
+
+    pub fn prev(self) -> Self {
+        <Self as PanelNavigable>::prev(self)
+    }
+}
+
+impl PanelNavigable for ResultsPanel {
+    fn next(self) -> Self {
         match self {
             Self::NetWorthChart => Self::AccountChart,
             Self::AccountChart => Self::YearlyBreakdown,
@@ -120,7 +189,7 @@ impl ResultsPanel {
         }
     }
 
-    pub fn prev(self) -> Self {
+    fn prev(self) -> Self {
         match self {
             Self::NetWorthChart => Self::Ledger,
             Self::AccountChart => Self::NetWorthChart,
@@ -141,6 +210,16 @@ pub enum OptimizePanel {
 
 impl OptimizePanel {
     pub fn next(self) -> Self {
+        <Self as PanelNavigable>::next(self)
+    }
+
+    pub fn prev(self) -> Self {
+        <Self as PanelNavigable>::prev(self)
+    }
+}
+
+impl PanelNavigable for OptimizePanel {
+    fn next(self) -> Self {
         match self {
             Self::Parameters => Self::Objective,
             Self::Objective => Self::Progress,
@@ -149,7 +228,7 @@ impl OptimizePanel {
         }
     }
 
-    pub fn prev(self) -> Self {
+    fn prev(self) -> Self {
         match self {
             Self::Parameters => Self::Results,
             Self::Objective => Self::Parameters,

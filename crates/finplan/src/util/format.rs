@@ -50,3 +50,17 @@ pub fn format_currency_short(value: f64) -> String {
 pub fn format_percentage(value: f64) -> String {
     format!("{:.2}%", value * 100.0)
 }
+
+/// Format a currency value in compact form (e.g., $2.1M, $450K, $50)
+pub fn format_compact_currency(value: f64) -> String {
+    let abs_value = value.abs();
+    let sign = if value < 0.0 { "-" } else { "" };
+
+    if abs_value >= 1_000_000.0 {
+        format!("{}${:.1}M", sign, abs_value / 1_000_000.0)
+    } else if abs_value >= 1_000.0 {
+        format!("{}${:.0}K", sign, abs_value / 1_000.0)
+    } else {
+        format!("{}${:.0}", sign, abs_value)
+    }
+}

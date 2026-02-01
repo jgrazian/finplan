@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-use crate::state::TextInputModal;
+use crate::modals::TextInputModal;
 
 use super::helpers::{HelpText, calculate_scroll, render_cursor_line, render_modal_frame};
 use super::{ConfirmedValue, ModalResult};

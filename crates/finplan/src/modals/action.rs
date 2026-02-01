@@ -13,6 +13,7 @@ pub enum ModalAction {
     Event(EventAction),
     Effect(EffectAction),
     Optimize(OptimizeAction),
+    Amount(AmountAction),
 }
 
 /// Scenario-specific actions
@@ -27,6 +28,8 @@ pub enum ScenarioAction {
     New,
     Duplicate,
     Delete,
+    /// Run Monte Carlo with convergence-based stopping
+    MonteCarloConvergence,
 }
 
 /// Account-specific actions
@@ -86,8 +89,17 @@ pub enum EventAction {
     CompleteChildTrigger,
     /// Final form for repeating event (name, description)
     FinalizeRepeating,
+    /// Create repeating event from unified form (all fields in one form)
+    CreateRepeatingUnified,
     /// Pick a quick event template (Social Security, RMD, Medicare)
     PickQuickEvent,
+    // Trigger editing actions
+    /// Pick trigger type when editing an existing event's trigger
+    EditTriggerTypePick,
+    /// Update an existing event's trigger (simple triggers)
+    UpdateTrigger,
+    /// Update an existing event's trigger (repeating triggers)
+    UpdateRepeating,
 }
 
 /// Effect-specific actions (effects within events)
@@ -114,6 +126,25 @@ pub enum OptimizeAction {
     RunOptimization,
 }
 
+/// Amount-specific actions (editing amount fields in effects)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AmountAction {
+    /// Pick amount type from picker
+    PickType,
+    /// Fixed amount form
+    FixedForm,
+    /// Inflation-adjusted form
+    InflationForm,
+    /// Scale/percentage form
+    ScaleForm,
+    /// Target to balance form
+    TargetForm,
+    /// Account balance reference form
+    AccountBalanceForm,
+    /// Account cash balance reference form
+    CashBalanceForm,
+}
+
 // Convenience constructors for common actions
 impl ModalAction {
     // Scenario shortcuts
@@ -126,6 +157,7 @@ impl ModalAction {
     pub const NEW_SCENARIO: Self = Self::Scenario(ScenarioAction::New);
     pub const DUPLICATE_SCENARIO: Self = Self::Scenario(ScenarioAction::Duplicate);
     pub const DELETE_SCENARIO: Self = Self::Scenario(ScenarioAction::Delete);
+    pub const MONTE_CARLO_CONVERGENCE: Self = Self::Scenario(ScenarioAction::MonteCarloConvergence);
 
     // Account shortcuts
     pub const PICK_ACCOUNT_CATEGORY: Self = Self::Account(AccountAction::PickCategory);
@@ -165,7 +197,12 @@ impl ModalAction {
     pub const BUILD_CHILD_TRIGGER: Self = Self::Event(EventAction::BuildChildTrigger);
     pub const COMPLETE_CHILD_TRIGGER: Self = Self::Event(EventAction::CompleteChildTrigger);
     pub const FINALIZE_REPEATING: Self = Self::Event(EventAction::FinalizeRepeating);
+    pub const CREATE_REPEATING_UNIFIED: Self = Self::Event(EventAction::CreateRepeatingUnified);
     pub const PICK_QUICK_EVENT: Self = Self::Event(EventAction::PickQuickEvent);
+    // Trigger editing shortcuts
+    pub const EDIT_TRIGGER_TYPE_PICK: Self = Self::Event(EventAction::EditTriggerTypePick);
+    pub const UPDATE_TRIGGER: Self = Self::Event(EventAction::UpdateTrigger);
+    pub const UPDATE_REPEATING: Self = Self::Event(EventAction::UpdateRepeating);
 
     // Effect shortcuts
     pub const MANAGE_EFFECTS: Self = Self::Effect(EffectAction::Manage);
@@ -182,6 +219,15 @@ impl ModalAction {
     pub const SELECT_OBJECTIVE: Self = Self::Optimize(OptimizeAction::SelectObjective);
     pub const CONFIGURE_OPTIMIZE_SETTINGS: Self = Self::Optimize(OptimizeAction::ConfigureSettings);
     pub const RUN_OPTIMIZATION: Self = Self::Optimize(OptimizeAction::RunOptimization);
+
+    // Amount shortcuts
+    pub const PICK_AMOUNT_TYPE: Self = Self::Amount(AmountAction::PickType);
+    pub const AMOUNT_FIXED_FORM: Self = Self::Amount(AmountAction::FixedForm);
+    pub const AMOUNT_INFLATION_FORM: Self = Self::Amount(AmountAction::InflationForm);
+    pub const AMOUNT_SCALE_FORM: Self = Self::Amount(AmountAction::ScaleForm);
+    pub const AMOUNT_TARGET_FORM: Self = Self::Amount(AmountAction::TargetForm);
+    pub const AMOUNT_ACCOUNT_BALANCE_FORM: Self = Self::Amount(AmountAction::AccountBalanceForm);
+    pub const AMOUNT_CASH_BALANCE_FORM: Self = Self::Amount(AmountAction::CashBalanceForm);
 }
 
 #[cfg(test)]
