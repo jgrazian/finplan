@@ -25,7 +25,7 @@ impl StatusBar {
                 "Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
             }
             crate::state::TabId::Scenario => {
-                "r: run | m: MC | R: all | c: copy | n: new | s/l: save/load | e: params"
+                "r: run | m/M: MC | M: MC Conv | R: all | c: copy | n: new | s/l: save/load | e: params"
             }
             crate::state::TabId::Results => {
                 "h/l: year | $: real/nominal | v: percentile | f: filter"
