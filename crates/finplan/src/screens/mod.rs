@@ -1,5 +1,5 @@
+pub mod analysis;
 pub mod events;
-pub mod optimize;
 pub mod portfolio_profiles;
 pub mod results;
 pub mod scenario;

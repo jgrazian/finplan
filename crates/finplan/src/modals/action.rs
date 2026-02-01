@@ -13,6 +13,7 @@ pub enum ModalAction {
     Event(EventAction),
     Effect(EffectAction),
     Optimize(OptimizeAction),
+    Analysis(AnalysisAction),
     Amount(AmountAction),
 }
 
@@ -115,7 +116,7 @@ pub enum EffectAction {
     Delete,
 }
 
-/// Optimization-specific actions
+/// Optimization-specific actions (legacy, kept for backwards compatibility)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptimizeAction {
     AddParameter,
@@ -124,6 +125,25 @@ pub enum OptimizeAction {
     SelectObjective,
     ConfigureSettings,
     RunOptimization,
+}
+
+/// Analysis-specific actions (parameter sweep sensitivity analysis)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisAction {
+    /// Add a sweep parameter
+    AddParameter,
+    /// Configure a sweep parameter (min/max/steps)
+    ConfigureParameter { index: usize },
+    /// Delete a sweep parameter
+    DeleteParameter { index: usize },
+    /// Toggle a metric on/off
+    ToggleMetric,
+    /// Configure analysis settings (MC iterations, steps)
+    ConfigureSettings,
+    /// Run the analysis
+    RunAnalysis,
+    /// Select parameter target after picking event
+    SelectParameterTarget { event_index: usize },
 }
 
 /// Amount-specific actions (editing amount fields in effects)
@@ -214,11 +234,17 @@ impl ModalAction {
     pub const EDIT_EFFECT: Self = Self::Effect(EffectAction::Edit);
     pub const DELETE_EFFECT: Self = Self::Effect(EffectAction::Delete);
 
-    // Optimize shortcuts
+    // Optimize shortcuts (legacy)
     pub const ADD_OPTIMIZE_PARAMETER: Self = Self::Optimize(OptimizeAction::AddParameter);
     pub const SELECT_OBJECTIVE: Self = Self::Optimize(OptimizeAction::SelectObjective);
     pub const CONFIGURE_OPTIMIZE_SETTINGS: Self = Self::Optimize(OptimizeAction::ConfigureSettings);
     pub const RUN_OPTIMIZATION: Self = Self::Optimize(OptimizeAction::RunOptimization);
+
+    // Analysis shortcuts
+    pub const ADD_ANALYSIS_PARAMETER: Self = Self::Analysis(AnalysisAction::AddParameter);
+    pub const TOGGLE_ANALYSIS_METRIC: Self = Self::Analysis(AnalysisAction::ToggleMetric);
+    pub const CONFIGURE_ANALYSIS_SETTINGS: Self = Self::Analysis(AnalysisAction::ConfigureSettings);
+    pub const RUN_ANALYSIS: Self = Self::Analysis(AnalysisAction::RunAnalysis);
 
     // Amount shortcuts
     pub const PICK_AMOUNT_TYPE: Self = Self::Amount(AmountAction::PickType);

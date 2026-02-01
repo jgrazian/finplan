@@ -68,6 +68,8 @@ pub enum MarketError {
     Cancelled,
     /// Historical data is empty and cannot be sampled
     EmptyHistoricalData,
+    /// Configuration error
+    Config(String),
 }
 
 impl fmt::Display for MarketError {
@@ -88,6 +90,7 @@ impl fmt::Display for MarketError {
             MarketError::Lookup(e) => write!(f, "{}", e),
             MarketError::Cancelled => write!(f, "simulation cancelled"),
             MarketError::EmptyHistoricalData => write!(f, "historical data is empty"),
+            MarketError::Config(msg) => write!(f, "configuration error: {}", msg),
         }
     }
 }

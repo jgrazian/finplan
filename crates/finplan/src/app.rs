@@ -18,7 +18,7 @@ use crate::modals::{
     render_modal,
 };
 use crate::screens::{
-    ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
+    ModalHandler, analysis::AnalysisScreen, events::EventsScreen,
     portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
 };
 use crate::state::{AppState, PercentileView, ResultsState, SimulationStatus, TabId};
@@ -33,7 +33,7 @@ pub struct App {
     scenario_screen: ScenarioScreen,
     events_screen: EventsScreen,
     results_screen: ResultsScreen,
-    optimize_screen: OptimizeScreen,
+    analysis_screen: AnalysisScreen,
 }
 
 impl Default for App {
@@ -55,7 +55,7 @@ impl App {
             scenario_screen: ScenarioScreen,
             events_screen: EventsScreen,
             results_screen: ResultsScreen,
-            optimize_screen: OptimizeScreen,
+            analysis_screen: AnalysisScreen,
         }
     }
 
@@ -73,7 +73,7 @@ impl App {
             scenario_screen: ScenarioScreen,
             events_screen: EventsScreen,
             results_screen: ResultsScreen,
-            optimize_screen: OptimizeScreen,
+            analysis_screen: AnalysisScreen,
         }
     }
 
@@ -291,6 +291,26 @@ impl App {
                         &format!("Ran Monte Carlo on {} scenarios.", completed_count),
                     ));
                 }
+                SimulationResponse::SweepProgress { current, total } => {
+                    // Update analysis progress
+                    self.state.analysis_state.current_point = current;
+                    self.state.analysis_state.total_points = total;
+                }
+                SimulationResponse::SweepComplete { results } => {
+                    self.state.analysis_state.running = false;
+                    self.state.simulation_status = SimulationStatus::Idle;
+
+                    // Convert SweepResults to AnalysisResults
+                    let analysis_results = convert_sweep_to_analysis_results(&results);
+                    self.state.analysis_state.results = Some(analysis_results);
+
+                    // Show completion modal
+                    let total_points = self.state.analysis_state.total_points;
+                    self.state.modal = ModalState::Message(MessageModal::info(
+                        "Analysis Complete",
+                        &format!("Evaluated {} parameter combinations.", total_points),
+                    ));
+                }
             }
         }
     }
@@ -405,6 +425,28 @@ impl App {
                         iterations,
                     });
                 }
+                PendingSimulation::SweepAnalysis { sweep_config } => {
+                    // Build simulation config for current scenario
+                    let config = match self.state.to_simulation_config() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            self.state.analysis_state.running = false;
+                            self.state.simulation_status = SimulationStatus::Idle;
+                            self.state.set_error(format!("Config error: {}", e));
+                            return;
+                        }
+                    };
+
+                    let birth_date = self.state.data().parameters.birth_date.clone();
+                    let start_date = self.state.data().parameters.start_date.clone();
+
+                    self.worker.send(SimulationRequest::SweepAnalysis {
+                        config,
+                        sweep_config,
+                        birth_date,
+                        start_date,
+                    });
+                }
             }
         }
     }
@@ -464,7 +506,7 @@ impl App {
             TabId::Scenario => self.scenario_screen.render(frame, area, &self.state),
             TabId::Events => self.events_screen.render(frame, area, &self.state),
             TabId::Results => self.results_screen.render(frame, area, &self.state),
-            TabId::Optimize => self.optimize_screen.render(frame, area, &self.state),
+            TabId::Analysis => self.analysis_screen.render(frame, area, &self.state),
         }
     }
 
@@ -545,7 +587,7 @@ impl App {
             TabId::Scenario => self.scenario_screen.handle_key(key_event, &mut self.state),
             TabId::Events => self.events_screen.handle_key(key_event, &mut self.state),
             TabId::Results => self.results_screen.handle_key(key_event, &mut self.state),
-            TabId::Optimize => self.optimize_screen.handle_key(key_event, &mut self.state),
+            TabId::Analysis => self.analysis_screen.handle_key(key_event, &mut self.state),
         };
 
         if result == EventResult::Exit {
@@ -565,8 +607,8 @@ impl App {
         } else if self.scenario_screen.handles(&action) {
             self.scenario_screen
                 .handle_modal_result(&mut self.state, action, &value)
-        } else if self.optimize_screen.handles(&action) {
-            self.optimize_screen
+        } else if self.analysis_screen.handles(&action) {
+            self.analysis_screen
                 .handle_modal_result(&mut self.state, action, &value)
         } else {
             // No handler found - this shouldn't happen with proper coverage
@@ -740,5 +782,57 @@ impl App {
 
             _ => {}
         }
+    }
+}
+
+/// Convert core SweepResults to TUI AnalysisResults
+fn convert_sweep_to_analysis_results(
+    results: &finplan_core::analysis::SweepResults,
+) -> crate::state::AnalysisResults {
+    use crate::state::{AnalysisMetricType, AnalysisResults};
+    use std::collections::HashMap;
+
+    let mut metric_results = HashMap::new();
+
+    // Get grid dimensions
+    let (success_values, _rows, cols) =
+        results.get_metric_grid(&finplan_core::analysis::AnalysisMetric::SuccessRate);
+
+    // Extract success rate as 2D vector (convert to percentage)
+    let success_data: Vec<Vec<f64>> = if cols <= 1 {
+        // 1D: each row is a single value
+        success_values
+            .into_iter()
+            .map(|v| vec![v * 100.0])
+            .collect()
+    } else {
+        // 2D: reshape into rows x cols
+        success_values
+            .chunks(cols)
+            .map(|chunk| chunk.iter().map(|v| v * 100.0).collect())
+            .collect()
+    };
+    metric_results.insert(AnalysisMetricType::SuccessRate, success_data);
+
+    // Extract P50 final net worth
+    let (p50_values, _, p50_cols) = results
+        .get_metric_grid(&finplan_core::analysis::AnalysisMetric::Percentile { percentile: 50 });
+
+    let p50_data: Vec<Vec<f64>> = if p50_cols <= 1 {
+        p50_values.into_iter().map(|v| vec![v]).collect()
+    } else {
+        p50_values
+            .chunks(p50_cols)
+            .map(|chunk| chunk.to_vec())
+            .collect()
+    };
+    metric_results.insert(AnalysisMetricType::P50FinalNetWorth, p50_data);
+
+    AnalysisResults {
+        param1_values: results.param1_values().to_vec(),
+        param2_values: results.param2_values().to_vec(),
+        metric_results,
+        param1_label: results.param1_label().to_string(),
+        param2_label: results.param2_label().to_string(),
     }
 }

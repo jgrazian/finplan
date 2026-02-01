@@ -5,17 +5,18 @@
 
 mod account;
 pub mod amount;
+pub mod analysis;
 mod config;
 mod effect;
 mod event;
 mod holding;
-pub mod optimize;
 mod profile;
 mod scenario;
 pub mod wizard;
 
 pub use account::*;
 pub use amount::*;
+pub use analysis::*;
 pub use config::*;
 pub use effect::*;
 pub use event::*;

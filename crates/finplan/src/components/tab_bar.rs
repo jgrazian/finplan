@@ -40,7 +40,7 @@ impl Component for TabBar {
             state.switch_tab(TabId::Results);
             EventResult::Handled
         } else if KeybindingsConfig::matches(&key, &kb.tab_5) {
-            state.switch_tab(TabId::Optimize);
+            state.switch_tab(TabId::Analysis);
             EventResult::Handled
         } else {
             EventResult::NotHandled

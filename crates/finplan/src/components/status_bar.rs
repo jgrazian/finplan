@@ -30,7 +30,7 @@ impl StatusBar {
             crate::state::TabId::Results => {
                 "h/l: year | $: real/nominal | v: percentile | f: filter"
             }
-            crate::state::TabId::Optimize => "Tab: panel | r: run | a: add | d: del | s: settings",
+            crate::state::TabId::Analysis => "Tab: panel | r: run | a: add | d: del | m: metrics",
         }
     }
 

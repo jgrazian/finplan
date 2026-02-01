@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{self, JoinHandle};
 
+use finplan_core::analysis::{SweepConfig, SweepProgress, SweepResults, sweep_evaluate};
 use finplan_core::config::SimulationConfig;
 use finplan_core::model::{
     ConvergenceConfig, ConvergenceMetric, MonteCarloConfig, MonteCarloProgress,
@@ -53,6 +54,13 @@ pub enum SimulationRequest {
         scenarios: Vec<(String, SimulationConfig, String, String)>,
         iterations: usize,
     },
+    /// Run sweep analysis (parameter sensitivity)
+    SweepAnalysis {
+        config: SimulationConfig,
+        sweep_config: SweepConfig,
+        birth_date: String,
+        start_date: String,
+    },
     /// Graceful shutdown
     Shutdown,
 }
@@ -85,6 +93,10 @@ pub enum SimulationResponse {
     Cancelled,
     /// Error occurred
     Error(String),
+    /// Sweep analysis progress
+    SweepProgress { current: usize, total: usize },
+    /// Sweep analysis completed
+    SweepComplete { results: Box<SweepResults> },
 }
 
 /// Background worker that runs simulations on a separate thread
@@ -328,6 +340,46 @@ fn worker_loop(
                     Err(_) => {
                         // Cancelled during batch
                         let _ = response_tx.send(SimulationResponse::Cancelled);
+                    }
+                }
+            }
+
+            SimulationRequest::SweepAnalysis {
+                config,
+                sweep_config,
+                birth_date: _,
+                start_date: _,
+            } => {
+                // Check for cancellation before starting
+                if cancel_flag.load(Ordering::SeqCst) {
+                    let _ = response_tx.send(SimulationResponse::Cancelled);
+                    continue;
+                }
+
+                // Reset progress for sweep
+                let total_points = sweep_config.total_points();
+                progress.store(0, Ordering::SeqCst);
+                batch_scenario_total.store(total_points, Ordering::SeqCst);
+
+                // Create SweepProgress from existing atomics
+                let sweep_progress = SweepProgress::from_atomics(
+                    progress.clone(),
+                    batch_scenario_total.clone(),
+                    cancel_flag.clone(),
+                );
+
+                // Run sweep analysis
+                match sweep_evaluate(&config, &sweep_config, Some(&sweep_progress)) {
+                    Ok(results) => {
+                        let _ = response_tx.send(SimulationResponse::SweepComplete {
+                            results: Box::new(results),
+                        });
+                    }
+                    Err(finplan_core::error::MarketError::Cancelled) => {
+                        let _ = response_tx.send(SimulationResponse::Cancelled);
+                    }
+                    Err(e) => {
+                        let _ = response_tx.send(SimulationResponse::Error(e.to_string()));
                     }
                 }
             }

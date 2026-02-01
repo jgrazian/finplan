@@ -199,6 +199,49 @@ impl PanelNavigable for ResultsPanel {
     }
 }
 
+// ========== Analysis Screen Panels ==========
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnalysisPanel {
+    #[default]
+    Parameters,
+    Metrics,
+    Config,
+    Results,
+}
+
+impl AnalysisPanel {
+    pub fn next(self) -> Self {
+        <Self as PanelNavigable>::next(self)
+    }
+
+    pub fn prev(self) -> Self {
+        <Self as PanelNavigable>::prev(self)
+    }
+}
+
+impl PanelNavigable for AnalysisPanel {
+    fn next(self) -> Self {
+        match self {
+            Self::Parameters => Self::Metrics,
+            Self::Metrics => Self::Config,
+            Self::Config => Self::Results,
+            Self::Results => Self::Parameters,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Parameters => Self::Results,
+            Self::Metrics => Self::Parameters,
+            Self::Config => Self::Metrics,
+            Self::Results => Self::Config,
+        }
+    }
+}
+
+// ========== Legacy Optimize Panel (kept for backwards compatibility) ==========
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OptimizePanel {
     #[default]

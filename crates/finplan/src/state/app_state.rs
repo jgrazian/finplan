@@ -16,8 +16,8 @@ use crate::util::percentiles::{
 use super::cache::CachedValue;
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::screen_state::{
-    EventsState, MonteCarloPreviewSummary, OptimizeState, PercentileView, PortfolioProfilesState,
-    ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
+    AnalysisState, EventsState, MonteCarloPreviewSummary, OptimizeState, PercentileView,
+    PortfolioProfilesState, ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
 };
 use super::tabs::TabId;
 use crate::modals::{FormModal, ModalState};
@@ -140,6 +140,10 @@ pub enum PendingSimulation {
         relative_threshold: f64,
         metric: finplan_core::model::ConvergenceMetric,
     },
+    /// Run sweep analysis (parameter sensitivity)
+    SweepAnalysis {
+        sweep_config: finplan_core::analysis::SweepConfig,
+    },
 }
 
 // ========== AppState ==========
@@ -181,6 +185,7 @@ pub struct AppState {
     pub scenario_state: ScenarioState,
     pub results_state: ResultsState,
     pub optimize_state: OptimizeState,
+    pub analysis_state: AnalysisState,
 
     pub modal: ModalState,
     pub error_message: Option<String>,
@@ -224,6 +229,7 @@ impl Default for AppState {
             scenario_state: ScenarioState::default(),
             results_state: ResultsState::default(),
             optimize_state: OptimizeState::new(),
+            analysis_state: AnalysisState::new(),
             modal: ModalState::None,
             error_message: None,
             exit: false,

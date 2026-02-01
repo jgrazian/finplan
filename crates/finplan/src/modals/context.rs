@@ -21,8 +21,8 @@ pub enum ModalContext {
     Effect(EffectContext),
     /// Context for config operations (tax, inflation)
     Config(ConfigContext),
-    /// Context for optimization operations
-    Optimize(OptimizeContext),
+    /// Context for analysis operations (parameter sweep)
+    Analysis(AnalysisContext),
     /// Context for amount editing (recursive amount builder)
     Amount(AmountContext),
 }
@@ -669,7 +669,7 @@ pub enum ConfigContext {
     Inflation(InflationConfigContext),
 }
 
-/// Optimization context for parameter/objective configuration
+/// Optimization context for parameter/objective configuration (legacy)
 #[derive(Debug, Clone, PartialEq)]
 pub enum OptimizeContext {
     /// Configuring a parameter at a specific index
@@ -677,6 +677,21 @@ pub enum OptimizeContext {
     /// Selecting objective type
     Objective,
     /// Configuring settings (iterations, algorithm)
+    Settings,
+}
+
+/// Analysis context for parameter sweep configuration
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnalysisContext {
+    /// Selecting an event to create a sweep parameter
+    SelectEvent,
+    /// Selecting the sweep target (trigger/effect) for an event
+    SelectTarget { event_index: usize },
+    /// Configuring a parameter at a specific index (min/max/steps)
+    Parameter { index: usize },
+    /// Selecting metrics
+    Metrics,
+    /// Configuring settings (MC iterations, default steps)
     Settings,
 }
 
@@ -839,22 +854,6 @@ impl ModalContext {
     pub fn as_config(&self) -> Option<&ConfigContext> {
         match self {
             Self::Config(ctx) => Some(ctx),
-            _ => None,
-        }
-    }
-
-    /// Extract optimize context
-    pub fn as_optimize(&self) -> Option<&OptimizeContext> {
-        match self {
-            Self::Optimize(ctx) => Some(ctx),
-            _ => None,
-        }
-    }
-
-    /// Extract optimize parameter index
-    pub fn as_optimize_param_index(&self) -> Option<usize> {
-        match self {
-            Self::Optimize(OptimizeContext::Parameter { index }) => Some(*index),
             _ => None,
         }
     }

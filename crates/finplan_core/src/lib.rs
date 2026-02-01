@@ -34,6 +34,7 @@
 // Core modules
 // ============================================================================
 
+pub mod analysis;
 pub mod apply;
 pub mod error;
 pub mod evaluate;
