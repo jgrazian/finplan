@@ -76,6 +76,7 @@ impl WebWorker {
             iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: true,
+            ..Default::default()
         };
 
         // Run Monte Carlo (synchronously - will block UI)
@@ -188,6 +189,7 @@ impl WebWorker {
                 iterations,
                 percentiles: vec![0.05, 0.50, 0.95],
                 compute_mean: false,
+                ..Default::default()
             };
 
             let mc_summary = match finplan_core::simulation::monte_carlo_simulate_with_config(

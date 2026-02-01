@@ -83,6 +83,7 @@ impl KeybindingsConfig {
             KeyCode::PageUp => "pageup".to_string(),
             KeyCode::PageDown => "pagedown".to_string(),
             KeyCode::F(n) => format!("f{}", n),
+            #[cfg(feature = "native")]
             KeyCode::Insert => "insert".to_string(),
             #[cfg(feature = "native")]
             KeyCode::BackTab => {

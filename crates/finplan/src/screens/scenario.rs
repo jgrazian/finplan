@@ -298,7 +298,8 @@ impl Component for ScenarioScreen {
             return EventResult::Handled;
         }
 
-        // Import scenario
+        // Import scenario (native only)
+        #[cfg(feature = "native")]
         if KeybindingsConfig::matches(&key, &kb.tabs.scenario.import) {
             let default_path = dirs::home_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -316,7 +317,8 @@ impl Component for ScenarioScreen {
             return EventResult::Handled;
         }
 
-        // Export scenario
+        // Export scenario (native only)
+        #[cfg(feature = "native")]
         if KeybindingsConfig::matches(&key, &kb.tabs.scenario.export) {
             let default_path = dirs::home_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))

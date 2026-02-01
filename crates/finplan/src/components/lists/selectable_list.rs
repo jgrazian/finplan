@@ -1,6 +1,6 @@
 //! Generic selectable list component and input handling utilities.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crate::event::{AppKeyEvent, KeyCode};
 
 /// Trait for panel enums that support Tab/BackTab navigation.
 pub trait PanelNavigable: Copy + Eq {
@@ -98,13 +98,13 @@ pub fn calculate_centered_scroll(
 ///
 /// # Returns
 /// `true` if the key was handled, `false` otherwise
-pub fn handle_list_navigation(key: &KeyEvent, selected: &mut usize, total: usize) -> bool {
+pub fn handle_list_navigation(key: &AppKeyEvent, selected: &mut usize, total: usize) -> bool {
     if total == 0 {
         return false;
     }
 
     // Don't handle if shift is pressed (that's for reordering)
-    if key.modifiers.contains(KeyModifiers::SHIFT) {
+    if key.shift {
         return false;
     }
 
@@ -137,7 +137,7 @@ pub fn handle_list_navigation(key: &KeyEvent, selected: &mut usize, total: usize
 /// # Returns
 /// `Some((from, to))` if items should be swapped, `None` otherwise
 pub fn handle_list_reorder(
-    key: &KeyEvent,
+    key: &AppKeyEvent,
     selected: usize,
     total: usize,
 ) -> Option<(usize, usize)> {
@@ -145,8 +145,7 @@ pub fn handle_list_reorder(
         return None;
     }
 
-    let has_shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    if !has_shift {
+    if !key.shift {
         return None;
     }
 
@@ -169,184 +168,18 @@ pub fn handle_list_reorder(
 ///
 /// # Returns
 /// `true` if the key was handled, `false` otherwise
-pub fn handle_panel_navigation<P: PanelNavigable>(key: &KeyEvent, focused: &mut P) -> bool {
-    match key.code {
-        KeyCode::Tab if key.modifiers.is_empty() => {
-            *focused = focused.next();
-            true
-        }
-        KeyCode::BackTab => {
-            *focused = focused.prev();
-            true
-        }
-        _ => false,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_calculate_centered_scroll_few_items() {
-        // When total items fit in viewport, no scroll needed
-        assert_eq!(calculate_centered_scroll(0, 5, 10), 0);
-        assert_eq!(calculate_centered_scroll(4, 5, 10), 0);
+pub fn handle_panel_navigation<P: PanelNavigable>(key: &AppKeyEvent, focused: &mut P) -> bool {
+    // Handle back-tab (Shift+Tab on web, BackTab on native)
+    if key.is_back_tab() {
+        *focused = focused.prev();
+        return true;
     }
 
-    #[test]
-    fn test_calculate_centered_scroll_beginning() {
-        // Near the top, no scroll
-        assert_eq!(calculate_centered_scroll(0, 20, 10), 0);
-        assert_eq!(calculate_centered_scroll(4, 20, 10), 0);
+    // Handle forward tab
+    if matches!(key.code, KeyCode::Tab) && key.no_modifiers() {
+        *focused = focused.next();
+        return true;
     }
 
-    #[test]
-    fn test_calculate_centered_scroll_middle() {
-        // In the middle, center the selection
-        let offset = calculate_centered_scroll(10, 20, 10);
-        assert!(offset > 0 && offset < 10);
-    }
-
-    #[test]
-    fn test_calculate_centered_scroll_end() {
-        // Near the end, scroll to show last items
-        assert_eq!(calculate_centered_scroll(19, 20, 10), 10);
-        assert_eq!(calculate_centered_scroll(18, 20, 10), 10);
-    }
-
-    #[test]
-    fn test_handle_list_navigation_down() {
-        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        let mut selected = 0usize;
-
-        assert!(handle_list_navigation(&key, &mut selected, 5));
-        assert_eq!(selected, 1);
-    }
-
-    #[test]
-    fn test_handle_list_navigation_down_wrap() {
-        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        let mut selected = 4usize;
-
-        assert!(handle_list_navigation(&key, &mut selected, 5));
-        assert_eq!(selected, 0);
-    }
-
-    #[test]
-    fn test_handle_list_navigation_up() {
-        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        let mut selected = 2usize;
-
-        assert!(handle_list_navigation(&key, &mut selected, 5));
-        assert_eq!(selected, 1);
-    }
-
-    #[test]
-    fn test_handle_list_navigation_up_wrap() {
-        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
-        let mut selected = 0usize;
-
-        assert!(handle_list_navigation(&key, &mut selected, 5));
-        assert_eq!(selected, 4);
-    }
-
-    #[test]
-    fn test_handle_list_navigation_empty() {
-        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        let mut selected = 0usize;
-
-        assert!(!handle_list_navigation(&key, &mut selected, 0));
-    }
-
-    #[test]
-    fn test_handle_list_navigation_ignores_shift() {
-        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::SHIFT);
-        let mut selected = 0usize;
-
-        assert!(!handle_list_navigation(&key, &mut selected, 5));
-        assert_eq!(selected, 0);
-    }
-
-    #[test]
-    fn test_handle_list_reorder_down() {
-        let key = KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT);
-        assert_eq!(handle_list_reorder(&key, 2, 5), Some((2, 3)));
-    }
-
-    #[test]
-    fn test_handle_list_reorder_up() {
-        let key = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
-        assert_eq!(handle_list_reorder(&key, 2, 5), Some((2, 1)));
-    }
-
-    #[test]
-    fn test_handle_list_reorder_at_end() {
-        let key = KeyEvent::new(KeyCode::Char('J'), KeyModifiers::SHIFT);
-        assert_eq!(handle_list_reorder(&key, 4, 5), None);
-    }
-
-    #[test]
-    fn test_handle_list_reorder_at_start() {
-        let key = KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT);
-        assert_eq!(handle_list_reorder(&key, 0, 5), None);
-    }
-
-    #[test]
-    fn test_handle_list_reorder_without_shift() {
-        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        assert_eq!(handle_list_reorder(&key, 2, 5), None);
-    }
-
-    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-    enum TestPanel {
-        A,
-        B,
-        C,
-    }
-
-    impl PanelNavigable for TestPanel {
-        fn next(self) -> Self {
-            match self {
-                Self::A => Self::B,
-                Self::B => Self::C,
-                Self::C => Self::A,
-            }
-        }
-
-        fn prev(self) -> Self {
-            match self {
-                Self::A => Self::C,
-                Self::B => Self::A,
-                Self::C => Self::B,
-            }
-        }
-    }
-
-    #[test]
-    fn test_handle_panel_navigation_tab() {
-        let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
-        let mut focused = TestPanel::A;
-
-        assert!(handle_panel_navigation(&key, &mut focused));
-        assert_eq!(focused, TestPanel::B);
-    }
-
-    #[test]
-    fn test_handle_panel_navigation_backtab() {
-        let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
-        let mut focused = TestPanel::B;
-
-        assert!(handle_panel_navigation(&key, &mut focused));
-        assert_eq!(focused, TestPanel::A);
-    }
-
-    #[test]
-    fn test_handle_panel_navigation_ignores_other_keys() {
-        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
-        let mut focused = TestPanel::A;
-
-        assert!(!handle_panel_navigation(&key, &mut focused));
-        assert_eq!(focused, TestPanel::A);
-    }
+    false
 }

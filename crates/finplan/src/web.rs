@@ -17,14 +17,16 @@ use crate::components::status_bar::StatusBar;
 use crate::components::tab_bar::TabBar;
 use crate::components::{Component, EventResult};
 use crate::event::AppKeyEvent;
-use crate::modals::{ConfirmedValue, ModalResult, handle_modal_key, render_modal};
+use crate::modals::{
+    ConfirmedValue, ModalAction, ModalResult, ModalState, handle_modal_key, render_modal,
+};
 use crate::platform::web::{WebStorage, WebWorker};
 use crate::platform::{SimulationRequest, SimulationWorker, Storage};
 use crate::screens::{
     ModalHandler, events::EventsScreen, optimize::OptimizeScreen,
     portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
 };
-use crate::state::{AppState, ModalAction, ModalState, SimulationStatus, TabId};
+use crate::state::{AppState, SimulationStatus, TabId};
 
 /// Web application state wrapped for callback access.
 struct WebApp {
@@ -90,6 +92,12 @@ impl WebApp {
                     self.state.modal = ModalState::None;
                 }
                 ModalResult::Continue | ModalResult::FieldChanged(_) => {}
+                ModalResult::AmountFieldActivated(field_idx) => {
+                    self.handle_amount_field_activated(field_idx);
+                }
+                ModalResult::TriggerFieldActivated(field_idx) => {
+                    self.handle_trigger_field_activated(field_idx);
+                }
             }
             return;
         }
@@ -159,26 +167,19 @@ impl WebApp {
 
     /// Handle modal result (dispatch to appropriate screen handler).
     fn handle_modal_result(&mut self, action: ModalAction, value: ConfirmedValue) {
-        // Legacy string value for handlers not yet migrated
-        let legacy_value = value.to_legacy_string();
-
         // Delegate to screen-specific handlers based on action type
         let result = if self.portfolio_profiles_screen.handles(&action) {
-            self.portfolio_profiles_screen.handle_modal_result(
-                &mut self.state,
-                action,
-                &value,
-                &legacy_value,
-            )
+            self.portfolio_profiles_screen
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.scenario_screen.handles(&action) {
             self.scenario_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.events_screen.handles(&action) {
             self.events_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else if self.optimize_screen.handles(&action) {
             self.optimize_screen
-                .handle_modal_result(&mut self.state, action, &value, &legacy_value)
+                .handle_modal_result(&mut self.state, action, &value)
         } else {
             crate::actions::ActionResult::close()
         };
@@ -194,6 +195,154 @@ impl WebApp {
                 self.state.set_error(msg);
                 self.state.modal = ModalState::None;
             }
+        }
+    }
+
+    /// Handle when an Amount field is activated in a form
+    fn handle_amount_field_activated(&mut self, field_idx: usize) {
+        use crate::actions::launch_amount_picker;
+        use crate::modals::context::{EffectContext, ModalContext};
+
+        // Get the current form's context to determine what effect we're editing
+        let ModalState::Form(form) = &self.state.modal else {
+            return;
+        };
+
+        // Extract effect context from the form
+        let Some(ModalContext::Effect(effect_ctx)) = &form.context else {
+            return;
+        };
+
+        // Get event/effect indices and effect type
+        let (event_idx, effect_idx, effect_type) = match effect_ctx {
+            EffectContext::Edit {
+                event,
+                effect,
+                effect_type,
+            } => (*event, *effect, effect_type.clone()),
+            EffectContext::Add { event, effect_type } => (*event, 0, effect_type.clone()),
+            EffectContext::Existing { .. } => {
+                // For existing context, we don't have the effect type
+                // This shouldn't normally happen for amount editing
+                return;
+            }
+        };
+
+        // Get the current amount from the field
+        let current_amount = form
+            .fields
+            .get(field_idx)
+            .and_then(|f| f.as_amount())
+            .cloned()
+            .unwrap_or_else(|| crate::data::events_data::AmountData::fixed(0.0));
+
+        // Store the current form so we can restore it after amount editing
+        self.state.pending_effect_form = Some(form.clone());
+
+        // Launch the amount picker
+        let result = launch_amount_picker(
+            &self.state,
+            event_idx,
+            effect_idx,
+            field_idx,
+            effect_type,
+            &current_amount,
+        );
+
+        // Apply the result
+        if let crate::actions::ActionResult::Done(Some(modal)) = result {
+            self.state.modal = modal;
+        }
+    }
+
+    /// Handle when a Trigger field is activated in a form
+    fn handle_trigger_field_activated(&mut self, field_idx: usize) {
+        use crate::modals::PickerModal;
+        use crate::modals::context::{
+            IndexContext, ModalContext, TriggerChildSlot, TriggerContext,
+        };
+
+        // Get the current form's context
+        let ModalState::Form(form) = &self.state.modal else {
+            return;
+        };
+
+        match &form.context {
+            // Case 1: Editing an existing event's trigger
+            Some(ModalContext::Index(IndexContext::Event(idx))) => {
+                let event_index = *idx;
+
+                // Close the current form and open the trigger type picker
+                let trigger_types = vec![
+                    "Date".to_string(),
+                    "Age".to_string(),
+                    "Repeating".to_string(),
+                    "Manual".to_string(),
+                    "Account Balance".to_string(),
+                    "Net Worth".to_string(),
+                    "Relative to Event".to_string(),
+                ];
+
+                self.state.modal = ModalState::Picker(
+                    PickerModal::new(
+                        "Select New Trigger Type",
+                        trigger_types,
+                        ModalAction::EDIT_TRIGGER_TYPE_PICK,
+                    )
+                    .with_typed_context(ModalContext::Trigger(
+                        TriggerContext::EditStart { event_index },
+                    )),
+                );
+            }
+
+            // Case 2: Unified repeating form - editing start/end conditions
+            Some(ModalContext::Trigger(TriggerContext::RepeatingBuilder(builder)))
+                if builder.unified_form_mode =>
+            {
+                // Field 3 = Start, Field 4 = End
+                let slot = match field_idx {
+                    3 => TriggerChildSlot::Start,
+                    4 => TriggerChildSlot::End,
+                    _ => return, // Unknown field
+                };
+
+                // Store the current form so we can return to it after editing
+                let form_clone = form.clone();
+                self.state.pending_repeating_form = Some(form_clone);
+
+                // Update builder to track which slot we're editing
+                let mut builder = builder.clone();
+                builder.editing_slot = Some(slot);
+
+                // Show child trigger type picker
+                let title = match slot {
+                    TriggerChildSlot::Start => "Select Start Condition",
+                    TriggerChildSlot::End => "Select End Condition",
+                };
+
+                let none_option = match slot {
+                    TriggerChildSlot::Start => "None (Start Immediately)",
+                    TriggerChildSlot::End => "None (Run Forever)",
+                };
+
+                let options = vec![
+                    none_option.to_string(),
+                    "Date".to_string(),
+                    "Age".to_string(),
+                    "Account Balance".to_string(),
+                    "Net Worth".to_string(),
+                    "Relative to Event".to_string(),
+                ];
+
+                self.state.modal = ModalState::Picker(
+                    PickerModal::new(title, options, ModalAction::PICK_CHILD_TRIGGER_TYPE)
+                        .with_typed_context(ModalContext::Trigger(
+                            TriggerContext::RepeatingBuilder(builder),
+                        )),
+                );
+            }
+
+            _ => {}
         }
     }
 
@@ -321,7 +470,9 @@ impl WebApp {
         let pending = self.state.pending_simulation.take();
         if let Some(request) = pending {
             match request {
-                PendingSimulation::Single | PendingSimulation::MonteCarlo { .. } => {
+                PendingSimulation::Single
+                | PendingSimulation::MonteCarlo { .. }
+                | PendingSimulation::MonteCarloConvergence { .. } => {
                     // Build simulation config for current scenario
                     let config = match self.state.to_simulation_config() {
                         Ok(c) => c,
@@ -349,6 +500,15 @@ impl WebApp {
                             self.worker.send(SimulationRequest::MonteCarlo {
                                 config,
                                 iterations,
+                                birth_date,
+                                start_date,
+                            });
+                        }
+                        PendingSimulation::MonteCarloConvergence { max_iterations, .. } => {
+                            // Web doesn't support convergence mode, use max_iterations as fixed
+                            self.worker.send(SimulationRequest::MonteCarlo {
+                                config,
+                                iterations: max_iterations,
                                 birth_date,
                                 start_date,
                             });

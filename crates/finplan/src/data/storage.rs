@@ -21,6 +21,7 @@ use crate::state::ScenarioSummary;
 
 #[cfg(feature = "native")]
 use super::app_data::{AppData, SimulationData};
+#[cfg(feature = "native")]
 use super::keybindings_data::KeybindingsConfig;
 
 /// Configuration stored in config.yaml
