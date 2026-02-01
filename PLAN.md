@@ -1,197 +1,380 @@
-# FinPlan Development Plan
+# Analysis Screen Implementation Plan
 
-Use this file to track current and future work plans.
-Edit as needed to track implementation state, assumptions, and reasoning.
+Replace the Optimize screen with a new Analysis screen for parameter sweep sensitivity analysis.
 
----
+## Summary
 
-## Current Work: TUI Controls Improvement
+- **Goal**: Enable users to sweep parameters (retirement age, savings rate, house price, etc.) across ranges and visualize effects on metrics (success rate, net worth at age X, percentiles, taxes, drawdown)
+- **Dimensions**: N-dimensional sweeps supported; UI renders 1D slices (line charts) + 2D slices (heatmaps)
+- **Execution**: Two-phase: run simulations up-front, analyze with different metrics afterward
+- **Persistence**: Session only
 
-### Overview
+## Screen Layout
 
-Improve the controls and control display in the TUI with three main goals:
-1. Redesign status bar to show global commands (right) and tab commands (left)
-2. Create a customizable keybindings system with config.yaml serialization
-3. Review and rationalize the current control scheme
+### 1D Mode
+```
+┌─ SWEEP PARAMETERS ──────────┬─ METRICS ─────────────────┐
+│ > Retirement Age [60-70]    │ [x] Success Rate          │
+│                             │ [x] Net Worth at 75       │
+│ [a] add  [d] delete         │ [ ] P5/P50/P95            │
+├─ CONFIGURATION ─────────────┼─ PROGRESS ────────────────┤
+│ MC Iterations: 500          │ [========    ] 60%        │
+│ Steps: 6                    │ 4/6 points complete       │
+├─ 1D RESULTS ────────────────┴───────────────────────────┤
+│ 100%|              *---*---*                            │
+│  90%|        *---*'                                     │
+│  80%|  *---*'                                           │
+│     +----+----+----+----+----+                          │
+│       60   62   64   66   68   70                       │
+└─────────────────────────────────────────────────────────┘
+```
 
----
+### 2D Mode
+```
+┌─ 2D HEATMAP - Success Rate (%) ─────────────────────────┐
+│        Withdrawal Amount ($K/yr)                        │
+│        30    35    40    45    50    55    60          │
+│    60  98    95    89    78    62    45    30          │
+│ R  62  99    97    92    84    70    52    35          │
+│ e  64  99    98    95    89    78    60    42          │
+│ t  66  99    99    97    93    85    70    55          │
+│    68 100    99    98    96    90    78    62          │
+│    70 100   100    99    98    94    85    72          │
+│                                                         │
+│  Legend: Red <50  Yellow 50-70  Green 70-85  Bright >85│
+└─────────────────────────────────────────────────────────┘
+```
 
-## Phase 1: Status Bar Redesign - COMPLETED
+## Implementation Phases
 
-### Goal
-Update `crates/finplan/src/components/status_bar.rs` to display:
-- **Right side**: True global commands (work everywhere)
-- **Left side**: Tab-specific commands (work within current tab)
-- **Panel boxes (inline)**: Panel-local commands (continue existing behavior)
+### Phase 1: Core Engine (`finplan_core`) ✅ COMPLETE
 
-### Implementation - DONE
+The `analysis` module supports N-dimensional parameter sweeps with a two-phase approach:
 
-- [x] Split help text into `get_tab_help_text()` and `get_global_help_text()`
-- [x] Modified `StatusBar::render()` to use Layout for left/right regions
-- [x] Left side: Tab-specific commands (DarkGray)
-- [x] Right side: Global commands (White, right-aligned): "1-5: tabs | Ctrl+S: save | q: quit"
-- [x] Preserved error message and simulation status priority rendering
-- [x] Dirty indicator [*] shown on left before tab help
+| File | Description |
+|------|-------------|
+| `src/analysis/mod.rs` | Module exports |
+| `src/analysis/config.rs` | `SweepConfig`, `SweepParameter`, `SweepTarget`, `SweepGrid<T>` |
+| `src/analysis/metrics.rs` | `AnalysisMetric` enum, `compute_metrics()`, `SweepResults` |
+| `src/analysis/evaluator.rs` | `sweep_simulate()`, `sweep_evaluate()`, `SweepSimulationResults` |
 
----
+**Two-Phase Architecture:**
 
-## Phase 2: Keybindings Configuration System - INFRASTRUCTURE COMPLETE
+```rust
+// Phase 1: Run simulations up-front (expensive, done once)
+let sim_results = sweep_simulate(&config, &sweep_config, Some(&progress))?;
 
-### Goal
-Create a keybindings configuration that can be:
-- Serialized to `~/.finplan/keybindings.yaml`
-- Loaded at startup
-- Used throughout the app for key matching
+// Phase 2: Compute metrics on-demand (fast, repeatable with different metrics)
+let results = sim_results.compute_all_metrics(&[AnalysisMetric::SuccessRate]);
 
-### Implementation - INFRASTRUCTURE DONE
+// Can compute different metrics without re-running simulations
+let other_results = sim_results.compute_all_metrics(&[
+    AnalysisMetric::NetWorthAtAge { age: 75 },
+    AnalysisMetric::MaxDrawdown,
+]);
 
-**New Files Created:**
-- [x] `crates/finplan/src/data/keybindings_data.rs` - All keybinding data structures
-- [x] `crates/finplan/src/keybindings.rs` - Key matching utilities (`key_to_string`, `matches`, `load_or_default`, `save`)
+// Or use combined mode for simpler cases
+let results = sweep_evaluate(&config, &sweep_config, progress)?;
+```
 
-**Integration - DONE:**
-- [x] `crates/finplan/src/data/mod.rs` - Added keybindings_data export
-- [x] `crates/finplan/src/lib.rs` - Added keybindings module export
-- [x] `crates/finplan/src/data/storage.rs` - Added `load_keybindings()`, `save_keybindings()`, keybindings in `LoadResult`
-- [x] `crates/finplan/src/state/app_state.rs` - Added `keybindings: KeybindingsConfig` field, loaded from storage
+**N-Dimensional Grid (`SweepGrid<T>`):**
 
-**Remaining - Use Keybindings Throughout App:**
-- [ ] Update `app.rs` global key handling to use `KeybindingsConfig::matches()`
-- [ ] Update `tab_bar.rs` to use keybindings config
-- [ ] Update each screen to use config bindings instead of hardcoded keys
-- [ ] Update `selectable_list.rs` navigation utilities
-- [ ] Generate default keybindings.yaml on first run if not present
-- [ ] Update status bar to read from keybindings config for display
+```rust
+/// Generic N-dimensional grid with flat backing array and stride-based indexing
+pub struct SweepGrid<T> {
+    data: Vec<T>,       // Row-major storage
+    shape: Vec<usize>,  // Shape per dimension
+    strides: Vec<usize>,// Precomputed strides
+}
 
----
+impl<T> SweepGrid<T> {
+    fn new(shape: Vec<usize>, default: T) -> Self;
+    fn get(&self, indices: &[usize]) -> Option<&T>;
+    fn set(&mut self, indices: &[usize], value: T) -> bool;
+    fn slice_1d(&self, dim: usize, fixed: &[Option<usize>]) -> Option<Vec<(f64, &T)>>;
+    fn slice_2d(&self, dim1: usize, dim2: usize, fixed: &[Option<usize>]) -> Option<(Vec<&T>, usize, usize)>;
+}
+```
 
-## Phase 3: Control Scheme Review - COMPLETED
+**Simulation Results Storage:**
 
-### Key Fixes Applied
+```rust
+/// Stores raw MonteCarloSummary for each grid point
+pub struct SweepSimulationResults {
+    pub param_values: Vec<Vec<f64>>,           // Values per dimension
+    pub param_labels: Vec<String>,             // Labels per dimension
+    pub summaries: SweepGrid<Option<MonteCarloSummary>>,
+    pub birth_year: i16,
+}
 
-1. **Fixed `d` key conflict in Scenario tab** - DONE
-   - Changed duplicate scenario from `'d'` to `'c'`
-   - Updated help text to show `[c]opy` instead of `[d]up`
+impl SweepSimulationResults {
+    fn compute_all_metrics(&self, metrics: &[AnalysisMetric]) -> SweepResults;
+    fn compute_metric_grid(&self, metric: &AnalysisMetric) -> SweepGrid<f64>;
+}
+```
 
-2. **Fixed `h` key conflict in Portfolio tab** - DONE
-   - Changed history mode toggle from `'h'` to `'y'`
-   - Updated help text to show `[y] historical` / `[y] parametric`
+**Key types:**
+```rust
+pub enum AnalysisMetric {
+    SuccessRate,
+    NetWorthAtAge { age: u8 },
+    Percentile { percentile: u8 },
+    LifetimeTaxes,
+    MaxDrawdown,
+    SafeWithdrawalRate { target_success_rate: f64 },
+}
 
-### Standardized Control Scheme
+pub enum TriggerParam {
+    Date,
+    Age,
+    RepeatingStart(Box<TriggerParam>),
+    RepeatingEnd(Box<TriggerParam>),
+}
 
-#### Global Commands
-| Key | Action |
-|-----|--------|
-| `q`, `Ctrl+C` | Quit |
-| `Ctrl+S` | Save all |
-| `Esc` | Cancel/clear |
-| `1-5` | Switch tabs |
+pub enum EffectParam {
+    Value,
+    Multiplier,
+}
 
-#### Universal Navigation
-| Key | Action |
-|-----|--------|
-| `j/k` or `Up/Down` | Navigate list |
-| `h/l` or `Left/Right` | Navigate time (Results) |
-| `Tab/Shift+Tab` | Switch panels |
-| `Shift+J/K` | Reorder items |
-| `Enter` | Confirm/select/edit |
+#[derive(Default)]
+pub enum EffectTarget {
+    #[default]
+    FirstEligible,
+    Index(usize),
+}
 
-#### Universal CRUD
-| Key | Action |
-|-----|--------|
-| `a` | Add new item |
-| `e` | Edit selected item |
-| `d` | Delete selected item |
-| `c` | Copy/duplicate item |
+pub struct SweepParameter {
+    pub event_id: EventId,
+    pub target: SweepTarget,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub step_count: usize,
+}
 
-#### Tab-Specific Commands
+pub enum SweepTarget {
+    Trigger(TriggerParam),
+    Effect { param: EffectParam, target: EffectTarget },
+    AssetAllocation { account_id: AccountId },
+}
+```
 
-**Portfolio Profiles**:
-- `Enter`: Edit holdings
-- `m`: Map/cycle profile for asset
-- `A`: Auto-suggest all profiles
-- `y`: Toggle historical/parametric mode
-- `b`: Pick block size (historical mode)
+### Phase 2: TUI State (`finplan`)
 
-**Events**:
-- Standard CRUD: `a/e/d/c`
-- `t`: Toggle enabled
-- `f`: Manage effects
+**Modify:**
+- `state/screen_state.rs` - Replace `OptimizeState` with `AnalysisState`
+- `state/panels.rs` - Replace `OptimizePanel` with `AnalysisPanel`
+- `state/app_state.rs` - Replace `optimize_state` field
+- `modals/action.rs` - Replace `OptimizeAction` with `AnalysisAction`
 
-**Scenario**:
-- `r`: Run single simulation
-- `m`: Monte Carlo (1000 iterations)
-- `R`: Run all scenarios (batch)
-- `n`: New scenario
-- `c`: Copy/duplicate scenario
-- `Delete/Backspace`: Delete scenario
-- `s`: Save as
-- `l`: Load
-- `e`: Edit parameters
-- `i/x`: Import/export
-- `p`: Preview projection
-- `$`: Toggle real/nominal
+**New state:**
+```rust
+pub struct AnalysisState {
+    pub focused_panel: AnalysisPanel,
+    pub sweep_parameters: Vec<SweepParameter>,  // max 2
+    pub selected_metrics: HashSet<AnalysisMetric>,
+    pub mc_iterations: usize,
+    pub running: bool,
+    pub current_point: usize,
+    pub total_points: usize,
+    pub results: Option<SweepResults>,
+    pub selected_result: (usize, usize),  // cursor for 2D
+}
+```
 
-**Results**:
-- `h/l`: Year navigation
-- `Home/End`: First/last year
-- `$`: Toggle real/nominal
-- `v`: Cycle percentile
-- `f`: Cycle ledger filter
+### Phase 3: TUI Actions
 
-**Optimize**:
-- `r`: Run optimization
-- `s`: Settings
-- `a/d`: Add/delete parameters
-- `Enter`: Configure selected
+**Create** `actions/analysis.rs` (replaces `optimize.rs`):
+- `handle_add_parameter()` - Enumerate all events with sweepable params, show picker
+- `handle_configure_parameter()` - Form for min/max/steps
+- `handle_select_metrics()` - Multi-select for metrics
+- `handle_run_analysis()` - Send to worker thread
 
----
+**Key function - enumerate sweepable targets:**
+```rust
+/// Enumerate all sweepable parameters from an event
+fn get_sweepable_targets(event: &EventData, event_id: EventId) -> Vec<SweepableTarget> {
+    let mut targets = Vec::new();
 
-## File Changes Summary
+    // 1. Scan trigger for sweepable params (Age, Date, Repeating start/end)
+    scan_trigger_params(&event.trigger, TriggerPath::Root, &mut |path, current_value| {
+        targets.push(SweepableTarget {
+            event_id,
+            event_name: event.name.0.clone(),
+            target: SweepTarget::Trigger(path),
+            description: format_trigger_description(&event.name.0, &path),
+            current_value,
+        });
+    });
 
-### New Files
-- `crates/finplan/src/data/keybindings_data.rs` - Keybinding data structures
-- `crates/finplan/src/keybindings.rs` - Key parsing and matching utilities
+    // 2. Scan effects for sweepable amounts (Fixed values, Scale multipliers)
+    for (idx, effect) in event.effects.iter().enumerate() {
+        if let Some((param, current_value)) = get_effect_sweepable_param(effect) {
+            targets.push(SweepableTarget {
+                event_id,
+                event_name: event.name.0.clone(),
+                target: SweepTarget::Effect {
+                    param,
+                    target: EffectTarget::Index(idx)
+                },
+                description: format_effect_description(&event.name.0, effect, idx),
+                current_value,
+            });
+        }
+    }
 
-### Modified Files
-- `crates/finplan/src/components/status_bar.rs` - Two-column layout
-- `crates/finplan/src/data/storage.rs` - Load/save keybindings
-- `crates/finplan/src/data/mod.rs` - Export keybindings module
-- `crates/finplan/src/lib.rs` - Export keybindings module
-- `crates/finplan/src/state/app_state.rs` - Add keybindings field
-- `crates/finplan/src/screens/scenario.rs` - Changed duplicate key `d` → `c`
-- `crates/finplan/src/components/panels/profiles_panel.rs` - Changed history toggle `h` → `y`
+    targets
+}
 
----
+/// Recursively scan trigger for sweepable parameters
+fn scan_trigger_params<F>(trigger: &TriggerData, path: TriggerPath, callback: &mut F)
+where F: FnMut(TriggerParam, f64)
+{
+    match trigger {
+        TriggerData::Age { years, .. } => {
+            callback(path.to_param(), *years as f64);
+        }
+        TriggerData::Date { date } => {
+            // Extract year as sweepable value
+            if let Ok(d) = parse_date(date) {
+                callback(path.to_param(), d.year() as f64);
+            }
+        }
+        TriggerData::Repeating { start, end, .. } => {
+            if let Some(start_trigger) = start {
+                scan_trigger_params(start_trigger, path.into_start(), callback);
+            }
+            if let Some(end_trigger) = end {
+                scan_trigger_params(end_trigger, path.into_end(), callback);
+            }
+        }
+        _ => {} // And, Or, thresholds not sweepable for now
+    }
+}
 
-## Testing Checklist
+/// Extract sweepable parameter from an effect
+fn get_effect_sweepable_param(effect: &EffectData) -> Option<(EffectParam, f64)> {
+    let amount = match effect {
+        EffectData::Income { amount, .. } |
+        EffectData::Expense { amount, .. } |
+        EffectData::AssetPurchase { amount, .. } |
+        EffectData::AssetSale { amount, .. } |
+        EffectData::Sweep { amount, .. } |
+        EffectData::AdjustBalance { amount, .. } |
+        EffectData::CashTransfer { amount, .. } => amount,
+        _ => return None,
+    };
 
-- [x] Code compiles without errors
-- [x] Clippy passes without warnings
-- [x] Status bar shows global commands on right, tab commands on left
-- [x] `c` in Scenario now duplicates (was `d`)
-- [x] `y` in Portfolio toggles history mode (was `h`)
-- [ ] `~/.finplan/keybindings.yaml` can be created manually for custom bindings
-- [ ] Keybindings are loaded at startup (infrastructure ready)
+    // Unwrap InflationAdjusted to find Fixed value
+    extract_fixed_value(amount).map(|v| (EffectParam::Value, v))
+}
+```
 
----
+### Parameter Selection UX Flow
 
-## Future Work
+When user presses 'a' to add a sweep parameter:
 
-### Complete Keybindings Integration
-The keybindings infrastructure is complete. To fully use it throughout the app:
-
-1. Replace hardcoded `KeyCode::Char('x')` matches with:
-   ```rust
-   if KeybindingsConfig::matches(&key, &state.keybindings.tabs.events.add) {
-       // handle add
-   }
+1. **Event Picker**: Show list of all events with sweepable parameters
+   ```
+   ┌─ Select Event ────────────────────────────┐
+   │ > Retirement (Age trigger: 65)            │
+   │   Monthly Salary (Income: $8,000)         │
+   │   Social Security (Income: $2,500)        │
+   │   Retirement Withdrawal (Sweep: $50,000)  │
+   │   House Purchase (Expense: $600,000)      │
+   └───────────────────────────────────────────┘
    ```
 
-2. Update status bar to dynamically show keys from config:
-   ```rust
-   let add_key = state.keybindings.tabs.events.add.first().unwrap_or(&"a".to_string());
-   format!("{}: add", add_key)
+2. **Target Picker** (if event has multiple sweepable params): Show which part to sweep
+   ```
+   ┌─ Select Parameter for "Retirement Withdrawal" ─┐
+   │ > Trigger: Start Age (currently 65)            │
+   │   Effect #1: Sweep Amount (currently $50,000)  │
+   └────────────────────────────────────────────────┘
    ```
 
-3. Consider adding a keybindings editor in the TUI settings.
+3. **Range Form**: Configure min/max/steps
+   ```
+   ┌─ Configure Sweep Range ────────────────┐
+   │ Parameter: Retirement Age              │
+   │                                        │
+   │ Min Value: [60     ]                   │
+   │ Max Value: [70     ]                   │
+   │ Steps:     [6      ]                   │
+   │                                        │
+   │ Preview: 60, 62, 64, 66, 68, 70       │
+   └────────────────────────────────────────┘
+   ```
+
+### Phase 4: Worker Thread
+
+**Modify** `worker.rs`:
+- Add `SimulationRequest::SweepAnalysis { config, sweep_config }`
+- Add `SimulationResponse::SweepProgress { current, total }`
+- Add `SimulationResponse::SweepComplete { results }`
+
+### Phase 5: Screen Implementation
+
+**Create** `screens/analysis.rs` (replaces `optimize.rs`):
+- `render_parameters()` - List of sweep parameters
+- `render_metrics()` - Checkbox-style metric selector
+- `render_config()` - MC iterations, step count
+- `render_progress()` - Progress bar during execution
+- `render_results_1d()` - ASCII line chart
+- `render_results_2d()` - Color-coded heatmap with cursor navigation
+
+### Phase 6: Cleanup
+
+- Remove `screens/optimize.rs`
+- Remove `actions/optimize.rs`
+- Update `screens/mod.rs` exports
+- Update `actions/mod.rs` exports
+- Keep `finplan_core/optimization/` for now (may be useful later)
+
+## Files to Modify
+
+### finplan_core
+| File | Action |
+|------|--------|
+| `src/lib.rs` | Add `pub mod analysis;` |
+| `src/analysis/mod.rs` | **NEW** |
+| `src/analysis/config.rs` | **NEW** |
+| `src/analysis/metrics.rs` | **NEW** |
+| `src/analysis/evaluator.rs` | **NEW** |
+
+### finplan (TUI)
+| File | Action |
+|------|--------|
+| `src/state/screen_state.rs` | Replace OptimizeState with AnalysisState |
+| `src/state/panels.rs` | Replace OptimizePanel with AnalysisPanel |
+| `src/state/app_state.rs` | Replace optimize_state field |
+| `src/modals/action.rs` | Replace OptimizeAction with AnalysisAction |
+| `src/modals/context.rs` | Replace OptimizeContext with AnalysisContext |
+| `src/actions/analysis.rs` | **NEW** (replaces optimize.rs) |
+| `src/actions/mod.rs` | Update exports |
+| `src/screens/analysis.rs` | **NEW** (replaces optimize.rs) |
+| `src/screens/mod.rs` | Update exports |
+| `src/worker.rs` | Add sweep request/response types |
+| `src/app.rs` | Update screen routing if needed |
+
+## Metrics Implementation Notes
+
+| Metric | Source | Notes |
+|--------|--------|-------|
+| SuccessRate | `MonteCarloStats.success_rate` | Direct |
+| NetWorthAtAge | `SimulationResult.wealth_snapshots` | Find snapshot at target year |
+| Percentile | `MonteCarloStats.percentile_values` | Direct lookup |
+| LifetimeTaxes | `SimulationResult.yearly_taxes` | Sum all years |
+| MaxDrawdown | `wealth_snapshots` | Compute peak-to-trough |
+| SafeWithdrawalRate | Iterative | Binary search for rate achieving target success |
+
+## Verification
+
+1. Build: `cargo build`
+2. Run TUI: `cargo run --bin finplan`
+3. Navigate to Analysis tab
+4. Add a sweep parameter (e.g., Retirement Age 60-70)
+5. Select metrics (Success Rate, Net Worth at 75)
+6. Run analysis - verify progress updates
+7. Verify 1D line chart displays correctly
+8. Add second parameter - verify 2D heatmap
+9. Run `cargo clippy` and `cargo fmt`

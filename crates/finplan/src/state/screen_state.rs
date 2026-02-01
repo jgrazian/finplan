@@ -328,6 +328,197 @@ pub struct ResultsState {
     pub value_display_mode: ValueDisplayMode,
 }
 
+// ========== Analysis Screen State (Parameter Sweep) ==========
+
+use std::collections::HashSet;
+
+use super::panels::AnalysisPanel;
+
+/// Sweep parameter for analysis
+#[derive(Debug, Clone)]
+pub struct AnalysisSweepParameter {
+    /// Event ID being swept
+    pub event_id: EventId,
+    /// Display name for the parameter
+    pub name: String,
+    /// What is being swept (trigger age, effect value, etc.)
+    pub sweep_type: AnalysisSweepType,
+    /// Minimum value
+    pub min_value: f64,
+    /// Maximum value
+    pub max_value: f64,
+    /// Number of steps
+    pub step_count: usize,
+    /// Current value being displayed
+    pub current_value: f64,
+}
+
+/// Type of parameter being swept
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisSweepType {
+    /// Age trigger (years)
+    TriggerAge,
+    /// Date trigger (year)
+    TriggerDate,
+    /// Effect amount (dollars)
+    EffectValue,
+    /// Repeating event start age
+    RepeatingStartAge,
+    /// Repeating event end age
+    RepeatingEndAge,
+}
+
+impl AnalysisSweepType {
+    /// Get display name
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::TriggerAge => "Age",
+            Self::TriggerDate => "Year",
+            Self::EffectValue => "Amount",
+            Self::RepeatingStartAge => "Start Age",
+            Self::RepeatingEndAge => "End Age",
+        }
+    }
+}
+
+/// Metrics that can be computed in analysis
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnalysisMetricType {
+    SuccessRate,
+    NetWorthAtAge { age: u8 },
+    P5FinalNetWorth,
+    P50FinalNetWorth,
+    P95FinalNetWorth,
+    LifetimeTaxes,
+    MaxDrawdown,
+}
+
+impl AnalysisMetricType {
+    pub fn label(&self) -> String {
+        match self {
+            Self::SuccessRate => "Success Rate".to_string(),
+            Self::NetWorthAtAge { age } => format!("Net Worth at {}", age),
+            Self::P5FinalNetWorth => "P5 Final Net Worth".to_string(),
+            Self::P50FinalNetWorth => "P50 Final Net Worth".to_string(),
+            Self::P95FinalNetWorth => "P95 Final Net Worth".to_string(),
+            Self::LifetimeTaxes => "Lifetime Taxes".to_string(),
+            Self::MaxDrawdown => "Max Drawdown".to_string(),
+        }
+    }
+
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::SuccessRate => "Success %",
+            Self::NetWorthAtAge { .. } => "Net Worth",
+            Self::P5FinalNetWorth => "P5",
+            Self::P50FinalNetWorth => "P50",
+            Self::P95FinalNetWorth => "P95",
+            Self::LifetimeTaxes => "Taxes",
+            Self::MaxDrawdown => "Drawdown",
+        }
+    }
+}
+
+/// Results from a sweep analysis
+#[derive(Debug, Clone)]
+pub struct AnalysisResults {
+    /// Parameter 1 values
+    pub param1_values: Vec<f64>,
+    /// Parameter 2 values (empty for 1D)
+    pub param2_values: Vec<f64>,
+    /// Results for each metric
+    pub metric_results: HashMap<AnalysisMetricType, Vec<Vec<f64>>>,
+    /// Parameter 1 label
+    pub param1_label: String,
+    /// Parameter 2 label (empty for 1D)
+    pub param2_label: String,
+}
+
+impl AnalysisResults {
+    /// Check if this is a 1D result
+    pub fn is_1d(&self) -> bool {
+        self.param2_values.is_empty()
+    }
+
+    /// Get flat values for a metric (for 1D charts)
+    pub fn get_1d_values(&self, metric: &AnalysisMetricType) -> Vec<f64> {
+        self.metric_results
+            .get(metric)
+            .map(|rows| rows.iter().filter_map(|r| r.first().copied()).collect())
+            .unwrap_or_default()
+    }
+}
+
+/// State for the Analysis screen
+#[derive(Debug, Default)]
+pub struct AnalysisState {
+    /// Currently focused panel
+    pub focused_panel: AnalysisPanel,
+    /// Sweep parameters (max 2)
+    pub sweep_parameters: Vec<AnalysisSweepParameter>,
+    /// Selected parameter index (for navigation)
+    pub selected_param_index: usize,
+    /// Selected metrics to compute
+    pub selected_metrics: HashSet<AnalysisMetricType>,
+    /// Monte Carlo iterations per point
+    pub mc_iterations: usize,
+    /// Number of steps for sweeps
+    pub default_steps: usize,
+    /// Whether analysis is running
+    pub running: bool,
+    /// Current point being processed
+    pub current_point: usize,
+    /// Total points to process
+    pub total_points: usize,
+    /// Analysis results (session only, not persisted)
+    pub results: Option<AnalysisResults>,
+    /// Selected result cursor for 2D navigation
+    pub selected_result: (usize, usize),
+}
+
+impl AnalysisState {
+    pub fn new() -> Self {
+        let mut selected_metrics = HashSet::new();
+        selected_metrics.insert(AnalysisMetricType::SuccessRate);
+        selected_metrics.insert(AnalysisMetricType::P50FinalNetWorth);
+
+        Self {
+            focused_panel: AnalysisPanel::Parameters,
+            sweep_parameters: Vec::new(),
+            selected_param_index: 0,
+            selected_metrics,
+            mc_iterations: 500,
+            default_steps: 6,
+            running: false,
+            current_point: 0,
+            total_points: 0,
+            results: None,
+            selected_result: (0, 0),
+        }
+    }
+
+    /// Check if this is a 1D analysis
+    pub fn is_1d(&self) -> bool {
+        self.sweep_parameters.len() == 1
+    }
+
+    /// Check if this is a 2D analysis
+    pub fn is_2d(&self) -> bool {
+        self.sweep_parameters.len() == 2
+    }
+
+    /// Calculate total sweep points
+    pub fn total_sweep_points(&self) -> usize {
+        self.sweep_parameters
+            .iter()
+            .map(|p| p.step_count)
+            .product::<usize>()
+            .max(1)
+    }
+}
+
+// ========== Legacy Optimize State (kept for backwards compatibility) ==========
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ParameterType {
     #[default]
