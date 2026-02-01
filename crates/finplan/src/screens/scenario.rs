@@ -182,6 +182,31 @@ impl Component for ScenarioScreen {
             return EventResult::Handled;
         }
 
+        // Run Monte Carlo with convergence-based stopping
+        if KeybindingsConfig::matches(&key, &kb.tabs.scenario.monte_carlo_convergence) {
+            if !state.simulation_status.is_running() {
+                let metric_options = vec![
+                    "Median".to_string(),
+                    "Success Rate".to_string(),
+                    "Percentiles".to_string(),
+                    "Mean".to_string(),
+                ];
+                let form = FormModal::new(
+                    "Monte Carlo with Convergence",
+                    vec![
+                        FormField::select("Convergence Metric", metric_options, "Median"),
+                        FormField::new("Min Iterations", FieldType::Text, "100"),
+                        FormField::new("Max Iterations", FieldType::Text, "10000"),
+                        FormField::new("Threshold (%)", FieldType::Text, "1.0"),
+                    ],
+                    ModalAction::MONTE_CARLO_CONVERGENCE,
+                )
+                .start_editing();
+                state.modal = ModalState::Form(form);
+            }
+            return EventResult::Handled;
+        }
+
         // Run All scenarios (background)
         if KeybindingsConfig::matches(&key, &kb.tabs.scenario.run_all) {
             if !state.simulation_status.is_running() {
@@ -926,6 +951,9 @@ impl super::ModalHandler for ScenarioScreen {
                 actions::handle_duplicate_scenario(state, ctx)
             }
             ModalAction::Scenario(ScenarioAction::Delete) => actions::handle_delete_scenario(state),
+            ModalAction::Scenario(ScenarioAction::MonteCarloConvergence) => {
+                actions::handle_monte_carlo_convergence(state, ctx)
+            }
 
             // This shouldn't happen if handles() is correct
             _ => crate::actions::ActionResult::close(),

@@ -242,7 +242,8 @@ mod tests {
             max_final_net_worth: 1_500_000.0,
             percentile_values: vec![],
             converged: None,
-            relative_standard_error: None,
+            convergence_metric: None,
+            convergence_value: None,
         };
         assert!(check_constraints(&constraints, &stats));
     }
@@ -262,7 +263,8 @@ mod tests {
             max_final_net_worth: 1_500_000.0,
             percentile_values: vec![],
             converged: None,
-            relative_standard_error: None,
+            convergence_metric: None,
+            convergence_value: None,
         };
         let bad_stats = MonteCarloStats {
             success_rate: 0.85,

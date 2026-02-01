@@ -216,3 +216,73 @@ pub fn handle_delete_scenario(state: &mut AppState) -> ActionResult {
         ActionResult::Error("No scenario selected".to_string())
     }
 }
+
+/// Handle Monte Carlo with convergence-based stopping
+pub fn handle_monte_carlo_convergence(state: &mut AppState, ctx: ActionContext) -> ActionResult {
+    use finplan_core::model::ConvergenceMetric;
+
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
+
+    let metric_str = form.get_str(0).unwrap_or("").trim();
+    let min_str = form.get_str(1).unwrap_or("").trim();
+    let max_str = form.get_str(2).unwrap_or("").trim();
+    let threshold_str = form.get_str(3).unwrap_or("").trim();
+
+    // Parse convergence metric
+    let metric = match metric_str {
+        "Median" => ConvergenceMetric::Median,
+        "Success Rate" => ConvergenceMetric::SuccessRate,
+        "Percentiles" => ConvergenceMetric::Percentiles,
+        "Mean" => ConvergenceMetric::Mean,
+        _ => {
+            return ActionResult::Error(format!("Unknown convergence metric: '{}'", metric_str));
+        }
+    };
+
+    // Parse minimum iterations
+    let min_iterations: usize = match min_str.parse() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            return ActionResult::Error(format!(
+                "Invalid min iterations: '{}'. Must be a positive number",
+                min_str
+            ));
+        }
+    };
+
+    // Parse maximum iterations
+    let max_iterations: usize = match max_str.parse() {
+        Ok(n) if n > min_iterations => n,
+        _ => {
+            return ActionResult::Error(format!(
+                "Invalid max iterations: '{}'. Must be greater than min ({})",
+                max_str, min_iterations
+            ));
+        }
+    };
+
+    // Parse convergence threshold (as percentage, convert to decimal)
+    let threshold_pct: f64 = match threshold_str.parse() {
+        Ok(n) if n > 0.0 && n <= 100.0 => n,
+        _ => {
+            return ActionResult::Error(format!(
+                "Invalid threshold: '{}'. Must be between 0 and 100",
+                threshold_str
+            ));
+        }
+    };
+    let relative_threshold = threshold_pct / 100.0;
+
+    // Request the convergence-based Monte Carlo simulation
+    state.request_monte_carlo_convergence(
+        min_iterations,
+        max_iterations,
+        relative_threshold,
+        metric,
+    );
+
+    ActionResult::close()
+}

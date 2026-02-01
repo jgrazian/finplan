@@ -28,6 +28,8 @@ pub enum ScenarioAction {
     New,
     Duplicate,
     Delete,
+    /// Run Monte Carlo with convergence-based stopping
+    MonteCarloConvergence,
 }
 
 /// Account-specific actions
@@ -155,6 +157,7 @@ impl ModalAction {
     pub const NEW_SCENARIO: Self = Self::Scenario(ScenarioAction::New);
     pub const DUPLICATE_SCENARIO: Self = Self::Scenario(ScenarioAction::Duplicate);
     pub const DELETE_SCENARIO: Self = Self::Scenario(ScenarioAction::Delete);
+    pub const MONTE_CARLO_CONVERGENCE: Self = Self::Scenario(ScenarioAction::MonteCarloConvergence);
 
     // Account shortcuts
     pub const PICK_ACCOUNT_CATEGORY: Self = Self::Account(AccountAction::PickCategory);

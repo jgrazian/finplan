@@ -148,6 +148,7 @@ impl Default for EventsBindings {
 pub struct ScenarioBindings {
     pub run: Vec<String>,
     pub monte_carlo: Vec<String>,
+    pub monte_carlo_convergence: Vec<String>,
     pub run_all: Vec<String>,
     pub new: Vec<String>,
     pub copy: Vec<String>,
@@ -165,6 +166,7 @@ impl Default for ScenarioBindings {
         Self {
             run: vec!["r".into()],
             monte_carlo: vec!["m".into()],
+            monte_carlo_convergence: vec!["shift+m".into()],
             run_all: vec!["shift+r".into()],
             new: vec!["n".into()],
             copy: vec!["c".into()],

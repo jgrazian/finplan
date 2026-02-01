@@ -242,11 +242,54 @@ pub struct MonteCarloResult {
 // Memory-efficient Monte Carlo types
 // ============================================================================
 
+/// Metric to use for convergence checking
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ConvergenceMetric {
+    /// Track relative standard error of the mean (SEM / |mean|).
+    /// Note: For skewed distributions (common with compound returns), the mean
+    /// can drift upward as more extreme positive outcomes are sampled.
+    Mean,
+    /// Track stability of the median (P50). More robust for skewed distributions.
+    #[default]
+    Median,
+    /// Track stability of the success rate (% runs with positive final net worth).
+    /// Often the most meaningful metric for retirement planning.
+    SuccessRate,
+    /// Track stability of P5, P50, and P95 percentiles simultaneously.
+    /// Converges when all three percentiles are stable.
+    Percentiles,
+}
+
+impl ConvergenceMetric {
+    /// Get display name for the metric
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Mean => "Mean",
+            Self::Median => "Median",
+            Self::SuccessRate => "Success Rate",
+            Self::Percentiles => "Percentiles",
+        }
+    }
+
+    /// Get short name for compact display
+    pub fn short_name(&self) -> &'static str {
+        match self {
+            Self::Mean => "mean",
+            Self::Median => "p50",
+            Self::SuccessRate => "success",
+            Self::Percentiles => "pctl",
+        }
+    }
+}
+
 /// Configuration for convergence-based stopping
 #[derive(Debug, Clone)]
 pub struct ConvergenceConfig {
-    /// Stop when relative standard error (SEM / |mean|) is below this threshold.
-    /// For example, 0.01 means stop when standard error is 1% of the mean.
+    /// The metric to track for convergence
+    pub metric: ConvergenceMetric,
+    /// Stop when the metric changes by less than this threshold between batches.
+    /// For Mean: relative standard error (SEM / |mean|)
+    /// For Median/SuccessRate/Percentiles: relative change between batches
     pub relative_threshold: f64,
     /// Maximum iterations (cap to prevent infinite runs)
     pub max_iterations: usize,
@@ -255,6 +298,7 @@ pub struct ConvergenceConfig {
 impl Default for ConvergenceConfig {
     fn default() -> Self {
         Self {
+            metric: ConvergenceMetric::default(),
             relative_threshold: 0.01, // 1% precision
             max_iterations: 10_000,
         }
@@ -313,9 +357,14 @@ pub struct MonteCarloStats {
     /// None if fixed iteration mode was used.
     #[serde(default)]
     pub converged: Option<bool>,
-    /// The final relative standard error (SEM / |mean|) if convergence mode was used.
+    /// The convergence metric used (if any)
     #[serde(default)]
-    pub relative_standard_error: Option<f64>,
+    pub convergence_metric: Option<ConvergenceMetric>,
+    /// The final convergence metric value when simulation stopped.
+    /// For Mean: relative standard error (SEM / |mean|)
+    /// For Median/SuccessRate/Percentiles: relative change from previous batch
+    #[serde(default)]
+    pub convergence_value: Option<f64>,
 }
 
 /// Accumulator for computing mean wealth snapshots across iterations

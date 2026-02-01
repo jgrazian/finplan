@@ -384,7 +384,8 @@ mod tests {
                 max_final_net_worth: 0.0,
                 percentile_values: vec![],
                 converged: None,
-                relative_standard_error: None,
+                convergence_metric: None,
+                convergence_value: None,
             },
         };
 

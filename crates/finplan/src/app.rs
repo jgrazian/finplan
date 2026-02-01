@@ -304,7 +304,9 @@ impl App {
         let pending = self.state.pending_simulation.take();
         if let Some(request) = pending {
             match request {
-                PendingSimulation::Single | PendingSimulation::MonteCarlo { .. } => {
+                PendingSimulation::Single
+                | PendingSimulation::MonteCarlo { .. }
+                | PendingSimulation::MonteCarloConvergence { .. } => {
                     // Build simulation config for current scenario
                     let config = match self.state.to_simulation_config() {
                         Ok(c) => c,
@@ -332,6 +334,22 @@ impl App {
                             self.worker.send(SimulationRequest::MonteCarlo {
                                 config,
                                 iterations,
+                                birth_date,
+                                start_date,
+                            });
+                        }
+                        PendingSimulation::MonteCarloConvergence {
+                            min_iterations,
+                            max_iterations,
+                            relative_threshold,
+                            metric,
+                        } => {
+                            self.worker.send(SimulationRequest::MonteCarloConvergence {
+                                config,
+                                min_iterations,
+                                max_iterations,
+                                relative_threshold,
+                                metric,
                                 birth_date,
                                 start_date,
                             });

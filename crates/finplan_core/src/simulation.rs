@@ -7,10 +7,10 @@ use crate::config::SimulationConfig;
 use crate::error::MarketError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
-    AccountFlavor, AccountId, CashFlowKind, EventTrigger, LedgerEntry, MeanAccumulators,
-    MonteCarloConfig, MonteCarloProgress, MonteCarloResult, MonteCarloStats, MonteCarloSummary,
-    SimulationResult, SimulationWarning, StateEvent, TaxStatus, WarningKind, YearlyCashFlowSummary,
-    final_net_worth,
+    AccountFlavor, AccountId, CashFlowKind, ConvergenceMetric, EventTrigger, LedgerEntry,
+    MeanAccumulators, MonteCarloConfig, MonteCarloProgress, MonteCarloResult, MonteCarloStats,
+    MonteCarloSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus, WarningKind,
+    YearlyCashFlowSummary, final_net_worth,
 };
 use crate::simulation_state::{SimulationState, cached_spans};
 use rand::{RngCore, SeedableRng};
@@ -561,6 +561,138 @@ impl OnlineStats {
     }
 }
 
+/// Convergence tracker that supports multiple metrics
+struct ConvergenceTracker {
+    metric: ConvergenceMetric,
+    threshold: f64,
+    /// Previous values for stability checking (median, success_rate, p5, p50, p95)
+    prev_median: Option<f64>,
+    prev_success_rate: Option<f64>,
+    prev_percentiles: Option<(f64, f64, f64)>, // (p5, p50, p95)
+}
+
+impl ConvergenceTracker {
+    fn new(metric: ConvergenceMetric, threshold: f64) -> Self {
+        Self {
+            metric,
+            threshold,
+            prev_median: None,
+            prev_success_rate: None,
+            prev_percentiles: None,
+        }
+    }
+
+    /// Check if convergence has been achieved based on current data
+    /// Returns (converged, current_metric_value)
+    fn check_convergence(
+        &mut self,
+        seed_results: &[(u64, f64)],
+        online_stats: &OnlineStats,
+    ) -> (bool, Option<f64>) {
+        let n = seed_results.len();
+        if n == 0 {
+            return (false, None);
+        }
+
+        match self.metric {
+            ConvergenceMetric::Mean => {
+                // Use relative standard error for mean convergence
+                if let Some(rse) = online_stats.relative_standard_error() {
+                    (rse < self.threshold, Some(rse))
+                } else {
+                    (false, None)
+                }
+            }
+            ConvergenceMetric::Median => {
+                // Track P50 stability between batches
+                let median_idx = (n as f64 * 0.5).floor() as usize;
+                let median = seed_results
+                    .get(median_idx.min(n - 1))
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0.0);
+
+                let relative_change = if let Some(prev) = self.prev_median {
+                    if prev.abs() < f64::EPSILON {
+                        if median.abs() < f64::EPSILON {
+                            0.0
+                        } else {
+                            f64::INFINITY
+                        }
+                    } else {
+                        ((median - prev) / prev).abs()
+                    }
+                } else {
+                    f64::INFINITY
+                };
+
+                self.prev_median = Some(median);
+                (relative_change < self.threshold, Some(relative_change))
+            }
+            ConvergenceMetric::SuccessRate => {
+                // Track success rate stability
+                let success_count = seed_results.iter().filter(|(_, v)| *v > 0.0).count();
+                let success_rate = success_count as f64 / n as f64;
+
+                let absolute_change = if let Some(prev) = self.prev_success_rate {
+                    (success_rate - prev).abs()
+                } else {
+                    f64::INFINITY
+                };
+
+                self.prev_success_rate = Some(success_rate);
+                // For success rate, use absolute change since it's already a percentage
+                (absolute_change < self.threshold, Some(absolute_change))
+            }
+            ConvergenceMetric::Percentiles => {
+                // Track P5/P50/P95 stability
+                let p5_idx = (n as f64 * 0.05).floor() as usize;
+                let p50_idx = (n as f64 * 0.50).floor() as usize;
+                let p95_idx = (n as f64 * 0.95).floor() as usize;
+
+                let p5 = seed_results
+                    .get(p5_idx.min(n - 1))
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0.0);
+                let p50 = seed_results
+                    .get(p50_idx.min(n - 1))
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0.0);
+                let p95 = seed_results
+                    .get(p95_idx.min(n - 1))
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0.0);
+
+                let max_relative_change =
+                    if let Some((prev_p5, prev_p50, prev_p95)) = self.prev_percentiles {
+                        let rel_change = |curr: f64, prev: f64| {
+                            if prev.abs() < f64::EPSILON {
+                                if curr.abs() < f64::EPSILON {
+                                    0.0
+                                } else {
+                                    f64::INFINITY
+                                }
+                            } else {
+                                ((curr - prev) / prev).abs()
+                            }
+                        };
+
+                        rel_change(p5, prev_p5)
+                            .max(rel_change(p50, prev_p50))
+                            .max(rel_change(p95, prev_p95))
+                    } else {
+                        f64::INFINITY
+                    };
+
+                self.prev_percentiles = Some((p5, p50, p95));
+                (
+                    max_relative_change < self.threshold,
+                    Some(max_relative_change),
+                )
+            }
+        }
+    }
+}
+
 /// Memory-efficient Monte Carlo simulation
 ///
 /// This function runs simulations in two phases:
@@ -594,7 +726,12 @@ pub fn monte_carlo_simulate_with_config(
         .as_ref()
         .map(|c| c.max_iterations)
         .unwrap_or(config.iterations);
-    let convergence_threshold = config.convergence.as_ref().map(|c| c.relative_threshold);
+
+    // Set up convergence tracker if in convergence mode
+    let mut convergence_tracker = config
+        .convergence
+        .as_ref()
+        .map(|c| ConvergenceTracker::new(c.metric, c.relative_threshold));
 
     // Track all results and statistics
     let mut seed_results: Vec<(u64, f64)> = Vec::new();
@@ -602,6 +739,7 @@ pub fn monte_carlo_simulate_with_config(
     let mut mean_accumulators: Option<MeanAccumulators> = None;
     let mut batch_seed: u64 = 0;
     let mut converged = false;
+    let mut final_convergence_value: Option<f64> = None;
 
     // Run batches until we have enough iterations and (optionally) convergence
     loop {
@@ -683,14 +821,19 @@ pub fn monte_carlo_simulate_with_config(
             Err(poisoned) => poisoned.into_inner(),
         });
 
+        // Sort results for percentile-based convergence checks
+        seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
         // Check convergence if we have enough iterations
-        if let Some(threshold) = convergence_threshold {
-            if seed_results.len() >= min_iterations
-                && let Some(rse) = online_stats.relative_standard_error()
-                && rse < threshold
-            {
-                converged = true;
-                break;
+        if let Some(ref mut tracker) = convergence_tracker {
+            if seed_results.len() >= min_iterations {
+                let (is_converged, metric_value) =
+                    tracker.check_convergence(&seed_results, &online_stats);
+                final_convergence_value = metric_value;
+                if is_converged {
+                    converged = true;
+                    break;
+                }
             }
         } else if seed_results.len() >= config.iterations {
             // Fixed mode: stop after reaching target iterations
@@ -698,7 +841,7 @@ pub fn monte_carlo_simulate_with_config(
         }
     }
 
-    // Sort by final net worth (ascending)
+    // Final sort (may already be sorted from last iteration)
     seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // Calculate final statistics
@@ -737,7 +880,6 @@ pub fn monte_carlo_simulate_with_config(
         .collect();
 
     // Build stats with convergence info
-    let relative_standard_error = online_stats.relative_standard_error();
     let stats = MonteCarloStats {
         num_iterations: actual_iterations,
         success_rate,
@@ -747,7 +889,8 @@ pub fn monte_carlo_simulate_with_config(
         max_final_net_worth,
         percentile_values,
         converged: config.convergence.as_ref().map(|_| converged),
-        relative_standard_error,
+        convergence_metric: config.convergence.as_ref().map(|c| c.metric),
+        convergence_value: final_convergence_value,
     };
 
     Ok(MonteCarloSummary {
@@ -828,7 +971,12 @@ pub fn monte_carlo_simulate_with_progress(
         .as_ref()
         .map(|c| c.max_iterations)
         .unwrap_or(config.iterations);
-    let convergence_threshold = config.convergence.as_ref().map(|c| c.relative_threshold);
+
+    // Set up convergence tracker if in convergence mode
+    let mut convergence_tracker = config
+        .convergence
+        .as_ref()
+        .map(|c| ConvergenceTracker::new(c.metric, c.relative_threshold));
 
     // Track all results and statistics
     let mut seed_results: Vec<(u64, f64)> = Vec::new();
@@ -836,6 +984,7 @@ pub fn monte_carlo_simulate_with_progress(
     let mut mean_accumulators: Option<MeanAccumulators> = None;
     let mut batch_seed: u64 = 0;
     let mut converged = false;
+    let mut final_convergence_value: Option<f64> = None;
 
     // Track if any thread detected cancellation
     let cancelled = std::sync::atomic::AtomicBool::new(false);
@@ -945,14 +1094,19 @@ pub fn monte_carlo_simulate_with_progress(
             return Err(MarketError::Cancelled);
         }
 
+        // Sort results for percentile-based convergence checks
+        seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
         // Check convergence if we have enough iterations
-        if let Some(threshold) = convergence_threshold {
-            if seed_results.len() >= min_iterations
-                && let Some(rse) = online_stats.relative_standard_error()
-                && rse < threshold
-            {
-                converged = true;
-                break;
+        if let Some(ref mut tracker) = convergence_tracker {
+            if seed_results.len() >= min_iterations {
+                let (is_converged, metric_value) =
+                    tracker.check_convergence(&seed_results, &online_stats);
+                final_convergence_value = metric_value;
+                if is_converged {
+                    converged = true;
+                    break;
+                }
             }
         } else if seed_results.len() >= config.iterations {
             // Fixed mode: stop after reaching target iterations
@@ -960,7 +1114,7 @@ pub fn monte_carlo_simulate_with_progress(
         }
     }
 
-    // Sort by final net worth (ascending)
+    // Final sort (may already be sorted from last iteration)
     seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     // Calculate final statistics
@@ -999,7 +1153,6 @@ pub fn monte_carlo_simulate_with_progress(
         .collect();
 
     // Build stats with convergence info
-    let relative_standard_error = online_stats.relative_standard_error();
     let stats = MonteCarloStats {
         num_iterations: actual_iterations,
         success_rate,
@@ -1009,7 +1162,8 @@ pub fn monte_carlo_simulate_with_progress(
         max_final_net_worth,
         percentile_values,
         converged: config.convergence.as_ref().map(|_| converged),
-        relative_standard_error,
+        convergence_metric: config.convergence.as_ref().map(|c| c.metric),
+        convergence_value: final_convergence_value,
     };
 
     Ok(MonteCarloSummary {

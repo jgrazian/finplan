@@ -133,6 +133,13 @@ pub enum PendingSimulation {
     MonteCarlo { iterations: usize },
     /// Run Monte Carlo on all scenarios
     Batch { iterations: usize },
+    /// Run Monte Carlo with convergence-based stopping
+    MonteCarloConvergence {
+        min_iterations: usize,
+        max_iterations: usize,
+        relative_threshold: f64,
+        metric: finplan_core::model::ConvergenceMetric,
+    },
 }
 
 // ========== AppState ==========
@@ -531,6 +538,29 @@ impl AppState {
             current_scenario_name: None,
         };
         self.scenario_state.batch_running = true;
+    }
+
+    /// Request Monte Carlo simulation with convergence-based stopping
+    /// Runs at least min_iterations, then continues until the specified metric
+    /// converges below relative_threshold or max_iterations is reached.
+    pub fn request_monte_carlo_convergence(
+        &mut self,
+        min_iterations: usize,
+        max_iterations: usize,
+        relative_threshold: f64,
+        metric: finplan_core::model::ConvergenceMetric,
+    ) {
+        self.pending_simulation = Some(PendingSimulation::MonteCarloConvergence {
+            min_iterations,
+            max_iterations,
+            relative_threshold,
+            metric,
+        });
+        // Show max iterations as the target since we don't know when it will converge
+        self.simulation_status = SimulationStatus::RunningMonteCarlo {
+            current: 0,
+            total: max_iterations,
+        };
     }
 
     /// Run the simulation and store results (synchronous, blocks UI)

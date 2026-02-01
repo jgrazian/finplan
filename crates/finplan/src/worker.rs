@@ -6,7 +6,10 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{self, JoinHandle};
 
 use finplan_core::config::SimulationConfig;
-use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, SimulationResult as CoreResult};
+use finplan_core::model::{
+    ConvergenceConfig, ConvergenceMetric, MonteCarloConfig, MonteCarloProgress,
+    SimulationResult as CoreResult,
+};
 
 use crate::data::convert::to_tui_result;
 use crate::state::{
@@ -31,6 +34,16 @@ pub enum SimulationRequest {
     MonteCarlo {
         config: SimulationConfig,
         iterations: usize,
+        birth_date: String,
+        start_date: String,
+    },
+    /// Run Monte Carlo with convergence-based stopping
+    MonteCarloConvergence {
+        config: SimulationConfig,
+        min_iterations: usize,
+        max_iterations: usize,
+        relative_threshold: f64,
+        metric: ConvergenceMetric,
         birth_date: String,
         start_date: String,
     },
@@ -231,6 +244,47 @@ fn worker_loop(
                 match run_monte_carlo_simulation(
                     &config,
                     iterations,
+                    None, // No convergence config
+                    &birth_date,
+                    &start_date,
+                    &cancel_flag,
+                    &progress,
+                    &response_tx,
+                ) {
+                    Ok(Some(result)) => {
+                        let _ = response_tx.send(result);
+                    }
+                    Ok(None) => {
+                        // Cancelled
+                        let _ = response_tx.send(SimulationResponse::Cancelled);
+                    }
+                    Err(e) => {
+                        let _ = response_tx.send(SimulationResponse::Error(e));
+                    }
+                }
+            }
+
+            SimulationRequest::MonteCarloConvergence {
+                config,
+                min_iterations,
+                max_iterations,
+                relative_threshold,
+                metric,
+                birth_date,
+                start_date,
+            } => {
+                progress.store(0, Ordering::SeqCst);
+
+                let convergence = Some(ConvergenceConfig {
+                    metric,
+                    relative_threshold,
+                    max_iterations,
+                });
+
+                match run_monte_carlo_simulation(
+                    &config,
+                    min_iterations,
+                    convergence,
                     &birth_date,
                     &start_date,
                     &cancel_flag,
@@ -299,6 +353,7 @@ fn run_single_simulation(
 fn run_monte_carlo_simulation(
     config: &SimulationConfig,
     iterations: usize,
+    convergence: Option<ConvergenceConfig>,
     birth_date: &str,
     start_date: &str,
     cancel_flag: &Arc<AtomicBool>,
@@ -315,6 +370,7 @@ fn run_monte_carlo_simulation(
         iterations,
         percentiles: vec![0.05, 0.50, 0.95],
         compute_mean: true,
+        convergence,
         parallel_batches: cpu_parallel_batches(),
         ..Default::default()
     };
