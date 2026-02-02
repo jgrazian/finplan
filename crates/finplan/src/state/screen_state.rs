@@ -512,6 +512,99 @@ impl AnalysisResults {
 
         Some((matrix, min_val, max_val))
     }
+
+    /// Get 1D metric data for a specific dimension with fixed values for other dimensions
+    /// Returns (param_values, metric_values)
+    pub fn get_1d_metric_data_for_config(
+        &self,
+        metric: &AnalysisMetricData,
+        x_dim: usize,
+        fixed_values: &std::collections::HashMap<usize, usize>,
+    ) -> (Vec<f64>, Vec<f64>) {
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        // Build fixed array: None for x_dim, Some for others
+        let fixed: Vec<Option<usize>> = (0..self.ndim())
+            .map(|dim| {
+                if dim == x_dim {
+                    None
+                } else {
+                    // Use provided fixed value or midpoint
+                    Some(
+                        fixed_values
+                            .get(&dim)
+                            .copied()
+                            .unwrap_or_else(|| self.midpoint_index(dim)),
+                    )
+                }
+            })
+            .collect();
+
+        if let Some(slice) = self
+            .sweep_results
+            .get_metric_1d_slice(&core_metric, x_dim, &fixed)
+        {
+            let (params, metrics): (Vec<f64>, Vec<f64>) = slice.into_iter().unzip();
+            let scaled: Vec<f64> = metrics.iter().map(|v| v * scale).collect();
+            (params, scaled)
+        } else {
+            (Vec::new(), Vec::new())
+        }
+    }
+
+    /// Get 2D metric data for specific dimensions with fixed values for other dimensions
+    /// Returns (matrix in row-major, min_val, max_val)
+    pub fn get_2d_metric_matrix_for_config(
+        &self,
+        metric: &AnalysisMetricData,
+        x_dim: usize,
+        y_dim: usize,
+        fixed_values: &std::collections::HashMap<usize, usize>,
+    ) -> Option<(Vec<Vec<f64>>, f64, f64)> {
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        // Build fixed array: None for x_dim and y_dim, Some for others
+        let fixed: Vec<Option<usize>> = (0..self.ndim())
+            .map(|dim| {
+                if dim == x_dim || dim == y_dim {
+                    None
+                } else {
+                    Some(
+                        fixed_values
+                            .get(&dim)
+                            .copied()
+                            .unwrap_or_else(|| self.midpoint_index(dim)),
+                    )
+                }
+            })
+            .collect();
+
+        // Get 2D slice - returns (values, x_params, y_params)
+        let (values, _x_params, _y_params) =
+            self.sweep_results
+                .get_metric_2d_slice(&core_metric, x_dim, y_dim, &fixed)?;
+
+        let x_len = self.shape().get(x_dim).copied().unwrap_or(1);
+        let y_len = self.shape().get(y_dim).copied().unwrap_or(1);
+
+        if x_len == 0 || y_len == 0 || values.is_empty() {
+            return None;
+        }
+
+        // Reshape into 2D matrix (rows = y_dim, cols = x_dim)
+        let matrix: Vec<Vec<f64>> = values
+            .chunks(x_len)
+            .map(|chunk| chunk.iter().map(|v| v * scale).collect())
+            .collect();
+
+        let scaled: Vec<f64> = values.iter().map(|v| v * scale).collect();
+        let min_val = scaled.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_val = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+        Some((matrix, min_val, max_val))
+    }
 }
 
 /// State for the Analysis screen

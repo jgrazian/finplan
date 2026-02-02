@@ -548,7 +548,7 @@ impl AnalysisScreen {
 
         match config.chart_type {
             ChartType::Scatter1D => {
-                self.render_single_1d_chart(frame, area, results, &config.metric, is_selected);
+                self.render_single_1d_chart(frame, area, results, config, is_selected);
             }
             ChartType::Heatmap2D => {
                 self.render_mini_2d_heatmap(frame, area, results, config, is_selected);
@@ -583,8 +583,15 @@ impl AnalysisScreen {
         let inner = chart_block.inner(area);
         frame.render_widget(chart_block, area);
 
-        // Get 2D data
-        let Some((matrix, min_val, max_val)) = results.get_2d_metric_matrix(&config.metric) else {
+        // Get 2D data using config's x/y parameters
+        let x_dim = config.x_param_index;
+        let y_dim = config.y_param_index.unwrap_or(1);
+        let Some((matrix, min_val, max_val)) = results.get_2d_metric_matrix_for_config(
+            &config.metric,
+            x_dim,
+            y_dim,
+            &config.fixed_values,
+        ) else {
             let placeholder = Paragraph::new("No data");
             frame.render_widget(placeholder, inner);
             return;
@@ -631,16 +638,21 @@ impl AnalysisScreen {
         frame.render_widget(paragraph, inner);
     }
 
-    /// Render a single 1D chart for a specific metric
+    /// Render a single 1D chart based on config
     fn render_single_1d_chart(
         &self,
         frame: &mut Frame,
         area: Rect,
         results: &AnalysisResults,
-        metric: &AnalysisMetricData,
+        config: &crate::data::analysis_data::ChartConfigData,
         is_selected: bool,
     ) {
-        let (param_values, values) = results.get_1d_metric_data(metric);
+        let metric = &config.metric;
+        let x_dim = config.x_param_index;
+
+        // Get data for the configured dimension
+        let (param_values, values) =
+            results.get_1d_metric_data_for_config(metric, x_dim, &config.fixed_values);
 
         if values.is_empty() || param_values.is_empty() {
             return;
@@ -707,8 +719,10 @@ impl AnalysisScreen {
             ]
         };
 
+        // Use the correct parameter label for the x-axis
+        let x_label = results.param_label(x_dim);
         let x_axis = Axis::default()
-            .title(results.param1_label().to_string().dark_gray())
+            .title(x_label.to_string().dark_gray())
             .bounds([x_min - x_padding, x_max + x_padding])
             .labels(x_labels);
 
