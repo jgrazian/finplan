@@ -86,6 +86,16 @@ impl SweepProgress {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
+
+    /// Create a MonteCarloProgress that shares this progress's atomics.
+    /// This allows MC iteration progress to flow through to sweep progress.
+    /// Uses accumulating mode to avoid resetting progress between sweep points.
+    pub fn as_mc_progress(&self) -> MonteCarloProgress {
+        MonteCarloProgress::from_atomics_accumulating(
+            self.completed.clone(),
+            self.cancelled.clone(),
+        )
+    }
 }
 
 impl Default for SweepProgress {
@@ -218,17 +228,6 @@ pub fn sweep_simulate(
     let param_labels = sweep_config.labels();
     let shape = sweep_config.grid_shape();
 
-    let total_points = sweep_config.total_points();
-    if let Some(p) = progress {
-        p.reset(total_points);
-    }
-
-    // Extract birth year
-    let birth_year = base_config.birth_date.map(|d| d.year()).unwrap_or(1980);
-
-    // Create the result grid
-    let mut summaries: SweepGrid<Option<MonteCarloSummary>> = SweepGrid::new(shape.clone(), None);
-
     // Monte Carlo config for each point
     let mc_config = MonteCarloConfig {
         iterations: sweep_config.mc_iterations,
@@ -237,6 +236,19 @@ pub fn sweep_simulate(
         parallel_batches: sweep_config.parallel_batches,
         ..Default::default()
     };
+
+    // Reset progress to track total iterations (points × iterations per point)
+    let total_points = sweep_config.total_points();
+    let total_iterations = total_points * mc_config.iterations;
+    if let Some(p) = progress {
+        p.reset(total_iterations);
+    }
+
+    // Extract birth year
+    let birth_year = base_config.birth_date.map(|d| d.year()).unwrap_or(1980);
+
+    // Create the result grid
+    let mut summaries: SweepGrid<Option<MonteCarloSummary>> = SweepGrid::new(shape.clone(), None);
 
     // Iterate through all grid points
     for indices in summaries.indices() {
@@ -254,16 +266,13 @@ pub fn sweep_simulate(
                 apply_parameter(&modified_config, &sweep_config.parameters[dim], value)?;
         }
 
-        // Run Monte Carlo simulation
-        let mc_progress = MonteCarloProgress::new();
+        // Run Monte Carlo simulation with progress shared from sweep
+        // Each MC iteration increments the shared progress counter
+        let mc_progress = progress.map(|p| p.as_mc_progress()).unwrap_or_default();
         let summary =
             monte_carlo_simulate_with_progress(&modified_config, &mc_config, &mc_progress)?;
 
         summaries.set(&indices, Some(summary));
-
-        if let Some(p) = progress {
-            p.increment();
-        }
     }
 
     Ok(SweepSimulationResults {

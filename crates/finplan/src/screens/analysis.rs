@@ -2,9 +2,10 @@ use crossterm::event::KeyEvent;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
+    symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph},
 };
 
 use super::Screen;
@@ -28,9 +29,9 @@ impl AnalysisScreen {
         };
 
         let title = if focused {
-            " PARAMETERS [a add, d del, Enter edit] "
+            " SWEEP PARAMETERS [a add, d del, Enter edit] "
         } else {
-            " PARAMETERS "
+            " SWEEP PARAMETERS "
         };
 
         let block = Block::default()
@@ -161,9 +162,9 @@ impl AnalysisScreen {
         };
 
         let title = if focused {
-            " CONFIG [s settings] "
+            " CONFIGURATION [s settings] "
         } else {
-            " CONFIG "
+            " CONFIGURATION "
         };
 
         let block = Block::default()
@@ -295,7 +296,7 @@ impl AnalysisScreen {
         }
     }
 
-    /// Render a 1D ASCII line chart for sweep results
+    /// Render a 1D line chart for sweep results using ratatui Chart widget
     fn render_1d_chart(
         &self,
         frame: &mut Frame,
@@ -304,8 +305,6 @@ impl AnalysisScreen {
         block: Block,
         results: &AnalysisResults,
     ) {
-        let inner = block.inner(area);
-
         // Get the primary metric (success rate if available)
         let metric = if state
             .analysis_state
@@ -333,120 +332,84 @@ impl AnalysisScreen {
             return;
         }
 
-        // Calculate chart dimensions
-        let chart_height = inner.height.saturating_sub(4) as usize; // Leave room for axis labels
-        let chart_width = inner.width.saturating_sub(10) as usize; // Leave room for Y-axis
+        // Convert to chart data points: (x, y) tuples
+        // Note: Success rate is already stored as percentage (0-100) in AnalysisResults
+        let data: Vec<(f64, f64)> = param_values
+            .iter()
+            .zip(values.iter())
+            .map(|(&x, &y)| (x, y))
+            .collect();
 
-        if chart_height < 3 || chart_width < 10 {
-            let content = vec![Line::from("  Area too small for chart.")];
-            let paragraph = Paragraph::new(content).block(block);
-            frame.render_widget(paragraph, area);
-            return;
-        }
+        // Calculate bounds with padding to ensure data is visible
+        let x_min = param_values.first().copied().unwrap_or(0.0);
+        let x_max = param_values.last().copied().unwrap_or(1.0);
+        let x_padding = (x_max - x_min).abs() * 0.02;
 
-        // Find min/max values
-        let (min_val, max_val) = if metric == AnalysisMetricType::SuccessRate {
-            (0.0, 1.0) // Success rate is always 0-100%
+        let (y_min, y_max) = if metric == AnalysisMetricType::SuccessRate {
+            // Find actual min/max in data to scale appropriately
+            let actual_min = data.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
+            let actual_max = data
+                .iter()
+                .map(|(_, y)| *y)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let range = (actual_max - actual_min).max(5.0); // At least 5% range
+            let padding = range * 0.1;
+            (
+                (actual_min - padding).max(0.0),
+                (actual_max + padding).min(105.0),
+            )
         } else {
             let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
             let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-            (min, max)
+            let padding = (max - min).abs().max(1.0) * 0.1;
+            (min - padding, max + padding)
         };
-        let range = (max_val - min_val).max(0.0001);
 
-        // Build ASCII chart lines
-        let mut lines: Vec<Line> = Vec::new();
+        // Create dataset
+        let dataset = Dataset::default()
+            .name(metric.short_label())
+            .marker(symbols::Marker::Dot)
+            .graph_type(GraphType::Scatter)
+            .style(Style::default().fg(Color::Green))
+            .data(&data);
 
-        // Title line
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                metric.short_label(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" vs "),
-            Span::styled(&results.param1_label, Style::default().fg(Color::Cyan)),
-        ]));
-        lines.push(Line::from(""));
+        // Create axis labels
+        let x_labels = vec![
+            Span::raw(format!("{:.0}", x_min)),
+            Span::raw(format!("{:.0}", (x_min + x_max) / 2.0)),
+            Span::raw(format!("{:.0}", x_max)),
+        ];
 
-        // Chart body
-        for row in (0..chart_height).rev() {
-            let y_value = min_val + (row as f64 / (chart_height - 1) as f64) * range;
-            let y_label = if metric == AnalysisMetricType::SuccessRate {
-                format!("{:>5.0}%", y_value * 100.0)
-            } else {
-                format!("{:>6}", format_currency(y_value))
-            };
+        let y_labels = if metric == AnalysisMetricType::SuccessRate {
+            vec![
+                Span::raw(format!("{:.0}%", y_min)),
+                Span::raw(format!("{:.0}%", (y_min + y_max) / 2.0)),
+                Span::raw(format!("{:.0}%", y_max)),
+            ]
+        } else {
+            vec![
+                Span::raw(format_currency(y_min)),
+                Span::raw(format_currency((y_min + y_max) / 2.0)),
+                Span::raw(format_currency(y_max)),
+            ]
+        };
 
-            let mut row_chars = vec![' '; chart_width];
+        let x_axis = Axis::default()
+            .title(results.param1_label.clone().dark_gray())
+            .bounds([x_min - x_padding, x_max + x_padding])
+            .labels(x_labels);
 
-            // Plot points
-            for (i, &val) in values.iter().enumerate() {
-                let x_pos = if values.len() > 1 {
-                    (i * (chart_width - 1)) / (values.len() - 1)
-                } else {
-                    chart_width / 2
-                };
+        let y_axis = Axis::default()
+            .title(metric.short_label().dark_gray())
+            .bounds([y_min, y_max])
+            .labels(y_labels);
 
-                let val_row =
-                    ((val - min_val) / range * (chart_height - 1) as f64).round() as usize;
-                if val_row == row && x_pos < chart_width {
-                    row_chars[x_pos] = '*';
-                }
+        let chart = Chart::new(vec![dataset])
+            .block(block)
+            .x_axis(x_axis)
+            .y_axis(y_axis);
 
-                // Draw line segments
-                if i > 0 && x_pos < chart_width {
-                    let prev_val = values[i - 1];
-                    let prev_row =
-                        ((prev_val - min_val) / range * (chart_height - 1) as f64).round() as usize;
-                    let prev_x = if values.len() > 1 {
-                        ((i - 1) * (chart_width - 1)) / (values.len() - 1)
-                    } else {
-                        chart_width / 2
-                    };
-
-                    // Simple line drawing between points
-                    if prev_row == row {
-                        for x in prev_x..=x_pos {
-                            if x < chart_width && row_chars[x] == ' ' {
-                                row_chars[x] = '-';
-                            }
-                        }
-                    }
-                }
-            }
-
-            let row_str: String = row_chars.into_iter().collect();
-            lines.push(Line::from(vec![
-                Span::styled(y_label, Style::default().fg(Color::DarkGray)),
-                Span::raw("|"),
-                Span::styled(row_str, Style::default().fg(Color::Green)),
-            ]));
-        }
-
-        // X-axis
-        let x_axis = format!("      +{}", "-".repeat(chart_width));
-        lines.push(Line::from(Span::styled(
-            x_axis,
-            Style::default().fg(Color::DarkGray),
-        )));
-
-        // X-axis labels
-        if let (Some(first), Some(last)) = (param_values.first(), param_values.last()) {
-            let first_str = format!("{:.0}", first);
-            let last_str = format!("{:.0}", last);
-            let padding = chart_width.saturating_sub(first_str.len() + last_str.len());
-            let x_labels = format!("      {}{}{}", first_str, " ".repeat(padding), last_str);
-            lines.push(Line::from(Span::styled(
-                x_labels,
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-
-        let paragraph = Paragraph::new(lines).block(block);
-        frame.render_widget(paragraph, area);
+        frame.render_widget(chart, area);
     }
 
     /// Render a 2D heatmap for sweep results
@@ -798,29 +761,37 @@ impl Component for AnalysisScreen {
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
         let panel = state.analysis_state.focused_panel;
 
-        // Main layout: left (40%) and right (60%)
+        // Main layout: top section and bottom results
         let main_layout = Layout::default()
-            .direction(Direction::Horizontal)
+            .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(40), // Parameters
-                Constraint::Percentage(60), // Right side
+                Constraint::Min(10),        // Top section (Parameters | Metrics + Config)
+                Constraint::Percentage(50), // Results
             ])
             .split(area);
 
-        // Right side: top (Metrics), middle (Config), bottom (Results)
+        // Top section: left (Parameters) and right (Metrics + Config)
+        let top_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(40), // Parameters (full height of top)
+                Constraint::Percentage(60), // Metrics + Config stacked
+            ])
+            .split(main_layout[0]);
+
+        // Right side of top: Metrics (top) and Config (bottom)
         let right_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(30), // Metrics
-                Constraint::Percentage(20), // Config
-                Constraint::Percentage(50), // Results
+                Constraint::Percentage(60), // Metrics
+                Constraint::Percentage(40), // Config
             ])
-            .split(main_layout[1]);
+            .split(top_layout[1]);
 
         // Render all 4 panels
         self.render_parameters(
             frame,
-            main_layout[0],
+            top_layout[0],
             state,
             panel == AnalysisPanel::Parameters,
         );
@@ -838,7 +809,7 @@ impl Component for AnalysisScreen {
         );
         self.render_results(
             frame,
-            right_layout[2],
+            main_layout[1],
             state,
             panel == AnalysisPanel::Results,
         );

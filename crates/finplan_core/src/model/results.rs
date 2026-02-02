@@ -725,6 +725,8 @@ pub struct MonteCarloProgress {
     completed: Arc<AtomicUsize>,
     /// Flag to request cancellation
     cancel: Arc<AtomicBool>,
+    /// Skip reset when reusing (for accumulating progress across multiple runs)
+    skip_reset: bool,
 }
 
 impl Default for MonteCarloProgress {
@@ -739,12 +741,26 @@ impl MonteCarloProgress {
         Self {
             completed: Arc::new(AtomicUsize::new(0)),
             cancel: Arc::new(AtomicBool::new(false)),
+            skip_reset: false,
         }
     }
 
     /// Create from existing atomics (for interop with existing TUI code)
     pub fn from_atomics(completed: Arc<AtomicUsize>, cancel: Arc<AtomicBool>) -> Self {
-        Self { completed, cancel }
+        Self {
+            completed,
+            cancel,
+            skip_reset: false,
+        }
+    }
+
+    /// Create from existing atomics, skipping reset (for accumulating progress)
+    pub fn from_atomics_accumulating(completed: Arc<AtomicUsize>, cancel: Arc<AtomicBool>) -> Self {
+        Self {
+            completed,
+            cancel,
+            skip_reset: true,
+        }
     }
 
     /// Get the number of completed iterations
@@ -764,6 +780,9 @@ impl MonteCarloProgress {
 
     /// Reset the progress tracker for reuse
     pub fn reset(&self) {
+        if self.skip_reset {
+            return;
+        }
         self.completed.store(0, Ordering::Relaxed);
         self.cancel.store(false, Ordering::Relaxed);
     }

@@ -158,6 +158,12 @@ impl App {
                 };
             }
 
+            // Update progress if sweep analysis is running
+            if self.state.analysis_state.running {
+                self.state.analysis_state.current_point = self.worker.get_progress();
+                self.state.analysis_state.total_points = self.worker.get_batch_scenario_total();
+            }
+
             // Check for pending simulation requests
             self.dispatch_pending_simulation();
 
