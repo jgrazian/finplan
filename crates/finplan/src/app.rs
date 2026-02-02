@@ -841,6 +841,10 @@ fn convert_sweep_to_analysis_results(
         AnalysisMetricData::LifetimeTaxes,
         extract_metric(&AnalysisMetric::LifetimeTaxes, 1.0),
     );
+    metric_results.insert(
+        AnalysisMetricData::MaxDrawdown,
+        extract_metric(&AnalysisMetric::MaxDrawdown, 100.0), // Convert to percentage
+    );
 
     // Generate labels from sweep parameters (e.g., "Retirement Age" instead of "Age (Event 8)")
     let format_label = |idx: usize| -> String {

@@ -24,6 +24,16 @@ const MIN_CHART_WIDTH: u16 = 60;
 /// Maximum width for a single chart in the results panel
 const MAX_CHART_WIDTH: u16 = 80;
 
+/// Available metrics for selection
+const AVAILABLE_METRICS: &[AnalysisMetricData] = &[
+    AnalysisMetricData::SuccessRate,
+    AnalysisMetricData::P50FinalNetWorth,
+    AnalysisMetricData::P5FinalNetWorth,
+    AnalysisMetricData::P95FinalNetWorth,
+    AnalysisMetricData::LifetimeTaxes,
+    AnalysisMetricData::MaxDrawdown,
+];
+
 /// Colors for different metrics
 const METRIC_COLORS: &[(AnalysisMetricData, Color)] = &[
     (AnalysisMetricData::SuccessRate, Color::Green),
@@ -31,6 +41,7 @@ const METRIC_COLORS: &[(AnalysisMetricData, Color)] = &[
     (AnalysisMetricData::P5FinalNetWorth, Color::Blue),
     (AnalysisMetricData::P95FinalNetWorth, Color::Magenta),
     (AnalysisMetricData::LifetimeTaxes, Color::Yellow),
+    (AnalysisMetricData::MaxDrawdown, Color::Red),
 ];
 
 fn metric_color(metric: &AnalysisMetricData) -> Color {
@@ -129,7 +140,7 @@ impl AnalysisScreen {
         };
 
         let title = if focused {
-            " METRICS [m toggle] "
+            " METRICS [t toggle, j/k nav] "
         } else {
             " METRICS "
         };
@@ -140,32 +151,31 @@ impl AnalysisScreen {
             .title(title);
 
         let selected = &state.analysis_state.selected_metrics;
+        let selected_idx = state.analysis_state.selected_metric_index;
 
-        // Available metrics
-        let all_metrics = [
-            AnalysisMetricData::SuccessRate,
-            AnalysisMetricData::P50FinalNetWorth,
-            AnalysisMetricData::P5FinalNetWorth,
-            AnalysisMetricData::P95FinalNetWorth,
-            AnalysisMetricData::LifetimeTaxes,
-        ];
-
-        let items: Vec<ListItem> = all_metrics
+        let items: Vec<ListItem> = AVAILABLE_METRICS
             .iter()
-            .map(|metric| {
-                let checked = if selected.contains(metric) {
-                    "[x]"
-                } else {
-                    "[ ]"
-                };
-                let style = if selected.contains(metric) {
+            .enumerate()
+            .map(|(idx, metric)| {
+                let is_cursor = focused && idx == selected_idx;
+                let is_enabled = selected.contains(metric);
+
+                let checked = if is_enabled { "[x]" } else { "[ ]" };
+
+                let style = if is_cursor {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_enabled {
                     Style::default().fg(Color::Green)
                 } else {
                     Style::default().fg(Color::DarkGray)
                 };
 
+                let prefix = if is_cursor { "> " } else { "  " };
+
                 ListItem::new(Line::from(vec![
-                    Span::raw("  "),
+                    Span::styled(prefix, style),
                     Span::styled(checked, style),
                     Span::raw(" "),
                     Span::styled(metric.label(), style),
@@ -670,27 +680,46 @@ impl Component for AnalysisScreen {
             return EventResult::Handled;
         }
 
-        // Parameter list navigation (j/k or Up/Down in Parameters panel)
+        // List navigation (j/k or Up/Down in Parameters or Metrics panel)
         if KeybindingsConfig::matches(&key, &kb.navigation.down) {
-            if panel == AnalysisPanel::Parameters {
-                let param_count = state.analysis_state.sweep_parameters.len();
-                if param_count > 0 {
-                    state.analysis_state.selected_param_index =
-                        (state.analysis_state.selected_param_index + 1) % param_count;
+            match panel {
+                AnalysisPanel::Parameters => {
+                    let param_count = state.analysis_state.sweep_parameters.len();
+                    if param_count > 0 {
+                        state.analysis_state.selected_param_index =
+                            (state.analysis_state.selected_param_index + 1) % param_count;
+                    }
                 }
+                AnalysisPanel::Metrics => {
+                    let metric_count = AVAILABLE_METRICS.len();
+                    state.analysis_state.selected_metric_index =
+                        (state.analysis_state.selected_metric_index + 1) % metric_count;
+                }
+                _ => {}
             }
             return EventResult::Handled;
         }
         if KeybindingsConfig::matches(&key, &kb.navigation.up) {
-            if panel == AnalysisPanel::Parameters {
-                let param_count = state.analysis_state.sweep_parameters.len();
-                if param_count > 0 {
-                    if state.analysis_state.selected_param_index == 0 {
-                        state.analysis_state.selected_param_index = param_count - 1;
-                    } else {
-                        state.analysis_state.selected_param_index -= 1;
+            match panel {
+                AnalysisPanel::Parameters => {
+                    let param_count = state.analysis_state.sweep_parameters.len();
+                    if param_count > 0 {
+                        if state.analysis_state.selected_param_index == 0 {
+                            state.analysis_state.selected_param_index = param_count - 1;
+                        } else {
+                            state.analysis_state.selected_param_index -= 1;
+                        }
                     }
                 }
+                AnalysisPanel::Metrics => {
+                    let metric_count = AVAILABLE_METRICS.len();
+                    if state.analysis_state.selected_metric_index == 0 {
+                        state.analysis_state.selected_metric_index = metric_count - 1;
+                    } else {
+                        state.analysis_state.selected_metric_index -= 1;
+                    }
+                }
+                _ => {}
             }
             return EventResult::Handled;
         }
@@ -729,16 +758,15 @@ impl Component for AnalysisScreen {
             return EventResult::Handled;
         }
 
-        // m: Toggle metrics (in Metrics panel)
-        if KeybindingsConfig::matches(&key, &[String::from("m")]) {
+        // t: Toggle currently selected metric (in Metrics panel)
+        if KeybindingsConfig::matches(&key, &[String::from("t")]) {
             if panel == AnalysisPanel::Metrics {
-                let result = handle_analysis_action(state, AnalysisAction::ToggleMetric, "");
-                match result {
-                    ActionResult::Done(modal) | ActionResult::Modified(modal) => {
-                        state.modal = modal.unwrap_or(ModalState::None);
-                    }
-                    ActionResult::Error(msg) => {
-                        state.set_error(msg);
+                let idx = state.analysis_state.selected_metric_index;
+                if let Some(metric) = AVAILABLE_METRICS.get(idx) {
+                    if state.analysis_state.selected_metrics.contains(metric) {
+                        state.analysis_state.selected_metrics.remove(metric);
+                    } else {
+                        state.analysis_state.selected_metrics.insert(*metric);
                     }
                 }
             }
@@ -780,14 +808,13 @@ impl Component for AnalysisScreen {
                     }
                 }
                 AnalysisPanel::Metrics => {
-                    // Toggle metric
-                    let result = handle_analysis_action(state, AnalysisAction::ToggleMetric, "");
-                    match result {
-                        ActionResult::Done(modal) | ActionResult::Modified(modal) => {
-                            state.modal = modal.unwrap_or(ModalState::None);
-                        }
-                        ActionResult::Error(msg) => {
-                            state.set_error(msg);
+                    // Toggle currently selected metric
+                    let idx = state.analysis_state.selected_metric_index;
+                    if let Some(metric) = AVAILABLE_METRICS.get(idx) {
+                        if state.analysis_state.selected_metrics.contains(metric) {
+                            state.analysis_state.selected_metrics.remove(metric);
+                        } else {
+                            state.analysis_state.selected_metrics.insert(*metric);
                         }
                     }
                 }

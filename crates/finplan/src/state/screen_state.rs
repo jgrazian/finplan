@@ -1,11 +1,7 @@
 /// Per-screen state structs.
 use std::collections::HashMap;
 
-use finplan_core::model::{AccountId, EventId};
-
-use super::panels::{
-    EventsPanel, OptimizePanel, PortfolioProfilesPanel, ResultsPanel, ScenarioPanel,
-};
+use super::panels::{EventsPanel, PortfolioProfilesPanel, ResultsPanel, ScenarioPanel};
 
 /// Percentile view for Monte Carlo results
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -333,171 +329,7 @@ pub struct ResultsState {
 use std::collections::HashSet;
 
 use super::panels::AnalysisPanel;
-use crate::data::analysis_data::{
-    AnalysisConfigData, AnalysisMetricData, SweepParameterData, SweepTypeData,
-};
-
-/// Sweep parameter for analysis
-#[derive(Debug, Clone)]
-pub struct AnalysisSweepParameter {
-    /// Event ID being swept
-    pub event_id: EventId,
-    /// Display name for the parameter
-    pub name: String,
-    /// What is being swept (trigger age, effect value, etc.)
-    pub sweep_type: AnalysisSweepType,
-    /// Minimum value
-    pub min_value: f64,
-    /// Maximum value
-    pub max_value: f64,
-    /// Number of steps
-    pub step_count: usize,
-    /// Current value being displayed
-    pub current_value: f64,
-}
-
-impl AnalysisSweepParameter {
-    /// Convert to persistable data type
-    pub fn to_data(&self) -> SweepParameterData {
-        SweepParameterData {
-            // EventId is 1-based, convert to 0-based index
-            event_index: (self.event_id.0 as usize).saturating_sub(1),
-            name: self.name.clone(),
-            sweep_type: self.sweep_type.to_data(),
-            min_value: self.min_value,
-            max_value: self.max_value,
-            step_count: self.step_count,
-        }
-    }
-
-    /// Convert from persistable data type
-    pub fn from_data(data: &SweepParameterData) -> Self {
-        Self {
-            // Convert 0-based index to 1-based EventId
-            event_id: EventId((data.event_index + 1) as u16),
-            name: data.name.clone(),
-            sweep_type: AnalysisSweepType::from_data(&data.sweep_type),
-            min_value: data.min_value,
-            max_value: data.max_value,
-            step_count: data.step_count,
-            current_value: data.min_value, // Default to min
-        }
-    }
-}
-
-/// Type of parameter being swept
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnalysisSweepType {
-    /// Age trigger (years)
-    TriggerAge,
-    /// Date trigger (year)
-    TriggerDate,
-    /// Effect amount (dollars)
-    EffectValue,
-    /// Repeating event start age
-    RepeatingStartAge,
-    /// Repeating event end age
-    RepeatingEndAge,
-}
-
-impl AnalysisSweepType {
-    /// Get display name
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::TriggerAge => "Age",
-            Self::TriggerDate => "Year",
-            Self::EffectValue => "Amount",
-            Self::RepeatingStartAge => "Start Age",
-            Self::RepeatingEndAge => "End Age",
-        }
-    }
-
-    /// Convert to persistable data type
-    pub fn to_data(&self) -> SweepTypeData {
-        match self {
-            Self::TriggerAge => SweepTypeData::TriggerAge,
-            Self::TriggerDate => SweepTypeData::TriggerDate,
-            Self::EffectValue => SweepTypeData::EffectValue,
-            Self::RepeatingStartAge => SweepTypeData::RepeatingStartAge,
-            Self::RepeatingEndAge => SweepTypeData::RepeatingEndAge,
-        }
-    }
-
-    /// Convert from persistable data type
-    pub fn from_data(data: &SweepTypeData) -> Self {
-        match data {
-            SweepTypeData::TriggerAge => Self::TriggerAge,
-            SweepTypeData::TriggerDate => Self::TriggerDate,
-            SweepTypeData::EffectValue => Self::EffectValue,
-            SweepTypeData::RepeatingStartAge => Self::RepeatingStartAge,
-            SweepTypeData::RepeatingEndAge => Self::RepeatingEndAge,
-        }
-    }
-}
-
-/// Metrics that can be computed in analysis
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AnalysisMetricType {
-    SuccessRate,
-    NetWorthAtAge { age: u8 },
-    P5FinalNetWorth,
-    P50FinalNetWorth,
-    P95FinalNetWorth,
-    LifetimeTaxes,
-    MaxDrawdown,
-}
-
-impl AnalysisMetricType {
-    pub fn label(&self) -> String {
-        match self {
-            Self::SuccessRate => "Success Rate".to_string(),
-            Self::NetWorthAtAge { age } => format!("Net Worth at {}", age),
-            Self::P5FinalNetWorth => "P5 Final Net Worth".to_string(),
-            Self::P50FinalNetWorth => "P50 Final Net Worth".to_string(),
-            Self::P95FinalNetWorth => "P95 Final Net Worth".to_string(),
-            Self::LifetimeTaxes => "Lifetime Taxes".to_string(),
-            Self::MaxDrawdown => "Max Drawdown".to_string(),
-        }
-    }
-
-    pub fn short_label(&self) -> &'static str {
-        match self {
-            Self::SuccessRate => "Success %",
-            Self::NetWorthAtAge { .. } => "Net Worth",
-            Self::P5FinalNetWorth => "P5",
-            Self::P50FinalNetWorth => "P50",
-            Self::P95FinalNetWorth => "P95",
-            Self::LifetimeTaxes => "Taxes",
-            Self::MaxDrawdown => "Drawdown",
-        }
-    }
-
-    /// Convert to persistable data type
-    pub fn to_data(&self) -> AnalysisMetricData {
-        match self {
-            Self::SuccessRate => AnalysisMetricData::SuccessRate,
-            Self::NetWorthAtAge { age } => AnalysisMetricData::NetWorthAtAge { age: *age },
-            Self::P5FinalNetWorth => AnalysisMetricData::P5FinalNetWorth,
-            Self::P50FinalNetWorth => AnalysisMetricData::P50FinalNetWorth,
-            Self::P95FinalNetWorth => AnalysisMetricData::P95FinalNetWorth,
-            Self::LifetimeTaxes => AnalysisMetricData::LifetimeTaxes,
-            Self::MaxDrawdown => AnalysisMetricData::MaxDrawdown,
-        }
-    }
-
-    /// Convert from persistable data type
-    pub fn from_data(data: &AnalysisMetricData) -> Self {
-        match data {
-            AnalysisMetricData::SuccessRate => Self::SuccessRate,
-            AnalysisMetricData::NetWorthAtAge { age } => Self::NetWorthAtAge { age: *age },
-            AnalysisMetricData::P5FinalNetWorth => Self::P5FinalNetWorth,
-            AnalysisMetricData::P50FinalNetWorth => Self::P50FinalNetWorth,
-            AnalysisMetricData::P95FinalNetWorth => Self::P95FinalNetWorth,
-            AnalysisMetricData::LifetimeTaxes => Self::LifetimeTaxes,
-            AnalysisMetricData::MaxDrawdown => Self::MaxDrawdown,
-        }
-    }
-}
+use crate::data::analysis_data::{AnalysisConfigData, AnalysisMetricData, SweepParameterData};
 
 /// Results from a sweep analysis
 #[derive(Debug, Clone)]
@@ -507,7 +339,7 @@ pub struct AnalysisResults {
     /// Parameter 2 values (empty for 1D)
     pub param2_values: Vec<f64>,
     /// Results for each metric
-    pub metric_results: HashMap<AnalysisMetricType, Vec<Vec<f64>>>,
+    pub metric_results: HashMap<AnalysisMetricData, Vec<Vec<f64>>>,
     /// Parameter 1 label
     pub param1_label: String,
     /// Parameter 2 label (empty for 1D)
@@ -521,7 +353,7 @@ impl AnalysisResults {
     }
 
     /// Get flat values for a metric (for 1D charts)
-    pub fn get_1d_values(&self, metric: &AnalysisMetricType) -> Vec<f64> {
+    pub fn get_1d_values(&self, metric: &AnalysisMetricData) -> Vec<f64> {
         self.metric_results
             .get(metric)
             .map(|rows| rows.iter().filter_map(|r| r.first().copied()).collect())
@@ -535,11 +367,13 @@ pub struct AnalysisState {
     /// Currently focused panel
     pub focused_panel: AnalysisPanel,
     /// Sweep parameters (max 2)
-    pub sweep_parameters: Vec<AnalysisSweepParameter>,
+    pub sweep_parameters: Vec<SweepParameterData>,
     /// Selected parameter index (for navigation)
     pub selected_param_index: usize,
+    /// Selected metric index (for navigation in metrics panel)
+    pub selected_metric_index: usize,
     /// Selected metrics to compute
-    pub selected_metrics: HashSet<AnalysisMetricType>,
+    pub selected_metrics: HashSet<AnalysisMetricData>,
     /// Monte Carlo iterations per point
     pub mc_iterations: usize,
     /// Number of steps for sweeps
@@ -559,13 +393,14 @@ pub struct AnalysisState {
 impl AnalysisState {
     pub fn new() -> Self {
         let mut selected_metrics = HashSet::new();
-        selected_metrics.insert(AnalysisMetricType::SuccessRate);
-        selected_metrics.insert(AnalysisMetricType::P50FinalNetWorth);
+        selected_metrics.insert(AnalysisMetricData::SuccessRate);
+        selected_metrics.insert(AnalysisMetricData::P50FinalNetWorth);
 
         Self {
             focused_panel: AnalysisPanel::Parameters,
             sweep_parameters: Vec::new(),
             selected_param_index: 0,
+            selected_metric_index: 0,
             selected_metrics,
             mc_iterations: 500,
             default_steps: 6,
@@ -598,20 +433,13 @@ impl AnalysisState {
 
     /// Convert persistable config to runtime state (loads from scenario)
     pub fn load_from_config(&mut self, config: &AnalysisConfigData) {
-        self.sweep_parameters = config
-            .sweep_parameters
-            .iter()
-            .map(AnalysisSweepParameter::from_data)
-            .collect();
-        self.selected_metrics = config
-            .selected_metrics
-            .iter()
-            .map(AnalysisMetricType::from_data)
-            .collect();
+        self.sweep_parameters = config.sweep_parameters.clone();
+        self.selected_metrics = config.selected_metrics.clone();
         self.mc_iterations = config.mc_iterations;
         self.default_steps = config.default_steps;
         // Reset transient state
         self.selected_param_index = 0;
+        self.selected_metric_index = 0;
         self.results = None;
         self.running = false;
         self.current_point = 0;
@@ -621,85 +449,10 @@ impl AnalysisState {
     /// Convert runtime state to persistable config (saves to scenario)
     pub fn to_config(&self) -> AnalysisConfigData {
         AnalysisConfigData {
-            sweep_parameters: self
-                .sweep_parameters
-                .iter()
-                .map(AnalysisSweepParameter::to_data)
-                .collect(),
-            selected_metrics: self
-                .selected_metrics
-                .iter()
-                .map(AnalysisMetricType::to_data)
-                .collect(),
+            sweep_parameters: self.sweep_parameters.clone(),
+            selected_metrics: self.selected_metrics.clone(),
             mc_iterations: self.mc_iterations,
             default_steps: self.default_steps,
-        }
-    }
-}
-
-// ========== Legacy Optimize State (kept for backwards compatibility) ==========
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ParameterType {
-    #[default]
-    RetirementAge,
-    ContributionRate,
-    WithdrawalAmount,
-    AssetAllocation,
-}
-
-#[derive(Debug, Clone)]
-pub struct SelectedParameter {
-    pub param_type: ParameterType,
-    pub event_id: Option<EventId>,
-    pub account_id: Option<AccountId>,
-    pub min_value: f64,
-    pub max_value: f64,
-}
-
-#[derive(Debug, Clone, Default)]
-pub enum OptimizationObjectiveSelection {
-    #[default]
-    MaxWealthAtDeath,
-    MaxWealthAtRetirement {
-        event_id: Option<EventId>,
-    },
-    MaxSustainableWithdrawal {
-        event_id: Option<EventId>,
-        success_rate: f64,
-    },
-    MinLifetimeTax,
-}
-
-#[derive(Debug, Clone)]
-pub struct OptimizationResultDisplay {
-    pub optimal_values: Vec<(String, f64)>,
-    pub objective_value: f64,
-    pub success_rate: f64,
-    pub converged: bool,
-    pub iterations: usize,
-}
-
-#[derive(Debug, Default)]
-pub struct OptimizeState {
-    pub focused_panel: OptimizePanel,
-    pub selected_param_index: usize,
-    pub selected_parameters: Vec<SelectedParameter>,
-    pub objective: OptimizationObjectiveSelection,
-    pub mc_iterations: usize,
-    pub max_iterations: usize,
-    pub running: bool,
-    pub current_iteration: usize,
-    pub result: Option<OptimizationResultDisplay>,
-    pub convergence_data: Vec<(usize, f64)>,
-}
-
-impl OptimizeState {
-    pub fn new() -> Self {
-        Self {
-            mc_iterations: 500,
-            max_iterations: 100,
-            ..Default::default()
         }
     }
 }
