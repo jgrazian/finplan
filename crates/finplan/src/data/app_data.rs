@@ -47,15 +47,8 @@ pub struct SimulationData {
     pub parameters: ParametersData,
 
     /// Analysis configuration (sweep parameters, metrics, etc.)
-    #[serde(default, skip_serializing_if = "is_default_analysis")]
+    #[serde(default)]
     pub analysis: AnalysisConfigData,
-}
-
-fn is_default_analysis(config: &AnalysisConfigData) -> bool {
-    config.sweep_parameters.is_empty()
-        && config.selected_metrics.is_empty()
-        && config.mc_iterations == 500
-        && config.default_steps == 6
 }
 
 impl Default for SimulationData {
@@ -106,6 +99,8 @@ impl SimulationData {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use crate::data::{
         events_data::{AccountTag, AmountData, EffectData, EventTag, IntervalData, TriggerData},
         parameters_data::{DistributionType, InflationData},
@@ -220,6 +215,13 @@ mod tests {
                 tax_config: Default::default(),
                 returns_mode: Default::default(),
                 historical_block_size: None,
+            },
+            analysis: AnalysisConfigData {
+                mc_iterations: 1000,
+                default_steps: 10,
+                sweep_parameters: vec![],
+                selected_metrics: HashSet::new(),
+                chart_configs: vec![],
             },
         };
 

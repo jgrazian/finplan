@@ -16,8 +16,8 @@ use crate::util::percentiles::{
 use super::cache::CachedValue;
 use super::errors::{LoadError, SaveError, SimulationError};
 use super::screen_state::{
-    AnalysisState, EventsState, MonteCarloPreviewSummary, OptimizeState, PercentileView,
-    PortfolioProfilesState, ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
+    AnalysisState, EventsState, MonteCarloPreviewSummary, PercentileView, PortfolioProfilesState,
+    ProjectionPreview, ResultsState, ScenarioState, ScenarioSummary,
 };
 use super::tabs::TabId;
 use crate::modals::{FormModal, ModalState};
@@ -184,7 +184,6 @@ pub struct AppState {
     pub events_state: EventsState,
     pub scenario_state: ScenarioState,
     pub results_state: ResultsState,
-    pub optimize_state: OptimizeState,
     pub analysis_state: AnalysisState,
 
     pub modal: ModalState,
@@ -228,7 +227,6 @@ impl Default for AppState {
             events_state: EventsState::default(),
             scenario_state: ScenarioState::default(),
             results_state: ResultsState::default(),
-            optimize_state: OptimizeState::new(),
             analysis_state: AnalysisState::new(),
             modal: ModalState::None,
             error_message: None,
