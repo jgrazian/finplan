@@ -52,65 +52,27 @@ fn metric_color(metric: &AnalysisMetricData) -> Color {
         .unwrap_or(Color::Green)
 }
 
-/// Handle chart configuration - add or configure a chart at the selected index
+/// Handle chart configuration - show modal to configure chart at the selected index
 fn handle_chart_configure(state: &mut AppState) {
-    use crate::data::analysis_data::{ChartConfigData, ChartType};
-
-    let results = match &state.analysis_state.results {
-        Some(r) => r,
-        None => return,
-    };
-
     let selected_idx = state.analysis_state.selected_chart_index;
 
-    // If the selected slot doesn't have a chart, add one (and fill gaps)
-    if selected_idx >= state.analysis_state.chart_configs.len() {
-        let ndim = results.ndim();
+    // Show the chart configuration modal
+    let result = handle_analysis_action(
+        state,
+        AnalysisAction::ConfigureChart {
+            index: selected_idx,
+        },
+        "",
+    );
 
-        // Fill in slots up to and including selected_idx
-        while state.analysis_state.chart_configs.len() <= selected_idx {
-            let idx = state.analysis_state.chart_configs.len();
-            let metric = AVAILABLE_METRICS
-                .get(idx % AVAILABLE_METRICS.len())
-                .copied()
-                .unwrap_or(AnalysisMetricData::SuccessRate);
-            let chart = if ndim == 1 || idx.is_multiple_of(2) {
-                ChartConfigData::new_1d(0, metric)
-            } else {
-                ChartConfigData::new_2d(0, 1.min(ndim - 1), metric)
-            };
-            state.analysis_state.chart_configs.push(chart);
+    match result {
+        ActionResult::Done(modal) | ActionResult::Modified(modal) => {
+            state.modal = modal.unwrap_or(ModalState::None);
         }
-
-        state.mark_modified();
-        return;
-    }
-
-    // Configure the existing chart by cycling through types
-    let chart = &state.analysis_state.chart_configs[selected_idx];
-
-    let new_type = match chart.chart_type {
-        ChartType::Scatter1D => ChartType::Heatmap2D,
-        ChartType::Heatmap2D => ChartType::Scatter1D,
-    };
-
-    state.analysis_state.chart_configs[selected_idx].chart_type = new_type;
-
-    // If switching to 2D and we need a y_param, set it
-    if new_type == ChartType::Heatmap2D
-        && state.analysis_state.chart_configs[selected_idx]
-            .y_param_index
-            .is_none()
-    {
-        let x_param = state.analysis_state.chart_configs[selected_idx].x_param_index;
-        let ndim = results.ndim();
-        if ndim >= 2 {
-            state.analysis_state.chart_configs[selected_idx].y_param_index =
-                Some((x_param + 1) % ndim);
+        ActionResult::Error(msg) => {
+            state.set_error(msg);
         }
     }
-
-    state.mark_modified();
 }
 
 /// Handle adding a new chart
@@ -531,7 +493,7 @@ impl AnalysisScreen {
         frame.render_widget(paragraph, inner);
     }
 
-    /// Render charts based on chart_configs
+    /// Render charts based on chart_configs, showing empty slots for unconfigured positions
     fn render_configured_charts(
         &self,
         frame: &mut Frame,
@@ -540,30 +502,19 @@ impl AnalysisScreen {
         block: Block,
         results: &AnalysisResults,
     ) {
-        // For now, fall back to old behavior if no chart configs
-        // This will be replaced with proper chart rendering
         let charts = &state.analysis_state.chart_configs;
         let selected_idx = state.analysis_state.selected_chart_index;
-
-        if charts.is_empty() {
-            // Should not happen, but fall back to old 1D/2D behavior
-            if results.is_1d() {
-                self.render_1d_charts(frame, area, state, block, results);
-            } else {
-                self.render_2d_heatmap(frame, area, state, block, results);
-            }
-            return;
-        }
+        let focused = state.analysis_state.focused_panel == AnalysisPanel::Results;
 
         // Render the outer block
         frame.render_widget(block.clone(), area);
         let inner = block.inner(area);
 
-        // Calculate how many charts fit
-        let num_charts = charts.len().min(4);
-        let chart_width = (inner.width / num_charts as u16).clamp(MIN_CHART_WIDTH, MAX_CHART_WIDTH);
+        // Calculate how many slots fit (always show up to 4, based on available width)
+        let num_slots = ((inner.width as usize) / MIN_CHART_WIDTH as usize).clamp(1, 4);
+        let chart_width = (inner.width / num_slots as u16).clamp(MIN_CHART_WIDTH, MAX_CHART_WIDTH);
 
-        let mut constraints: Vec<Constraint> = (0..num_charts)
+        let mut constraints: Vec<Constraint> = (0..num_slots)
             .map(|_| Constraint::Length(chart_width))
             .collect();
         constraints.push(Constraint::Min(0)); // Fill remaining space
@@ -573,10 +524,14 @@ impl AnalysisScreen {
             .constraints(constraints)
             .split(inner);
 
-        // Render each configured chart
-        for (i, chart_config) in charts.iter().take(num_charts).enumerate() {
-            let is_selected = i == selected_idx;
-            self.render_chart_from_config(frame, slots[i], results, chart_config, is_selected);
+        // Render each slot: either a configured chart or an empty [CONFIGURE] slot
+        for i in 0..num_slots {
+            let is_selected = focused && i == selected_idx;
+            if let Some(chart_config) = charts.get(i) {
+                self.render_chart_from_config(frame, slots[i], results, chart_config, is_selected);
+            } else {
+                self.render_empty_chart_slot(frame, slots[i], i, is_selected);
+            }
         }
     }
 
@@ -593,11 +548,9 @@ impl AnalysisScreen {
 
         match config.chart_type {
             ChartType::Scatter1D => {
-                self.render_single_1d_chart(frame, area, results, &config.metric);
+                self.render_single_1d_chart(frame, area, results, &config.metric, is_selected);
             }
             ChartType::Heatmap2D => {
-                // For 2D heatmap, we need a mini version
-                // For now, render a placeholder or simplified view
                 self.render_mini_2d_heatmap(frame, area, results, config, is_selected);
             }
         }
@@ -678,63 +631,6 @@ impl AnalysisScreen {
         frame.render_widget(paragraph, inner);
     }
 
-    /// Render one or more 1D line charts for sweep results
-    fn render_1d_charts(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        state: &AppState,
-        block: Block,
-        results: &AnalysisResults,
-    ) {
-        // First render the outer block
-        frame.render_widget(block.clone(), area);
-        let inner = block.inner(area);
-
-        // Get ordered list of metrics to display
-        let metrics: Vec<AnalysisMetricData> = state
-            .analysis_state
-            .selected_metrics
-            .iter()
-            .cloned()
-            .collect();
-
-        if metrics.is_empty() {
-            return;
-        }
-
-        // Calculate how many charts can fit at minimum width
-        let max_charts_that_fit = (inner.width / MIN_CHART_WIDTH).max(1) as usize;
-
-        // Number of charts to render (limited by metrics we have)
-        let num_charts = metrics.len().min(max_charts_that_fit);
-
-        // Calculate chart width: distribute evenly, but clamp to [MIN, MAX]
-        let chart_width = if inner.width < MIN_CHART_WIDTH {
-            // Very narrow screen - just use full width
-            inner.width
-        } else {
-            // Distribute width evenly among charts, clamped to [MIN, MAX]
-            (inner.width / num_charts as u16).clamp(MIN_CHART_WIDTH, MAX_CHART_WIDTH)
-        };
-
-        // Build constraints: one slot per chart, then a filler for remaining space
-        let mut constraints: Vec<Constraint> = (0..num_charts)
-            .map(|_| Constraint::Length(chart_width))
-            .collect();
-        constraints.push(Constraint::Min(0)); // Absorb remaining space on the right
-
-        let slots = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(constraints)
-            .split(inner);
-
-        // Render each metric's chart
-        for (i, metric) in metrics.iter().take(num_charts).enumerate() {
-            self.render_single_1d_chart(frame, slots[i], results, metric);
-        }
-    }
-
     /// Render a single 1D chart for a specific metric
     fn render_single_1d_chart(
         &self,
@@ -742,6 +638,7 @@ impl AnalysisScreen {
         area: Rect,
         results: &AnalysisResults,
         metric: &AnalysisMetricData,
+        is_selected: bool,
     ) {
         let (param_values, values) = results.get_1d_metric_data(metric);
 
@@ -821,9 +718,14 @@ impl AnalysisScreen {
             .labels(y_labels);
 
         // Create chart with a bordered block showing the metric name
+        let border_color = if is_selected {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        };
         let chart_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(border_color))
             .title(Span::styled(
                 format!(" {} ", metric.short_label()),
                 Style::default().fg(color),
@@ -836,134 +738,6 @@ impl AnalysisScreen {
             .legend_position(Some(LegendPosition::BottomRight));
 
         frame.render_widget(chart, area);
-    }
-
-    /// Render a 2D heatmap for sweep results
-    fn render_2d_heatmap(
-        &self,
-        frame: &mut Frame,
-        area: Rect,
-        state: &AppState,
-        block: Block,
-        results: &AnalysisResults,
-    ) {
-        let inner = block.inner(area);
-
-        // Get the primary metric
-        let metric = if state
-            .analysis_state
-            .selected_metrics
-            .contains(&AnalysisMetricData::SuccessRate)
-        {
-            AnalysisMetricData::SuccessRate
-        } else {
-            state
-                .analysis_state
-                .selected_metrics
-                .iter()
-                .next()
-                .cloned()
-                .unwrap_or(AnalysisMetricData::SuccessRate)
-        };
-
-        let Some((matrix, min_val, max_val)) = results.get_2d_metric_matrix(&metric) else {
-            let content = vec![Line::from("  No data to display.")];
-            let paragraph = Paragraph::new(content).block(block);
-            frame.render_widget(paragraph, area);
-            return;
-        };
-
-        if matrix.is_empty() || matrix.first().map(|r| r.is_empty()).unwrap_or(true) {
-            let content = vec![Line::from("  No data to display.")];
-            let paragraph = Paragraph::new(content).block(block);
-            frame.render_widget(paragraph, area);
-            return;
-        }
-
-        let mut lines: Vec<Line> = Vec::new();
-
-        // Title
-        lines.push(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                metric.short_label(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(": "),
-            Span::styled(results.param1_label(), Style::default().fg(Color::Magenta)),
-            Span::raw(" x "),
-            Span::styled(results.param2_label(), Style::default().fg(Color::Magenta)),
-        ]));
-        lines.push(Line::from(""));
-
-        // Color scaling - use fixed range for success rate (percentage), otherwise data range
-        let (scale_min, scale_max) = if metric == AnalysisMetricData::SuccessRate {
-            (0.0, 100.0)
-        } else {
-            (min_val, max_val)
-        };
-        let range = (scale_max - scale_min).max(0.0001);
-
-        // Heatmap characters
-        let heat_chars = [' ', '.', ':', '+', '*', '#', '@'];
-
-        // Render rows (param1 on Y-axis, param2 on X-axis)
-        let max_rows = inner.height.saturating_sub(6) as usize;
-        let param1_values = results.param1_values();
-        for (i, row) in matrix.iter().enumerate().take(max_rows) {
-            let y_val = param1_values
-                .get(i)
-                .map(|v| format!("{:>6.0}", v))
-                .unwrap_or_default();
-
-            let mut spans = vec![
-                Span::styled(y_val, Style::default().fg(Color::DarkGray)),
-                Span::raw(" |"),
-            ];
-
-            for &val in row.iter().take(inner.width.saturating_sub(10) as usize) {
-                let normalized = ((val - scale_min) / range).clamp(0.0, 1.0);
-                let char_idx = (normalized * (heat_chars.len() - 1) as f64).round() as usize;
-                let ch = heat_chars[char_idx.min(heat_chars.len() - 1)];
-
-                let color = if normalized < 0.33 {
-                    Color::Red
-                } else if normalized < 0.66 {
-                    Color::Yellow
-                } else {
-                    Color::Green
-                };
-
-                spans.push(Span::styled(format!(" {}", ch), Style::default().fg(color)));
-            }
-
-            lines.push(Line::from(spans));
-        }
-
-        // X-axis label
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::raw("       "),
-            Span::styled(
-                format!("{} ->", results.param2_label()),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-
-        // Legend
-        lines.push(Line::from(vec![
-            Span::raw("  Legend: "),
-            Span::styled("Low", Style::default().fg(Color::Red)),
-            Span::raw(" -> "),
-            Span::styled("Mid", Style::default().fg(Color::Yellow)),
-            Span::raw(" -> "),
-            Span::styled("High", Style::default().fg(Color::Green)),
-        ]));
-
-        let paragraph = Paragraph::new(lines).block(block);
-        frame.render_widget(paragraph, area);
     }
 }
 
@@ -1206,17 +980,16 @@ impl Component for AnalysisScreen {
         }
 
         // h/l: Navigate between chart slots (in Results panel with results)
-        // Navigate between empty slots or existing charts
+        // Navigate between all slots (configured or empty)
         if KeybindingsConfig::matches(&key, &kb.navigation.left)
             && panel == AnalysisPanel::Results
             && state.analysis_state.results.is_some()
         {
-            // Calculate number of slots (max 4, or number of charts)
-            let num_charts = state.analysis_state.chart_configs.len();
-            let count = if num_charts > 0 { num_charts.min(4) } else { 4 };
+            // Always navigate across all 4 slots (max possible)
+            const MAX_SLOTS: usize = 4;
 
             if state.analysis_state.selected_chart_index == 0 {
-                state.analysis_state.selected_chart_index = count - 1;
+                state.analysis_state.selected_chart_index = MAX_SLOTS - 1;
             } else {
                 state.analysis_state.selected_chart_index -= 1;
             }
@@ -1226,11 +999,11 @@ impl Component for AnalysisScreen {
             && panel == AnalysisPanel::Results
             && state.analysis_state.results.is_some()
         {
-            let num_charts = state.analysis_state.chart_configs.len();
-            let count = if num_charts > 0 { num_charts.min(4) } else { 4 };
+            // Always navigate across all 4 slots (max possible)
+            const MAX_SLOTS: usize = 4;
 
             state.analysis_state.selected_chart_index =
-                (state.analysis_state.selected_chart_index + 1) % count;
+                (state.analysis_state.selected_chart_index + 1) % MAX_SLOTS;
             return EventResult::Handled;
         }
 
@@ -1243,21 +1016,15 @@ impl Component for AnalysisScreen {
             return EventResult::Handled;
         }
 
-        // -: Delete chart
+        // -: Delete chart (only if there's a chart at the selected index)
         if KeybindingsConfig::matches(&key, &kb.tabs.analyze.delete_chart)
             && panel == AnalysisPanel::Results
-            && !state.analysis_state.chart_configs.is_empty()
         {
             let idx = state.analysis_state.selected_chart_index;
-            state.analysis_state.chart_configs.remove(idx);
-            // Adjust selection if needed
-            if state.analysis_state.selected_chart_index >= state.analysis_state.chart_configs.len()
-                && !state.analysis_state.chart_configs.is_empty()
-            {
-                state.analysis_state.selected_chart_index =
-                    state.analysis_state.chart_configs.len() - 1;
+            if idx < state.analysis_state.chart_configs.len() {
+                state.analysis_state.chart_configs.remove(idx);
+                state.mark_modified();
             }
-            state.mark_modified();
             return EventResult::Handled;
         }
 

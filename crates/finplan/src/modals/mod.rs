@@ -161,25 +161,46 @@ fn update_dependent_fields(state: &mut AppState, field_idx: usize) {
                 let assets = get_assets_for_sale(state, &from_account);
                 Some((asset_sale_fields::ASSET, assets, current_asset))
             }
+            // Chart Config: "Chart Type" affects "Y Parameter" options
+            FormKind::ChartConfig
+                if field_idx == chart_config_fields::CHART_TYPE
+                    && modal.fields.len() > chart_config_fields::Y_PARAMETER =>
+            {
+                let chart_type = modal.fields[chart_config_fields::CHART_TYPE].value.clone();
+                let is_2d = chart_type.contains("2D") || chart_type.contains("Heatmap");
+
+                // Get current Y param options (the full parameter list is stored there)
+                let y_field = &modal.fields[chart_config_fields::Y_PARAMETER];
+                let current_value = y_field.value.clone();
+
+                // For 1D, show only "N/A"; for 2D, show full parameter list
+                let new_options = if is_2d {
+                    // Restore parameter options from X parameter field (they have the same options)
+                    modal.fields[chart_config_fields::X_PARAMETER]
+                        .options
+                        .clone()
+                } else {
+                    vec!["N/A".to_string()]
+                };
+
+                Some((chart_config_fields::Y_PARAMETER, new_options, current_value))
+            }
             _ => None,
         }
     };
 
     // Now apply the update (mutable borrow)
-    if let Some((asset_field_idx, assets, current_asset)) = update_info {
+    if let Some((field_idx, new_options, current_value)) = update_info {
         let ModalState::Form(modal) = &mut state.modal else {
             return;
         };
 
         // Update the dependent field options
-        modal.fields[asset_field_idx].options = assets;
+        modal.fields[field_idx].options = new_options;
 
         // Keep current selection if still valid, otherwise select first
-        if !modal.fields[asset_field_idx]
-            .options
-            .contains(&current_asset)
-        {
-            modal.fields[asset_field_idx].value = modal.fields[asset_field_idx]
+        if !modal.fields[field_idx].options.contains(&current_value) {
+            modal.fields[field_idx].value = modal.fields[field_idx]
                 .options
                 .first()
                 .cloned()

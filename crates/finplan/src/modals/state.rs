@@ -206,6 +206,8 @@ pub enum FormKind {
     AssetPurchase,
     /// Asset sale effect - may need dependent fields (From Account → Asset)
     AssetSale,
+    /// Chart configuration - Y Parameter depends on Chart Type
+    ChartConfig,
     /// All other forms without special behavior
     #[default]
     Generic,
@@ -228,6 +230,14 @@ pub mod asset_sale_fields {
     pub const LOT_METHOD: usize = 4;
     /// Special value meaning "sell all assets" (liquidate)
     pub const ALL_ASSETS: &str = "[All]";
+}
+
+/// Field indices for ChartConfig form
+pub mod chart_config_fields {
+    pub const CHART_TYPE: usize = 0;
+    pub const X_PARAMETER: usize = 1;
+    pub const Y_PARAMETER: usize = 2;
+    // Note: Metric is at index 3 when Y_PARAMETER exists, or 2 when it doesn't
 }
 
 #[derive(Debug, Clone, PartialEq)]

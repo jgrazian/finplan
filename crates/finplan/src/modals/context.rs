@@ -693,6 +693,8 @@ pub enum AnalysisContext {
     Metrics,
     /// Configuring settings (MC iterations, default steps)
     Settings,
+    /// Configuring a result chart (type, X/Y params, metric)
+    ChartConfig { chart_index: usize },
 }
 
 /// Amount editing context for recursive amount building

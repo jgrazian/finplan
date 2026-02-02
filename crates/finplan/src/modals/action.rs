@@ -144,6 +144,8 @@ pub enum AnalysisAction {
     RunAnalysis,
     /// Select parameter target after picking event
     SelectParameterTarget { event_index: usize },
+    /// Configure a result chart (type, parameters, metric)
+    ConfigureChart { index: usize },
 }
 
 /// Amount-specific actions (editing amount fields in effects)

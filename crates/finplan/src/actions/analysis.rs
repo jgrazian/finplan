@@ -1,11 +1,13 @@
 // Analysis actions - parameter sweep configuration and execution
 
-use crate::data::analysis_data::{AnalysisMetricData, SweepParameterData, SweepTypeData};
+use crate::data::analysis_data::{
+    AnalysisMetricData, ChartConfigData, ChartType, SweepParameterData, SweepTypeData,
+};
 use crate::data::events_data::{AmountData, EffectData, TriggerData};
 use crate::modals::context::AnalysisContext;
 use crate::modals::{
-    AnalysisAction, FieldType, FormField, FormModal, ModalAction, ModalContext, ModalState,
-    PickerModal,
+    AnalysisAction, FieldType, FormField, FormKind, FormModal, ModalAction, ModalContext,
+    ModalState, PickerModal,
 };
 use crate::state::{AnalysisPanel, AppState};
 
@@ -27,6 +29,7 @@ pub fn handle_analysis_action(
         AnalysisAction::SelectParameterTarget { event_index } => {
             handle_select_parameter_target(state, event_index)
         }
+        AnalysisAction::ConfigureChart { index } => handle_configure_chart(state, index, value),
     }
 }
 
@@ -528,6 +531,184 @@ fn handle_run_analysis(state: &mut AppState) -> ActionResult {
     state.pending_simulation = Some(PendingSimulation::SweepAnalysis { sweep_config });
 
     ActionResult::Done(None)
+}
+
+/// Handle chart configuration - show form or process submission
+fn handle_configure_chart(state: &mut AppState, index: usize, _value: &str) -> ActionResult {
+    // Get results to determine available parameters
+    let results = match &state.analysis_state.results {
+        Some(r) => r,
+        None => return ActionResult::error("No analysis results available"),
+    };
+
+    let ndim = results.ndim();
+
+    // If no form modal exists, show the configuration form
+    if !matches!(state.modal, ModalState::Form(_)) {
+        return show_chart_config_form(state, index);
+    }
+
+    // Otherwise handle form submission
+    if let ModalState::Form(ref form) = state.modal {
+        let values = form.values();
+
+        // Parse chart type from field 0
+        let chart_type_str = values.str(0);
+        let chart_type = if chart_type_str.contains("2D") || chart_type_str.contains("Heatmap") {
+            ChartType::Heatmap2D
+        } else {
+            ChartType::Scatter1D
+        };
+
+        // Parse X parameter from field 1
+        let x_param_str = values.str(1);
+        let x_param_index = parse_param_index(x_param_str, ndim);
+
+        // Parse Y parameter from field 2 (for 2D charts)
+        let y_param_index = if chart_type == ChartType::Heatmap2D && ndim >= 2 {
+            let y_param_str = values.str(2);
+            Some(parse_param_index(y_param_str, ndim))
+        } else {
+            None
+        };
+
+        // Parse metric from field 3 (when Y param field exists) or 2 (when ndim < 2)
+        let metric_field_idx = if ndim >= 2 { 3 } else { 2 };
+        let metric_str = values.str(metric_field_idx);
+        let metric = parse_metric(metric_str).unwrap_or(AnalysisMetricData::SuccessRate);
+
+        // Create or update the chart config
+        let chart_config = ChartConfigData {
+            chart_type,
+            x_param_index,
+            y_param_index,
+            metric,
+            fixed_values: std::collections::HashMap::new(),
+        };
+
+        // Ensure we have enough slots
+        while state.analysis_state.chart_configs.len() <= index {
+            state
+                .analysis_state
+                .chart_configs
+                .push(ChartConfigData::new_1d(0, AnalysisMetricData::SuccessRate));
+        }
+
+        state.analysis_state.chart_configs[index] = chart_config;
+        state.analysis_state.selected_chart_index = index;
+    }
+
+    ActionResult::Modified(None)
+}
+
+/// Show the chart configuration form
+fn show_chart_config_form(state: &mut AppState, chart_index: usize) -> ActionResult {
+    let results = match &state.analysis_state.results {
+        Some(r) => r,
+        None => return ActionResult::error("No analysis results available"),
+    };
+
+    let ndim = results.ndim();
+
+    // Get existing chart config if any
+    let existing = state.analysis_state.chart_configs.get(chart_index);
+
+    // Determine current values
+    let current_type = existing
+        .map(|c| c.chart_type)
+        .unwrap_or(ChartType::Scatter1D);
+    let current_x = existing.map(|c| c.x_param_index).unwrap_or(0);
+    let current_y = existing.and_then(|c| c.y_param_index).unwrap_or(1);
+    let current_metric = existing
+        .map(|c| c.metric)
+        .unwrap_or(AnalysisMetricData::SuccessRate);
+
+    // Build parameter options for picker fields
+    let param_options: Vec<String> = (0..ndim)
+        .map(|i| format!("{}: {}", i, results.param_label(i)))
+        .collect();
+
+    // Chart type options
+    let type_options = vec!["1D Scatter".to_string(), "2D Heatmap".to_string()];
+    let current_type_str = match current_type {
+        ChartType::Scatter1D => "1D Scatter",
+        ChartType::Heatmap2D => "2D Heatmap",
+    };
+
+    // Metric options
+    let metric_options = vec![
+        "Success Rate".to_string(),
+        "P5 Final Net Worth".to_string(),
+        "P50 Final Net Worth".to_string(),
+        "P95 Final Net Worth".to_string(),
+        "Lifetime Taxes".to_string(),
+        "Max Drawdown".to_string(),
+    ];
+    let current_metric_str = match current_metric {
+        AnalysisMetricData::SuccessRate => "Success Rate",
+        AnalysisMetricData::P5FinalNetWorth => "P5 Final Net Worth",
+        AnalysisMetricData::P50FinalNetWorth => "P50 Final Net Worth",
+        AnalysisMetricData::P95FinalNetWorth => "P95 Final Net Worth",
+        AnalysisMetricData::LifetimeTaxes => "Lifetime Taxes",
+        AnalysisMetricData::MaxDrawdown => "Max Drawdown",
+        _ => "Success Rate",
+    };
+
+    let mut fields = vec![
+        FormField::select("Chart Type", type_options, current_type_str),
+        FormField::select(
+            "X Parameter",
+            param_options.clone(),
+            &format!("{}: {}", current_x, results.param_label(current_x)),
+        ),
+    ];
+
+    // Add Y parameter field - always a Select, but options change based on chart type
+    if ndim >= 2 {
+        let (y_options, y_value) = if current_type == ChartType::Scatter1D {
+            // For 1D, show only "N/A" option
+            (vec!["N/A".to_string()], "N/A".to_string())
+        } else {
+            // For 2D, show full parameter list
+            (
+                param_options,
+                format!(
+                    "{}: {}",
+                    current_y,
+                    results.param_label(current_y.min(ndim - 1))
+                ),
+            )
+        };
+        fields.push(FormField::select("Y Parameter", y_options, &y_value));
+    }
+
+    fields.push(FormField::select(
+        "Metric",
+        metric_options,
+        current_metric_str,
+    ));
+
+    let title = format!("Configure Chart {}", chart_index + 1);
+    let action = ModalAction::Analysis(AnalysisAction::ConfigureChart { index: chart_index });
+
+    let form = FormModal::new(&title, fields, action)
+        .with_kind(FormKind::ChartConfig)
+        .with_typed_context(ModalContext::Analysis(AnalysisContext::ChartConfig {
+            chart_index,
+        }))
+        .start_editing();
+
+    ActionResult::modal(ModalState::Form(form))
+}
+
+/// Parse parameter index from form value like "0: Retirement Age"
+fn parse_param_index(value: &str, ndim: usize) -> usize {
+    value
+        .split(':')
+        .next()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(0)
+        .min(ndim.saturating_sub(1))
 }
 
 // ========== Helper Functions ==========
