@@ -1,8 +1,9 @@
-use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::{collections::HashMap, io};
 
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
+use finplan_core::analysis::AnalysisMetric;
 use rand::RngCore;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -11,6 +12,7 @@ use ratatui::{
 
 use crate::actions::ActionResult;
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
+use crate::data::analysis_data::AnalysisMetricData;
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::storage::DataDirectory;
 use crate::modals::{
@@ -21,7 +23,9 @@ use crate::screens::{
     ModalHandler, analysis::AnalysisScreen, events::EventsScreen,
     portfolio_profiles::PortfolioProfilesScreen, results::ResultsScreen, scenario::ScenarioScreen,
 };
-use crate::state::{AppState, PercentileView, ResultsState, SimulationStatus, TabId};
+use crate::state::{
+    AnalysisResults, AppState, PercentileView, ResultsState, SimulationStatus, TabId,
+};
 use crate::worker::{SimulationResponse, SimulationWorker};
 
 pub struct App {
@@ -307,7 +311,10 @@ impl App {
                     self.state.simulation_status = SimulationStatus::Idle;
 
                     // Convert SweepResults to AnalysisResults
-                    let analysis_results = convert_sweep_to_analysis_results(&results);
+                    let analysis_results = convert_sweep_to_analysis_results(
+                        &results,
+                        &self.state.analysis_state.sweep_parameters,
+                    );
                     self.state.analysis_state.results = Some(analysis_results);
 
                     // Show completion modal
@@ -794,11 +801,8 @@ impl App {
 /// Convert core SweepResults to TUI AnalysisResults
 fn convert_sweep_to_analysis_results(
     results: &finplan_core::analysis::SweepResults,
+    sweep_params: &[crate::data::analysis_data::SweepParameterData],
 ) -> crate::state::AnalysisResults {
-    use crate::state::{AnalysisMetricType, AnalysisResults};
-    use finplan_core::analysis::AnalysisMetric;
-    use std::collections::HashMap;
-
     let mut metric_results = HashMap::new();
 
     // Helper to extract and reshape metric data
@@ -818,31 +822,39 @@ fn convert_sweep_to_analysis_results(
 
     // Extract all metrics
     metric_results.insert(
-        AnalysisMetricType::SuccessRate,
+        AnalysisMetricData::SuccessRate,
         extract_metric(&AnalysisMetric::SuccessRate, 100.0), // Convert to percentage
     );
     metric_results.insert(
-        AnalysisMetricType::P50FinalNetWorth,
+        AnalysisMetricData::P50FinalNetWorth,
         extract_metric(&AnalysisMetric::Percentile { percentile: 50 }, 1.0),
     );
     metric_results.insert(
-        AnalysisMetricType::P5FinalNetWorth,
+        AnalysisMetricData::P5FinalNetWorth,
         extract_metric(&AnalysisMetric::Percentile { percentile: 5 }, 1.0),
     );
     metric_results.insert(
-        AnalysisMetricType::P95FinalNetWorth,
+        AnalysisMetricData::P95FinalNetWorth,
         extract_metric(&AnalysisMetric::Percentile { percentile: 95 }, 1.0),
     );
     metric_results.insert(
-        AnalysisMetricType::LifetimeTaxes,
+        AnalysisMetricData::LifetimeTaxes,
         extract_metric(&AnalysisMetric::LifetimeTaxes, 1.0),
     );
+
+    // Generate labels from sweep parameters (e.g., "Retirement Age" instead of "Age (Event 8)")
+    let format_label = |idx: usize| -> String {
+        sweep_params
+            .get(idx)
+            .map(|p| format!("{} {}", p.event_name, p.sweep_type.display_name()))
+            .unwrap_or_else(|| results.param_labels.get(idx).cloned().unwrap_or_default())
+    };
 
     AnalysisResults {
         param1_values: results.param1_values().to_vec(),
         param2_values: results.param2_values().to_vec(),
         metric_results,
-        param1_label: results.param1_label().to_string(),
-        param2_label: results.param2_label().to_string(),
+        param1_label: format_label(0),
+        param2_label: format_label(1),
     }
 }

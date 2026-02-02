@@ -270,18 +270,38 @@ impl AppState {
 
     /// Switch to a different scenario
     pub fn switch_scenario(&mut self, name: &str) {
-        if self.app_data.simulations.contains_key(name) {
-            self.current_scenario = name.to_string();
-            self.simulation_result = None;
-            self.core_simulation_result = None;
-            self.monte_carlo_result = None;
-            // Increment version to invalidate caches (different scenario = different data)
-            self.data_version = self.data_version.wrapping_add(1);
+        if !self.app_data.simulations.contains_key(name) {
+            return;
+        }
+
+        // Save current analysis state before switching
+        self.save_analysis_to_current_scenario();
+
+        self.current_scenario = name.to_string();
+        self.simulation_result = None;
+        self.core_simulation_result = None;
+        self.monte_carlo_result = None;
+
+        // Load analysis config for the new scenario
+        if let Some(data) = self.app_data.simulations.get(name) {
+            self.analysis_state.load_from_config(&data.analysis);
+        }
+
+        // Increment version to invalidate caches (different scenario = different data)
+        self.data_version = self.data_version.wrapping_add(1);
+    }
+
+    /// Save the current analysis state to the current scenario's data
+    pub fn save_analysis_to_current_scenario(&mut self) {
+        if let Some(data) = self.app_data.simulations.get_mut(&self.current_scenario) {
+            data.analysis = self.analysis_state.to_config();
         }
     }
 
     /// Save current scenario with a new name (copy)
     pub fn save_scenario_as(&mut self, name: &str) {
+        // Sync analysis state to current scenario before copying
+        self.save_analysis_to_current_scenario();
         let data = self.data().clone();
         self.app_data.simulations.insert(name.to_string(), data);
         self.current_scenario = name.to_string();
@@ -289,6 +309,9 @@ impl AppState {
 
     /// Create a new empty scenario
     pub fn new_scenario(&mut self, name: &str) {
+        // Save current analysis state before switching
+        self.save_analysis_to_current_scenario();
+
         self.app_data
             .simulations
             .insert(name.to_string(), SimulationData::default());
@@ -296,6 +319,10 @@ impl AppState {
         self.simulation_result = None;
         self.core_simulation_result = None;
         self.monte_carlo_result = None;
+
+        // Reset analysis state for new scenario
+        self.analysis_state = AnalysisState::new();
+
         // Increment version for new scenario data
         self.data_version = self.data_version.wrapping_add(1);
     }
@@ -309,7 +336,7 @@ impl AppState {
 
         let mut state = Self {
             app_data: result.app_data,
-            current_scenario: result.current_scenario,
+            current_scenario: result.current_scenario.clone(),
             data_dir: Some(data_dir),
             keybindings: result.keybindings,
             ..Default::default()
@@ -317,6 +344,11 @@ impl AppState {
 
         // Load cached scenario summaries
         state.scenario_state.scenario_summaries = result.scenario_summaries;
+
+        // Load analysis config from the current scenario
+        if let Some(data) = state.app_data.simulations.get(&result.current_scenario) {
+            state.analysis_state.load_from_config(&data.analysis);
+        }
 
         Ok(state)
     }
@@ -366,6 +398,9 @@ impl AppState {
 
     /// Save all dirty scenarios
     pub fn save_all_dirty(&mut self) -> Result<usize, SaveError> {
+        // Sync analysis state to current scenario before saving
+        self.save_analysis_to_current_scenario();
+
         let dirty: Vec<String> = self.dirty_scenarios.iter().cloned().collect();
         let mut saved = 0;
 

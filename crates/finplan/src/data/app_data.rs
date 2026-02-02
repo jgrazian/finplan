@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::{
+    analysis_data::AnalysisConfigData,
     events_data::EventData,
     parameters_data::ParametersData,
     portfolio_data::{AssetTag, PortfolioData},
@@ -44,6 +45,17 @@ pub struct SimulationData {
     /// Simulation parameters (dates, duration, inflation, taxes)
     #[serde(default)]
     pub parameters: ParametersData,
+
+    /// Analysis configuration (sweep parameters, metrics, etc.)
+    #[serde(default, skip_serializing_if = "is_default_analysis")]
+    pub analysis: AnalysisConfigData,
+}
+
+fn is_default_analysis(config: &AnalysisConfigData) -> bool {
+    config.sweep_parameters.is_empty()
+        && config.selected_metrics.is_empty()
+        && config.mc_iterations == 500
+        && config.default_steps == 6
 }
 
 impl Default for SimulationData {
@@ -59,6 +71,7 @@ impl Default for SimulationData {
             historical_assets: HashMap::new(),
             events: vec![],
             parameters: ParametersData::default(),
+            analysis: AnalysisConfigData::default(),
         }
     }
 }

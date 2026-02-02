@@ -333,6 +333,9 @@ pub struct ResultsState {
 use std::collections::HashSet;
 
 use super::panels::AnalysisPanel;
+use crate::data::analysis_data::{
+    AnalysisConfigData, AnalysisMetricData, SweepParameterData, SweepTypeData,
+};
 
 /// Sweep parameter for analysis
 #[derive(Debug, Clone)]
@@ -351,6 +354,35 @@ pub struct AnalysisSweepParameter {
     pub step_count: usize,
     /// Current value being displayed
     pub current_value: f64,
+}
+
+impl AnalysisSweepParameter {
+    /// Convert to persistable data type
+    pub fn to_data(&self) -> SweepParameterData {
+        SweepParameterData {
+            // EventId is 1-based, convert to 0-based index
+            event_index: (self.event_id.0 as usize).saturating_sub(1),
+            name: self.name.clone(),
+            sweep_type: self.sweep_type.to_data(),
+            min_value: self.min_value,
+            max_value: self.max_value,
+            step_count: self.step_count,
+        }
+    }
+
+    /// Convert from persistable data type
+    pub fn from_data(data: &SweepParameterData) -> Self {
+        Self {
+            // Convert 0-based index to 1-based EventId
+            event_id: EventId((data.event_index + 1) as u16),
+            name: data.name.clone(),
+            sweep_type: AnalysisSweepType::from_data(&data.sweep_type),
+            min_value: data.min_value,
+            max_value: data.max_value,
+            step_count: data.step_count,
+            current_value: data.min_value, // Default to min
+        }
+    }
 }
 
 /// Type of parameter being swept
@@ -377,6 +409,28 @@ impl AnalysisSweepType {
             Self::EffectValue => "Amount",
             Self::RepeatingStartAge => "Start Age",
             Self::RepeatingEndAge => "End Age",
+        }
+    }
+
+    /// Convert to persistable data type
+    pub fn to_data(&self) -> SweepTypeData {
+        match self {
+            Self::TriggerAge => SweepTypeData::TriggerAge,
+            Self::TriggerDate => SweepTypeData::TriggerDate,
+            Self::EffectValue => SweepTypeData::EffectValue,
+            Self::RepeatingStartAge => SweepTypeData::RepeatingStartAge,
+            Self::RepeatingEndAge => SweepTypeData::RepeatingEndAge,
+        }
+    }
+
+    /// Convert from persistable data type
+    pub fn from_data(data: &SweepTypeData) -> Self {
+        match data {
+            SweepTypeData::TriggerAge => Self::TriggerAge,
+            SweepTypeData::TriggerDate => Self::TriggerDate,
+            SweepTypeData::EffectValue => Self::EffectValue,
+            SweepTypeData::RepeatingStartAge => Self::RepeatingStartAge,
+            SweepTypeData::RepeatingEndAge => Self::RepeatingEndAge,
         }
     }
 }
@@ -415,6 +469,32 @@ impl AnalysisMetricType {
             Self::P95FinalNetWorth => "P95",
             Self::LifetimeTaxes => "Taxes",
             Self::MaxDrawdown => "Drawdown",
+        }
+    }
+
+    /// Convert to persistable data type
+    pub fn to_data(&self) -> AnalysisMetricData {
+        match self {
+            Self::SuccessRate => AnalysisMetricData::SuccessRate,
+            Self::NetWorthAtAge { age } => AnalysisMetricData::NetWorthAtAge { age: *age },
+            Self::P5FinalNetWorth => AnalysisMetricData::P5FinalNetWorth,
+            Self::P50FinalNetWorth => AnalysisMetricData::P50FinalNetWorth,
+            Self::P95FinalNetWorth => AnalysisMetricData::P95FinalNetWorth,
+            Self::LifetimeTaxes => AnalysisMetricData::LifetimeTaxes,
+            Self::MaxDrawdown => AnalysisMetricData::MaxDrawdown,
+        }
+    }
+
+    /// Convert from persistable data type
+    pub fn from_data(data: &AnalysisMetricData) -> Self {
+        match data {
+            AnalysisMetricData::SuccessRate => Self::SuccessRate,
+            AnalysisMetricData::NetWorthAtAge { age } => Self::NetWorthAtAge { age: *age },
+            AnalysisMetricData::P5FinalNetWorth => Self::P5FinalNetWorth,
+            AnalysisMetricData::P50FinalNetWorth => Self::P50FinalNetWorth,
+            AnalysisMetricData::P95FinalNetWorth => Self::P95FinalNetWorth,
+            AnalysisMetricData::LifetimeTaxes => Self::LifetimeTaxes,
+            AnalysisMetricData::MaxDrawdown => Self::MaxDrawdown,
         }
     }
 }
@@ -514,6 +594,46 @@ impl AnalysisState {
             .map(|p| p.step_count)
             .product::<usize>()
             .max(1)
+    }
+
+    /// Convert persistable config to runtime state (loads from scenario)
+    pub fn load_from_config(&mut self, config: &AnalysisConfigData) {
+        self.sweep_parameters = config
+            .sweep_parameters
+            .iter()
+            .map(AnalysisSweepParameter::from_data)
+            .collect();
+        self.selected_metrics = config
+            .selected_metrics
+            .iter()
+            .map(AnalysisMetricType::from_data)
+            .collect();
+        self.mc_iterations = config.mc_iterations;
+        self.default_steps = config.default_steps;
+        // Reset transient state
+        self.selected_param_index = 0;
+        self.results = None;
+        self.running = false;
+        self.current_point = 0;
+        self.total_points = 0;
+    }
+
+    /// Convert runtime state to persistable config (saves to scenario)
+    pub fn to_config(&self) -> AnalysisConfigData {
+        AnalysisConfigData {
+            sweep_parameters: self
+                .sweep_parameters
+                .iter()
+                .map(AnalysisSweepParameter::to_data)
+                .collect(),
+            selected_metrics: self
+                .selected_metrics
+                .iter()
+                .map(AnalysisMetricType::to_data)
+                .collect(),
+            mc_iterations: self.mc_iterations,
+            default_steps: self.default_steps,
+        }
     }
 }
 

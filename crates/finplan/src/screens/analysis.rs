@@ -11,13 +11,13 @@ use ratatui::{
 };
 
 use super::Screen;
-use crate::actions::ActionResult;
 use crate::actions::analysis::handle_analysis_action;
 use crate::components::{Component, EventResult};
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
-use crate::state::{AnalysisMetricType, AnalysisPanel, AnalysisResults, AppState};
+use crate::state::{AnalysisPanel, AnalysisResults, AppState};
 use crate::util::format::format_currency;
+use crate::{actions::ActionResult, data::analysis_data::AnalysisMetricData};
 
 /// Minimum width for a single chart in the results panel
 const MIN_CHART_WIDTH: u16 = 60;
@@ -25,15 +25,15 @@ const MIN_CHART_WIDTH: u16 = 60;
 const MAX_CHART_WIDTH: u16 = 80;
 
 /// Colors for different metrics
-const METRIC_COLORS: &[(AnalysisMetricType, Color)] = &[
-    (AnalysisMetricType::SuccessRate, Color::Green),
-    (AnalysisMetricType::P50FinalNetWorth, Color::Cyan),
-    (AnalysisMetricType::P5FinalNetWorth, Color::Blue),
-    (AnalysisMetricType::P95FinalNetWorth, Color::Magenta),
-    (AnalysisMetricType::LifetimeTaxes, Color::Yellow),
+const METRIC_COLORS: &[(AnalysisMetricData, Color)] = &[
+    (AnalysisMetricData::SuccessRate, Color::Green),
+    (AnalysisMetricData::P50FinalNetWorth, Color::Cyan),
+    (AnalysisMetricData::P5FinalNetWorth, Color::Blue),
+    (AnalysisMetricData::P95FinalNetWorth, Color::Magenta),
+    (AnalysisMetricData::LifetimeTaxes, Color::Yellow),
 ];
 
-fn metric_color(metric: &AnalysisMetricType) -> Color {
+fn metric_color(metric: &AnalysisMetricData) -> Color {
     METRIC_COLORS
         .iter()
         .find(|(m, _)| m == metric)
@@ -108,7 +108,7 @@ impl AnalysisScreen {
                     let prefix = if is_selected { "> " } else { "  " };
                     ListItem::new(Line::from(vec![
                         Span::styled(prefix, style),
-                        Span::styled(&param.name, style),
+                        Span::styled(&param.event_name, style),
                         Span::raw(" "),
                         Span::styled(bounds, Style::default().fg(Color::DarkGray)),
                     ]))
@@ -143,11 +143,11 @@ impl AnalysisScreen {
 
         // Available metrics
         let all_metrics = [
-            AnalysisMetricType::SuccessRate,
-            AnalysisMetricType::P50FinalNetWorth,
-            AnalysisMetricType::P5FinalNetWorth,
-            AnalysisMetricType::P95FinalNetWorth,
-            AnalysisMetricType::LifetimeTaxes,
+            AnalysisMetricData::SuccessRate,
+            AnalysisMetricData::P50FinalNetWorth,
+            AnalysisMetricData::P5FinalNetWorth,
+            AnalysisMetricData::P95FinalNetWorth,
+            AnalysisMetricData::LifetimeTaxes,
         ];
 
         let items: Vec<ListItem> = all_metrics
@@ -334,7 +334,7 @@ impl AnalysisScreen {
         let inner = block.inner(area);
 
         // Get ordered list of metrics to display
-        let metrics: Vec<AnalysisMetricType> = state
+        let metrics: Vec<AnalysisMetricData> = state
             .analysis_state
             .selected_metrics
             .iter()
@@ -383,7 +383,7 @@ impl AnalysisScreen {
         frame: &mut Frame,
         area: Rect,
         results: &AnalysisResults,
-        metric: &AnalysisMetricType,
+        metric: &AnalysisMetricData,
     ) {
         let values = results.get_1d_values(metric);
         let param_values = &results.param1_values;
@@ -404,7 +404,7 @@ impl AnalysisScreen {
         let x_max = param_values.last().copied().unwrap_or(1.0);
         let x_padding = (x_max - x_min).abs() * 0.02;
 
-        let (y_min, y_max) = if *metric == AnalysisMetricType::SuccessRate {
+        let (y_min, y_max) = if *metric == AnalysisMetricData::SuccessRate {
             let actual_min = data.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
             let actual_max = data
                 .iter()
@@ -439,7 +439,7 @@ impl AnalysisScreen {
             Span::raw(format!("{:.0}", x_max)),
         ];
 
-        let y_labels = if *metric == AnalysisMetricType::SuccessRate {
+        let y_labels = if *metric == AnalysisMetricData::SuccessRate {
             vec![
                 Span::raw(format!("{:.0}%", y_min)),
                 Span::raw(format!("{:.0}%", (y_min + y_max) / 2.0)),
@@ -496,9 +496,9 @@ impl AnalysisScreen {
         let metric = if state
             .analysis_state
             .selected_metrics
-            .contains(&AnalysisMetricType::SuccessRate)
+            .contains(&AnalysisMetricData::SuccessRate)
         {
-            AnalysisMetricType::SuccessRate
+            AnalysisMetricData::SuccessRate
         } else {
             state
                 .analysis_state
@@ -506,7 +506,7 @@ impl AnalysisScreen {
                 .iter()
                 .next()
                 .cloned()
-                .unwrap_or(AnalysisMetricType::SuccessRate)
+                .unwrap_or(AnalysisMetricData::SuccessRate)
         };
 
         let Some(matrix) = results.metric_results.get(&metric) else {
@@ -542,7 +542,7 @@ impl AnalysisScreen {
         lines.push(Line::from(""));
 
         // Find min/max for color scaling
-        let (min_val, max_val) = if metric == AnalysisMetricType::SuccessRate {
+        let (min_val, max_val) = if metric == AnalysisMetricData::SuccessRate {
             (0.0, 1.0)
         } else {
             let mut min = f64::INFINITY;
