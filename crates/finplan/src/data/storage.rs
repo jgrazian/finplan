@@ -100,6 +100,7 @@ impl DataDirectory {
 
     /// Initialize the data directory structure
     pub fn init(&self) -> Result<(), StorageError> {
+        tracing::info!(path = ?self.root, "Initializing data directory");
         fs::create_dir_all(&self.root)
             .map_err(|e| StorageError::Io(format!("Failed to create data directory: {}", e)))?;
         fs::create_dir_all(self.scenarios_dir()).map_err(|e| {
@@ -220,6 +221,7 @@ impl DataDirectory {
             .or_else(|| simulations.keys().next().cloned())
             .unwrap_or_else(|| "Default".to_string());
 
+        let scenario_count = simulations.len();
         let app_data = AppData {
             active_scenario: Some(current_scenario.clone()),
             simulations,
@@ -230,6 +232,12 @@ impl DataDirectory {
 
         // Load keybindings
         let keybindings = self.load_keybindings();
+
+        tracing::info!(
+            scenarios = scenario_count,
+            active = %current_scenario,
+            "Loaded scenarios from data directory"
+        );
 
         Ok(LoadResult {
             app_data,
@@ -259,6 +267,7 @@ impl DataDirectory {
             .map_err(|e| StorageError::Serialize(format!("Failed to serialize scenario: {}", e)))?;
 
         let path = self.scenario_path(name);
+        tracing::info!(scenario = name, path = ?path, "Saving scenario");
         fs::write(path, yaml)
             .map_err(|e| StorageError::Io(format!("Failed to write scenario: {}", e)))
     }
@@ -275,6 +284,7 @@ impl DataDirectory {
     pub fn delete_scenario(&self, name: &str) -> Result<(), StorageError> {
         let path = self.scenario_path(name);
         if path.exists() {
+            tracing::info!(scenario = name, path = ?path, "Deleting scenario");
             fs::remove_file(path)
                 .map_err(|e| StorageError::Io(format!("Failed to delete scenario: {}", e)))?;
         }
@@ -287,6 +297,7 @@ impl DataDirectory {
         let new_path = self.scenario_path(new_name);
 
         if old_path.exists() {
+            tracing::info!(from = old_name, to = new_name, "Renaming scenario");
             fs::rename(old_path, new_path)
                 .map_err(|e| StorageError::Io(format!("Failed to rename scenario: {}", e)))?;
         }
@@ -296,10 +307,11 @@ impl DataDirectory {
     /// Export a scenario to an external file path
     pub fn export_scenario(
         &self,
-        _name: &str,
+        name: &str,
         data: &SimulationData,
         dest: &Path,
     ) -> Result<(), StorageError> {
+        tracing::info!(scenario = name, path = ?dest, "Exporting scenario");
         let yaml = data
             .to_yaml()
             .map_err(|e| StorageError::Serialize(format!("Failed to serialize scenario: {}", e)))?;
@@ -309,6 +321,7 @@ impl DataDirectory {
 
     /// Import a scenario from an external file path
     pub fn import_scenario(&self, source: &Path) -> Result<(String, SimulationData), StorageError> {
+        tracing::info!(path = ?source, "Importing scenario");
         let content = fs::read_to_string(source)
             .map_err(|e| StorageError::Io(format!("Failed to read file: {}", e)))?;
 
@@ -322,6 +335,7 @@ impl DataDirectory {
             .unwrap_or("Imported")
             .to_string();
 
+        tracing::info!(scenario = %name, "Scenario imported successfully");
         Ok((name, data))
     }
 

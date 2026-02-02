@@ -195,6 +195,7 @@ impl App {
                     tui_result,
                     core_result,
                 } => {
+                    tracing::info!("Single simulation completed");
                     self.state.simulation_result = Some(tui_result);
                     self.state.core_simulation_result = Some(core_result);
                     self.state.monte_carlo_result = None;
@@ -211,6 +212,14 @@ impl App {
                     default_tui_result,
                     default_core_result,
                 } => {
+                    let iterations = stored_result.stats.num_iterations;
+                    let success_rate = stored_result.stats.success_rate;
+                    tracing::info!(
+                        iterations = iterations,
+                        success_rate = format!("{:.1}%", success_rate * 100.0),
+                        "Monte Carlo simulation completed"
+                    );
+
                     // Store results
                     self.state.simulation_result = Some(default_tui_result);
                     self.state.core_simulation_result = Some(default_core_result);
@@ -221,8 +230,6 @@ impl App {
                     }
 
                     // Store full MC result (unbox)
-                    let iterations = stored_result.stats.num_iterations;
-                    let success_rate = stored_result.stats.success_rate;
                     self.state.monte_carlo_result = Some(*stored_result);
 
                     // Reset results state for MC viewing
@@ -245,6 +252,7 @@ impl App {
                     ));
                 }
                 SimulationResponse::Cancelled => {
+                    tracing::info!("Simulation cancelled by user");
                     self.state.simulation_status = SimulationStatus::Idle;
                     self.state.modal = ModalState::Message(MessageModal::info(
                         "Cancelled",
@@ -252,6 +260,7 @@ impl App {
                     ));
                 }
                 SimulationResponse::Error(msg) => {
+                    tracing::error!(error = %msg, "Simulation error");
                     self.state.simulation_status = SimulationStatus::Idle;
                     self.state.set_error(msg);
                 }
@@ -287,6 +296,7 @@ impl App {
                     }
                 }
                 SimulationResponse::BatchComplete { completed_count } => {
+                    tracing::info!(completed = completed_count, "Batch Monte Carlo completed");
                     self.state.simulation_status = SimulationStatus::Idle;
                     self.state.scenario_state.batch_running = false;
 
@@ -305,6 +315,8 @@ impl App {
                     self.state.analysis_state.total_points = total;
                 }
                 SimulationResponse::SweepComplete { results } => {
+                    let total_points = self.state.analysis_state.total_points;
+                    tracing::info!(points = total_points, "Sweep analysis completed");
                     self.state.analysis_state.running = false;
                     self.state.simulation_status = SimulationStatus::Idle;
 
@@ -316,7 +328,6 @@ impl App {
                     self.state.analysis_state.results = Some(analysis_results);
 
                     // Show completion modal
-                    let total_points = self.state.analysis_state.total_points;
                     self.state.modal = ModalState::Message(MessageModal::info(
                         "Analysis Complete",
                         &format!("Evaluated {} parameter combinations.", total_points),
@@ -467,6 +478,7 @@ impl App {
         match self.state.save_all_dirty() {
             Ok(count) => {
                 if count > 0 {
+                    tracing::info!(count = count, "Saved scenarios");
                     self.state.modal = ModalState::Message(MessageModal::info(
                         "Saved",
                         &format!("Saved {} scenario(s)", count),
@@ -479,6 +491,7 @@ impl App {
                 }
             }
             Err(e) => {
+                tracing::error!(error = %e, "Failed to save scenarios");
                 self.state.set_error(format!("Failed to save: {}", e));
             }
         }

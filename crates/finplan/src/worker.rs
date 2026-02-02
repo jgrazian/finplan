@@ -227,6 +227,7 @@ fn worker_loop(
                 birth_date,
                 start_date,
             } => {
+                tracing::info!(seed = seed, "Starting single simulation");
                 if cancel_flag.load(Ordering::SeqCst) {
                     let _ = response_tx.send(SimulationResponse::Cancelled);
                     continue;
@@ -251,6 +252,7 @@ fn worker_loop(
                 birth_date,
                 start_date,
             } => {
+                tracing::info!(iterations = iterations, "Starting Monte Carlo simulation");
                 progress.store(0, Ordering::SeqCst);
 
                 match run_monte_carlo_simulation(
@@ -320,6 +322,11 @@ fn worker_loop(
                 scenarios,
                 iterations,
             } => {
+                tracing::info!(
+                    scenarios = scenarios.len(),
+                    iterations = iterations,
+                    "Starting batch Monte Carlo simulation"
+                );
                 batch_scenario_index.store(0, Ordering::SeqCst);
                 batch_scenario_total.store(scenarios.len(), Ordering::SeqCst);
                 progress.store(0, Ordering::SeqCst);
@@ -350,6 +357,9 @@ fn worker_loop(
                 birth_date: _,
                 start_date: _,
             } => {
+                let total_points = sweep_config.total_points();
+                tracing::info!(total_points = total_points, "Starting sweep analysis");
+
                 // Check for cancellation before starting
                 if cancel_flag.load(Ordering::SeqCst) {
                     let _ = response_tx.send(SimulationResponse::Cancelled);
@@ -357,7 +367,6 @@ fn worker_loop(
                 }
 
                 // Reset progress for sweep
-                let total_points = sweep_config.total_points();
                 progress.store(0, Ordering::SeqCst);
                 batch_scenario_total.store(total_points, Ordering::SeqCst);
 

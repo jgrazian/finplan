@@ -108,6 +108,7 @@ pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
 
     match state.import_scenario(path) {
         Ok(name) => {
+            tracing::info!(scenario = %name, path = %path_str, "Imported scenario");
             // Switch to the imported scenario
             state.switch_scenario(&name);
             ActionResult::Modified(Some(ModalState::Message(MessageModal::info(
@@ -115,7 +116,10 @@ pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
                 &format!("Imported scenario as '{}'", name),
             ))))
         }
-        Err(e) => ActionResult::Error(format!("Import failed: {}", e)),
+        Err(e) => {
+            tracing::error!(path = %path_str, error = %e, "Failed to import scenario");
+            ActionResult::Error(format!("Import failed: {}", e))
+        }
     }
 }
 
@@ -129,11 +133,17 @@ pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
     let path = Path::new(path_str);
 
     match state.export_scenario(path) {
-        Ok(()) => ActionResult::Done(Some(ModalState::Message(MessageModal::info(
-            "Exported",
-            &format!("Scenario exported to {}", path_str),
-        )))),
-        Err(e) => ActionResult::Error(format!("Export failed: {}", e)),
+        Ok(()) => {
+            tracing::info!(path = %path_str, "Exported scenario");
+            ActionResult::Done(Some(ModalState::Message(MessageModal::info(
+                "Exported",
+                &format!("Scenario exported to {}", path_str),
+            ))))
+        }
+        Err(e) => {
+            tracing::error!(path = %path_str, error = %e, "Failed to export scenario");
+            ActionResult::Error(format!("Export failed: {}", e))
+        }
     }
 }
 
@@ -149,6 +159,7 @@ pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionRe
         return ActionResult::Error(format!("Scenario '{}' already exists", name));
     }
 
+    tracing::info!(scenario = name, "Creating new scenario");
     state.new_scenario(name);
     state.dirty_scenarios.insert(name.to_string());
 
@@ -178,6 +189,7 @@ pub fn handle_duplicate_scenario(state: &mut AppState, ctx: ActionContext) -> Ac
         .unwrap_or_else(|| state.current_scenario.clone());
 
     if state.duplicate_scenario(&source_name, new_name) {
+        tracing::info!(from = %source_name, to = new_name, "Duplicated scenario");
         // Switch to the new scenario
         state.switch_scenario(new_name);
         ActionResult::Modified(Some(ModalState::Message(MessageModal::info(
@@ -205,11 +217,13 @@ pub fn handle_delete_scenario(state: &mut AppState) -> ActionResult {
         }
 
         if state.delete_scenario(&name) {
+            tracing::info!(scenario = %name, "Deleted scenario");
             ActionResult::Modified(Some(ModalState::Message(MessageModal::info(
                 "Deleted",
                 &format!("Deleted scenario '{}'", name),
             ))))
         } else {
+            tracing::warn!(scenario = %name, "Cannot delete last scenario");
             ActionResult::Error("Cannot delete the last scenario".to_string())
         }
     } else {
