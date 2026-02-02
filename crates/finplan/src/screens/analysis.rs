@@ -23,6 +23,8 @@ use crate::{actions::ActionResult, data::analysis_data::AnalysisMetricData};
 const MIN_CHART_WIDTH: u16 = 60;
 /// Maximum width for a single chart in the results panel
 const MAX_CHART_WIDTH: u16 = 80;
+/// Default number of colors in heatmap gradient
+const HEATMAP_COLOR_COUNT: usize = 7;
 
 /// Available metrics for selection
 const AVAILABLE_METRICS: &[AnalysisMetricData] = &[
@@ -556,7 +558,85 @@ impl AnalysisScreen {
         }
     }
 
-    /// Render a mini 2D heatmap in a chart slot
+    /// Get heatmap color gradient (cool blue to warm red, viridis-inspired)
+    fn heatmap_gradient(num_colors: usize) -> Vec<Color> {
+        // Viridis-inspired palette: deep purple -> blue -> teal -> green -> yellow
+        match num_colors {
+            1 => vec![Color::Rgb(33, 145, 140)], // Teal
+            2 => vec![Color::Rgb(68, 1, 84), Color::Rgb(253, 231, 37)], // Purple to Yellow
+            3 => vec![
+                Color::Rgb(68, 1, 84),    // Deep purple
+                Color::Rgb(33, 145, 140), // Teal
+                Color::Rgb(253, 231, 37), // Yellow
+            ],
+            4 => vec![
+                Color::Rgb(68, 1, 84),    // Deep purple
+                Color::Rgb(59, 82, 139),  // Blue
+                Color::Rgb(33, 145, 140), // Teal
+                Color::Rgb(253, 231, 37), // Yellow
+            ],
+            5 => vec![
+                Color::Rgb(68, 1, 84),    // Deep purple
+                Color::Rgb(59, 82, 139),  // Blue
+                Color::Rgb(33, 145, 140), // Teal
+                Color::Rgb(94, 201, 98),  // Green
+                Color::Rgb(253, 231, 37), // Yellow
+            ],
+            6 => vec![
+                Color::Rgb(68, 1, 84),    // Deep purple
+                Color::Rgb(70, 50, 127),  // Purple-blue
+                Color::Rgb(59, 82, 139),  // Blue
+                Color::Rgb(33, 145, 140), // Teal
+                Color::Rgb(94, 201, 98),  // Green
+                Color::Rgb(253, 231, 37), // Yellow
+            ],
+            7 => vec![
+                Color::Rgb(68, 1, 84),    // Deep purple
+                Color::Rgb(70, 50, 127),  // Purple-blue
+                Color::Rgb(59, 82, 139),  // Blue
+                Color::Rgb(33, 145, 140), // Teal
+                Color::Rgb(53, 183, 121), // Teal-green
+                Color::Rgb(94, 201, 98),  // Green
+                Color::Rgb(253, 231, 37), // Yellow
+            ],
+            _ => {
+                // Generate viridis-like gradient with more colors
+                let key_colors: [(f64, u8, u8, u8); 5] = [
+                    (0.0, 68, 1, 84),    // Deep purple
+                    (0.25, 59, 82, 139), // Blue
+                    (0.5, 33, 145, 140), // Teal
+                    (0.75, 94, 201, 98), // Green
+                    (1.0, 253, 231, 37), // Yellow
+                ];
+                let mut colors = Vec::with_capacity(num_colors);
+                for i in 0..num_colors {
+                    let t = i as f64 / (num_colors - 1) as f64;
+                    // Find the two key colors to interpolate between
+                    let mut c1_idx = 0;
+                    for (idx, &(pos, _, _, _)) in key_colors.iter().enumerate() {
+                        if pos <= t {
+                            c1_idx = idx;
+                        }
+                    }
+                    let c2_idx = (c1_idx + 1).min(key_colors.len() - 1);
+                    let (t1, r1, g1, b1) = key_colors[c1_idx];
+                    let (t2, r2, g2, b2) = key_colors[c2_idx];
+                    let local_t = if (t2 - t1).abs() < 0.001 {
+                        0.0
+                    } else {
+                        (t - t1) / (t2 - t1)
+                    };
+                    let r = (r1 as f64 + (r2 as f64 - r1 as f64) * local_t) as u8;
+                    let g = (g1 as f64 + (g2 as f64 - g1 as f64) * local_t) as u8;
+                    let b = (b1 as f64 + (b2 as f64 - b1 as f64) * local_t) as u8;
+                    colors.push(Color::Rgb(r, g, b));
+                }
+                colors
+            }
+        }
+    }
+
+    /// Render a 2D heatmap in a chart slot with axes and legend
     fn render_mini_2d_heatmap(
         &self,
         frame: &mut Frame,
@@ -592,50 +672,246 @@ impl AnalysisScreen {
             y_dim,
             &config.fixed_values,
         ) else {
-            let placeholder = Paragraph::new("No data");
+            let placeholder =
+                Paragraph::new("No data").alignment(ratatui::layout::Alignment::Center);
             frame.render_widget(placeholder, inner);
             return;
         };
 
-        if matrix.is_empty() {
+        if matrix.is_empty() || matrix[0].is_empty() {
             return;
         }
 
-        // Render a simplified heatmap
-        let heat_chars = [' ', '.', ':', '+', '*', '#', '@'];
-        let (scale_min, scale_max) = if config.metric == AnalysisMetricData::SuccessRate {
-            (0.0, 100.0)
+        let data_rows = matrix.len();
+        let data_cols = matrix[0].len();
+
+        // Get parameter ranges for axis labels
+        let x_values = results.param_values(x_dim);
+        let y_values = results.param_values(y_dim);
+        let x_label = results.param_label(x_dim);
+        let y_label = results.param_label(y_dim);
+
+        let (x_min, x_max) = if x_values.is_empty() {
+            (0.0, 1.0)
         } else {
-            (min_val, max_val)
+            (
+                x_values.first().copied().unwrap_or(0.0),
+                x_values.last().copied().unwrap_or(1.0),
+            )
         };
+        let (y_min, y_max) = if y_values.is_empty() {
+            (0.0, 1.0)
+        } else {
+            (
+                y_values.first().copied().unwrap_or(0.0),
+                y_values.last().copied().unwrap_or(1.0),
+            )
+        };
+
+        // Value scale for colors - always use actual data range for better contrast
+        let scale_min = min_val;
+        let scale_max = max_val;
         let range = (scale_max - scale_min).max(0.0001);
 
-        let max_rows = inner.height as usize;
-        let max_cols = inner.width as usize;
+        // Get color gradient
+        let colors = Self::heatmap_gradient(HEATMAP_COLOR_COUNT);
 
-        let mut lines: Vec<Line> = Vec::new();
-        for row in matrix.iter().take(max_rows) {
-            let mut spans: Vec<Span> = Vec::new();
-            for &val in row.iter().take(max_cols) {
-                let normalized = ((val - scale_min) / range).clamp(0.0, 1.0);
-                let char_idx = (normalized * (heat_chars.len() - 1) as f64).round() as usize;
-                let ch = heat_chars[char_idx.min(heat_chars.len() - 1)];
+        // Layout: Y-axis labels | heatmap | legend
+        // Top row: Y-axis title
+        // Below heatmap: X-axis labels + title
+        let y_label_width: u16 = 6; // Space for Y-axis labels
+        let legend_width: u16 = 8; // Space for legend
+        let top_padding: u16 = 1; // Space for Y-axis title
+        let x_label_height: u16 = 2; // Space for X-axis labels + title (no extra row)
 
-                let color = if normalized < 0.33 {
-                    Color::Red
-                } else if normalized < 0.66 {
-                    Color::Yellow
-                } else {
-                    Color::Green
-                };
+        // Calculate available space for heatmap
+        let heatmap_width = inner.width.saturating_sub(y_label_width + legend_width + 1);
+        let heatmap_height = inner.height.saturating_sub(x_label_height + top_padding);
 
-                spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-            }
-            lines.push(Line::from(spans));
+        if heatmap_width < 4 || heatmap_height < 2 {
+            return; // Too small to render
         }
 
-        let paragraph = Paragraph::new(lines);
-        frame.render_widget(paragraph, inner);
+        // Calculate cell sizes with remainder distribution for even fill
+        // Base sizes via integer division
+        let base_cell_width = (heatmap_width as usize / data_cols).max(1);
+        let base_cell_height = (heatmap_height as usize / data_rows).max(1);
+        // Remainder to distribute among first N cells
+        let extra_cols = heatmap_width as usize % data_cols;
+        let extra_rows = heatmap_height as usize % data_rows;
+
+        // Use full available space
+        let actual_heatmap_width = heatmap_width as usize;
+        let actual_heatmap_height = heatmap_height as usize;
+
+        // Heatmap area (offset by top_padding for Y-axis title)
+        let heatmap_x = inner.x + y_label_width;
+        let heatmap_y = inner.y + top_padding;
+
+        // Render Y-axis labels (low, mid, high)
+        let y_mid = (y_min + y_max) / 2.0;
+        let y_labels = [
+            (0, format!("{:.0}", y_max)),
+            (actual_heatmap_height / 2, format!("{:.0}", y_mid)),
+            (
+                actual_heatmap_height.saturating_sub(1),
+                format!("{:.0}", y_min),
+            ),
+        ];
+
+        for (row_offset, label) in y_labels {
+            if row_offset < actual_heatmap_height {
+                let label_area = Rect::new(
+                    inner.x,
+                    heatmap_y + row_offset as u16,
+                    y_label_width.saturating_sub(1),
+                    1,
+                );
+                let label_text = Paragraph::new(label).alignment(ratatui::layout::Alignment::Right);
+                frame.render_widget(label_text, label_area);
+            }
+        }
+
+        // Render Y-axis title on the top padding row (extend over heatmap area for longer labels)
+        let y_title_width = y_label_width + (actual_heatmap_width as u16 / 2);
+        let title_area = Rect::new(inner.x, inner.y, y_title_width, 1);
+        let title_text = Paragraph::new(Span::styled(
+            y_label.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+        frame.render_widget(title_text, title_area);
+
+        // Helper to calculate cumulative position with distributed remainder
+        let row_start = |row: usize| -> usize {
+            // First 'extra_rows' rows get an extra pixel
+            let extra = row.min(extra_rows);
+            row * base_cell_height + extra
+        };
+        let col_start = |col: usize| -> usize {
+            let extra = col.min(extra_cols);
+            col * base_cell_width + extra
+        };
+
+        // Render heatmap cells
+        for (data_row, row_data) in matrix.iter().enumerate().take(data_rows) {
+            for (data_col, &val) in row_data.iter().enumerate().take(data_cols) {
+                let normalized = ((val - scale_min) / range).clamp(0.0, 1.0);
+                let color_idx = (normalized * (colors.len() - 1) as f64).round() as usize;
+                let color = colors[color_idx.min(colors.len() - 1)];
+
+                // Calculate screen position for this cell using distributed sizing
+                // Matrix row 0 = top of heatmap (high Y value)
+                let screen_row = row_start(data_row);
+                let screen_col = col_start(data_col);
+                let cell_height = row_start(data_row + 1) - screen_row;
+                let cell_width = col_start(data_col + 1) - screen_col;
+
+                // Render the cell as filled blocks
+                for dy in 0..cell_height {
+                    let y_pos = heatmap_y + screen_row as u16 + dy as u16;
+                    if y_pos >= heatmap_y + actual_heatmap_height as u16 {
+                        break;
+                    }
+
+                    let cell_str: String = "█".repeat(cell_width);
+                    let cell_area =
+                        Rect::new(heatmap_x + screen_col as u16, y_pos, cell_width as u16, 1);
+                    let cell_widget =
+                        Paragraph::new(Span::styled(cell_str, Style::default().fg(color)));
+                    frame.render_widget(cell_widget, cell_area);
+                }
+            }
+        }
+
+        // Render X-axis labels (low, mid, high)
+        let x_axis_y = heatmap_y + actual_heatmap_height as u16;
+        let x_mid = (x_min + x_max) / 2.0;
+        let x_labels = [
+            (0usize, format!("{:.0}", x_min)),
+            (actual_heatmap_width / 2, format!("{:.0}", x_mid)),
+            (
+                actual_heatmap_width.saturating_sub(4),
+                format!("{:.0}", x_max),
+            ),
+        ];
+
+        for (col_offset, label) in x_labels {
+            let label_area = Rect::new(
+                heatmap_x + col_offset as u16,
+                x_axis_y,
+                label.len() as u16 + 1,
+                1,
+            );
+            let label_text = Paragraph::new(label);
+            frame.render_widget(label_text, label_area);
+        }
+
+        // Render X-axis title (centered under heatmap)
+        if x_axis_y + 1 < inner.y + inner.height {
+            // Center the title properly: start position = heatmap_x + (heatmap_width - title_len) / 2
+            let title_len = x_label.len() as u16;
+            let title_x = heatmap_x + (actual_heatmap_width as u16).saturating_sub(title_len) / 2;
+            let title_area = Rect::new(title_x, x_axis_y + 1, title_len, 1);
+            let title_text = Paragraph::new(Span::styled(
+                x_label.to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+            frame.render_widget(title_text, title_area);
+        }
+
+        // Render legend (aligned with heatmap, accounting for top_padding)
+        let legend_x = heatmap_x + actual_heatmap_width as u16 + 1;
+        let legend_height = colors.len().min(actual_heatmap_height);
+
+        // Legend title on top padding row
+        let legend_title_area = Rect::new(legend_x, inner.y, legend_width, 1);
+        let legend_title = if config.metric == AnalysisMetricData::SuccessRate {
+            "%"
+        } else {
+            "$"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                legend_title,
+                Style::default().fg(Color::DarkGray),
+            )),
+            legend_title_area,
+        );
+
+        // Legend color bars with values (start at heatmap_y, aligned with heatmap)
+        for (i, color) in colors.iter().enumerate().take(legend_height) {
+            let legend_row = heatmap_y + i as u16;
+            if legend_row >= inner.y + inner.height {
+                break;
+            }
+
+            // Color block
+            let block_area = Rect::new(legend_x, legend_row, 2, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled("██", Style::default().fg(*color))),
+                block_area,
+            );
+
+            // Value label (show for first, middle, and last)
+            if i == 0 || i == colors.len() - 1 || i == colors.len() / 2 {
+                let val =
+                    scale_max - (scale_max - scale_min) * i as f64 / (colors.len() - 1) as f64;
+                let val_str = if config.metric == AnalysisMetricData::SuccessRate {
+                    format!("{:.0}", val)
+                } else if val.abs() >= 1_000_000.0 {
+                    format!("{:.1}M", val / 1_000_000.0)
+                } else if val.abs() >= 1_000.0 {
+                    format!("{:.0}K", val / 1_000.0)
+                } else {
+                    format!("{:.0}", val)
+                };
+                let val_area = Rect::new(legend_x + 2, legend_row, legend_width - 2, 1);
+                frame.render_widget(
+                    Paragraph::new(Span::styled(val_str, Style::default().fg(Color::DarkGray))),
+                    val_area,
+                );
+            }
+        }
     }
 
     /// Render a single 1D chart based on config
