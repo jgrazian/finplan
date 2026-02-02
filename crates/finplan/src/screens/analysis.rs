@@ -5,7 +5,9 @@ use ratatui::{
     style::{Color, Modifier, Style, Stylize},
     symbols,
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, List, ListItem, Paragraph},
+    widgets::{
+        Axis, Block, Borders, Chart, Dataset, GraphType, LegendPosition, List, ListItem, Paragraph,
+    },
 };
 
 use super::Screen;
@@ -16,6 +18,28 @@ use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
 use crate::state::{AnalysisMetricType, AnalysisPanel, AnalysisResults, AppState};
 use crate::util::format::format_currency;
+
+/// Minimum width for a single chart in the results panel
+const MIN_CHART_WIDTH: u16 = 60;
+/// Maximum width for a single chart in the results panel
+const MAX_CHART_WIDTH: u16 = 80;
+
+/// Colors for different metrics
+const METRIC_COLORS: &[(AnalysisMetricType, Color)] = &[
+    (AnalysisMetricType::SuccessRate, Color::Green),
+    (AnalysisMetricType::P50FinalNetWorth, Color::Cyan),
+    (AnalysisMetricType::P5FinalNetWorth, Color::Blue),
+    (AnalysisMetricType::P95FinalNetWorth, Color::Magenta),
+    (AnalysisMetricType::LifetimeTaxes, Color::Yellow),
+];
+
+fn metric_color(metric: &AnalysisMetricType) -> Color {
+    METRIC_COLORS
+        .iter()
+        .find(|(m, _)| m == metric)
+        .map(|(_, c)| *c)
+        .unwrap_or(Color::Green)
+}
 
 pub struct AnalysisScreen;
 
@@ -208,7 +232,7 @@ impl AnalysisScreen {
         frame.render_widget(paragraph, area);
     }
 
-    /// Render the Results panel (bottom) with 1D line chart or 2D heatmap
+    /// Render the Results panel (bottom) with 1D line chart(s) or 2D heatmap
     fn render_results(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
         let border_style = if focused {
             Style::default().fg(Color::Yellow)
@@ -234,10 +258,10 @@ impl AnalysisScreen {
 
         if let Some(results) = &state.analysis_state.results {
             if results.is_1d() {
-                // Render 1D line chart
-                self.render_1d_chart(frame, area, state, block, results);
+                // Render 1D line chart(s) - potentially multiple side by side
+                self.render_1d_charts(frame, area, state, block, results);
             } else {
-                // Render 2D heatmap
+                // Render 2D heatmap (single chart for now)
                 self.render_2d_heatmap(frame, area, state, block, results);
             }
         } else if state.analysis_state.running {
@@ -296,8 +320,8 @@ impl AnalysisScreen {
         }
     }
 
-    /// Render a 1D line chart for sweep results using ratatui Chart widget
-    fn render_1d_chart(
+    /// Render one or more 1D line charts for sweep results
+    fn render_1d_charts(
         &self,
         frame: &mut Frame,
         area: Rect,
@@ -305,54 +329,88 @@ impl AnalysisScreen {
         block: Block,
         results: &AnalysisResults,
     ) {
-        // Get the primary metric (success rate if available)
-        let metric = if state
+        // First render the outer block
+        frame.render_widget(block.clone(), area);
+        let inner = block.inner(area);
+
+        // Get ordered list of metrics to display
+        let metrics: Vec<AnalysisMetricType> = state
             .analysis_state
             .selected_metrics
-            .contains(&AnalysisMetricType::SuccessRate)
-        {
-            AnalysisMetricType::SuccessRate
+            .iter()
+            .cloned()
+            .collect();
+
+        if metrics.is_empty() {
+            return;
+        }
+
+        // Calculate how many charts can fit at minimum width
+        let max_charts_that_fit = (inner.width / MIN_CHART_WIDTH).max(1) as usize;
+
+        // Number of charts to render (limited by metrics we have)
+        let num_charts = metrics.len().min(max_charts_that_fit);
+
+        // Calculate chart width: distribute evenly, but clamp to [MIN, MAX]
+        let chart_width = if inner.width < MIN_CHART_WIDTH {
+            // Very narrow screen - just use full width
+            inner.width
         } else {
-            state
-                .analysis_state
-                .selected_metrics
-                .iter()
-                .next()
-                .cloned()
-                .unwrap_or(AnalysisMetricType::SuccessRate)
+            // Distribute width evenly among charts, clamped to [MIN, MAX]
+            (inner.width / num_charts as u16).clamp(MIN_CHART_WIDTH, MAX_CHART_WIDTH)
         };
 
-        let values = results.get_1d_values(&metric);
+        // Build constraints: one slot per chart, then a filler for remaining space
+        let mut constraints: Vec<Constraint> = (0..num_charts)
+            .map(|_| Constraint::Length(chart_width))
+            .collect();
+        constraints.push(Constraint::Min(0)); // Absorb remaining space on the right
+
+        let slots = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(constraints)
+            .split(inner);
+
+        // Render each metric's chart
+        for (i, metric) in metrics.iter().take(num_charts).enumerate() {
+            self.render_single_1d_chart(frame, slots[i], results, metric);
+        }
+    }
+
+    /// Render a single 1D chart for a specific metric
+    fn render_single_1d_chart(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        results: &AnalysisResults,
+        metric: &AnalysisMetricType,
+    ) {
+        let values = results.get_1d_values(metric);
         let param_values = &results.param1_values;
 
         if values.is_empty() || param_values.is_empty() {
-            let content = vec![Line::from("  No data to display.")];
-            let paragraph = Paragraph::new(content).block(block);
-            frame.render_widget(paragraph, area);
             return;
         }
 
         // Convert to chart data points: (x, y) tuples
-        // Note: Success rate is already stored as percentage (0-100) in AnalysisResults
         let data: Vec<(f64, f64)> = param_values
             .iter()
             .zip(values.iter())
             .map(|(&x, &y)| (x, y))
             .collect();
 
-        // Calculate bounds with padding to ensure data is visible
+        // Calculate bounds with padding
         let x_min = param_values.first().copied().unwrap_or(0.0);
         let x_max = param_values.last().copied().unwrap_or(1.0);
         let x_padding = (x_max - x_min).abs() * 0.02;
 
-        let (y_min, y_max) = if metric == AnalysisMetricType::SuccessRate {
-            // Find actual min/max in data to scale appropriately
+        let (y_min, y_max) = if *metric == AnalysisMetricType::SuccessRate {
             let actual_min = data.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
             let actual_max = data
                 .iter()
                 .map(|(_, y)| *y)
                 .fold(f64::NEG_INFINITY, f64::max);
-            let range = (actual_max - actual_min).max(5.0); // At least 5% range
+            let range = (actual_max - actual_min).max(5.0);
             let padding = range * 0.1;
             (
                 (actual_min - padding).max(0.0),
@@ -365,12 +423,13 @@ impl AnalysisScreen {
             (min - padding, max + padding)
         };
 
-        // Create dataset
+        // Create dataset with metric-specific color
+        let color = metric_color(metric);
         let dataset = Dataset::default()
             .name(metric.short_label())
             .marker(symbols::Marker::Dot)
             .graph_type(GraphType::Scatter)
-            .style(Style::default().fg(Color::Green))
+            .style(Style::default().fg(color))
             .data(&data);
 
         // Create axis labels
@@ -380,7 +439,7 @@ impl AnalysisScreen {
             Span::raw(format!("{:.0}", x_max)),
         ];
 
-        let y_labels = if metric == AnalysisMetricType::SuccessRate {
+        let y_labels = if *metric == AnalysisMetricType::SuccessRate {
             vec![
                 Span::raw(format!("{:.0}%", y_min)),
                 Span::raw(format!("{:.0}%", (y_min + y_max) / 2.0)),
@@ -404,10 +463,20 @@ impl AnalysisScreen {
             .bounds([y_min, y_max])
             .labels(y_labels);
 
+        // Create chart with a bordered block showing the metric name
+        let chart_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                format!(" {} ", metric.short_label()),
+                Style::default().fg(color),
+            ));
+
         let chart = Chart::new(vec![dataset])
-            .block(block)
+            .block(chart_block)
             .x_axis(x_axis)
-            .y_axis(y_axis);
+            .y_axis(y_axis)
+            .legend_position(Some(LegendPosition::BottomRight));
 
         frame.render_widget(chart, area);
     }

@@ -796,43 +796,47 @@ fn convert_sweep_to_analysis_results(
     results: &finplan_core::analysis::SweepResults,
 ) -> crate::state::AnalysisResults {
     use crate::state::{AnalysisMetricType, AnalysisResults};
+    use finplan_core::analysis::AnalysisMetric;
     use std::collections::HashMap;
 
     let mut metric_results = HashMap::new();
 
-    // Get grid dimensions
-    let (success_values, _rows, cols) =
-        results.get_metric_grid(&finplan_core::analysis::AnalysisMetric::SuccessRate);
-
-    // Extract success rate as 2D vector (convert to percentage)
-    let success_data: Vec<Vec<f64>> = if cols <= 1 {
-        // 1D: each row is a single value
-        success_values
-            .into_iter()
-            .map(|v| vec![v * 100.0])
-            .collect()
-    } else {
-        // 2D: reshape into rows x cols
-        success_values
-            .chunks(cols)
-            .map(|chunk| chunk.iter().map(|v| v * 100.0).collect())
-            .collect()
+    // Helper to extract and reshape metric data
+    let extract_metric = |core_metric: &AnalysisMetric, scale: f64| -> Vec<Vec<f64>> {
+        let (values, _, cols) = results.get_metric_grid(core_metric);
+        if cols <= 1 {
+            // 1D: each row is a single value
+            values.into_iter().map(|v| vec![v * scale]).collect()
+        } else {
+            // 2D: reshape into rows x cols
+            values
+                .chunks(cols)
+                .map(|chunk| chunk.iter().map(|v| v * scale).collect())
+                .collect()
+        }
     };
-    metric_results.insert(AnalysisMetricType::SuccessRate, success_data);
 
-    // Extract P50 final net worth
-    let (p50_values, _, p50_cols) = results
-        .get_metric_grid(&finplan_core::analysis::AnalysisMetric::Percentile { percentile: 50 });
-
-    let p50_data: Vec<Vec<f64>> = if p50_cols <= 1 {
-        p50_values.into_iter().map(|v| vec![v]).collect()
-    } else {
-        p50_values
-            .chunks(p50_cols)
-            .map(|chunk| chunk.to_vec())
-            .collect()
-    };
-    metric_results.insert(AnalysisMetricType::P50FinalNetWorth, p50_data);
+    // Extract all metrics
+    metric_results.insert(
+        AnalysisMetricType::SuccessRate,
+        extract_metric(&AnalysisMetric::SuccessRate, 100.0), // Convert to percentage
+    );
+    metric_results.insert(
+        AnalysisMetricType::P50FinalNetWorth,
+        extract_metric(&AnalysisMetric::Percentile { percentile: 50 }, 1.0),
+    );
+    metric_results.insert(
+        AnalysisMetricType::P5FinalNetWorth,
+        extract_metric(&AnalysisMetric::Percentile { percentile: 5 }, 1.0),
+    );
+    metric_results.insert(
+        AnalysisMetricType::P95FinalNetWorth,
+        extract_metric(&AnalysisMetric::Percentile { percentile: 95 }, 1.0),
+    );
+    metric_results.insert(
+        AnalysisMetricType::LifetimeTaxes,
+        extract_metric(&AnalysisMetric::LifetimeTaxes, 1.0),
+    );
 
     AnalysisResults {
         param1_values: results.param1_values().to_vec(),
