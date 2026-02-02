@@ -183,7 +183,11 @@ impl SweepSimulationResults {
                     AnalysisMetric::NetWorthAtAge { .. } => {
                         computed.net_worth_at_age.unwrap_or(0.0)
                     }
-                    AnalysisMetric::Percentile { .. } => computed.percentile_value.unwrap_or(0.0),
+                    AnalysisMetric::Percentile { percentile } => computed
+                        .percentile_values
+                        .get(percentile)
+                        .copied()
+                        .unwrap_or(0.0),
                     AnalysisMetric::LifetimeTaxes => computed.lifetime_taxes.unwrap_or(0.0),
                     AnalysisMetric::MaxDrawdown => computed.max_drawdown.unwrap_or(0.0),
                     AnalysisMetric::SafeWithdrawalRate { .. } => {

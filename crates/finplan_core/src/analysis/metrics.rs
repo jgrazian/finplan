@@ -1,5 +1,7 @@
 //! Analysis metrics that can be computed from simulation results.
 
+use std::collections::HashMap;
+
 use crate::model::{MonteCarloSummary, SimulationResult};
 use serde::{Deserialize, Serialize};
 
@@ -53,7 +55,8 @@ impl AnalysisMetric {
 pub struct ComputedMetrics {
     pub success_rate: Option<f64>,
     pub net_worth_at_age: Option<f64>,
-    pub percentile_value: Option<f64>,
+    /// Percentile values indexed by percentile (e.g., 5 -> P5 value, 50 -> P50 value)
+    pub percentile_values: HashMap<u8, f64>,
     pub lifetime_taxes: Option<f64>,
     pub max_drawdown: Option<f64>,
     pub safe_withdrawal_rate: Option<f64>,
@@ -89,12 +92,14 @@ pub fn compute_metrics(
             }
             AnalysisMetric::Percentile { percentile } => {
                 let target_p = *percentile as f64 / 100.0;
-                result.percentile_value = summary
+                if let Some((_, value)) = summary
                     .stats
                     .percentile_values
                     .iter()
                     .find(|(p, _)| (*p - target_p).abs() < 0.01)
-                    .map(|(_, v)| *v);
+                {
+                    result.percentile_values.insert(*percentile, *value);
+                }
             }
             AnalysisMetric::LifetimeTaxes => {
                 // Sum taxes from P50 run
@@ -247,7 +252,11 @@ impl SweepResults {
         match metric {
             AnalysisMetric::SuccessRate => metrics.success_rate.unwrap_or(0.0),
             AnalysisMetric::NetWorthAtAge { .. } => metrics.net_worth_at_age.unwrap_or(0.0),
-            AnalysisMetric::Percentile { .. } => metrics.percentile_value.unwrap_or(0.0),
+            AnalysisMetric::Percentile { percentile } => metrics
+                .percentile_values
+                .get(percentile)
+                .copied()
+                .unwrap_or(0.0),
             AnalysisMetric::LifetimeTaxes => metrics.lifetime_taxes.unwrap_or(0.0),
             AnalysisMetric::MaxDrawdown => metrics.max_drawdown.unwrap_or(0.0),
             AnalysisMetric::SafeWithdrawalRate { .. } => {
