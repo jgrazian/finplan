@@ -17,14 +17,15 @@ use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
 use crate::state::{AnalysisPanel, AnalysisResults, AppState};
 use crate::util::format::format_currency;
-use crate::{actions::ActionResult, data::analysis_data::AnalysisMetricData};
+use crate::{
+    actions::ActionResult,
+    data::analysis_data::{AnalysisMetricData, ColorScheme},
+};
 
 /// Minimum width for a single chart in the results panel
 const MIN_CHART_WIDTH: u16 = 60;
 /// Maximum width for a single chart in the results panel
 const MAX_CHART_WIDTH: u16 = 80;
-/// Default number of colors in heatmap gradient
-const HEATMAP_COLOR_COUNT: usize = 7;
 
 /// Available metrics for selection
 const AVAILABLE_METRICS: &[AnalysisMetricData] = &[
@@ -558,81 +559,89 @@ impl AnalysisScreen {
         }
     }
 
-    /// Get heatmap color gradient (cool blue to warm red, viridis-inspired)
-    fn heatmap_gradient(num_colors: usize) -> Vec<Color> {
-        // Viridis-inspired palette: deep purple -> blue -> teal -> green -> yellow
-        match num_colors {
-            1 => vec![Color::Rgb(33, 145, 140)], // Teal
-            2 => vec![Color::Rgb(68, 1, 84), Color::Rgb(253, 231, 37)], // Purple to Yellow
-            3 => vec![
-                Color::Rgb(68, 1, 84),    // Deep purple
-                Color::Rgb(33, 145, 140), // Teal
-                Color::Rgb(253, 231, 37), // Yellow
-            ],
-            4 => vec![
+    /// Get 7-color heatmap gradient for a given color scheme (viridis family)
+    fn heatmap_gradient(scheme: ColorScheme) -> Vec<Color> {
+        match scheme {
+            // Viridis: purple -> teal -> green -> yellow (perceptually uniform)
+            ColorScheme::Viridis => vec![
                 Color::Rgb(68, 1, 84),    // Deep purple
                 Color::Rgb(59, 82, 139),  // Blue
                 Color::Rgb(33, 145, 140), // Teal
+                Color::Rgb(42, 121, 142), // Teal-blue
+                Color::Rgb(92, 200, 99),  // Green
+                Color::Rgb(180, 222, 44), // Yellow-green
                 Color::Rgb(253, 231, 37), // Yellow
             ],
-            5 => vec![
-                Color::Rgb(68, 1, 84),    // Deep purple
-                Color::Rgb(59, 82, 139),  // Blue
-                Color::Rgb(33, 145, 140), // Teal
-                Color::Rgb(94, 201, 98),  // Green
-                Color::Rgb(253, 231, 37), // Yellow
+            // Magma: dark purple -> magenta -> pink -> light yellow
+            ColorScheme::Magma => vec![
+                Color::Rgb(0, 0, 4),       // Near black
+                Color::Rgb(46, 15, 94),    // Deep purple
+                Color::Rgb(135, 38, 129),  // Magenta
+                Color::Rgb(205, 64, 113),  // Pink-red
+                Color::Rgb(242, 100, 159), // Pink
+                Color::Rgb(253, 138, 189), // Light pink
+                Color::Rgb(252, 253, 191), // Light yellow
             ],
-            6 => vec![
-                Color::Rgb(68, 1, 84),    // Deep purple
-                Color::Rgb(70, 50, 127),  // Purple-blue
-                Color::Rgb(59, 82, 139),  // Blue
-                Color::Rgb(33, 145, 140), // Teal
-                Color::Rgb(94, 201, 98),  // Green
-                Color::Rgb(253, 231, 37), // Yellow
+            // Inferno: dark purple -> red/orange -> yellow
+            ColorScheme::Inferno => vec![
+                Color::Rgb(0, 0, 4),       // Near black
+                Color::Rgb(52, 10, 95),    // Deep purple
+                Color::Rgb(131, 31, 105),  // Purple-magenta
+                Color::Rgb(205, 72, 60),   // Orange-red
+                Color::Rgb(245, 132, 15),  // Orange
+                Color::Rgb(251, 194, 80),  // Yellow-orange
+                Color::Rgb(252, 255, 164), // Light yellow
             ],
-            7 => vec![
-                Color::Rgb(68, 1, 84),    // Deep purple
-                Color::Rgb(70, 50, 127),  // Purple-blue
-                Color::Rgb(59, 82, 139),  // Blue
-                Color::Rgb(33, 145, 140), // Teal
-                Color::Rgb(53, 183, 121), // Teal-green
-                Color::Rgb(94, 201, 98),  // Green
-                Color::Rgb(253, 231, 37), // Yellow
+            // Plasma: blue -> purple -> orange -> yellow
+            ColorScheme::Plasma => vec![
+                Color::Rgb(13, 8, 135),   // Deep blue
+                Color::Rgb(97, 5, 135),   // Purple
+                Color::Rgb(163, 22, 114), // Magenta
+                Color::Rgb(212, 76, 85),  // Red-pink
+                Color::Rgb(241, 129, 48), // Orange
+                Color::Rgb(250, 194, 40), // Yellow-orange
+                Color::Rgb(240, 249, 33), // Yellow
             ],
-            _ => {
-                // Generate viridis-like gradient with more colors
-                let key_colors: [(f64, u8, u8, u8); 5] = [
-                    (0.0, 68, 1, 84),    // Deep purple
-                    (0.25, 59, 82, 139), // Blue
-                    (0.5, 33, 145, 140), // Teal
-                    (0.75, 94, 201, 98), // Green
-                    (1.0, 253, 231, 37), // Yellow
-                ];
-                let mut colors = Vec::with_capacity(num_colors);
-                for i in 0..num_colors {
-                    let t = i as f64 / (num_colors - 1) as f64;
-                    // Find the two key colors to interpolate between
-                    let mut c1_idx = 0;
-                    for (idx, &(pos, _, _, _)) in key_colors.iter().enumerate() {
-                        if pos <= t {
-                            c1_idx = idx;
-                        }
-                    }
-                    let c2_idx = (c1_idx + 1).min(key_colors.len() - 1);
-                    let (t1, r1, g1, b1) = key_colors[c1_idx];
-                    let (t2, r2, g2, b2) = key_colors[c2_idx];
-                    let local_t = if (t2 - t1).abs() < 0.001 {
-                        0.0
-                    } else {
-                        (t - t1) / (t2 - t1)
-                    };
-                    let r = (r1 as f64 + (r2 as f64 - r1 as f64) * local_t) as u8;
-                    let g = (g1 as f64 + (g2 as f64 - g1 as f64) * local_t) as u8;
-                    let b = (b1 as f64 + (b2 as f64 - b1 as f64) * local_t) as u8;
-                    colors.push(Color::Rgb(r, g, b));
-                }
-                colors
-            }
+            // Cividis: dark blue -> gray/tan -> yellow (colorblind-friendly)
+            ColorScheme::Cividis => vec![
+                Color::Rgb(0, 32, 77),     // Dark blue
+                Color::Rgb(35, 62, 108),   // Blue
+                Color::Rgb(84, 90, 108),   // Gray-blue
+                Color::Rgb(138, 135, 121), // Gray-tan
+                Color::Rgb(191, 176, 110), // Tan
+                Color::Rgb(233, 211, 88),  // Yellow-tan
+                Color::Rgb(255, 234, 70),  // Yellow
+            ],
+            // Rocket: dark blue -> magenta -> pink/cream
+            ColorScheme::Rocket => vec![
+                Color::Rgb(3, 5, 26),      // Near black
+                Color::Rgb(104, 31, 85),   // Deep magenta
+                Color::Rgb(188, 22, 86),   // Magenta-red
+                Color::Rgb(241, 100, 69),  // Orange-red
+                Color::Rgb(246, 176, 137), // Peach
+                Color::Rgb(250, 229, 212), // Cream
+                Color::Rgb(250, 235, 221), // Light cream
+            ],
+            // Mako: dark -> purple -> teal/cyan -> light
+            ColorScheme::Mako => vec![
+                Color::Rgb(11, 4, 5),      // Near black
+                Color::Rgb(55, 40, 83),    // Purple
+                Color::Rgb(103, 150, 168), // Teal
+                Color::Rgb(167, 207, 195), // Light teal
+                Color::Rgb(214, 233, 217), // Pale green
+                Color::Rgb(248, 245, 229), // Cream
+                Color::Rgb(222, 245, 229), // Light
+            ],
+            // Turbo: purple -> blue -> cyan -> green -> yellow -> orange -> red
+            ColorScheme::Turbo => vec![
+                Color::Rgb(48, 18, 59),   // Deep purple
+                Color::Rgb(71, 115, 235), // Blue
+                Color::Rgb(51, 173, 247), // Cyan
+                Color::Rgb(113, 254, 95), // Green
+                Color::Rgb(202, 42, 3),   // Orange
+                Color::Rgb(149, 13, 1),   // Red-orange
+                Color::Rgb(122, 4, 3),    // Dark red
+            ],
         }
     }
 
@@ -713,8 +722,8 @@ impl AnalysisScreen {
         let scale_max = max_val;
         let range = (scale_max - scale_min).max(0.0001);
 
-        // Get color gradient
-        let colors = Self::heatmap_gradient(HEATMAP_COLOR_COUNT);
+        // Get color gradient from config
+        let colors = Self::heatmap_gradient(config.color_scheme);
 
         // Layout: Y-axis labels | heatmap | legend
         // Top row: Y-axis title

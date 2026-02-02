@@ -1,7 +1,7 @@
 // Analysis actions - parameter sweep configuration and execution
 
 use crate::data::analysis_data::{
-    AnalysisMetricData, ChartConfigData, ChartType, SweepParameterData, SweepTypeData,
+    AnalysisMetricData, ChartConfigData, ChartType, ColorScheme, SweepParameterData, SweepTypeData,
 };
 use crate::data::events_data::{AmountData, EffectData, TriggerData};
 use crate::modals::context::AnalysisContext;
@@ -577,12 +577,18 @@ fn handle_configure_chart(state: &mut AppState, index: usize, _value: &str) -> A
         let metric_str = values.str(metric_field_idx);
         let metric = parse_metric(metric_str).unwrap_or(AnalysisMetricData::SuccessRate);
 
+        // Parse color scheme from the next field
+        let color_scheme_field_idx = metric_field_idx + 1;
+        let color_scheme_str = values.str(color_scheme_field_idx);
+        let color_scheme = parse_color_scheme(color_scheme_str);
+
         // Create or update the chart config
         let chart_config = ChartConfigData {
             chart_type,
             x_param_index,
             y_param_index,
             metric,
+            color_scheme,
             fixed_values: std::collections::HashMap::new(),
         };
 
@@ -688,6 +694,18 @@ fn show_chart_config_form(state: &mut AppState, chart_index: usize) -> ActionRes
         current_metric_str,
     ));
 
+    // Color scheme options (for heatmaps)
+    let color_scheme_options: Vec<String> = ColorScheme::all()
+        .iter()
+        .map(|s| s.display_name().to_string())
+        .collect();
+    let current_color_scheme = existing.map(|c| c.color_scheme).unwrap_or_default();
+    fields.push(FormField::select(
+        "Color Scheme",
+        color_scheme_options,
+        current_color_scheme.display_name(),
+    ));
+
     let title = format!("Configure Chart {}", chart_index + 1);
     let action = ModalAction::Analysis(AnalysisAction::ConfigureChart { index: chart_index });
 
@@ -709,6 +727,21 @@ fn parse_param_index(value: &str, ndim: usize) -> usize {
         .and_then(|s| s.trim().parse::<usize>().ok())
         .unwrap_or(0)
         .min(ndim.saturating_sub(1))
+}
+
+/// Parse color scheme from form value
+fn parse_color_scheme(value: &str) -> ColorScheme {
+    match value.to_lowercase().as_str() {
+        "viridis" => ColorScheme::Viridis,
+        "magma" => ColorScheme::Magma,
+        "inferno" => ColorScheme::Inferno,
+        "plasma" => ColorScheme::Plasma,
+        "cividis" => ColorScheme::Cividis,
+        "rocket" => ColorScheme::Rocket,
+        "mako" => ColorScheme::Mako,
+        "turbo" => ColorScheme::Turbo,
+        _ => ColorScheme::default(),
+    }
 }
 
 // ========== Helper Functions ==========

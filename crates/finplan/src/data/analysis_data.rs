@@ -137,6 +137,87 @@ pub enum ChartType {
     Heatmap2D,
 }
 
+/// Color scheme for heatmaps (viridis family)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorScheme {
+    /// Viridis: purple -> teal -> green -> yellow (default, perceptually uniform)
+    #[default]
+    Viridis,
+    /// Magma: dark purple -> magenta -> pink -> light yellow
+    Magma,
+    /// Inferno: dark purple -> red/orange -> yellow
+    Inferno,
+    /// Plasma: blue -> purple -> orange -> yellow
+    Plasma,
+    /// Cividis: dark blue -> gray/tan -> yellow (colorblind-friendly)
+    Cividis,
+    /// Rocket: dark blue -> magenta -> pink/cream
+    Rocket,
+    /// Mako: dark -> purple -> teal/cyan -> light
+    Mako,
+    /// Turbo: purple -> blue -> cyan -> green -> yellow -> orange -> red
+    Turbo,
+}
+
+impl ColorScheme {
+    /// Get display name for the color scheme
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Viridis => "Viridis",
+            Self::Magma => "Magma",
+            Self::Inferno => "Inferno",
+            Self::Plasma => "Plasma",
+            Self::Cividis => "Cividis",
+            Self::Rocket => "Rocket",
+            Self::Mako => "Mako",
+            Self::Turbo => "Turbo",
+        }
+    }
+
+    /// Get all available color schemes
+    pub fn all() -> &'static [ColorScheme] {
+        &[
+            Self::Viridis,
+            Self::Magma,
+            Self::Inferno,
+            Self::Plasma,
+            Self::Cividis,
+            Self::Rocket,
+            Self::Mako,
+            Self::Turbo,
+        ]
+    }
+
+    /// Get the next color scheme in the list
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Viridis => Self::Magma,
+            Self::Magma => Self::Inferno,
+            Self::Inferno => Self::Plasma,
+            Self::Plasma => Self::Cividis,
+            Self::Cividis => Self::Rocket,
+            Self::Rocket => Self::Mako,
+            Self::Mako => Self::Turbo,
+            Self::Turbo => Self::Viridis,
+        }
+    }
+
+    /// Get the previous color scheme in the list
+    pub fn prev(&self) -> Self {
+        match self {
+            Self::Viridis => Self::Turbo,
+            Self::Magma => Self::Viridis,
+            Self::Inferno => Self::Magma,
+            Self::Plasma => Self::Inferno,
+            Self::Cividis => Self::Plasma,
+            Self::Rocket => Self::Cividis,
+            Self::Mako => Self::Rocket,
+            Self::Turbo => Self::Mako,
+        }
+    }
+}
+
 impl ChartType {
     /// Get display name for the chart type
     pub fn display_name(&self) -> &'static str {
@@ -163,6 +244,10 @@ pub struct ChartConfigData {
     /// Metric to display
     pub metric: AnalysisMetricData,
 
+    /// Color scheme for heatmaps
+    #[serde(default)]
+    pub color_scheme: ColorScheme,
+
     /// Fixed values for non-displayed dimensions (dimension index -> step index)
     /// Uses midpoint if not specified for a dimension
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -176,6 +261,7 @@ impl Default for ChartConfigData {
             x_param_index: 0,
             y_param_index: None,
             metric: AnalysisMetricData::SuccessRate,
+            color_scheme: ColorScheme::default(),
             fixed_values: HashMap::new(),
         }
     }
@@ -189,6 +275,7 @@ impl ChartConfigData {
             x_param_index: x_param,
             y_param_index: None,
             metric,
+            color_scheme: ColorScheme::default(),
             fixed_values: HashMap::new(),
         }
     }
@@ -200,6 +287,7 @@ impl ChartConfigData {
             x_param_index: x_param,
             y_param_index: Some(y_param),
             metric,
+            color_scheme: ColorScheme::default(),
             fixed_values: HashMap::new(),
         }
     }
