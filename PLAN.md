@@ -1,380 +1,142 @@
-# Analysis Screen Implementation Plan
+# Plan: N-Dimensional Parameter Sweeps with Configurable Result Charts
 
-Replace the Optimize screen with a new Analysis screen for parameter sweep sensitivity analysis.
+## Overview
 
-## Summary
+Extend the analysis feature to support N-dimensional parameter sweeps with user-configurable result charts. Currently limited to 2 parameters, but `finplan_core`'s `SweepGrid<T>` already supports arbitrary dimensions with `slice_1d`/`slice_2d` operations.
 
-- **Goal**: Enable users to sweep parameters (retirement age, savings rate, house price, etc.) across ranges and visualize effects on metrics (success rate, net worth at age X, percentiles, taxes, drawdown)
-- **Dimensions**: N-dimensional sweeps supported; UI renders 1D slices (line charts) + 2D slices (heatmaps)
-- **Execution**: Two-phase: run simulations up-front, analyze with different metrics afterward
-- **Persistence**: Session only
+## Key Changes
 
-## Screen Layout
+### 1. Data Structures
 
-### 1D Mode
-```
-┌─ SWEEP PARAMETERS ──────────┬─ METRICS ─────────────────┐
-│ > Retirement Age [60-70]    │ [x] Success Rate          │
-│                             │ [x] Net Worth at 75       │
-│ [a] add  [d] delete         │ [ ] P5/P50/P95            │
-├─ CONFIGURATION ─────────────┼─ PROGRESS ────────────────┤
-│ MC Iterations: 500          │ [========    ] 60%        │
-│ Steps: 6                    │ 4/6 points complete       │
-├─ 1D RESULTS ────────────────┴───────────────────────────┤
-│ 100%|              *---*---*                            │
-│  90%|        *---*'                                     │
-│  80%|  *---*'                                           │
-│     +----+----+----+----+----+                          │
-│       60   62   64   66   68   70                       │
-└─────────────────────────────────────────────────────────┘
+**Add `ChartConfigData`** (`crates/finplan/src/data/analysis_data.rs`):
+```rust
+pub enum ChartType { Scatter1D, Heatmap2D }
+
+pub struct ChartConfigData {
+    pub id: usize,
+    pub chart_type: ChartType,
+    pub x_param_index: usize,           // X-axis dimension
+    pub y_param_index: Option<usize>,   // Y-axis dimension (2D only)
+    pub metric: AnalysisMetricData,
+    pub fixed_values: HashMap<usize, usize>,  // Non-displayed dims -> step index
+}
 ```
 
-### 2D Mode
+**Update `AnalysisConfigData`** to include `chart_configs: Vec<ChartConfigData>`
+
+**Replace `AnalysisResults`** (`crates/finplan/src/state/screen_state.rs`):
+- Remove hardcoded `param1_values`, `param2_values`
+- Store `finplan_core::analysis::SweepResults` directly (already N-dimensional)
+- Add helper methods: `ndim()`, `param_values(dim)`, `midpoint_index(dim)`
+
+**Update `AnalysisState`** to add:
+- `chart_configs: Vec<ChartConfigData>`
+- `selected_chart_index: usize` (for h/l navigation between chart slots)
+
+### 2. Remove 2-Parameter Limit
+
+**File**: `crates/finplan/src/actions/analysis.rs:49-52`
+
+Replace the hard limit with a reasonable cap (6 dimensions):
+```rust
+const MAX_SWEEP_DIMENSIONS: usize = 6;
+if state.analysis_state.sweep_parameters.len() >= MAX_SWEEP_DIMENSIONS {
+    return ActionResult::error("Maximum of 6 sweep parameters supported.");
+}
 ```
-┌─ 2D HEATMAP - Success Rate (%) ─────────────────────────┐
-│        Withdrawal Amount ($K/yr)                        │
-│        30    35    40    45    50    55    60          │
-│    60  98    95    89    78    62    45    30          │
-│ R  62  99    97    92    84    70    52    35          │
-│ e  64  99    98    95    89    78    60    42          │
-│ t  66  99    99    97    93    85    70    55          │
-│    68 100    99    98    96    90    78    62          │
-│    70 100   100    99    98    94    85    72          │
-│                                                         │
-│  Legend: Red <50  Yellow 50-70  Green 70-85  Bright >85│
-└─────────────────────────────────────────────────────────┘
-```
 
-## Implementation Phases
+### 3. Chart Configuration UI
 
-### Phase 1: Core Engine (`finplan_core`) ✅ COMPLETE
+**Results Panel Layout**:
+- Display 2-4 charts side-by-side (based on available width, like current implementation)
+- Each chart slot shows configured chart OR empty `[CONFIGURE]` placeholder
+- Use existing MIN_CHART_WIDTH (60) / MAX_CHART_WIDTH (80) constraints
 
-The `analysis` module supports N-dimensional parameter sweeps with a two-phase approach:
+**Navigation Flow**:
+1. User navigates INTO Results panel (Tab)
+2. Use `h`/`l` (or arrow keys) to move between chart slots
+3. Selected chart is highlighted
+4. Press `Enter` or `c` to configure the selected chart
+5. Configuration modal allows picking:
+   - Chart type (1D scatter / 2D heatmap)
+   - X parameter (from N available)
+   - Y parameter (for 2D, from remaining N-1)
+   - Metric to display
+   - Fixed values for other dimensions (default: midpoint)
 
-| File | Description |
-|------|-------------|
-| `src/analysis/mod.rs` | Module exports |
-| `src/analysis/config.rs` | `SweepConfig`, `SweepParameter`, `SweepTarget`, `SweepGrid<T>` |
-| `src/analysis/metrics.rs` | `AnalysisMetric` enum, `compute_metrics()`, `SweepResults` |
-| `src/analysis/evaluator.rs` | `sweep_simulate()`, `sweep_evaluate()`, `SweepSimulationResults` |
+**Keybindings** (`crates/finplan/src/data/keybindings_data.rs`):
+- `h`/`l` or Left/Right: Navigate between charts (in Results panel)
+- `Enter` or `c`: Configure selected chart
+- `+` or `a`: Add new chart (if space available)
+- `-` or `d`: Delete selected chart
 
-**Two-Phase Architecture:**
+### 4. Chart Rendering with Slicing
+
+**File**: `crates/finplan/src/screens/analysis.rs`
+
+New rendering flow:
+1. Calculate how many charts fit (2-4 based on width)
+2. For each chart slot:
+   - If slot has config: render chart with sliced data
+   - If slot empty: show `[CONFIGURE]` placeholder
+   - Highlight selected chart (border color/style) when panel focused
+3. For configured charts:
+   - Build `fixed` array: `None` for displayed dims, `Some(idx)` for others
+   - Call `SweepGrid::slice_1d()` or `slice_2d()` to extract data
+   - Render using existing chart widgets
 
 ```rust
-// Phase 1: Run simulations up-front (expensive, done once)
-let sim_results = sweep_simulate(&config, &sweep_config, Some(&progress))?;
+fn render_1d_chart_from_config(&self, results: &AnalysisResults, config: &ChartConfigData) {
+    let fixed: Vec<Option<usize>> = (0..results.ndim())
+        .map(|dim| {
+            if dim == config.x_param_index { None }
+            else { Some(config.fixed_values.get(&dim).copied()
+                       .unwrap_or_else(|| results.midpoint_index(dim))) }
+        }).collect();
 
-// Phase 2: Compute metrics on-demand (fast, repeatable with different metrics)
-let results = sim_results.compute_all_metrics(&[AnalysisMetric::SuccessRate]);
-
-// Can compute different metrics without re-running simulations
-let other_results = sim_results.compute_all_metrics(&[
-    AnalysisMetric::NetWorthAtAge { age: 75 },
-    AnalysisMetric::MaxDrawdown,
-]);
-
-// Or use combined mode for simpler cases
-let results = sweep_evaluate(&config, &sweep_config, progress)?;
-```
-
-**N-Dimensional Grid (`SweepGrid<T>`):**
-
-```rust
-/// Generic N-dimensional grid with flat backing array and stride-based indexing
-pub struct SweepGrid<T> {
-    data: Vec<T>,       // Row-major storage
-    shape: Vec<usize>,  // Shape per dimension
-    strides: Vec<usize>,// Precomputed strides
-}
-
-impl<T> SweepGrid<T> {
-    fn new(shape: Vec<usize>, default: T) -> Self;
-    fn get(&self, indices: &[usize]) -> Option<&T>;
-    fn set(&mut self, indices: &[usize], value: T) -> bool;
-    fn slice_1d(&self, dim: usize, fixed: &[Option<usize>]) -> Option<Vec<(f64, &T)>>;
-    fn slice_2d(&self, dim1: usize, dim2: usize, fixed: &[Option<usize>]) -> Option<(Vec<&T>, usize, usize)>;
+    let slice = results.sweep_results.metrics.slice_1d(config.x_param_index, &fixed);
+    // Render scatter plot with slice data
 }
 ```
 
-**Simulation Results Storage:**
+### 5. Persistence
 
-```rust
-/// Stores raw MonteCarloSummary for each grid point
-pub struct SweepSimulationResults {
-    pub param_values: Vec<Vec<f64>>,           // Values per dimension
-    pub param_labels: Vec<String>,             // Labels per dimension
-    pub summaries: SweepGrid<Option<MonteCarloSummary>>,
-    pub birth_year: i16,
-}
+Update `load_from_config` / `to_config` in `AnalysisState` to include chart configs.
 
-impl SweepSimulationResults {
-    fn compute_all_metrics(&self, metrics: &[AnalysisMetric]) -> SweepResults;
-    fn compute_metric_grid(&self, metric: &AnalysisMetric) -> SweepGrid<f64>;
-}
-```
-
-**Key types:**
-```rust
-pub enum AnalysisMetric {
-    SuccessRate,
-    NetWorthAtAge { age: u8 },
-    Percentile { percentile: u8 },
-    LifetimeTaxes,
-    MaxDrawdown,
-    SafeWithdrawalRate { target_success_rate: f64 },
-}
-
-pub enum TriggerParam {
-    Date,
-    Age,
-    RepeatingStart(Box<TriggerParam>),
-    RepeatingEnd(Box<TriggerParam>),
-}
-
-pub enum EffectParam {
-    Value,
-    Multiplier,
-}
-
-#[derive(Default)]
-pub enum EffectTarget {
-    #[default]
-    FirstEligible,
-    Index(usize),
-}
-
-pub struct SweepParameter {
-    pub event_id: EventId,
-    pub target: SweepTarget,
-    pub min_value: f64,
-    pub max_value: f64,
-    pub step_count: usize,
-}
-
-pub enum SweepTarget {
-    Trigger(TriggerParam),
-    Effect { param: EffectParam, target: EffectTarget },
-    AssetAllocation { account_id: AccountId },
-}
-```
-
-### Phase 2: TUI State (`finplan`)
-
-**Modify:**
-- `state/screen_state.rs` - Replace `OptimizeState` with `AnalysisState`
-- `state/panels.rs` - Replace `OptimizePanel` with `AnalysisPanel`
-- `state/app_state.rs` - Replace `optimize_state` field
-- `modals/action.rs` - Replace `OptimizeAction` with `AnalysisAction`
-
-**New state:**
-```rust
-pub struct AnalysisState {
-    pub focused_panel: AnalysisPanel,
-    pub sweep_parameters: Vec<SweepParameter>,  // max 2
-    pub selected_metrics: HashSet<AnalysisMetric>,
-    pub mc_iterations: usize,
-    pub running: bool,
-    pub current_point: usize,
-    pub total_points: usize,
-    pub results: Option<SweepResults>,
-    pub selected_result: (usize, usize),  // cursor for 2D
-}
-```
-
-### Phase 3: TUI Actions
-
-**Create** `actions/analysis.rs` (replaces `optimize.rs`):
-- `handle_add_parameter()` - Enumerate all events with sweepable params, show picker
-- `handle_configure_parameter()` - Form for min/max/steps
-- `handle_select_metrics()` - Multi-select for metrics
-- `handle_run_analysis()` - Send to worker thread
-
-**Key function - enumerate sweepable targets:**
-```rust
-/// Enumerate all sweepable parameters from an event
-fn get_sweepable_targets(event: &EventData, event_id: EventId) -> Vec<SweepableTarget> {
-    let mut targets = Vec::new();
-
-    // 1. Scan trigger for sweepable params (Age, Date, Repeating start/end)
-    scan_trigger_params(&event.trigger, TriggerPath::Root, &mut |path, current_value| {
-        targets.push(SweepableTarget {
-            event_id,
-            event_name: event.name.0.clone(),
-            target: SweepTarget::Trigger(path),
-            description: format_trigger_description(&event.name.0, &path),
-            current_value,
-        });
-    });
-
-    // 2. Scan effects for sweepable amounts (Fixed values, Scale multipliers)
-    for (idx, effect) in event.effects.iter().enumerate() {
-        if let Some((param, current_value)) = get_effect_sweepable_param(effect) {
-            targets.push(SweepableTarget {
-                event_id,
-                event_name: event.name.0.clone(),
-                target: SweepTarget::Effect {
-                    param,
-                    target: EffectTarget::Index(idx)
-                },
-                description: format_effect_description(&event.name.0, effect, idx),
-                current_value,
-            });
-        }
-    }
-
-    targets
-}
-
-/// Recursively scan trigger for sweepable parameters
-fn scan_trigger_params<F>(trigger: &TriggerData, path: TriggerPath, callback: &mut F)
-where F: FnMut(TriggerParam, f64)
-{
-    match trigger {
-        TriggerData::Age { years, .. } => {
-            callback(path.to_param(), *years as f64);
-        }
-        TriggerData::Date { date } => {
-            // Extract year as sweepable value
-            if let Ok(d) = parse_date(date) {
-                callback(path.to_param(), d.year() as f64);
-            }
-        }
-        TriggerData::Repeating { start, end, .. } => {
-            if let Some(start_trigger) = start {
-                scan_trigger_params(start_trigger, path.into_start(), callback);
-            }
-            if let Some(end_trigger) = end {
-                scan_trigger_params(end_trigger, path.into_end(), callback);
-            }
-        }
-        _ => {} // And, Or, thresholds not sweepable for now
-    }
-}
-
-/// Extract sweepable parameter from an effect
-fn get_effect_sweepable_param(effect: &EffectData) -> Option<(EffectParam, f64)> {
-    let amount = match effect {
-        EffectData::Income { amount, .. } |
-        EffectData::Expense { amount, .. } |
-        EffectData::AssetPurchase { amount, .. } |
-        EffectData::AssetSale { amount, .. } |
-        EffectData::Sweep { amount, .. } |
-        EffectData::AdjustBalance { amount, .. } |
-        EffectData::CashTransfer { amount, .. } => amount,
-        _ => return None,
-    };
-
-    // Unwrap InflationAdjusted to find Fixed value
-    extract_fixed_value(amount).map(|v| (EffectParam::Value, v))
-}
-```
-
-### Parameter Selection UX Flow
-
-When user presses 'a' to add a sweep parameter:
-
-1. **Event Picker**: Show list of all events with sweepable parameters
-   ```
-   ┌─ Select Event ────────────────────────────┐
-   │ > Retirement (Age trigger: 65)            │
-   │   Monthly Salary (Income: $8,000)         │
-   │   Social Security (Income: $2,500)        │
-   │   Retirement Withdrawal (Sweep: $50,000)  │
-   │   House Purchase (Expense: $600,000)      │
-   └───────────────────────────────────────────┘
-   ```
-
-2. **Target Picker** (if event has multiple sweepable params): Show which part to sweep
-   ```
-   ┌─ Select Parameter for "Retirement Withdrawal" ─┐
-   │ > Trigger: Start Age (currently 65)            │
-   │   Effect #1: Sweep Amount (currently $50,000)  │
-   └────────────────────────────────────────────────┘
-   ```
-
-3. **Range Form**: Configure min/max/steps
-   ```
-   ┌─ Configure Sweep Range ────────────────┐
-   │ Parameter: Retirement Age              │
-   │                                        │
-   │ Min Value: [60     ]                   │
-   │ Max Value: [70     ]                   │
-   │ Steps:     [6      ]                   │
-   │                                        │
-   │ Preview: 60, 62, 64, 66, 68, 70       │
-   └────────────────────────────────────────┘
-   ```
-
-### Phase 4: Worker Thread
-
-**Modify** `worker.rs`:
-- Add `SimulationRequest::SweepAnalysis { config, sweep_config }`
-- Add `SimulationResponse::SweepProgress { current, total }`
-- Add `SimulationResponse::SweepComplete { results }`
-
-### Phase 5: Screen Implementation
-
-**Create** `screens/analysis.rs` (replaces `optimize.rs`):
-- `render_parameters()` - List of sweep parameters
-- `render_metrics()` - Checkbox-style metric selector
-- `render_config()` - MC iterations, step count
-- `render_progress()` - Progress bar during execution
-- `render_results_1d()` - ASCII line chart
-- `render_results_2d()` - Color-coded heatmap with cursor navigation
-
-### Phase 6: Cleanup
-
-- Remove `screens/optimize.rs`
-- Remove `actions/optimize.rs`
-- Update `screens/mod.rs` exports
-- Update `actions/mod.rs` exports
-- Keep `finplan_core/optimization/` for now (may be useful later)
+---
 
 ## Files to Modify
 
-### finplan_core
-| File | Action |
-|------|--------|
-| `src/lib.rs` | Add `pub mod analysis;` |
-| `src/analysis/mod.rs` | **NEW** |
-| `src/analysis/config.rs` | **NEW** |
-| `src/analysis/metrics.rs` | **NEW** |
-| `src/analysis/evaluator.rs` | **NEW** |
+| File | Changes |
+|------|---------|
+| `crates/finplan/src/data/analysis_data.rs` | Add `ChartType`, `ChartConfigData`, update `AnalysisConfigData` |
+| `crates/finplan/src/state/screen_state.rs` | Replace `AnalysisResults`, update `AnalysisState` |
+| `crates/finplan/src/actions/analysis.rs` | Remove 2-param limit, add chart config handlers |
+| `crates/finplan/src/screens/analysis.rs` | Add `[CONFIGURE]` prompt, slice-based rendering |
+| `crates/finplan/src/data/keybindings_data.rs` | Add chart config keybindings |
+| `crates/finplan/src/modals/action.rs` | Add chart configuration actions |
 
-### finplan (TUI)
-| File | Action |
-|------|--------|
-| `src/state/screen_state.rs` | Replace OptimizeState with AnalysisState |
-| `src/state/panels.rs` | Replace OptimizePanel with AnalysisPanel |
-| `src/state/app_state.rs` | Replace optimize_state field |
-| `src/modals/action.rs` | Replace OptimizeAction with AnalysisAction |
-| `src/modals/context.rs` | Replace OptimizeContext with AnalysisContext |
-| `src/actions/analysis.rs` | **NEW** (replaces optimize.rs) |
-| `src/actions/mod.rs` | Update exports |
-| `src/screens/analysis.rs` | **NEW** (replaces optimize.rs) |
-| `src/screens/mod.rs` | Update exports |
-| `src/worker.rs` | Add sweep request/response types |
-| `src/app.rs` | Update screen routing if needed |
+---
 
-## Metrics Implementation Notes
+## Implementation Order
 
-| Metric | Source | Notes |
-|--------|--------|-------|
-| SuccessRate | `MonteCarloStats.success_rate` | Direct |
-| NetWorthAtAge | `SimulationResult.wealth_snapshots` | Find snapshot at target year |
-| Percentile | `MonteCarloStats.percentile_values` | Direct lookup |
-| LifetimeTaxes | `SimulationResult.yearly_taxes` | Sum all years |
-| MaxDrawdown | `wealth_snapshots` | Compute peak-to-trough |
-| SafeWithdrawalRate | Iterative | Binary search for rate achieving target success |
+1. **Phase 1**: Add `ChartType` and `ChartConfigData` to `analysis_data.rs`
+2. **Phase 2**: Replace `AnalysisResults` to wrap core's `SweepResults`
+3. **Phase 3**: Update `AnalysisState` with chart config fields
+4. **Phase 4**: Remove 2-parameter limit in `actions/analysis.rs`
+5. **Phase 5**: Add `[CONFIGURE]` prompt rendering in results panel
+6. **Phase 6**: Implement chart configuration modal flow
+7. **Phase 7**: Implement slice-based chart rendering
+8. **Phase 8**: Add keybindings and persistence
+
+---
 
 ## Verification
 
-1. Build: `cargo build`
-2. Run TUI: `cargo run --bin finplan`
-3. Navigate to Analysis tab
-4. Add a sweep parameter (e.g., Retirement Age 60-70)
-5. Select metrics (Success Rate, Net Worth at 75)
-6. Run analysis - verify progress updates
-7. Verify 1D line chart displays correctly
-8. Add second parameter - verify 2D heatmap
-9. Run `cargo clippy` and `cargo fmt`
+1. Configure 3-4 sweep parameters and run analysis
+2. Verify `[CONFIGURE]` prompt appears in results
+3. Add a 1D scatter chart, select metric and parameter
+4. Add a 2D heatmap chart with different parameters
+5. Change fixed values for non-displayed dimensions
+6. Save scenario, reload, verify chart configs persist
+7. Run `cargo fmt` and `cargo clippy`

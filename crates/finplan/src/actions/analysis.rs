@@ -46,9 +46,12 @@ fn handle_add_parameter(state: &mut AppState, value: &str) -> ActionResult {
         );
     }
 
-    // Check if we already have 2 parameters (max for 2D sweep)
-    if state.analysis_state.sweep_parameters.len() >= 2 {
-        return ActionResult::error("Maximum of 2 sweep parameters supported for 2D analysis.");
+    // Reasonable limit on dimensions to prevent exponential growth of sweep points
+    const MAX_SWEEP_DIMENSIONS: usize = 6;
+    if state.analysis_state.sweep_parameters.len() >= MAX_SWEEP_DIMENSIONS {
+        return ActionResult::error(
+            "Maximum of 6 sweep parameters supported. Remove a parameter to add a new one.",
+        );
     }
 
     let options: Vec<String> = sweepable.iter().map(|(name, _, _)| name.clone()).collect();

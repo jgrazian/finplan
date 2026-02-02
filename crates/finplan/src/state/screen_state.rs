@@ -329,35 +329,188 @@ pub struct ResultsState {
 use std::collections::HashSet;
 
 use super::panels::AnalysisPanel;
-use crate::data::analysis_data::{AnalysisConfigData, AnalysisMetricData, SweepParameterData};
+use crate::data::analysis_data::{
+    AnalysisConfigData, AnalysisMetricData, ChartConfigData, SweepParameterData,
+};
+use finplan_core::analysis::{AnalysisMetric, SweepResults};
 
-/// Results from a sweep analysis
+/// Results from a sweep analysis - wraps core's N-dimensional SweepResults
 #[derive(Debug, Clone)]
 pub struct AnalysisResults {
-    /// Parameter 1 values
-    pub param1_values: Vec<f64>,
-    /// Parameter 2 values (empty for 1D)
-    pub param2_values: Vec<f64>,
-    /// Results for each metric
-    pub metric_results: HashMap<AnalysisMetricData, Vec<Vec<f64>>>,
-    /// Parameter 1 label
-    pub param1_label: String,
-    /// Parameter 2 label (empty for 1D)
-    pub param2_label: String,
+    /// The core sweep results with N-dimensional data
+    pub sweep_results: SweepResults,
 }
 
 impl AnalysisResults {
-    /// Check if this is a 1D result
-    pub fn is_1d(&self) -> bool {
-        self.param2_values.is_empty()
+    /// Create new analysis results from core SweepResults
+    pub fn new(sweep_results: SweepResults) -> Self {
+        Self { sweep_results }
     }
 
-    /// Get flat values for a metric (for 1D charts)
-    pub fn get_1d_values(&self, metric: &AnalysisMetricData) -> Vec<f64> {
-        self.metric_results
-            .get(metric)
-            .map(|rows| rows.iter().filter_map(|r| r.first().copied()).collect())
-            .unwrap_or_default()
+    /// Get number of dimensions
+    pub fn ndim(&self) -> usize {
+        self.sweep_results.ndim()
+    }
+
+    /// Check if this is a 1D result
+    pub fn is_1d(&self) -> bool {
+        self.sweep_results.is_1d()
+    }
+
+    /// Check if this is a 2D result
+    pub fn is_2d(&self) -> bool {
+        self.sweep_results.is_2d()
+    }
+
+    /// Get parameter values for a dimension
+    pub fn param_values(&self, dim: usize) -> &[f64] {
+        self.sweep_results
+            .param_values
+            .get(dim)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Get parameter label for a dimension
+    pub fn param_label(&self, dim: usize) -> &str {
+        self.sweep_results
+            .param_labels
+            .get(dim)
+            .map(|s| s.as_str())
+            .unwrap_or("")
+    }
+
+    /// Get midpoint index for a dimension (for default fixed values)
+    pub fn midpoint_index(&self, dim: usize) -> usize {
+        let len = self
+            .sweep_results
+            .param_values
+            .get(dim)
+            .map(|v| v.len())
+            .unwrap_or(1);
+        len / 2
+    }
+
+    /// Get the grid shape
+    pub fn shape(&self) -> &[usize] {
+        self.sweep_results.shape()
+    }
+
+    // ===== Backwards compatibility helpers for existing rendering code =====
+
+    /// Get param1 values (backwards compatibility)
+    pub fn param1_values(&self) -> &[f64] {
+        self.param_values(0)
+    }
+
+    /// Get param2 values (backwards compatibility)
+    pub fn param2_values(&self) -> &[f64] {
+        self.param_values(1)
+    }
+
+    /// Get param1 label (backwards compatibility)
+    pub fn param1_label(&self) -> &str {
+        self.param_label(0)
+    }
+
+    /// Get param2 label (backwards compatibility)
+    pub fn param2_label(&self) -> &str {
+        self.param_label(1)
+    }
+
+    /// Convert TUI metric to core metric
+    fn to_core_metric(metric: &AnalysisMetricData) -> AnalysisMetric {
+        match metric {
+            AnalysisMetricData::SuccessRate => AnalysisMetric::SuccessRate,
+            AnalysisMetricData::NetWorthAtAge { age } => {
+                AnalysisMetric::NetWorthAtAge { age: *age }
+            }
+            AnalysisMetricData::P5FinalNetWorth => AnalysisMetric::Percentile { percentile: 5 },
+            AnalysisMetricData::P50FinalNetWorth => AnalysisMetric::Percentile { percentile: 50 },
+            AnalysisMetricData::P95FinalNetWorth => AnalysisMetric::Percentile { percentile: 95 },
+            AnalysisMetricData::LifetimeTaxes => AnalysisMetric::LifetimeTaxes,
+            AnalysisMetricData::MaxDrawdown => AnalysisMetric::MaxDrawdown,
+        }
+    }
+
+    /// Get metric scale factor (some metrics display as percentages)
+    fn metric_scale(metric: &AnalysisMetricData) -> f64 {
+        match metric {
+            AnalysisMetricData::SuccessRate | AnalysisMetricData::MaxDrawdown => 100.0,
+            _ => 1.0,
+        }
+    }
+
+    /// Get 1D metric data for charting (simple case: first dimension, no fixed values)
+    /// Returns (param_values, metric_values)
+    pub fn get_1d_metric_data(&self, metric: &AnalysisMetricData) -> (Vec<f64>, Vec<f64>) {
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        // For backwards compatibility with existing 1D/2D rendering:
+        // Get the full metric grid and return first dimension values
+        let (values, _rows, cols) = self.sweep_results.get_metric_grid(&core_metric);
+
+        if cols <= 1 {
+            // True 1D data
+            let param_vals = self.param1_values().to_vec();
+            let metric_vals: Vec<f64> = values.iter().map(|v| v * scale).collect();
+            (param_vals, metric_vals)
+        } else {
+            // 2D+ data - take a slice at midpoint of other dimensions
+            let fixed: Vec<Option<usize>> = (0..self.ndim())
+                .map(|dim| {
+                    if dim == 0 {
+                        None
+                    } else {
+                        Some(self.midpoint_index(dim))
+                    }
+                })
+                .collect();
+
+            if let Some(slice) = self
+                .sweep_results
+                .get_metric_1d_slice(&core_metric, 0, &fixed)
+            {
+                let (params, metrics): (Vec<f64>, Vec<f64>) = slice.into_iter().unzip();
+                let scaled: Vec<f64> = metrics.iter().map(|v| v * scale).collect();
+                (params, scaled)
+            } else {
+                (Vec::new(), Vec::new())
+            }
+        }
+    }
+
+    /// Get 2D metric data for heatmap (simple case: first two dimensions)
+    /// Returns (matrix in row-major, rows, cols, min_val, max_val)
+    pub fn get_2d_metric_matrix(
+        &self,
+        metric: &AnalysisMetricData,
+    ) -> Option<(Vec<Vec<f64>>, f64, f64)> {
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        // For backwards compatibility: use first two dimensions
+        let (values, rows, cols) = self.sweep_results.get_metric_grid(&core_metric);
+
+        if rows == 0 || cols == 0 {
+            return None;
+        }
+
+        // Reshape into 2D matrix
+        let matrix: Vec<Vec<f64>> = values
+            .chunks(cols)
+            .map(|chunk| chunk.iter().map(|v| v * scale).collect())
+            .collect();
+
+        let scaled_values: Vec<f64> = values.iter().map(|v| v * scale).collect();
+        let min_val = scaled_values.iter().cloned().fold(f64::INFINITY, f64::min);
+        let max_val = scaled_values
+            .iter()
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        Some((matrix, min_val, max_val))
     }
 }
 
@@ -366,7 +519,7 @@ impl AnalysisResults {
 pub struct AnalysisState {
     /// Currently focused panel
     pub focused_panel: AnalysisPanel,
-    /// Sweep parameters (max 2)
+    /// Sweep parameters (N-dimensional, no hard limit)
     pub sweep_parameters: Vec<SweepParameterData>,
     /// Selected parameter index (for navigation)
     pub selected_param_index: usize,
@@ -386,8 +539,12 @@ pub struct AnalysisState {
     pub total_points: usize,
     /// Analysis results (session only, not persisted)
     pub results: Option<AnalysisResults>,
-    /// Selected result cursor for 2D navigation
+    /// Selected result cursor for 2D navigation (legacy)
     pub selected_result: (usize, usize),
+    /// Configured charts for the results panel
+    pub chart_configs: Vec<ChartConfigData>,
+    /// Selected chart index (for h/l navigation between chart slots)
+    pub selected_chart_index: usize,
 }
 
 impl AnalysisState {
@@ -409,6 +566,8 @@ impl AnalysisState {
             total_points: 0,
             results: None,
             selected_result: (0, 0),
+            chart_configs: Vec::new(),
+            selected_chart_index: 0,
         }
     }
 
@@ -437,9 +596,11 @@ impl AnalysisState {
         self.selected_metrics = config.selected_metrics.clone();
         self.mc_iterations = config.mc_iterations;
         self.default_steps = config.default_steps;
+        self.chart_configs = config.chart_configs.clone();
         // Reset transient state
         self.selected_param_index = 0;
         self.selected_metric_index = 0;
+        self.selected_chart_index = 0;
         self.results = None;
         self.running = false;
         self.current_point = 0;
@@ -453,6 +614,7 @@ impl AnalysisState {
             selected_metrics: self.selected_metrics.clone(),
             mc_iterations: self.mc_iterations,
             default_steps: self.default_steps,
+            chart_configs: self.chart_configs.clone(),
         }
     }
 }

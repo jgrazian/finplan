@@ -85,7 +85,7 @@ pub struct TabBindings {
     pub events: EventsBindings,
     pub scenario: ScenarioBindings,
     pub results: ResultsBindings,
-    pub optimize: OptimizeBindings,
+    pub analyze: AnalyzeBindings,
 }
 
 /// Keybindings for the Portfolio & Profiles tab.
@@ -208,23 +208,34 @@ impl Default for ResultsBindings {
     }
 }
 
-/// Keybindings for the Optimize tab.
+/// Keybindings for the Analyze tab.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct OptimizeBindings {
+pub struct AnalyzeBindings {
     pub add_param: Vec<String>,
     pub delete_param: Vec<String>,
     pub run: Vec<String>,
     pub settings: Vec<String>,
+    pub toggle_metric: Vec<String>,
+    /// Configure chart (in Results panel)
+    pub configure_chart: Vec<String>,
+    /// Add new chart (in Results panel)
+    pub add_chart: Vec<String>,
+    /// Delete chart (in Results panel)
+    pub delete_chart: Vec<String>,
 }
 
-impl Default for OptimizeBindings {
+impl Default for AnalyzeBindings {
     fn default() -> Self {
         Self {
             add_param: vec!["a".into()],
             delete_param: vec!["d".into()],
             run: vec!["r".into()],
             settings: vec!["s".into()],
+            toggle_metric: vec!["t".into()],
+            configure_chart: vec!["c".into(), "enter".into()],
+            add_chart: vec!["+".into()],
+            delete_chart: vec!["-".into()],
         }
     }
 }

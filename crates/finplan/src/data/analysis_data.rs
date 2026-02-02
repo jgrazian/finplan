@@ -1,7 +1,7 @@
 //! Analysis configuration data for persistence.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Persisted analysis configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -21,6 +21,10 @@ pub struct AnalysisConfigData {
     /// Selected metrics to compute
     #[serde(default, skip_serializing_if = "HashSet::is_empty")]
     pub selected_metrics: HashSet<AnalysisMetricData>,
+
+    /// Configured result charts (persisted per scenario)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chart_configs: Vec<ChartConfigData>,
 }
 
 fn default_mc_iterations() -> usize {
@@ -118,6 +122,85 @@ impl AnalysisMetricData {
             Self::P95FinalNetWorth => "P95",
             Self::LifetimeTaxes => "Taxes",
             Self::MaxDrawdown => "Drawdown",
+        }
+    }
+}
+
+/// Type of chart to render in results panel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ChartType {
+    /// 1D scatter/line plot (single parameter on X-axis)
+    #[default]
+    Scatter1D,
+    /// 2D heatmap (two parameters on X and Y axes)
+    Heatmap2D,
+}
+
+impl ChartType {
+    /// Get display name for the chart type
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Scatter1D => "1D Scatter",
+            Self::Heatmap2D => "2D Heatmap",
+        }
+    }
+}
+
+/// Configuration for a single chart in the results panel
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChartConfigData {
+    /// Chart type (1D scatter or 2D heatmap)
+    pub chart_type: ChartType,
+
+    /// Parameter dimension index for X-axis
+    pub x_param_index: usize,
+
+    /// Parameter dimension index for Y-axis (only for 2D heatmaps)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y_param_index: Option<usize>,
+
+    /// Metric to display
+    pub metric: AnalysisMetricData,
+
+    /// Fixed values for non-displayed dimensions (dimension index -> step index)
+    /// Uses midpoint if not specified for a dimension
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub fixed_values: HashMap<usize, usize>,
+}
+
+impl Default for ChartConfigData {
+    fn default() -> Self {
+        Self {
+            chart_type: ChartType::Scatter1D,
+            x_param_index: 0,
+            y_param_index: None,
+            metric: AnalysisMetricData::SuccessRate,
+            fixed_values: HashMap::new(),
+        }
+    }
+}
+
+impl ChartConfigData {
+    /// Create a default 1D chart for a given parameter
+    pub fn new_1d(x_param: usize, metric: AnalysisMetricData) -> Self {
+        Self {
+            chart_type: ChartType::Scatter1D,
+            x_param_index: x_param,
+            y_param_index: None,
+            metric,
+            fixed_values: HashMap::new(),
+        }
+    }
+
+    /// Create a default 2D heatmap for two parameters
+    pub fn new_2d(x_param: usize, y_param: usize, metric: AnalysisMetricData) -> Self {
+        Self {
+            chart_type: ChartType::Heatmap2D,
+            x_param_index: x_param,
+            y_param_index: Some(y_param),
+            metric,
+            fixed_values: HashMap::new(),
         }
     }
 }

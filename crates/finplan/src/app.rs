@@ -1,9 +1,8 @@
+use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{collections::HashMap, io};
 
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind};
-use finplan_core::analysis::AnalysisMetric;
 use rand::RngCore;
 use ratatui::{
     DefaultTerminal, Frame,
@@ -12,7 +11,6 @@ use ratatui::{
 
 use crate::actions::ActionResult;
 use crate::components::{Component, EventResult, status_bar::StatusBar, tab_bar::TabBar};
-use crate::data::analysis_data::AnalysisMetricData;
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::data::storage::DataDirectory;
 use crate::modals::{
@@ -803,62 +801,16 @@ fn convert_sweep_to_analysis_results(
     results: &finplan_core::analysis::SweepResults,
     sweep_params: &[crate::data::analysis_data::SweepParameterData],
 ) -> crate::state::AnalysisResults {
-    let mut metric_results = HashMap::new();
-
-    // Helper to extract and reshape metric data
-    let extract_metric = |core_metric: &AnalysisMetric, scale: f64| -> Vec<Vec<f64>> {
-        let (values, _, cols) = results.get_metric_grid(core_metric);
-        if cols <= 1 {
-            // 1D: each row is a single value
-            values.into_iter().map(|v| vec![v * scale]).collect()
-        } else {
-            // 2D: reshape into rows x cols
-            values
-                .chunks(cols)
-                .map(|chunk| chunk.iter().map(|v| v * scale).collect())
-                .collect()
-        }
-    };
-
-    // Extract all metrics
-    metric_results.insert(
-        AnalysisMetricData::SuccessRate,
-        extract_metric(&AnalysisMetric::SuccessRate, 100.0), // Convert to percentage
-    );
-    metric_results.insert(
-        AnalysisMetricData::P50FinalNetWorth,
-        extract_metric(&AnalysisMetric::Percentile { percentile: 50 }, 1.0),
-    );
-    metric_results.insert(
-        AnalysisMetricData::P5FinalNetWorth,
-        extract_metric(&AnalysisMetric::Percentile { percentile: 5 }, 1.0),
-    );
-    metric_results.insert(
-        AnalysisMetricData::P95FinalNetWorth,
-        extract_metric(&AnalysisMetric::Percentile { percentile: 95 }, 1.0),
-    );
-    metric_results.insert(
-        AnalysisMetricData::LifetimeTaxes,
-        extract_metric(&AnalysisMetric::LifetimeTaxes, 1.0),
-    );
-    metric_results.insert(
-        AnalysisMetricData::MaxDrawdown,
-        extract_metric(&AnalysisMetric::MaxDrawdown, 100.0), // Convert to percentage
-    );
+    // Clone the results and update labels with event names
+    let mut sweep_results = results.clone();
 
     // Generate labels from sweep parameters (e.g., "Retirement Age" instead of "Age (Event 8)")
-    let format_label = |idx: usize| -> String {
-        sweep_params
-            .get(idx)
-            .map(|p| format!("{} {}", p.event_name, p.sweep_type.display_name()))
-            .unwrap_or_else(|| results.param_labels.get(idx).cloned().unwrap_or_default())
-    };
-
-    AnalysisResults {
-        param1_values: results.param1_values().to_vec(),
-        param2_values: results.param2_values().to_vec(),
-        metric_results,
-        param1_label: format_label(0),
-        param2_label: format_label(1),
+    for (idx, param) in sweep_params.iter().enumerate() {
+        if idx < sweep_results.param_labels.len() {
+            sweep_results.param_labels[idx] =
+                format!("{} {}", param.event_name, param.sweep_type.display_name());
+        }
     }
+
+    AnalysisResults::new(sweep_results)
 }
