@@ -394,7 +394,9 @@ pub struct SweepConfig {
 }
 
 fn default_parallel_batches() -> usize {
-    rayon::current_num_threads().max(1)
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
 }
 
 impl Default for SweepConfig {

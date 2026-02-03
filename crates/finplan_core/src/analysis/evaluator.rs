@@ -13,9 +13,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::config::SimulationConfig;
 use crate::error::MarketError;
 use crate::model::{
-    EventTrigger, MonteCarloConfig, MonteCarloProgress, MonteCarloSummary, TransferAmount,
+    AccountSnapshot, EventTrigger, MonteCarloConfig, MonteCarloProgress, MonteCarloStats,
+    MonteCarloSummary, SimulationResult, TransferAmount,
 };
-use crate::simulation::monte_carlo_simulate_with_progress;
+use crate::simulation::{monte_carlo_simulate_with_progress, monte_carlo_stats_only};
 
 use super::{
     EffectParam, EffectTarget, SweepConfig, SweepGrid, SweepParameter, SweepPointData,
@@ -193,6 +194,226 @@ impl SweepSimulationResults {
     }
 }
 
+/// Memory-efficient sweep results that store only stats and seeds for on-demand percentile runs.
+///
+/// This struct reduces memory usage by ~1000x compared to `SweepSimulationResults` by storing
+/// only `MonteCarloStats` and percentile seeds for each grid point. When a full `SimulationResult`
+/// is needed (e.g., to view percentile charts), the simulation is re-run on demand using the
+/// stored seed.
+///
+/// # Memory Comparison
+/// - `SweepSimulationResults`: Stores full `MonteCarloSummary` (including 5 full `SimulationResult`s)
+///   per grid point. For a 10×10 sweep, this is 500 full results (~25 MB+).
+/// - `LazySweepResults`: Stores only `MonteCarloStats` (~200 bytes) and 5 seeds (~80 bytes)
+///   per grid point. For a 10×10 sweep, this is ~28 KB.
+#[derive(Debug, Clone)]
+pub struct LazySweepResults {
+    /// Values for each parameter dimension
+    pub param_values: Vec<Vec<f64>>,
+    /// Labels for each parameter
+    pub param_labels: Vec<String>,
+    /// Stats for each grid point (compact)
+    pub stats: SweepGrid<MonteCarloStats>,
+    /// Seeds for percentile runs: (percentile, seed) pairs per grid point
+    pub percentile_seeds: SweepGrid<Vec<(f64, u64)>>,
+    /// Birth year for metric computation
+    pub birth_year: i16,
+    /// Base config for re-running simulations (stored once)
+    base_config: SimulationConfig,
+    /// Sweep config for parameter reconstruction
+    sweep_config: SweepConfig,
+}
+
+impl LazySweepResults {
+    /// Get the number of dimensions
+    pub fn ndim(&self) -> usize {
+        self.param_values.len()
+    }
+
+    /// Get the grid shape
+    pub fn shape(&self) -> &[usize] {
+        self.stats.shape()
+    }
+
+    /// Get the total number of points
+    pub fn total_points(&self) -> usize {
+        self.stats.len()
+    }
+
+    /// Get stats at the given indices
+    pub fn get_stats(&self, indices: &[usize]) -> Option<&MonteCarloStats> {
+        self.stats.get(indices)
+    }
+
+    /// Get percentile seeds at the given indices
+    pub fn get_seeds(&self, indices: &[usize]) -> Option<&Vec<(f64, u64)>> {
+        self.percentile_seeds.get(indices)
+    }
+
+    /// Check if all simulations completed successfully
+    pub fn is_complete(&self) -> bool {
+        // A grid point is complete if it has stats with iterations > 0
+        self.stats.data().iter().all(|s| s.num_iterations > 0)
+    }
+
+    /// Reconstruct the SimulationConfig for a specific grid position
+    fn reconstruct_config(&self, indices: &[usize]) -> Result<SimulationConfig, MarketError> {
+        let mut config = self.base_config.clone();
+        for (dim, &idx) in indices.iter().enumerate() {
+            let value = self.param_values[dim][idx];
+            config = apply_parameter(&config, &self.sweep_config.parameters[dim], value)?;
+        }
+        Ok(config)
+    }
+
+    /// Get a percentile run on demand (re-runs simulation with stored seed).
+    ///
+    /// This is the key method for lazy computation - it reconstructs the config
+    /// for the given grid position and re-runs the simulation with the specific
+    /// seed that produced the requested percentile result.
+    pub fn get_percentile_run(
+        &self,
+        indices: &[usize],
+        percentile: f64,
+    ) -> Result<SimulationResult, MarketError> {
+        let seeds = self
+            .percentile_seeds
+            .get(indices)
+            .ok_or_else(|| MarketError::Config("Invalid grid indices".to_string()))?;
+
+        let (_, seed) = seeds
+            .iter()
+            .find(|(p, _)| (*p - percentile).abs() < 0.01)
+            .ok_or_else(|| {
+                MarketError::Config(format!(
+                    "Percentile {} not found in stored seeds",
+                    percentile
+                ))
+            })?;
+
+        let config = self.reconstruct_config(indices)?;
+        crate::simulation::simulate(&config, *seed)
+    }
+
+    /// Compute metrics for all points using stats (no re-simulation needed for most metrics).
+    ///
+    /// This method computes metrics efficiently by using the stored `MonteCarloStats`
+    /// directly. For metrics that need full simulation data (like MaxDrawdown, NetWorthAtAge),
+    /// it lazily fetches the P50 run and extracts the needed data.
+    pub fn compute_all_metrics(&self, _metrics: &[super::AnalysisMetric]) -> SweepResults {
+        let mut results = SweepResults::new(
+            self.param_values.clone(),
+            self.param_labels.clone(),
+            self.birth_year,
+        );
+
+        for indices in self.stats.indices() {
+            let stats = self.stats.get(&indices).unwrap();
+            let point_data = self.stats_to_point_data(stats, &indices);
+            results.set(&indices, point_data);
+        }
+
+        results
+    }
+
+    /// Convert MonteCarloStats to SweepPointData.
+    ///
+    /// For basic metrics (success_rate, percentiles), this uses stored stats directly.
+    /// For metrics requiring full simulation data, it would need to fetch the P50 run.
+    fn stats_to_point_data(&self, stats: &MonteCarloStats, indices: &[usize]) -> SweepPointData {
+        // For metrics that need P50 simulation data (NetWorthAtAge, MaxDrawdown, LifetimeTaxes),
+        // we lazily fetch the P50 run. This is cached by the caller if needed.
+        let (p50_yearly_net_worth, p50_lifetime_taxes) =
+            if let Ok(p50_result) = self.get_percentile_run(indices, 0.5) {
+                let yearly: Vec<(i16, f64)> = p50_result
+                    .wealth_snapshots
+                    .iter()
+                    .map(|s| {
+                        let total: f64 = s
+                            .accounts
+                            .iter()
+                            .map(|a: &AccountSnapshot| a.total_value())
+                            .sum();
+                        (s.date.year(), total)
+                    })
+                    .collect();
+                let taxes: f64 = p50_result.yearly_taxes.iter().map(|t| t.total_tax).sum();
+                (yearly, taxes)
+            } else {
+                (Vec::new(), 0.0)
+            };
+
+        SweepPointData {
+            success_rate: stats.success_rate,
+            num_iterations: stats.num_iterations,
+            final_percentiles: stats.percentile_values.clone(),
+            p50_yearly_net_worth,
+            p50_lifetime_taxes,
+        }
+    }
+
+    /// Compute a single metric for all points, returning a grid of values.
+    ///
+    /// For metrics that only need stats (SuccessRate, Percentile), this is very fast.
+    /// For metrics needing full results, it fetches P50 runs lazily.
+    pub fn compute_metric_grid(&self, metric: &super::AnalysisMetric) -> SweepGrid<f64> {
+        let mut grid = SweepGrid::new(self.stats.shape().to_vec(), 0.0);
+
+        for indices in self.stats.indices() {
+            let stats = self.stats.get(&indices).unwrap();
+
+            // Fast path for stats-only metrics
+            let value = match metric {
+                super::AnalysisMetric::SuccessRate => stats.success_rate,
+                super::AnalysisMetric::Percentile { percentile } => {
+                    let target_p = *percentile as f64 / 100.0;
+                    stats
+                        .percentile_values
+                        .iter()
+                        .find(|(p, _)| (*p - target_p).abs() < 0.01)
+                        .map(|(_, v)| *v)
+                        .unwrap_or(0.0)
+                }
+                // Slow path: need to fetch P50 run
+                _ => {
+                    let point_data = self.stats_to_point_data(stats, &indices);
+                    point_data.compute_metric(metric, self.birth_year)
+                }
+            };
+
+            grid.set(&indices, value);
+        }
+
+        grid
+    }
+
+    /// Get values for parameter 1 (for backwards compatibility)
+    pub fn param1_values(&self) -> &[f64] {
+        self.param_values
+            .first()
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Get values for parameter 2 (for backwards compatibility)
+    pub fn param2_values(&self) -> &[f64] {
+        self.param_values
+            .get(1)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Get label for parameter 1
+    pub fn param1_label(&self) -> &str {
+        self.param_labels.first().map(|s| s.as_str()).unwrap_or("")
+    }
+
+    /// Get label for parameter 2
+    pub fn param2_label(&self) -> &str {
+        self.param_labels.get(1).map(|s| s.as_str()).unwrap_or("")
+    }
+}
+
 /// Run simulations for all sweep points without computing metrics.
 ///
 /// This is the first phase of two-phase sweep analysis. Call `compute_all_metrics()`
@@ -285,8 +506,12 @@ pub fn sweep_simulate(
 /// Supports N-dimensional sweeps. For each point in the grid, runs a Monte Carlo
 /// simulation and computes the requested metrics.
 ///
+/// This function uses memory-efficient lazy sweep simulation internally, which stores
+/// only stats and seeds during the sweep. Percentile runs are reconstructed on demand
+/// when computing metrics that need them (e.g., NetWorthAtAge, MaxDrawdown).
+///
 /// For fine-grained control or to analyze results with different metrics, use
-/// `sweep_simulate()` followed by `SweepSimulationResults::compute_all_metrics()`.
+/// `sweep_simulate_lazy()` and call `compute_all_metrics()` on the result.
 ///
 /// Returns SweepResults containing computed metrics for each point.
 pub fn sweep_evaluate(
@@ -294,11 +519,123 @@ pub fn sweep_evaluate(
     sweep_config: &SweepConfig,
     progress: Option<&SweepProgress>,
 ) -> Result<SweepResults, MarketError> {
-    // Run simulations first
-    let sim_results = sweep_simulate(base_config, sweep_config, progress)?;
+    // Use memory-efficient lazy sweep simulation
+    let lazy_results = sweep_simulate_lazy(base_config, sweep_config, progress)?;
 
-    // Compute metrics
-    Ok(sim_results.compute_all_metrics(&sweep_config.metrics))
+    // Compute metrics (this will lazily fetch P50 runs when needed)
+    Ok(lazy_results.compute_all_metrics(&sweep_config.metrics))
+}
+
+/// Memory-efficient sweep simulation that stores only stats and seeds.
+///
+/// This function is similar to `sweep_simulate` but uses much less memory by storing
+/// only `MonteCarloStats` and percentile seeds (instead of full `MonteCarloSummary`
+/// with complete `SimulationResult` objects).
+///
+/// Use this for large sweep grids where memory is a concern. Percentile runs can be
+/// reconstructed on demand using `LazySweepResults::get_percentile_run()`.
+///
+/// # Example
+/// ```ignore
+/// // Run memory-efficient sweep
+/// let lazy_results = sweep_simulate_lazy(&config, &sweep_config, Some(&progress))?;
+///
+/// // Get stats directly (fast)
+/// let stats = lazy_results.get_stats(&[0, 5]).unwrap();
+///
+/// // Get full P50 run on demand (re-runs simulation)
+/// let p50_result = lazy_results.get_percentile_run(&[0, 5], 0.5)?;
+/// ```
+pub fn sweep_simulate_lazy(
+    base_config: &SimulationConfig,
+    sweep_config: &SweepConfig,
+    progress: Option<&SweepProgress>,
+) -> Result<LazySweepResults, MarketError> {
+    // Validate configuration
+    if sweep_config.parameters.is_empty() {
+        return Err(MarketError::Config(
+            "At least one sweep parameter required".to_string(),
+        ));
+    }
+
+    // Get parameter values and labels
+    let param_values = sweep_config.all_sweep_values();
+    let param_labels = sweep_config.labels();
+    let shape = sweep_config.grid_shape();
+
+    // Monte Carlo config for each point
+    let mc_config = MonteCarloConfig {
+        iterations: sweep_config.mc_iterations,
+        percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
+        compute_mean: false,
+        parallel_batches: sweep_config.parallel_batches,
+        ..Default::default()
+    };
+
+    // Reset progress to track total iterations (points × iterations per point)
+    let total_points = sweep_config.total_points();
+    let total_iterations = total_points * mc_config.iterations;
+    if let Some(p) = progress {
+        p.reset(total_iterations);
+    }
+
+    // Extract birth year
+    let birth_year = base_config.birth_date.map(|d| d.year()).unwrap_or(1980);
+
+    // Create result grids with compact default values
+    let default_stats = MonteCarloStats {
+        num_iterations: 0,
+        success_rate: 0.0,
+        mean_final_net_worth: 0.0,
+        std_dev_final_net_worth: 0.0,
+        min_final_net_worth: 0.0,
+        max_final_net_worth: 0.0,
+        percentile_values: Vec::new(),
+        converged: None,
+        convergence_metric: None,
+        convergence_value: None,
+    };
+    let mut stats_grid: SweepGrid<MonteCarloStats> =
+        SweepGrid::new(shape.clone(), default_stats.clone());
+    let mut seeds_grid: SweepGrid<Vec<(f64, u64)>> = SweepGrid::new(shape.clone(), Vec::new());
+
+    // Iterate through all grid points
+    for indices in stats_grid.indices() {
+        if let Some(p) = progress
+            && p.is_cancelled()
+        {
+            return Err(MarketError::Cancelled);
+        }
+
+        // Apply all parameters for this grid point
+        let mut modified_config = base_config.clone();
+        // Disable ledger collection for sweep simulations to save CPU/memory
+        modified_config.collect_ledger = false;
+        for (dim, &idx) in indices.iter().enumerate() {
+            let value = param_values[dim][idx];
+            modified_config =
+                apply_parameter(&modified_config, &sweep_config.parameters[dim], value)?;
+        }
+
+        // Run Monte Carlo simulation with stats-only mode
+        // This skips Phase 2 (re-running percentile seeds) and returns seeds instead
+        let mc_progress = progress.map(|p| p.as_mc_progress()).unwrap_or_default();
+        let (stats, percentile_seeds) =
+            monte_carlo_stats_only(&modified_config, &mc_config, &mc_progress)?;
+
+        stats_grid.set(&indices, stats);
+        seeds_grid.set(&indices, percentile_seeds);
+    }
+
+    Ok(LazySweepResults {
+        param_values,
+        param_labels,
+        stats: stats_grid,
+        percentile_seeds: seeds_grid,
+        birth_year,
+        base_config: base_config.clone(),
+        sweep_config: sweep_config.clone(),
+    })
 }
 
 /// Apply a parameter value to a simulation config

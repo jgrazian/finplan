@@ -1190,3 +1190,213 @@ pub fn monte_carlo_simulate_with_progress(
         mean_accumulators,
     })
 }
+
+/// Memory-efficient Monte Carlo simulation that returns only stats and percentile seeds.
+///
+/// This function is similar to `monte_carlo_simulate_with_progress` but skips Phase 2
+/// (re-running simulations for percentile results). Instead, it returns the seeds
+/// for each percentile, allowing the caller to re-run specific simulations on demand.
+///
+/// This is ideal for sweep analysis where storing full results for every grid point
+/// would consume excessive memory.
+///
+/// # Returns
+/// A tuple of (MonteCarloStats, Vec<(f64, u64)>) where the second element contains
+/// (percentile, seed) pairs for on-demand reconstruction.
+pub fn monte_carlo_stats_only(
+    params: &SimulationConfig,
+    config: &MonteCarloConfig,
+    progress: &MonteCarloProgress,
+) -> Result<(MonteCarloStats, Vec<(f64, u64)>), MarketError> {
+    let batch_size = config.batch_size;
+    let parallel_batches = config.parallel_batches;
+
+    // Reset progress for new simulation
+    progress.reset();
+
+    // Check for early cancellation
+    if progress.is_cancelled() {
+        return Err(MarketError::Cancelled);
+    }
+
+    // First validate by running one simulation to check for market errors
+    let _ = simulate(params, 0)?;
+
+    // Check for cancellation after validation
+    if progress.is_cancelled() {
+        return Err(MarketError::Cancelled);
+    }
+
+    // Create a config with ledger disabled for batch iterations
+    let mut batch_params = params.clone();
+    batch_params.collect_ledger = false;
+
+    // Determine iteration limits based on mode
+    let min_iterations = config.iterations;
+    let max_iterations = config
+        .convergence
+        .as_ref()
+        .map(|c| c.max_iterations)
+        .unwrap_or(config.iterations);
+
+    // Set up convergence tracker if in convergence mode
+    let mut convergence_tracker = config
+        .convergence
+        .as_ref()
+        .map(|c| ConvergenceTracker::new(c.metric, c.relative_threshold));
+
+    // Track all results and statistics
+    let mut seed_results: Vec<(u64, f64)> = Vec::new();
+    let mut online_stats = OnlineStats::new();
+    let mut batch_seed: u64 = 0;
+    let mut converged = false;
+    let mut final_convergence_value: Option<f64> = None;
+
+    // Track if any thread detected cancellation
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+    // Run batches until we have enough iterations and (optionally) convergence
+    loop {
+        let current_count = seed_results.len();
+
+        // Check if we've reached max iterations
+        if current_count >= max_iterations {
+            break;
+        }
+
+        // Check for cancellation
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+            return Err(MarketError::Cancelled);
+        }
+
+        // Calculate how many iterations to run in this round
+        let remaining = max_iterations - current_count;
+        let target_this_round = remaining.min(batch_size * parallel_batches);
+        let num_batches = target_this_round.div_ceil(batch_size);
+
+        // Run batches in parallel
+        let batch_outputs: Vec<(Vec<(u64, f64)>, OnlineStats)> = (0..num_batches)
+            .into_par_iter()
+            .map(|local_batch_idx| {
+                // Check cancellation at batch start
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+                    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                    return (Vec::new(), OnlineStats::new());
+                }
+
+                let mut rng =
+                    rand::rngs::SmallRng::seed_from_u64(batch_seed + local_batch_idx as u64);
+                let mut scratch = SimulationScratch::new();
+                let mut local_stats = OnlineStats::new();
+                let mut local_results = Vec::new();
+
+                let this_batch_size = if local_batch_idx == num_batches - 1 {
+                    target_this_round - local_batch_idx * batch_size
+                } else {
+                    batch_size
+                };
+
+                for _ in 0..this_batch_size {
+                    // Check cancellation periodically within batch
+                    if progress.is_cancelled() {
+                        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                        break;
+                    }
+
+                    let seed = rng.next_u64();
+                    if let Ok(result) = simulate_with_scratch(&batch_params, seed, &mut scratch) {
+                        let fnw = final_net_worth(&result);
+                        local_stats.add(fnw);
+                        local_results.push((seed, fnw));
+
+                        // Update progress counter
+                        progress.increment();
+                    }
+                }
+
+                (local_results, local_stats)
+            })
+            .collect();
+
+        // Merge results and stats
+        for (results, stats) in batch_outputs {
+            seed_results.extend(results);
+            online_stats.merge(&stats);
+        }
+
+        // Update batch seed for next round
+        batch_seed += num_batches as u64;
+
+        // Check for cancellation after stats-only batch
+        if cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled() {
+            return Err(MarketError::Cancelled);
+        }
+
+        // Sort results for percentile-based convergence checks
+        seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Check convergence if we have enough iterations
+        if let Some(ref mut tracker) = convergence_tracker {
+            if seed_results.len() >= min_iterations {
+                let (is_converged, metric_value) =
+                    tracker.check_convergence(&seed_results, &online_stats);
+                final_convergence_value = metric_value;
+                if is_converged {
+                    converged = true;
+                    break;
+                }
+            }
+        } else if seed_results.len() >= config.iterations {
+            // Fixed mode: stop after reaching target iterations
+            break;
+        }
+    }
+
+    // Final sort (may already be sorted from last iteration)
+    seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Calculate final statistics
+    let actual_iterations = seed_results.len();
+    let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
+    let mean_final_net_worth = online_stats.mean();
+    let std_dev_final_net_worth = online_stats.std_dev();
+
+    let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
+    let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
+
+    let success_count = final_values.iter().filter(|v| **v > 0.0).count();
+    let success_rate = if actual_iterations > 0 {
+        success_count as f64 / actual_iterations as f64
+    } else {
+        0.0
+    };
+
+    // Calculate percentile indices and values, and capture seeds for lazy reconstruction
+    let mut percentile_values = Vec::new();
+    let mut percentile_seeds = Vec::new();
+
+    if actual_iterations > 0 {
+        for &p in &config.percentiles {
+            let idx = ((actual_iterations as f64 * p).floor() as usize).min(actual_iterations - 1);
+            let (seed, value) = seed_results[idx];
+            percentile_values.push((p, value));
+            percentile_seeds.push((p, seed));
+        }
+    }
+
+    // Build stats (no percentile_runs since we return seeds for lazy computation)
+    let stats = MonteCarloStats {
+        num_iterations: actual_iterations,
+        success_rate,
+        mean_final_net_worth,
+        std_dev_final_net_worth,
+        min_final_net_worth,
+        max_final_net_worth,
+        percentile_values,
+        converged: config.convergence.as_ref().map(|_| converged),
+        convergence_metric: config.convergence.as_ref().map(|c| c.metric),
+        convergence_value: final_convergence_value,
+    };
+
+    Ok((stats, percentile_seeds))
+}
