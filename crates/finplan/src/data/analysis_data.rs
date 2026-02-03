@@ -2,6 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 /// Persisted analysis configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -297,4 +298,55 @@ impl ChartConfigData {
             fixed_values: HashMap::new(),
         }
     }
+}
+
+// ========== Cache Types for Sweep Results Persistence ==========
+
+/// Fingerprint for cache validation - captures the config state that affects results
+///
+/// Note: Selected metrics are NOT included in the fingerprint because metrics can
+/// be computed on-demand from the raw sweep data without re-running simulations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SweepConfigFingerprint {
+    /// Hash of sweep parameters configuration
+    pub parameters_hash: String,
+    /// Number of Monte Carlo iterations per sweep point
+    pub mc_iterations: usize,
+}
+
+impl SweepConfigFingerprint {
+    /// Create a fingerprint from the current analysis configuration
+    pub fn from_config(config: &AnalysisConfigData) -> Self {
+        Self {
+            parameters_hash: Self::hash_parameters(&config.sweep_parameters),
+            mc_iterations: config.mc_iterations,
+        }
+    }
+
+    /// Hash the sweep parameters to detect changes
+    fn hash_parameters(params: &[SweepParameterData]) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+
+        for param in params {
+            param.event_name.hash(&mut hasher);
+            std::mem::discriminant(&param.sweep_type).hash(&mut hasher);
+            param.min_value.to_bits().hash(&mut hasher);
+            param.max_value.to_bits().hash(&mut hasher);
+            param.step_count.hash(&mut hasher);
+        }
+
+        format!("{:x}", hasher.finish())
+    }
+}
+
+/// Cached sweep results with validation fingerprint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedSweepResults {
+    /// Fingerprint for cache validation
+    pub fingerprint: SweepConfigFingerprint,
+    /// The cached sweep results
+    pub results: finplan_core::analysis::SweepResults,
+    /// When the cache was created (ISO 8601 timestamp)
+    pub created_at: String,
 }

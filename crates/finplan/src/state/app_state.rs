@@ -285,6 +285,9 @@ impl AppState {
             self.analysis_state.load_from_config(&data.analysis);
         }
 
+        // Try to load cached sweep results
+        self.try_load_sweep_cache();
+
         // Increment version to invalidate caches (different scenario = different data)
         self.data_version = self.data_version.wrapping_add(1);
     }
@@ -348,6 +351,9 @@ impl AppState {
             state.analysis_state.load_from_config(&data.analysis);
         }
 
+        // Try to load cached sweep results
+        state.try_load_sweep_cache();
+
         Ok(state)
     }
 
@@ -356,6 +362,38 @@ impl AppState {
         self.data_dir
             .as_ref()
             .map(|p| crate::data::storage::DataDirectory::new(p.clone()))
+    }
+
+    /// Try to load cached sweep results for the current scenario
+    fn try_load_sweep_cache(&mut self) {
+        let Some(storage) = self.get_storage() else {
+            return;
+        };
+
+        match storage.load_sweep_cache(&self.current_scenario) {
+            Ok(Some(cached)) => {
+                let sweep_params = self.analysis_state.sweep_parameters.clone();
+                if self
+                    .analysis_state
+                    .try_load_from_cache(cached, &sweep_params)
+                {
+                    tracing::info!(
+                        scenario = %self.current_scenario,
+                        "Loaded cached sweep results"
+                    );
+                }
+            }
+            Ok(None) => {
+                // No cache available, that's fine
+            }
+            Err(e) => {
+                tracing::warn!(
+                    scenario = %self.current_scenario,
+                    error = %e,
+                    "Failed to load sweep cache"
+                );
+            }
+        }
     }
 
     /// Save the current scenario to its file
@@ -1031,6 +1069,13 @@ impl AppState {
         self.app_data.simulations.remove(name);
         self.scenario_state.scenario_summaries.remove(name);
         self.dirty_scenarios.remove(name);
+
+        // Delete the sweep cache for this scenario
+        if let Some(storage) = self.get_storage()
+            && let Err(e) = storage.delete_sweep_cache(name)
+        {
+            tracing::warn!(scenario = name, error = %e, "Failed to delete sweep cache");
+        }
 
         // If we deleted the current scenario, switch to another one
         if self.current_scenario == name

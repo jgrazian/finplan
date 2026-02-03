@@ -52,7 +52,7 @@ pub enum SweepTarget {
 /// N-dimensional grid storage with flat backing array and stride-based indexing.
 ///
 /// Stores values in row-major order where the last dimension varies fastest.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SweepGrid<T> {
     /// The data stored in row-major order
     data: Vec<T>,

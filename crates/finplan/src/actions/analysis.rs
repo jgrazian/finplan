@@ -301,6 +301,9 @@ fn handle_configure_parameter(state: &mut AppState, index: usize) -> ActionResul
         param.step_count = step_count;
     }
 
+    // Invalidate stale results since config changed
+    state.analysis_state.invalidate_stale_results();
+
     ActionResult::Modified(None)
 }
 
@@ -389,6 +392,10 @@ fn handle_delete_parameter(state: &mut AppState, index: usize) -> ActionResult {
                 .len()
                 .saturating_sub(1);
         }
+
+        // Invalidate stale results since config changed
+        state.analysis_state.invalidate_stale_results();
+
         ActionResult::Modified(None)
     } else {
         ActionResult::close()
@@ -406,6 +413,8 @@ fn handle_toggle_metric(state: &mut AppState, value: &str) -> ActionResult {
             } else {
                 state.analysis_state.selected_metrics.insert(metric);
             }
+            // Note: We don't invalidate results here because metrics are computed at sweep time
+            // and changing display metrics doesn't require re-running the sweep
             return ActionResult::Modified(None);
         }
     }
@@ -491,12 +500,20 @@ fn handle_configure_settings(state: &mut AppState, _value: &str) -> ActionResult
         return show_settings_form(state);
     }
 
+    // Capture old MC iterations to detect changes
+    let old_mc_iterations = state.analysis_state.mc_iterations;
+
     // Otherwise, handle form submission - parse form values
     if let ModalState::Form(ref form) = state.modal {
         let values = form.values();
 
         state.analysis_state.mc_iterations = values.int(0, 500);
         state.analysis_state.default_steps = values.int(1, 6);
+    }
+
+    // Invalidate results if MC iterations changed (affects result validity)
+    if state.analysis_state.mc_iterations != old_mc_iterations {
+        state.analysis_state.invalidate_stale_results();
     }
 
     ActionResult::Modified(None)

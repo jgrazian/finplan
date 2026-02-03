@@ -18,8 +18,8 @@ use crate::model::{
 use crate::simulation::monte_carlo_simulate_with_progress;
 
 use super::{
-    AnalysisMetric, EffectParam, EffectTarget, SweepConfig, SweepGrid, SweepParameter,
-    SweepResults, SweepTarget, TriggerParam, compute_metrics,
+    EffectParam, EffectTarget, SweepConfig, SweepGrid, SweepParameter, SweepPointData,
+    SweepResults, SweepTarget, TriggerParam,
 };
 
 /// Progress tracking for sweep analysis
@@ -156,14 +156,21 @@ impl SweepSimulationResults {
     }
 
     /// Compute metrics for all points using the given metric definitions.
-    /// Returns SweepResults with computed metrics for each grid point.
-    pub fn compute_all_metrics(&self, metrics: &[AnalysisMetric]) -> SweepResults {
-        let mut results = SweepResults::new(self.param_values.clone(), self.param_labels.clone());
+    /// Returns SweepResults with raw data for each grid point.
+    ///
+    /// Note: The `metrics` parameter is no longer used since raw data is stored
+    /// and metrics are computed on-demand. It's kept for API compatibility.
+    pub fn compute_all_metrics(&self, _metrics: &[super::AnalysisMetric]) -> SweepResults {
+        let mut results = SweepResults::new(
+            self.param_values.clone(),
+            self.param_labels.clone(),
+            self.birth_year,
+        );
 
         for indices in self.summaries.indices() {
             if let Some(summary) = self.get(&indices) {
-                let computed = compute_metrics(summary, metrics, self.birth_year);
-                results.set(&indices, computed);
+                let point_data = SweepPointData::from_summary(summary, self.birth_year);
+                results.set(&indices, point_data);
             }
         }
 
@@ -171,29 +178,13 @@ impl SweepSimulationResults {
     }
 
     /// Compute a single metric for all points, returning a grid of values.
-    pub fn compute_metric_grid(&self, metric: &AnalysisMetric) -> SweepGrid<f64> {
+    pub fn compute_metric_grid(&self, metric: &super::AnalysisMetric) -> SweepGrid<f64> {
         let mut grid = SweepGrid::new(self.summaries.shape().to_vec(), 0.0);
 
         for indices in self.summaries.indices() {
             if let Some(summary) = self.get(&indices) {
-                let computed =
-                    compute_metrics(summary, std::slice::from_ref(metric), self.birth_year);
-                let value = match metric {
-                    AnalysisMetric::SuccessRate => computed.success_rate.unwrap_or(0.0),
-                    AnalysisMetric::NetWorthAtAge { .. } => {
-                        computed.net_worth_at_age.unwrap_or(0.0)
-                    }
-                    AnalysisMetric::Percentile { percentile } => computed
-                        .percentile_values
-                        .get(percentile)
-                        .copied()
-                        .unwrap_or(0.0),
-                    AnalysisMetric::LifetimeTaxes => computed.lifetime_taxes.unwrap_or(0.0),
-                    AnalysisMetric::MaxDrawdown => computed.max_drawdown.unwrap_or(0.0),
-                    AnalysisMetric::SafeWithdrawalRate { .. } => {
-                        computed.safe_withdrawal_rate.unwrap_or(0.0)
-                    }
-                };
+                let point_data = SweepPointData::from_summary(summary, self.birth_year);
+                let value = point_data.compute_metric(metric, self.birth_year);
                 grid.set(&indices, value);
             }
         }

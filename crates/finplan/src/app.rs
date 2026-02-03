@@ -327,6 +327,31 @@ impl App {
                     );
                     self.state.analysis_state.results = Some(analysis_results);
 
+                    // Compute and store fingerprint for cache validation
+                    use crate::data::analysis_data::{CachedSweepResults, SweepConfigFingerprint};
+                    let fingerprint =
+                        SweepConfigFingerprint::from_config(&self.state.analysis_state.to_config());
+                    self.state.analysis_state.results_fingerprint = Some(fingerprint.clone());
+
+                    // Save to cache
+                    if let Some(ref storage) = self
+                        .state
+                        .data_dir
+                        .as_ref()
+                        .map(|p| DataDirectory::new(p.clone()))
+                    {
+                        let cached = CachedSweepResults {
+                            fingerprint,
+                            results: (*results).clone(),
+                            created_at: jiff::Zoned::now().to_string(),
+                        };
+                        if let Err(e) =
+                            storage.save_sweep_cache(&self.state.current_scenario, &cached)
+                        {
+                            tracing::warn!(error = %e, "Failed to cache sweep results");
+                        }
+                    }
+
                     // Show completion modal
                     self.state.modal = ModalState::Message(MessageModal::info(
                         "Analysis Complete",

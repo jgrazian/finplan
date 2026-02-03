@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 use crate::state::ScenarioSummary;
 
+use super::analysis_data::CachedSweepResults;
 use super::app_data::{AppData, SimulationData};
 use super::keybindings_data::KeybindingsConfig;
 
@@ -171,6 +172,73 @@ impl DataDirectory {
     /// Save keybindings to keybindings.yaml
     pub fn save_keybindings(&self, keybindings: &KeybindingsConfig) -> Result<(), StorageError> {
         keybindings.save(&self.root)
+    }
+
+    // ========== Sweep Cache Methods ==========
+
+    /// Get the path to the sweep cache directory
+    fn sweep_cache_dir(&self) -> PathBuf {
+        self.root.join("sweep_cache")
+    }
+
+    /// Get the path to a specific scenario's sweep cache file
+    fn sweep_cache_path(&self, scenario_name: &str) -> PathBuf {
+        self.sweep_cache_dir()
+            .join(format!("{}.yaml", sanitize_filename(scenario_name)))
+    }
+
+    /// Load cached sweep results for a scenario
+    pub fn load_sweep_cache(
+        &self,
+        scenario_name: &str,
+    ) -> Result<Option<CachedSweepResults>, StorageError> {
+        let cache_path = self.sweep_cache_path(scenario_name);
+        if !cache_path.exists() {
+            return Ok(None);
+        }
+
+        let content = fs::read_to_string(&cache_path)
+            .map_err(|e| StorageError::Io(format!("Failed to read sweep cache: {}", e)))?;
+
+        let cached: CachedSweepResults = serde_saphyr::from_str(&content)
+            .map_err(|e| StorageError::Parse(format!("Failed to parse sweep cache: {}", e)))?;
+
+        Ok(Some(cached))
+    }
+
+    /// Save sweep results to cache for a scenario
+    pub fn save_sweep_cache(
+        &self,
+        scenario_name: &str,
+        cached: &CachedSweepResults,
+    ) -> Result<(), StorageError> {
+        // Ensure cache directory exists
+        let cache_dir = self.sweep_cache_dir();
+        if !cache_dir.exists() {
+            fs::create_dir_all(&cache_dir).map_err(|e| {
+                StorageError::Io(format!("Failed to create sweep cache directory: {}", e))
+            })?;
+        }
+
+        let yaml = serde_saphyr::to_string(cached).map_err(|e| {
+            StorageError::Serialize(format!("Failed to serialize sweep cache: {}", e))
+        })?;
+
+        let cache_path = self.sweep_cache_path(scenario_name);
+        tracing::info!(scenario = scenario_name, path = ?cache_path, "Saving sweep cache");
+        fs::write(cache_path, yaml)
+            .map_err(|e| StorageError::Io(format!("Failed to write sweep cache: {}", e)))
+    }
+
+    /// Delete cached sweep results for a scenario
+    pub fn delete_sweep_cache(&self, scenario_name: &str) -> Result<(), StorageError> {
+        let cache_path = self.sweep_cache_path(scenario_name);
+        if cache_path.exists() {
+            tracing::info!(scenario = scenario_name, path = ?cache_path, "Deleting sweep cache");
+            fs::remove_file(cache_path)
+                .map_err(|e| StorageError::Io(format!("Failed to delete sweep cache: {}", e)))?;
+        }
+        Ok(())
     }
 
     /// Load all scenarios from the scenarios directory

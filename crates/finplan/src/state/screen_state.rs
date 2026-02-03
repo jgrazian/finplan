@@ -330,7 +330,8 @@ use std::collections::HashSet;
 
 use super::panels::AnalysisPanel;
 use crate::data::analysis_data::{
-    AnalysisConfigData, AnalysisMetricData, ChartConfigData, SweepParameterData,
+    AnalysisConfigData, AnalysisMetricData, CachedSweepResults, ChartConfigData,
+    SweepConfigFingerprint, SweepParameterData,
 };
 use finplan_core::analysis::{AnalysisMetric, SweepResults};
 
@@ -678,23 +679,8 @@ impl AnalysisResults {
     ) {
         if current_dim == shape.len() {
             // We have a complete index set, get the value
-            if let Some(computed) = self.sweep_results.get(indices) {
-                let value = match metric {
-                    AnalysisMetric::SuccessRate => computed.success_rate.unwrap_or(0.0),
-                    AnalysisMetric::NetWorthAtAge { .. } => {
-                        computed.net_worth_at_age.unwrap_or(0.0)
-                    }
-                    AnalysisMetric::Percentile { percentile } => computed
-                        .percentile_values
-                        .get(percentile)
-                        .copied()
-                        .unwrap_or(0.0),
-                    AnalysisMetric::LifetimeTaxes => computed.lifetime_taxes.unwrap_or(0.0),
-                    AnalysisMetric::MaxDrawdown => computed.max_drawdown.unwrap_or(0.0),
-                    AnalysisMetric::SafeWithdrawalRate { .. } => {
-                        computed.safe_withdrawal_rate.unwrap_or(0.0)
-                    }
-                };
+            if let Some(point_data) = self.sweep_results.get(indices) {
+                let value = point_data.compute_metric(metric, self.sweep_results.birth_year);
                 values.push(value);
             }
             return;
@@ -753,8 +739,10 @@ pub struct AnalysisState {
     pub current_point: usize,
     /// Total points to process
     pub total_points: usize,
-    /// Analysis results (session only, not persisted)
+    /// Analysis results (can be persisted via cache)
     pub results: Option<AnalysisResults>,
+    /// Fingerprint of the config that produced the current results (for cache validation)
+    pub results_fingerprint: Option<SweepConfigFingerprint>,
     /// Selected result cursor for 2D navigation (legacy)
     pub selected_result: (usize, usize),
     /// Configured charts for the results panel
@@ -781,6 +769,7 @@ impl AnalysisState {
             current_point: 0,
             total_points: 0,
             results: None,
+            results_fingerprint: None,
             selected_result: (0, 0),
             chart_configs: Vec::new(),
             selected_chart_index: 0,
@@ -818,6 +807,7 @@ impl AnalysisState {
         self.selected_metric_index = 0;
         self.selected_chart_index = 0;
         self.results = None;
+        self.results_fingerprint = None;
         self.running = false;
         self.current_point = 0;
         self.total_points = 0;
@@ -833,4 +823,64 @@ impl AnalysisState {
             chart_configs: self.chart_configs.clone(),
         }
     }
+
+    /// Check if the current results match the current config
+    /// Returns false if results are stale (config has changed since results were computed)
+    pub fn results_match_config(&self) -> bool {
+        let Some(ref fingerprint) = self.results_fingerprint else {
+            return false;
+        };
+
+        let current_fingerprint = SweepConfigFingerprint::from_config(&self.to_config());
+        *fingerprint == current_fingerprint
+    }
+
+    /// Try to load results from a cache entry
+    /// Returns true if the cache was valid and loaded successfully
+    pub fn try_load_from_cache(
+        &mut self,
+        cached: CachedSweepResults,
+        sweep_params: &[SweepParameterData],
+    ) -> bool {
+        // Verify the cache matches current config
+        let current_fingerprint = SweepConfigFingerprint::from_config(&self.to_config());
+        if cached.fingerprint != current_fingerprint {
+            tracing::debug!("Sweep cache fingerprint mismatch, ignoring cached results");
+            return false;
+        }
+
+        // Convert SweepResults to AnalysisResults
+        let analysis_results = convert_sweep_to_analysis_results(&cached.results, sweep_params);
+
+        self.results = Some(analysis_results);
+        self.results_fingerprint = Some(cached.fingerprint);
+        true
+    }
+
+    /// Clear results if they no longer match the current config
+    pub fn invalidate_stale_results(&mut self) {
+        if self.results.is_some() && !self.results_match_config() {
+            self.results = None;
+            self.results_fingerprint = None;
+        }
+    }
+}
+
+/// Convert core SweepResults to TUI AnalysisResults (helper for cache loading)
+fn convert_sweep_to_analysis_results(
+    results: &finplan_core::analysis::SweepResults,
+    sweep_params: &[SweepParameterData],
+) -> AnalysisResults {
+    // Clone the results and update labels with event names
+    let mut sweep_results = results.clone();
+
+    // Generate labels from sweep parameters (e.g., "Retirement Age" instead of "Age (Event 8)")
+    for (idx, param) in sweep_params.iter().enumerate() {
+        if idx < sweep_results.param_labels.len() {
+            sweep_results.param_labels[idx] =
+                format!("{} {}", param.event_name, param.sweep_type.display_name());
+        }
+    }
+
+    AnalysisResults::new(sweep_results)
 }
