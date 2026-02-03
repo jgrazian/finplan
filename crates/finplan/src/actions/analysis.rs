@@ -559,7 +559,9 @@ fn handle_run_analysis(state: &mut AppState) -> ActionResult {
     let metrics: Vec<finplan_core::analysis::AnalysisMetric> = vec![
         finplan_core::analysis::AnalysisMetric::SuccessRate,
         finplan_core::analysis::AnalysisMetric::Percentile { percentile: 5 },
+        finplan_core::analysis::AnalysisMetric::Percentile { percentile: 25 },
         finplan_core::analysis::AnalysisMetric::Percentile { percentile: 50 },
+        finplan_core::analysis::AnalysisMetric::Percentile { percentile: 75 },
         finplan_core::analysis::AnalysisMetric::Percentile { percentile: 95 },
         finplan_core::analysis::AnalysisMetric::LifetimeTaxes,
         finplan_core::analysis::AnalysisMetric::MaxDrawdown,

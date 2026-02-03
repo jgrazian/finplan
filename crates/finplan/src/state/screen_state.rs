@@ -426,7 +426,9 @@ impl AnalysisResults {
                 AnalysisMetric::NetWorthAtAge { age: *age }
             }
             AnalysisMetricData::P5FinalNetWorth => AnalysisMetric::Percentile { percentile: 5 },
+            AnalysisMetricData::P25FinalNetWorth => AnalysisMetric::Percentile { percentile: 25 },
             AnalysisMetricData::P50FinalNetWorth => AnalysisMetric::Percentile { percentile: 50 },
+            AnalysisMetricData::P75FinalNetWorth => AnalysisMetric::Percentile { percentile: 75 },
             AnalysisMetricData::P95FinalNetWorth => AnalysisMetric::Percentile { percentile: 95 },
             AnalysisMetricData::LifetimeTaxes => AnalysisMetric::LifetimeTaxes,
             AnalysisMetricData::MaxDrawdown => AnalysisMetric::MaxDrawdown,
@@ -604,6 +606,127 @@ impl AnalysisResults {
         let max_val = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
         Some((matrix, min_val, max_val))
+    }
+
+    /// Get the min/max spread of a metric across all non-X dimensions for each X value.
+    /// This shows how sensitive the metric is to the "hidden" sweep parameters.
+    /// Returns (param_values, min_values, max_values)
+    pub fn get_1d_metric_spread_across_other_dims(
+        &self,
+        metric: &AnalysisMetricData,
+        x_dim: usize,
+    ) -> (Vec<f64>, Vec<f64>, Vec<f64>) {
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        let ndim = self.ndim();
+        let shape = self.shape();
+        let x_len = shape.get(x_dim).copied().unwrap_or(0);
+
+        if x_len == 0 || ndim == 0 {
+            return (Vec::new(), Vec::new(), Vec::new());
+        }
+
+        let param_values = self.param_values(x_dim).to_vec();
+        let mut min_values = Vec::with_capacity(x_len);
+        let mut max_values = Vec::with_capacity(x_len);
+
+        // For each X value, collect all metric values across other dimensions
+        for x_idx in 0..x_len {
+            let mut values_at_x = Vec::new();
+
+            // Generate all index combinations for other dimensions
+            self.collect_values_for_x(
+                &core_metric,
+                x_dim,
+                x_idx,
+                &mut vec![0; ndim],
+                0,
+                shape,
+                &mut values_at_x,
+            );
+
+            // Scale values and find min/max
+            let scaled: Vec<f64> = values_at_x.iter().map(|v| v * scale).collect();
+
+            let (min_val, max_val) = if scaled.is_empty() {
+                (0.0, 0.0)
+            } else {
+                let min = scaled.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max = scaled.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                (min, max)
+            };
+
+            min_values.push(min_val);
+            max_values.push(max_val);
+        }
+
+        (param_values, min_values, max_values)
+    }
+
+    /// Helper to recursively collect metric values for a fixed X index across all other dimensions
+    #[allow(clippy::too_many_arguments)]
+    fn collect_values_for_x(
+        &self,
+        metric: &AnalysisMetric,
+        x_dim: usize,
+        x_idx: usize,
+        indices: &mut Vec<usize>,
+        current_dim: usize,
+        shape: &[usize],
+        values: &mut Vec<f64>,
+    ) {
+        if current_dim == shape.len() {
+            // We have a complete index set, get the value
+            if let Some(computed) = self.sweep_results.get(indices) {
+                let value = match metric {
+                    AnalysisMetric::SuccessRate => computed.success_rate.unwrap_or(0.0),
+                    AnalysisMetric::NetWorthAtAge { .. } => {
+                        computed.net_worth_at_age.unwrap_or(0.0)
+                    }
+                    AnalysisMetric::Percentile { percentile } => computed
+                        .percentile_values
+                        .get(percentile)
+                        .copied()
+                        .unwrap_or(0.0),
+                    AnalysisMetric::LifetimeTaxes => computed.lifetime_taxes.unwrap_or(0.0),
+                    AnalysisMetric::MaxDrawdown => computed.max_drawdown.unwrap_or(0.0),
+                    AnalysisMetric::SafeWithdrawalRate { .. } => {
+                        computed.safe_withdrawal_rate.unwrap_or(0.0)
+                    }
+                };
+                values.push(value);
+            }
+            return;
+        }
+
+        if current_dim == x_dim {
+            // Fix this dimension to x_idx
+            indices[current_dim] = x_idx;
+            self.collect_values_for_x(
+                metric,
+                x_dim,
+                x_idx,
+                indices,
+                current_dim + 1,
+                shape,
+                values,
+            );
+        } else {
+            // Iterate over all values of this dimension
+            for i in 0..shape[current_dim] {
+                indices[current_dim] = i;
+                self.collect_values_for_x(
+                    metric,
+                    x_dim,
+                    x_idx,
+                    indices,
+                    current_dim + 1,
+                    shape,
+                    values,
+                );
+            }
+        }
     }
 }
 

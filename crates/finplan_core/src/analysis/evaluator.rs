@@ -235,7 +235,7 @@ pub fn sweep_simulate(
     // Monte Carlo config for each point
     let mc_config = MonteCarloConfig {
         iterations: sweep_config.mc_iterations,
-        percentiles: vec![0.05, 0.50, 0.95],
+        percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
         compute_mean: false,
         parallel_batches: sweep_config.parallel_batches,
         ..Default::default()

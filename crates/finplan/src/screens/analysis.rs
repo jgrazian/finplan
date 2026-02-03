@@ -924,11 +924,43 @@ impl AnalysisScreen {
             .map(|(&x, &y)| (x, y))
             .collect();
 
+        // If there are multiple sweep dimensions, show min/max spread of this metric
+        // across the other (non-X-axis) dimensions to indicate sensitivity
+        let (min_data, max_data) = if results.ndim() > 1 {
+            let (spread_params, min_values, max_values) =
+                results.get_1d_metric_spread_across_other_dims(metric, x_dim);
+
+            // Only show if there's actual variation
+            let has_variation = min_values
+                .iter()
+                .zip(max_values.iter())
+                .any(|(min, max)| (max - min).abs() > 0.01);
+
+            if has_variation {
+                let min_pts: Vec<(f64, f64)> = spread_params
+                    .iter()
+                    .zip(min_values.iter())
+                    .map(|(&x, &y)| (x, y))
+                    .collect();
+                let max_pts: Vec<(f64, f64)> = spread_params
+                    .iter()
+                    .zip(max_values.iter())
+                    .map(|(&x, &y)| (x, y))
+                    .collect();
+                (Some(min_pts), Some(max_pts))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
         // Calculate bounds with padding
         let x_min = param_values.first().copied().unwrap_or(0.0);
         let x_max = param_values.last().copied().unwrap_or(1.0);
         let x_padding = (x_max - x_min).abs() * 0.02;
 
+        // Calculate y bounds - include P10/P90 data if present for proper scaling
         let (y_min, y_max) = if *metric == AnalysisMetricData::SuccessRate {
             let actual_min = data.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
             let actual_max = data
@@ -942,20 +974,23 @@ impl AnalysisScreen {
                 (actual_max + padding).min(105.0),
             )
         } else {
-            let min = values.iter().cloned().fold(f64::INFINITY, f64::min);
-            let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            // Include min/max spread in bounds calculation if present
+            let mut all_values: Vec<f64> = values.clone();
+            if let Some(ref min_pts) = min_data {
+                all_values.extend(min_pts.iter().map(|(_, y)| *y));
+            }
+            if let Some(ref max_pts) = max_data {
+                all_values.extend(max_pts.iter().map(|(_, y)| *y));
+            }
+
+            let min = all_values.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = all_values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
             let padding = (max - min).abs().max(1.0) * 0.1;
             (min - padding, max + padding)
         };
 
         // Create dataset with metric-specific color
         let color = metric_color(metric);
-        let dataset = Dataset::default()
-            .name(metric.short_label())
-            .marker(symbols::Marker::Dot)
-            .graph_type(GraphType::Scatter)
-            .style(Style::default().fg(color))
-            .data(&data);
 
         // Create axis labels
         let x_labels = vec![
@@ -1004,7 +1039,43 @@ impl AnalysisScreen {
                 Style::default().fg(color),
             ));
 
-        let chart = Chart::new(vec![dataset])
+        // Build datasets - boundary lines first (so main data renders on top)
+        let mut datasets = Vec::new();
+
+        // Add spread boundary lines showing min/max of this metric across other sweep params
+        if let Some(ref min_pts) = min_data {
+            datasets.push(
+                Dataset::default()
+                    .name("Min")
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(Color::DarkGray))
+                    .data(min_pts),
+            );
+        }
+
+        if let Some(ref max_pts) = max_data {
+            datasets.push(
+                Dataset::default()
+                    .name("Max")
+                    .marker(symbols::Marker::Braille)
+                    .graph_type(GraphType::Line)
+                    .style(Style::default().fg(Color::DarkGray))
+                    .data(max_pts),
+            );
+        }
+
+        // Add main dataset on top
+        datasets.push(
+            Dataset::default()
+                .name(metric.short_label())
+                .marker(symbols::Marker::Dot)
+                .graph_type(GraphType::Scatter)
+                .style(Style::default().fg(color))
+                .data(&data),
+        );
+
+        let chart = Chart::new(datasets)
             .block(chart_block)
             .x_axis(x_axis)
             .y_axis(y_axis)
