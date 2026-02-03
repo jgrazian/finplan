@@ -47,6 +47,10 @@ pub struct SimulationState {
     /// Random number generator for stochastic effects (e.g., Random EventEffect)
     /// Uses RefCell for interior mutability since evaluate_effect takes &SimulationState
     pub rng: RefCell<rand::rngs::SmallRng>,
+
+    /// Whether to collect ledger entries during simulation
+    /// When false, ledger recording is skipped to save CPU/memory in batch runs
+    pub collect_ledger: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -517,6 +521,7 @@ impl SimulationState {
             pending_triggers: Vec::new(),
             warnings: Vec::new(),
             rng: RefCell::new(effect_rng),
+            collect_ledger: params.collect_ledger,
         })
     }
 

@@ -264,6 +264,8 @@ pub fn sweep_simulate(
 
         // Apply all parameters for this grid point
         let mut modified_config = base_config.clone();
+        // Disable ledger collection for sweep simulations to save CPU/memory
+        modified_config.collect_ledger = false;
         for (dim, &idx) in indices.iter().enumerate() {
             let value = param_values[dim][idx];
             modified_config =

@@ -336,7 +336,7 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
                             let return_rate = multiplier - 1.0;
 
                             // Only record if there was actual appreciation
-                            if (cash.value - previous_value).abs() > 0.001 {
+                            if state.collect_ledger && (cash.value - previous_value).abs() > 0.001 {
                                 state.history.ledger.push(LedgerEntry::new(
                                     next_checkpoint,
                                     StateEvent::CashAppreciation {
@@ -365,7 +365,9 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
                             let return_rate = multiplier - 1.0;
 
                             // Only record if there was actual appreciation
-                            if (inv.cash.value - previous_value).abs() > 0.001 {
+                            if state.collect_ledger
+                                && (inv.cash.value - previous_value).abs() > 0.001
+                            {
                                 state.history.ledger.push(LedgerEntry::new(
                                     next_checkpoint,
                                     StateEvent::CashAppreciation {
@@ -389,7 +391,9 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
                         loan.principal *= multiplier;
 
                         // Only record if there was actual interest accrual
-                        if (loan.principal - previous_principal).abs() > 0.001 {
+                        if state.collect_ledger
+                            && (loan.principal - previous_principal).abs() > 0.001
+                        {
                             state.history.ledger.push(LedgerEntry::new(
                                 next_checkpoint,
                                 StateEvent::LiabilityInterestAccrual {
@@ -408,14 +412,16 @@ fn advance_time(state: &mut SimulationState, _params: &SimulationConfig) {
         }
 
         // Record time advance event
-        state.history.ledger.push(LedgerEntry::new(
-            next_checkpoint,
-            StateEvent::TimeAdvance {
-                from_date: state.timeline.current_date,
-                to_date: next_checkpoint,
-                days_elapsed: days_passed,
-            },
-        ));
+        if state.collect_ledger {
+            state.history.ledger.push(LedgerEntry::new(
+                next_checkpoint,
+                StateEvent::TimeAdvance {
+                    from_date: state.timeline.current_date,
+                    to_date: next_checkpoint,
+                    days_elapsed: days_passed,
+                },
+            ));
+        }
     }
 
     // Capture year-end balances for RMD calculations (December 31)
@@ -719,6 +725,11 @@ pub fn monte_carlo_simulate_with_config(
     // This prevents us from running many iterations only to fail
     let _ = simulate(params, 0)?;
 
+    // Create a config with ledger disabled for batch iterations
+    // This saves CPU/memory since we only need final_net_worth during batches
+    let mut batch_params = params.clone();
+    batch_params.collect_ledger = false;
+
     // Determine iteration limits based on mode
     let min_iterations = config.iterations;
     let max_iterations = config
@@ -780,7 +791,8 @@ pub fn monte_carlo_simulate_with_config(
 
                 for _ in 0..this_batch_size {
                     let seed = rng.next_u64();
-                    if let Ok(result) = simulate_with_scratch(params, seed, &mut scratch) {
+                    // Use batch_params with ledger disabled for efficiency
+                    if let Ok(result) = simulate_with_scratch(&batch_params, seed, &mut scratch) {
                         let fnw = final_net_worth(&result);
                         local_stats.add(fnw);
                         local_results.push((seed, fnw));
@@ -964,6 +976,11 @@ pub fn monte_carlo_simulate_with_progress(
         return Err(MarketError::Cancelled);
     }
 
+    // Create a config with ledger disabled for batch iterations
+    // This saves CPU/memory since we only need final_net_worth during batches
+    let mut batch_params = params.clone();
+    batch_params.collect_ledger = false;
+
     // Determine iteration limits based on mode
     let min_iterations = config.iterations;
     let max_iterations = config
@@ -1045,7 +1062,8 @@ pub fn monte_carlo_simulate_with_progress(
                     }
 
                     let seed = rng.next_u64();
-                    if let Ok(result) = simulate_with_scratch(params, seed, &mut scratch) {
+                    // Use batch_params with ledger disabled for efficiency
+                    if let Ok(result) = simulate_with_scratch(&batch_params, seed, &mut scratch) {
                         let fnw = final_net_worth(&result);
                         local_stats.add(fnw);
                         local_results.push((seed, fnw));

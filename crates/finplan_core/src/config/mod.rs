@@ -63,6 +63,10 @@ fn default_duration_years() -> usize {
     30
 }
 
+fn default_true() -> bool {
+    true
+}
+
 /// Complete simulation configuration
 ///
 /// This is the main configuration type passed to the simulation engine.
@@ -104,7 +108,7 @@ fn default_duration_years() -> usize {
 ///     // evaluate result...
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationConfig {
     // === World Assumptions ===
     /// Return profiles for different asset classes.
@@ -148,6 +152,31 @@ pub struct SimulationConfig {
     /// Events that trigger state changes (retirement, home purchase, etc.)
     #[serde(default)]
     pub events: Vec<Event>,
+
+    /// Whether to collect ledger entries during simulation (default: true)
+    ///
+    /// Disable for batch MC iterations and parameter sweeps to save CPU/memory.
+    /// When disabled, `SimulationResult.ledger` and `yearly_cash_flows` will be empty.
+    #[serde(default = "default_true")]
+    pub collect_ledger: bool,
+}
+
+impl Default for SimulationConfig {
+    fn default() -> Self {
+        Self {
+            return_profiles: HashMap::new(),
+            inflation_profile: InflationProfile::default(),
+            asset_returns: HashMap::new(),
+            asset_prices: HashMap::new(),
+            tax_config: TaxConfig::default(),
+            start_date: None,
+            birth_date: None,
+            accounts: Vec::new(),
+            duration_years: default_duration_years(),
+            events: Vec::new(),
+            collect_ledger: true,
+        }
+    }
 }
 
 impl SimulationConfig {

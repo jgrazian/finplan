@@ -475,13 +475,17 @@ pub fn apply_eval_event_with_source(
     }
 }
 
-/// Helper to record a ledger entry
+/// Helper to record a ledger entry (skipped if collect_ledger is false)
+#[inline]
 fn record_ledger_entry(
     state: &mut SimulationState,
     date: jiff::civil::Date,
     source_event: Option<EventId>,
     event: StateEvent,
 ) {
+    if !state.collect_ledger {
+        return;
+    }
     let entry = match source_event {
         Some(eid) => LedgerEntry::with_source(date, eid, event),
         None => LedgerEntry::new(date, event),
@@ -609,11 +613,13 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 .set_triggered(event_id, state.timeline.current_date);
 
             // Record event trigger to ledger
-            state.history.ledger.push(LedgerEntry::with_source(
-                state.timeline.current_date,
-                event_id,
-                StateEvent::EventTriggered { event_id },
-            ));
+            if state.collect_ledger {
+                state.history.ledger.push(LedgerEntry::with_source(
+                    state.timeline.current_date,
+                    event_id,
+                    StateEvent::EventTriggered { event_id },
+                ));
+            }
 
             scratch.triggered.push(event_id);
 
@@ -691,10 +697,12 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             state
                 .event_state
                 .set_triggered(event_id, state.timeline.current_date);
-            state.history.ledger.push(LedgerEntry::new(
-                state.timeline.current_date,
-                StateEvent::EventTriggered { event_id },
-            ));
+            if state.collect_ledger {
+                state.history.ledger.push(LedgerEntry::new(
+                    state.timeline.current_date,
+                    StateEvent::EventTriggered { event_id },
+                ));
+            }
             scratch.triggered.push(event_id);
 
             // Get effects length to iterate by index, avoiding clone of entire Event
