@@ -16,7 +16,7 @@ use crate::components::{Component, EventResult};
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
 use crate::state::{AnalysisPanel, AnalysisResults, AppState};
-use crate::util::format::format_currency;
+use crate::util::format::format_compact_currency;
 use crate::{
     actions::ActionResult,
     data::analysis_data::{AnalysisMetricData, ColorScheme},
@@ -193,54 +193,28 @@ impl AnalysisScreen {
         }
     }
 
-    /// Render the Metrics panel (right-top)
-    fn render_metrics(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
+    /// Render the Metrics panel (right-top) - static list of computed metrics
+    fn render_metrics(&self, frame: &mut Frame, area: Rect, _state: &AppState, focused: bool) {
         let border_style = if focused {
             Style::default().fg(Color::Yellow)
         } else {
             Style::default()
         };
 
-        let title = if focused {
-            " METRICS [t toggle, j/k nav] "
-        } else {
-            " METRICS "
-        };
-
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(border_style)
-            .title(title);
-
-        let selected = &state.analysis_state.selected_metrics;
-        let selected_idx = state.analysis_state.selected_metric_index;
+            .title(" METRICS ");
 
         let items: Vec<ListItem> = AVAILABLE_METRICS
             .iter()
-            .enumerate()
-            .map(|(idx, metric)| {
-                let is_cursor = focused && idx == selected_idx;
-                let is_enabled = selected.contains(metric);
-
-                let checked = if is_enabled { "[x]" } else { "[ ]" };
-
-                let style = if is_cursor {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else if is_enabled {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-
-                let prefix = if is_cursor { "> " } else { "  " };
-
+            .map(|metric| {
+                let color = metric_color(metric);
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, style),
-                    Span::styled(checked, style),
+                    Span::styled("  ", Style::default()),
+                    Span::styled("●", Style::default().fg(color)),
                     Span::raw(" "),
-                    Span::styled(metric.label(), style),
+                    Span::styled(metric.label(), Style::default().fg(Color::White)),
                 ]))
             })
             .collect();
@@ -998,9 +972,9 @@ impl AnalysisScreen {
             ]
         } else {
             vec![
-                Span::raw(format_currency(y_min)),
-                Span::raw(format_currency((y_min + y_max) / 2.0)),
-                Span::raw(format_currency(y_max)),
+                Span::raw(format_compact_currency(y_min)),
+                Span::raw(format_compact_currency((y_min + y_max) / 2.0)),
+                Span::raw(format_compact_currency(y_max)),
             ]
         };
 
@@ -1092,46 +1066,26 @@ impl Component for AnalysisScreen {
             return EventResult::Handled;
         }
 
-        // List navigation (j/k or Up/Down in Parameters or Metrics panel)
-        if KeybindingsConfig::matches(&key, &kb.navigation.down) {
-            match panel {
-                AnalysisPanel::Parameters => {
-                    let param_count = state.analysis_state.sweep_parameters.len();
-                    if param_count > 0 {
-                        state.analysis_state.selected_param_index =
-                            (state.analysis_state.selected_param_index + 1) % param_count;
-                    }
-                }
-                AnalysisPanel::Metrics => {
-                    let metric_count = AVAILABLE_METRICS.len();
-                    state.analysis_state.selected_metric_index =
-                        (state.analysis_state.selected_metric_index + 1) % metric_count;
-                }
-                _ => {}
+        // List navigation (j/k or Up/Down in Parameters panel)
+        if KeybindingsConfig::matches(&key, &kb.navigation.down)
+            && panel == AnalysisPanel::Parameters
+        {
+            let param_count = state.analysis_state.sweep_parameters.len();
+            if param_count > 0 {
+                state.analysis_state.selected_param_index =
+                    (state.analysis_state.selected_param_index + 1) % param_count;
             }
             return EventResult::Handled;
         }
-        if KeybindingsConfig::matches(&key, &kb.navigation.up) {
-            match panel {
-                AnalysisPanel::Parameters => {
-                    let param_count = state.analysis_state.sweep_parameters.len();
-                    if param_count > 0 {
-                        if state.analysis_state.selected_param_index == 0 {
-                            state.analysis_state.selected_param_index = param_count - 1;
-                        } else {
-                            state.analysis_state.selected_param_index -= 1;
-                        }
-                    }
+        if KeybindingsConfig::matches(&key, &kb.navigation.up) && panel == AnalysisPanel::Parameters
+        {
+            let param_count = state.analysis_state.sweep_parameters.len();
+            if param_count > 0 {
+                if state.analysis_state.selected_param_index == 0 {
+                    state.analysis_state.selected_param_index = param_count - 1;
+                } else {
+                    state.analysis_state.selected_param_index -= 1;
                 }
-                AnalysisPanel::Metrics => {
-                    let metric_count = AVAILABLE_METRICS.len();
-                    if state.analysis_state.selected_metric_index == 0 {
-                        state.analysis_state.selected_metric_index = metric_count - 1;
-                    } else {
-                        state.analysis_state.selected_metric_index -= 1;
-                    }
-                }
-                _ => {}
             }
             return EventResult::Handled;
         }
@@ -1164,21 +1118,6 @@ impl Component for AnalysisScreen {
                         && !params.is_empty()
                     {
                         state.analysis_state.selected_param_index = params.len() - 1;
-                    }
-                }
-            }
-            return EventResult::Handled;
-        }
-
-        // t: Toggle currently selected metric (in Metrics panel)
-        if KeybindingsConfig::matches(&key, &kb.tabs.analyze.toggle_metric) {
-            if panel == AnalysisPanel::Metrics {
-                let idx = state.analysis_state.selected_metric_index;
-                if let Some(metric) = AVAILABLE_METRICS.get(idx) {
-                    if state.analysis_state.selected_metrics.contains(metric) {
-                        state.analysis_state.selected_metrics.remove(metric);
-                    } else {
-                        state.analysis_state.selected_metrics.insert(*metric);
                     }
                 }
             }
@@ -1220,15 +1159,7 @@ impl Component for AnalysisScreen {
                     }
                 }
                 AnalysisPanel::Metrics => {
-                    // Toggle currently selected metric
-                    let idx = state.analysis_state.selected_metric_index;
-                    if let Some(metric) = AVAILABLE_METRICS.get(idx) {
-                        if state.analysis_state.selected_metrics.contains(metric) {
-                            state.analysis_state.selected_metrics.remove(metric);
-                        } else {
-                            state.analysis_state.selected_metrics.insert(*metric);
-                        }
-                    }
+                    // Metrics panel is static - no action on Enter
                 }
                 AnalysisPanel::Config => {
                     // Show settings

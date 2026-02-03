@@ -250,9 +250,14 @@ fn show_parameter_config_form(
     ActionResult::modal(ModalState::Form(form))
 }
 
-/// Handle parameter configuration form submission
+/// Handle parameter configuration - show form or process submission
 fn handle_configure_parameter(state: &mut AppState, index: usize) -> ActionResult {
-    // Extract form values
+    // If no form modal exists, show the configuration form
+    if !matches!(state.modal, ModalState::Form(_)) {
+        return show_edit_parameter_form(state, index);
+    }
+
+    // Otherwise, extract form values and apply updates
     let updates = if let ModalState::Form(ref form) = state.modal {
         let values = form.values();
 
@@ -297,6 +302,75 @@ fn handle_configure_parameter(state: &mut AppState, index: usize) -> ActionResul
     }
 
     ActionResult::Modified(None)
+}
+
+/// Show the parameter edit form for an existing parameter
+fn show_edit_parameter_form(state: &mut AppState, index: usize) -> ActionResult {
+    let param = match state.analysis_state.sweep_parameters.get(index) {
+        Some(p) => p,
+        None => return ActionResult::error("Parameter not found"),
+    };
+
+    let event_name = &param.event_name;
+    let sweep_type = param.sweep_type;
+    let current_min = param.min_value;
+    let current_max = param.max_value;
+    let current_steps = param.step_count;
+
+    let (label, fields) = match sweep_type {
+        SweepTypeData::TriggerAge
+        | SweepTypeData::RepeatingStartAge
+        | SweepTypeData::RepeatingEndAge => {
+            let type_label = sweep_type.display_name();
+            (
+                format!("Configure {} Sweep: {}", type_label, event_name),
+                vec![
+                    FormField::new(
+                        "Min Age",
+                        FieldType::Text,
+                        &format!("{}", current_min as i32),
+                    ),
+                    FormField::new(
+                        "Max Age",
+                        FieldType::Text,
+                        &format!("{}", current_max as i32),
+                    ),
+                    FormField::new("Steps", FieldType::Text, &current_steps.to_string()),
+                ],
+            )
+        }
+        SweepTypeData::TriggerDate => (
+            format!("Configure Year Sweep: {}", event_name),
+            vec![
+                FormField::new(
+                    "Min Year",
+                    FieldType::Text,
+                    &format!("{}", current_min as i32),
+                ),
+                FormField::new(
+                    "Max Year",
+                    FieldType::Text,
+                    &format!("{}", current_max as i32),
+                ),
+                FormField::new("Steps", FieldType::Text, &current_steps.to_string()),
+            ],
+        ),
+        SweepTypeData::EffectValue => (
+            format!("Configure Amount Sweep: {}", event_name),
+            vec![
+                FormField::currency("Min Amount", current_min),
+                FormField::currency("Max Amount", current_max),
+                FormField::new("Steps", FieldType::Text, &current_steps.to_string()),
+            ],
+        ),
+    };
+
+    let action = ModalAction::Analysis(AnalysisAction::ConfigureParameter { index });
+    let form = FormModal::new(&label, fields, action)
+        .with_typed_context(ModalContext::Analysis(AnalysisContext::Parameter { index }))
+        .start_editing();
+
+    ActionResult::modal(ModalState::Form(form))
 }
 
 /// Delete a sweep parameter
@@ -441,11 +515,6 @@ fn handle_run_analysis(state: &mut AppState) -> ActionResult {
         return ActionResult::error("No sweep parameters configured. Press 'a' to add parameters.");
     }
 
-    // Validate we have metrics
-    if state.analysis_state.selected_metrics.is_empty() {
-        return ActionResult::error("No metrics selected. Press 'm' to select metrics.");
-    }
-
     // Build core SweepConfig from TUI state
     let mut parameters = Vec::new();
     for param in &state.analysis_state.sweep_parameters {
@@ -485,31 +554,16 @@ fn handle_run_analysis(state: &mut AppState) -> ActionResult {
         });
     }
 
-    // Convert TUI metrics to core metrics
-    let metrics: Vec<finplan_core::analysis::AnalysisMetric> = state
-        .analysis_state
-        .selected_metrics
-        .iter()
-        .map(|m| match m {
-            AnalysisMetricData::SuccessRate => finplan_core::analysis::AnalysisMetric::SuccessRate,
-            AnalysisMetricData::NetWorthAtAge { age } => {
-                finplan_core::analysis::AnalysisMetric::NetWorthAtAge { age: *age }
-            }
-            AnalysisMetricData::P5FinalNetWorth => {
-                finplan_core::analysis::AnalysisMetric::Percentile { percentile: 5 }
-            }
-            AnalysisMetricData::P50FinalNetWorth => {
-                finplan_core::analysis::AnalysisMetric::Percentile { percentile: 50 }
-            }
-            AnalysisMetricData::P95FinalNetWorth => {
-                finplan_core::analysis::AnalysisMetric::Percentile { percentile: 95 }
-            }
-            AnalysisMetricData::LifetimeTaxes => {
-                finplan_core::analysis::AnalysisMetric::LifetimeTaxes
-            }
-            AnalysisMetricData::MaxDrawdown => finplan_core::analysis::AnalysisMetric::MaxDrawdown,
-        })
-        .collect();
+    // Compute ALL metrics during sweep analysis (they all come from the same P50 run)
+    // User selection controls which metrics are displayed, not which are computed
+    let metrics: Vec<finplan_core::analysis::AnalysisMetric> = vec![
+        finplan_core::analysis::AnalysisMetric::SuccessRate,
+        finplan_core::analysis::AnalysisMetric::Percentile { percentile: 5 },
+        finplan_core::analysis::AnalysisMetric::Percentile { percentile: 50 },
+        finplan_core::analysis::AnalysisMetric::Percentile { percentile: 95 },
+        finplan_core::analysis::AnalysisMetric::LifetimeTaxes,
+        finplan_core::analysis::AnalysisMetric::MaxDrawdown,
+    ];
 
     let sweep_config = SweepConfig {
         parameters,
