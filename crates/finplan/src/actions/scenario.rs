@@ -149,7 +149,11 @@ pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
 
 /// Handle creating a new empty scenario
 pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let name = ctx.selected().unwrap_or_default().trim();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
+    let name = form.get_str(0).unwrap_or_default().trim();
     if name.is_empty() {
         return ActionResult::Error("Scenario name cannot be empty".to_string());
     }
@@ -171,7 +175,11 @@ pub fn handle_new_scenario(state: &mut AppState, ctx: ActionContext) -> ActionRe
 
 /// Handle duplicating an existing scenario
 pub fn handle_duplicate_scenario(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let new_name = ctx.selected().unwrap_or_default().trim();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
+    let new_name = form.get_str(0).unwrap_or_default().trim();
     if new_name.is_empty() {
         return ActionResult::Error("Scenario name cannot be empty".to_string());
     }
