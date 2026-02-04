@@ -362,10 +362,18 @@ fn build_asset_mappings(
     };
 
     // Build asset_returns map from the selected assets HashMap
-    for (asset_tag, profile_tag) in asset_mappings {
+    // Sort asset_mappings for deterministic iteration order
+    let mut sorted_mappings: Vec<_> = asset_mappings.iter().collect();
+    sorted_mappings.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+
+    for (asset_tag, profile_tag) in sorted_mappings {
         if let Some(&profile_id) = ctx.profile_ids.get(&profile_tag.0) {
             // Find all instances of this asset across accounts
-            for ((_, asset_name), (_, asset_id)) in &ctx.asset_ids {
+            // Sort asset_ids for deterministic iteration order
+            let mut sorted_asset_ids: Vec<_> = ctx.asset_ids.iter().collect();
+            sorted_asset_ids.sort_by(|a, b| a.0.cmp(b.0));
+
+            for ((_, asset_name), (_, asset_id)) in sorted_asset_ids {
                 if asset_name == &asset_tag.0 {
                     config.asset_returns.insert(*asset_id, profile_id);
                     // Set a default price
@@ -955,4 +963,231 @@ pub fn to_tui_result(
         final_real_net_worth,
         years,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::app_data::SimulationData;
+    use crate::data::parameters_data::ReturnsMode;
+    use crate::data::portfolio_data::{
+        AccountData, AccountType, AssetAccount, AssetTag, AssetValue, Property,
+    };
+    use crate::data::profiles_data::ReturnProfileTag;
+    use rand::RngCore;
+    use std::collections::HashMap;
+
+    /// Test that to_simulation_config produces deterministic results regardless of
+    /// HashMap insertion order in historical_assets. This guards against non-determinism
+    /// from HashMap iteration order which varies across process invocations.
+    #[test]
+    fn test_asset_mapping_determinism() {
+        // Create a minimal simulation data structure
+        let mut data = SimulationData::default();
+
+        // Set up historical mode
+        data.parameters.returns_mode = ReturnsMode::Historical;
+        data.parameters.historical_block_size = Some(5);
+        data.parameters.birth_date = "1980-01-01".to_string();
+        data.parameters.start_date = "2024-01-01".to_string();
+        data.parameters.duration_years = 30;
+
+        // Add accounts with various assets
+        data.portfolios.accounts = vec![
+            AccountData {
+                name: "Checking".to_string(),
+                description: None,
+                account_type: AccountType::Checking(Property {
+                    value: 10000.0,
+                    return_profile: None,
+                }),
+            },
+            AccountData {
+                name: "Brokerage".to_string(),
+                description: None,
+                account_type: AccountType::Brokerage(AssetAccount {
+                    assets: vec![
+                        AssetValue {
+                            asset: AssetTag("VFIAX".to_string()),
+                            value: 100000.0,
+                        },
+                        AssetValue {
+                            asset: AssetTag("VTSAX".to_string()),
+                            value: 50000.0,
+                        },
+                        AssetValue {
+                            asset: AssetTag("BND".to_string()),
+                            value: 25000.0,
+                        },
+                    ],
+                }),
+            },
+        ];
+
+        // Test with different HashMap insertion orders for historical_assets
+        // Order A: VFIAX, VTSAX, BND
+        let mut historical_a = HashMap::new();
+        historical_a.insert(
+            AssetTag("VFIAX".to_string()),
+            ReturnProfileTag("S&P 500".to_string()),
+        );
+        historical_a.insert(
+            AssetTag("VTSAX".to_string()),
+            ReturnProfileTag("S&P 500".to_string()),
+        );
+        historical_a.insert(
+            AssetTag("BND".to_string()),
+            ReturnProfileTag("US Agg Bonds".to_string()),
+        );
+
+        // Order B: BND, VFIAX, VTSAX (different insertion order)
+        let mut historical_b = HashMap::new();
+        historical_b.insert(
+            AssetTag("BND".to_string()),
+            ReturnProfileTag("US Agg Bonds".to_string()),
+        );
+        historical_b.insert(
+            AssetTag("VFIAX".to_string()),
+            ReturnProfileTag("S&P 500".to_string()),
+        );
+        historical_b.insert(
+            AssetTag("VTSAX".to_string()),
+            ReturnProfileTag("S&P 500".to_string()),
+        );
+
+        // Order C: VTSAX, BND, VFIAX (yet another order)
+        let mut historical_c = HashMap::new();
+        historical_c.insert(
+            AssetTag("VTSAX".to_string()),
+            ReturnProfileTag("S&P 500".to_string()),
+        );
+        historical_c.insert(
+            AssetTag("BND".to_string()),
+            ReturnProfileTag("US Agg Bonds".to_string()),
+        );
+        historical_c.insert(
+            AssetTag("VFIAX".to_string()),
+            ReturnProfileTag("S&P 500".to_string()),
+        );
+
+        // Convert with order A
+        let mut data_a = data.clone();
+        data_a.historical_assets = historical_a;
+        let config_a = to_simulation_config(&data_a).expect("Config A should succeed");
+
+        // Convert with order B
+        let mut data_b = data.clone();
+        data_b.historical_assets = historical_b;
+        let config_b = to_simulation_config(&data_b).expect("Config B should succeed");
+
+        // Convert with order C
+        let mut data_c = data;
+        data_c.historical_assets = historical_c;
+        let config_c = to_simulation_config(&data_c).expect("Config C should succeed");
+
+        // Verify asset_returns mappings are identical
+        assert_eq!(
+            config_a.asset_returns.len(),
+            config_b.asset_returns.len(),
+            "asset_returns length differs between A and B"
+        );
+        assert_eq!(
+            config_a.asset_returns.len(),
+            config_c.asset_returns.len(),
+            "asset_returns length differs between A and C"
+        );
+
+        for (asset_id, profile_id_a) in &config_a.asset_returns {
+            let profile_id_b = config_b
+                .asset_returns
+                .get(asset_id)
+                .expect("Asset should exist in config B");
+            let profile_id_c = config_c
+                .asset_returns
+                .get(asset_id)
+                .expect("Asset should exist in config C");
+
+            assert_eq!(
+                profile_id_a, profile_id_b,
+                "Profile ID for asset {:?} differs between A and B",
+                asset_id
+            );
+            assert_eq!(
+                profile_id_a, profile_id_c,
+                "Profile ID for asset {:?} differs between A and C",
+                asset_id
+            );
+        }
+
+        // Verify return_profiles are identical
+        assert_eq!(
+            config_a.return_profiles.len(),
+            config_b.return_profiles.len(),
+            "return_profiles length differs between A and B"
+        );
+
+        for (profile_id, _) in &config_a.return_profiles {
+            assert!(
+                config_b.return_profiles.contains_key(profile_id),
+                "Profile {:?} missing from config B",
+                profile_id
+            );
+            assert!(
+                config_c.return_profiles.contains_key(profile_id),
+                "Profile {:?} missing from config C",
+                profile_id
+            );
+        }
+
+        // Verify that running simulations with same seed produces identical results
+        use finplan_core::simulation_state::SimulationState;
+        use rand::SeedableRng;
+
+        let mut rng_a = rand::rngs::SmallRng::seed_from_u64(42);
+        let mut rng_b = rand::rngs::SmallRng::seed_from_u64(42);
+        let mut rng_c = rand::rngs::SmallRng::seed_from_u64(42);
+
+        let state_a =
+            SimulationState::from_parameters(&config_a, rng_a.next_u64()).expect("State A");
+        let state_b =
+            SimulationState::from_parameters(&config_b, rng_b.next_u64()).expect("State B");
+        let state_c =
+            SimulationState::from_parameters(&config_c, rng_c.next_u64()).expect("State C");
+
+        // Check that initial portfolio values are identical
+        let start_date = state_a.timeline.start_date;
+        let current_date = state_a.timeline.current_date;
+
+        let total_a: f64 = state_a
+            .portfolio
+            .accounts
+            .values()
+            .map(|acc| acc.total_value(&state_a.portfolio.market, start_date, current_date))
+            .sum();
+        let total_b: f64 = state_b
+            .portfolio
+            .accounts
+            .values()
+            .map(|acc| acc.total_value(&state_b.portfolio.market, start_date, current_date))
+            .sum();
+        let total_c: f64 = state_c
+            .portfolio
+            .accounts
+            .values()
+            .map(|acc| acc.total_value(&state_c.portfolio.market, start_date, current_date))
+            .sum();
+
+        assert!(
+            (total_a - total_b).abs() < 0.01,
+            "Initial portfolio value differs between A ({}) and B ({})",
+            total_a,
+            total_b
+        );
+        assert!(
+            (total_a - total_c).abs() < 0.01,
+            "Initial portfolio value differs between A ({}) and C ({})",
+            total_a,
+            total_c
+        );
+    }
 }

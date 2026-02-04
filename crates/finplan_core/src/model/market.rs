@@ -2099,4 +2099,122 @@ mod tests {
         let result = profile.sample_sequence(&mut rng, 10);
         assert!(result.is_err());
     }
+
+    /// Test that Market::from_profiles produces deterministic results regardless of
+    /// HashMap insertion order. This guards against non-determinism from HashMap
+    /// iteration order which varies across process invocations.
+    #[test]
+    fn test_market_from_profiles_determinism() {
+        use rand::SeedableRng;
+
+        let rp1 = ReturnProfileId(1);
+        let rp2 = ReturnProfileId(2);
+        let rp3 = ReturnProfileId(3);
+        let asset1 = AssetId(1);
+        let asset2 = AssetId(2);
+        let asset3 = AssetId(3);
+
+        // Create profiles - use bootstrap profiles which consume significant RNG
+        let profile1 = ReturnProfile::sp500_bootstrap();
+        let profile2 = ReturnProfile::us_small_cap_bootstrap();
+        let profile3 = ReturnProfile::intl_developed_bootstrap();
+
+        // Build HashMap in order 1, 2, 3
+        let mut profiles_order_a = HashMap::new();
+        profiles_order_a.insert(rp1, profile1.clone());
+        profiles_order_a.insert(rp2, profile2.clone());
+        profiles_order_a.insert(rp3, profile3.clone());
+
+        // Build HashMap in order 3, 1, 2 (different insertion order)
+        let mut profiles_order_b = HashMap::new();
+        profiles_order_b.insert(rp3, profile3.clone());
+        profiles_order_b.insert(rp1, profile1.clone());
+        profiles_order_b.insert(rp2, profile2.clone());
+
+        // Build HashMap in order 2, 3, 1 (yet another order)
+        let mut profiles_order_c = HashMap::new();
+        profiles_order_c.insert(rp2, profile2);
+        profiles_order_c.insert(rp3, profile3);
+        profiles_order_c.insert(rp1, profile1);
+
+        let assets = FxHashMap::from_iter([
+            (asset1, (1000.0, rp1)),
+            (asset2, (2000.0, rp2)),
+            (asset3, (3000.0, rp3)),
+        ]);
+
+        let inflation = InflationProfile::us_historical_bootstrap(Some(5));
+
+        // Create markets with same seed but different HashMap insertion orders
+        let mut rng_a = rand::rngs::StdRng::seed_from_u64(12345);
+        let market_a =
+            Market::from_profiles(&mut rng_a, 30, &inflation, &profiles_order_a, &assets)
+                .expect("Market A should succeed");
+
+        let mut rng_b = rand::rngs::StdRng::seed_from_u64(12345);
+        let market_b =
+            Market::from_profiles(&mut rng_b, 30, &inflation, &profiles_order_b, &assets)
+                .expect("Market B should succeed");
+
+        let mut rng_c = rand::rngs::StdRng::seed_from_u64(12345);
+        let market_c =
+            Market::from_profiles(&mut rng_c, 30, &inflation, &profiles_order_c, &assets)
+                .expect("Market C should succeed");
+
+        // Verify all markets produce identical results
+        let start = date(2024, 1, 1);
+        for year in 1..=30 {
+            let eval = date(2024 + year, 1, 1);
+
+            // Check asset values are identical
+            for &asset_id in &[asset1, asset2, asset3] {
+                let val_a = market_a.get_asset_value(start, eval, asset_id).unwrap();
+                let val_b = market_b.get_asset_value(start, eval, asset_id).unwrap();
+                let val_c = market_c.get_asset_value(start, eval, asset_id).unwrap();
+
+                assert!(
+                    (val_a - val_b).abs() < 1e-10,
+                    "Year {}: Asset {:?} differs between order A ({}) and B ({})",
+                    year,
+                    asset_id,
+                    val_a,
+                    val_b
+                );
+                assert!(
+                    (val_a - val_c).abs() < 1e-10,
+                    "Year {}: Asset {:?} differs between order A ({}) and C ({})",
+                    year,
+                    asset_id,
+                    val_a,
+                    val_c
+                );
+            }
+
+            // Check inflation values are identical
+            let inf_a = market_a
+                .get_inflation_adjusted_value(start, eval, 1000.0)
+                .unwrap();
+            let inf_b = market_b
+                .get_inflation_adjusted_value(start, eval, 1000.0)
+                .unwrap();
+            let inf_c = market_c
+                .get_inflation_adjusted_value(start, eval, 1000.0)
+                .unwrap();
+
+            assert!(
+                (inf_a - inf_b).abs() < 1e-10,
+                "Year {}: Inflation differs between order A ({}) and B ({})",
+                year,
+                inf_a,
+                inf_b
+            );
+            assert!(
+                (inf_a - inf_c).abs() < 1e-10,
+                "Year {}: Inflation differs between order A ({}) and C ({})",
+                year,
+                inf_a,
+                inf_c
+            );
+        }
+    }
 }
