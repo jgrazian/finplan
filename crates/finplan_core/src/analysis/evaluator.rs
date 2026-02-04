@@ -175,6 +175,9 @@ impl SweepSimulationResults {
             }
         }
 
+        // Compute standardized inflation factor from all points for consistent metric display
+        results.finalize_inflation_factor();
+
         results
     }
 
@@ -313,6 +316,9 @@ impl LazySweepResults {
             results.set(&indices, point_data);
         }
 
+        // Compute standardized inflation factor from all points for consistent metric display
+        results.finalize_inflation_factor();
+
         results
     }
 
@@ -323,7 +329,7 @@ impl LazySweepResults {
     fn stats_to_point_data(&self, stats: &MonteCarloStats, indices: &[usize]) -> SweepPointData {
         // For metrics that need P50 simulation data (NetWorthAtAge, MaxDrawdown, LifetimeTaxes),
         // we lazily fetch the P50 run. This is cached by the caller if needed.
-        let (p50_yearly_net_worth, p50_lifetime_taxes) =
+        let (p50_yearly_net_worth, p50_lifetime_taxes, final_inflation_factor) =
             if let Ok(p50_result) = self.get_percentile_run(indices, 0.5) {
                 let yearly: Vec<(i16, f64)> = p50_result
                     .wealth_snapshots
@@ -338,9 +344,14 @@ impl LazySweepResults {
                     })
                     .collect();
                 let taxes: f64 = p50_result.yearly_taxes.iter().map(|t| t.total_tax).sum();
-                (yearly, taxes)
+                let inflation = p50_result
+                    .cumulative_inflation
+                    .last()
+                    .copied()
+                    .unwrap_or(1.0);
+                (yearly, taxes, inflation)
             } else {
-                (Vec::new(), 0.0)
+                (Vec::new(), 0.0, 1.0)
             };
 
         SweepPointData {
@@ -349,6 +360,7 @@ impl LazySweepResults {
             final_percentiles: stats.percentile_values.clone(),
             p50_yearly_net_worth,
             p50_lifetime_taxes,
+            final_inflation_factor,
         }
     }
 

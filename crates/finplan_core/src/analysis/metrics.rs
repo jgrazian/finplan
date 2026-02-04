@@ -72,13 +72,23 @@ pub struct SweepPointData {
     pub success_rate: f64,
     /// Number of Monte Carlo iterations used
     pub num_iterations: usize,
-    /// Final net worth percentiles: (percentile as 0-1, value)
+    /// Final net worth percentiles: (percentile as 0-1, value) in NOMINAL dollars
     /// Typically includes 0.05, 0.25, 0.50, 0.75, 0.95
     pub final_percentiles: Vec<(f64, f64)>,
-    /// P50 yearly net worth: (year, net_worth) - for NetWorthAtAge and MaxDrawdown
+    /// P50 yearly net worth: (year, net_worth) in NOMINAL dollars - for NetWorthAtAge and MaxDrawdown
     pub p50_yearly_net_worth: Vec<(i16, f64)>,
-    /// Total lifetime taxes from P50 run
+    /// Total lifetime taxes from P50 run in NOMINAL dollars
     pub p50_lifetime_taxes: f64,
+    /// Cumulative inflation factor at end of simulation (for converting to real dollars)
+    /// Value of 1.0 means no inflation adjustment; higher values indicate more inflation.
+    /// To convert nominal to real: real_value = nominal_value / final_inflation_factor
+    #[serde(default = "default_inflation_factor")]
+    pub final_inflation_factor: f64,
+}
+
+/// Default inflation factor for backwards compatibility with old serialized data
+fn default_inflation_factor() -> f64 {
+    1.0
 }
 
 impl Default for SweepPointData {
@@ -89,6 +99,7 @@ impl Default for SweepPointData {
             final_percentiles: Vec::new(),
             p50_yearly_net_worth: Vec::new(),
             p50_lifetime_taxes: 0.0,
+            final_inflation_factor: 1.0,
         }
     }
 }
@@ -128,42 +139,87 @@ impl SweepPointData {
             .map(|result| result.yearly_taxes.iter().map(|t| t.total_tax).sum())
             .unwrap_or(0.0);
 
+        // Extract final cumulative inflation factor from P50 run
+        // This is the factor needed to convert end-of-simulation nominal values to real dollars
+        let final_inflation_factor = p50_run
+            .and_then(|result| result.cumulative_inflation.last().copied())
+            .unwrap_or(1.0);
+
         Self {
             success_rate,
             num_iterations,
             final_percentiles,
             p50_yearly_net_worth,
             p50_lifetime_taxes,
+            final_inflation_factor,
         }
     }
 
-    /// Compute a specific metric from this raw data
+    /// Compute a specific metric from this raw data.
+    ///
+    /// All monetary values are returned in inflation-adjusted (real) dollars.
+    /// This uses the cumulative inflation factor from the end of the simulation
+    /// to convert nominal values to today's dollars.
     pub fn compute_metric(&self, metric: &AnalysisMetric, birth_year: i16) -> f64 {
+        self.compute_metric_with_inflation(metric, birth_year, self.final_inflation_factor)
+    }
+
+    /// Compute a metric using a specified inflation factor.
+    ///
+    /// This allows using a standardized inflation factor across multiple sweep points
+    /// for consistent comparison (e.g., in heatmaps).
+    pub fn compute_metric_with_inflation(
+        &self,
+        metric: &AnalysisMetric,
+        birth_year: i16,
+        inflation_factor: f64,
+    ) -> f64 {
+        // Helper to convert nominal to real dollars
+        let to_real = |nominal: f64| -> f64 {
+            if inflation_factor > 0.0 {
+                nominal / inflation_factor
+            } else {
+                nominal
+            }
+        };
+
         match metric {
+            // SuccessRate is already a ratio, no adjustment needed
             AnalysisMetric::SuccessRate => self.success_rate,
 
+            // Percentile net worth values need inflation adjustment
             AnalysisMetric::Percentile { percentile } => {
                 let target_p = *percentile as f64 / 100.0;
-                self.final_percentiles
+                let nominal = self
+                    .final_percentiles
                     .iter()
                     .find(|(p, _)| (*p - target_p).abs() < 0.01)
                     .map(|(_, v)| *v)
-                    .unwrap_or(0.0)
+                    .unwrap_or(0.0);
+                to_real(nominal)
             }
 
+            // Net worth at specific age needs inflation adjustment
+            // Note: We use final inflation factor as approximation (could be refined
+            // with per-year factors if stored, but final factor is reasonable for analysis)
             AnalysisMetric::NetWorthAtAge { age } => {
                 let target_year = birth_year + *age as i16;
-                self.p50_yearly_net_worth
+                let nominal = self
+                    .p50_yearly_net_worth
                     .iter()
                     .find(|(year, _)| *year == target_year)
                     .map(|(_, nw)| *nw)
-                    .unwrap_or(0.0)
+                    .unwrap_or(0.0);
+                to_real(nominal)
             }
 
-            AnalysisMetric::LifetimeTaxes => self.p50_lifetime_taxes,
+            // Lifetime taxes need inflation adjustment
+            AnalysisMetric::LifetimeTaxes => to_real(self.p50_lifetime_taxes),
 
+            // MaxDrawdown is a percentage (peak-to-trough ratio), no adjustment needed
             AnalysisMetric::MaxDrawdown => self.compute_max_drawdown(),
 
+            // SWR is a percentage, no adjustment needed
             AnalysisMetric::SafeWithdrawalRate { .. } => {
                 // SWR requires iterative search - not computed from stored data
                 0.0
@@ -352,6 +408,12 @@ pub struct SweepResults {
     pub data: super::SweepGrid<SweepPointData>,
     /// Birth year for age-based metric calculations
     pub birth_year: i16,
+    /// Standardized inflation factor used for all metric computations.
+    /// This ensures consistent inflation adjustment across all sweep points,
+    /// avoiding visual artifacts in heatmaps from varying simulation durations.
+    /// Computed as the maximum inflation factor across all sweep points.
+    #[serde(default = "default_inflation_factor")]
+    pub standard_inflation_factor: f64,
 }
 
 impl SweepResults {
@@ -363,7 +425,21 @@ impl SweepResults {
             param_labels,
             data: super::SweepGrid::new(shape, SweepPointData::default()),
             birth_year,
+            standard_inflation_factor: 1.0, // Will be computed after data is populated
         }
+    }
+
+    /// Compute and set the standard inflation factor from all populated sweep points.
+    /// Uses the maximum inflation factor across all points to ensure consistent
+    /// conversion to real dollars (the longest simulation duration sets the baseline).
+    pub fn finalize_inflation_factor(&mut self) {
+        let max_factor = self
+            .data
+            .data()
+            .iter()
+            .map(|point| point.final_inflation_factor)
+            .fold(1.0_f64, f64::max);
+        self.standard_inflation_factor = max_factor;
     }
 
     /// Get the number of dimensions
@@ -422,9 +498,9 @@ impl SweepResults {
         self.data.set(indices, value)
     }
 
-    /// Compute a metric value from raw data at a point
+    /// Compute a metric value from raw data at a point using standardized inflation
     fn compute_metric_at(&self, point: &SweepPointData, metric: &AnalysisMetric) -> f64 {
-        point.compute_metric(metric, self.birth_year)
+        point.compute_metric_with_inflation(metric, self.birth_year, self.standard_inflation_factor)
     }
 
     /// Get results for a specific metric as a flat grid (for 1D/2D rendering)
