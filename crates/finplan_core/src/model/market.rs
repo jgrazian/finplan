@@ -160,10 +160,16 @@ impl Market {
         let inflation_values = inflation_profile.sample_sequence(rng, num_years)?;
 
         let mut returns: FxHashMap<ReturnProfileId, Vec<f64>> = FxHashMap::default();
-        for (rp_id, rp) in return_profiles.iter() {
+        // Sort profile IDs for deterministic iteration order
+        // HashMap iteration is non-deterministic across process invocations,
+        // which would cause different random returns per profile with the same seed
+        let mut profile_ids: Vec<_> = return_profiles.keys().copied().collect();
+        profile_ids.sort_by_key(|id| id.0);
+        for rp_id in profile_ids {
+            let rp = &return_profiles[&rp_id];
             // Use sample_sequence for proper regime-switching support
             let rp_returns = rp.sample_sequence(rng, num_years)?;
-            returns.insert(*rp_id, rp_returns);
+            returns.insert(rp_id, rp_returns);
         }
 
         Ok(Self::new(inflation_values, returns, assets.clone()))

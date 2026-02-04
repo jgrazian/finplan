@@ -172,6 +172,14 @@ fn convert_parameters(
     config.start_date = Some(parse_date(&params.start_date)?);
     config.duration_years = params.duration_years;
 
+    // Log the returns mode being used for debugging
+    tracing::info!(
+        returns_mode = ?params.returns_mode,
+        historical_block_size = ?params.historical_block_size,
+        duration_years = params.duration_years,
+        "Converting simulation parameters"
+    );
+
     // In Historical mode, always use historical bootstrap inflation with the same block size
     config.inflation_profile = match params.returns_mode {
         ReturnsMode::Historical => {
