@@ -585,6 +585,8 @@ impl AnalysisResults {
             .collect();
 
         // Get 2D slice - returns (values, x_params, y_params)
+        // slice_2d iterates: outer loop = x_dim, inner loop = y_dim
+        // So data is [x0y0, x0y1, ..., x0yN, x1y0, x1y1, ..., x1yN, ...]
         let (values, _x_params, _y_params) =
             self.sweep_results
                 .get_metric_2d_slice(&core_metric, x_dim, y_dim, &fixed)?;
@@ -596,10 +598,19 @@ impl AnalysisResults {
             return None;
         }
 
-        // Reshape into 2D matrix (rows = y_dim, cols = x_dim)
-        let matrix: Vec<Vec<f64>> = values
-            .chunks(x_len)
+        // First reshape with correct chunk size (y_len values per x)
+        // This gives matrix_xy[x][y]
+        let matrix_xy: Vec<Vec<f64>> = values
+            .chunks(y_len)
             .map(|chunk| chunk.iter().map(|v| v * scale).collect())
+            .collect();
+
+        // Transpose to get matrix[y][x] (rows = y_dim, cols = x_dim)
+        // Reverse Y so matrix[0] = highest Y value (standard chart: Y increases upward)
+        // Screen row 0 is at top, so highest Y appears at top
+        let matrix: Vec<Vec<f64>> = (0..y_len)
+            .rev()
+            .map(|y| (0..x_len).map(|x| matrix_xy[x][y]).collect())
             .collect();
 
         let scaled: Vec<f64> = values.iter().map(|v| v * scale).collect();

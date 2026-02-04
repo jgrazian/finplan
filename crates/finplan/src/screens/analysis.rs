@@ -16,7 +16,7 @@ use crate::components::{Component, EventResult};
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
 use crate::state::{AnalysisPanel, AnalysisResults, AppState};
-use crate::util::format::format_compact_currency;
+use crate::util::format::{format_compact_currency, format_currency_short};
 use crate::{
     actions::ActionResult,
     data::analysis_data::{AnalysisMetricData, ColorScheme},
@@ -164,10 +164,19 @@ impl AnalysisScreen {
                 .iter()
                 .enumerate()
                 .map(|(idx, param)| {
-                    let bounds = format!(
-                        "[{:.0}-{:.0}, {} steps]",
-                        param.min_value, param.max_value, param.step_count
-                    );
+                    let bounds = if param.sweep_type.is_currency() {
+                        format!(
+                            "[{}-{}, {} steps]",
+                            format_currency_short(param.min_value),
+                            format_currency_short(param.max_value),
+                            param.step_count
+                        )
+                    } else {
+                        format!(
+                            "[{:.0}-{:.0}, {} steps]",
+                            param.min_value, param.max_value, param.step_count
+                        )
+                    };
 
                     let is_selected = idx == selected_idx;
                     let style = if is_selected {
@@ -731,15 +740,21 @@ impl AnalysisScreen {
         let heatmap_x = inner.x + y_label_width;
         let heatmap_y = inner.y + top_padding;
 
-        // Render Y-axis labels (low, mid, high)
+        // Render Y-axis labels (standard orientation: y_max at top, y_min at bottom)
+        // Check if axis represents currency (label ends with "Amount")
+        let y_is_currency = y_label.ends_with("Amount");
+        let format_y = |v: f64| {
+            if y_is_currency {
+                format_compact_currency(v).replace('$', "")
+            } else {
+                format!("{:.0}", v)
+            }
+        };
         let y_mid = (y_min + y_max) / 2.0;
         let y_labels = [
-            (0, format!("{:.0}", y_max)),
-            (actual_heatmap_height / 2, format!("{:.0}", y_mid)),
-            (
-                actual_heatmap_height.saturating_sub(1),
-                format!("{:.0}", y_min),
-            ),
+            (0, format_y(y_max)),
+            (actual_heatmap_height / 2, format_y(y_mid)),
+            (actual_heatmap_height.saturating_sub(1), format_y(y_min)),
         ];
 
         for (row_offset, label) in y_labels {
@@ -808,14 +823,19 @@ impl AnalysisScreen {
 
         // Render X-axis labels (low, mid, high)
         let x_axis_y = heatmap_y + actual_heatmap_height as u16;
+        let x_is_currency = x_label.ends_with("Amount");
+        let format_x = |v: f64| {
+            if x_is_currency {
+                format_compact_currency(v).replace('$', "")
+            } else {
+                format!("{:.0}", v)
+            }
+        };
         let x_mid = (x_min + x_max) / 2.0;
         let x_labels = [
-            (0usize, format!("{:.0}", x_min)),
-            (actual_heatmap_width / 2, format!("{:.0}", x_mid)),
-            (
-                actual_heatmap_width.saturating_sub(4),
-                format!("{:.0}", x_max),
-            ),
+            (0usize, format_x(x_min)),
+            (actual_heatmap_width / 2, format_x(x_mid)),
+            (actual_heatmap_width.saturating_sub(4), format_x(x_max)),
         ];
 
         for (col_offset, label) in x_labels {
@@ -876,17 +896,14 @@ impl AnalysisScreen {
             );
 
             // Value label (show for first, middle, and last)
+            // colors[0] = purple = low value, colors[last] = yellow = high value
             if i == 0 || i == colors.len() - 1 || i == colors.len() / 2 {
                 let val =
-                    scale_max - (scale_max - scale_min) * i as f64 / (colors.len() - 1) as f64;
+                    scale_min + (scale_max - scale_min) * i as f64 / (colors.len() - 1) as f64;
                 let val_str = if config.metric == AnalysisMetricData::SuccessRate {
-                    format!("{:.0}", val)
-                } else if val.abs() >= 1_000_000.0 {
-                    format!("{:.1}M", val / 1_000_000.0)
-                } else if val.abs() >= 1_000.0 {
-                    format!("{:.0}K", val / 1_000.0)
+                    format!("{:.0}%", val)
                 } else {
-                    format!("{:.0}", val)
+                    format_compact_currency(val).replace("$", "")
                 };
                 let val_area = Rect::new(legend_x + 2, legend_row, legend_width - 2, 1);
                 frame.render_widget(

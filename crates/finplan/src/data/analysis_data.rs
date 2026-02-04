@@ -83,6 +83,11 @@ impl SweepTypeData {
             Self::RepeatingEndAge => "End Age",
         }
     }
+
+    /// Returns true if this sweep type represents a currency value
+    pub fn is_currency(&self) -> bool {
+        matches!(self, Self::EffectValue)
+    }
 }
 
 /// Analysis metric type for persistence
