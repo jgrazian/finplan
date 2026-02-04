@@ -754,7 +754,7 @@ pub fn evaluate_effect_into(
             let mut remaining = evaluate_transfer_amount(
                 amount,
                 &TransferEndpoint::External,
-                &TransferEndpoint::External,
+                &TransferEndpoint::Cash { account_id: *to },
                 state,
             )?;
 
