@@ -11,8 +11,6 @@ use ratatui::{
 };
 
 use super::Screen;
-use crate::actions::analysis::handle_analysis_action;
-use crate::components::{Component, EventResult};
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
 use crate::state::{AnalysisPanel, AnalysisResults, AppState};
@@ -20,6 +18,11 @@ use crate::util::format::{format_compact_currency, format_currency_short};
 use crate::{
     actions::ActionResult,
     data::analysis_data::{AnalysisMetricData, ColorScheme},
+};
+use crate::{actions::analysis::handle_analysis_action, util::styles::focused_block_with_help};
+use crate::{
+    components::{Component, EventResult},
+    util::styles::focused_block,
 };
 
 /// Minimum width for a single chart in the results panel
@@ -119,22 +122,8 @@ pub struct AnalysisScreen;
 impl AnalysisScreen {
     /// Render the Parameters panel (left 40%)
     fn render_parameters(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let title = if focused {
-            " SWEEP PARAMETERS [a add, d del, Enter edit] "
-        } else {
-            " SWEEP PARAMETERS "
-        };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
+        let block =
+            focused_block_with_help(" SWEEP PARAMETERS ", focused, "[a]dd [d]el [Enter] edit");
 
         let params = &state.analysis_state.sweep_parameters;
         let selected_idx = state.analysis_state.selected_param_index;
@@ -204,16 +193,7 @@ impl AnalysisScreen {
 
     /// Render the Metrics panel (right-top) - static list of computed metrics
     fn render_metrics(&self, frame: &mut Frame, area: Rect, _state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(" METRICS ");
+        let block = focused_block(" METRICS ", focused);
 
         let items: Vec<ListItem> = AVAILABLE_METRICS
             .iter()
@@ -234,22 +214,7 @@ impl AnalysisScreen {
 
     /// Render the Config panel (right-middle)
     fn render_config(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let title = if focused {
-            " CONFIGURATION [s settings] "
-        } else {
-            " CONFIGURATION "
-        };
-
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
+        let block = focused_block(" CONFIGURATION ", focused);
 
         let mc_iter = state.analysis_state.mc_iterations;
         let default_steps = state.analysis_state.default_steps;
@@ -276,11 +241,6 @@ impl AnalysisScreen {
                     Style::default().fg(Color::Cyan),
                 ),
             ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Press 's' to change settings",
-                Style::default().fg(Color::DarkGray),
-            )),
         ];
 
         let paragraph = Paragraph::new(content).block(block);
@@ -289,12 +249,6 @@ impl AnalysisScreen {
 
     /// Render the Results panel (bottom) with 1D line chart(s) or 2D heatmap
     fn render_results(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let title = if state.analysis_state.running {
             format!(
                 " RESULTS [{}/{}] ",
@@ -306,10 +260,8 @@ impl AnalysisScreen {
             " RESULTS ".to_string()
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
+        let block =
+            focused_block_with_help(title.as_str(), focused, "[h/l] select [c]configure chart");
 
         if let Some(results) = &state.analysis_state.results {
             // Check if we have chart configs

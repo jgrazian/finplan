@@ -11,13 +11,14 @@ use crate::modals::{
     context::TriggerContext,
 };
 use crate::state::{AppState, EventsPanel};
+use crate::util::styles::{focused_block, focused_block_with_help};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use super::Screen;
@@ -29,12 +30,6 @@ impl EventsScreen {
         let is_focused = state.events_state.focused_panel == EventsPanel::Details;
 
         let title = " EVENT DETAILS ";
-
-        let border_style = if is_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
 
         let content = if state.data().events.is_empty() {
             vec![
@@ -122,12 +117,7 @@ impl EventsScreen {
         };
 
         let paragraph = Paragraph::new(content)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(title)
-                    .border_style(border_style),
-            )
+            .block(focused_block(title, is_focused))
             .wrap(Wrap { trim: true });
 
         frame.render_widget(paragraph, area);
@@ -146,12 +136,6 @@ impl EventsScreen {
 
         let indicator = "[-]";
         let title = format!(" {} TIMELINE ", indicator);
-
-        let border_style = if is_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
 
         let events = &state.data().events;
         let birth_date = &state.data().parameters.birth_date;
@@ -279,14 +263,7 @@ impl EventsScreen {
             )));
         }
 
-        let mut block = Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style);
-
-        if is_focused {
-            block = block.title_bottom(Line::from(" [Space] Toggle ").fg(Color::DarkGray));
-        }
+        let block = focused_block_with_help(&title, is_focused, "[Space] Toggle");
 
         let paragraph = Paragraph::new(lines)
             .block(block)

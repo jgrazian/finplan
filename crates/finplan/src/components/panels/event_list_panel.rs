@@ -85,7 +85,7 @@ impl EventListPanel {
                 .collect()
         };
 
-        let help_text = " [a]dd [e]dit [d]el [c]opy [Shift+J/K] Reorder [t]oggle ";
+        let help_text = "[a]dd [e]dit [d]el [c]opy [Shift+J/K] Reorder [t]oggle";
         let block = focused_block_with_help(" EVENTS ", is_focused, help_text);
 
         let list = List::new(items).block(block);

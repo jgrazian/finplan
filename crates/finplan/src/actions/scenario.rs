@@ -96,7 +96,11 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
 
 /// Handle importing a scenario from an external file
 pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
-    let path_str = ctx.selected().unwrap_or_default().trim();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
+    let path_str = form.get_str(0).unwrap_or_default().trim();
     if path_str.is_empty() {
         return ActionResult::Error("File path cannot be empty".to_string());
     }
@@ -125,7 +129,11 @@ pub fn handle_import(state: &mut AppState, ctx: ActionContext) -> ActionResult {
 
 /// Handle exporting the current scenario to an external file
 pub fn handle_export(state: &AppState, ctx: ActionContext) -> ActionResult {
-    let path_str = ctx.selected().unwrap_or_default().trim();
+    let form = match ctx.form() {
+        Some(f) => f,
+        None => return ActionResult::Error("Invalid form data".to_string()),
+    };
+    let path_str = form.get_str(0).unwrap_or_default().trim();
     if path_str.is_empty() {
         return ActionResult::Error("File path cannot be empty".to_string());
     }

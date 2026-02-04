@@ -20,17 +20,15 @@ impl StatusBar {
     /// Returns tab-specific help text for the left side of the status bar
     fn get_tab_help_text(state: &AppState) -> &'static str {
         match state.active_tab {
-            crate::state::TabId::PortfolioProfiles => "Tab: panel | y: hist/param",
+            crate::state::TabId::PortfolioProfiles => " y: hist/param",
             crate::state::TabId::Events => {
-                "Tab: panel | a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
+                " a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
             }
             crate::state::TabId::Scenario => {
-                "r: run | m/M: MC | M: MC Conv | R: all | c: copy | n: new | s/l: save/load | e: params"
+                "r: run | m: MC | M: MC Conv | R: all | c: copy | n: new | s/l: save/load | e: params"
             }
-            crate::state::TabId::Results => {
-                "h/l: year | $: real/nominal | v: percentile | f: filter"
-            }
-            crate::state::TabId::Analysis => "Tab: panel | r: run | a: add | d: del | m: metrics",
+            crate::state::TabId::Results => " $: real/nominal | v: percentile ",
+            crate::state::TabId::Analysis => " r: run analysis | s: settings ",
         }
     }
 

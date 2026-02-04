@@ -45,9 +45,9 @@ impl ProfilesPanel {
         };
 
         let help_text = if is_historical {
-            " [b]lock size "
+            "[b]lock size"
         } else {
-            " [a]dd [e]dit [d]el [Shift+J/K] Reorder "
+            "[a]dd [e]dit [d]el [Shift+J/K] Reorder"
         };
 
         let block = focused_block_with_help(title, is_focused, help_text);

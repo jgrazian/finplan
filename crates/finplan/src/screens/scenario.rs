@@ -8,14 +8,15 @@ use crate::modals::{
 use crate::modals::{ScenarioAction, ScenarioPickerModal};
 use crate::state::{AppState, ScenarioPanel, ValueDisplayMode};
 use crate::util::format::{format_compact_currency, format_currency, format_currency_short};
+use crate::util::styles::{focused_block, focused_block_with_help};
 use crossterm::event::{KeyCode, KeyEvent};
 use jiff::civil::Date;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, List, ListItem, Paragraph},
+    widgets::{Bar, BarChart, BarGroup, List, ListItem, Paragraph},
 };
 
 use super::Screen;
@@ -396,12 +397,6 @@ impl Component for ScenarioScreen {
 
 impl ScenarioScreen {
     fn render_scenario_list(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let scenarios = state.get_scenario_list_with_summaries();
         let selected_index = state.scenario_state.selected_index;
         let display_mode = state.results_state.value_display_mode;
@@ -508,14 +503,7 @@ impl ScenarioScreen {
 
         let title = " SCENARIOS ";
 
-        let mut block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
-
-        if focused {
-            block = block.title_bottom(Line::from(" j/k nav | Tab panels ").fg(Color::DarkGray));
-        }
+        let block = focused_block_with_help(title, focused, "[j/k] scroll");
 
         // Layout for list + keybinds
         let inner = block.inner(area);
@@ -545,12 +533,6 @@ impl ScenarioScreen {
         state: &AppState,
         focused: bool,
     ) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let params = &state.data().parameters;
         let current_age = self.calculate_age(state);
         let end_age = self.calculate_end_age(state);
@@ -628,12 +610,7 @@ impl ScenarioScreen {
             " SELECTED "
         };
 
-        let paragraph = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title),
-        );
+        let paragraph = Paragraph::new(lines).block(focused_block(title, focused));
 
         frame.render_widget(paragraph, area);
     }
@@ -645,12 +622,6 @@ impl ScenarioScreen {
         state: &AppState,
         focused: bool,
     ) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let scenarios = state.get_scenario_list_with_summaries();
         let display_mode = state.results_state.value_display_mode;
         let mode_label = Self::get_mode_label(state);
@@ -727,33 +698,23 @@ impl ScenarioScreen {
             )));
         }
 
-        let title = format!(" COMPARISON ({}) [$ toggle] ", mode_label);
+        let title = format!(" COMPARISON ({}) ", mode_label);
 
-        let paragraph = Paragraph::new(lines).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title),
-        );
+        let paragraph = Paragraph::new(lines).block(focused_block_with_help(
+            &title,
+            focused,
+            "[$] inflation adjustment",
+        ));
 
         frame.render_widget(paragraph, area);
     }
 
     fn render_overlay_chart(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let display_mode = state.results_state.value_display_mode;
         let mode_label = Self::get_mode_label(state);
         let title = format!(" NET WORTH OVERLAY ({}) ", mode_label);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
+        let block = focused_block(&title, focused);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);

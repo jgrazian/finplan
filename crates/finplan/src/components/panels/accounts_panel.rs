@@ -81,12 +81,12 @@ impl AccountsPanel {
                 .is_editing_value()
                 || state.portfolio_profiles_state.account_mode.is_adding_new()
             {
-                " [Enter] Save  [Esc] Cancel ".to_string()
+                "[Enter] Save  [Esc] Cancel".to_string()
             } else {
-                " [Enter] Edit [d] Del [Shift+J/K] Reorder [Esc] Exit ".to_string()
+                "[Enter] Edit [d]el [Shift+J/K] Reorder [Esc] Exit".to_string()
             }
         } else {
-            " [a]dd [e]dit [d]el [Enter] Holdings [Shift+J/K] Reorder ".to_string()
+            "[a]dd [e]dit [d]el [Enter] Holdings [Shift+J/K] Reorder".to_string()
         }
     }
 

@@ -694,7 +694,7 @@ checksum = "9844ddc3a6e533d62bba727eb6c28b5d360921d5175e9ff0f1e621a5c590a4d5"
 
 [[package]]
 name = "finplan"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "clap",
  "color-eyre",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "finplan_core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "criterion",
  "jiff",

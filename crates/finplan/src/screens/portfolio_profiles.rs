@@ -16,13 +16,14 @@ use crate::modals::{AccountAction, ConfigAction, HoldingAction, ProfileAction};
 use crate::modals::{FormField, FormModal, MessageModal, ModalAction, ModalState, PickerModal};
 use crate::state::{AppState, PortfolioProfilesPanel};
 use crate::util::format::format_percentage;
+use crate::util::styles::{focused_block, focused_block_with_help};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{List, ListItem, Paragraph},
 };
 
 use super::Screen;
@@ -123,17 +124,8 @@ impl PortfolioProfilesScreen {
             summary_parts.join(", ")
         };
 
-        let border_style = if is_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let title = format!(" [+] ASSET MAPPINGS  {} ", summary);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style);
+        let block = focused_block(&title, is_focused);
 
         frame.render_widget(block, area);
     }
@@ -170,17 +162,8 @@ impl PortfolioProfilesScreen {
             federal_short, state_str, inflation_short
         );
 
-        let border_style = if is_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let title = format!(" [+] TAX & INFLATION  {} ", summary);
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style);
+        let block = focused_block(&title, is_focused);
 
         frame.render_widget(block, area);
     }
@@ -245,20 +228,11 @@ impl PortfolioProfilesScreen {
 
         let title = " [-] ASSET MAPPINGS ";
 
-        let border_style = if is_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let mut block = Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style);
+        let mut block = focused_block(title, is_focused);
 
         if is_focused && !unique_assets.is_empty() {
             block = block.title_bottom(
-                Line::from(" [m] Map [a] Suggest [A] All [Space] Collapse ").fg(Color::DarkGray),
+                Line::from(" [m]ap [a] Suggest [A]ll [Space] Collapse ").fg(Color::DarkGray),
             );
         }
 
@@ -352,21 +326,7 @@ impl PortfolioProfilesScreen {
 
         let title = " [-] TAX & INFLATION ";
 
-        let border_style = if is_focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        let mut block = Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style);
-
-        if is_focused {
-            block =
-                block.title_bottom(Line::from(" [e] Edit  [Space] Collapse ").fg(Color::DarkGray));
-        }
+        let block = focused_block_with_help(title, is_focused, "[e]dit [Space] Collapse");
 
         let paragraph = Paragraph::new(lines).block(block);
 

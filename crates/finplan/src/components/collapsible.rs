@@ -8,8 +8,10 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders},
+    widgets::Block,
 };
+
+use crate::util::styles::focused_block;
 
 /// State for a collapsible panel
 #[derive(Debug, Clone)]
@@ -73,27 +75,12 @@ impl<'a> CollapsiblePanel<'a> {
         let indicator = if self.expanded { "[-]" } else { "[+]" };
         let title = format!(" {} {} ", indicator, self.title);
 
-        let border_style = if self.focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
-        Block::default()
-            .borders(Borders::ALL)
-            .title(title)
-            .border_style(border_style)
+        focused_block(&title, self.focused)
     }
 
     /// Render a collapsed panel (just the title bar with indicator)
     pub fn render_collapsed(&self, frame: &mut Frame, area: Rect) {
         let indicator = if self.expanded { "[-]" } else { "[+]" };
-
-        let border_style = if self.focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
 
         // For collapsed state, render a minimal block
         let title_line = Line::from(vec![
@@ -105,10 +92,7 @@ impl<'a> CollapsiblePanel<'a> {
             Span::styled(" (collapsed)", Style::default().fg(Color::DarkGray)),
         ]);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(title_line)
-            .border_style(border_style);
+        let block = focused_block("", self.focused).title(title_line);
 
         frame.render_widget(block, area);
     }

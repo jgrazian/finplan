@@ -1,10 +1,10 @@
-use crate::util::format::format_currency_short;
+use crate::util::{format::format_currency_short, styles::focused_block};
 use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 
 /// Consistent dark grey color for empty bar portions
@@ -72,19 +72,11 @@ impl<'a> PortfolioOverviewChart<'a> {
     }
 
     pub fn render(self, frame: &mut Frame, area: Rect) {
-        let border_style = if self.focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let title = self
             .title
             .unwrap_or_else(|| " PORTFOLIO OVERVIEW ".to_string());
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
+
+        let block = focused_block(&title, self.focused);
 
         let inner_area = block.inner(area);
         frame.render_widget(block, area);

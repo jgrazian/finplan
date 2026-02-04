@@ -6,6 +6,7 @@ use crate::components::{Component, EventResult};
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::state::{AppState, PercentileView, ResultsPanel, SimulationResult, ValueDisplayMode};
 use crate::util::format::{format_currency, format_currency_short};
+use crate::util::styles::{focused_block, focused_block_with_help};
 use crossterm::event::{KeyCode, KeyEvent};
 use finplan_core::model::{AccountId, AccountSnapshotFlavor, WealthSnapshot};
 use ratatui::{
@@ -13,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Bar, BarChart, BarGroup, Block, Borders, List, ListItem, Paragraph},
+    widgets::{Bar, BarChart, BarGroup, List, ListItem, Paragraph},
 };
 
 use super::Screen;
@@ -118,12 +119,6 @@ impl ResultsScreen {
     }
 
     fn render_chart(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         // Get selected year for highlighting
         let years = Self::get_years_current(state);
         let year_index = state
@@ -139,21 +134,9 @@ impl ResultsScreen {
         // Build title with percentile and display mode indicators
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
-            if focused {
-                format!(
-                    " NET WORTH PROJECTION ({}) ({}) ({}) [h/l year, v view, $ toggle] ",
-                    selected_year, pct, mode_label
-                )
-            } else {
-                format!(
-                    " NET WORTH PROJECTION ({}) ({}) ({}) ",
-                    selected_year, pct, mode_label
-                )
-            }
-        } else if focused {
             format!(
-                " NET WORTH PROJECTION ({}) ({}) [h/l year, $ toggle] ",
-                selected_year, mode_label
+                " NET WORTH PROJECTION ({}) ({}) ({}) ",
+                selected_year, pct, mode_label
             )
         } else {
             format!(
@@ -162,10 +145,7 @@ impl ResultsScreen {
             )
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
+        let block = focused_block_with_help(&title, focused, "[h/l] year [v]iew [$] real/nominal");
 
         if let Some(result) = Self::get_current_tui_result(state) {
             if result.years.is_empty() {
@@ -329,12 +309,6 @@ impl ResultsScreen {
         state: &AppState,
         focused: bool,
     ) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         // Get selected year for highlighting
         let years = Self::get_years_current(state);
         let year_index = state
@@ -446,32 +420,19 @@ impl ResultsScreen {
         // Build title with percentile and display mode indicators
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
-            if focused {
-                format!(
-                    " YEARLY BREAKDOWN ({}) ({}) ({}) [j/k scroll, v view, $ toggle] ",
-                    selected_year, pct, mode_label
-                )
-            } else {
-                format!(
-                    " YEARLY BREAKDOWN ({}) ({}) ({}) ",
-                    selected_year, pct, mode_label
-                )
-            }
-        } else if focused {
             format!(
-                " YEARLY BREAKDOWN ({}) ({}) [j/k scroll, $ toggle] ",
-                selected_year, mode_label
+                " YEARLY BREAKDOWN ({}) ({}) ({}) ",
+                selected_year, pct, mode_label
             )
         } else {
             format!(" YEARLY BREAKDOWN ({}) ({}) ", selected_year, mode_label)
         };
 
-        let list = List::new(items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title),
-        );
+        let list = List::new(items).block(focused_block_with_help(
+            &title,
+            focused,
+            "[j/k] scroll [h/l] year [v]iew [$] real/nominal",
+        ));
 
         frame.render_widget(list, area);
     }
@@ -499,21 +460,9 @@ impl ResultsScreen {
         // Build title with percentile and display mode indicators
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
-            if focused {
-                format!(
-                    " ACCOUNT BREAKDOWN ({}) ({}) ({}) [h/l year, v view, $ toggle] ",
-                    selected_year, pct, mode_label
-                )
-            } else {
-                format!(
-                    " ACCOUNT BREAKDOWN ({}) ({}) ({}) ",
-                    selected_year, pct, mode_label
-                )
-            }
-        } else if focused {
             format!(
-                " ACCOUNT BREAKDOWN ({}) ({}) [h/l year, $ toggle] ",
-                selected_year, mode_label
+                " ACCOUNT BREAKDOWN ({}) ({}) ({}) ",
+                selected_year, pct, mode_label
             )
         } else {
             format!(" ACCOUNT BREAKDOWN ({}) ({}) ", selected_year, mode_label)
@@ -571,17 +520,7 @@ impl ResultsScreen {
                 .line_spacing(1)
                 .render(frame, area);
         } else {
-            let border_style = if focused {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default()
-            };
-
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(border_style)
-                .title(title);
-
+            let block = focused_block(&title, focused);
             let content = vec![
                 Line::from(""),
                 Line::from("No account data for selected year."),

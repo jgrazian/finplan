@@ -1126,7 +1126,7 @@ mod tests {
             "return_profiles length differs between A and B"
         );
 
-        for (profile_id, _) in &config_a.return_profiles {
+        for profile_id in config_a.return_profiles.keys() {
             assert!(
                 config_b.return_profiles.contains_key(profile_id),
                 "Profile {:?} missing from config B",

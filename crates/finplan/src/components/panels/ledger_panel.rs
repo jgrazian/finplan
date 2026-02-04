@@ -6,13 +6,14 @@ use std::collections::HashMap;
 
 use crate::state::{AppState, LedgerFilter, PercentileView};
 use crate::util::format::format_currency;
+use crate::util::styles::focused_block_with_help;
 use finplan_core::model::{AccountId, EventId, LedgerEntry, StateEvent};
 use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{List, ListItem, Paragraph},
 };
 
 /// Ledger panel component.
@@ -21,36 +22,18 @@ pub struct LedgerPanel;
 impl LedgerPanel {
     /// Render the ledger panel.
     pub fn render(frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
-        let border_style = if focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        };
-
         let filter = state.results_state.ledger_filter;
 
         // Build title with percentile indicator if viewing Monte Carlo
         let title = if state.results_state.viewing_monte_carlo {
             let pct = state.results_state.percentile_view.short_label();
-            if focused {
-                format!(
-                    " LEDGER [{}] ({}) [j/k scroll, f filter, v view] ",
-                    filter.label(),
-                    pct
-                )
-            } else {
-                format!(" LEDGER [{}] ({}) ", filter.label(), pct)
-            }
-        } else if focused {
-            format!(" LEDGER [{}] [j/k scroll, f filter] ", filter.label())
+            format!(" LEDGER [{}] ({}) ", filter.label(), pct)
         } else {
             format!(" LEDGER [{}] ", filter.label())
         };
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .title(title);
+        let block =
+            focused_block_with_help(&title, focused, "[j/k] scroll [PgUp/PgDn] fast [f]ilter");
 
         if let Some(core_result) = Self::get_current_core_result(state) {
             let account_names = Self::build_account_name_map(state);
