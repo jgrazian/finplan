@@ -130,9 +130,11 @@ pub enum OptimizeAction {
 /// Analysis-specific actions (parameter sweep sensitivity analysis)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisAction {
-    /// Add a sweep parameter
+    /// Add a sweep parameter (shows event picker)
     AddParameter,
-    /// Configure a sweep parameter (min/max/steps)
+    /// Create a new parameter from form submission
+    CreateParameter,
+    /// Configure an existing sweep parameter (min/max/steps)
     ConfigureParameter { index: usize },
     /// Delete a sweep parameter
     DeleteParameter { index: usize },

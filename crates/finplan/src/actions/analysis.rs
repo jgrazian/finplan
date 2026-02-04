@@ -21,6 +21,7 @@ pub fn handle_analysis_action(
 ) -> ActionResult {
     match action {
         AnalysisAction::AddParameter => handle_add_parameter(state, value),
+        AnalysisAction::CreateParameter => handle_create_parameter(state),
         AnalysisAction::ConfigureParameter { index } => handle_configure_parameter(state, index),
         AnalysisAction::DeleteParameter { index } => handle_delete_parameter(state, index),
         AnalysisAction::ToggleMetric => handle_toggle_metric(state, value),
@@ -139,7 +140,7 @@ fn handle_select_parameter_target(state: &mut AppState, event_index: usize) -> A
     show_parameter_config_form(state, event_index, &target)
 }
 
-/// Show configuration form for a sweep parameter
+/// Show configuration form for a NEW sweep parameter (not yet added to state)
 fn show_parameter_config_form(
     state: &mut AppState,
     event_index: usize,
@@ -227,27 +228,80 @@ fn show_parameter_config_form(
         ),
     };
 
-    // Store the parameter info temporarily (will be completed in configure handler)
-    let next_idx = state.analysis_state.sweep_parameters.len();
-    state
-        .analysis_state
-        .sweep_parameters
-        .push(SweepParameterData {
+    // Use CreateParameter action - parameter will be added when form is confirmed
+    let action = ModalAction::Analysis(AnalysisAction::CreateParameter);
+    let form = FormModal::new(&label, fields, action)
+        .with_typed_context(ModalContext::Analysis(AnalysisContext::NewParameter {
             event_name: event_name.clone(),
             sweep_type: *sweep_type,
-            min_value: default_min,
-            max_value: default_max,
-            step_count: default_steps,
-        });
-
-    let action = ModalAction::Analysis(AnalysisAction::ConfigureParameter { index: next_idx });
-    let form = FormModal::new(&label, fields, action)
-        .with_typed_context(ModalContext::Analysis(AnalysisContext::Parameter {
-            index: next_idx,
         }))
         .start_editing();
 
     ActionResult::modal(ModalState::Form(form))
+}
+
+/// Handle creating a new parameter from form submission
+fn handle_create_parameter(state: &mut AppState) -> ActionResult {
+    // Extract event_name and sweep_type from the form context
+    let (event_name, sweep_type) = if let ModalState::Form(ref form) = state.modal {
+        if let Some(ModalContext::Analysis(AnalysisContext::NewParameter {
+            ref event_name,
+            sweep_type,
+        })) = form.context
+        {
+            (event_name.clone(), sweep_type)
+        } else {
+            return ActionResult::error("Missing parameter context");
+        }
+    } else {
+        return ActionResult::error("Expected form modal");
+    };
+
+    // Extract form values
+    let (min_value, max_value, step_count) = if let ModalState::Form(ref form) = state.modal {
+        let values = form.values();
+        match sweep_type {
+            SweepTypeData::TriggerAge
+            | SweepTypeData::RepeatingStartAge
+            | SweepTypeData::RepeatingEndAge => {
+                let min = values.int(0, 60) as f64;
+                let max = values.int(1, 70) as f64;
+                let steps = values.int(2, 6);
+                (min, max, steps)
+            }
+            SweepTypeData::TriggerDate => {
+                let min = values.int(0, 2030) as f64;
+                let max = values.int(1, 2040) as f64;
+                let steps = values.int(2, 6);
+                (min, max, steps)
+            }
+            SweepTypeData::EffectValue => {
+                let min = values.currency(0, 0.0);
+                let max = values.currency(1, 100000.0);
+                let steps = values.int(2, 6);
+                (min, max, steps)
+            }
+        }
+    } else {
+        return ActionResult::error("Expected form modal");
+    };
+
+    // Now add the parameter to state
+    state
+        .analysis_state
+        .sweep_parameters
+        .push(SweepParameterData {
+            event_name,
+            sweep_type,
+            min_value,
+            max_value,
+            step_count,
+        });
+
+    // Invalidate stale results since config changed
+    state.analysis_state.invalidate_stale_results();
+
+    ActionResult::Modified(None)
 }
 
 /// Handle parameter configuration - show form or process submission
