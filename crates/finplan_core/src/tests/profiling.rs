@@ -165,9 +165,18 @@ fn test_account_balance_trigger_safe() {
 }
 
 #[test]
-fn test_account_balance_trigger_dangerous() {
-    // Two interdependent AccountBalance triggers with once: false create an infinite loop
-    // This is the classic "ping-pong" pattern that should be caught by iteration limits
+fn test_account_balance_trigger_cooldown_prevents_infinite_loop() {
+    // Two interdependent AccountBalance triggers with once: false WOULD create an infinite loop,
+    // but the 1-day cooldown on balance-based triggers prevents this.
+    //
+    // The cooldown ensures that after a balance trigger fires, it won't fire again until the
+    // next simulation day. This prevents the classic "ping-pong" pattern where:
+    //   add -> subtract -> add -> subtract... (infinite loop within same day)
+    //
+    // Instead, the behavior is:
+    //   Day 1: add fires (cooldown set), subtract fires (cooldown set), day ends
+    //   Day 2: add fires (if condition met), subtract fires (if condition met), day ends
+    //   ...
     let mut config = create_basic_config(1);
 
     // Checking account that will ping-pong between positive and negative
@@ -192,11 +201,12 @@ fn test_account_balance_trigger_dangerous() {
             amount_mode: AmountMode::Net,
             income_type: IncomeType::TaxFree,
         }],
-        once: false, // DANGEROUS
+        once: false, // Would be dangerous without cooldown
     });
 
     // Trigger 2: When balance > 0, subtract $100
-    // This creates the ping-pong: add -> subtract -> add -> subtract...
+    // Without cooldown, this creates ping-pong: add -> subtract -> add -> subtract...
+    // With cooldown, each trigger fires at most once per day
     config.events.push(Event {
         event_id: EventId(2),
         trigger: EventTrigger::AccountBalance {
@@ -207,51 +217,51 @@ fn test_account_balance_trigger_dangerous() {
             from: AccountId(2),
             amount: TransferAmount::Fixed(100.0),
         }],
-        once: false, // DANGEROUS
+        once: false, // Would be dangerous without cooldown
     });
 
-    // Use a low iteration limit to catch the infinite loop quickly
+    // Use a low iteration limit - we should NOT hit it thanks to cooldown
     let instrumentation = InstrumentationConfig::with_limit(50);
     let (result, metrics) = simulate_with_metrics(&config, 42, &instrumentation).unwrap();
 
-    // Simulation should still complete (due to iteration limit breaking the loop)
+    // Simulation should complete successfully
     assert!(!result.wealth_snapshots.is_empty());
 
-    // Should have hit the iteration limit
+    // Should NOT hit the iteration limit thanks to cooldown
     assert!(
-        metrics.had_iteration_limit_hits(),
-        "Dangerous AccountBalance trigger should hit iteration limit"
+        !metrics.had_iteration_limit_hits(),
+        "Balance trigger cooldown should prevent iteration limit hits"
     );
 
-    println!("Dangerous AccountBalance trigger metrics:");
-    println!(
-        "  Iteration limit dates: {:?}",
-        metrics.iteration_limit_dates
-    );
+    println!("AccountBalance trigger with cooldown metrics:");
     println!(
         "  Max iterations at single date: {}",
         metrics.max_same_date_iterations
     );
 
-    // Both events should have fired many times before being cut off
+    // Both events should fire, but not excessively (cooldown limits to ~1 per day)
     let event1_count = metrics.events_by_id.get(&EventId(1)).copied().unwrap_or(0);
     let event2_count = metrics.events_by_id.get(&EventId(2)).copied().unwrap_or(0);
-    println!("  Event 1 (add) fired {} times before limit", event1_count);
-    println!(
-        "  Event 2 (subtract) fired {} times before limit",
-        event2_count
-    );
+    println!("  Event 1 (add) fired {} times", event1_count);
+    println!("  Event 2 (subtract) fired {} times", event2_count);
 
-    // Each event should have fired at least a few times
+    // Events should fire a reasonable number of times (roughly once per time step)
+    // but not thousands of times as would happen without cooldown
     assert!(
-        event1_count > 5,
-        "Add event should have fired multiple times, got {}",
+        event1_count >= 1,
+        "Add event should have fired at least once, got {}",
         event1_count
     );
     assert!(
-        event2_count > 5,
-        "Subtract event should have fired multiple times, got {}",
+        event2_count >= 1,
+        "Subtract event should have fired at least once, got {}",
         event2_count
+    );
+    // Max iterations should be low (2-3 per date, not 50+)
+    assert!(
+        metrics.max_same_date_iterations < 10,
+        "Max iterations should be low with cooldown, got {}",
+        metrics.max_same_date_iterations
     );
 }
 

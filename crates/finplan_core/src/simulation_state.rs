@@ -21,6 +21,14 @@ pub mod cached_spans {
         use jiff::ToSpan;
         3.months()
     });
+
+    /// 1-day span used for balance-based trigger cooldowns
+    /// This prevents AccountBalance/AssetBalance/NetWorth triggers from
+    /// re-firing in the inner loop on the same simulation date
+    pub static ONE_DAY: LazyLock<Span> = LazyLock::new(|| {
+        use jiff::ToSpan;
+        1.days()
+    });
 }
 
 #[derive(Debug, Clone, Copy)]

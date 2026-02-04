@@ -10,7 +10,7 @@ use crate::{
         AccountFlavor, AssetLot, EventId, EventTrigger, LedgerEntry, SimulationWarning, StateEvent,
         WarningKind,
     },
-    simulation_state::SimulationState,
+    simulation_state::{SimulationState, cached_spans},
 };
 
 /// Pre-allocated scratch buffers for simulation hot paths.
@@ -565,8 +565,31 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
 
         let should_trigger = match trigger_result {
             TriggerEvent::Triggered => {
-                // Clear next_possible_trigger since event is firing
-                state.event_state.clear_next_possible_trigger(event_id);
+                // For balance-based triggers (AccountBalance, AssetBalance, NetWorth),
+                // set a 1-day cooldown to prevent them from re-firing in the inner loop
+                // on the same simulation date. These triggers can't predict when they'll
+                // next be relevant, so without a cooldown they'd be evaluated every
+                // iteration, potentially causing 1000+ iterations per time step.
+                let trigger_type = state.event_state.get_event(event_id).map(|e| &e.trigger);
+                let needs_cooldown = matches!(
+                    trigger_type,
+                    Some(EventTrigger::AccountBalance { .. })
+                        | Some(EventTrigger::AssetBalance { .. })
+                        | Some(EventTrigger::NetWorth { .. })
+                );
+
+                if needs_cooldown {
+                    let tomorrow = state
+                        .timeline
+                        .current_date
+                        .saturating_add(*cached_spans::ONE_DAY);
+                    state
+                        .event_state
+                        .set_next_possible_trigger(event_id, tomorrow);
+                } else {
+                    // Clear next_possible_trigger since event is firing
+                    state.event_state.clear_next_possible_trigger(event_id);
+                }
                 true
             }
             TriggerEvent::StartRepeating(next_date) => {
