@@ -145,7 +145,11 @@ impl ResultsScreen {
             )
         };
 
-        let block = focused_block_with_help(&title, focused, "[h/l] year [v]iew [$] real/nominal");
+        let block = focused_block_with_help(
+            &title,
+            focused,
+            "[h/l] year [v]iew [$] real/nominal [r]un [m]onte carlo",
+        );
 
         if let Some(result) = Self::get_current_tui_result(state) {
             if result.years.is_empty() {
@@ -275,7 +279,7 @@ impl ResultsScreen {
                 Line::from(""),
                 Line::from("No simulation results available."),
                 Line::from(""),
-                Line::from("Run a simulation from the Scenario screen to see results here."),
+                Line::from("Press [r] for single run or [m] for Monte Carlo simulation."),
             ];
             let paragraph = Paragraph::new(content).block(block);
             frame.render_widget(paragraph, area);
@@ -681,6 +685,22 @@ impl Component for ResultsScreen {
         if KeybindingsConfig::matches(&key, &kb.tabs.results.toggle_real) {
             state.results_state.value_display_mode =
                 state.results_state.value_display_mode.toggle();
+            return EventResult::Handled;
+        }
+
+        // r for re-running single simulation
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.run) {
+            if !state.simulation_status.is_running() {
+                state.request_simulation();
+            }
+            return EventResult::Handled;
+        }
+
+        // m for re-running Monte Carlo simulation
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.monte_carlo) {
+            if !state.simulation_status.is_running() {
+                state.request_monte_carlo(1000);
+            }
             return EventResult::Handled;
         }
 

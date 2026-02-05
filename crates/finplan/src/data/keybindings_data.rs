@@ -192,6 +192,8 @@ pub struct ResultsBindings {
     pub toggle_real: Vec<String>,
     pub cycle_percentile: Vec<String>,
     pub cycle_filter: Vec<String>,
+    pub run: Vec<String>,
+    pub monte_carlo: Vec<String>,
 }
 
 impl Default for ResultsBindings {
@@ -204,6 +206,8 @@ impl Default for ResultsBindings {
             toggle_real: vec!["$".into()],
             cycle_percentile: vec!["v".into()],
             cycle_filter: vec!["f".into()],
+            run: vec!["r".into()],
+            monte_carlo: vec!["m".into()],
         }
     }
 }

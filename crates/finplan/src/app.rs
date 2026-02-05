@@ -196,11 +196,17 @@ impl App {
                     core_result,
                 } => {
                     tracing::info!("Single simulation completed");
+                    // Preserve year index, clamped to new result bounds
+                    let prev_year_index = self.state.results_state.selected_year_index;
+                    let new_max_index = tui_result.years.len().saturating_sub(1);
+
                     self.state.simulation_result = Some(tui_result);
                     self.state.core_simulation_result = Some(core_result);
                     self.state.monte_carlo_result = None;
                     self.state.results_state = ResultsState::default();
                     self.state.results_state.viewing_monte_carlo = false;
+                    self.state.results_state.selected_year_index =
+                        prev_year_index.min(new_max_index);
                     self.state.simulation_status = SimulationStatus::Idle;
 
                     // Switch to results tab
@@ -220,6 +226,10 @@ impl App {
                         "Monte Carlo simulation completed"
                     );
 
+                    // Preserve year index, clamped to new result bounds
+                    let prev_year_index = self.state.results_state.selected_year_index;
+                    let new_max_index = default_tui_result.years.len().saturating_sub(1);
+
                     // Store results
                     self.state.simulation_result = Some(default_tui_result);
                     self.state.core_simulation_result = Some(default_core_result);
@@ -232,10 +242,12 @@ impl App {
                     // Store full MC result (unbox)
                     self.state.monte_carlo_result = Some(*stored_result);
 
-                    // Reset results state for MC viewing
+                    // Reset results state for MC viewing, preserving year index
                     self.state.results_state = ResultsState::default();
                     self.state.results_state.viewing_monte_carlo = true;
                     self.state.results_state.percentile_view = PercentileView::P50;
+                    self.state.results_state.selected_year_index =
+                        prev_year_index.min(new_max_index);
                     self.state.simulation_status = SimulationStatus::Idle;
 
                     // Update scenario summary cache

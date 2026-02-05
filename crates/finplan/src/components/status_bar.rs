@@ -27,7 +27,7 @@ impl StatusBar {
             crate::state::TabId::Scenario => {
                 "r: run | m: MC | M: MC Conv | R: all | c: copy | n: new | s/l: save/load | e: params"
             }
-            crate::state::TabId::Results => " $: real/nominal | v: percentile ",
+            crate::state::TabId::Results => " r: run | m: MC | $: real/nominal | v: percentile ",
             crate::state::TabId::Analysis => " r: run analysis | s: settings ",
         }
     }
