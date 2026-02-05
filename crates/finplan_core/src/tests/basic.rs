@@ -5,11 +5,12 @@
 use std::collections::HashMap;
 
 use crate::config::SimulationConfig;
+use crate::model::MonteCarloConfig;
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, InflationProfile,
     InvestmentContainer, ReturnProfile, ReturnProfileId, TaxStatus,
 };
-use crate::simulation::{monte_carlo_simulate, simulate};
+use crate::simulation::{monte_carlo_simulate_with_config, simulate};
 
 #[test]
 fn test_monte_carlo_simulation() {
@@ -42,14 +43,20 @@ fn test_monte_carlo_simulation() {
     };
 
     const NUM_ITERATIONS: usize = 100;
-    let result = monte_carlo_simulate(&params, NUM_ITERATIONS).unwrap();
-    assert_eq!(result.iterations.len(), NUM_ITERATIONS);
+    let mc_config = MonteCarloConfig {
+        iterations: NUM_ITERATIONS,
+        seed: Some(42),
+        ..Default::default()
+    };
+    let result = monte_carlo_simulate_with_config(&params, &mc_config).unwrap();
+    assert_eq!(result.stats.num_iterations, NUM_ITERATIONS);
 
-    // Check that results are different (due to random seed)
-    let first_final = result.iterations[0].final_account_balance(AccountId(1));
-    let second_final = result.iterations[1].final_account_balance(AccountId(1));
-
-    assert_eq!(first_final, second_final);
+    // Verify determinism: running with same seed produces same results
+    let result2 = monte_carlo_simulate_with_config(&params, &mc_config).unwrap();
+    assert_eq!(
+        result.stats.mean_final_net_worth,
+        result2.stats.mean_final_net_worth
+    );
 }
 
 #[test]
