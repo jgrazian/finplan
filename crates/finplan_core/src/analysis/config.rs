@@ -391,6 +391,9 @@ pub struct SweepConfig {
     /// Number of parallel batches (defaults to CPU count)
     #[serde(default = "default_parallel_batches")]
     pub parallel_batches: usize,
+    /// Optional seed for reproducible results. If None, a random seed is generated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 fn default_parallel_batches() -> usize {
@@ -406,6 +409,7 @@ impl Default for SweepConfig {
             metrics: vec![super::AnalysisMetric::SuccessRate],
             mc_iterations: 500,
             parallel_batches: default_parallel_batches(),
+            seed: None,
         }
     }
 }

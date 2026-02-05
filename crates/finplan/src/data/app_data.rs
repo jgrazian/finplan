@@ -215,6 +215,7 @@ mod tests {
                 tax_config: Default::default(),
                 returns_mode: Default::default(),
                 historical_block_size: None,
+                seed: None,
             },
             analysis: AnalysisConfigData {
                 mc_iterations: 1000,

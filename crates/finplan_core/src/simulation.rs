@@ -748,7 +748,8 @@ pub fn monte_carlo_simulate_with_config(
     let mut seed_results: Vec<(u64, f64)> = Vec::new();
     let mut online_stats = OnlineStats::new();
     let mut mean_accumulators: Option<MeanAccumulators> = None;
-    let mut batch_seed: u64 = 0;
+    // Use configured seed if provided, otherwise generate a random one
+    let mut batch_seed: u64 = config.seed.unwrap_or_else(|| rand::rng().next_u64());
     let mut converged = false;
     let mut final_convergence_value: Option<f64> = None;
 
@@ -999,7 +1000,8 @@ pub fn monte_carlo_simulate_with_progress(
     let mut seed_results: Vec<(u64, f64)> = Vec::new();
     let mut online_stats = OnlineStats::new();
     let mut mean_accumulators: Option<MeanAccumulators> = None;
-    let mut batch_seed: u64 = 0;
+    // Use configured seed if provided, otherwise generate a random one
+    let mut batch_seed: u64 = config.seed.unwrap_or_else(|| rand::rng().next_u64());
     let mut converged = false;
     let mut final_convergence_value: Option<f64> = None;
 
@@ -1248,7 +1250,8 @@ pub fn monte_carlo_stats_only(
     // Track all results and statistics
     let mut seed_results: Vec<(u64, f64)> = Vec::new();
     let mut online_stats = OnlineStats::new();
-    let mut batch_seed: u64 = 0;
+    // Use configured seed if provided, otherwise generate a random one
+    let mut batch_seed: u64 = config.seed.unwrap_or_else(|| rand::rng().next_u64());
     let mut converged = false;
     let mut final_convergence_value: Option<f64> = None;
 

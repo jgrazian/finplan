@@ -638,10 +638,14 @@ fn handle_run_analysis(state: &mut AppState) -> ActionResult {
         finplan_core::analysis::AnalysisMetric::MaxDrawdown,
     ];
 
+    // Use the scenario's configured seed for reproducibility
+    let scenario_seed = state.data().parameters.seed;
+
     let sweep_config = SweepConfig {
         parameters,
         metrics,
         mc_iterations: state.analysis_state.mc_iterations,
+        seed: scenario_seed,
         ..Default::default()
     };
 

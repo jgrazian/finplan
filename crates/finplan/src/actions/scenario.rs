@@ -40,7 +40,7 @@ pub fn handle_switch_to(state: &mut AppState, name: &str) -> ActionResult {
     ActionResult::close()
 }
 
-/// Handle editing simulation parameters (start date, birth date, duration)
+/// Handle editing simulation parameters (start date, birth date, duration, seed)
 pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> ActionResult {
     // Extract form fields
     let form = match ctx.form() {
@@ -51,6 +51,7 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
     let start_date = form.get_str(0).unwrap_or("").trim();
     let birth_date = form.get_str(1).unwrap_or("").trim();
     let duration_str = form.get_str(2).unwrap_or("").trim();
+    let seed_str = form.get_str(3).unwrap_or("").trim();
 
     // Validate start_date format (YYYY-MM-DD)
     if !start_date.is_empty() && start_date.parse::<jiff::civil::Date>().is_err() {
@@ -79,11 +80,27 @@ pub fn handle_edit_parameters(state: &mut AppState, ctx: ActionContext) -> Actio
         }
     };
 
+    // Parse seed (empty or whitespace-only means None, otherwise must be a valid u64)
+    let seed: Option<u64> = if seed_str.is_empty() {
+        None
+    } else {
+        match seed_str.parse() {
+            Ok(s) => Some(s),
+            Err(_) => {
+                return ActionResult::Error(format!(
+                    "Invalid seed: '{}'. Must be a positive integer or empty",
+                    seed_str
+                ));
+            }
+        }
+    };
+
     // Update the parameters
     let params = &mut state.data_mut().parameters;
     params.start_date = start_date.to_string();
     params.birth_date = birth_date.to_string();
     params.duration_years = duration;
+    params.seed = seed;
 
     // Clear the projection preview since parameters changed
     state.scenario_state.projection_preview = None;

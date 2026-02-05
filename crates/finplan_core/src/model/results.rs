@@ -326,6 +326,9 @@ pub struct MonteCarloConfig {
     /// Number of batches to run in parallel per round. Higher values use more
     /// parallelism but may increase memory usage. Defaults to 4.
     pub parallel_batches: usize,
+    /// Optional seed for reproducible results. If None, a random seed is generated.
+    /// The seed determines the sequence of random numbers used across all iterations.
+    pub seed: Option<u64>,
 }
 
 impl Default for MonteCarloConfig {
@@ -337,6 +340,7 @@ impl Default for MonteCarloConfig {
             convergence: None,
             batch_size: 100,
             parallel_batches: 4,
+            seed: None,
         }
     }
 }

@@ -41,6 +41,11 @@ pub struct ParametersData {
     /// None = i.i.d. sampling, Some(n) = n-year block bootstrap
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub historical_block_size: Option<usize>,
+
+    /// Optional seed for reproducible Monte Carlo results.
+    /// If None, a random seed is generated for each run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 }
 
 fn default_duration() -> usize {
@@ -220,6 +225,7 @@ impl Default for ParametersData {
             tax_config: TaxConfigData::default(),
             returns_mode: ReturnsMode::default(),
             historical_block_size: None,
+            seed: None,
         }
     }
 }
@@ -244,6 +250,7 @@ mod tests {
             },
             returns_mode: ReturnsMode::Parametric,
             historical_block_size: None,
+            seed: Some(12345),
         };
 
         let yaml = serde_saphyr::to_string(&params).unwrap();
@@ -251,5 +258,6 @@ mod tests {
 
         let deserialized: ParametersData = serde_saphyr::from_str(&yaml).unwrap();
         assert_eq!(deserialized.duration_years, 40);
+        assert_eq!(deserialized.seed, Some(12345));
     }
 }

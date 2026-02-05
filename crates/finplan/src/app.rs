@@ -384,12 +384,15 @@ impl App {
                         }
                     };
 
-                    let birth_date = self.state.data().parameters.birth_date.clone();
-                    let start_date = self.state.data().parameters.start_date.clone();
+                    let params = &self.state.data().parameters;
+                    let birth_date = params.birth_date.clone();
+                    let start_date = params.start_date.clone();
+                    let mc_seed = params.seed;
 
                     match request {
                         PendingSimulation::Single => {
-                            let seed = rand::rng().next_u64();
+                            // For single simulation, use configured seed or generate random
+                            let seed = mc_seed.unwrap_or_else(|| rand::rng().next_u64());
                             self.worker.send(SimulationRequest::Single {
                                 config,
                                 seed,
@@ -401,6 +404,7 @@ impl App {
                             self.worker.send(SimulationRequest::MonteCarlo {
                                 config,
                                 iterations,
+                                seed: mc_seed,
                                 birth_date,
                                 start_date,
                             });
@@ -417,6 +421,7 @@ impl App {
                                 max_iterations,
                                 relative_threshold,
                                 metric,
+                                seed: mc_seed,
                                 birth_date,
                                 start_date,
                             });
@@ -432,9 +437,16 @@ impl App {
                     for (name, data) in &self.state.app_data.simulations {
                         match to_simulation_config(data) {
                             Ok(config) => {
+                                let seed = data.parameters.seed;
                                 let birth_date = data.parameters.birth_date.clone();
                                 let start_date = data.parameters.start_date.clone();
-                                scenarios.push((name.clone(), config, birth_date, start_date));
+                                scenarios.push((
+                                    name.clone(),
+                                    config,
+                                    seed,
+                                    birth_date,
+                                    start_date,
+                                ));
                             }
                             Err(e) => {
                                 errors.push(format!("{}: {}", name, e));
@@ -458,7 +470,7 @@ impl App {
                     scenarios.sort_by(|a, b| a.0.cmp(&b.0));
 
                     // Update status with first scenario name
-                    let first_name = scenarios.first().map(|(n, _, _, _)| n.clone());
+                    let first_name = scenarios.first().map(|(n, _, _, _, _)| n.clone());
                     self.state.simulation_status = SimulationStatus::RunningBatch {
                         scenario_index: 0,
                         scenario_total: scenarios.len(),

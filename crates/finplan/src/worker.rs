@@ -35,6 +35,8 @@ pub enum SimulationRequest {
     MonteCarlo {
         config: SimulationConfig,
         iterations: usize,
+        /// Optional seed for reproducible results (None = random each run)
+        seed: Option<u64>,
         birth_date: String,
         start_date: String,
     },
@@ -45,13 +47,15 @@ pub enum SimulationRequest {
         max_iterations: usize,
         relative_threshold: f64,
         metric: ConvergenceMetric,
+        /// Optional seed for reproducible results (None = random each run)
+        seed: Option<u64>,
         birth_date: String,
         start_date: String,
     },
     /// Run Monte Carlo on multiple scenarios (batch mode)
     Batch {
-        /// Vec of (scenario_name, config, birth_date, start_date)
-        scenarios: Vec<(String, SimulationConfig, String, String)>,
+        /// Vec of (scenario_name, config, seed, birth_date, start_date)
+        scenarios: Vec<(String, SimulationConfig, Option<u64>, String, String)>,
         iterations: usize,
     },
     /// Run sweep analysis (parameter sensitivity)
@@ -249,16 +253,18 @@ fn worker_loop(
             SimulationRequest::MonteCarlo {
                 config,
                 iterations,
+                seed,
                 birth_date,
                 start_date,
             } => {
-                tracing::info!(iterations = iterations, "Starting Monte Carlo simulation");
+                tracing::info!(iterations = iterations, seed = ?seed, "Starting Monte Carlo simulation");
                 progress.store(0, Ordering::SeqCst);
 
                 match run_monte_carlo_simulation(
                     &config,
                     iterations,
                     None, // No convergence config
+                    seed,
                     &birth_date,
                     &start_date,
                     &cancel_flag,
@@ -284,6 +290,7 @@ fn worker_loop(
                 max_iterations,
                 relative_threshold,
                 metric,
+                seed,
                 birth_date,
                 start_date,
             } => {
@@ -299,6 +306,7 @@ fn worker_loop(
                     &config,
                     min_iterations,
                     convergence,
+                    seed,
                     &birth_date,
                     &start_date,
                     &cancel_flag,
@@ -415,6 +423,7 @@ fn run_monte_carlo_simulation(
     config: &SimulationConfig,
     iterations: usize,
     convergence: Option<ConvergenceConfig>,
+    seed: Option<u64>,
     birth_date: &str,
     start_date: &str,
     cancel_flag: &Arc<AtomicBool>,
@@ -433,6 +442,7 @@ fn run_monte_carlo_simulation(
         compute_mean: true,
         convergence,
         parallel_batches: cpu_parallel_batches(),
+        seed,
         ..Default::default()
     };
 
@@ -513,7 +523,7 @@ fn run_monte_carlo_simulation(
 
 /// Run Monte Carlo on multiple scenarios in batch mode
 fn run_batch_monte_carlo(
-    scenarios: Vec<(String, SimulationConfig, String, String)>,
+    scenarios: Vec<(String, SimulationConfig, Option<u64>, String, String)>,
     iterations: usize,
     cancel_flag: &Arc<AtomicBool>,
     progress: &Arc<AtomicUsize>,
@@ -522,7 +532,8 @@ fn run_batch_monte_carlo(
 ) -> Result<usize, ()> {
     let mut completed_count = 0;
 
-    for (idx, (scenario_name, config, birth_date, start_date)) in scenarios.into_iter().enumerate()
+    for (idx, (scenario_name, config, seed, birth_date, start_date)) in
+        scenarios.into_iter().enumerate()
     {
         // Update batch scenario index
         batch_scenario_index.store(idx, Ordering::SeqCst);
@@ -539,6 +550,7 @@ fn run_batch_monte_carlo(
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: false,
             parallel_batches: cpu_parallel_batches(),
+            seed,
             ..Default::default()
         };
 

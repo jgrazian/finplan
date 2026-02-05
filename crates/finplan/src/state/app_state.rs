@@ -648,8 +648,12 @@ impl AppState {
             .to_simulation_config()
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
-        // Generate a random seed
-        let seed = rand::rng().next_u64();
+        // Use configured seed or generate a random one
+        let seed = self
+            .data()
+            .parameters
+            .seed
+            .unwrap_or_else(|| rand::rng().next_u64());
 
         // Run the simulation
         let core_result = finplan_core::simulation::simulate(&config, seed)
@@ -682,12 +686,16 @@ impl AppState {
             .to_simulation_config()
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
+        // Get configured seed (if any) for reproducibility
+        let seed = self.data().parameters.seed;
+
         // Configure Monte Carlo simulation with CPU-based parallelism
         let mc_config = finplan_core::model::MonteCarloConfig {
             iterations: num_iterations,
             percentiles: vec![0.05, 0.50, 0.95],
             compute_mean: true,
             parallel_batches: cpu_parallel_batches(),
+            seed,
             ..Default::default()
         };
 
@@ -763,8 +771,12 @@ impl AppState {
             .to_simulation_config()
             .map_err(|e| SimulationError::Config(e.to_string()))?;
 
-        // Generate a random seed
-        let seed = rand::rng().next_u64();
+        // Use configured seed or generate a random one
+        let seed = self
+            .data()
+            .parameters
+            .seed
+            .unwrap_or_else(|| rand::rng().next_u64());
 
         // Run the simulation
         let core_result = finplan_core::simulation::simulate(&config, seed)

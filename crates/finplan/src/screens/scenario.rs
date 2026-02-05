@@ -278,6 +278,9 @@ impl Component for ScenarioScreen {
                 params.start_date.clone()
             };
 
+            // Format seed as empty string if None, otherwise the number
+            let seed_str = params.seed.map(|s| s.to_string()).unwrap_or_default();
+
             let form = FormModal::new(
                 "Edit Simulation Parameters",
                 vec![
@@ -292,6 +295,7 @@ impl Component for ScenarioScreen {
                         FieldType::Text,
                         &params.duration_years.to_string(),
                     ),
+                    FormField::new("Seed (optional)", FieldType::Text, &seed_str),
                 ],
                 ModalAction::EDIT_PARAMETERS,
             );
@@ -502,8 +506,7 @@ impl ScenarioScreen {
         ]);
 
         let title = " SCENARIOS ";
-
-        let block = focused_block_with_help(title, focused, "[j/k] scroll");
+        let block = focused_block(title, focused);
 
         // Layout for list + keybinds
         let inner = block.inner(area);

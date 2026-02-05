@@ -462,6 +462,7 @@ pub fn sweep_simulate(
         percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
         compute_mean: false,
         parallel_batches: sweep_config.parallel_batches,
+        seed: sweep_config.seed,
         ..Default::default()
     };
 
@@ -581,6 +582,7 @@ pub fn sweep_simulate_lazy(
         percentiles: vec![0.05, 0.25, 0.50, 0.75, 0.95],
         compute_mean: false,
         parallel_batches: sweep_config.parallel_batches,
+        seed: sweep_config.seed,
         ..Default::default()
     };
 
