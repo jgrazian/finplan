@@ -324,8 +324,8 @@ impl AccountsPanel {
             .iter()
             .map(|a| format_currency_short(a.value).len())
             .max()
-            .unwrap_or(2)
-            .max(2); // Minimum width for "$0"
+            .unwrap_or(7)
+            .max(7); // Minimum width to avoid truncation during editing
 
         // Fixed widths: prefix(2) + ticker(6) + space(1) + space(1) + pct(6) + space(1) + val(dynamic)
         let fixed_width = 2 + 6 + 1 + 1 + 6 + 1 + max_val_width;

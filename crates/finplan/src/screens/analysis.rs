@@ -961,12 +961,22 @@ impl AnalysisScreen {
         // Create dataset with metric-specific color
         let color = metric_color(metric);
 
-        // Create axis labels
-        let x_labels = vec![
-            Span::raw(format!("{:.0}", x_min)),
-            Span::raw(format!("{:.0}", (x_min + x_max) / 2.0)),
-            Span::raw(format!("{:.0}", x_max)),
-        ];
+        // Create axis labels - check if axis represents currency (label ends with "Amount")
+        let x_label = results.param_label(x_dim);
+        let x_is_currency = x_label.ends_with("Amount");
+        let x_labels = if x_is_currency {
+            vec![
+                Span::raw(format_compact_currency(x_min)),
+                Span::raw(format_compact_currency((x_min + x_max) / 2.0)),
+                Span::raw(format_compact_currency(x_max)),
+            ]
+        } else {
+            vec![
+                Span::raw(format!("{:.0}", x_min)),
+                Span::raw(format!("{:.0}", (x_min + x_max) / 2.0)),
+                Span::raw(format!("{:.0}", x_max)),
+            ]
+        };
 
         let y_labels = if *metric == AnalysisMetricData::SuccessRate {
             vec![
@@ -983,7 +993,6 @@ impl AnalysisScreen {
         };
 
         // Use the correct parameter label for the x-axis
-        let x_label = results.param_label(x_dim);
         let x_axis = Axis::default()
             .title(x_label.to_string().dark_gray())
             .bounds([x_min - x_padding, x_max + x_padding])
