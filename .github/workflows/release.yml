@@ -19,6 +19,12 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: finplan-windows-x86_64.exe
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact: finplan-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: finplan-macos-aarch64
 
     runs-on: ${{ matrix.os }}
 
@@ -51,6 +57,10 @@ jobs:
       - name: Rename binary (Windows)
         if: matrix.os == 'windows-latest'
         run: mv target/${{ matrix.target }}/release/finplan.exe target/${{ matrix.target }}/release/${{ matrix.artifact }}
+
+      - name: Rename binary (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: mv target/${{ matrix.target }}/release/finplan target/${{ matrix.target }}/release/${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
