@@ -179,6 +179,12 @@ pub fn handle_edit_account(state: &mut AppState, ctx: ActionContext) -> ActionRe
         None => return ActionResult::close(),
     };
 
+    // Capture old name before edit
+    let old_name = match state.data().portfolios.accounts.get(idx) {
+        Some(a) => a.name.clone(),
+        None => return ActionResult::close(),
+    };
+
     if let Some(account) = state.data_mut().portfolios.accounts.get_mut(idx) {
         match &mut account.account_type {
             AccountType::Checking(prop)
@@ -223,10 +229,17 @@ pub fn handle_edit_account(state: &mut AppState, ctx: ActionContext) -> ActionRe
                 account.description = form.get_optional_str(1);
             }
         }
-        ActionResult::modified()
     } else {
-        ActionResult::close()
+        return ActionResult::close();
     }
+
+    // Propagate rename if name changed
+    let new_name = state.data().portfolios.accounts[idx].name.clone();
+    if old_name != new_name {
+        state.data_mut().rename_account(&old_name, &new_name);
+    }
+
+    ActionResult::modified()
 }
 
 /// Handle account deletion

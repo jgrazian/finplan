@@ -289,6 +289,12 @@ pub fn handle_edit_event(state: &mut AppState, ctx: ActionContext) -> ActionResu
         None => return ActionResult::close(),
     };
 
+    // Capture old name before edit
+    let old_name = match state.data().events.get(idx) {
+        Some(e) => e.name.0.clone(),
+        None => return ActionResult::close(),
+    };
+
     if let Some(event) = state.data_mut().events.get_mut(idx) {
         // Fields: [name, description, once, enabled, trigger, effects (ro)]
         // Note: trigger editing is handled separately via Enter on the Trigger field
@@ -298,10 +304,23 @@ pub fn handle_edit_event(state: &mut AppState, ctx: ActionContext) -> ActionResu
         event.description = form.get_optional_str(1);
         event.once = form.get_bool_or(2, false);
         event.enabled = form.get_bool_or(3, true);
-        ActionResult::modified()
     } else {
-        ActionResult::close()
+        return ActionResult::close();
     }
+
+    // Propagate rename if name changed
+    let new_name = state.data().events[idx].name.0.clone();
+    if old_name != new_name {
+        state.data_mut().rename_event(&old_name, &new_name);
+        // Also update the runtime analysis state (separate from persisted data)
+        for sweep in &mut state.analysis_state.sweep_parameters {
+            if sweep.event_name == old_name {
+                sweep.event_name = new_name.clone();
+            }
+        }
+    }
+
+    ActionResult::modified()
 }
 
 /// Handle event deletion

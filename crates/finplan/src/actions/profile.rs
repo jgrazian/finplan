@@ -211,6 +211,12 @@ pub fn handle_edit_profile(state: &mut AppState, ctx: ActionContext) -> ActionRe
         None => return ActionResult::close(),
     };
 
+    // Capture old name before edit
+    let old_name = match state.data().profiles.get(idx) {
+        Some(p) => p.name.0.clone(),
+        None => return ActionResult::close(),
+    };
+
     if let Some(profile_data) = state.data_mut().profiles.get_mut(idx) {
         // Update name and description from form
         if let Some(name) = form.str_non_empty("Name") {
@@ -273,10 +279,17 @@ pub fn handle_edit_profile(state: &mut AppState, ctx: ActionContext) -> ActionRe
                 // Bootstrap profiles use historical presets, no editable parameters
             }
         }
-        ActionResult::modified()
     } else {
-        ActionResult::close()
+        return ActionResult::close();
     }
+
+    // Propagate rename if name changed
+    let new_name = state.data().profiles[idx].name.0.clone();
+    if old_name != new_name {
+        state.data_mut().rename_profile(&old_name, &new_name);
+    }
+
+    ActionResult::modified()
 }
 
 /// Handle profile deletion
