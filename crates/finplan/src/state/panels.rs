@@ -211,7 +211,7 @@ impl PanelNavigable for ResultsPanel {
 pub enum AnalysisPanel {
     #[default]
     Parameters,
-    Metrics,
+    Sensitivity,
     Config,
     Results,
 }
@@ -229,8 +229,8 @@ impl AnalysisPanel {
 impl PanelNavigable for AnalysisPanel {
     fn next(self) -> Self {
         match self {
-            Self::Parameters => Self::Metrics,
-            Self::Metrics => Self::Config,
+            Self::Parameters => Self::Sensitivity,
+            Self::Sensitivity => Self::Config,
             Self::Config => Self::Results,
             Self::Results => Self::Parameters,
         }
@@ -239,8 +239,8 @@ impl PanelNavigable for AnalysisPanel {
     fn prev(self) -> Self {
         match self {
             Self::Parameters => Self::Results,
-            Self::Metrics => Self::Parameters,
-            Self::Config => Self::Metrics,
+            Self::Sensitivity => Self::Parameters,
+            Self::Config => Self::Sensitivity,
             Self::Results => Self::Config,
         }
     }

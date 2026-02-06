@@ -367,6 +367,23 @@ use crate::data::analysis_data::{
 };
 use finplan_core::analysis::{AnalysisMetric, SweepResults};
 
+/// A single parameter's sensitivity to a metric (for tornado chart)
+#[derive(Debug, Clone)]
+pub struct SensitivityEntry {
+    /// Index of the parameter in sweep_parameters
+    pub param_index: usize,
+    /// Display label for the parameter
+    pub param_label: String,
+    /// Metric value when param is at its minimum (averaged over other params)
+    pub low_value: f64,
+    /// Metric value when param is at its maximum (averaged over other params)
+    pub high_value: f64,
+    /// Signed impact: high_value - low_value
+    pub impact: f64,
+    /// Absolute impact for sorting
+    pub abs_impact: f64,
+}
+
 /// Results from a sweep analysis - wraps core's N-dimensional SweepResults
 #[derive(Debug, Clone)]
 pub struct AnalysisResults {
@@ -708,6 +725,123 @@ impl AnalysisResults {
         (param_values, min_values, max_values)
     }
 
+    /// Compute sensitivity of a metric to each sweep parameter.
+    /// For each parameter, averages the metric across all other parameter combinations
+    /// at the parameter's min and max values, showing the "main effect".
+    /// Results are sorted by absolute impact (most impactful first).
+    pub fn compute_sensitivity(&self, metric: &AnalysisMetricData) -> Vec<SensitivityEntry> {
+        let ndim = self.ndim();
+        let shape = self.shape();
+
+        if ndim == 0 || shape.contains(&0) {
+            return Vec::new();
+        }
+
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        let mut entries = Vec::new();
+
+        for dim in 0..ndim {
+            let dim_size = shape[dim];
+            if dim_size < 2 {
+                continue;
+            }
+
+            // Collect all metric values for first and last index of this dimension
+            let mut values_at_min = Vec::new();
+            let mut values_at_max = Vec::new();
+
+            self.collect_values_for_x(
+                &core_metric,
+                dim,
+                0, // min index
+                &mut vec![0; ndim],
+                0,
+                shape,
+                &mut values_at_min,
+            );
+
+            self.collect_values_for_x(
+                &core_metric,
+                dim,
+                dim_size - 1, // max index
+                &mut vec![0; ndim],
+                0,
+                shape,
+                &mut values_at_max,
+            );
+
+            let avg_at_min = if values_at_min.is_empty() {
+                0.0
+            } else {
+                values_at_min.iter().sum::<f64>() / values_at_min.len() as f64
+            };
+
+            let avg_at_max = if values_at_max.is_empty() {
+                0.0
+            } else {
+                values_at_max.iter().sum::<f64>() / values_at_max.len() as f64
+            };
+
+            let low_value = avg_at_min * scale;
+            let high_value = avg_at_max * scale;
+            let impact = high_value - low_value;
+
+            entries.push(SensitivityEntry {
+                param_index: dim,
+                param_label: self.param_label(dim).to_string(),
+                low_value,
+                high_value,
+                impact,
+                abs_impact: impact.abs(),
+            });
+        }
+
+        // Sort by absolute impact (most impactful first)
+        entries.sort_by(|a, b| {
+            b.abs_impact
+                .partial_cmp(&a.abs_impact)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        entries
+    }
+
+    /// Compute the baseline metric value (all parameters at midpoint).
+    pub fn compute_baseline(&self, metric: &AnalysisMetricData) -> f64 {
+        let ndim = self.ndim();
+        let shape = self.shape();
+        if ndim == 0 || shape.contains(&0) {
+            return 0.0;
+        }
+
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        let mid_indices: Vec<usize> = (0..ndim).map(|d| self.midpoint_index(d)).collect();
+        if let Some(point) = self.sweep_results.get(&mid_indices) {
+            point.compute_metric(&core_metric, self.sweep_results.birth_year) * scale
+        } else {
+            0.0
+        }
+    }
+
+    /// Compute the overall min/max of a metric across all grid points.
+    pub fn compute_metric_range(&self, metric: &AnalysisMetricData) -> (f64, f64) {
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        let (values, _rows, _cols) = self.sweep_results.get_metric_grid(&core_metric);
+        if values.is_empty() {
+            return (0.0, 0.0);
+        }
+
+        let min = values.iter().cloned().fold(f64::INFINITY, f64::min) * scale;
+        let max = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * scale;
+        (min, max)
+    }
+
     /// Helper to recursively collect metric values for a fixed X index across all other dimensions
     #[allow(clippy::too_many_arguments)]
     fn collect_values_for_x(
@@ -770,6 +904,8 @@ pub struct AnalysisState {
     pub selected_param_index: usize,
     /// Selected metric index (for navigation in metrics panel)
     pub selected_metric_index: usize,
+    /// Selected metric index for sensitivity tornado chart
+    pub sensitivity_metric_index: usize,
     /// Selected metrics to compute
     pub selected_metrics: HashSet<AnalysisMetricData>,
     /// Monte Carlo iterations per point
@@ -805,6 +941,7 @@ impl AnalysisState {
             sweep_parameters: Vec::new(),
             selected_param_index: 0,
             selected_metric_index: 0,
+            sensitivity_metric_index: 0,
             selected_metrics,
             mc_iterations: 500,
             default_steps: 6,
@@ -848,6 +985,7 @@ impl AnalysisState {
         // Reset transient state
         self.selected_param_index = 0;
         self.selected_metric_index = 0;
+        self.sensitivity_metric_index = 0;
         self.selected_chart_index = 0;
         self.results = None;
         self.results_fingerprint = None;

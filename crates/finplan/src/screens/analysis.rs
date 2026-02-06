@@ -13,7 +13,7 @@ use ratatui::{
 use super::Screen;
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
-use crate::state::{AnalysisPanel, AnalysisResults, AppState};
+use crate::state::{AnalysisPanel, AnalysisResults, AppState, SensitivityEntry};
 use crate::util::format::{format_compact_currency, format_currency_short};
 use crate::{
     actions::ActionResult,
@@ -191,25 +191,234 @@ impl AnalysisScreen {
         }
     }
 
-    /// Render the Metrics panel (right-top) - static list of computed metrics
-    fn render_metrics(&self, frame: &mut Frame, area: Rect, _state: &AppState, focused: bool) {
-        let block = focused_block(" METRICS ", focused);
+    /// Render the Sensitivity panel (right side) - tornado chart showing parameter impact
+    fn render_sensitivity(&self, frame: &mut Frame, area: Rect, state: &AppState, focused: bool) {
+        let block = focused_block_with_help(" SENSITIVITY ", focused, "[h/l/j/k] metric");
 
-        let items: Vec<ListItem> = AVAILABLE_METRICS
+        let inner_block = block.clone();
+        frame.render_widget(block, area);
+        let inner = inner_block.inner(area);
+
+        if inner.height < 4 || inner.width < 20 {
+            return;
+        }
+
+        // Get current metric from sensitivity_metric_index
+        let metric_idx = state.analysis_state.sensitivity_metric_index % AVAILABLE_METRICS.len();
+        let selected_metric = &AVAILABLE_METRICS[metric_idx];
+        let color = metric_color(selected_metric);
+        let is_pct = matches!(
+            selected_metric,
+            AnalysisMetricData::SuccessRate | AnalysisMetricData::MaxDrawdown
+        );
+
+        let has_results = state.analysis_state.results.is_some();
+        let num_params = state
+            .analysis_state
+            .results
+            .as_ref()
+            .map_or(0, |r| r.ndim());
+
+        let content_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),                               // [0] Metric title
+                Constraint::Length(1),                               // [1] Spacer
+                Constraint::Length(num_params.max(1) as u16),        // [2] Tornado chart
+                Constraint::Length(if has_results { 2 } else { 0 }), // [3] Baseline + range
+                Constraint::Min(0),                                  // [4] Flexible space
+                Constraint::Length(1),                               // [5] Metric dots
+            ])
+            .split(inner);
+
+        // Row 1: Selected metric title
+        let title_line = Line::from(vec![
+            Span::styled("  ● ", Style::default().fg(color)),
+            Span::styled(
+                selected_metric.label(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+        ]);
+        frame.render_widget(Paragraph::new(title_line), content_layout[0]);
+
+        // Row 2: Tornado chart
+        if let Some(results) = &state.analysis_state.results {
+            let entries = results.compute_sensitivity(selected_metric);
+            if !entries.is_empty() {
+                self.render_tornado_chart(frame, content_layout[2], &entries, selected_metric);
+            } else {
+                let placeholder = Paragraph::new(Span::styled(
+                    "  Not enough data for sensitivity analysis",
+                    Style::default().fg(Color::DarkGray),
+                ));
+                frame.render_widget(placeholder, content_layout[2]);
+            }
+
+            // Row 3: Baseline & range
+            let baseline = results.compute_baseline(selected_metric);
+            let (range_min, range_max) = results.compute_metric_range(selected_metric);
+            let fmt_val = |v: f64| -> String {
+                if is_pct {
+                    format!("{:.0}%", v)
+                } else {
+                    format_compact_currency(v)
+                }
+            };
+            let summary_line = Line::from(vec![
+                Span::raw("  "),
+                Span::styled("Baseline: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(fmt_val(baseline), Style::default().fg(Color::White)),
+                Span::styled("    Range: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{} - {}", fmt_val(range_min), fmt_val(range_max)),
+                    Style::default().fg(Color::White),
+                ),
+            ]);
+            if content_layout[3].height >= 2 {
+                let summary_area = Rect::new(
+                    content_layout[3].x,
+                    content_layout[3].y + 1,
+                    content_layout[3].width,
+                    1,
+                );
+                frame.render_widget(Paragraph::new(summary_line), summary_area);
+            }
+        } else if state.analysis_state.running {
+            let placeholder = Paragraph::new(Span::styled(
+                "  Analysis in progress...",
+                Style::default().fg(Color::Yellow),
+            ));
+            frame.render_widget(placeholder, content_layout[2]);
+        } else {
+            let placeholder = Paragraph::new(Span::styled(
+                "  Run analysis (r) to see sensitivity",
+                Style::default().fg(Color::DarkGray),
+            ));
+            frame.render_widget(placeholder, content_layout[2]);
+        }
+
+        // Row 5 (bottom): Metric selector dots
+        let mut dots: Vec<Span> = vec![Span::raw("  ")];
+        for (i, m) in AVAILABLE_METRICS.iter().enumerate() {
+            let mc = metric_color(m);
+            let is_selected = i == metric_idx;
+            if is_selected {
+                dots.push(Span::styled(
+                    "●",
+                    Style::default().fg(mc).add_modifier(Modifier::BOLD),
+                ));
+                dots.push(Span::styled(
+                    format!(" {} ", m.short_label()),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                dots.push(Span::styled("●", Style::default().fg(mc)));
+                dots.push(Span::styled(
+                    format!(" {} ", m.short_label()),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        }
+        frame.render_widget(Paragraph::new(Line::from(dots)), content_layout[5]);
+    }
+
+    /// Render the tornado chart bars
+    fn render_tornado_chart(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        entries: &[SensitivityEntry],
+        metric: &AnalysisMetricData,
+    ) {
+        let is_pct = matches!(
+            metric,
+            AnalysisMetricData::SuccessRate | AnalysisMetricData::MaxDrawdown
+        );
+
+        // Find the max absolute impact for scaling bars
+        let max_impact = entries.iter().map(|e| e.abs_impact).fold(0.0_f64, f64::max);
+        if max_impact < 0.0001 {
+            let placeholder = Paragraph::new(Span::styled(
+                "  No significant sensitivity detected",
+                Style::default().fg(Color::DarkGray),
+            ));
+            frame.render_widget(placeholder, area);
+            return;
+        }
+
+        let color = metric_color(metric);
+
+        // Calculate column widths
+        let label_width = entries
             .iter()
-            .map(|metric| {
-                let color = metric_color(metric);
-                ListItem::new(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled("●", Style::default().fg(color)),
-                    Span::raw(" "),
-                    Span::styled(metric.label(), Style::default().fg(Color::White)),
-                ]))
-            })
-            .collect();
+            .map(|e| e.param_label.len())
+            .max()
+            .unwrap_or(10)
+            .min(24) as u16;
+        let value_width: u16 = if is_pct { 16 } else { 20 }; // "  54.0% - 100.0%" or "  $54K - $100K"
+        let bar_width = area.width.saturating_sub(label_width + value_width + 4); // 4 for padding
 
-        let list = List::new(items).block(block);
-        frame.render_widget(list, area);
+        // Render each entry as a row
+        for (i, entry) in entries.iter().enumerate() {
+            if i as u16 >= area.height {
+                break;
+            }
+
+            let row_y = area.y + i as u16;
+
+            // Parameter label (right-aligned in label column)
+            let label = if entry.param_label.len() > label_width as usize {
+                entry.param_label[..label_width as usize].to_string()
+            } else {
+                format!(
+                    "{:>width$}",
+                    entry.param_label,
+                    width = label_width as usize
+                )
+            };
+            let label_area = Rect::new(area.x, row_y, label_width, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(label, Style::default().fg(Color::White))),
+                label_area,
+            );
+
+            // Bar
+            let bar_chars = ((entry.abs_impact / max_impact) * bar_width as f64).round() as u16;
+            let bar_chars = bar_chars.max(1).min(bar_width);
+
+            let bar_str: String = "█".repeat(bar_chars as usize);
+            let bar_area = Rect::new(area.x + label_width + 2, row_y, bar_width, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(bar_str, Style::default().fg(color))),
+                bar_area,
+            );
+
+            // Value range
+            let (lo, hi) = if entry.low_value <= entry.high_value {
+                (entry.low_value, entry.high_value)
+            } else {
+                (entry.high_value, entry.low_value)
+            };
+            let range_str = if is_pct {
+                format!("  {:.0}% - {:.0}%", lo, hi)
+            } else {
+                format!(
+                    "  {} - {}",
+                    format_compact_currency(lo),
+                    format_compact_currency(hi)
+                )
+            };
+            let val_area = Rect::new(area.x + label_width + 2 + bar_width, row_y, value_width, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    range_str,
+                    Style::default().fg(Color::DarkGray),
+                )),
+                val_area,
+            );
+        }
     }
 
     /// Render the Config panel (right-middle)
@@ -1139,6 +1348,27 @@ impl Component for AnalysisScreen {
             return EventResult::Handled;
         }
 
+        // j/k/h/l in Sensitivity panel cycles metrics
+        if (KeybindingsConfig::matches(&key, &kb.navigation.down)
+            || KeybindingsConfig::matches(&key, &kb.navigation.right))
+            && panel == AnalysisPanel::Sensitivity
+        {
+            state.analysis_state.sensitivity_metric_index =
+                (state.analysis_state.sensitivity_metric_index + 1) % AVAILABLE_METRICS.len();
+            return EventResult::Handled;
+        }
+        if (KeybindingsConfig::matches(&key, &kb.navigation.up)
+            || KeybindingsConfig::matches(&key, &kb.navigation.left))
+            && panel == AnalysisPanel::Sensitivity
+        {
+            if state.analysis_state.sensitivity_metric_index == 0 {
+                state.analysis_state.sensitivity_metric_index = AVAILABLE_METRICS.len() - 1;
+            } else {
+                state.analysis_state.sensitivity_metric_index -= 1;
+            }
+            return EventResult::Handled;
+        }
+
         // a: Add parameter
         if KeybindingsConfig::matches(&key, &kb.tabs.analyze.add_param) {
             if panel == AnalysisPanel::Parameters {
@@ -1207,8 +1437,8 @@ impl Component for AnalysisScreen {
                         }
                     }
                 }
-                AnalysisPanel::Metrics => {
-                    // Metrics panel is static - no action on Enter
+                AnalysisPanel::Sensitivity => {
+                    // Sensitivity panel - no Enter action needed
                 }
                 AnalysisPanel::Config => {
                     // Show settings
@@ -1317,47 +1547,42 @@ impl Component for AnalysisScreen {
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),        // Top section (Parameters | Metrics + Config)
-                Constraint::Percentage(50), // Results
+                Constraint::Min(10),        // Top section
+                Constraint::Percentage(60), // Results
             ])
             .split(area);
 
-        // Top section: left (Parameters) and right (Metrics + Config)
+        // Top section: left (Parameters + Config stacked) and right (Sensitivity)
         let top_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(40), // Parameters (full height of top)
-                Constraint::Percentage(60), // Metrics + Config stacked
+                Constraint::Percentage(30), // Parameters + Config
+                Constraint::Percentage(70), // Sensitivity (tornado chart)
             ])
             .split(main_layout[0]);
 
-        // Right side of top: Metrics (top) and Config (bottom)
-        let right_layout = Layout::default()
+        // Left side of top: Parameters (top) and Config (bottom)
+        let left_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Percentage(60), // Metrics
-                Constraint::Percentage(40), // Config
+                Constraint::Percentage(65), // Parameters
+                Constraint::Percentage(35), // Config
             ])
-            .split(top_layout[1]);
+            .split(top_layout[0]);
 
-        // Render all 4 panels
+        // Render all panels
         self.render_parameters(
             frame,
-            top_layout[0],
+            left_layout[0],
             state,
             panel == AnalysisPanel::Parameters,
         );
-        self.render_metrics(
+        self.render_config(frame, left_layout[1], state, panel == AnalysisPanel::Config);
+        self.render_sensitivity(
             frame,
-            right_layout[0],
+            top_layout[1],
             state,
-            panel == AnalysisPanel::Metrics,
-        );
-        self.render_config(
-            frame,
-            right_layout[1],
-            state,
-            panel == AnalysisPanel::Config,
+            panel == AnalysisPanel::Sensitivity,
         );
         self.render_results(
             frame,
