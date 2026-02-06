@@ -19,7 +19,7 @@ pub enum TriggerParam {
 /// Target for sweeping an effect parameter
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EffectParam {
-    /// Modify the Fixed value in an amount (unwraps InflationAdjusted if present)
+    /// Modify the Fixed value in an amount (unwraps `InflationAdjusted` if present)
     Value,
     /// Modify Scale multiplier
     Multiplier,
@@ -28,7 +28,7 @@ pub enum EffectParam {
 /// Specifies which effect to target within an event
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum EffectTarget {
-    /// Apply to first eligible effect (Income, Expense, Sweep, AssetPurchase, AssetSale, etc.)
+    /// Apply to first eligible effect (Income, Expense, Sweep, `AssetPurchase``AssetSale`le, etc.)
     #[default]
     FirstEligible,
     /// Apply to specific effect by index (0-based)
@@ -75,6 +75,7 @@ impl<T: Clone> SweepGrid<T> {
     }
 
     /// Create a grid from existing data. Data must be in row-major order.
+    #[must_use]
     pub fn from_data(shape: Vec<usize>, data: Vec<T>) -> Option<Self> {
         let total_size: usize = shape.iter().product();
         if data.len() != total_size {
@@ -89,26 +90,31 @@ impl<T: Clone> SweepGrid<T> {
     }
 
     /// Get the shape of the grid
+    #[must_use]
     pub fn shape(&self) -> &[usize] {
         &self.shape
     }
 
     /// Get the number of dimensions
+    #[must_use]
     pub fn ndim(&self) -> usize {
         self.shape.len()
     }
 
     /// Get the total number of elements
+    #[must_use]
     pub fn len(&self) -> usize {
         self.data.len()
     }
 
     /// Check if the grid is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
     /// Convert multi-dimensional indices to flat index
+    #[must_use]
     pub fn flat_index(&self, indices: &[usize]) -> Option<usize> {
         if indices.len() != self.shape.len() {
             return None;
@@ -124,6 +130,7 @@ impl<T: Clone> SweepGrid<T> {
     }
 
     /// Convert flat index to multi-dimensional indices
+    #[must_use]
     pub fn multi_index(&self, flat: usize) -> Option<Vec<usize>> {
         if flat >= self.data.len() {
             return None;
@@ -138,6 +145,7 @@ impl<T: Clone> SweepGrid<T> {
     }
 
     /// Get a reference to the value at the given indices
+    #[must_use]
     pub fn get(&self, indices: &[usize]) -> Option<&T> {
         self.flat_index(indices).map(|i| &self.data[i])
     }
@@ -158,6 +166,7 @@ impl<T: Clone> SweepGrid<T> {
     }
 
     /// Get a reference to the underlying data
+    #[must_use]
     pub fn data(&self) -> &[T] {
         &self.data
     }
@@ -168,6 +177,7 @@ impl<T: Clone> SweepGrid<T> {
     }
 
     /// Iterate over all indices in row-major order
+    #[must_use]
     pub fn indices(&self) -> GridIndices {
         GridIndices {
             shape: self.shape.clone(),
@@ -183,6 +193,7 @@ impl<T: Clone> SweepGrid<T> {
 
     /// Extract a 1D slice along a dimension at fixed indices for other dimensions.
     /// Returns the values and their coordinates along the extracted dimension.
+    #[must_use]
     pub fn slice_1d(&self, dim: usize, fixed: &[Option<usize>]) -> Option<Vec<(f64, &T)>>
     where
         T: Clone,
@@ -209,7 +220,8 @@ impl<T: Clone> SweepGrid<T> {
     }
 
     /// Extract a 2D slice for two dimensions at fixed indices for others.
-    /// Returns shape (dim1_size, dim2_size) and flattened data in row-major.
+    /// Returns shape (`dim1_size`, `dim2_size`) and flattened data in row-major.
+    #[must_use]
     pub fn slice_2d(
         &self,
         dim1: usize,
@@ -252,6 +264,7 @@ impl<T: Clone> SweepGrid<T> {
 
 impl<T: Default + Clone> SweepGrid<T> {
     /// Create a new grid with default values
+    #[must_use]
     pub fn with_default(shape: Vec<usize>) -> Self {
         Self::new(shape, T::default())
     }
@@ -319,17 +332,19 @@ pub struct SweepParameter {
 
 impl SweepParameter {
     /// Create a new sweep parameter for an age trigger
+    #[must_use]
     pub fn age(event_id: EventId, min_age: u8, max_age: u8, steps: usize) -> Self {
         Self {
             event_id,
             target: SweepTarget::Trigger(TriggerParam::Age),
-            min_value: min_age as f64,
-            max_value: max_age as f64,
+            min_value: f64::from(min_age),
+            max_value: f64::from(max_age),
             step_count: steps,
         }
     }
 
     /// Create a new sweep parameter for an effect value
+    #[must_use]
     pub fn effect_value(event_id: EventId, min: f64, max: f64, steps: usize) -> Self {
         Self {
             event_id,
@@ -344,6 +359,7 @@ impl SweepParameter {
     }
 
     /// Generate the sweep values
+    #[must_use]
     pub fn sweep_values(&self) -> Vec<f64> {
         if self.step_count <= 1 {
             return vec![self.min_value];
@@ -355,6 +371,7 @@ impl SweepParameter {
     }
 
     /// Get a descriptive label for display
+    #[must_use]
     pub fn label(&self) -> String {
         match &self.target {
             SweepTarget::Trigger(TriggerParam::Age) => {
@@ -384,7 +401,7 @@ impl SweepParameter {
 pub struct SweepConfig {
     /// Parameters to sweep (supports N dimensions)
     pub parameters: Vec<SweepParameter>,
-    /// Metrics to compute at each point (used when running combined sweep_evaluate)
+    /// Metrics to compute at each point (used when running combined `sweep_evaluate`)
     pub metrics: Vec<super::AnalysisMetric>,
     /// Number of Monte Carlo iterations per point
     pub mc_iterations: usize,
@@ -398,7 +415,7 @@ pub struct SweepConfig {
 
 fn default_parallel_batches() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get())
+        .map(std::num::NonZero::get)
         .unwrap_or(1)
 }
 
@@ -416,37 +433,47 @@ impl Default for SweepConfig {
 
 impl SweepConfig {
     /// Get the number of dimensions in the sweep
+    #[must_use]
     pub fn ndim(&self) -> usize {
         self.parameters.len()
     }
 
     /// Check if this is a 1D sweep
+    #[must_use]
     pub fn is_1d(&self) -> bool {
         self.parameters.len() == 1
     }
 
     /// Check if this is a 2D sweep
+    #[must_use]
     pub fn is_2d(&self) -> bool {
         self.parameters.len() == 2
     }
 
     /// Get total number of sweep points
+    #[must_use]
     pub fn total_points(&self) -> usize {
         self.parameters.iter().map(|p| p.step_count).product()
     }
 
     /// Get the shape of the sweep grid (step counts for each parameter)
+    #[must_use]
     pub fn grid_shape(&self) -> Vec<usize> {
         self.parameters.iter().map(|p| p.step_count).collect()
     }
 
     /// Get sweep values for all parameters
+    #[must_use]
     pub fn all_sweep_values(&self) -> Vec<Vec<f64>> {
-        self.parameters.iter().map(|p| p.sweep_values()).collect()
+        self.parameters
+            .iter()
+            .map(SweepParameter::sweep_values)
+            .collect()
     }
 
     /// Get labels for all parameters
+    #[must_use]
     pub fn labels(&self) -> Vec<String> {
-        self.parameters.iter().map(|p| p.label()).collect()
+        self.parameters.iter().map(SweepParameter::label).collect()
     }
 }

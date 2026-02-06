@@ -1,7 +1,7 @@
-//! Apply EvalEvents to SimulationState
+//! Apply `EvalEvents` to `SimulationState`
 //!
-//! This module takes the evaluated EvalEvents from evaluate.rs and applies them
-//! to mutate the SimulationState, recording state changes to the ledger.
+//! This module takes the evaluated `EvalEvents` from evaluate.rs and applies them
+//! to mutate the `SimulationState`, recording state changes to the ledger.
 
 use crate::{
     error::{AccountTypeError, ApplyError, LookupError},
@@ -17,16 +17,17 @@ use crate::{
 /// Allocated once per thread and reused across Monte Carlo iterations.
 #[derive(Debug)]
 pub struct SimulationScratch {
-    /// Scratch for triggered event IDs (process_events_into)
+    /// Scratch for triggered event IDs (`process_events_into`)
     pub triggered: Vec<EventId>,
-    /// Scratch for evaluate_effect results
+    /// Scratch for `evaluate_effect` results
     pub eval_events: Vec<EvalEvent>,
     /// Scratch for event IDs to check
     pub event_ids_to_check: Vec<EventId>,
 }
 
 impl SimulationScratch {
-    /// Create a new SimulationScratch with pre-allocated capacity
+    /// Create a new `SimulationScratch` with pre-allocated capacity
+    #[must_use]
     pub fn new() -> Self {
         Self {
             triggered: Vec::with_capacity(16),
@@ -49,12 +50,12 @@ impl Default for SimulationScratch {
     }
 }
 
-/// Apply an EvalEvent to mutate the SimulationState and record to ledger
+/// Apply an `EvalEvent` to mutate the `SimulationState` and record to ledger
 pub fn apply_eval_event(state: &mut SimulationState, event: &EvalEvent) -> Result<(), ApplyError> {
     apply_eval_event_with_source(state, event, None)
 }
 
-/// Apply an EvalEvent to mutate the SimulationState and record to ledger
+/// Apply an `EvalEvent` to mutate the `SimulationState` and record to ledger
 /// with an optional source event for attribution
 pub fn apply_eval_event_with_source(
     state: &mut SimulationState,
@@ -475,7 +476,7 @@ pub fn apply_eval_event_with_source(
     }
 }
 
-/// Helper to record a ledger entry (skipped if collect_ledger is false)
+/// Helper to record a ledger entry (skipped if `collect_ledger` is false)
 #[inline]
 fn record_ledger_entry(
     state: &mut SimulationState,
@@ -573,9 +574,11 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 let trigger_type = state.event_state.get_event(event_id).map(|e| &e.trigger);
                 let needs_cooldown = matches!(
                     trigger_type,
-                    Some(EventTrigger::AccountBalance { .. })
-                        | Some(EventTrigger::AssetBalance { .. })
-                        | Some(EventTrigger::NetWorth { .. })
+                    Some(
+                        EventTrigger::AccountBalance { .. }
+                            | EventTrigger::AssetBalance { .. }
+                            | EventTrigger::NetWorth { .. }
+                    )
                 );
 
                 if needs_cooldown {
@@ -650,8 +653,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             let effects_len = state
                 .event_state
                 .get_event(event_id)
-                .map(|e| e.effects.len())
-                .unwrap_or(0);
+                .map_or(0, |e| e.effects.len());
 
             // Evaluate and apply effects by index, avoiding EventEffect clone
             for effect_idx in 0..effects_len {
@@ -680,7 +682,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                                 state.warnings.push(SimulationWarning {
                                     date: state.timeline.current_date,
                                     event_id: Some(event_id),
-                                    message: format!("failed to apply effect: {}", e),
+                                    message: format!("failed to apply effect: {e}"),
                                     kind: WarningKind::EffectSkipped,
                                 });
                             }
@@ -690,7 +692,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                         state.warnings.push(SimulationWarning {
                             date: state.timeline.current_date,
                             event_id: Some(event_id),
-                            message: format!("failed to evaluate effect: {}", e),
+                            message: format!("failed to evaluate effect: {e}"),
                             kind: WarningKind::EvaluationFailed,
                         });
                     }
@@ -732,8 +734,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             let effects_len = state
                 .event_state
                 .get_event(event_id)
-                .map(|e| e.effects.len())
-                .unwrap_or(0);
+                .map_or(0, |e| e.effects.len());
 
             // Evaluate and apply effects by index, avoiding EventEffect clone
             for effect_idx in 0..effects_len {

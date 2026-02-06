@@ -93,6 +93,7 @@ impl Default for SimulationBuilder {
 
 impl SimulationBuilder {
     /// Create a new simulation builder
+    #[must_use]
     pub fn new() -> Self {
         Self {
             config: SimulationConfig::default(),
@@ -114,53 +115,62 @@ impl SimulationBuilder {
     // =========================================================================
 
     /// Set the simulation start date
+    #[must_use]
     pub fn start_date(mut self, date: jiff::civil::Date) -> Self {
         self.config.start_date = Some(date);
         self
     }
 
     /// Set the simulation start date (convenience method)
+    #[must_use]
     pub fn start(mut self, year: i16, month: i8, day: i8) -> Self {
         self.config.start_date = Some(jiff::civil::date(year, month, day));
         self
     }
 
     /// Set the simulation duration in years
+    #[must_use]
     pub fn duration_years(mut self, years: usize) -> Self {
         self.config.duration_years = years;
         self
     }
 
     /// Alias for duration_years
+    #[must_use]
     pub fn years(self, years: usize) -> Self {
         self.duration_years(years)
     }
 
     /// Set the birth date for age-based triggers
+    #[must_use]
     pub fn birth_date(mut self, year: i16, month: i8, day: i8) -> Self {
         self.config.birth_date = Some(jiff::civil::date(year, month, day));
         self
     }
 
     /// Set the birth date using a Date object
+    #[must_use]
     pub fn birth_date_obj(mut self, date: jiff::civil::Date) -> Self {
         self.config.birth_date = Some(date);
         self
     }
 
     /// Set the inflation profile
+    #[must_use]
     pub fn inflation_profile(mut self, profile: InflationProfile) -> Self {
         self.config.inflation_profile = profile;
         self
     }
 
     /// Set a fixed inflation rate
+    #[must_use]
     pub fn inflation(mut self, rate: f64) -> Self {
         self.config.inflation_profile = InflationProfile::Fixed(rate);
         self
     }
 
     /// Set the tax configuration
+    #[must_use]
     pub fn tax_config(mut self, config: TaxConfig) -> Self {
         self.config.tax_config = config;
         self
@@ -171,6 +181,7 @@ impl SimulationBuilder {
     // =========================================================================
 
     /// Add a named return profile
+    #[must_use]
     pub fn return_profile(mut self, name: impl Into<String>, profile: ReturnProfile) -> Self {
         let name = name.into();
         let profile_id = ReturnProfileId(self.next_return_profile_id);
@@ -188,12 +199,14 @@ impl SimulationBuilder {
     // =========================================================================
 
     /// Add an asset definition using the AssetBuilder
+    #[must_use]
     pub fn asset(mut self, builder: AssetBuilder) -> Self {
         self.pending_assets.push(builder.build());
         self
     }
 
     /// Quick method to add an asset with a fixed return
+    #[must_use]
     pub fn asset_fixed(mut self, name: impl Into<String>, price: f64, annual_return: f64) -> Self {
         self.pending_assets.push(
             AssetBuilder::new(name)
@@ -209,27 +222,32 @@ impl SimulationBuilder {
     // =========================================================================
 
     /// Add an account using the AccountBuilder
+    #[must_use]
     pub fn account(mut self, builder: AccountBuilder) -> Self {
         self.pending_accounts.push(builder);
         self
     }
 
     /// Quick method to add a bank account with cash
+    #[must_use]
     pub fn bank(self, name: impl Into<String>, cash: f64) -> Self {
         self.account(AccountBuilder::bank_account(name).cash(cash))
     }
 
     /// Quick method to add a taxable brokerage account
+    #[must_use]
     pub fn brokerage(self, name: impl Into<String>, cash: f64) -> Self {
         self.account(AccountBuilder::taxable_brokerage(name).cash(cash))
     }
 
     /// Quick method to add a traditional 401k
+    #[must_use]
     pub fn traditional_401k(self, name: impl Into<String>, cash: f64) -> Self {
         self.account(AccountBuilder::traditional_401k(name).cash(cash))
     }
 
     /// Quick method to add a Roth IRA
+    #[must_use]
     pub fn roth_ira(self, name: impl Into<String>, cash: f64) -> Self {
         self.account(AccountBuilder::roth_ira(name).cash(cash))
     }
@@ -245,6 +263,7 @@ impl SimulationBuilder {
     /// * `asset_name` - Name of the asset (must be defined via `asset()`)
     /// * `units` - Number of shares/units
     /// * `cost_basis` - Total cost basis for this lot
+    #[must_use]
     pub fn position(
         mut self,
         account_name: impl Into<String>,
@@ -263,6 +282,7 @@ impl SimulationBuilder {
     }
 
     /// Add a position with a specific purchase date
+    #[must_use]
     pub fn position_dated(
         mut self,
         account_name: impl Into<String>,
@@ -286,12 +306,14 @@ impl SimulationBuilder {
     // =========================================================================
 
     /// Add an event using the EventBuilder
+    #[must_use]
     pub fn event(mut self, builder: EventBuilder) -> Self {
         self.pending_events.push(builder.build());
         self
     }
 
     /// Quick method to add monthly income
+    #[must_use]
     pub fn monthly_income(
         self,
         name: impl Into<String>,
@@ -308,6 +330,7 @@ impl SimulationBuilder {
     }
 
     /// Quick method to add monthly expense
+    #[must_use]
     pub fn monthly_expense(
         self,
         name: impl Into<String>,
@@ -329,6 +352,7 @@ impl SimulationBuilder {
     /// Build the simulation configuration and metadata
     ///
     /// This resolves all name references to IDs and creates the final configuration.
+    #[must_use]
     pub fn build(mut self) -> (SimulationConfig, SimulationMetadata) {
         // 1. Register all assets and their return profiles
         let mut asset_ids: HashMap<String, AssetId> = HashMap::new();

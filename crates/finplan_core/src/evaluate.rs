@@ -207,7 +207,7 @@ pub fn evaluate_trigger(
             // Short-circuit: return NotTriggered on first non-triggered, avoiding Vec allocation
             for t in triggers {
                 match evaluate_trigger(event_id, t, state)? {
-                    TriggerEvent::Triggered => continue,
+                    TriggerEvent::Triggered => {}
                     _ => return Ok(TriggerEvent::NotTriggered),
                 }
             }
@@ -386,7 +386,7 @@ pub enum EvalEvent {
 }
 
 /// Apply a single effect to the simulation state
-/// Allocates and returns a new Vec (convenience wrapper around evaluate_effect_into)
+/// Allocates and returns a new Vec (convenience wrapper around `evaluate_effect_into`)
 pub fn evaluate_effect(
     effect: &EventEffect,
     state: &SimulationState,
@@ -599,25 +599,23 @@ pub fn evaluate_effect_into(
                 .get(from)
                 .ok_or(EngineError::AccountNotFound(*from))?;
 
-            let investment = match &account.flavor {
-                AccountFlavor::Investment(inv) => inv,
-                _ => return Err(AccountTypeError::NotAnInvestmentAccount(*from).into()),
+            let AccountFlavor::Investment(investment) = &account.flavor else {
+                return Err(AccountTypeError::NotAnInvestmentAccount(*from).into());
             };
 
             // Get assets to liquidate (specific asset or all assets in account)
             // Use inline dedup to avoid sort overhead for small collections
-            let assets_to_liquidate: Vec<AssetId> = match asset_id {
-                Some(id) => vec![*id],
-                None => {
-                    // Inline dedup: for small N, linear search is faster than sort+dedup
-                    let mut assets: Vec<AssetId> = Vec::with_capacity(investment.positions.len());
-                    for lot in &investment.positions {
-                        if !assets.contains(&lot.asset_id) {
-                            assets.push(lot.asset_id);
-                        }
+            let assets_to_liquidate: Vec<AssetId> = if let Some(id) = asset_id {
+                vec![*id]
+            } else {
+                // Inline dedup: for small N, linear search is faster than sort+dedup
+                let mut assets: Vec<AssetId> = Vec::with_capacity(investment.positions.len());
+                for lot in &investment.positions {
+                    if !assets.contains(&lot.asset_id) {
+                        assets.push(lot.asset_id);
                     }
-                    assets
                 }
+                assets
             };
 
             let mut remaining = target_amount;
@@ -634,14 +632,13 @@ pub fn evaluate_effect_into(
                 };
 
                 // Get current price from Market
-                let current_price = match get_current_price(
+                let Some(current_price) = get_current_price(
                     &state.portfolio.market,
                     state.timeline.start_date,
                     state.timeline.current_date,
                     asset_id,
-                ) {
-                    Some(price) => price,
-                    None => continue, // Skip if no price available
+                ) else {
+                    continue;
                 };
 
                 // Single pass over positions to get both units and cost basis
@@ -952,34 +949,29 @@ pub fn evaluate_effect_into(
                 .get(to)
                 .ok_or(EngineError::AccountNotFound(*to))?;
 
-            match &dest_account.flavor {
-                // If destination is a liability, this is a loan payment
-                AccountFlavor::Liability(_) => {
-                    out.push(EvalEvent::CashDebit {
-                        from: *from,
-                        net_amount: transfer_amount,
-                        kind: CashFlowKind::Expense,
-                    });
-                    out.push(EvalEvent::AdjustBalance {
-                        account: *to,
-                        delta: -transfer_amount, // Negative = reduce debt
-                    });
-                    Ok(())
-                }
-                // Otherwise, regular cash transfer
-                _ => {
-                    out.push(EvalEvent::CashDebit {
-                        from: *from,
-                        net_amount: transfer_amount,
-                        kind: CashFlowKind::Transfer,
-                    });
-                    out.push(EvalEvent::CashCredit {
-                        to: *to,
-                        net_amount: transfer_amount,
-                        kind: CashFlowKind::Transfer,
-                    });
-                    Ok(())
-                }
+            if let AccountFlavor::Liability(_) = &dest_account.flavor {
+                out.push(EvalEvent::CashDebit {
+                    from: *from,
+                    net_amount: transfer_amount,
+                    kind: CashFlowKind::Expense,
+                });
+                out.push(EvalEvent::AdjustBalance {
+                    account: *to,
+                    delta: -transfer_amount, // Negative = reduce debt
+                });
+                Ok(())
+            } else {
+                out.push(EvalEvent::CashDebit {
+                    from: *from,
+                    net_amount: transfer_amount,
+                    kind: CashFlowKind::Transfer,
+                });
+                out.push(EvalEvent::CashCredit {
+                    to: *to,
+                    net_amount: transfer_amount,
+                    kind: CashFlowKind::Transfer,
+                });
+                Ok(())
             }
         }
 
@@ -1006,7 +998,7 @@ pub fn evaluate_effect_into(
 }
 
 /// Resolve withdrawal sources based on strategy or custom list
-/// Only Investment accounts (with InvestmentContainer) are considered for withdrawals
+/// Only Investment accounts (with `InvestmentContainer`) are considered for withdrawals
 pub fn resolve_withdrawal_sources(
     sources: &WithdrawalSources,
     state: &SimulationState,

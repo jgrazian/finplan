@@ -50,6 +50,7 @@ pub struct AssetDefinition {
 
 impl AssetBuilder {
     /// Create a new asset builder with the given name/ticker
+    #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -65,6 +66,7 @@ impl AssetBuilder {
     // =========================================================================
 
     /// Create a US total stock market fund (like VTSAX/VTI)
+    #[must_use]
     pub fn us_total_market(name: impl Into<String>) -> Self {
         Self::new(name)
             .description("US Total Stock Market Index")
@@ -72,6 +74,7 @@ impl AssetBuilder {
     }
 
     /// Create an S&P 500 index fund
+    #[must_use]
     pub fn sp500(name: impl Into<String>) -> Self {
         Self::new(name)
             .description("S&P 500 Index")
@@ -79,6 +82,7 @@ impl AssetBuilder {
     }
 
     /// Create an international stock fund
+    #[must_use]
     pub fn international_stock(name: impl Into<String>) -> Self {
         Self::new(name)
             .description("International Stock Index")
@@ -86,6 +90,7 @@ impl AssetBuilder {
     }
 
     /// Create a total bond market fund
+    #[must_use]
     pub fn total_bond(name: impl Into<String>) -> Self {
         Self::new(name)
             .description("Total Bond Market Index")
@@ -93,6 +98,7 @@ impl AssetBuilder {
     }
 
     /// Create a money market / high-yield savings asset
+    #[must_use]
     pub fn money_market(name: impl Into<String>) -> Self {
         Self::new(name)
             .description("Money Market / Cash Equivalent")
@@ -100,6 +106,7 @@ impl AssetBuilder {
     }
 
     /// Create real estate investment (like a REIT or property)
+    #[must_use]
     pub fn real_estate(name: impl Into<String>) -> Self {
         Self::new(name)
             .description("Real Estate Investment")
@@ -111,36 +118,42 @@ impl AssetBuilder {
     // =========================================================================
 
     /// Set a description for this asset
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
     /// Set the initial price per unit
+    #[must_use]
     pub fn price(mut self, price: f64) -> Self {
         self.initial_price = price;
         self
     }
 
     /// Set the return profile for this asset
+    #[must_use]
     pub fn return_profile(mut self, profile: ReturnProfile) -> Self {
         self.return_profile = Some(profile);
         self
     }
 
     /// Set a fixed annual return rate
+    #[must_use]
     pub fn fixed_return(mut self, rate: f64) -> Self {
         self.return_profile = Some(ReturnProfile::Fixed(rate));
         self
     }
 
     /// Set the return profile by referencing a named profile
+    #[must_use]
     pub fn return_profile_name(mut self, name: impl Into<String>) -> Self {
         self.return_profile_name = Some(name.into());
         self
     }
 
     /// Build the asset definition
+    #[must_use]
     pub fn build(self) -> AssetDefinition {
         AssetDefinition {
             name: self.name,

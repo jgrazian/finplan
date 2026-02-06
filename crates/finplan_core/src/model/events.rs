@@ -23,7 +23,9 @@ pub enum RepeatInterval {
 }
 
 impl RepeatInterval {
-    /// Convert to a jiff::Span for date arithmetic
+    /// Convert to a `jiff::Span` for date arithmetic
+    #[must_use]
+    #[inline]
     pub fn span(&self) -> jiff::Span {
         match self {
             RepeatInterval::Never => 0.days(),
@@ -56,8 +58,8 @@ pub enum TransferAmount {
     /// The inner value represents "real" (constant purchasing power) dollars;
     /// the result is the equivalent "nominal" (current) dollars.
     ///
-    /// Sensible for: Fixed, TargetToBalance, arithmetic on fixed amounts
-    /// Nonsensical for: SourceBalance, AccountTotalBalance (already nominal)
+    /// Sensible for: Fixed, `TargetToBalance`, arithmetic on fixed amounts
+    /// Nonsensical for: `SourceBalance``AccountTotalBalance`ce (already nominal)
     ///
     /// Example: InflationAdjusted(Fixed(7000.0)) means "$7000 in today's dollars"
     /// If inflation averages 3%/year, this becomes ~$7,210 after year 1, ~$7,426 after year 2, etc.
@@ -67,11 +69,11 @@ pub enum TransferAmount {
     SourceBalance,
 
     /// Transfer enough to zero out target balance (for debt payoff)
-    /// Calculates: -1 * target_balance (turns negative debt to zero)
+    /// Calculates: -1 * `target_balance` (turns negative debt to zero)
     ZeroTargetBalance,
 
     /// Transfer enough to bring target to specified balance
-    /// Calculates: max(0, target_balance - current_target_balance)
+    /// Calculates: max(0, `target_balance` - `current_target_balance`)
     TargetToBalance(f64),
 
     // === Balance References ===
@@ -115,6 +117,7 @@ pub enum TransferAmount {
 
 impl TransferAmount {
     /// Transfer the lesser of a fixed amount or available balance
+    #[must_use]
     pub fn up_to(amount: f64) -> Self {
         TransferAmount::Min(
             Box::new(TransferAmount::Fixed(amount)),
@@ -123,6 +126,7 @@ impl TransferAmount {
     }
 
     /// Transfer all balance above a reserve amount
+    #[must_use]
     pub fn excess_above(reserve: f64) -> Self {
         TransferAmount::Max(
             Box::new(TransferAmount::Fixed(0.0)),
@@ -136,6 +140,7 @@ impl TransferAmount {
     /// Create an inflation-adjusted fixed amount (maintains purchasing power over time)
     ///
     /// Example: `TransferAmount::inflation_adjusted(7000.0)` means "$7000 in start-of-simulation dollars"
+    #[must_use]
     pub fn inflation_adjusted(base_amount: f64) -> Self {
         TransferAmount::InflationAdjusted(Box::new(TransferAmount::Fixed(base_amount)))
     }
@@ -144,6 +149,7 @@ impl TransferAmount {
     ///
     /// Example: `TransferAmount::scaled(0.04, TransferAmount::AccountTotalBalance { account_id })`
     /// means "4% of account balance"
+    #[must_use]
     pub fn scaled(multiplier: f64, base: TransferAmount) -> Self {
         TransferAmount::Scale(multiplier, Box::new(base))
     }
@@ -151,6 +157,7 @@ impl TransferAmount {
     /// Convenience for percentage of account balance
     ///
     /// Example: `TransferAmount::percent_of_account(0.04, account_id)` = 4% of account balance
+    #[must_use]
     pub fn percent_of_account(rate: f64, account_id: AccountId) -> Self {
         TransferAmount::Scale(
             rate,
@@ -220,8 +227,8 @@ pub enum WithdrawalOrder {
     ProRata,
 
     /// Penalty-aware: avoids early withdrawal penalties
-    /// Before age 59.5: Taxable → TaxFree → TaxDeferred (avoid 10% penalty)
-    /// After age 59.5: Falls back to TaxEfficientEarly behavior
+    /// Before age 59.5: Taxable → `TaxFree` → `TaxDeferred` (avoid 10% penalty)
+    /// After age 59.5: Falls back to `TaxEfficientEarly` behavior
     PenaltyAware,
 }
 
@@ -260,12 +267,12 @@ impl Default for WithdrawalSources {
 pub enum AmountMode {
     /// The amount specified is BEFORE taxes are applied.
     /// - For Income: Full salary; income taxes deducted from deposit
-    /// - For AssetSale: Gross proceeds; capital gains taxes deducted
+    /// - For `AssetSale`: Gross proceeds; capital gains taxes deducted
     Gross,
 
     /// The amount specified is what should be RECEIVED after taxes.
     /// - For Income: Take-home pay; gross back-calculated for tax records
-    /// - For AssetSale: Net proceeds; system sells enough to cover taxes
+    /// - For `AssetSale`: Net proceeds; system sells enough to cover taxes
     #[default]
     Net,
 }
@@ -279,30 +286,32 @@ pub enum TriggerOffset {
 }
 
 impl TriggerOffset {
-    /// Convert to a jiff::Span for date arithmetic.
-    /// This is relatively expensive - prefer using add_to_date() instead.
+    /// Convert to a `jiff::Span` for date arithmetic.
+    /// This is relatively expensive - prefer using `add_to_date()` instead.
     #[inline]
+    #[must_use]
     pub fn to_span(&self) -> jiff::Span {
         use jiff::ToSpan;
         match self {
-            TriggerOffset::Days(d) => (*d as i64).days(),
-            TriggerOffset::Months(m) => (*m as i64).months(),
-            TriggerOffset::Years(y) => (*y as i64).years(),
+            TriggerOffset::Days(d) => i64::from(*d).days(),
+            TriggerOffset::Months(m) => i64::from(*m).months(),
+            TriggerOffset::Years(y) => i64::from(*y).years(),
         }
     }
 
     /// Fast date addition that avoids expensive Span->DateArithmetic conversion.
     #[inline]
+    #[must_use]
     pub fn add_to_date(&self, date: jiff::civil::Date) -> jiff::civil::Date {
         match self {
             TriggerOffset::Days(d) => {
                 // Direct day addition via SignedDuration avoids Span overhead
-                let duration = jiff::SignedDuration::from_hours(*d as i64 * 24);
+                let duration = jiff::SignedDuration::from_hours(i64::from(*d) * 24);
                 date.checked_add(duration).unwrap_or(date)
             }
             TriggerOffset::Months(m) => {
                 // Manual month arithmetic
-                let total_months = date.year() as i32 * 12 + date.month() as i32 - 1 + *m;
+                let total_months = i32::from(date.year()) * 12 + i32::from(date.month()) - 1 + *m;
                 let new_year = total_months.div_euclid(12) as i16;
                 let new_month = (total_months.rem_euclid(12) + 1) as i8;
                 // Inline days_in_month to avoid creating a temporary jiff::civil::date
@@ -311,7 +320,7 @@ impl TriggerOffset {
                 jiff::civil::date(new_year, new_month, new_day)
             }
             TriggerOffset::Years(y) => {
-                let new_year = (date.year() as i32 + *y) as i16;
+                let new_year = (i32::from(date.year()) + *y) as i16;
                 // Inline days_in_month to avoid creating a temporary jiff::civil::date
                 let max_day = days_in_month(new_year, date.month());
                 let new_day = date.day().min(max_day);
@@ -321,7 +330,7 @@ impl TriggerOffset {
     }
 }
 
-/// Fast inline days-in-month calculation without creating a jiff::civil::Date.
+/// Fast inline days-in-month calculation without creating a `jiff::civil::Date`.
 #[inline]
 fn days_in_month(year: i16, month: i8) -> i8 {
     const DAYS: [i8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -345,13 +354,14 @@ pub enum BalanceThreshold {
 }
 
 impl BalanceThreshold {
+    #[must_use]
     pub fn value(&self) -> f64 {
         match self {
-            BalanceThreshold::GreaterThanOrEqual(v) => *v,
-            BalanceThreshold::LessThanOrEqual(v) => *v,
+            BalanceThreshold::GreaterThanOrEqual(v) | BalanceThreshold::LessThanOrEqual(v) => *v,
         }
     }
 
+    #[must_use]
     pub fn evaluate(&self, balance: f64) -> bool {
         match self {
             BalanceThreshold::GreaterThanOrEqual(v) => balance >= *v,
@@ -367,7 +377,7 @@ pub enum EventTrigger {
     /// Trigger on a specific date
     Date(jiff::civil::Date),
 
-    /// Trigger at a specific age (requires birth_date in SimulationParameters)
+    /// Trigger at a specific age (requires `birth_date` in `SimulationParameters`)
     Age { years: u8, months: Option<u8> },
 
     /// Trigger N days/months/years after another event
@@ -411,7 +421,7 @@ pub enum EventTrigger {
         #[serde(default)]
         end_condition: Option<Box<EventTrigger>>,
         /// Optional: maximum number of times this event can trigger
-        /// After reaching this count, the event stops repeating (equivalent to StopRepeating)
+        /// After reaching this count, the event stops repeating (equivalent to `StopRepeating`)
         #[serde(default)]
         max_occurrences: Option<u32>,
     },
@@ -419,7 +429,7 @@ pub enum EventTrigger {
     // TODO: Add account limits triggers
 
     // === Manual/Simulation Control ===
-    /// Never triggers automatically; can only be triggered by TriggerEvent effect
+    /// Never triggers automatically; can only be triggered by `TriggerEvent` effect
     Manual,
 }
 
@@ -474,7 +484,7 @@ pub enum EventEffect {
     },
 
     /// Sweep: Liquidate assets and transfer to another account
-    /// Combines AssetSale + Income in a single operation
+    /// Combines `AssetSale` + Income in a single operation
     /// Common use case for RMDs and rebalancing between accounts
     Sweep {
         /// Source(s) to liquidate from
@@ -548,7 +558,7 @@ pub enum EventEffect {
     /// Each Monte Carlo iteration will get different random outcomes based on its seed,
     /// making this suitable for modeling uncertainty in financial plans.
     Random {
-        /// Probability threshold (0.0 to 1.0). E.g., 0.1 = 10% chance of on_true
+        /// Probability threshold (0.0 to 1.0). E.g., 0.1 = 10% chance of `on_true`
         probability: f64,
         /// Effect to execute if random check passes
         on_true: Box<EventEffect>,

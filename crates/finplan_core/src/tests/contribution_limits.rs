@@ -88,8 +88,7 @@ fn test_monthly_contribution_limit() {
     let final_balance = result.final_account_balance(roth_ira).unwrap();
     assert!(
         (final_balance - 1000.0).abs() < 0.01,
-        "Expected $1000, got ${:.2}",
-        final_balance
+        "Expected $1000, got ${final_balance:.2}"
     );
 
     // Verify ledger entries
@@ -180,8 +179,7 @@ fn test_yearly_contribution_limit() {
     let final_balance = result.final_account_balance(roth_401k).unwrap();
     assert!(
         (final_balance - 46000.0).abs() < 0.01,
-        "Expected $46000, got ${:.2}. Should be capped at $23k per year for 2 years.",
-        final_balance
+        "Expected $46000, got ${final_balance:.2}. Should be capped at $23k per year for 2 years."
     );
 
     // Count contributions per year
@@ -202,13 +200,11 @@ fn test_yearly_contribution_limit() {
 
     assert!(
         (year_2024_total - 23000.0).abs() < 0.01,
-        "2024 contributions should be capped at $23000, got ${:.2}",
-        year_2024_total
+        "2024 contributions should be capped at $23000, got ${year_2024_total:.2}"
     );
     assert!(
         (year_2025_total - 23000.0).abs() < 0.01,
-        "2025 contributions should be capped at $23000, got ${:.2}",
-        year_2025_total
+        "2025 contributions should be capped at $23000, got ${year_2025_total:.2}"
     );
 }
 
@@ -301,8 +297,7 @@ fn test_contribution_limit_with_asset_purchase() {
     let final_balance = result.final_account_balance(ira).unwrap();
     assert!(
         (final_balance - 7000.0).abs() < 0.01,
-        "Expected $7000 total value, got ${:.2}",
-        final_balance
+        "Expected $7000 total value, got ${final_balance:.2}"
     );
 
     // Verify cash and asset distribution
@@ -322,8 +317,7 @@ fn test_contribution_limit_with_asset_purchase() {
 
     assert!(
         (ira_cash - 5000.0).abs() < 0.01,
-        "Expected $5000 cash remaining, got ${:.2}",
-        ira_cash
+        "Expected $5000 cash remaining, got ${ira_cash:.2}"
     );
 
     // Check asset balance ($2000 worth / $100 per share = 20 shares)
@@ -331,7 +325,6 @@ fn test_contribution_limit_with_asset_purchase() {
 
     assert!(
         (asset_balance - 2000.0).abs() < 0.01,
-        "Expected $2000 in assets, got ${:.2}",
-        asset_balance
+        "Expected $2000 in assets, got ${asset_balance:.2}"
     );
 }

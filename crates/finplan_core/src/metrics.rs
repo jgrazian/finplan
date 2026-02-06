@@ -29,6 +29,7 @@ impl Default for InstrumentationConfig {
 
 impl InstrumentationConfig {
     /// Create a config with metrics disabled (fastest execution)
+    #[must_use]
     pub fn disabled() -> Self {
         Self {
             collect_metrics: false,
@@ -37,6 +38,7 @@ impl InstrumentationConfig {
     }
 
     /// Create a config with a custom iteration limit
+    #[must_use]
     pub fn with_limit(max_iterations: u64) -> Self {
         Self {
             collect_metrics: true,
@@ -64,6 +66,7 @@ pub struct SimulationMetrics {
 
 impl SimulationMetrics {
     /// Create empty metrics
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -95,11 +98,13 @@ impl SimulationMetrics {
     }
 
     /// Check if any iteration limits were hit
+    #[must_use]
     pub fn had_iteration_limit_hits(&self) -> bool {
         !self.iteration_limit_dates.is_empty()
     }
 
     /// Get average iterations per time step
+    #[must_use]
     pub fn avg_iterations_per_step(&self) -> f64 {
         if self.time_steps == 0 {
             0.0

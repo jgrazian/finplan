@@ -7,6 +7,7 @@ use crate::model::{TaxBracket, TaxConfig};
 
 /// Calculate federal income tax using progressive brackets
 /// Returns the total tax owed on the given income
+#[must_use]
 pub fn calculate_federal_tax(income: f64, brackets: &[TaxBracket]) -> f64 {
     if income <= 0.0 || brackets.is_empty() {
         return 0.0;
@@ -16,10 +17,7 @@ pub fn calculate_federal_tax(income: f64, brackets: &[TaxBracket]) -> f64 {
     let mut prev_threshold = 0.0;
 
     for (i, bracket) in brackets.iter().enumerate() {
-        let next_threshold = brackets
-            .get(i + 1)
-            .map(|b| b.threshold)
-            .unwrap_or(f64::INFINITY);
+        let next_threshold = brackets.get(i + 1).map_or(f64::INFINITY, |b| b.threshold);
 
         if income <= bracket.threshold {
             break;
@@ -37,6 +35,7 @@ pub fn calculate_federal_tax(income: f64, brackets: &[TaxBracket]) -> f64 {
 /// Calculate marginal tax on additional income given existing YTD income
 /// This is useful for calculating tax on a withdrawal when there's already
 /// been taxable income earlier in the year
+#[must_use]
 pub fn calculate_federal_marginal_tax(
     additional_income: f64,
     ytd_income: f64,
@@ -48,7 +47,8 @@ pub fn calculate_federal_marginal_tax(
 }
 
 /// Calculate the gross income needed to achieve a target net income after federal marginal taxes and state taxes
-/// This is the inverse of calculate_federal_marginal_tax + state tax
+/// This is the inverse of `calculate_federal_marginal_tax` + state tax
+#[must_use]
 pub fn calculate_gross_from_net(
     net_amount: f64,
     ytd_income: f64,
@@ -72,8 +72,7 @@ pub fn calculate_gross_from_net(
         let federal_rate = federal_brackets[i].rate;
         let next_threshold = federal_brackets
             .get(i + 1)
-            .map(|b| b.threshold)
-            .unwrap_or(f64::MAX);
+            .map_or(f64::MAX, |b| b.threshold);
 
         // How much gross income fits in this bracket?
         let bracket_room = next_threshold - income_cursor;
@@ -91,12 +90,11 @@ pub fn calculate_gross_from_net(
             // All remaining net fits in this bracket
             gross += remaining_net / net_per_gross;
             break;
-        } else {
-            // Use up this bracket and move to next
-            gross += bracket_room;
-            remaining_net -= max_net_in_bracket;
-            income_cursor = next_threshold;
         }
+        // Use up this bracket and move to next
+        gross += bracket_room;
+        remaining_net -= max_net_in_bracket;
+        income_cursor = next_threshold;
     }
 
     gross
@@ -131,6 +129,7 @@ pub struct RealizedGainsTaxResult {
 /// * `long_term_gain` - Gains from assets held >= 1 year
 /// * `tax_config` - Tax configuration
 /// * `ytd_ordinary_income` - Year-to-date ordinary income for bracket calculation
+#[must_use]
 pub fn calculate_realized_gains_tax(
     short_term_gain: f64,
     long_term_gain: f64,
@@ -185,6 +184,7 @@ pub struct OrdinaryIncomeTaxResult {
 /// Calculate taxes on a withdrawal from a tax-deferred account
 ///
 /// Tax-deferred accounts (Traditional IRA, 401k) are taxed as ordinary income.
+#[must_use]
 pub fn calculate_tax_deferred_withdrawal_tax(
     gross_amount: f64,
     tax_config: &TaxConfig,
@@ -240,7 +240,7 @@ mod tests {
     fn test_federal_tax_first_bracket() {
         let config = test_tax_config();
         let tax = calculate_federal_tax(5_000.0, &config.federal_brackets);
-        assert!((tax - 500.0).abs() < 0.01, "Expected 500, got {}", tax);
+        assert!((tax - 500.0).abs() < 0.01, "Expected 500, got {tax}");
     }
 
     #[test]
@@ -252,7 +252,7 @@ mod tests {
         // $10,000 at 22% = $2,200
         // Total = $6,800
         let tax = calculate_federal_tax(50_000.0, &config.federal_brackets);
-        assert!((tax - 6_800.0).abs() < 0.01, "Expected 6800, got {}", tax);
+        assert!((tax - 6_800.0).abs() < 0.01, "Expected 6800, got {tax}");
     }
 
     #[test]
@@ -266,8 +266,7 @@ mod tests {
         let marginal = calculate_federal_marginal_tax(10_000.0, 35_000.0, &config.federal_brackets);
         assert!(
             (marginal - 1_700.0).abs() < 0.01,
-            "Expected 1700, got {}",
-            marginal
+            "Expected 1700, got {marginal}"
         );
     }
 

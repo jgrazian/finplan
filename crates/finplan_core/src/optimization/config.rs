@@ -40,14 +40,14 @@ pub enum OptimizableParameter {
         max_age: u8,
     },
 
-    /// Optimize a contribution rate (modifies TransferAmount::Fixed in event effects)
+    /// Optimize a contribution rate (modifies `TransferAmount::Fixed` in event effects)
     ContributionRate {
         event_id: EventId,
         min_amount: f64,
         max_amount: f64,
     },
 
-    /// Optimize a withdrawal amount (modifies TransferAmount::Fixed in event effects)
+    /// Optimize a withdrawal amount (modifies `TransferAmount::Fixed` in event effects)
     WithdrawalAmount {
         event_id: EventId,
         min_amount: f64,
@@ -64,11 +64,12 @@ pub enum OptimizableParameter {
 
 impl OptimizableParameter {
     /// Returns the (min, max) bounds for this parameter
+    #[must_use]
     pub fn bounds(&self) -> (f64, f64) {
         match self {
             OptimizableParameter::RetirementAge {
                 min_age, max_age, ..
-            } => (*min_age as f64, *max_age as f64),
+            } => (f64::from(*min_age), f64::from(*max_age)),
             OptimizableParameter::ContributionRate {
                 min_amount,
                 max_amount,
@@ -88,6 +89,7 @@ impl OptimizableParameter {
     }
 
     /// Returns a display name for this parameter
+    #[must_use]
     pub fn name(&self) -> String {
         match self {
             OptimizableParameter::RetirementAge { event_id, .. } => {

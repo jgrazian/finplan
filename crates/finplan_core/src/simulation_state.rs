@@ -46,14 +46,14 @@ pub struct SimulationState {
     pub taxes: SimTaxState,
     pub history: SimHistory,
 
-    /// Events pending immediate triggering (from TriggerEvent effect)
+    /// Events pending immediate triggering (from `TriggerEvent` effect)
     pub pending_triggers: Vec<EventId>,
 
     /// Non-fatal warnings collected during simulation
     pub warnings: Vec<SimulationWarning>,
 
-    /// Random number generator for stochastic effects (e.g., Random EventEffect)
-    /// Uses RefCell for interior mutability since evaluate_effect takes &SimulationState
+    /// Random number generator for stochastic effects (e.g., Random `EventEffect`)
+    /// Uses `RefCell` for interior mutability since `evaluate_effect` takes &`SimulationState`
     pub rng: RefCell<rand::rngs::SmallRng>,
 
     /// Whether to collect ledger entries during simulation
@@ -72,10 +72,11 @@ pub struct SimTimeline {
 impl SimTimeline {
     /// Check if the person is below the early withdrawal age (59.5 years)
     /// Returns true if age < 59 years OR (age == 59 years AND months < 6)
+    #[must_use]
     pub fn is_below_early_withdrawal_age(&self) -> bool {
         // Calculate age manually since jiff::Span from until() is in days only
         let mut years = self.current_date.year() - self.birth_date.year();
-        let mut months = self.current_date.month() as i32 - self.birth_date.month() as i32;
+        let mut months = i32::from(self.current_date.month()) - i32::from(self.birth_date.month());
 
         // Adjust for birthday not yet reached in current year
         if self.current_date.month() < self.birth_date.month()
@@ -103,9 +104,9 @@ pub struct SimPortfolio {
     /// Market containing asset prices and returns
     pub market: Market,
     // === RMD Tracking ===
-    /// Year-end account balances for RMD calculation (year -> account_id -> balance)
+    /// Year-end account balances for RMD calculation (year -> `account_id` -> balance)
     pub year_end_balances: FxHashMap<i16, FxHashMap<AccountId, f64>>,
-    /// Active RMD accounts (account_id -> starting_age)
+    /// Active RMD accounts (`account_id` -> `starting_age`)
     pub active_rmd_accounts: FxHashMap<AccountId, u8>,
     // === Contribution Tracking ===
     /// YTD contributions per account (for yearly limits)
@@ -142,13 +143,13 @@ pub struct SimEventState {
     pub terminated_events: Vec<bool>,
 
     /// Next possible trigger date for each event (dense Vec indexed by EventId.0)
-    /// Used for early-skip optimization: if current_date < next_possible_trigger, skip evaluation
+    /// Used for early-skip optimization: if `current_date` < `next_possible_trigger`, skip evaluation
     pub next_possible_trigger: Vec<Option<jiff::civil::Date>>,
 
-    /// How many times each repeating event has triggered (for max_occurrences support)
+    /// How many times each repeating event has triggered (for `max_occurrences` support)
     pub repeating_occurrence_count: Vec<u32>,
 
-    /// Accumulated values for event flow limits (less hot, keep as HashMap)
+    /// Accumulated values for event flow limits (less hot, keep as `HashMap`)
     pub event_flow_ytd: FxHashMap<EventId, f64>,
     pub event_flow_lifetime: FxHashMap<EventId, f64>,
     pub event_flow_last_period_key: FxHashMap<EventId, i16>,
@@ -157,6 +158,7 @@ pub struct SimEventState {
 impl SimEventState {
     /// Get an event by ID (O(1) lookup)
     #[inline]
+    #[must_use]
     pub fn get_event(&self, id: EventId) -> Option<&Event> {
         self.events.get(id.0 as usize).and_then(|o| o.as_ref())
     }
@@ -166,11 +168,12 @@ impl SimEventState {
     pub fn is_triggered(&self, id: EventId) -> bool {
         self.triggered_events
             .get(id.0 as usize)
-            .is_some_and(|o| o.is_some())
+            .is_some_and(std::option::Option::is_some)
     }
 
     /// Get the date an event was triggered
     #[inline]
+    #[must_use]
     pub fn triggered_date(&self, id: EventId) -> Option<jiff::civil::Date> {
         self.triggered_events.get(id.0 as usize).and_then(|o| *o)
     }
@@ -185,12 +188,14 @@ impl SimEventState {
 
     /// Get pre-computed Age trigger date
     #[inline]
+    #[must_use]
     pub fn age_trigger_date(&self, id: EventId) -> Option<jiff::civil::Date> {
         self.age_trigger_dates.get(id.0 as usize).and_then(|o| *o)
     }
 
     /// Check if an event is terminated (O(1) lookup)
     #[inline]
+    #[must_use]
     pub fn is_terminated(&self, id: &EventId) -> bool {
         self.terminated_events
             .get(id.0 as usize)
@@ -208,6 +213,7 @@ impl SimEventState {
 
     /// Get next possible trigger date for early-skip optimization
     #[inline]
+    #[must_use]
     pub fn next_possible_trigger(&self, id: EventId) -> Option<jiff::civil::Date> {
         self.next_possible_trigger
             .get(id.0 as usize)
@@ -232,6 +238,7 @@ impl SimEventState {
 
     /// Get repeating event active status: None=not started, Some(true)=active, Some(false)=paused
     #[inline]
+    #[must_use]
     pub fn repeating_active(&self, id: EventId) -> Option<bool> {
         self.repeating_event_active
             .get(id.0 as usize)
@@ -259,6 +266,7 @@ impl SimEventState {
 
     /// Get next scheduled date for repeating event
     #[inline]
+    #[must_use]
     pub fn next_date(&self, id: EventId) -> Option<jiff::civil::Date> {
         self.event_next_date.get(id.0 as usize).and_then(|o| *o)
     }
@@ -273,6 +281,7 @@ impl SimEventState {
 
     /// Get cached interval span for repeating event
     #[inline]
+    #[must_use]
     pub fn interval_span(&self, id: EventId) -> Option<jiff::Span> {
         self.repeating_event_spans
             .get(id.0 as usize)
@@ -281,6 +290,7 @@ impl SimEventState {
 
     /// Get how many times a repeating event has triggered
     #[inline]
+    #[must_use]
     pub fn occurrence_count(&self, id: EventId) -> u32 {
         self.repeating_occurrence_count
             .get(id.0 as usize)
@@ -321,7 +331,7 @@ pub struct SimHistory {
 
 /// Recursively traverse a trigger tree, collecting cacheable values.
 /// Collects Repeating interval spans and Age trigger dates.
-/// Used during SimulationState initialization for performance caching.
+/// Used during `SimulationState` initialization for performance caching.
 fn collect_trigger_cache_values(
     trigger: &EventTrigger,
     birth_date: jiff::civil::Date,
@@ -348,8 +358,8 @@ fn collect_trigger_cache_values(
         EventTrigger::Age { years, months } => {
             // Cache this Age trigger's computed date
             let target_months = months.unwrap_or(0);
-            let trigger_date =
-                birth_date.saturating_add((*years as i64).years().months(target_months as i64));
+            let trigger_date = birth_date
+                .saturating_add(i64::from(*years).years().months(i64::from(target_months)));
             age_dates.push(trigger_date);
         }
         EventTrigger::And(triggers) | EventTrigger::Or(triggers) => {
@@ -563,7 +573,7 @@ impl SimulationState {
         self.portfolio
             .accounts
             .get(&account_id)
-            .and_then(|acc| acc.cash_balance())
+            .and_then(Account::cash_balance)
             .ok_or(EngineError::AccountNotFound(account_id))
     }
 
@@ -630,8 +640,8 @@ impl SimulationState {
             .ok_or(EngineError::AssetNotFound(asset_coord))
     }
 
-    /// Calculate total income from CashCredit events in the current year
-    /// This sums all CashCredit ledger entries for the current calendar year
+    /// Calculate total income from `CashCredit` events in the current year
+    /// This sums all `CashCredit` ledger entries for the current calendar year
     pub fn calculate_total_income(&self) -> f64 {
         self.history
             .ledger
@@ -651,8 +661,8 @@ impl SimulationState {
     pub fn current_age(&self) -> (u8, u8) {
         // Calculate age manually since jiff::Span from until() is in days only
         let mut years = self.timeline.current_date.year() - self.timeline.birth_date.year();
-        let mut months =
-            self.timeline.current_date.month() as i32 - self.timeline.birth_date.month() as i32;
+        let mut months = i32::from(self.timeline.current_date.month())
+            - i32::from(self.timeline.birth_date.month());
 
         // Adjust for birthday not yet reached in current year
         if self.timeline.current_date.month() < self.timeline.birth_date.month()
@@ -703,7 +713,7 @@ impl SimulationState {
             };
 
             // Reset YTD flow accumulators (for flow limits)
-            for (event_id, last_period) in self.event_state.event_flow_last_period_key.iter_mut() {
+            for (event_id, last_period) in &mut self.event_state.event_flow_last_period_key {
                 if *last_period != current_year {
                     self.event_state.event_flow_ytd.insert(*event_id, 0.0);
                     *last_period = current_year;
@@ -712,7 +722,7 @@ impl SimulationState {
         }
     }
 
-    /// Build account snapshots with starting values from SimulationParameters
+    /// Build account snapshots with starting values from `SimulationParameters`
     pub fn snapshot_wealth(&mut self) {
         // Collect account IDs and sort for deterministic ordering
         // This is critical for mean accumulator to work correctly across parallel iterations
@@ -735,7 +745,7 @@ impl SimulationState {
         self.portfolio.wealth_snapshots.push(WealthSnapshot {
             date: self.timeline.current_date,
             accounts: account_snapshots,
-        })
+        });
     }
 
     // === RMD Helper Functions ===

@@ -15,6 +15,7 @@ use crate::{
 };
 
 /// Calculate current price for an asset using the Market struct
+#[must_use]
 pub fn get_current_price(
     market: &Market,
     start_date: Date,
@@ -40,7 +41,7 @@ pub struct LiquidationResult {
 pub struct LiquidationParams<'a> {
     /// The investment container to liquidate from
     pub investment: &'a InvestmentContainer,
-    /// The full asset coordinate (for generating StateEvents)
+    /// The full asset coordinate (for generating `StateEvents`)
     pub asset_coord: AssetCoord,
     /// Where to credit the cash proceeds
     pub to_account: AccountId,
@@ -67,6 +68,7 @@ pub struct LiquidationParams<'a> {
 ///
 /// # Arguments
 /// * `params` - Liquidation parameters containing all necessary information
+#[must_use]
 pub fn liquidate_investment(params: &LiquidationParams) -> (LiquidationResult, Vec<EvalEvent>) {
     let mut effects = Vec::with_capacity(8);
     let result = liquidate_investment_into(params, &mut effects);
@@ -90,7 +92,7 @@ pub fn liquidate_investment_into(
         .positions
         .iter()
         .filter(|lot| lot.asset_id == params.asset_coord.asset_id)
-        .cloned()
+        .copied()
         .collect();
 
     if lots.is_empty() || params.amount <= 0.001 || params.current_price <= 0.0 {
@@ -280,7 +282,7 @@ pub struct LotConsumptionResult {
     pub units_consumed: f64,
     /// Total cost basis of consumed units
     pub cost_basis: f64,
-    /// Total proceeds from sale (units * current_price)
+    /// Total proceeds from sale (units * `current_price`)
     pub proceeds: f64,
     /// Short-term capital gain (held < 1 year)
     pub short_term_gain: f64,
@@ -309,6 +311,7 @@ pub struct LotSubtraction {
 /// * `current_price` - Current price per unit of the asset
 /// * `method` - Which lot selection method to use
 /// * `current_date` - Current date for determining short/long-term holding period
+#[must_use]
 pub fn consume_lots(
     lots: &[AssetLot],
     amount: f64,
@@ -396,7 +399,7 @@ fn consume_lots_average_cost(
         ..Default::default()
     };
 
-    for lot in lots.iter() {
+    for lot in lots {
         let units_from_lot = lot.units * proportion;
         if units_from_lot <= 0.001 {
             continue;
@@ -434,7 +437,7 @@ fn consume_lots_average_cost(
     result
 }
 
-/// Consume lots using specific identification (FIFO, LIFO, HighestCost, LowestCost)
+/// Consume lots using specific identification (FIFO, LIFO, `HighestCost`, `LowestCost`)
 fn consume_lots_specific(
     lots: &[AssetLot],
     units_to_sell: f64,
@@ -444,7 +447,7 @@ fn consume_lots_specific(
     let mut result = LotConsumptionResult::default();
     let mut remaining_units = units_to_sell;
 
-    for lot in lots.iter() {
+    for lot in lots {
         if remaining_units <= 0.001 {
             break;
         }
@@ -489,7 +492,8 @@ fn consume_lots_specific(
     result
 }
 
-/// Convert lot consumption result to StateEvent lot subtractions
+/// Convert lot consumption result to `StateEvent` lot subtractions
+#[must_use]
 pub fn lot_subtractions_to_effects(
     asset_coord: AssetCoord,
     result: &LotConsumptionResult,

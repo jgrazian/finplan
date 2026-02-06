@@ -36,6 +36,7 @@ pub struct ConvergenceHistory {
 
 impl ConvergenceHistory {
     /// Create a new empty convergence history
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -60,11 +61,13 @@ impl ConvergenceHistory {
     }
 
     /// Get the number of evaluations performed
+    #[must_use]
     pub fn num_evaluations(&self) -> usize {
         self.evaluations.len()
     }
 
     /// Get the best evaluation (highest objective with satisfied constraints)
+    #[must_use]
     pub fn best_evaluation(&self) -> Option<&EvaluationRecord> {
         self.evaluations
             .iter()
@@ -114,7 +117,7 @@ pub struct OptimizationResult {
     /// Number of iterations performed
     pub iterations: usize,
 
-    /// Total number of simulations run (iterations * monte_carlo_iterations)
+    /// Total number of simulations run (iterations * `monte_carlo_iterations`)
     pub total_simulations: usize,
 
     /// Full convergence history
@@ -123,6 +126,7 @@ pub struct OptimizationResult {
 
 impl OptimizationResult {
     /// Create a result for when no feasible solution was found
+    #[must_use]
     pub fn no_feasible_solution(history: ConvergenceHistory) -> Self {
         Self {
             optimal_parameters: HashMap::new(),

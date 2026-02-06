@@ -240,6 +240,7 @@ impl EventBuilder {
     }
 
     /// Set the destination account by ID
+    #[must_use]
     pub fn to_account_id(mut self, id: AccountId) -> Self {
         match &mut self.event_type {
             EventType::Income(spec) => {
@@ -254,6 +255,7 @@ impl EventBuilder {
     }
 
     /// Set the source account by name (for expenses)
+    #[must_use]
     pub fn from_account(mut self, name: impl Into<String>) -> Self {
         let name = name.into();
         match &mut self.event_type {
@@ -269,6 +271,7 @@ impl EventBuilder {
     }
 
     /// Set the source account by ID
+    #[must_use]
     pub fn from_account_id(mut self, id: AccountId) -> Self {
         match &mut self.event_type {
             EventType::Expense(spec) => {
@@ -283,6 +286,7 @@ impl EventBuilder {
     }
 
     /// Set the target asset for purchases by name
+    #[must_use]
     pub fn to_asset(
         mut self,
         account_name: impl Into<String>,
@@ -298,6 +302,7 @@ impl EventBuilder {
     }
 
     /// Set the target asset for purchases by coord
+    #[must_use]
     pub fn to_asset_coord(mut self, coord: AssetCoord) -> Self {
         if let EventType::AssetPurchase(spec) = &mut self.event_type {
             spec.to_asset = AssetRef::Coord(coord);
@@ -310,6 +315,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Withdraw from a single account
+    #[must_use]
     pub fn from_single_account(mut self, account_name: impl Into<String>) -> Self {
         if let EventType::AssetSale(spec) = &mut self.event_type {
             spec.sources =
@@ -319,6 +325,7 @@ impl EventBuilder {
     }
 
     /// Withdraw from accounts in the specified order (waterfall strategy)
+    #[must_use]
     pub fn from_accounts_in_order<I, S>(mut self, accounts: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -336,6 +343,7 @@ impl EventBuilder {
     }
 
     /// Use a predefined withdrawal strategy
+    #[must_use]
     pub fn withdrawal_strategy(mut self, order: WithdrawalOrder) -> Self {
         if let EventType::AssetSale(spec) = &mut self.event_type {
             spec.sources = WithdrawalSourceSpec::Strategy {
@@ -347,6 +355,7 @@ impl EventBuilder {
     }
 
     /// Use tax-efficient withdrawal order (taxable first, then tax-deferred, then tax-free)
+    #[must_use]
     pub fn tax_efficient(self) -> Self {
         self.withdrawal_strategy(WithdrawalOrder::TaxEfficientEarly)
     }
@@ -356,6 +365,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Set a fixed amount
+    #[must_use]
     pub fn amount(mut self, value: f64) -> Self {
         let amount = AmountSpec::Fixed(value);
         match &mut self.event_type {
@@ -369,6 +379,7 @@ impl EventBuilder {
     }
 
     /// Use the full source balance
+    #[must_use]
     pub fn full_balance(mut self) -> Self {
         let amount = AmountSpec::SourceBalance;
         match &mut self.event_type {
@@ -382,6 +393,7 @@ impl EventBuilder {
     }
 
     /// Set a complex transfer amount
+    #[must_use]
     pub fn transfer_amount(mut self, amount: TransferAmount) -> Self {
         let amount = AmountSpec::TransferAmount(amount);
         match &mut self.event_type {
@@ -399,6 +411,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Amount is gross (before taxes)
+    #[must_use]
     pub fn gross(mut self) -> Self {
         match &mut self.event_type {
             EventType::Income(spec) => spec.amount_mode = AmountMode::Gross,
@@ -409,6 +422,7 @@ impl EventBuilder {
     }
 
     /// Amount is net (after taxes)
+    #[must_use]
     pub fn net(mut self) -> Self {
         match &mut self.event_type {
             EventType::Income(spec) => spec.amount_mode = AmountMode::Net,
@@ -423,6 +437,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Income is taxable (default)
+    #[must_use]
     pub fn taxable(mut self) -> Self {
         if let EventType::Income(spec) = &mut self.event_type {
             spec.income_type = IncomeType::Taxable;
@@ -431,6 +446,7 @@ impl EventBuilder {
     }
 
     /// Income is tax-free (e.g., Roth withdrawals, municipal bond interest)
+    #[must_use]
     pub fn tax_free(mut self) -> Self {
         if let EventType::Income(spec) = &mut self.event_type {
             spec.income_type = IncomeType::TaxFree;
@@ -443,6 +459,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Use FIFO (first-in, first-out) for lot selection
+    #[must_use]
     pub fn fifo(mut self) -> Self {
         if let EventType::AssetSale(spec) = &mut self.event_type {
             spec.lot_method = LotMethod::Fifo;
@@ -451,6 +468,7 @@ impl EventBuilder {
     }
 
     /// Use LIFO (last-in, first-out) for lot selection
+    #[must_use]
     pub fn lifo(mut self) -> Self {
         if let EventType::AssetSale(spec) = &mut self.event_type {
             spec.lot_method = LotMethod::Lifo;
@@ -459,6 +477,7 @@ impl EventBuilder {
     }
 
     /// Sell highest cost lots first (minimize gains)
+    #[must_use]
     pub fn highest_cost_first(mut self) -> Self {
         if let EventType::AssetSale(spec) = &mut self.event_type {
             spec.lot_method = LotMethod::HighestCost;
@@ -467,6 +486,7 @@ impl EventBuilder {
     }
 
     /// Sell lowest cost lots first (realize gains)
+    #[must_use]
     pub fn lowest_cost_first(mut self) -> Self {
         if let EventType::AssetSale(spec) = &mut self.event_type {
             spec.lot_method = LotMethod::LowestCost;
@@ -479,12 +499,14 @@ impl EventBuilder {
     // =========================================================================
 
     /// Trigger on a specific date
+    #[must_use]
     pub fn on_date(mut self, date: Date) -> Self {
         self.trigger = TriggerSpec::Date(date);
         self
     }
 
     /// Trigger at a specific age
+    #[must_use]
     pub fn at_age(mut self, years: u8) -> Self {
         self.trigger = TriggerSpec::Age {
             years,
@@ -494,6 +516,7 @@ impl EventBuilder {
     }
 
     /// Trigger at a specific age and month
+    #[must_use]
     pub fn at_age_months(mut self, years: u8, months: u8) -> Self {
         self.trigger = TriggerSpec::Age {
             years,
@@ -503,6 +526,7 @@ impl EventBuilder {
     }
 
     /// Event triggers once (default for date/age triggers)
+    #[must_use]
     pub fn once(mut self) -> Self {
         self.once = true;
         self
@@ -513,6 +537,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Event repeats weekly
+    #[must_use]
     pub fn weekly(mut self) -> Self {
         self.trigger = TriggerSpec::Repeating {
             interval: RepeatInterval::Weekly,
@@ -524,6 +549,7 @@ impl EventBuilder {
     }
 
     /// Event repeats bi-weekly
+    #[must_use]
     pub fn biweekly(mut self) -> Self {
         self.trigger = TriggerSpec::Repeating {
             interval: RepeatInterval::BiWeekly,
@@ -535,6 +561,7 @@ impl EventBuilder {
     }
 
     /// Event repeats monthly
+    #[must_use]
     pub fn monthly(mut self) -> Self {
         self.trigger = TriggerSpec::Repeating {
             interval: RepeatInterval::Monthly,
@@ -546,6 +573,7 @@ impl EventBuilder {
     }
 
     /// Event repeats quarterly
+    #[must_use]
     pub fn quarterly(mut self) -> Self {
         self.trigger = TriggerSpec::Repeating {
             interval: RepeatInterval::Quarterly,
@@ -557,6 +585,7 @@ impl EventBuilder {
     }
 
     /// Event repeats yearly
+    #[must_use]
     pub fn yearly(mut self) -> Self {
         self.trigger = TriggerSpec::Repeating {
             interval: RepeatInterval::Yearly,
@@ -568,6 +597,7 @@ impl EventBuilder {
     }
 
     /// Start repeating from this date
+    #[must_use]
     pub fn starting_on(mut self, date: Date) -> Self {
         if let TriggerSpec::Repeating { start, .. } = &mut self.trigger {
             *start = Some(Box::new(TriggerSpec::Date(date)));
@@ -584,6 +614,7 @@ impl EventBuilder {
     }
 
     /// Start repeating at this age
+    #[must_use]
     pub fn starting_at_age(mut self, years: u8) -> Self {
         if let TriggerSpec::Repeating { start, .. } = &mut self.trigger {
             *start = Some(Box::new(TriggerSpec::Age {
@@ -605,6 +636,7 @@ impl EventBuilder {
     }
 
     /// Stop repeating after this date
+    #[must_use]
     pub fn until_date(mut self, date: Date) -> Self {
         if let TriggerSpec::Repeating { end, .. } = &mut self.trigger {
             *end = Some(Box::new(TriggerSpec::Date(date)));
@@ -613,6 +645,7 @@ impl EventBuilder {
     }
 
     /// Stop repeating at this age
+    #[must_use]
     pub fn until_age(mut self, years: u8) -> Self {
         if let TriggerSpec::Repeating { end, .. } = &mut self.trigger {
             *end = Some(Box::new(TriggerSpec::Age {
@@ -624,6 +657,7 @@ impl EventBuilder {
     }
 
     /// Stop repeating after N occurrences
+    #[must_use]
     pub fn max_occurrences(mut self, count: u32) -> Self {
         if let TriggerSpec::Repeating {
             max_occurrences, ..
@@ -639,6 +673,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Set the event description
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -649,6 +684,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Add a custom effect (for custom events)
+    #[must_use]
     pub fn effect(mut self, effect: EventEffect) -> Self {
         if let EventType::Custom(effects) = &mut self.event_type {
             effects.push(effect);
@@ -677,6 +713,7 @@ impl EventBuilder {
     // =========================================================================
 
     /// Build the event definition (to be resolved by SimulationBuilder)
+    #[must_use]
     pub fn build(self) -> EventDefinition {
         EventDefinition {
             name: self.name,

@@ -11,6 +11,7 @@ use rayon::prelude::*;
 use crate::config::SimulationConfig;
 use crate::error::MarketError;
 use crate::model::MonteCarloConfig;
+use crate::optimization::OptimizableParameter;
 use crate::simulation::monte_carlo_simulate_with_config;
 
 use super::config::OptimizationConfig;
@@ -26,7 +27,10 @@ fn generate_grid_points(
         return vec![vec![]];
     }
 
-    let bounds: Vec<(f64, f64)> = parameters.iter().map(|p| p.bounds()).collect();
+    let bounds: Vec<(f64, f64)> = parameters
+        .iter()
+        .map(OptimizableParameter::bounds)
+        .collect();
     let mut points = Vec::new();
     let mut indices = vec![0usize; parameters.len()];
 
@@ -37,7 +41,7 @@ fn generate_grid_points(
             .zip(bounds.iter())
             .map(|(&idx, &(min, max))| {
                 if grid_size <= 1 {
-                    (min + max) / 2.0
+                    f64::midpoint(min, max)
                 } else {
                     min + (max - min) * (idx as f64) / (grid_size - 1) as f64
                 }
@@ -47,7 +51,7 @@ fn generate_grid_points(
 
         // Increment indices (like counting in base grid_size)
         let mut carry = true;
-        for index in indices.iter_mut() {
+        for index in &mut indices {
             if carry {
                 *index += 1;
                 if *index >= grid_size {

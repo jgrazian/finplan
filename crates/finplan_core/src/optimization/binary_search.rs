@@ -15,7 +15,7 @@ use super::result::{ConvergenceHistory, OptimizationResult, TerminationReason};
 
 /// Progress callback for binary search optimization
 ///
-/// Arguments: (iteration, current_value, objective_value)
+/// Arguments: (iteration, `current_value`, `objective_value`)
 pub type ProgressCallback = Box<dyn Fn(usize, f64, f64) + Send + Sync>;
 
 /// Perform binary search optimization for a single parameter
@@ -71,7 +71,7 @@ pub fn optimize_binary_search(
     // Binary search loop
     while iteration < opt_config.max_iterations && (high - low) > opt_config.tolerance * max_val {
         iteration += 1;
-        let mid = (low + high) / 2.0;
+        let mid = f64::midpoint(low, high);
 
         let record = evaluate(base_config, opt_config, &[mid])?;
         history.record(record.clone());

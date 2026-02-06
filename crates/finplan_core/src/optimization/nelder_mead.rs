@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::config::SimulationConfig;
 use crate::error::MarketError;
+use crate::optimization::OptimizableParameter;
 
 use super::config::OptimizationConfig;
 use super::evaluator::evaluate;
@@ -16,7 +17,7 @@ use super::result::{ConvergenceHistory, EvaluationRecord, OptimizationResult, Te
 
 /// Progress callback for Nelder-Mead optimization
 ///
-/// Arguments: (iteration, best_objective, current_simplex_size)
+/// Arguments: (iteration, `best_objective`, `current_simplex_size`)
 pub type ProgressCallback = Box<dyn Fn(usize, f64, f64) + Send + Sync>;
 
 /// Standard Nelder-Mead coefficients
@@ -40,12 +41,19 @@ fn initialize_simplex(
     opt_config: &OptimizationConfig,
 ) -> Result<Vec<SimplexVertex>, MarketError> {
     let n = opt_config.parameters.len();
-    let bounds: Vec<(f64, f64)> = opt_config.parameters.iter().map(|p| p.bounds()).collect();
+    let bounds: Vec<(f64, f64)> = opt_config
+        .parameters
+        .iter()
+        .map(OptimizableParameter::bounds)
+        .collect();
 
     let mut simplex = Vec::with_capacity(n + 1);
 
     // Start at the center of the parameter space
-    let center: Vec<f64> = bounds.iter().map(|(min, max)| (min + max) / 2.0).collect();
+    let center: Vec<f64> = bounds
+        .iter()
+        .map(|(min, max)| f64::midpoint(*min, *max))
+        .collect();
 
     // Evaluate center point
     let center_record = evaluate(base_config, opt_config, &center)?;
@@ -139,7 +147,7 @@ fn simplex_size(simplex: &[SimplexVertex], centroid: &[f64]) -> f64 {
                 .sum::<f64>()
                 .sqrt()
         })
-        .fold(0.0_f64, |a, b| a.max(b))
+        .fold(0.0_f64, f64::max)
 }
 
 /// Perform Nelder-Mead simplex optimization
@@ -163,7 +171,11 @@ pub fn optimize_nelder_mead(
         });
     }
 
-    let bounds: Vec<(f64, f64)> = opt_config.parameters.iter().map(|p| p.bounds()).collect();
+    let bounds: Vec<(f64, f64)> = opt_config
+        .parameters
+        .iter()
+        .map(OptimizableParameter::bounds)
+        .collect();
     let mut history = ConvergenceHistory::new();
 
     // Initialize simplex

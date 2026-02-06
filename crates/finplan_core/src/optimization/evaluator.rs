@@ -18,6 +18,7 @@ use super::result::EvaluationRecord;
 /// Apply parameter values to a simulation configuration
 ///
 /// Returns `None` if the configuration cannot be modified (e.g., event not found)
+#[must_use]
 pub fn apply_parameters(
     base_config: &SimulationConfig,
     parameters: &[OptimizableParameter],
@@ -88,7 +89,7 @@ pub fn apply_parameters(
     Some(config)
 }
 
-/// Modify TransferAmount::Fixed values in event effects
+/// Modify `TransferAmount::Fixed` values in event effects
 fn modify_fixed_amount_in_effects(effects: &mut [EventEffect], new_amount: f64) {
     for effect in effects {
         match effect {
@@ -106,7 +107,7 @@ fn modify_fixed_amount_in_effects(effects: &mut [EventEffect], new_amount: f64) 
     }
 }
 
-/// Recursively modify TransferAmount::Fixed values
+/// Recursively modify `TransferAmount::Fixed` values
 fn modify_transfer_amount(amount: &mut TransferAmount, new_amount: f64) {
     match amount {
         TransferAmount::Fixed(val) => {
@@ -169,6 +170,7 @@ pub fn evaluate(
 }
 
 /// Calculate the objective function value from simulation results
+#[must_use]
 pub fn calculate_objective(objective: &OptimizationObjective, summary: &MonteCarloSummary) -> f64 {
     match objective {
         OptimizationObjective::MaximizeWealthAt { .. } => {
@@ -195,10 +197,9 @@ pub fn calculate_objective(objective: &OptimizationObjective, summary: &MonteCar
         }
         OptimizationObjective::MinimizeLifetimeTax => {
             // Get total lifetime taxes from mean result
-            let total_tax = summary
-                .get_mean_result()
-                .map(|result| result.yearly_taxes.iter().map(|t| t.total_tax).sum::<f64>())
-                .unwrap_or(0.0);
+            let total_tax = summary.get_mean_result().map_or(0.0, |result| {
+                result.yearly_taxes.iter().map(|t| t.total_tax).sum::<f64>()
+            });
             // Negate since we want to minimize
             -total_tax
         }
@@ -206,6 +207,7 @@ pub fn calculate_objective(objective: &OptimizationObjective, summary: &MonteCar
 }
 
 /// Check if all constraints are satisfied
+#[must_use]
 pub fn check_constraints(constraints: &OptimizationConstraints, stats: &MonteCarloStats) -> bool {
     // Check minimum success rate
     if let Some(min_rate) = constraints.min_success_rate

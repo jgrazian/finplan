@@ -1,6 +1,6 @@
 //! State events - the immutable ledger of simulation state changes
 //!
-//! Every mutation to simulation state is represented as a StateEvent.
+//! Every mutation to simulation state is represented as a `StateEvent`.
 //! These form an immutable ledger that can be used to:
 //! - Replay the simulation
 //! - Audit what happened and when
@@ -23,7 +23,7 @@ pub enum CashFlowKind {
     Income,
     /// True expense (bills, purchases, etc.)
     Expense,
-    /// Proceeds from liquidating investments (Sweep, AssetSale)
+    /// Proceeds from liquidating investments (Sweep, `AssetSale`)
     LiquidationProceeds,
     /// Cash used to purchase investments
     InvestmentPurchase,
@@ -52,6 +52,7 @@ pub struct LedgerEntry {
 }
 
 impl LedgerEntry {
+    #[must_use]
     pub fn new(date: Date, event: StateEvent) -> Self {
         Self {
             date,
@@ -60,6 +61,7 @@ impl LedgerEntry {
         }
     }
 
+    #[must_use]
     pub fn with_source(date: Date, source_event: EventId, event: StateEvent) -> Self {
         Self {
             date,
@@ -222,6 +224,7 @@ pub enum StateEvent {
 
 impl StateEvent {
     /// Check if this is a time-related event
+    #[must_use]
     pub fn is_time_event(&self) -> bool {
         matches!(
             self,
@@ -230,6 +233,7 @@ impl StateEvent {
     }
 
     /// Check if this is a cash operation
+    #[must_use]
     pub fn is_cash_event(&self) -> bool {
         matches!(
             self,
@@ -240,6 +244,7 @@ impl StateEvent {
     }
 
     /// Check if this is an asset operation
+    #[must_use]
     pub fn is_asset_event(&self) -> bool {
         matches!(
             self,
@@ -248,6 +253,7 @@ impl StateEvent {
     }
 
     /// Check if this is a tax event
+    #[must_use]
     pub fn is_tax_event(&self) -> bool {
         matches!(
             self,
@@ -259,6 +265,7 @@ impl StateEvent {
     }
 
     /// Check if this is an event management event
+    #[must_use]
     pub fn is_event_management(&self) -> bool {
         matches!(
             self,
@@ -270,6 +277,7 @@ impl StateEvent {
     }
 
     /// Get the account ID if this event affects a specific account
+    #[must_use]
     pub fn account_id(&self) -> Option<AccountId> {
         match self {
             StateEvent::CreateAccount(account) => Some(account.account_id),
@@ -287,6 +295,7 @@ impl StateEvent {
     }
 
     /// Get the event ID if this is related to a user-defined event
+    #[must_use]
     pub fn event_id(&self) -> Option<EventId> {
         match self {
             StateEvent::EventTriggered { event_id } => Some(*event_id),

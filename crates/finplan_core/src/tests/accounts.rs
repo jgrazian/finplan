@@ -65,11 +65,7 @@ fn test_investment_account_cash_and_positions() {
 
     assert!(
         (actual - expected_total).abs() < 1.0,
-        "Expected total ${:.2} (position ${:.2} + cash ${:.2}), got ${:.2}",
-        expected_total,
-        expected_position,
-        cash_amount,
-        actual
+        "Expected total ${expected_total:.2} (position ${expected_position:.2} + cash ${cash_amount:.2}), got ${actual:.2}"
     );
 }
 
@@ -138,9 +134,7 @@ fn test_multiple_lots_same_asset() {
 
     assert!(
         (actual - expected_value).abs() < 1.0,
-        "Expected ${:.2}, got ${:.2}",
-        expected_value,
-        actual
+        "Expected ${expected_value:.2}, got ${actual:.2}"
     );
 }
 
@@ -201,15 +195,11 @@ fn test_property_account_appreciation() {
 
     assert!(
         (house_actual - expected_house).abs() < 1.0,
-        "House expected ${:.2}, got ${:.2}",
-        expected_house,
-        house_actual
+        "House expected ${expected_house:.2}, got ${house_actual:.2}"
     );
     assert!(
         (car_actual - expected_car).abs() < 1.0,
-        "Car expected ${:.2}, got ${:.2}",
-        expected_car,
-        car_actual
+        "Car expected ${expected_car:.2}, got ${car_actual:.2}"
     );
 }
 
@@ -248,9 +238,7 @@ fn test_liability_account_negative_balance() {
     let expected = -loan_principal * (1.0 + loan_rate).powi(5);
     assert!(
         (actual - expected).abs() < 200.0, // Allow for compounding method differences
-        "Liability should be ${:.2}, got ${:.2}",
-        expected,
-        actual
+        "Liability should be ${expected:.2}, got ${actual:.2}"
     );
 }
 
@@ -341,21 +329,15 @@ fn test_tax_status_same_returns() {
     // All should have same ending value (tax status doesn't affect appreciation)
     assert!(
         (taxable - expected).abs() < 1.0,
-        "Taxable expected ${:.2}, got ${:.2}",
-        expected,
-        taxable
+        "Taxable expected ${expected:.2}, got ${taxable:.2}"
     );
     assert!(
         (deferred - expected).abs() < 1.0,
-        "Tax-deferred expected ${:.2}, got ${:.2}",
-        expected,
-        deferred
+        "Tax-deferred expected ${expected:.2}, got ${deferred:.2}"
     );
     assert!(
         (tax_free - expected).abs() < 1.0,
-        "Tax-free expected ${:.2}, got ${:.2}",
-        expected,
-        tax_free
+        "Tax-free expected ${expected:.2}, got ${tax_free:.2}"
     );
 }
 
@@ -392,8 +374,7 @@ fn test_empty_investment_account() {
 
     assert!(
         actual.abs() < 0.01,
-        "Empty account should have $0 balance, got ${:.2}",
-        actual
+        "Empty account should have $0 balance, got ${actual:.2}"
     );
 }
 

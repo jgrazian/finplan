@@ -112,6 +112,7 @@ pub struct SimulationResult {
 impl SimulationResult {
     /// Get the final balance for a specific account
     /// Uses pre-computed final balances from the simulation
+    #[must_use]
     pub fn final_account_balance(&self, account_id: AccountId) -> Option<f64> {
         self.wealth_snapshots.last().and_then(|snapshot| {
             snapshot.accounts.iter().find_map(|acc_snap| {
@@ -126,6 +127,7 @@ impl SimulationResult {
 
     /// Get the final balance for a specific asset
     /// Uses pre-computed final asset balances from the simulation
+    #[must_use]
     pub fn final_asset_balance(&self, account_id: AccountId, asset_id: AssetId) -> Option<f64> {
         self.wealth_snapshots.last().and_then(|snapshot| {
             snapshot.accounts.iter().find_map(|acc_snap| {
@@ -142,6 +144,7 @@ impl SimulationResult {
         })
     }
 
+    #[must_use]
     pub fn yearly_net_worth(&self) -> Vec<(jiff::civil::Date, f64)> {
         self.wealth_snapshots
             .iter()
@@ -151,7 +154,7 @@ impl SimulationResult {
                 let total = snapshot
                     .accounts
                     .iter()
-                    .map(|acc_snap| acc_snap.total_value())
+                    .map(AccountSnapshot::total_value)
                     .sum();
                 (snapshot.date, total)
             })
@@ -159,6 +162,7 @@ impl SimulationResult {
     }
 
     /// Check if an event was triggered at any point
+    #[must_use]
     pub fn event_was_triggered(&self, event_id: EventId) -> bool {
         self.ledger
             .iter()
@@ -166,6 +170,7 @@ impl SimulationResult {
     }
 
     /// Get the date when an event was first triggered
+    #[must_use]
     pub fn event_trigger_date(&self, event_id: EventId) -> Option<jiff::civil::Date> {
         self.ledger.iter().find_map(|entry| {
             if let StateEvent::EventTriggered { event_id: eid } = &entry.event
@@ -253,13 +258,6 @@ impl SimulationResult {
     }
 }
 
-/// Results from Monte Carlo simulation (multiple runs)
-/// DEPRECATED: Use MonteCarloSummary with monte_carlo_simulate_with_config for memory efficiency
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MonteCarloResult {
-    pub iterations: Vec<SimulationResult>,
-}
-
 // ============================================================================
 // Memory-efficient Monte Carlo types
 // ============================================================================
@@ -284,6 +282,7 @@ pub enum ConvergenceMetric {
 
 impl ConvergenceMetric {
     /// Get display name for the metric
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Mean => "Mean",
@@ -294,6 +293,7 @@ impl ConvergenceMetric {
     }
 
     /// Get short name for compact display
+    #[must_use]
     pub fn short_name(&self) -> &'static str {
         match self {
             Self::Mean => "mean",
@@ -408,6 +408,7 @@ pub struct SnapshotMeanAccumulator {
 
 impl SnapshotMeanAccumulator {
     /// Create a new accumulator using the first result as a template
+    #[must_use]
     pub fn new(template: &SimulationResult) -> Self {
         let dates: Vec<_> = template.wealth_snapshots.iter().map(|s| s.date).collect();
         let account_ids: Vec<Vec<_>> = template
@@ -444,6 +445,7 @@ impl SnapshotMeanAccumulator {
     }
 
     /// Build the mean wealth snapshots
+    #[must_use]
     pub fn build_mean_snapshots(&self) -> Vec<WealthSnapshot> {
         let n = self.count as f64;
         self.dates
@@ -491,6 +493,7 @@ pub struct TaxMeanAccumulator {
 
 impl TaxMeanAccumulator {
     /// Create a new accumulator using the first result as a template
+    #[must_use]
     pub fn new(template: &SimulationResult) -> Self {
         let sums = template
             .yearly_taxes
@@ -520,6 +523,7 @@ impl TaxMeanAccumulator {
     }
 
     /// Build the mean tax summaries
+    #[must_use]
     pub fn build_mean_taxes(&self) -> Vec<TaxSummary> {
         let n = self.count as f64;
         self.sums
@@ -652,6 +656,7 @@ pub struct MeanAccumulators {
 }
 
 impl MeanAccumulators {
+    #[must_use]
     pub fn new(template: &SimulationResult) -> Self {
         Self {
             snapshots: SnapshotMeanAccumulator::new(template),
@@ -668,7 +673,8 @@ impl MeanAccumulators {
         self.inflation.accumulate(result);
     }
 
-    /// Build a synthetic SimulationResult with mean values
+    /// Build a synthetic `SimulationResult` with mean values
+    #[must_use]
     pub fn build_mean_result(&self) -> SimulationResult {
         SimulationResult {
             wealth_snapshots: self.snapshots.build_mean_snapshots(),
@@ -695,6 +701,7 @@ pub struct MonteCarloSummary {
 
 impl MonteCarloSummary {
     /// Get the result for a specific percentile (exact match)
+    #[must_use]
     pub fn get_percentile(&self, percentile: f64) -> Option<&SimulationResult> {
         self.percentile_runs
             .iter()
@@ -706,14 +713,15 @@ impl MonteCarloSummary {
     pub fn get_mean_result(&self) -> Option<SimulationResult> {
         self.mean_accumulators
             .as_ref()
-            .map(|acc| acc.build_mean_result())
+            .map(MeanAccumulators::build_mean_result)
     }
 }
 
-/// Helper function to calculate final net worth from a SimulationResult
+/// Helper function to calculate final net worth from a `SimulationResult`
+#[must_use]
 pub fn final_net_worth(result: &SimulationResult) -> f64 {
     result.wealth_snapshots.last().map_or(0.0, |snap| {
-        snap.accounts.iter().map(|acc| acc.total_value()).sum()
+        snap.accounts.iter().map(AccountSnapshot::total_value).sum()
     })
 }
 
@@ -763,6 +771,7 @@ impl Default for MonteCarloProgress {
 
 impl MonteCarloProgress {
     /// Create a new progress tracker
+    #[must_use]
     pub fn new() -> Self {
         Self {
             completed: Arc::new(AtomicUsize::new(0)),
@@ -790,11 +799,13 @@ impl MonteCarloProgress {
     }
 
     /// Get the number of completed iterations
+    #[must_use]
     pub fn completed(&self) -> usize {
         self.completed.load(Ordering::Relaxed)
     }
 
     /// Check if cancellation was requested
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }

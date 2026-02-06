@@ -21,11 +21,13 @@ pub struct Record {
 }
 
 impl Record {
+    #[must_use]
     pub fn new(date: jiff::civil::Date, kind: RecordKind) -> Self {
         Self { date, kind }
     }
 
     /// Create a return record
+    #[must_use]
     pub fn investment_return(
         date: jiff::civil::Date,
         account_id: AccountId,
@@ -47,6 +49,7 @@ impl Record {
     }
 
     /// Create an event record
+    #[must_use]
     pub fn event(date: jiff::civil::Date, event_id: EventId) -> Self {
         Self::new(date, RecordKind::Event { event_id })
     }

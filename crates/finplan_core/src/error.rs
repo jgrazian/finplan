@@ -14,13 +14,13 @@ pub enum LookupError {
 impl fmt::Display for LookupError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LookupError::AccountNotFound(id) => write!(f, "account {:?} not found", id),
-            LookupError::AssetNotFound(coord) => write!(f, "asset {:?} not found", coord),
+            LookupError::AccountNotFound(id) => write!(f, "account {id:?} not found"),
+            LookupError::AssetNotFound(coord) => write!(f, "asset {coord:?} not found"),
             LookupError::AssetPriceNotFound(coord) => {
-                write!(f, "price not available for asset {:?}", coord)
+                write!(f, "price not available for asset {coord:?}")
             }
             LookupError::ReturnProfileNotFound(id) => {
-                write!(f, "return profile {:?} not found", id)
+                write!(f, "return profile {id:?} not found")
             }
         }
     }
@@ -40,13 +40,13 @@ impl fmt::Display for AccountTypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             AccountTypeError::NotACashAccount(id) => {
-                write!(f, "account {:?} is not a cash account", id)
+                write!(f, "account {id:?} is not a cash account")
             }
             AccountTypeError::NotAnInvestmentAccount(id) => {
-                write!(f, "account {:?} is not an investment account", id)
+                write!(f, "account {id:?} is not an investment account")
             }
             AccountTypeError::InvalidAccountType(id) => {
-                write!(f, "invalid account type for account {:?}", id)
+                write!(f, "invalid account type for account {id:?}")
             }
         }
     }
@@ -83,14 +83,13 @@ impl fmt::Display for MarketError {
             } => {
                 write!(
                     f,
-                    "invalid {} parameters (mean={}, std_dev={}): {}",
-                    profile_type, mean, std_dev, reason
+                    "invalid {profile_type} parameters (mean={mean}, std_dev={std_dev}): {reason}"
                 )
             }
-            MarketError::Lookup(e) => write!(f, "{}", e),
+            MarketError::Lookup(e) => write!(f, "{e}"),
             MarketError::Cancelled => write!(f, "simulation cancelled"),
             MarketError::EmptyHistoricalData => write!(f, "historical data is empty"),
-            MarketError::Config(msg) => write!(f, "configuration error: {}", msg),
+            MarketError::Config(msg) => write!(f, "configuration error: {msg}"),
         }
     }
 }
@@ -126,7 +125,7 @@ pub enum TransferEvaluationError {
 impl fmt::Display for TransferEvaluationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TransferEvaluationError::Lookup(e) => write!(f, "{}", e),
+            TransferEvaluationError::Lookup(e) => write!(f, "{e}"),
             TransferEvaluationError::ExternalBalanceReference => {
                 write!(f, "cannot reference balance of external endpoint")
             }
@@ -166,9 +165,9 @@ pub enum TriggerEventError {
 impl fmt::Display for TriggerEventError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TriggerEventError::Lookup(e) => write!(f, "{}", e),
-            TriggerEventError::TransferEvaluation(e) => write!(f, "{}", e),
-            TriggerEventError::DateError(e) => write!(f, "date calculation error: {}", e),
+            TriggerEventError::Lookup(e) => write!(f, "{e}"),
+            TriggerEventError::TransferEvaluation(e) => write!(f, "{e}"),
+            TriggerEventError::DateError(e) => write!(f, "date calculation error: {e}"),
         }
     }
 }
@@ -211,9 +210,9 @@ pub enum StateEventError {
 impl fmt::Display for StateEventError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StateEventError::Lookup(e) => write!(f, "{}", e),
-            StateEventError::AccountType(e) => write!(f, "{}", e),
-            StateEventError::TransferEvaluation(e) => write!(f, "{}", e),
+            StateEventError::Lookup(e) => write!(f, "{e}"),
+            StateEventError::AccountType(e) => write!(f, "{e}"),
+            StateEventError::TransferEvaluation(e) => write!(f, "{e}"),
         }
     }
 }
@@ -255,8 +254,8 @@ pub enum ApplyError {
 impl fmt::Display for ApplyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ApplyError::Lookup(e) => write!(f, "{}", e),
-            ApplyError::AccountType(e) => write!(f, "{}", e),
+            ApplyError::Lookup(e) => write!(f, "{e}"),
+            ApplyError::AccountType(e) => write!(f, "{e}"),
         }
     }
 }

@@ -2,8 +2,8 @@
 //!
 //! These tests verify:
 //! - Normal simulations have reasonable iteration counts
-//! - AccountBalance triggers with `once: true` work correctly
-//! - AccountBalance triggers with `once: false` are caught by iteration limits
+//! - `AccountBalance` triggers with `once: true` work correctly
+//! - `AccountBalance` triggers with `once: false` are caught by iteration limits
 //! - Event count scaling is linear with simulation complexity
 
 use std::collections::HashMap;
@@ -148,8 +148,7 @@ fn test_account_balance_trigger_safe() {
     let sweep_count = metrics.events_by_id.get(&EventId(2)).copied().unwrap_or(0);
     assert!(
         sweep_count >= 1,
-        "Sweep event should have fired at least once, got {}",
-        sweep_count
+        "Sweep event should have fired at least once, got {sweep_count}"
     );
 
     println!("Safe AccountBalance trigger metrics:");
@@ -157,7 +156,7 @@ fn test_account_balance_trigger_safe() {
         "  Max iterations at single date: {}",
         metrics.max_same_date_iterations
     );
-    println!("  Sweep event fired {} times", sweep_count);
+    println!("  Sweep event fired {sweep_count} times");
     println!(
         "  Total events triggered: {}",
         metrics.total_events_triggered
@@ -242,20 +241,18 @@ fn test_account_balance_trigger_cooldown_prevents_infinite_loop() {
     // Both events should fire, but not excessively (cooldown limits to ~1 per day)
     let event1_count = metrics.events_by_id.get(&EventId(1)).copied().unwrap_or(0);
     let event2_count = metrics.events_by_id.get(&EventId(2)).copied().unwrap_or(0);
-    println!("  Event 1 (add) fired {} times", event1_count);
-    println!("  Event 2 (subtract) fired {} times", event2_count);
+    println!("  Event 1 (add) fired {event1_count} times");
+    println!("  Event 2 (subtract) fired {event2_count} times");
 
     // Events should fire a reasonable number of times (roughly once per time step)
     // but not thousands of times as would happen without cooldown
     assert!(
         event1_count >= 1,
-        "Add event should have fired at least once, got {}",
-        event1_count
+        "Add event should have fired at least once, got {event1_count}"
     );
     assert!(
         event2_count >= 1,
-        "Subtract event should have fired at least once, got {}",
-        event2_count
+        "Subtract event should have fired at least once, got {event2_count}"
     );
     // Max iterations should be low (2-3 per date, not 50+)
     assert!(
@@ -333,14 +330,13 @@ fn test_event_count_scaling() {
     let ratio = events_10yr as f64 / events_5yr as f64;
 
     println!("Event scaling:");
-    println!("  5yr events: {}", events_5yr);
-    println!("  10yr events: {}", events_10yr);
-    println!("  Ratio: {:.2}x", ratio);
+    println!("  5yr events: {events_5yr}");
+    println!("  10yr events: {events_10yr}");
+    println!("  Ratio: {ratio:.2}x");
 
     assert!(
         ratio > 1.8 && ratio < 2.2,
-        "Event count should roughly double for 2x duration, got {:.2}x",
-        ratio
+        "Event count should roughly double for 2x duration, got {ratio:.2}x"
     );
 }
 
@@ -360,7 +356,7 @@ fn test_monte_carlo_memory_efficiency() {
     let elapsed = start.elapsed();
 
     println!("Monte Carlo (100 iterations, 30yr):");
-    println!("  Duration: {:?}", elapsed);
+    println!("  Duration: {elapsed:?}");
     println!("  Success rate: {:.1}%", result.stats.success_rate * 100.0);
     println!(
         "  Mean final net worth: ${:.0}",
@@ -377,8 +373,7 @@ fn test_monte_carlo_memory_efficiency() {
     // Verify reasonable performance (should complete in < 10 seconds on most systems)
     assert!(
         elapsed.as_secs() < 30,
-        "Monte Carlo simulation took too long: {:?}",
-        elapsed
+        "Monte Carlo simulation took too long: {elapsed:?}"
     );
 }
 

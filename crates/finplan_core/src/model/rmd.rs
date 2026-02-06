@@ -20,6 +20,7 @@ pub struct RmdTableEntry {
 
 impl RmdTable {
     /// IRS Uniform Lifetime Table (2024)
+    #[must_use]
     pub fn irs_uniform_lifetime_2024() -> Self {
         RmdTable {
             entries: vec![
@@ -220,6 +221,7 @@ impl RmdTable {
     }
 
     /// Get divisor for a specific age
+    #[must_use]
     pub fn divisor_for_age(&self, age: u8) -> Option<f64> {
         self.entries
             .iter()

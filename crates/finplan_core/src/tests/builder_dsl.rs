@@ -6,7 +6,7 @@ use crate::config::{AccountBuilder, AssetBuilder, EventBuilder, SimulationBuilde
 use crate::model::{AccountFlavor, TaxStatus};
 use crate::simulation::simulate;
 
-/// Test basic SimulationBuilder usage
+/// Test basic `SimulationBuilder` usage
 #[test]
 fn test_simulation_builder_basic() {
     let (config, metadata) = SimulationBuilder::new()
@@ -25,7 +25,7 @@ fn test_simulation_builder_basic() {
     assert!(metadata.events.is_empty());
 }
 
-/// Test AccountBuilder preset types
+/// Test `AccountBuilder` preset types
 #[test]
 fn test_account_builder_presets() {
     let (config, metadata) = SimulationBuilder::new()
@@ -93,7 +93,7 @@ fn test_account_builder_presets() {
     }
 }
 
-/// Test AssetBuilder with return profiles
+/// Test `AssetBuilder` with return profiles
 #[test]
 fn test_asset_builder_with_profiles() {
     let (config, metadata) = SimulationBuilder::new()
@@ -167,7 +167,7 @@ fn test_positions() {
     }
 }
 
-/// Test EventBuilder for income
+/// Test `EventBuilder` for income
 #[test]
 fn test_income_event_builder() {
     let (config, metadata) = SimulationBuilder::new()
@@ -197,7 +197,7 @@ fn test_income_event_builder() {
     assert_eq!(salary_event.effects.len(), 1);
 }
 
-/// Test EventBuilder for expense
+/// Test `EventBuilder` for expense
 #[test]
 fn test_expense_event_builder() {
     let (config, metadata) = SimulationBuilder::new()

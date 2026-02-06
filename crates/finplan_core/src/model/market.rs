@@ -86,7 +86,7 @@ fn apply_rates_to_value(
 
     if remaining_days > 0 {
         let yearly_rate = rates[complete_years].incremental;
-        let partial_rate = n_day_rate(yearly_rate, remaining_days as f64);
+        let partial_rate = n_day_rate(yearly_rate, f64::from(remaining_days));
         Some(value * (1.0 + partial_rate))
     } else {
         Some(value)
@@ -94,6 +94,8 @@ fn apply_rates_to_value(
 }
 
 /// Convert a yearly rate to an n-day rate using compound interest
+#[must_use]
+#[inline]
 pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
     (1.0 + yearly_rate).powf(n_days / 365.0) - 1.0
 }
@@ -106,15 +108,16 @@ pub struct Market {
 }
 
 impl Market {
+    #[must_use]
     pub fn new(
-        inflation_values: Vec<f64>,
+        inflation_values: &[f64],
         returns: FxHashMap<ReturnProfileId, Vec<f64>>,
         assets: FxHashMap<AssetId, (f64, ReturnProfileId)>,
     ) -> Self {
         let mut inflation_rates = Vec::with_capacity(inflation_values.len());
         let mut cumulative = 1.0;
 
-        for r in &inflation_values {
+        for r in inflation_values {
             inflation_rates.push(Rate {
                 incremental: *r,
                 cumulative,
@@ -127,9 +130,9 @@ impl Market {
             let mut returns_rates = Vec::with_capacity(rp_values.len());
             let mut cumulative = 1.0;
 
-            for r in &rp_values {
+            for r in rp_values {
                 returns_rates.push(Rate {
-                    incremental: *r,
+                    incremental: r,
                     cumulative,
                 });
                 cumulative *= 1.0 + r;
@@ -172,9 +175,10 @@ impl Market {
             returns.insert(rp_id, rp_returns);
         }
 
-        Ok(Self::new(inflation_values, returns, assets.clone()))
+        Ok(Self::new(&inflation_values, returns, assets.clone()))
     }
 
+    #[must_use]
     pub fn get_asset_value(
         &self,
         start_date: Date,
@@ -188,6 +192,7 @@ impl Market {
 
     /// Calculate the inflation-adjusted value of a cash amount.
     /// Returns the future nominal value needed to have the same purchasing power.
+    #[must_use]
     pub fn get_inflation_adjusted_value(
         &self,
         start_date: Date,
@@ -198,6 +203,7 @@ impl Market {
     }
 
     /// Calculate the value of an amount after applying returns from a specific profile.
+    #[must_use]
     pub fn get_return_on_value(
         &self,
         start_date: Date,
@@ -210,7 +216,8 @@ impl Market {
     }
 
     /// Get the return multiplier for a period (used for cash compounding).
-    /// Returns (1 + n_day_rate) for the given number of days at the year_index rate.
+    /// Returns (1 + `n_day_rate`) for the given number of days at the `year_index` rate.
+    #[must_use]
     pub fn get_period_multiplier(
         &self,
         year_index: usize,
@@ -233,10 +240,11 @@ impl Market {
     ///
     /// Returns a vector where index i represents the cumulative inflation from
     /// the start of the simulation through year i. The first element (year 0) is 1.0,
-    /// representing today's dollars. Each subsequent year is multiplied by (1 + inflation_rate).
+    /// representing today's dollars. Each subsequent year is multiplied by (1 + `inflation_rate`).
     ///
     /// These factors can be used to convert nominal future values to real (today's) dollars
-    /// by dividing: real_value = nominal_value / cumulative_inflation[year_index]
+    /// by dividing: `real_value` = `nominal_value` / `cumulative_inflation`[`year_index`]
+    #[must_use]
     pub fn get_cumulative_inflation_factors(&self) -> Vec<f64> {
         // Build cumulative factors: [1.0, 1.0*(1+r0), 1.0*(1+r0)*(1+r1), ...]
         // Note: inflation_values stores Rate { incremental, cumulative } where
@@ -297,6 +305,7 @@ impl InflationProfile {
     };
 
     /// Create a bootstrap inflation profile from US historical CPI data.
+    #[must_use]
     pub fn us_historical_bootstrap(block_size: Option<usize>) -> Self {
         InflationProfile::Bootstrap {
             history: HistoricalInflation::us_cpi(),
@@ -334,37 +343,34 @@ impl InflationProfile {
 
     /// Sample a sequence of inflation rates.
     ///
-    /// For `Bootstrap` profiles, this uses block bootstrap if block_size > 1,
+    /// For `Bootstrap` profiles, this uses block bootstrap if `block_size` > 1,
     /// otherwise i.i.d. sampling. Other profile types sample independently each year.
     pub fn sample_sequence<R: Rng + ?Sized>(
         &self,
         rng: &mut R,
         n: usize,
     ) -> Result<Vec<f64>, MarketError> {
-        match self {
-            InflationProfile::Bootstrap {
-                history,
-                block_size,
-            } => {
-                let bs = block_size.unwrap_or(1);
-                if bs > 1 {
-                    history
-                        .block_bootstrap(rng, n, bs)
-                        .ok_or(MarketError::EmptyHistoricalData)
-                } else {
-                    history
-                        .sample_years(rng, n)
-                        .ok_or(MarketError::EmptyHistoricalData)
-                }
+        if let InflationProfile::Bootstrap {
+            history,
+            block_size,
+        } = self
+        {
+            let bs = block_size.unwrap_or(1);
+            if bs > 1 {
+                history
+                    .block_bootstrap(rng, n, bs)
+                    .ok_or(MarketError::EmptyHistoricalData)
+            } else {
+                history
+                    .sample_years(rng, n)
+                    .ok_or(MarketError::EmptyHistoricalData)
             }
-            // For all other profile types, sample independently each year
-            _ => {
-                let mut results = Vec::with_capacity(n);
-                for _ in 0..n {
-                    results.push(self.sample(rng)?);
-                }
-                Ok(results)
+        } else {
+            let mut results = Vec::with_capacity(n);
+            for _ in 0..n {
+                results.push(self.sample(rng)?);
             }
+            Ok(results)
         }
     }
 }
@@ -385,7 +391,7 @@ pub enum ReturnProfile {
     /// Student's t distribution for fat-tailed returns.
     /// Better captures extreme market events than Normal distribution.
     /// - `mean`: Expected return (location parameter)
-    /// - `scale`: Scale parameter (similar to std_dev but adjusted for df)
+    /// - `scale`: Scale parameter (similar to `std_dev` but adjusted for df)
     /// - `df`: Degrees of freedom (lower = fatter tails, typically 4-6 for equities)
     StudentT {
         mean: f64,
@@ -406,7 +412,7 @@ pub enum ReturnProfile {
     },
     /// Bootstrap sampling from historical return data.
     /// Non-parametric approach that samples directly from observed historical returns.
-    /// - `preset`: Preset key identifying the historical data source (e.g., "sp500", "us_small_cap")
+    /// - `preset`: Preset key identifying the historical data source (e.g., "sp500", `us_small_cap`)
     /// - `block_size`: Optional block size for block bootstrap (preserves autocorrelation).
     ///   If None or 1, uses i.i.d. sampling with replacement.
     Bootstrap {
@@ -781,8 +787,9 @@ impl ReturnProfile {
     // - Bear markets: avg duration ~2 years, lower returns (~-8%), higher vol (~25%)
 
     /// S&P 500 regime-switching model with Normal distributions for each regime.
-    /// Bull: 15% mean, 12% std_dev | Bear: -8% mean, 25% std_dev
+    /// Bull: 15% mean, 12% `std_dev` | Bear: -8% mean, 25% `std_dev`
     /// Transition: ~12% bull->bear (8yr cycles), ~50% bear->bull (2yr cycles)
+    #[must_use]
     pub fn sp500_regime_switching_normal() -> ReturnProfile {
         ReturnProfile::RegimeSwitching {
             bull: Box::new(ReturnProfile::Normal {
@@ -800,6 +807,7 @@ impl ReturnProfile {
 
     /// S&P 500 regime-switching model with Student's t distributions for fat tails.
     /// Same parameters as normal but with df=5 for each regime.
+    #[must_use]
     pub fn sp500_regime_switching_student_t() -> ReturnProfile {
         ReturnProfile::RegimeSwitching {
             bull: Box::new(ReturnProfile::StudentT {
@@ -818,6 +826,7 @@ impl ReturnProfile {
     }
 
     /// Create a custom regime-switching profile.
+    #[must_use]
     pub fn regime_switching(
         bull: ReturnProfile,
         bear: ReturnProfile,
@@ -840,6 +849,7 @@ impl ReturnProfile {
 
     /// Bootstrap from S&P 500 historical returns (1927-2023, 97 years).
     /// Uses i.i.d. sampling with replacement.
+    #[must_use]
     pub fn sp500_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::sp500(),
@@ -848,6 +858,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from S&P 500 with 5-year blocks (preserves momentum/mean-reversion).
+    #[must_use]
     pub fn sp500_bootstrap_block5() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::sp500(),
@@ -856,6 +867,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from US Small Cap historical returns (1927-2024, 98 years).
+    #[must_use]
     pub fn us_small_cap_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::us_small_cap(),
@@ -864,6 +876,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from US T-Bills historical returns (1934-2025, 92 years).
+    #[must_use]
     pub fn us_tbills_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::us_tbills(),
@@ -872,6 +885,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from US Long-Term Bonds historical returns (1927-2023, 97 years).
+    #[must_use]
     pub fn us_long_bonds_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::us_long_bonds(),
@@ -880,6 +894,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from International Developed Markets (1991-2024, 34 years).
+    #[must_use]
     pub fn intl_developed_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::intl_developed(),
@@ -888,6 +903,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from Emerging Markets (1991-2024, 33 years).
+    #[must_use]
     pub fn emerging_markets_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::emerging_markets(),
@@ -896,6 +912,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from US REITs (2005-2026, 22 years).
+    #[must_use]
     pub fn reits_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::reits(),
@@ -904,6 +921,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from Gold (2001-2026, 26 years).
+    #[must_use]
     pub fn gold_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::gold(),
@@ -912,6 +930,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from US Aggregate Bonds (2004-2026, 23 years).
+    #[must_use]
     pub fn us_agg_bonds_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::us_agg_bonds(),
@@ -920,6 +939,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from US Corporate Bonds (2003-2026, 24 years).
+    #[must_use]
     pub fn us_corporate_bonds_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::us_corporate_bonds(),
@@ -928,6 +948,7 @@ impl ReturnProfile {
     }
 
     /// Bootstrap from US TIPS (2004-2026, 23 years).
+    #[must_use]
     pub fn tips_bootstrap() -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history: HistoricalReturns::tips(),
@@ -936,6 +957,7 @@ impl ReturnProfile {
     }
 
     /// Create a custom bootstrap profile from historical data.
+    #[must_use]
     pub fn bootstrap(history: HistoricalReturns, block_size: Option<usize>) -> ReturnProfile {
         ReturnProfile::Bootstrap {
             history,
@@ -954,12 +976,13 @@ pub struct HistoricalReturns {
     pub name: Cow<'static, str>,
     /// Starting year of the data series
     pub start_year: i16,
-    /// Annual returns (index 0 = start_year)
+    /// Annual returns (index 0 = `start_year`)
     pub returns: Cow<'static, [f64]>,
 }
 
 impl HistoricalReturns {
     /// Create a new historical returns series.
+    #[must_use]
     pub fn new(
         name: impl Into<Cow<'static, str>>,
         start_year: i16,
@@ -973,11 +996,13 @@ impl HistoricalReturns {
     }
 
     /// Number of years of historical data available.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.returns.len()
     }
 
     /// Returns true if the historical data is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.returns.is_empty()
     }
@@ -1056,11 +1081,11 @@ impl HistoricalReturns {
             / n;
         let std_dev = variance.sqrt();
 
-        let min = self.returns.iter().cloned().fold(f64::INFINITY, f64::min);
+        let min = self.returns.iter().copied().fold(f64::INFINITY, f64::min);
         let max = self
             .returns
             .iter()
-            .cloned()
+            .copied()
             .fold(f64::NEG_INFINITY, f64::max);
 
         Some(HistoricalStatistics {
@@ -1078,11 +1103,13 @@ impl HistoricalReturns {
     // =========================================================================
 
     /// S&P 500 Total Return (1927-2023, 97 years)
+    #[must_use]
     pub fn sp500() -> Self {
         Self::new("S&P 500", 1927, historical_returns::SP_500_ANNUAL_RETURNS)
     }
 
     /// US Small Cap Stocks (1927-2024, 98 years)
+    #[must_use]
     pub fn us_small_cap() -> Self {
         Self::new(
             "US Small Cap",
@@ -1092,6 +1119,7 @@ impl HistoricalReturns {
     }
 
     /// US 3-Month Treasury Bills (1934-2025, 92 years)
+    #[must_use]
     pub fn us_tbills() -> Self {
         Self::new(
             "US T-Bills",
@@ -1101,6 +1129,7 @@ impl HistoricalReturns {
     }
 
     /// US Long-Term Government Bonds (1927-2023, 97 years)
+    #[must_use]
     pub fn us_long_bonds() -> Self {
         Self::new(
             "US Long Bonds",
@@ -1110,6 +1139,7 @@ impl HistoricalReturns {
     }
 
     /// Developed Markets ex-US (1991-2024, 34 years)
+    #[must_use]
     pub fn intl_developed() -> Self {
         Self::new(
             "Intl Developed",
@@ -1119,6 +1149,7 @@ impl HistoricalReturns {
     }
 
     /// Emerging Markets (1991-2024, 33 years)
+    #[must_use]
     pub fn emerging_markets() -> Self {
         Self::new(
             "Emerging Markets",
@@ -1128,16 +1159,19 @@ impl HistoricalReturns {
     }
 
     /// US REITs (2005-2026, 22 years)
+    #[must_use]
     pub fn reits() -> Self {
         Self::new("REITs", 2005, historical_returns::REITS_ANNUAL_RETURNS)
     }
 
     /// Gold (2001-2026, 26 years)
+    #[must_use]
     pub fn gold() -> Self {
         Self::new("Gold", 2001, historical_returns::GOLD_ANNUAL_RETURNS)
     }
 
     /// US Aggregate Bonds (2004-2026, 23 years)
+    #[must_use]
     pub fn us_agg_bonds() -> Self {
         Self::new(
             "US Agg Bonds",
@@ -1147,6 +1181,7 @@ impl HistoricalReturns {
     }
 
     /// US Corporate Bonds (2003-2026, 24 years)
+    #[must_use]
     pub fn us_corporate_bonds() -> Self {
         Self::new(
             "US Corporate Bonds",
@@ -1156,6 +1191,7 @@ impl HistoricalReturns {
     }
 
     /// US TIPS (2004-2026, 23 years)
+    #[must_use]
     pub fn tips() -> Self {
         Self::new("TIPS", 2004, historical_returns::TIPS_ANNUAL_RETURNS)
     }
@@ -1182,12 +1218,13 @@ pub struct HistoricalInflation {
     pub name: Cow<'static, str>,
     /// Starting year of the data series
     pub start_year: i16,
-    /// Annual inflation rates (index 0 = start_year)
+    /// Annual inflation rates (index 0 = `start_year`)
     pub rates: Cow<'static, [f64]>,
 }
 
 impl HistoricalInflation {
     /// Create a new historical inflation series.
+    #[must_use]
     pub fn new(
         name: impl Into<Cow<'static, str>>,
         start_year: i16,
@@ -1201,11 +1238,13 @@ impl HistoricalInflation {
     }
 
     /// Number of years of historical data available.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.rates.len()
     }
 
     /// Returns true if the historical data is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rates.is_empty()
     }
@@ -1298,6 +1337,7 @@ impl HistoricalInflation {
 
     /// US CPI Inflation (All Urban Consumers) (1948-2025, 78 years)
     /// Source: FRED CPIAUCSL
+    #[must_use]
     pub fn us_cpi() -> Self {
         Self::new("US CPI", 1948, historical_inflation::US_CPI_ANNUAL_RATES)
     }
@@ -1314,7 +1354,7 @@ pub struct MultiAssetHistory {
     pub names: Vec<String>,
     /// Starting year of the aligned data series
     pub start_year: i16,
-    /// Returns matrix: returns[year_index][asset_index]
+    /// Returns matrix: returns[`year_index`][asset_index]
     /// All rows must have the same length as `names`
     pub returns: Vec<Vec<f64>>,
 }
@@ -1344,16 +1384,19 @@ impl MultiAssetHistory {
     }
 
     /// Number of years of historical data.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.returns.len()
     }
 
     /// Returns true if no historical data is available.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.returns.is_empty()
     }
 
     /// Number of assets in the series.
+    #[must_use]
     pub fn num_assets(&self) -> usize {
         self.names.len()
     }
@@ -1565,7 +1608,7 @@ mod tests {
         let returns = FxHashMap::from_iter([(rp_id, vec![0.10, 0.05])]);
         let inflation = vec![0.02, 0.02];
 
-        let market = Market::new(inflation, returns, assets);
+        let market = Market::new(&inflation, returns, assets);
 
         let start_date = date(2024, 1, 1);
 
@@ -1591,7 +1634,7 @@ mod tests {
         // Partial year (6 months approx)
         // n_day_rate implementation: (1.0 + yearly_rate).powf(n_days / 365.0) - 1.0
         let eval_date = date(2024, 7, 2); // 183 days after Jan 1
-        let days = (eval_date - start_date).get_days() as f64;
+        let days = f64::from((eval_date - start_date).get_days());
         let expected_rate = (1.10_f64).powf(days / 365.0) - 1.0;
         let expected_val = 1000.0 * (1.0 + expected_rate);
 
@@ -1630,8 +1673,7 @@ mod tests {
         // Mean should be close to 0.10 (within 2% absolute)
         assert!(
             (mean - 0.10).abs() < 0.02,
-            "Mean {} too far from expected 0.10",
-            mean
+            "Mean {mean} too far from expected 0.10"
         );
 
         // For Student's t with df=5, variance = scale^2 * df/(df-2) = 0.15^2 * 5/3 = 0.0375
@@ -1640,9 +1682,7 @@ mod tests {
         let expected_std = 0.15 * (5.0_f64 / 3.0).sqrt();
         assert!(
             (std_dev - expected_std).abs() < expected_std * 0.20,
-            "Std dev {} too far from expected {}",
-            std_dev,
-            expected_std
+            "Std dev {std_dev} too far from expected {expected_std}"
         );
     }
 
@@ -1716,8 +1756,7 @@ mod tests {
         // This is a probabilistic test, but with seed 42 it should be stable
         assert!(
             runs < 45,
-            "Expected fewer runs ({}) due to regime persistence",
-            runs
+            "Expected fewer runs ({runs}) due to regime persistence"
         );
     }
 
@@ -1757,8 +1796,7 @@ mod tests {
         for r in &returns {
             assert!(
                 (*r - 0.10).abs() < 1e-10 || (*r - (-0.20)).abs() < 1e-10,
-                "Unexpected return value: {}",
-                r
+                "Unexpected return value: {r}"
             );
         }
     }

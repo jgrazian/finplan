@@ -66,6 +66,7 @@ impl AccountBuilder {
     /// Create a taxable brokerage account
     ///
     /// Tax treatment: Capital gains taxed when assets sold
+    #[must_use]
     pub fn taxable_brokerage(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -82,6 +83,7 @@ impl AccountBuilder {
     /// Create a traditional 401k account
     ///
     /// Tax treatment: Contributions tax-deferred, withdrawals taxed as ordinary income
+    #[must_use]
     pub fn traditional_401k(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -98,6 +100,7 @@ impl AccountBuilder {
     /// Create a traditional IRA account
     ///
     /// Tax treatment: Contributions may be tax-deductible, withdrawals taxed as ordinary income
+    #[must_use]
     pub fn traditional_ira(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -114,6 +117,7 @@ impl AccountBuilder {
     /// Create a Roth 401k account
     ///
     /// Tax treatment: Contributions post-tax, qualified withdrawals tax-free
+    #[must_use]
     pub fn roth_401k(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -130,6 +134,7 @@ impl AccountBuilder {
     /// Create a Roth IRA account
     ///
     /// Tax treatment: Contributions post-tax, qualified withdrawals tax-free
+    #[must_use]
     pub fn roth_ira(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -146,6 +151,7 @@ impl AccountBuilder {
     /// Create an HSA (Health Savings Account)
     ///
     /// Tax treatment: Triple tax-advantaged (contributions, growth, qualified withdrawals)
+    #[must_use]
     pub fn hsa(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -162,6 +168,7 @@ impl AccountBuilder {
     /// Create a 529 education savings account
     ///
     /// Tax treatment: Contributions post-tax, qualified education withdrawals tax-free
+    #[must_use]
     pub fn education_529(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -178,6 +185,7 @@ impl AccountBuilder {
     /// Create a checking or savings bank account
     ///
     /// Tax treatment: Interest taxed as ordinary income
+    #[must_use]
     pub fn bank_account(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -192,6 +200,7 @@ impl AccountBuilder {
     /// Create a high-yield savings account
     ///
     /// Tax treatment: Interest taxed as ordinary income
+    #[must_use]
     pub fn hysa(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -204,6 +213,7 @@ impl AccountBuilder {
     }
 
     /// Create a property/real estate account
+    #[must_use]
     pub fn property(name: impl Into<String>) -> Self {
         Self {
             name: Some(name.into()),
@@ -213,6 +223,7 @@ impl AccountBuilder {
     }
 
     /// Create a mortgage liability
+    #[must_use]
     pub fn mortgage(name: impl Into<String>, principal: f64, interest_rate: f64) -> Self {
         Self {
             name: Some(name.into()),
@@ -225,6 +236,7 @@ impl AccountBuilder {
     }
 
     /// Create a student loan liability
+    #[must_use]
     pub fn student_loan(name: impl Into<String>, principal: f64, interest_rate: f64) -> Self {
         Self {
             name: Some(name.into()),
@@ -237,6 +249,7 @@ impl AccountBuilder {
     }
 
     /// Create a generic loan liability
+    #[must_use]
     pub fn loan(name: impl Into<String>, principal: f64, interest_rate: f64) -> Self {
         Self {
             name: Some(name.into()),
@@ -253,18 +266,21 @@ impl AccountBuilder {
     // =========================================================================
 
     /// Set or update the account name
+    #[must_use]
     pub fn name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
         self
     }
 
     /// Set the account description
+    #[must_use]
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
     }
 
     /// Set the cash balance (for Bank or Investment accounts)
+    #[must_use]
     pub fn cash(mut self, amount: f64) -> Self {
         match &mut self.flavor {
             AccountFlavorBuilder::Bank { cash_value, .. } => {
@@ -281,6 +297,7 @@ impl AccountBuilder {
     }
 
     /// Set the return profile for cash (interest rate)
+    #[must_use]
     pub fn cash_return_profile(mut self, profile_id: ReturnProfileId) -> Self {
         match &mut self.flavor {
             AccountFlavorBuilder::Bank {
@@ -306,6 +323,7 @@ impl AccountBuilder {
     /// * `units` - Number of shares/units
     /// * `cost_basis` - Total cost basis for this lot
     /// * `purchase_date` - When the position was purchased
+    #[must_use]
     pub fn position(
         mut self,
         asset_id: AssetId,
@@ -325,6 +343,7 @@ impl AccountBuilder {
     }
 
     /// Set the fixed asset for a Property account
+    #[must_use]
     pub fn fixed_asset(mut self, asset_id: AssetId, value: f64) -> Self {
         if let AccountFlavorBuilder::Property { asset } = &mut self.flavor {
             *asset = Some(FixedAsset { asset_id, value });
@@ -333,6 +352,7 @@ impl AccountBuilder {
     }
 
     /// Build the account with the given ID
+    #[must_use]
     pub fn build_with_id(self, account_id: AccountId) -> Account {
         let flavor = match self.flavor {
             AccountFlavorBuilder::Bank {

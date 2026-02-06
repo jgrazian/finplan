@@ -1,9 +1,9 @@
 //! Simulation metadata for human-readable names and descriptions
 //!
-//! EntityMetadata provides optional names and descriptions for accounts,
+//! `EntityMetadata` provides optional names and descriptions for accounts,
 //! assets, cash flows, events, and spending targets.
 //!
-//! SimulationMetadata provides bidirectional mappings between string names
+//! `SimulationMetadata` provides bidirectional mappings between string names
 //! and IDs, enabling the builder DSL to use human-readable names.
 
 use crate::model::{AccountId, AssetId, EventId, ReturnProfileId};
@@ -46,6 +46,7 @@ pub struct SimulationMetadata {
 
 impl SimulationMetadata {
     /// Create a new empty metadata instance
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -105,41 +106,49 @@ impl SimulationMetadata {
     }
 
     /// Look up an account ID by name
+    #[must_use]
     pub fn account_id(&self, name: &str) -> Option<AccountId> {
         self.account_names.get(name).copied()
     }
 
     /// Look up an asset ID by name
+    #[must_use]
     pub fn asset_id(&self, name: &str) -> Option<AssetId> {
         self.asset_names.get(name).copied()
     }
 
     /// Look up an event ID by name
+    #[must_use]
     pub fn event_id(&self, name: &str) -> Option<EventId> {
         self.event_names.get(name).copied()
     }
 
     /// Look up a return profile ID by name
+    #[must_use]
     pub fn return_profile_id(&self, name: &str) -> Option<ReturnProfileId> {
         self.return_profile_names.get(name).copied()
     }
 
     /// Get the name of an account by ID
+    #[must_use]
     pub fn account_name(&self, id: AccountId) -> Option<&str> {
         self.accounts.get(&id).and_then(|m| m.name.as_deref())
     }
 
     /// Get the name of an asset by ID
+    #[must_use]
     pub fn asset_name(&self, id: AssetId) -> Option<&str> {
         self.assets.get(&id).and_then(|m| m.name.as_deref())
     }
 
     /// Get the name of an event by ID
+    #[must_use]
     pub fn event_name(&self, id: EventId) -> Option<&str> {
         self.events.get(&id).and_then(|m| m.name.as_deref())
     }
 
     /// Get the name of a return profile by ID
+    #[must_use]
     pub fn return_profile_name(&self, id: ReturnProfileId) -> Option<&str> {
         self.return_profiles
             .get(&id)

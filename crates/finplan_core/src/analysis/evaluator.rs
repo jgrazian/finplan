@@ -36,6 +36,7 @@ pub struct SweepProgress {
 
 impl SweepProgress {
     /// Create a new progress tracker
+    #[must_use]
     pub fn new(total: usize) -> Self {
         Self {
             completed: Arc::new(AtomicUsize::new(0)),
@@ -58,11 +59,13 @@ impl SweepProgress {
     }
 
     /// Get the number of completed points
+    #[must_use]
     pub fn completed(&self) -> usize {
         self.completed.load(Ordering::Relaxed)
     }
 
     /// Get the total number of points
+    #[must_use]
     pub fn total(&self) -> usize {
         self.total.load(Ordering::Relaxed)
     }
@@ -84,13 +87,15 @@ impl SweepProgress {
     }
 
     /// Check if cancelled
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Relaxed)
     }
 
-    /// Create a MonteCarloProgress that shares this progress's atomics.
+    /// Create a `MonteCarloProgress` that shares this progress's atomics.
     /// This allows MC iteration progress to flow through to sweep progress.
     /// Uses accumulating mode to avoid resetting progress between sweep points.
+    #[must_use]
     pub fn as_mc_progress(&self) -> MonteCarloProgress {
         MonteCarloProgress::from_atomics_accumulating(
             self.completed.clone(),
@@ -107,7 +112,7 @@ impl Default for SweepProgress {
 
 /// Raw simulation results for each point in an N-dimensional sweep grid.
 ///
-/// This stores the full MonteCarloSummary for each grid point, allowing
+/// This stores the full `MonteCarloSummary` for each grid point, allowing
 /// metrics to be computed on-demand without re-running simulations.
 #[derive(Debug, Clone)]
 pub struct SweepSimulationResults {
@@ -123,31 +128,36 @@ pub struct SweepSimulationResults {
 
 impl SweepSimulationResults {
     /// Get the number of dimensions
+    #[must_use]
     pub fn ndim(&self) -> usize {
         self.param_values.len()
     }
 
     /// Get the grid shape
+    #[must_use]
     pub fn shape(&self) -> &[usize] {
         self.summaries.shape()
     }
 
     /// Get the total number of points
+    #[must_use]
     pub fn total_points(&self) -> usize {
         self.summaries.len()
     }
 
     /// Get the simulation summary at the given indices
+    #[must_use]
     pub fn get(&self, indices: &[usize]) -> Option<&MonteCarloSummary> {
         self.summaries.get(indices).and_then(|opt| opt.as_ref())
     }
 
     /// Check if all simulations completed successfully
     pub fn is_complete(&self) -> bool {
-        self.summaries.data().iter().all(|opt| opt.is_some())
+        self.summaries.data().iter().all(Option::is_some)
     }
 
     /// Count completed simulations
+    #[must_use]
     pub fn completed_count(&self) -> usize {
         self.summaries
             .data()
@@ -157,10 +167,11 @@ impl SweepSimulationResults {
     }
 
     /// Compute metrics for all points using the given metric definitions.
-    /// Returns SweepResults with raw data for each grid point.
+    /// Returns `SweepResults` with raw data for each grid point.
     ///
     /// Note: The `metrics` parameter is no longer used since raw data is stored
     /// and metrics are computed on-demand. It's kept for API compatibility.
+    #[must_use]
     pub fn compute_all_metrics(&self, _metrics: &[super::AnalysisMetric]) -> SweepResults {
         let mut results = SweepResults::new(
             self.param_values.clone(),
@@ -182,6 +193,7 @@ impl SweepSimulationResults {
     }
 
     /// Compute a single metric for all points, returning a grid of values.
+    #[must_use]
     pub fn compute_metric_grid(&self, metric: &super::AnalysisMetric) -> SweepGrid<f64> {
         let mut grid = SweepGrid::new(self.summaries.shape().to_vec(), 0.0);
 
@@ -229,37 +241,43 @@ pub struct LazySweepResults {
 
 impl LazySweepResults {
     /// Get the number of dimensions
+    #[must_use]
     pub fn ndim(&self) -> usize {
         self.param_values.len()
     }
 
     /// Get the grid shape
+    #[must_use]
     pub fn shape(&self) -> &[usize] {
         self.stats.shape()
     }
 
     /// Get the total number of points
+    #[must_use]
     pub fn total_points(&self) -> usize {
         self.stats.len()
     }
 
     /// Get stats at the given indices
+    #[must_use]
     pub fn get_stats(&self, indices: &[usize]) -> Option<&MonteCarloStats> {
         self.stats.get(indices)
     }
 
     /// Get percentile seeds at the given indices
+    #[must_use]
     pub fn get_seeds(&self, indices: &[usize]) -> Option<&Vec<(f64, u64)>> {
         self.percentile_seeds.get(indices)
     }
 
     /// Check if all simulations completed successfully
+    #[must_use]
     pub fn is_complete(&self) -> bool {
         // A grid point is complete if it has stats with iterations > 0
         self.stats.data().iter().all(|s| s.num_iterations > 0)
     }
 
-    /// Reconstruct the SimulationConfig for a specific grid position
+    /// Reconstruct the `SimulationConfig` for a specific grid position
     fn reconstruct_config(&self, indices: &[usize]) -> Result<SimulationConfig, MarketError> {
         let mut config = self.base_config.clone();
         for (dim, &idx) in indices.iter().enumerate() {
@@ -288,10 +306,7 @@ impl LazySweepResults {
             .iter()
             .find(|(p, _)| (*p - percentile).abs() < 0.01)
             .ok_or_else(|| {
-                MarketError::Config(format!(
-                    "Percentile {} not found in stored seeds",
-                    percentile
-                ))
+                MarketError::Config(format!("Percentile {percentile} not found in stored seeds"))
             })?;
 
         let config = self.reconstruct_config(indices)?;
@@ -301,8 +316,9 @@ impl LazySweepResults {
     /// Compute metrics for all points using stats (no re-simulation needed for most metrics).
     ///
     /// This method computes metrics efficiently by using the stored `MonteCarloStats`
-    /// directly. For metrics that need full simulation data (like MaxDrawdown, NetWorthAtAge),
+    /// directly. For metrics that need full simulation data (like `MaxDrawdown`, `NetWorthAtAge`),
     /// it lazily fetches the P50 run and extracts the needed data.
+    #[must_use]
     pub fn compute_all_metrics(&self, _metrics: &[super::AnalysisMetric]) -> SweepResults {
         let mut results = SweepResults::new(
             self.param_values.clone(),
@@ -322,9 +338,9 @@ impl LazySweepResults {
         results
     }
 
-    /// Convert MonteCarloStats to SweepPointData.
+    /// Convert `MonteCarloStats` to `SweepPointData`.
     ///
-    /// For basic metrics (success_rate, percentiles), this uses stored stats directly.
+    /// For basic metrics (`success_rate`, percentiles), this uses stored stats directly.
     /// For metrics requiring full simulation data, it would need to fetch the P50 run.
     fn stats_to_point_data(&self, stats: &MonteCarloStats, indices: &[usize]) -> SweepPointData {
         // For metrics that need P50 simulation data (NetWorthAtAge, MaxDrawdown, LifetimeTaxes),
@@ -366,8 +382,9 @@ impl LazySweepResults {
 
     /// Compute a single metric for all points, returning a grid of values.
     ///
-    /// For metrics that only need stats (SuccessRate, Percentile), this is very fast.
+    /// For metrics that only need stats (`SuccessRate`, Percentile), this is very fast.
     /// For metrics needing full results, it fetches P50 runs lazily.
+    #[must_use]
     pub fn compute_metric_grid(&self, metric: &super::AnalysisMetric) -> SweepGrid<f64> {
         let mut grid = SweepGrid::new(self.stats.shape().to_vec(), 0.0);
 
@@ -378,13 +395,12 @@ impl LazySweepResults {
             let value = match metric {
                 super::AnalysisMetric::SuccessRate => stats.success_rate,
                 super::AnalysisMetric::Percentile { percentile } => {
-                    let target_p = *percentile as f64 / 100.0;
+                    let target_p = f64::from(*percentile) / 100.0;
                     stats
                         .percentile_values
                         .iter()
                         .find(|(p, _)| (*p - target_p).abs() < 0.01)
-                        .map(|(_, v)| *v)
-                        .unwrap_or(0.0)
+                        .map_or(0.0, |(_, v)| *v)
                 }
                 // Slow path: need to fetch P50 run
                 _ => {
@@ -399,30 +415,16 @@ impl LazySweepResults {
         grid
     }
 
-    /// Get values for parameter 1 (for backwards compatibility)
-    pub fn param1_values(&self) -> &[f64] {
-        self.param_values
-            .first()
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-
-    /// Get values for parameter 2 (for backwards compatibility)
-    pub fn param2_values(&self) -> &[f64] {
-        self.param_values
-            .get(1)
-            .map(|v| v.as_slice())
-            .unwrap_or(&[])
-    }
-
     /// Get label for parameter 1
+    #[must_use]
     pub fn param1_label(&self) -> &str {
-        self.param_labels.first().map(|s| s.as_str()).unwrap_or("")
+        self.param_labels.first().map_or("", |s| s.as_str())
     }
 
     /// Get label for parameter 2
+    #[must_use]
     pub fn param2_label(&self) -> &str {
-        self.param_labels.get(1).map(|s| s.as_str()).unwrap_or("")
+        self.param_labels.get(1).map_or("", |s| s.as_str())
     }
 }
 
@@ -474,7 +476,7 @@ pub fn sweep_simulate(
     }
 
     // Extract birth year
-    let birth_year = base_config.birth_date.map(|d| d.year()).unwrap_or(1980);
+    let birth_year = base_config.birth_date.map_or(1980, jiff::civil::Date::year);
 
     // Create the result grid
     let mut summaries: SweepGrid<Option<MonteCarloSummary>> = SweepGrid::new(shape.clone(), None);
@@ -499,7 +501,9 @@ pub fn sweep_simulate(
 
         // Run Monte Carlo simulation with progress shared from sweep
         // Each MC iteration increments the shared progress counter
-        let mc_progress = progress.map(|p| p.as_mc_progress()).unwrap_or_default();
+        let mc_progress = progress
+            .map(SweepProgress::as_mc_progress)
+            .unwrap_or_default();
         let summary =
             monte_carlo_simulate_with_progress(&modified_config, &mc_config, &mc_progress)?;
 
@@ -521,12 +525,12 @@ pub fn sweep_simulate(
 ///
 /// This function uses memory-efficient lazy sweep simulation internally, which stores
 /// only stats and seeds during the sweep. Percentile runs are reconstructed on demand
-/// when computing metrics that need them (e.g., NetWorthAtAge, MaxDrawdown).
+/// when computing metrics that need them (e.g., `NetWorthAtAge`, `MaxDrawdown`).
 ///
 /// For fine-grained control or to analyze results with different metrics, use
 /// `sweep_simulate_lazy()` and call `compute_all_metrics()` on the result.
 ///
-/// Returns SweepResults containing computed metrics for each point.
+/// Returns `SweepResults` containing computed metrics for each point.
 pub fn sweep_evaluate(
     base_config: &SimulationConfig,
     sweep_config: &SweepConfig,
@@ -594,7 +598,7 @@ pub fn sweep_simulate_lazy(
     }
 
     // Extract birth year
-    let birth_year = base_config.birth_date.map(|d| d.year()).unwrap_or(1980);
+    let birth_year = base_config.birth_date.map_or(1980, jiff::civil::Date::year);
 
     // Create result grids with compact default values
     let default_stats = MonteCarloStats {
@@ -633,7 +637,9 @@ pub fn sweep_simulate_lazy(
 
         // Run Monte Carlo simulation with stats-only mode
         // This skips Phase 2 (re-running percentile seeds) and returns seeds instead
-        let mc_progress = progress.map(|p| p.as_mc_progress()).unwrap_or_default();
+        let mc_progress = progress
+            .map(SweepProgress::as_mc_progress)
+            .unwrap_or_default();
         let (stats, percentile_seeds) =
             monte_carlo_stats_only(&modified_config, &mc_config, &mc_progress)?;
 
@@ -818,7 +824,7 @@ fn has_sweepable_amount(effect: &crate::model::EventEffect) -> bool {
     )
 }
 
-/// Apply a parameter modification to a TransferAmount
+/// Apply a parameter modification to a `TransferAmount`
 fn apply_amount_param(
     amount: &mut TransferAmount,
     param: &EffectParam,

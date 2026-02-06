@@ -112,7 +112,7 @@ fn default_true() -> bool {
 pub struct SimulationConfig {
     // === World Assumptions ===
     /// Return profiles for different asset classes.
-    /// Assets reference these by index (return_profile_index).
+    /// Assets reference these by index (`return_profile_index`).
     #[serde(default)]
     pub return_profiles: HashMap<ReturnProfileId, ReturnProfile>,
 
@@ -120,7 +120,7 @@ pub struct SimulationConfig {
     #[serde(default)]
     pub inflation_profile: InflationProfile,
 
-    /// Map of AssetId to ReturnProfileId (which return profile applies to each asset)
+    /// Map of `AssetId` to `ReturnProfileId` (which return profile applies to each asset)
     #[serde(default)]
     pub asset_returns: HashMap<AssetId, ReturnProfileId>,
 
@@ -181,6 +181,7 @@ impl Default for SimulationConfig {
 
 impl SimulationConfig {
     /// Create a new empty configuration
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -191,6 +192,7 @@ impl SimulationConfig {
     ///
     /// Finds the event with the given ID and updates its Age trigger.
     /// Returns None if the event doesn't exist or isn't age-triggered.
+    #[must_use]
     pub fn with_retirement_age(&self, event_id: EventId, age: u8) -> Option<Self> {
         let mut config = self.clone();
 
@@ -216,6 +218,7 @@ impl SimulationConfig {
     }
 
     /// Create a variant with a different simulation duration
+    #[must_use]
     pub fn with_duration_years(&self, years: usize) -> Self {
         let mut config = self.clone();
         config.duration_years = years;
@@ -223,6 +226,7 @@ impl SimulationConfig {
     }
 
     /// Set duration to simulate until a specific age
+    #[must_use]
     pub fn with_end_age(&self, end_age: u8) -> Option<Self> {
         let birth = self.birth_date?;
         let start = self.start_date?;
@@ -238,13 +242,14 @@ impl SimulationConfig {
             }
         };
 
-        let duration = (end_age as i32 - current_age as i32).max(1) as usize;
+        let duration = (i32::from(end_age) - i32::from(current_age)).max(1) as usize;
         Some(self.with_duration_years(duration))
     }
 
     // === Convenience Getters ===
 
     /// Calculate current age at start date
+    #[must_use]
     pub fn initial_age(&self) -> Option<u8> {
         let birth = self.birth_date?;
         let start = self.start_date?;
@@ -260,6 +265,7 @@ impl SimulationConfig {
     }
 
     /// Find an event by ID
+    #[must_use]
     pub fn event(&self, id: EventId) -> Option<&Event> {
         self.events.iter().find(|e| e.event_id == id)
     }
@@ -302,20 +308,24 @@ pub struct OptimizationGoal {
 }
 
 impl OptimizationGoal {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn target_end_net_worth(mut self, net_worth: f64) -> Self {
         self.target_end_net_worth = Some(net_worth);
         self
     }
 
+    #[must_use]
     pub fn evaluate_at_age(mut self, age: u8) -> Self {
         self.evaluate_at_age = Some(age);
         self
     }
 
+    #[must_use]
     pub fn min_success_rate(mut self, rate: f64) -> Self {
         self.min_success_rate = Some(rate);
         self

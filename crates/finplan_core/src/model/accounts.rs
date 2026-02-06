@@ -83,7 +83,7 @@ pub enum AccountFlavor {
 
     /// INVESTMENT ASSETS (Positive Value)
     /// Brokerage, 401k, Roth IRA
-    /// (Uses the "InvestmentContainer" from the previous answer)
+    /// (Uses the `InvestmentContainer` from the previous answer)
     Investment(InvestmentContainer),
 
     /// FIXED ASSETS (Positive Value)
@@ -104,6 +104,7 @@ pub struct Account {
 }
 
 impl Account {
+    #[must_use]
     pub fn total_value(&self, market: &Market, start_date: Date, current_date: Date) -> f64 {
         match &self.flavor {
             // Cash value is compounded incrementally during simulation, just return it
@@ -133,6 +134,8 @@ impl Account {
         }
     }
 
+    #[must_use]
+    #[inline]
     pub fn cash_balance(&self) -> Option<f64> {
         match &self.flavor {
             AccountFlavor::Bank(cash) => Some(cash.value),
@@ -142,6 +145,8 @@ impl Account {
         }
     }
 
+    #[must_use]
+    #[inline]
     pub fn is_liquid(&self) -> bool {
         match &self.flavor {
             AccountFlavor::Bank { .. } => true,
@@ -151,6 +156,7 @@ impl Account {
         }
     }
 
+    #[must_use]
     pub fn snapshot(
         &self,
         market: &Market,
@@ -216,6 +222,8 @@ pub struct AccountSnapshot {
 }
 
 impl AccountSnapshot {
+    #[must_use]
+    #[inline]
     pub fn total_value(&self) -> f64 {
         match &self.flavor {
             AccountSnapshotFlavor::Bank(cash) => *cash,

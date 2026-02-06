@@ -14,6 +14,8 @@ use crate::simulation::{monte_carlo_simulate_with_config, simulate};
 
 #[test]
 fn test_monte_carlo_simulation() {
+    const NUM_ITERATIONS: usize = 100;
+
     let params = SimulationConfig {
         start_date: Some(jiff::civil::date(2020, 2, 5)),
         duration_years: 10,
@@ -42,7 +44,6 @@ fn test_monte_carlo_simulation() {
         ..Default::default()
     };
 
-    const NUM_ITERATIONS: usize = 100;
     let mc_config = MonteCarloConfig {
         iterations: NUM_ITERATIONS,
         seed: Some(42),
@@ -99,11 +100,11 @@ fn test_simulation_basic() {
         expected_final,
         result.final_account_balance(AccountId(1)).unwrap()
     );
-    assert!(
-        result.final_account_balance(AccountId(1)).unwrap()
-            == result
-                .final_asset_balance(AccountId(1), AssetId(1))
-                .unwrap(),
+    assert_eq!(
+        result.final_account_balance(AccountId(1)).unwrap(),
+        result
+            .final_asset_balance(AccountId(1), AssetId(1))
+            .unwrap(),
         "Expected final account balance to equal asset balance"
     );
 

@@ -1,4 +1,4 @@
-//! Tests for SimulationResult structure and methods
+//! Tests for `SimulationResult` structure and methods
 //!
 //! These tests verify:
 //! - Result dates are correct
@@ -48,8 +48,7 @@ fn test_simulation_dates() {
     assert_eq!(
         result.wealth_snapshots.last().map(|snap| snap.date),
         Some(expected_end),
-        "Last date should be start + {} years",
-        years
+        "Last date should be start + {years} years"
     );
 }
 
@@ -114,16 +113,13 @@ fn test_final_balances_stored() {
     let actual_investment = result.final_account_balance(AccountId(1)).unwrap();
     assert!(
         (actual_investment - expected_investment).abs() < 1.0,
-        "Investment balance expected ${:.2}, got ${:.2}",
-        expected_investment,
-        actual_investment
+        "Investment balance expected ${expected_investment:.2}, got ${actual_investment:.2}"
     );
 
     let actual_bank = result.final_account_balance(AccountId(2)).unwrap();
     assert!(
         (actual_bank - 5_000.0).abs() < 0.01,
-        "Bank balance expected $5000, got ${:.2}",
-        actual_bank
+        "Bank balance expected $5000, got ${actual_bank:.2}"
     );
 }
 
@@ -192,22 +188,18 @@ fn test_final_asset_balances_stored() {
     let actual_stock = result.final_asset_balance(AccountId(1), stock_id).unwrap();
     assert!(
         (actual_stock - expected_stock).abs() < 1.0,
-        "Stock expected ${:.2}, got ${:.2}",
-        expected_stock,
-        actual_stock
+        "Stock expected ${expected_stock:.2}, got ${actual_stock:.2}"
     );
 
     let expected_bond = 10_000.0 * (1.04_f64).powi(3);
     let actual_bond = result.final_asset_balance(AccountId(1), bond_id).unwrap();
     assert!(
         (actual_bond - expected_bond).abs() < 1.0,
-        "Bond expected ${:.2}, got ${:.2}",
-        expected_bond,
-        actual_bond
+        "Bond expected ${expected_bond:.2}, got ${actual_bond:.2}"
     );
 }
 
-/// Test income events affect balance (via CashCredit StateEvent)
+/// Test income events affect balance (via `CashCredit` `StateEvent`)
 #[test]
 fn test_income_records_generated() {
     let start_date = jiff::civil::date(2020, 1, 1);
@@ -252,8 +244,7 @@ fn test_income_records_generated() {
     let final_balance = result.final_account_balance(AccountId(1)).unwrap();
     assert!(
         (final_balance - 10_000.0).abs() < 0.01,
-        "Final balance should be $10,000 from income, got ${:.2}",
-        final_balance
+        "Final balance should be $10,000 from income, got ${final_balance:.2}"
     );
 
     // Should have event triggered entry for the trigger
@@ -301,12 +292,11 @@ fn test_event_records_generated() {
     assert_eq!(
         trigger_date,
         Some(event_date),
-        "Event should have triggered on {:?}",
-        event_date
+        "Event should have triggered on {event_date:?}"
     );
 }
 
-/// Test event_was_triggered returns false for untriggered events
+/// Test `event_was_triggered` returns false for untriggered events
 #[test]
 fn test_untriggered_event() {
     let start_date = jiff::civil::date(2020, 1, 1);
@@ -726,13 +716,11 @@ fn test_ledger_income_and_expense_events() {
     if let StateEvent::CashCredit { amount, .. } = &income_credit.unwrap().event {
         assert!(
             *amount < 3_000.0,
-            "Net income should be less than gross $3,000 (taxes deducted), got ${:.2}",
-            amount
+            "Net income should be less than gross $3,000 (taxes deducted), got ${amount:.2}"
         );
         assert!(
             *amount > 2_000.0,
-            "Net income should still be substantial, got ${:.2}",
-            amount
+            "Net income should still be substantial, got ${amount:.2}"
         );
     }
 
@@ -757,12 +745,11 @@ fn test_ledger_income_and_expense_events() {
     let final_balance = result.final_account_balance(checking_account).unwrap();
     assert!(
         final_balance > 5_000.0 && final_balance < 6_500.0,
-        "Final balance should be between $5,000 and $6,500 (taxes reduce income), got ${:.2}",
-        final_balance
+        "Final balance should be between $5,000 and $6,500 (taxes reduce income), got ${final_balance:.2}"
     );
 }
 
-/// Test ledger captures AssetPurchase and AssetSale events correctly
+/// Test ledger captures `AssetPurchase` and `AssetSale` events correctly
 #[test]
 fn test_ledger_asset_purchase_and_sale_events() {
     use crate::model::{AssetCoord, StateEvent};
@@ -877,13 +864,11 @@ fn test_ledger_asset_purchase_and_sale_events() {
     {
         assert!(
             *units > 0.0 && *units < 51.0,
-            "Should buy positive shares (< 51 due to appreciation), got {}",
-            units
+            "Should buy positive shares (< 51 due to appreciation), got {units}"
         );
         assert!(
             (*cost_basis - 5_000.0).abs() < 0.01,
-            "Cost basis should be $5,000, got {}",
-            cost_basis
+            "Cost basis should be $5,000, got {cost_basis}"
         );
     }
 
@@ -922,16 +907,11 @@ fn test_ledger_asset_purchase_and_sale_events() {
     {
         assert!(*units > 0.0, "Sale should have units");
         assert!(*cost_basis > 0.0, "Sale should have cost_basis");
-        assert!(
-            *proceeds > 0.0,
-            "Sale should have proceeds, got {}",
-            proceeds
-        );
+        assert!(*proceeds > 0.0, "Sale should have proceeds, got {proceeds}");
         // Stock was purchased in March 2020, sold in June 2021 = ~15 months (long-term)
         assert!(
             *long_term_gain > 0.0,
-            "Sale should have long-term gain (held > 1 year), got {}",
-            long_term_gain
+            "Sale should have long-term gain (held > 1 year), got {long_term_gain}"
         );
         assert_eq!(
             *short_term_gain, 0.0,
@@ -949,8 +929,7 @@ fn test_ledger_asset_purchase_and_sale_events() {
     let final_balance = result.final_account_balance(brokerage_account).unwrap();
     assert!(
         final_balance > 10_000.0,
-        "Should have gained value overall, got ${:.2}",
-        final_balance
+        "Should have gained value overall, got ${final_balance:.2}"
     );
 }
 

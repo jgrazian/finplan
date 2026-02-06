@@ -29,8 +29,8 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
     }
 
     // Find year range from ledger (entries are chronological)
-    let min_year = ledger.first().map(|e| e.date.year()).unwrap_or(2024);
-    let max_year = ledger.last().map(|e| e.date.year()).unwrap_or(min_year);
+    let min_year = ledger.first().map_or(2024, |e| e.date.year());
+    let max_year = ledger.last().map_or(min_year, |e| e.date.year());
     let num_years = (max_year - min_year + 1) as usize;
 
     // Pre-allocate Vec with default summaries
@@ -48,9 +48,10 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
         match &entry.event {
             StateEvent::CashCredit { amount, kind, .. } => match kind {
                 CashFlowKind::Income => summary.income += amount,
-                CashFlowKind::LiquidationProceeds => summary.withdrawals += amount,
+                CashFlowKind::LiquidationProceeds | CashFlowKind::RmdWithdrawal => {
+                    summary.withdrawals += amount;
+                }
                 CashFlowKind::Appreciation => summary.appreciation += amount,
-                CashFlowKind::RmdWithdrawal => summary.withdrawals += amount,
                 _ => {}
             },
             StateEvent::CashDebit { amount, kind, .. } => match kind {
@@ -79,6 +80,7 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
 
 /// Build monthly cash flow summaries from ledger entries.
 /// Called lazily (not during simulation) when the user wants monthly granularity.
+#[must_use]
 pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSummary> {
     if ledger.is_empty() {
         return Vec::new();
@@ -86,8 +88,8 @@ pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSu
 
     // Collect unique (year, month) pairs from the ledger.
     // Entries are chronological so we can track by (year, month) key.
-    let min_year = ledger.first().map(|e| e.date.year()).unwrap_or(2024);
-    let max_year = ledger.last().map(|e| e.date.year()).unwrap_or(min_year);
+    let min_year = ledger.first().map_or(2024, |e| e.date.year());
+    let max_year = ledger.last().map_or(min_year, |e| e.date.year());
     let num_months = ((max_year - min_year) as usize + 1) * 12;
 
     // Index: (year - min_year) * 12 + (month - 1)
@@ -112,9 +114,10 @@ pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSu
         match &entry.event {
             StateEvent::CashCredit { amount, kind, .. } => match kind {
                 CashFlowKind::Income => summary.income += amount,
-                CashFlowKind::LiquidationProceeds => summary.withdrawals += amount,
+                CashFlowKind::LiquidationProceeds | CashFlowKind::RmdWithdrawal => {
+                    summary.withdrawals += amount;
+                }
                 CashFlowKind::Appreciation => summary.appreciation += amount,
-                CashFlowKind::RmdWithdrawal => summary.withdrawals += amount,
                 _ => {}
             },
             StateEvent::CashDebit { amount, kind, .. } => match kind {
@@ -141,15 +144,15 @@ pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSu
     }
 
     // Remove trailing empty months (those after the last ledger entry)
-    let last_year = ledger.last().map(|e| e.date.year()).unwrap_or(min_year);
-    let last_month = ledger.last().map(|e| e.date.month() as u8).unwrap_or(12);
+    let last_year = ledger.last().map_or(min_year, |e| e.date.year());
+    let last_month = ledger.last().map_or(12, |e| e.date.month() as u8);
     let last_idx = (last_year - min_year) as usize * 12 + (last_month as usize - 1);
     monthly.truncate(last_idx + 1);
 
     monthly
 }
 
-/// Extract the final SimulationResult from a completed simulation state.
+/// Extract the final `SimulationResult` from a completed simulation state.
 fn build_simulation_result(state: &mut SimulationState) -> SimulationResult {
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
     let cumulative_inflation = state.portfolio.market.get_cumulative_inflation_factors();
@@ -202,8 +205,7 @@ fn simulate_inner(
 ) -> Result<SimulationResult, MarketError> {
     let max_iterations = instrumentation
         .as_ref()
-        .map(|(c, _)| c.max_same_date_iterations)
-        .unwrap_or(1000);
+        .map_or(1000, |(c, _)| c.max_same_date_iterations);
 
     let mut state = SimulationState::from_parameters(params, seed)?;
     state.snapshot_wealth();
@@ -226,8 +228,7 @@ fn simulate_inner(
                     date: state.timeline.current_date,
                     event_id: None,
                     message: format!(
-                        "iteration limit ({}) reached, possible infinite loop",
-                        max_iterations
+                        "iteration limit ({max_iterations}) reached, possible infinite loop"
                     ),
                     kind: WarningKind::IterationLimitHit,
                 });
@@ -346,7 +347,7 @@ fn compound_cash_balance(
         return;
     }
     if let Some(multiplier) =
-        market.get_period_multiplier(year_index, days_passed as i64, return_profile_id)
+        market.get_period_multiplier(year_index, i64::from(days_passed), return_profile_id)
     {
         let previous_value = *cash_value;
         *cash_value *= multiplier;
@@ -412,7 +413,8 @@ fn compound_accounts(
             AccountFlavor::Liability(loan) => {
                 if loan.interest_rate > 0.0 {
                     let previous_principal = loan.principal;
-                    let multiplier = (1.0 + loan.interest_rate).powf(days_passed as f64 / 365.0);
+                    let multiplier =
+                        (1.0 + loan.interest_rate).powf(f64::from(days_passed) / 365.0);
                     loan.principal *= multiplier;
 
                     if state.collect_ledger && (loan.principal - previous_principal).abs() > 0.001 {
@@ -605,8 +607,7 @@ impl ConvergenceTracker {
                 let median_idx = (n as f64 * 0.5).floor() as usize;
                 let median = seed_results
                     .get(median_idx.min(n - 1))
-                    .map(|(_, v)| *v)
-                    .unwrap_or(0.0);
+                    .map_or(0.0, |(_, v)| *v);
 
                 let relative_change = if let Some(prev) = self.prev_median {
                     relative_change_or_inf(median, prev)
@@ -669,7 +670,7 @@ fn relative_change_or_inf(curr: f64, prev: f64) -> f64 {
 fn percentile_value(sorted: &[(u64, f64)], p: f64) -> f64 {
     let n = sorted.len();
     let idx = (n as f64 * p).floor() as usize;
-    sorted.get(idx.min(n - 1)).map(|(_, v)| *v).unwrap_or(0.0)
+    sorted.get(idx.min(n - 1)).map_or(0.0, |(_, v)| *v)
 }
 
 // ── Monte Carlo: unified core ────────────────────────────────────────
@@ -722,8 +723,7 @@ fn monte_carlo_core(
     let max_iterations = config
         .convergence
         .as_ref()
-        .map(|c| c.max_iterations)
-        .unwrap_or(config.iterations);
+        .map_or(config.iterations, |c| c.max_iterations);
 
     let mut convergence_tracker = config
         .convergence
@@ -807,13 +807,13 @@ fn monte_carlo_core(
                                 Ok(guard) => guard,
                                 Err(poisoned) => poisoned.into_inner(),
                             };
-                            match acc_guard.as_mut() {
-                                Some(acc) => acc.accumulate(&result),
-                                None => {
-                                    let mut new_acc = MeanAccumulators::new(&result);
-                                    new_acc.accumulate(&result);
-                                    *acc_guard = Some(new_acc);
-                                }
+
+                            if let Some(acc) = acc_guard.as_mut() {
+                                acc.accumulate(&result);
+                            } else {
+                                let mut new_acc = MeanAccumulators::new(&result);
+                                new_acc.accumulate(&result);
+                                *acc_guard = Some(new_acc);
                             }
                         }
 
@@ -933,7 +933,7 @@ fn monte_carlo_core(
 /// Memory-efficient Monte Carlo simulation.
 ///
 /// Runs simulations in two phases:
-/// 1. First pass: Run all iterations, keeping only (seed, final_net_worth) and accumulating mean sums
+/// 1. First pass: Run all iterations, keeping only (seed, `final_net_worth`) and accumulating mean sums
 /// 2. Second pass: Re-run only the specific seeds needed for percentile runs
 ///
 /// Supports convergence-based stopping via `config.convergence`.

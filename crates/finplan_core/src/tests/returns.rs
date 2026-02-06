@@ -62,9 +62,7 @@ fn test_single_asset_fixed_return() {
 
     assert!(
         (actual - expected).abs() < 1.0,
-        "Expected ${:.2}, got ${:.2}",
-        expected,
-        actual
+        "Expected ${expected:.2}, got ${actual:.2}"
     );
 }
 
@@ -98,9 +96,7 @@ fn test_bank_cash_no_appreciation() {
     // Bank cash should stay the same when return profile doesn't exist
     assert!(
         (final_balance - initial_value).abs() < 0.01,
-        "Bank cash should not appreciate without valid return profile. Expected ${:.2}, got ${:.2}",
-        initial_value,
-        final_balance
+        "Bank cash should not appreciate without valid return profile. Expected ${initial_value:.2}, got ${final_balance:.2}"
     );
 }
 
@@ -146,9 +142,7 @@ fn test_bank_cash_with_return_profile() {
     // and within a reasonable tolerance (0.5% higher max from frequent compounding)
     assert!(
         final_balance >= yearly_expected * 0.99 && final_balance <= yearly_expected * 1.01,
-        "HYSA should appreciate at ~4.5%. Expected ~${:.2}, got ${:.2}",
-        yearly_expected,
-        final_balance
+        "HYSA should appreciate at ~4.5%. Expected ~${yearly_expected:.2}, got ${final_balance:.2}"
     );
 }
 
@@ -207,9 +201,7 @@ fn test_investment_cash_appreciation() {
 
     assert!(
         (final_balance - expected_total).abs() < 10.0,
-        "Investment account should grow (cash at 5%, stocks at 8%). Expected ${:.2}, got ${:.2}",
-        expected_total,
-        final_balance
+        "Investment account should grow (cash at 5%, stocks at 8%). Expected ${expected_total:.2}, got ${final_balance:.2}"
     );
 }
 
@@ -284,24 +276,18 @@ fn test_multiple_assets_different_returns() {
     // Check individual assets
     assert!(
         (actual_stock - expected_stock).abs() < 10.0,
-        "Stock expected ${:.2}, got ${:.2}",
-        expected_stock,
-        actual_stock
+        "Stock expected ${expected_stock:.2}, got ${actual_stock:.2}"
     );
 
     assert!(
         (actual_bond - expected_bond).abs() < 10.0,
-        "Bond expected ${:.2}, got ${:.2}",
-        expected_bond,
-        actual_bond
+        "Bond expected ${expected_bond:.2}, got ${actual_bond:.2}"
     );
 
     // Check total
     assert!(
         (actual_total - expected_total).abs() < 20.0,
-        "Total expected ${:.2}, got ${:.2}",
-        expected_total,
-        actual_total
+        "Total expected ${expected_total:.2}, got ${actual_total:.2}"
     );
 }
 
@@ -351,9 +337,7 @@ fn test_negative_returns() {
 
     assert!(
         (actual - expected).abs() < 1.0,
-        "Expected ${:.2}, got ${:.2}",
-        expected,
-        actual
+        "Expected ${expected:.2}, got ${actual:.2}"
     );
 }
 
@@ -398,9 +382,7 @@ fn test_zero_return() {
 
     assert!(
         (actual - initial_value).abs() < 0.01,
-        "Zero return should keep value at ${:.2}, got ${:.2}",
-        initial_value,
-        actual
+        "Zero return should keep value at ${initial_value:.2}, got ${actual:.2}"
     );
 }
 
@@ -475,16 +457,12 @@ fn test_same_asset_multiple_accounts() {
 
     assert!(
         (actual_taxable - expected_taxable).abs() < 1.0,
-        "Taxable expected ${:.2}, got ${:.2}",
-        expected_taxable,
-        actual_taxable
+        "Taxable expected ${expected_taxable:.2}, got ${actual_taxable:.2}"
     );
 
     assert!(
         (actual_ira - expected_ira).abs() < 1.0,
-        "IRA expected ${:.2}, got ${:.2}",
-        expected_ira,
-        actual_ira
+        "IRA expected ${expected_ira:.2}, got ${actual_ira:.2}"
     );
 }
 
@@ -534,9 +512,7 @@ fn test_short_duration_returns() {
 
     assert!(
         (actual - expected).abs() < 0.1,
-        "Expected ${:.2}, got ${:.2}",
-        expected,
-        actual
+        "Expected ${expected:.2}, got ${actual:.2}"
     );
 }
 
@@ -587,9 +563,7 @@ fn test_long_duration_returns() {
     // Allow larger tolerance for long duration
     assert!(
         (actual - expected).abs() < 100.0,
-        "Expected ${:.2}, got ${:.2}",
-        expected,
-        actual
+        "Expected ${expected:.2}, got ${actual:.2}"
     );
 }
 
@@ -740,11 +714,8 @@ fn test_inflation_adjusted_expense() {
     // Allow some tolerance for timing differences
     assert!(
         (final_balance - expected_balance).abs() < 500.0,
-        "Expected final balance ~${:.2}, got ${:.2}. \
-         Total inflation-adjusted expenses should be ~${:.2}",
-        expected_balance,
-        final_balance,
-        expected_total_expenses
+        "Expected final balance ~${expected_balance:.2}, got ${final_balance:.2}. \
+         Total inflation-adjusted expenses should be ~${expected_total_expenses:.2}"
     );
 
     // Verify it's NOT using fixed expenses (which would be exactly $60,000 total)
@@ -752,9 +723,7 @@ fn test_inflation_adjusted_expense() {
     assert!(
         final_balance < fixed_expense_balance - 1000.0,
         "Expenses don't appear to be inflation-adjusted. \
-         Fixed expenses would leave ${:.2}, but we have ${:.2}",
-        fixed_expense_balance,
-        final_balance
+         Fixed expenses would leave ${fixed_expense_balance:.2}, but we have ${final_balance:.2}"
     );
 }
 
@@ -811,9 +780,7 @@ fn test_scale_transfer_amount() {
 
     assert!(
         (final_balance - expected).abs() < 10.0,
-        "Expected final balance ~${:.2} after 4% annual withdrawals, got ${:.2}",
-        expected,
-        final_balance
+        "Expected final balance ~${expected:.2} after 4% annual withdrawals, got ${final_balance:.2}"
     );
 
     // Verify it's NOT using a fixed withdrawal (which would be 4% of initial = $4k/year)
@@ -822,8 +789,6 @@ fn test_scale_transfer_amount() {
     assert!(
         (final_balance - fixed_withdrawal_balance).abs() > 100.0,
         "Scale should use current balance, not initial. \
-         Fixed 4% would leave ${:.2}, but we have ${:.2}",
-        fixed_withdrawal_balance,
-        final_balance
+         Fixed 4% would leave ${fixed_withdrawal_balance:.2}, but we have ${final_balance:.2}"
     );
 }
