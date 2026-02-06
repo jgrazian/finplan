@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::model::{AccountId, AssetCoord, ReturnProfileId};
+use crate::model::{AccountId, AssetCoord, AssetId, ReturnProfileId};
 
 /// Errors related to resource lookups
 #[derive(Debug, Clone)]
@@ -8,6 +8,7 @@ pub enum LookupError {
     AccountNotFound(AccountId),
     AssetNotFound(AssetCoord),
     AssetPriceNotFound(AssetCoord),
+    AssetIdNotFound(AssetId),
     ReturnProfileNotFound(ReturnProfileId),
 }
 
@@ -18,6 +19,9 @@ impl fmt::Display for LookupError {
             LookupError::AssetNotFound(coord) => write!(f, "asset {coord:?} not found"),
             LookupError::AssetPriceNotFound(coord) => {
                 write!(f, "price not available for asset {coord:?}")
+            }
+            LookupError::AssetIdNotFound(id) => {
+                write!(f, "asset {id:?} not found in market")
             }
             LookupError::ReturnProfileNotFound(id) => {
                 write!(f, "return profile {id:?} not found")
@@ -54,22 +58,22 @@ impl fmt::Display for AccountTypeError {
 
 impl std::error::Error for AccountTypeError {}
 
-/// Errors related to market/distribution operations
+/// Errors from market data generation (distribution sampling, historical data).
 #[derive(Debug, Clone)]
 pub enum MarketError {
+    /// Statistical distribution could not be constructed from the given parameters.
     InvalidDistributionParameters {
         profile_type: &'static str,
         mean: f64,
         std_dev: f64,
         reason: &'static str,
     },
-    Lookup(LookupError),
-    /// Monte Carlo simulation was cancelled by user request
-    Cancelled,
-    /// Historical data is empty and cannot be sampled
+    /// Historical return/inflation data is empty and cannot be sampled.
     EmptyHistoricalData,
-    /// Configuration error
-    Config(String),
+    /// A required asset or return profile was not found.
+    Lookup(LookupError),
+    /// The requested date range exceeds available generated rate data.
+    InsufficientRateData,
 }
 
 impl fmt::Display for MarketError {
@@ -86,10 +90,11 @@ impl fmt::Display for MarketError {
                     "invalid {profile_type} parameters (mean={mean}, std_dev={std_dev}): {reason}"
                 )
             }
-            MarketError::Lookup(e) => write!(f, "{e}"),
-            MarketError::Cancelled => write!(f, "simulation cancelled"),
             MarketError::EmptyHistoricalData => write!(f, "historical data is empty"),
-            MarketError::Config(msg) => write!(f, "configuration error: {msg}"),
+            MarketError::Lookup(e) => write!(f, "{e}"),
+            MarketError::InsufficientRateData => {
+                write!(f, "date range exceeds available rate data")
+            }
         }
     }
 }
@@ -109,8 +114,51 @@ impl From<LookupError> for MarketError {
     }
 }
 
-// Keep EngineError as an alias for backwards compatibility
-pub type EngineError = LookupError;
+/// Top-level error for simulation, Monte Carlo, and optimization operations.
+#[derive(Debug, Clone)]
+pub enum SimulationError {
+    /// Market data generation failed (bad distribution parameters, empty historical data).
+    Market(MarketError),
+    /// A required account, asset, or return profile was not found.
+    Lookup(LookupError),
+    /// Simulation was cancelled by user request.
+    Cancelled,
+    /// Invalid or inconsistent configuration.
+    Config(String),
+}
+
+impl fmt::Display for SimulationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SimulationError::Market(e) => write!(f, "{e}"),
+            SimulationError::Lookup(e) => write!(f, "{e}"),
+            SimulationError::Cancelled => write!(f, "simulation cancelled"),
+            SimulationError::Config(msg) => write!(f, "configuration error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for SimulationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            SimulationError::Market(e) => Some(e),
+            SimulationError::Lookup(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<MarketError> for SimulationError {
+    fn from(e: MarketError) -> Self {
+        SimulationError::Market(e)
+    }
+}
+
+impl From<LookupError> for SimulationError {
+    fn from(e: LookupError) -> Self {
+        SimulationError::Lookup(e)
+    }
+}
 
 pub type Result<T> = std::result::Result<T, LookupError>;
 

@@ -4,7 +4,7 @@
 //! and evaluate the objective function using Monte Carlo simulation.
 
 use crate::config::SimulationConfig;
-use crate::error::MarketError;
+use crate::error::SimulationError;
 use crate::model::{
     EventEffect, MonteCarloConfig, MonteCarloStats, MonteCarloSummary, TransferAmount,
 };
@@ -134,16 +134,11 @@ pub fn evaluate(
     base_config: &SimulationConfig,
     opt_config: &OptimizationConfig,
     values: &[f64],
-) -> Result<EvaluationRecord, MarketError> {
+) -> Result<EvaluationRecord, SimulationError> {
     // Apply parameters to get modified config
-    let config = apply_parameters(base_config, &opt_config.parameters, values).ok_or({
-        MarketError::InvalidDistributionParameters {
-            profile_type: "optimization",
-            mean: 0.0,
-            std_dev: 0.0,
-            reason: "failed to apply parameters to configuration",
-        }
-    })?;
+    let config = apply_parameters(base_config, &opt_config.parameters, values).ok_or(
+        SimulationError::Config("failed to apply parameters to configuration".to_string()),
+    )?;
 
     // Run Monte Carlo simulation
     let mc_config = MonteCarloConfig {

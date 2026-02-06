@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::config::SimulationConfig;
-use crate::error::MarketError;
+use crate::error::SimulationError;
 
 use super::config::OptimizationConfig;
 use super::evaluator::evaluate;
@@ -31,15 +31,12 @@ pub fn optimize_binary_search(
     base_config: &SimulationConfig,
     opt_config: &OptimizationConfig,
     progress_callback: Option<ProgressCallback>,
-) -> Result<OptimizationResult, MarketError> {
+) -> Result<OptimizationResult, SimulationError> {
     // Verify we have exactly one parameter
     if opt_config.parameters.len() != 1 {
-        return Err(MarketError::InvalidDistributionParameters {
-            profile_type: "optimization",
-            mean: opt_config.parameters.len() as f64,
-            std_dev: 1.0,
-            reason: "binary search requires exactly one parameter",
-        });
+        return Err(SimulationError::Config(
+            "binary search requires exactly one parameter".to_string(),
+        ));
     }
 
     let param = &opt_config.parameters[0];

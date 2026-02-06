@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 // Note: std::collections::HashMap is used in from_profiles for return_profiles parameter
 
-use crate::error::MarketError;
+use crate::error::{LookupError, MarketError};
 use crate::model::{AssetId, ReturnProfileId};
 
 #[derive(Debug, Clone, Copy)]
@@ -178,62 +178,73 @@ impl Market {
         Ok(Self::new(&inflation_values, returns, assets.clone()))
     }
 
-    #[must_use]
     pub fn get_asset_value(
         &self,
         start_date: Date,
         eval_date: Date,
         asset_id: AssetId,
-    ) -> Option<f64> {
-        let (initial_value, return_profile_id) = *self.assets.get(&asset_id)?;
-        let returns = self.returns.get(&return_profile_id)?;
+    ) -> Result<f64, MarketError> {
+        let (initial_value, return_profile_id) = *self
+            .assets
+            .get(&asset_id)
+            .ok_or(LookupError::AssetIdNotFound(asset_id))?;
+        let returns = self
+            .returns
+            .get(&return_profile_id)
+            .ok_or(LookupError::ReturnProfileNotFound(return_profile_id))?;
         apply_rates_to_value(returns, start_date, eval_date, initial_value)
+            .ok_or(MarketError::InsufficientRateData)
     }
 
     /// Calculate the inflation-adjusted value of a cash amount.
     /// Returns the future nominal value needed to have the same purchasing power.
-    #[must_use]
     pub fn get_inflation_adjusted_value(
         &self,
         start_date: Date,
         eval_date: Date,
         cash_amount: f64,
-    ) -> Option<f64> {
+    ) -> Result<f64, MarketError> {
         apply_rates_to_value(&self.inflation_values, start_date, eval_date, cash_amount)
+            .ok_or(MarketError::InsufficientRateData)
     }
 
     /// Calculate the value of an amount after applying returns from a specific profile.
-    #[must_use]
     pub fn get_return_on_value(
         &self,
         start_date: Date,
         eval_date: Date,
         initial_value: f64,
         return_profile_id: ReturnProfileId,
-    ) -> Option<f64> {
-        let returns = self.returns.get(&return_profile_id)?;
+    ) -> Result<f64, MarketError> {
+        let returns = self
+            .returns
+            .get(&return_profile_id)
+            .ok_or(LookupError::ReturnProfileNotFound(return_profile_id))?;
         apply_rates_to_value(returns, start_date, eval_date, initial_value)
+            .ok_or(MarketError::InsufficientRateData)
     }
 
     /// Get the return multiplier for a period (used for cash compounding).
     /// Returns (1 + `n_day_rate`) for the given number of days at the `year_index` rate.
-    #[must_use]
     pub fn get_period_multiplier(
         &self,
         year_index: usize,
         days: i64,
         return_profile_id: ReturnProfileId,
-    ) -> Option<f64> {
+    ) -> Result<f64, MarketError> {
         if days <= 0 {
-            return Some(1.0);
+            return Ok(1.0);
         }
-        let returns = self.returns.get(&return_profile_id)?;
+        let returns = self
+            .returns
+            .get(&return_profile_id)
+            .ok_or(LookupError::ReturnProfileNotFound(return_profile_id))?;
         if year_index >= returns.len() {
-            return None;
+            return Err(MarketError::InsufficientRateData);
         }
         let yearly_rate = returns[year_index].incremental;
         let period_rate = n_day_rate(yearly_rate, days as f64);
-        Some(1.0 + period_rate)
+        Ok(1.0 + period_rate)
     }
 
     /// Get cumulative inflation factors for each year of the simulation.
@@ -1645,7 +1656,7 @@ mod tests {
 
         // Before start date
         let val = market.get_asset_value(start_date, date(2023, 12, 31), asset_id);
-        assert!(val.is_none());
+        assert!(val.is_err());
     }
 
     #[test]
@@ -1826,7 +1837,7 @@ mod tests {
         // Should be able to get asset values
         let start = date(2024, 1, 1);
         let value = market.get_asset_value(start, date(2025, 1, 1), asset_id);
-        assert!(value.is_some());
+        assert!(value.is_ok());
         assert!(value.unwrap().is_finite());
     }
 
@@ -2016,7 +2027,7 @@ mod tests {
         // Should be able to get asset values
         let start = date(2024, 1, 1);
         let value = market.get_asset_value(start, date(2025, 1, 1), asset_id);
-        assert!(value.is_some());
+        assert!(value.is_ok());
         assert!(value.unwrap().is_finite());
     }
 

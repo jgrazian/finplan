@@ -55,7 +55,7 @@ pub use grid_search::optimize_grid_search;
 pub use nelder_mead::optimize_nelder_mead;
 
 use crate::config::SimulationConfig;
-use crate::error::MarketError;
+use crate::error::SimulationError;
 
 /// Main optimization entry point
 ///
@@ -78,16 +78,13 @@ pub fn optimize(
     base_config: &SimulationConfig,
     opt_config: &OptimizationConfig,
     progress_callback: Option<ProgressCallback>,
-) -> Result<OptimizationResult, MarketError> {
+) -> Result<OptimizationResult, SimulationError> {
     let num_params = opt_config.parameters.len();
 
     if num_params == 0 {
-        return Err(MarketError::InvalidDistributionParameters {
-            profile_type: "optimization",
-            mean: 0.0,
-            std_dev: 0.0,
-            reason: "no parameters to optimize",
-        });
+        return Err(SimulationError::Config(
+            "no parameters to optimize".to_string(),
+        ));
     }
 
     match &opt_config.algorithm {

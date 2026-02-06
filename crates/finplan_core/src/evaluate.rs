@@ -3,7 +3,7 @@ use rand::Rng;
 use rustc_hash::FxHashMap;
 
 use crate::error::{
-    AccountTypeError, EngineError, StateEventError, TransferEvaluationError, TriggerEventError,
+    AccountTypeError, LookupError, StateEventError, TransferEvaluationError, TriggerEventError,
 };
 use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment_into};
 use crate::model::{
@@ -37,7 +37,7 @@ fn evaluate_transfer_amount(
                     state.timeline.current_date,
                     base_amount,
                 )
-                .ok_or(TransferEvaluationError::InflationDataUnavailable)
+                .map_err(|_| TransferEvaluationError::InflationDataUnavailable)
         }
 
         TransferAmount::SourceBalance => match from {
@@ -597,7 +597,7 @@ pub fn evaluate_effect_into(
                 .portfolio
                 .accounts
                 .get(from)
-                .ok_or(EngineError::AccountNotFound(*from))?;
+                .ok_or(LookupError::AccountNotFound(*from))?;
 
             let AccountFlavor::Investment(investment) = &account.flavor else {
                 return Err(AccountTypeError::NotAnInvestmentAccount(*from).into());
@@ -632,7 +632,7 @@ pub fn evaluate_effect_into(
                 };
 
                 // Get current price from Market
-                let Some(current_price) = get_current_price(
+                let Ok(current_price) = get_current_price(
                     &state.portfolio.market,
                     state.timeline.start_date,
                     state.timeline.current_date,
@@ -947,7 +947,7 @@ pub fn evaluate_effect_into(
                 .portfolio
                 .accounts
                 .get(to)
-                .ok_or(EngineError::AccountNotFound(*to))?;
+                .ok_or(LookupError::AccountNotFound(*to))?;
 
             if let AccountFlavor::Liability(_) = &dest_account.flavor {
                 out.push(EvalEvent::CashDebit {

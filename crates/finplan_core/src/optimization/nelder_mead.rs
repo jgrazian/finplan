@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::config::SimulationConfig;
-use crate::error::MarketError;
+use crate::error::SimulationError;
 use crate::optimization::OptimizableParameter;
 
 use super::config::OptimizationConfig;
@@ -39,7 +39,7 @@ struct SimplexVertex {
 fn initialize_simplex(
     base_config: &SimulationConfig,
     opt_config: &OptimizationConfig,
-) -> Result<Vec<SimplexVertex>, MarketError> {
+) -> Result<Vec<SimplexVertex>, SimulationError> {
     let n = opt_config.parameters.len();
     let bounds: Vec<(f64, f64)> = opt_config
         .parameters
@@ -160,15 +160,12 @@ pub fn optimize_nelder_mead(
     base_config: &SimulationConfig,
     opt_config: &OptimizationConfig,
     progress_callback: Option<ProgressCallback>,
-) -> Result<OptimizationResult, MarketError> {
+) -> Result<OptimizationResult, SimulationError> {
     let n = opt_config.parameters.len();
     if n == 0 {
-        return Err(MarketError::InvalidDistributionParameters {
-            profile_type: "optimization",
-            mean: 0.0,
-            std_dev: 0.0,
-            reason: "no parameters to optimize",
-        });
+        return Err(SimulationError::Config(
+            "no parameters to optimize".to_string(),
+        ));
     }
 
     let bounds: Vec<(f64, f64)> = opt_config

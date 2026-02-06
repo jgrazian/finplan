@@ -6,6 +6,7 @@
 use jiff::civil::Date;
 
 use crate::{
+    error::MarketError,
     evaluate::EvalEvent,
     model::{
         AccountId, AssetCoord, AssetId, AssetLot, CashFlowKind, InvestmentContainer, LotMethod,
@@ -15,13 +16,12 @@ use crate::{
 };
 
 /// Calculate current price for an asset using the Market struct
-#[must_use]
 pub fn get_current_price(
     market: &Market,
     start_date: Date,
     current_date: Date,
     asset_id: AssetId,
-) -> Option<f64> {
+) -> Result<f64, MarketError> {
     market.get_asset_value(start_date, current_date, asset_id)
 }
 

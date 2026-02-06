@@ -4,7 +4,7 @@ use rustc_hash::FxHashMap;
 
 use crate::apply::{SimulationScratch, process_events_with_scratch};
 use crate::config::SimulationConfig;
-use crate::error::MarketError;
+use crate::error::SimulationError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
     AccountFlavor, AccountId, CashFlowKind, ConvergenceMetric, EventTrigger, LedgerEntry,
@@ -167,7 +167,7 @@ fn build_simulation_result(state: &mut SimulationState) -> SimulationResult {
     }
 }
 
-pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult, MarketError> {
+pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult, SimulationError> {
     let mut scratch = SimulationScratch::new();
     simulate_with_scratch(params, seed, &mut scratch)
 }
@@ -178,7 +178,7 @@ pub fn simulate_with_scratch(
     params: &SimulationConfig,
     seed: u64,
     scratch: &mut SimulationScratch,
-) -> Result<SimulationResult, MarketError> {
+) -> Result<SimulationResult, SimulationError> {
     simulate_inner(params, seed, scratch, None)
 }
 
@@ -189,7 +189,7 @@ pub fn simulate_with_metrics(
     params: &SimulationConfig,
     seed: u64,
     config: &InstrumentationConfig,
-) -> Result<(SimulationResult, SimulationMetrics), MarketError> {
+) -> Result<(SimulationResult, SimulationMetrics), SimulationError> {
     let mut scratch = SimulationScratch::new();
     let mut metrics = SimulationMetrics::new();
     let result = simulate_inner(params, seed, &mut scratch, Some((config, &mut metrics)))?;
@@ -202,7 +202,7 @@ fn simulate_inner(
     seed: u64,
     scratch: &mut SimulationScratch,
     mut instrumentation: Option<(&InstrumentationConfig, &mut SimulationMetrics)>,
-) -> Result<SimulationResult, MarketError> {
+) -> Result<SimulationResult, SimulationError> {
     let max_iterations = instrumentation
         .as_ref()
         .map_or(1000, |(c, _)| c.max_same_date_iterations);
@@ -346,7 +346,7 @@ fn compound_cash_balance(
     if *cash_value <= 0.0 {
         return;
     }
-    if let Some(multiplier) =
+    if let Ok(multiplier) =
         market.get_period_multiplier(year_index, i64::from(days_passed), return_profile_id)
     {
         let previous_value = *cash_value;
@@ -694,7 +694,7 @@ fn monte_carlo_core(
     params: &SimulationConfig,
     config: &MonteCarloConfig,
     options: &MonteCarloOptions<'_>,
-) -> Result<MonteCarloInternalResult, MarketError> {
+) -> Result<MonteCarloInternalResult, SimulationError> {
     let batch_size = config.batch_size;
     let parallel_batches = config.parallel_batches;
 
@@ -702,7 +702,7 @@ fn monte_carlo_core(
     if let Some(progress) = options.progress {
         progress.reset();
         if progress.is_cancelled() {
-            return Err(MarketError::Cancelled);
+            return Err(SimulationError::Cancelled);
         }
     }
 
@@ -712,7 +712,7 @@ fn monte_carlo_core(
     if let Some(progress) = options.progress
         && progress.is_cancelled()
     {
-        return Err(MarketError::Cancelled);
+        return Err(SimulationError::Cancelled);
     }
 
     // Disable ledger for batch iterations (only need final_net_worth)
@@ -749,7 +749,7 @@ fn monte_carlo_core(
         if let Some(progress) = options.progress
             && (cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled())
         {
-            return Err(MarketError::Cancelled);
+            return Err(SimulationError::Cancelled);
         }
 
         let remaining = max_iterations - current_count;
@@ -845,7 +845,7 @@ fn monte_carlo_core(
         if let Some(progress) = options.progress
             && (cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled())
         {
-            return Err(MarketError::Cancelled);
+            return Err(SimulationError::Cancelled);
         }
 
         seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -940,7 +940,7 @@ fn monte_carlo_core(
 pub fn monte_carlo_simulate_with_config(
     params: &SimulationConfig,
     config: &MonteCarloConfig,
-) -> Result<MonteCarloSummary, MarketError> {
+) -> Result<MonteCarloSummary, SimulationError> {
     let options = MonteCarloOptions {
         progress: None,
         compute_mean: config.compute_mean,
@@ -979,7 +979,7 @@ pub fn monte_carlo_simulate_with_progress(
     params: &SimulationConfig,
     config: &MonteCarloConfig,
     progress: &MonteCarloProgress,
-) -> Result<MonteCarloSummary, MarketError> {
+) -> Result<MonteCarloSummary, SimulationError> {
     let options = MonteCarloOptions {
         progress: Some(progress),
         compute_mean: config.compute_mean,
@@ -1002,7 +1002,7 @@ pub fn monte_carlo_stats_only(
     params: &SimulationConfig,
     config: &MonteCarloConfig,
     progress: &MonteCarloProgress,
-) -> Result<(MonteCarloStats, Vec<(f64, u64)>), MarketError> {
+) -> Result<(MonteCarloStats, Vec<(f64, u64)>), SimulationError> {
     let options = MonteCarloOptions {
         progress: Some(progress),
         compute_mean: false,

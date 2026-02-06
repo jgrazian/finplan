@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::config::SimulationConfig;
-use crate::error::MarketError;
+use crate::error::SimulationError;
 use crate::model::{
     AccountSnapshot, EventTrigger, MonteCarloConfig, MonteCarloProgress, MonteCarloStats,
     MonteCarloSummary, SimulationResult, TransferAmount,
@@ -278,7 +278,7 @@ impl LazySweepResults {
     }
 
     /// Reconstruct the `SimulationConfig` for a specific grid position
-    fn reconstruct_config(&self, indices: &[usize]) -> Result<SimulationConfig, MarketError> {
+    fn reconstruct_config(&self, indices: &[usize]) -> Result<SimulationConfig, SimulationError> {
         let mut config = self.base_config.clone();
         for (dim, &idx) in indices.iter().enumerate() {
             let value = self.param_values[dim][idx];
@@ -296,17 +296,19 @@ impl LazySweepResults {
         &self,
         indices: &[usize],
         percentile: f64,
-    ) -> Result<SimulationResult, MarketError> {
+    ) -> Result<SimulationResult, SimulationError> {
         let seeds = self
             .percentile_seeds
             .get(indices)
-            .ok_or_else(|| MarketError::Config("Invalid grid indices".to_string()))?;
+            .ok_or_else(|| SimulationError::Config("Invalid grid indices".to_string()))?;
 
         let (_, seed) = seeds
             .iter()
             .find(|(p, _)| (*p - percentile).abs() < 0.01)
             .ok_or_else(|| {
-                MarketError::Config(format!("Percentile {percentile} not found in stored seeds"))
+                SimulationError::Config(format!(
+                    "Percentile {percentile} not found in stored seeds"
+                ))
             })?;
 
         let config = self.reconstruct_config(indices)?;
@@ -445,10 +447,10 @@ pub fn sweep_simulate(
     base_config: &SimulationConfig,
     sweep_config: &SweepConfig,
     progress: Option<&SweepProgress>,
-) -> Result<SweepSimulationResults, MarketError> {
+) -> Result<SweepSimulationResults, SimulationError> {
     // Validate configuration
     if sweep_config.parameters.is_empty() {
-        return Err(MarketError::Config(
+        return Err(SimulationError::Config(
             "At least one sweep parameter required".to_string(),
         ));
     }
@@ -486,7 +488,7 @@ pub fn sweep_simulate(
         if let Some(p) = progress
             && p.is_cancelled()
         {
-            return Err(MarketError::Cancelled);
+            return Err(SimulationError::Cancelled);
         }
 
         // Apply all parameters for this grid point
@@ -535,7 +537,7 @@ pub fn sweep_evaluate(
     base_config: &SimulationConfig,
     sweep_config: &SweepConfig,
     progress: Option<&SweepProgress>,
-) -> Result<SweepResults, MarketError> {
+) -> Result<SweepResults, SimulationError> {
     // Use memory-efficient lazy sweep simulation
     let lazy_results = sweep_simulate_lazy(base_config, sweep_config, progress)?;
 
@@ -567,10 +569,10 @@ pub fn sweep_simulate_lazy(
     base_config: &SimulationConfig,
     sweep_config: &SweepConfig,
     progress: Option<&SweepProgress>,
-) -> Result<LazySweepResults, MarketError> {
+) -> Result<LazySweepResults, SimulationError> {
     // Validate configuration
     if sweep_config.parameters.is_empty() {
-        return Err(MarketError::Config(
+        return Err(SimulationError::Config(
             "At least one sweep parameter required".to_string(),
         ));
     }
@@ -622,7 +624,7 @@ pub fn sweep_simulate_lazy(
         if let Some(p) = progress
             && p.is_cancelled()
         {
-            return Err(MarketError::Cancelled);
+            return Err(SimulationError::Cancelled);
         }
 
         // Apply all parameters for this grid point
@@ -663,13 +665,13 @@ fn apply_parameter(
     config: &SimulationConfig,
     param: &SweepParameter,
     value: f64,
-) -> Result<SimulationConfig, MarketError> {
+) -> Result<SimulationConfig, SimulationError> {
     let mut modified = config.clone();
 
     // Find the event
     let event_idx = (param.event_id.0 as usize).saturating_sub(1);
     if event_idx >= modified.events.len() {
-        return Err(MarketError::Config(format!(
+        return Err(SimulationError::Config(format!(
             "Event {} not found",
             param.event_id.0
         )));
@@ -708,13 +710,13 @@ fn apply_trigger_param(
     trigger: &mut EventTrigger,
     param: &TriggerParam,
     value: f64,
-) -> Result<(), MarketError> {
+) -> Result<(), SimulationError> {
     match param {
         TriggerParam::Age => {
             if let EventTrigger::Age { years, .. } = trigger {
                 *years = value as u8;
             } else {
-                return Err(MarketError::Config(
+                return Err(SimulationError::Config(
                     "Target trigger is not an Age trigger".to_string(),
                 ));
             }
@@ -725,7 +727,7 @@ fn apply_trigger_param(
                 let new_year = value as i16;
                 *date = jiff::civil::date(new_year, date.month(), date.day());
             } else {
-                return Err(MarketError::Config(
+                return Err(SimulationError::Config(
                     "Target trigger is not a Date trigger".to_string(),
                 ));
             }
@@ -738,7 +740,7 @@ fn apply_trigger_param(
             {
                 apply_trigger_param(start, inner_param, value)?;
             } else {
-                return Err(MarketError::Config(
+                return Err(SimulationError::Config(
                     "Target trigger is not a Repeating trigger with start condition".to_string(),
                 ));
             }
@@ -751,7 +753,7 @@ fn apply_trigger_param(
             {
                 apply_trigger_param(end, inner_param, value)?;
             } else {
-                return Err(MarketError::Config(
+                return Err(SimulationError::Config(
                     "Target trigger is not a Repeating trigger with end condition".to_string(),
                 ));
             }
@@ -766,7 +768,7 @@ fn apply_effect_param(
     param: &EffectParam,
     target: &EffectTarget,
     value: f64,
-) -> Result<(), MarketError> {
+) -> Result<(), SimulationError> {
     use crate::model::EventEffect;
 
     // Find the target effect
@@ -782,7 +784,7 @@ fn apply_effect_param(
     };
 
     let Some(idx) = effect_idx else {
-        return Err(MarketError::Config(
+        return Err(SimulationError::Config(
             "No eligible effect found for sweep".to_string(),
         ));
     };
@@ -800,7 +802,7 @@ fn apply_effect_param(
             apply_amount_param(amount, param, value)?;
         }
         _ => {
-            return Err(MarketError::Config(
+            return Err(SimulationError::Config(
                 "Effect does not have a sweepable amount".to_string(),
             ));
         }
@@ -829,7 +831,7 @@ fn apply_amount_param(
     amount: &mut TransferAmount,
     param: &EffectParam,
     value: f64,
-) -> Result<(), MarketError> {
+) -> Result<(), SimulationError> {
     match param {
         EffectParam::Value => {
             // Unwrap InflationAdjusted if present, modify Fixed value
@@ -841,13 +843,13 @@ fn apply_amount_param(
                     if let TransferAmount::Fixed(v) = inner.as_mut() {
                         *v = value;
                     } else {
-                        return Err(MarketError::Config(
+                        return Err(SimulationError::Config(
                             "InflationAdjusted does not contain a Fixed amount".to_string(),
                         ));
                     }
                 }
                 _ => {
-                    return Err(MarketError::Config(
+                    return Err(SimulationError::Config(
                         "Amount is not a Fixed or InflationAdjusted(Fixed) value".to_string(),
                     ));
                 }
@@ -857,7 +859,7 @@ fn apply_amount_param(
             if let TransferAmount::Scale(multiplier, _) = amount {
                 *multiplier = value;
             } else {
-                return Err(MarketError::Config(
+                return Err(SimulationError::Config(
                     "Amount is not a Scale type".to_string(),
                 ));
             }

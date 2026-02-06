@@ -1,5 +1,5 @@
 use crate::config::SimulationConfig;
-use crate::error::{EngineError, MarketError, Result};
+use crate::error::{LookupError, Result, SimulationError};
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetCoord, AssetId, Event, EventId, EventTrigger,
     LedgerEntry, Market, ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxConfig,
@@ -382,7 +382,7 @@ impl SimulationState {
     pub fn from_parameters(
         params: &SimulationConfig,
         seed: u64,
-    ) -> std::result::Result<Self, MarketError> {
+    ) -> std::result::Result<Self, SimulationError> {
         let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
         let start_date = params
             .start_date
@@ -566,7 +566,7 @@ impl SimulationState {
             .map(|acc| {
                 acc.total_value(market, self.timeline.start_date, self.timeline.current_date)
             })
-            .ok_or(EngineError::AccountNotFound(account_id))
+            .ok_or(LookupError::AccountNotFound(account_id))
     }
 
     pub fn account_cash_balance(&self, account_id: AccountId) -> Result<f64> {
@@ -574,7 +574,7 @@ impl SimulationState {
             .accounts
             .get(&account_id)
             .and_then(Account::cash_balance)
-            .ok_or(EngineError::AccountNotFound(account_id))
+            .ok_or(LookupError::AccountNotFound(account_id))
     }
 
     /// Get current balance of a specific asset
@@ -584,7 +584,7 @@ impl SimulationState {
             .portfolio
             .accounts
             .get(&asset_coord.account_id)
-            .ok_or(EngineError::AccountNotFound(asset_coord.account_id))?;
+            .ok_or(LookupError::AccountNotFound(asset_coord.account_id))?;
 
         match &account.flavor {
             AccountFlavor::Investment(inv) => {
@@ -622,10 +622,10 @@ impl SimulationState {
                         .unwrap_or(asset.value);
                     Ok(value)
                 } else {
-                    Err(EngineError::AssetNotFound(asset_coord))
+                    Err(LookupError::AssetNotFound(asset_coord))
                 }
             }
-            _ => Err(EngineError::AssetNotFound(asset_coord)),
+            _ => Err(LookupError::AssetNotFound(asset_coord)),
         }
     }
 
@@ -637,7 +637,7 @@ impl SimulationState {
                 self.timeline.current_date,
                 asset_coord.asset_id,
             )
-            .ok_or(EngineError::AssetNotFound(asset_coord))
+            .map_err(|_| LookupError::AssetNotFound(asset_coord))
     }
 
     /// Calculate total income from `CashCredit` events in the current year
@@ -784,7 +784,7 @@ impl SimulationState {
             .portfolio
             .accounts
             .get(&account_id)
-            .ok_or(EngineError::AccountNotFound(account_id))?;
+            .ok_or(LookupError::AccountNotFound(account_id))?;
 
         if let AccountFlavor::Investment(inv) = &account.flavor
             && let Some(limit) = &inv.contribution_limit
@@ -819,7 +819,7 @@ impl SimulationState {
             .portfolio
             .accounts
             .get(&account_id)
-            .ok_or(EngineError::AccountNotFound(account_id))?;
+            .ok_or(LookupError::AccountNotFound(account_id))?;
 
         if let AccountFlavor::Investment(inv) = &account.flavor
             && let Some(limit) = &inv.contribution_limit

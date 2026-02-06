@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use rayon::prelude::*;
 
 use crate::config::SimulationConfig;
-use crate::error::MarketError;
+use crate::error::SimulationError;
 use crate::model::MonteCarloConfig;
 use crate::optimization::OptimizableParameter;
 use crate::simulation::monte_carlo_simulate_with_config;
@@ -82,17 +82,14 @@ pub fn optimize_grid_search(
     base_config: &SimulationConfig,
     opt_config: &OptimizationConfig,
     grid_size: usize,
-) -> Result<OptimizationResult, MarketError> {
+) -> Result<OptimizationResult, SimulationError> {
     let grid_points = generate_grid_points(&opt_config.parameters, grid_size);
     let total_points = grid_points.len();
 
     if total_points == 0 {
-        return Err(MarketError::InvalidDistributionParameters {
-            profile_type: "optimization",
-            mean: 0.0,
-            std_dev: 0.0,
-            reason: "no parameters to optimize",
-        });
+        return Err(SimulationError::Config(
+            "no parameters to optimize".to_string(),
+        ));
     }
 
     // Monte Carlo config for each evaluation

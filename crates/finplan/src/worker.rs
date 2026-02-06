@@ -392,7 +392,7 @@ fn worker_loop(
                             results: Box::new(results),
                         });
                     }
-                    Err(finplan_core::error::MarketError::Cancelled) => {
+                    Err(finplan_core::error::SimulationError::Cancelled) => {
                         let _ = response_tx.send(SimulationResponse::Cancelled);
                     }
                     Err(e) => {
@@ -456,7 +456,7 @@ fn run_monte_carlo_simulation(
         &mc_progress,
     ) {
         Ok(summary) => summary,
-        Err(finplan_core::error::MarketError::Cancelled) => {
+        Err(finplan_core::error::SimulationError::Cancelled) => {
             return Ok(None); // Cancelled by user
         }
         Err(e) => return Err(e.to_string()),
@@ -564,7 +564,7 @@ fn run_batch_monte_carlo(
             &mc_progress,
         ) {
             Ok(summary) => summary,
-            Err(finplan_core::error::MarketError::Cancelled) => {
+            Err(finplan_core::error::SimulationError::Cancelled) => {
                 return Err(()); // Cancelled by user
             }
             Err(e) => {
