@@ -269,6 +269,8 @@ pub struct ScenarioState {
     pub batch_running: bool,
     /// Selected scenarios for comparison (by name)
     pub comparison_scenarios: Vec<String>,
+    /// Scroll offset for the simulation errors panel
+    pub error_scroll_offset: usize,
 }
 
 /// Granularity for the cash flow breakdown panel

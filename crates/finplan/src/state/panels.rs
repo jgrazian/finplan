@@ -120,14 +120,18 @@ impl PanelNavigable for EventsPanel {
 pub enum ScenarioPanel {
     #[default]
     ScenarioList, // Left panel: list of scenarios
-    ScenarioDetails, // Left panel: selected scenario details
-    ComparisonTable, // Right panel: comparison table
-    OverlayChart,    // Right panel: net worth overlay chart
+    ScenarioDetails,  // Left panel: selected scenario details
+    SimulationErrors, // Left panel: simulation warnings/errors
+    ComparisonTable,  // Right panel: comparison table
+    OverlayChart,     // Right panel: net worth overlay chart
 }
 
 impl ScenarioPanel {
     pub fn is_left_panel(self) -> bool {
-        matches!(self, Self::ScenarioList | Self::ScenarioDetails)
+        matches!(
+            self,
+            Self::ScenarioList | Self::ScenarioDetails | Self::SimulationErrors
+        )
     }
 
     pub fn next(self) -> Self {
@@ -143,7 +147,8 @@ impl PanelNavigable for ScenarioPanel {
     fn next(self) -> Self {
         match self {
             Self::ScenarioList => Self::ScenarioDetails,
-            Self::ScenarioDetails => Self::ComparisonTable,
+            Self::ScenarioDetails => Self::SimulationErrors,
+            Self::SimulationErrors => Self::ComparisonTable,
             Self::ComparisonTable => Self::OverlayChart,
             Self::OverlayChart => Self::ScenarioList,
         }
@@ -153,7 +158,8 @@ impl PanelNavigable for ScenarioPanel {
         match self {
             Self::ScenarioList => Self::OverlayChart,
             Self::ScenarioDetails => Self::ScenarioList,
-            Self::ComparisonTable => Self::ScenarioDetails,
+            Self::SimulationErrors => Self::ScenarioDetails,
+            Self::ComparisonTable => Self::SimulationErrors,
             Self::OverlayChart => Self::ComparisonTable,
         }
     }

@@ -200,6 +200,13 @@ impl App {
                     let prev_year_index = self.state.results_state.selected_year_index;
                     let new_max_index = tui_result.years.len().saturating_sub(1);
 
+                    // Extract warnings for display
+                    self.state.simulation_errors = core_result
+                        .warnings
+                        .iter()
+                        .map(|w| format!("[{}] {}", w.date, w.message))
+                        .collect();
+
                     self.state.simulation_result = Some(tui_result);
                     self.state.core_simulation_result = Some(core_result);
                     self.state.monte_carlo_result = None;
@@ -229,6 +236,13 @@ impl App {
                     // Preserve year index, clamped to new result bounds
                     let prev_year_index = self.state.results_state.selected_year_index;
                     let new_max_index = default_tui_result.years.len().saturating_sub(1);
+
+                    // Extract warnings from the P50 (default) core result
+                    self.state.simulation_errors = default_core_result
+                        .warnings
+                        .iter()
+                        .map(|w| format!("[{}] {}", w.date, w.message))
+                        .collect();
 
                     // Store results
                     self.state.simulation_result = Some(default_tui_result);
@@ -274,6 +288,7 @@ impl App {
                 SimulationResponse::Error(msg) => {
                     tracing::error!(error = %msg, "Simulation error");
                     self.state.simulation_status = SimulationStatus::Idle;
+                    self.state.simulation_errors = vec![format!("FATAL: {}", msg)];
                     self.state.set_error(msg);
                 }
                 SimulationResponse::Progress { current, total } => {
@@ -382,6 +397,9 @@ impl App {
 
         let pending = self.state.pending_simulation.take();
         if let Some(request) = pending {
+            // Clear previous simulation errors
+            self.state.simulation_errors.clear();
+            self.state.scenario_state.error_scroll_offset = 0;
             match request {
                 PendingSimulation::Single
                 | PendingSimulation::MonteCarlo { .. }

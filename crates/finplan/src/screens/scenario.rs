@@ -101,7 +101,11 @@ impl Component for ScenarioScreen {
 
         // Scenario list navigation (j/k or up/down)
         if KeybindingsConfig::matches(&key, &kb.navigation.down) {
-            if panel.is_left_panel() && num_scenarios > 0 {
+            if panel == ScenarioPanel::SimulationErrors {
+                let max_offset = state.simulation_errors.len().saturating_sub(1);
+                state.scenario_state.error_scroll_offset =
+                    (state.scenario_state.error_scroll_offset + 1).min(max_offset);
+            } else if panel.is_left_panel() && num_scenarios > 0 {
                 state.scenario_state.selected_index =
                     (state.scenario_state.selected_index + 1) % num_scenarios;
             }
@@ -109,7 +113,10 @@ impl Component for ScenarioScreen {
         }
 
         if KeybindingsConfig::matches(&key, &kb.navigation.up) {
-            if panel.is_left_panel() && num_scenarios > 0 {
+            if panel == ScenarioPanel::SimulationErrors {
+                state.scenario_state.error_scroll_offset =
+                    state.scenario_state.error_scroll_offset.saturating_sub(1);
+            } else if panel.is_left_panel() && num_scenarios > 0 {
                 state.scenario_state.selected_index = state
                     .scenario_state
                     .selected_index
@@ -352,12 +359,13 @@ impl Component for ScenarioScreen {
             ])
             .split(area);
 
-        // Left column: scenario list + selected details
+        // Left column: scenario list + selected details + errors
         let left_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10),   // Scenario list
+                Constraint::Min(8),    // Scenario list
                 Constraint::Length(9), // Selected scenario details
+                Constraint::Length(6), // Simulation errors
             ])
             .split(main_cols[0]);
 
@@ -383,6 +391,12 @@ impl Component for ScenarioScreen {
             left_chunks[1],
             state,
             panel == ScenarioPanel::ScenarioDetails,
+        );
+        self.render_simulation_errors(
+            frame,
+            left_chunks[2],
+            state,
+            panel == ScenarioPanel::SimulationErrors,
         );
         self.render_comparison_table(
             frame,
@@ -616,6 +630,58 @@ impl ScenarioScreen {
         let paragraph = Paragraph::new(lines).block(focused_block(title, focused));
 
         frame.render_widget(paragraph, area);
+    }
+
+    fn render_simulation_errors(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        state: &AppState,
+        focused: bool,
+    ) {
+        let title = if focused {
+            " SIMULATION ERRORS "
+        } else {
+            " ERRORS "
+        };
+
+        let block = focused_block(title, focused);
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let errors = &state.simulation_errors;
+
+        if errors.is_empty() {
+            let msg = Paragraph::new(Line::from(Span::styled(
+                "No errors",
+                Style::default().fg(Color::DarkGray),
+            )));
+            frame.render_widget(msg, inner);
+            return;
+        }
+
+        let visible_height = inner.height as usize;
+        let scroll_offset = state.scenario_state.error_scroll_offset;
+
+        let items: Vec<ListItem> = errors
+            .iter()
+            .skip(scroll_offset)
+            .take(visible_height)
+            .map(|err| {
+                let color = if err.starts_with("FATAL:") {
+                    Color::Red
+                } else {
+                    Color::Yellow
+                };
+                ListItem::new(Line::from(Span::styled(
+                    err.as_str(),
+                    Style::default().fg(color),
+                )))
+            })
+            .collect();
+
+        let list = List::new(items);
+        frame.render_widget(list, inner);
     }
 
     fn render_comparison_table(

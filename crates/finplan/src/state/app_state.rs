@@ -209,6 +209,9 @@ pub struct AppState {
     pub error_message: Option<String>,
     pub exit: bool,
 
+    /// Warnings/errors from the last simulation run (displayed in Scenario tab)
+    pub simulation_errors: Vec<String>,
+
     /// Pending effect form when editing an amount field
     /// Stored temporarily while the amount editor modal is active
     pub pending_effect_form: Option<FormModal>,
@@ -251,6 +254,7 @@ impl Default for AppState {
             modal: ModalState::None,
             error_message: None,
             exit: false,
+            simulation_errors: Vec::new(),
             pending_effect_form: None,
             pending_repeating_form: None,
             keybindings: KeybindingsConfig::default(),
