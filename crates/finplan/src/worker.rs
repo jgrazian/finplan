@@ -126,20 +126,16 @@ impl SimulationWorker {
         let batch_scenario_index = Arc::new(AtomicUsize::new(0));
         let batch_scenario_total = Arc::new(AtomicUsize::new(0));
 
-        let flag_clone = cancel_flag.clone();
-        let progress_clone = progress.clone();
-        let batch_idx_clone = batch_scenario_index.clone();
-        let batch_total_clone = batch_scenario_total.clone();
+        let ctx = WorkerContext {
+            response_tx,
+            cancel_flag: cancel_flag.clone(),
+            progress: progress.clone(),
+            batch_scenario_index: batch_scenario_index.clone(),
+            batch_scenario_total: batch_scenario_total.clone(),
+        };
 
         let thread = thread::spawn(move || {
-            worker_loop(
-                request_rx,
-                response_tx,
-                flag_clone,
-                progress_clone,
-                batch_idx_clone,
-                batch_total_clone,
-            );
+            ctx.run(request_rx);
         });
 
         Self {
@@ -212,435 +208,395 @@ impl Drop for SimulationWorker {
     }
 }
 
-/// Main worker loop running on background thread
-fn worker_loop(
-    request_rx: Receiver<SimulationRequest>,
+/// Shared state for the background worker thread.
+struct WorkerContext {
     response_tx: Sender<SimulationResponse>,
     cancel_flag: Arc<AtomicBool>,
     progress: Arc<AtomicUsize>,
     batch_scenario_index: Arc<AtomicUsize>,
     batch_scenario_total: Arc<AtomicUsize>,
-) {
-    while let Ok(request) = request_rx.recv() {
-        match request {
-            SimulationRequest::Shutdown => break,
+}
 
-            SimulationRequest::Single {
-                config,
-                seed,
-                birth_date,
-                start_date,
-            } => {
-                tracing::info!(seed = seed, "Starting single simulation");
-                if cancel_flag.load(Ordering::SeqCst) {
-                    let _ = response_tx.send(SimulationResponse::Cancelled);
-                    continue;
+impl WorkerContext {
+    fn run(&self, request_rx: Receiver<SimulationRequest>) {
+        while let Ok(request) = request_rx.recv() {
+            match request {
+                SimulationRequest::Shutdown => break,
+
+                SimulationRequest::Single {
+                    config,
+                    seed,
+                    birth_date,
+                    start_date,
+                } => {
+                    tracing::info!(seed = seed, "Starting single simulation");
+                    if self.cancel_flag.load(Ordering::SeqCst) {
+                        let _ = self.response_tx.send(SimulationResponse::Cancelled);
+                        continue;
+                    }
+
+                    match Self::run_single(&config, seed, &birth_date, &start_date) {
+                        Ok((tui_result, core_result)) => {
+                            let _ = self.response_tx.send(SimulationResponse::SingleComplete {
+                                tui_result,
+                                core_result,
+                            });
+                        }
+                        Err(e) => {
+                            let _ = self.response_tx.send(SimulationResponse::Error(e));
+                        }
+                    }
                 }
 
-                match run_single_simulation(&config, seed, &birth_date, &start_date) {
-                    Ok((tui_result, core_result)) => {
-                        let _ = response_tx.send(SimulationResponse::SingleComplete {
-                            tui_result,
-                            core_result,
-                        });
-                    }
-                    Err(e) => {
-                        let _ = response_tx.send(SimulationResponse::Error(e));
-                    }
-                }
-            }
-
-            SimulationRequest::MonteCarlo {
-                config,
-                iterations,
-                seed,
-                birth_date,
-                start_date,
-            } => {
-                tracing::info!(iterations = iterations, seed = ?seed, "Starting Monte Carlo simulation");
-                progress.store(0, Ordering::SeqCst);
-
-                match run_monte_carlo_simulation(
-                    &config,
+                SimulationRequest::MonteCarlo {
+                    config,
                     iterations,
-                    None, // No convergence config
                     seed,
-                    &birth_date,
-                    &start_date,
-                    &cancel_flag,
-                    &progress,
-                    &response_tx,
-                ) {
-                    Ok(Some(result)) => {
-                        let _ = response_tx.send(result);
-                    }
-                    Ok(None) => {
-                        // Cancelled
-                        let _ = response_tx.send(SimulationResponse::Cancelled);
-                    }
-                    Err(e) => {
-                        let _ = response_tx.send(SimulationResponse::Error(e));
+                    birth_date,
+                    start_date,
+                } => {
+                    tracing::info!(iterations = iterations, seed = ?seed, "Starting Monte Carlo simulation");
+                    self.progress.store(0, Ordering::SeqCst);
+
+                    match self.run_monte_carlo(
+                        &config,
+                        iterations,
+                        None,
+                        seed,
+                        &birth_date,
+                        &start_date,
+                    ) {
+                        Ok(Some(result)) => {
+                            let _ = self.response_tx.send(result);
+                        }
+                        Ok(None) => {
+                            let _ = self.response_tx.send(SimulationResponse::Cancelled);
+                        }
+                        Err(e) => {
+                            let _ = self.response_tx.send(SimulationResponse::Error(e));
+                        }
                     }
                 }
-            }
 
-            SimulationRequest::MonteCarloConvergence {
-                config,
-                min_iterations,
-                max_iterations,
-                relative_threshold,
-                metric,
-                seed,
-                birth_date,
-                start_date,
-            } => {
-                progress.store(0, Ordering::SeqCst);
-
-                let convergence = Some(ConvergenceConfig {
-                    metric,
-                    relative_threshold,
-                    max_iterations,
-                });
-
-                match run_monte_carlo_simulation(
-                    &config,
+                SimulationRequest::MonteCarloConvergence {
+                    config,
                     min_iterations,
-                    convergence,
+                    max_iterations,
+                    relative_threshold,
+                    metric,
                     seed,
-                    &birth_date,
-                    &start_date,
-                    &cancel_flag,
-                    &progress,
-                    &response_tx,
-                ) {
-                    Ok(Some(result)) => {
-                        let _ = response_tx.send(result);
-                    }
-                    Ok(None) => {
-                        // Cancelled
-                        let _ = response_tx.send(SimulationResponse::Cancelled);
-                    }
-                    Err(e) => {
-                        let _ = response_tx.send(SimulationResponse::Error(e));
+                    birth_date,
+                    start_date,
+                } => {
+                    self.progress.store(0, Ordering::SeqCst);
+
+                    let convergence = Some(ConvergenceConfig {
+                        metric,
+                        relative_threshold,
+                        max_iterations,
+                    });
+
+                    match self.run_monte_carlo(
+                        &config,
+                        min_iterations,
+                        convergence,
+                        seed,
+                        &birth_date,
+                        &start_date,
+                    ) {
+                        Ok(Some(result)) => {
+                            let _ = self.response_tx.send(result);
+                        }
+                        Ok(None) => {
+                            let _ = self.response_tx.send(SimulationResponse::Cancelled);
+                        }
+                        Err(e) => {
+                            let _ = self.response_tx.send(SimulationResponse::Error(e));
+                        }
                     }
                 }
-            }
 
-            SimulationRequest::Batch {
-                scenarios,
-                iterations,
-            } => {
-                tracing::info!(
-                    scenarios = scenarios.len(),
-                    iterations = iterations,
-                    "Starting batch Monte Carlo simulation"
-                );
-                batch_scenario_index.store(0, Ordering::SeqCst);
-                batch_scenario_total.store(scenarios.len(), Ordering::SeqCst);
-                progress.store(0, Ordering::SeqCst);
-
-                match run_batch_monte_carlo(
+                SimulationRequest::Batch {
                     scenarios,
                     iterations,
-                    &cancel_flag,
-                    &progress,
-                    &batch_scenario_index,
-                    &response_tx,
-                ) {
-                    Ok(count) => {
-                        let _ = response_tx.send(SimulationResponse::BatchComplete {
-                            completed_count: count,
-                        });
-                    }
-                    Err(_) => {
-                        // Cancelled during batch
-                        let _ = response_tx.send(SimulationResponse::Cancelled);
+                } => {
+                    tracing::info!(
+                        scenarios = scenarios.len(),
+                        iterations = iterations,
+                        "Starting batch Monte Carlo simulation"
+                    );
+                    self.batch_scenario_index.store(0, Ordering::SeqCst);
+                    self.batch_scenario_total
+                        .store(scenarios.len(), Ordering::SeqCst);
+                    self.progress.store(0, Ordering::SeqCst);
+
+                    match self.run_batch_monte_carlo(scenarios, iterations) {
+                        Ok(count) => {
+                            let _ = self.response_tx.send(SimulationResponse::BatchComplete {
+                                completed_count: count,
+                            });
+                        }
+                        Err(_) => {
+                            let _ = self.response_tx.send(SimulationResponse::Cancelled);
+                        }
                     }
                 }
-            }
 
-            SimulationRequest::SweepAnalysis {
-                config,
-                sweep_config,
-                birth_date: _,
-                start_date: _,
-            } => {
-                let total_points = sweep_config.total_points();
-                tracing::info!(total_points = total_points, "Starting sweep analysis");
+                SimulationRequest::SweepAnalysis {
+                    config,
+                    sweep_config,
+                    birth_date: _,
+                    start_date: _,
+                } => {
+                    let total_points = sweep_config.total_points();
+                    tracing::info!(total_points = total_points, "Starting sweep analysis");
 
-                // Check for cancellation before starting
-                if cancel_flag.load(Ordering::SeqCst) {
-                    let _ = response_tx.send(SimulationResponse::Cancelled);
-                    continue;
-                }
-
-                // Reset progress for sweep
-                progress.store(0, Ordering::SeqCst);
-                batch_scenario_total.store(total_points, Ordering::SeqCst);
-
-                // Create SweepProgress from existing atomics
-                let sweep_progress = SweepProgress::from_atomics(
-                    progress.clone(),
-                    batch_scenario_total.clone(),
-                    cancel_flag.clone(),
-                );
-
-                // Run sweep analysis
-                match sweep_evaluate(&config, &sweep_config, Some(&sweep_progress)) {
-                    Ok(results) => {
-                        let _ = response_tx.send(SimulationResponse::SweepComplete {
-                            results: Box::new(results),
-                        });
+                    if self.cancel_flag.load(Ordering::SeqCst) {
+                        let _ = self.response_tx.send(SimulationResponse::Cancelled);
+                        continue;
                     }
-                    Err(finplan_core::error::SimulationError::Cancelled) => {
-                        let _ = response_tx.send(SimulationResponse::Cancelled);
-                    }
-                    Err(e) => {
-                        let _ = response_tx.send(SimulationResponse::Error(e.to_string()));
+
+                    self.progress.store(0, Ordering::SeqCst);
+                    self.batch_scenario_total
+                        .store(total_points, Ordering::SeqCst);
+
+                    let sweep_progress = SweepProgress::from_atomics(
+                        self.progress.clone(),
+                        self.batch_scenario_total.clone(),
+                        self.cancel_flag.clone(),
+                    );
+
+                    match sweep_evaluate(&config, &sweep_config, Some(&sweep_progress)) {
+                        Ok(results) => {
+                            let _ = self.response_tx.send(SimulationResponse::SweepComplete {
+                                results: Box::new(results),
+                            });
+                        }
+                        Err(finplan_core::error::SimulationError::Cancelled) => {
+                            let _ = self.response_tx.send(SimulationResponse::Cancelled);
+                        }
+                        Err(e) => {
+                            let _ = self
+                                .response_tx
+                                .send(SimulationResponse::Error(e.to_string()));
+                        }
                     }
                 }
             }
         }
     }
-}
 
-fn run_single_simulation(
-    config: &SimulationConfig,
-    seed: u64,
-    birth_date: &str,
-    start_date: &str,
-) -> Result<(SimulationResult, CoreResult), String> {
-    let core_result =
-        finplan_core::simulation::simulate(config, seed).map_err(|e| e.to_string())?;
-
-    let tui_result =
-        to_tui_result(&core_result, birth_date, start_date).map_err(|e| e.to_string())?;
-
-    Ok((tui_result, core_result))
-}
-
-fn run_monte_carlo_simulation(
-    config: &SimulationConfig,
-    iterations: usize,
-    convergence: Option<ConvergenceConfig>,
-    seed: Option<u64>,
-    birth_date: &str,
-    start_date: &str,
-    cancel_flag: &Arc<AtomicBool>,
-    progress: &Arc<AtomicUsize>,
-    _response_tx: &Sender<SimulationResponse>,
-) -> Result<Option<SimulationResponse>, String> {
-    // Check for cancellation before starting
-    if cancel_flag.load(Ordering::SeqCst) {
-        return Ok(None);
-    }
-
-    // Configure Monte Carlo simulation with CPU-based parallelism
-    let mc_config = MonteCarloConfig {
-        iterations,
-        percentiles: vec![0.05, 0.50, 0.95],
-        compute_mean: true,
-        convergence,
-        parallel_batches: cpu_parallel_batches(),
-        seed,
-        ..Default::default()
-    };
-
-    // Create progress tracker from existing atomics for real-time progress updates
-    let mc_progress = MonteCarloProgress::from_atomics(progress.clone(), cancel_flag.clone());
-
-    // Run Monte Carlo with real-time progress updates
-    let mc_summary = match finplan_core::simulation::monte_carlo_simulate_with_progress(
-        config,
-        &mc_config,
-        &mc_progress,
-    ) {
-        Ok(summary) => summary,
-        Err(finplan_core::error::SimulationError::Cancelled) => {
-            return Ok(None); // Cancelled by user
-        }
-        Err(e) => return Err(e.to_string()),
-    };
-
-    // Ensure progress shows completion
-    progress.store(iterations, Ordering::SeqCst);
-
-    // Check for cancellation after simulation
-    if cancel_flag.load(Ordering::SeqCst) {
-        return Ok(None);
-    }
-
-    // Convert percentile runs to TUI format
-    let mut percentile_results = Vec::new();
-    for (p, core_result) in &mc_summary.percentile_runs {
+    fn run_single(
+        config: &SimulationConfig,
+        seed: u64,
+        birth_date: &str,
+        start_date: &str,
+    ) -> Result<(SimulationResult, CoreResult), String> {
+        let core_result =
+            finplan_core::simulation::simulate(config, seed).map_err(|e| e.to_string())?;
         let tui_result =
-            to_tui_result(core_result, birth_date, start_date).map_err(|e| e.to_string())?;
-        percentile_results.push((*p, tui_result, core_result.clone()));
+            to_tui_result(&core_result, birth_date, start_date).map_err(|e| e.to_string())?;
+        Ok((tui_result, core_result))
     }
 
-    // Build mean results from accumulators
-    let (mean_tui_result, mean_core_result) = if let Some(mean_core) = mc_summary.get_mean_result()
-    {
-        let mean_tui =
-            to_tui_result(&mean_core, birth_date, start_date).map_err(|e| e.to_string())?;
-        (Some(mean_tui), Some(mean_core))
-    } else {
-        (None, None)
-    };
-
-    // Extract P50 as default result
-    let (default_tui_result, default_core_result) =
-        find_percentile_result_pair(&percentile_results, P50)
-            .map(|(tui, core)| (tui.clone(), core.clone()))
-            .ok_or_else(|| "Missing P50 result".to_string())?;
-
-    // Build preview summary
-    let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
-
-    let preview_summary = MonteCarloPreviewSummary {
-        num_iterations: mc_summary.stats.num_iterations,
-        success_rate: mc_summary.stats.success_rate,
-        p5_final: pset.p5,
-        p50_final: pset.p50,
-        p95_final: pset.p95,
-    };
-
-    // Build stored result
-    let stored_result = MonteCarloStoredResult {
-        stats: mc_summary.stats,
-        percentile_results,
-        mean_tui_result,
-        mean_core_result,
-    };
-
-    Ok(Some(SimulationResponse::MonteCarloComplete {
-        stored_result: Box::new(stored_result),
-        preview_summary,
-        default_tui_result,
-        default_core_result,
-    }))
-}
-
-/// Run Monte Carlo on multiple scenarios in batch mode
-fn run_batch_monte_carlo(
-    scenarios: Vec<(String, SimulationConfig, Option<u64>, String, String)>,
-    iterations: usize,
-    cancel_flag: &Arc<AtomicBool>,
-    progress: &Arc<AtomicUsize>,
-    batch_scenario_index: &Arc<AtomicUsize>,
-    response_tx: &Sender<SimulationResponse>,
-) -> Result<usize, ()> {
-    let mut completed_count = 0;
-
-    for (idx, (scenario_name, config, seed, birth_date, start_date)) in
-        scenarios.into_iter().enumerate()
-    {
-        // Update batch scenario index
-        batch_scenario_index.store(idx, Ordering::SeqCst);
-        progress.store(0, Ordering::SeqCst);
-
-        // Check for cancellation before each scenario
-        if cancel_flag.load(Ordering::SeqCst) {
-            return Err(());
+    fn run_monte_carlo(
+        &self,
+        config: &SimulationConfig,
+        iterations: usize,
+        convergence: Option<ConvergenceConfig>,
+        seed: Option<u64>,
+        birth_date: &str,
+        start_date: &str,
+    ) -> Result<Option<SimulationResponse>, String> {
+        if self.cancel_flag.load(Ordering::SeqCst) {
+            return Ok(None);
         }
 
-        // Configure Monte Carlo simulation (simpler config for batch - no mean needed)
         let mc_config = MonteCarloConfig {
             iterations,
             percentiles: vec![0.05, 0.50, 0.95],
-            compute_mean: false,
+            compute_mean: true,
+            convergence,
             parallel_batches: cpu_parallel_batches(),
             seed,
             ..Default::default()
         };
 
-        // Create progress tracker for this scenario
-        let mc_progress = MonteCarloProgress::from_atomics(progress.clone(), cancel_flag.clone());
+        let mc_progress =
+            MonteCarloProgress::from_atomics(self.progress.clone(), self.cancel_flag.clone());
 
-        // Run Monte Carlo with progress updates
         let mc_summary = match finplan_core::simulation::monte_carlo_simulate_with_progress(
-            &config,
+            config,
             &mc_config,
             &mc_progress,
         ) {
             Ok(summary) => summary,
             Err(finplan_core::error::SimulationError::Cancelled) => {
-                return Err(()); // Cancelled by user
+                return Ok(None);
             }
-            Err(e) => {
-                // Log error but continue with other scenarios
-                tracing::warn!(scenario = scenario_name, error = %e, "Monte Carlo failed");
-                continue;
-            }
+            Err(e) => return Err(e.to_string()),
         };
 
-        // Extract summary data
+        self.progress.store(iterations, Ordering::SeqCst);
+
+        if self.cancel_flag.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+
+        let mut percentile_results = Vec::new();
+        for (p, core_result) in &mc_summary.percentile_runs {
+            let tui_result =
+                to_tui_result(core_result, birth_date, start_date).map_err(|e| e.to_string())?;
+            percentile_results.push((*p, tui_result, core_result.clone()));
+        }
+
+        let (mean_tui_result, mean_core_result) =
+            if let Some(mean_core) = mc_summary.get_mean_result() {
+                let mean_tui =
+                    to_tui_result(&mean_core, birth_date, start_date).map_err(|e| e.to_string())?;
+                (Some(mean_tui), Some(mean_core))
+            } else {
+                (None, None)
+            };
+
+        let (default_tui_result, default_core_result) =
+            find_percentile_result_pair(&percentile_results, P50)
+                .map(|(tui, core)| (tui.clone(), core.clone()))
+                .ok_or_else(|| "Missing P50 result".to_string())?;
+
         let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
-        let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
 
-        // Get yearly net worth (nominal and real) from P50 run
-        let p50_tui = find_percentile_result(&mc_summary.percentile_runs, P50)
-            .and_then(|core_result| to_tui_result(core_result, &birth_date, &start_date).ok());
-
-        let yearly_nw = p50_tui
-            .as_ref()
-            .map(|tui| tui.years.iter().map(|y| (y.year, y.net_worth)).collect());
-        let yearly_real_nw = p50_tui.as_ref().map(|tui| {
-            tui.years
-                .iter()
-                .map(|y| (y.year, y.real_net_worth))
-                .collect()
-        });
-
-        // Calculate real values using inflation factor from P50 TUI result
-        let (final_real_nw, real_p5, real_p50, real_p95) = if let Some(ref tui) = p50_tui {
-            let final_real = tui.final_real_net_worth;
-            // Calculate inflation factor from P50: nominal / real
-            let inflation_factor = if tui.final_real_net_worth > 0.0 {
-                tui.final_net_worth / tui.final_real_net_worth
-            } else {
-                1.0
-            };
-            // Apply same factor to convert all percentiles to real terms
-            let real_p5 = if inflation_factor > 0.0 {
-                p5 / inflation_factor
-            } else {
-                p5
-            };
-            let real_p50 = if inflation_factor > 0.0 {
-                p50 / inflation_factor
-            } else {
-                p50
-            };
-            let real_p95 = if inflation_factor > 0.0 {
-                p95 / inflation_factor
-            } else {
-                p95
-            };
-            (Some(final_real), real_p5, real_p50, real_p95)
-        } else {
-            (None, p5, p50, p95)
+        let preview_summary = MonteCarloPreviewSummary {
+            num_iterations: mc_summary.stats.num_iterations,
+            success_rate: mc_summary.stats.success_rate,
+            p5_final: pset.p5,
+            p50_final: pset.p50,
+            p95_final: pset.p95,
         };
 
-        let summary = ScenarioSummary {
-            name: scenario_name.clone(),
-            final_net_worth: Some(p50),
-            success_rate: Some(mc_summary.stats.success_rate),
-            percentiles: Some((p5, p50, p95)),
-            yearly_net_worth: yearly_nw,
-            final_real_net_worth: final_real_nw,
-            real_percentiles: Some((real_p5, real_p50, real_p95)),
-            yearly_real_net_worth: yearly_real_nw,
+        let stored_result = MonteCarloStoredResult {
+            stats: mc_summary.stats,
+            percentile_results,
+            mean_tui_result,
+            mean_core_result,
         };
 
-        // Send per-scenario completion
-        let _ = response_tx.send(SimulationResponse::BatchScenarioComplete {
-            scenario_name,
-            summary,
-        });
-
-        completed_count += 1;
+        Ok(Some(SimulationResponse::MonteCarloComplete {
+            stored_result: Box::new(stored_result),
+            preview_summary,
+            default_tui_result,
+            default_core_result,
+        }))
     }
 
-    Ok(completed_count)
+    fn run_batch_monte_carlo(
+        &self,
+        scenarios: Vec<(String, SimulationConfig, Option<u64>, String, String)>,
+        iterations: usize,
+    ) -> Result<usize, ()> {
+        let mut completed_count = 0;
+
+        for (idx, (scenario_name, config, seed, birth_date, start_date)) in
+            scenarios.into_iter().enumerate()
+        {
+            self.batch_scenario_index.store(idx, Ordering::SeqCst);
+            self.progress.store(0, Ordering::SeqCst);
+
+            if self.cancel_flag.load(Ordering::SeqCst) {
+                return Err(());
+            }
+
+            let mc_config = MonteCarloConfig {
+                iterations,
+                percentiles: vec![0.05, 0.50, 0.95],
+                compute_mean: false,
+                parallel_batches: cpu_parallel_batches(),
+                seed,
+                ..Default::default()
+            };
+
+            let mc_progress =
+                MonteCarloProgress::from_atomics(self.progress.clone(), self.cancel_flag.clone());
+
+            let mc_summary = match finplan_core::simulation::monte_carlo_simulate_with_progress(
+                &config,
+                &mc_config,
+                &mc_progress,
+            ) {
+                Ok(summary) => summary,
+                Err(finplan_core::error::SimulationError::Cancelled) => {
+                    return Err(());
+                }
+                Err(e) => {
+                    tracing::warn!(scenario = scenario_name, error = %e, "Monte Carlo failed");
+                    continue;
+                }
+            };
+
+            let pset = PercentileSet::from_values_or_default(&mc_summary.stats.percentile_values);
+            let (p5, p50, p95) = (pset.p5, pset.p50, pset.p95);
+
+            let p50_tui = find_percentile_result(&mc_summary.percentile_runs, P50)
+                .and_then(|core_result| to_tui_result(core_result, &birth_date, &start_date).ok());
+
+            let yearly_nw = p50_tui
+                .as_ref()
+                .map(|tui| tui.years.iter().map(|y| (y.year, y.net_worth)).collect());
+            let yearly_real_nw = p50_tui.as_ref().map(|tui| {
+                tui.years
+                    .iter()
+                    .map(|y| (y.year, y.real_net_worth))
+                    .collect()
+            });
+
+            let (final_real_nw, real_p5, real_p50, real_p95) = if let Some(ref tui) = p50_tui {
+                let final_real = tui.final_real_net_worth;
+                let inflation_factor = if tui.final_real_net_worth > 0.0 {
+                    tui.final_net_worth / tui.final_real_net_worth
+                } else {
+                    1.0
+                };
+                let real_p5 = if inflation_factor > 0.0 {
+                    p5 / inflation_factor
+                } else {
+                    p5
+                };
+                let real_p50 = if inflation_factor > 0.0 {
+                    p50 / inflation_factor
+                } else {
+                    p50
+                };
+                let real_p95 = if inflation_factor > 0.0 {
+                    p95 / inflation_factor
+                } else {
+                    p95
+                };
+                (Some(final_real), real_p5, real_p50, real_p95)
+            } else {
+                (None, p5, p50, p95)
+            };
+
+            let summary = ScenarioSummary {
+                name: scenario_name.clone(),
+                final_net_worth: Some(p50),
+                success_rate: Some(mc_summary.stats.success_rate),
+                percentiles: Some((p5, p50, p95)),
+                yearly_net_worth: yearly_nw,
+                final_real_net_worth: final_real_nw,
+                real_percentiles: Some((real_p5, real_p50, real_p95)),
+                yearly_real_net_worth: yearly_real_nw,
+            };
+
+            let _ = self
+                .response_tx
+                .send(SimulationResponse::BatchScenarioComplete {
+                    scenario_name,
+                    summary,
+                });
+
+            completed_count += 1;
+        }
+
+        Ok(completed_count)
+    }
 }
