@@ -241,11 +241,47 @@ impl AnalysisScreen {
         ]);
         frame.render_widget(Paragraph::new(title_line), content_layout[0]);
 
-        // Row 2: Tornado chart
+        // Row 2: Tornado chart + interaction matrix
         if let Some(results) = &state.analysis_state.results {
             let entries = results.compute_sensitivity(selected_metric);
             if !entries.is_empty() {
-                self.render_tornado_chart(frame, content_layout[2], &entries, selected_metric);
+                let chart_area = content_layout[2];
+
+                if entries.len() >= 2 {
+                    // Calculate matrix width needed
+                    let matrix_label_w = entries
+                        .iter()
+                        .map(|e| e.param_label.len())
+                        .max()
+                        .unwrap_or(5)
+                        .min(14) as u16;
+                    let matrix_grid_w = entries.len() as u16 * 2;
+                    let matrix_total_w = matrix_label_w + 1 + matrix_grid_w;
+
+                    if chart_area.width > matrix_total_w + 30 {
+                        // Split horizontally: tornado | interaction matrix
+                        let h_split = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([
+                                Constraint::Min(30),
+                                Constraint::Length(matrix_total_w + 4),
+                            ])
+                            .split(chart_area);
+
+                        self.render_tornado_chart(frame, h_split[0], &entries, selected_metric);
+                        self.render_interaction_matrix(
+                            frame,
+                            h_split[1],
+                            results,
+                            &entries,
+                            selected_metric,
+                        );
+                    } else {
+                        self.render_tornado_chart(frame, chart_area, &entries, selected_metric);
+                    }
+                } else {
+                    self.render_tornado_chart(frame, chart_area, &entries, selected_metric);
+                }
             } else {
                 let placeholder = Paragraph::new(Span::styled(
                     "  Not enough data for sensitivity analysis",
@@ -418,6 +454,126 @@ impl AnalysisScreen {
                 )),
                 val_area,
             );
+        }
+    }
+
+    /// Interpolate between dark gray and a target color based on t (0.0 to 1.0)
+    fn interpolate_color(t: f64, target: Color) -> Color {
+        let (r2, g2, b2) = match target {
+            Color::Rgb(r, g, b) => (r as f64, g as f64, b as f64),
+            Color::Green => (0.0, 200.0, 0.0),
+            Color::Cyan => (0.0, 200.0, 200.0),
+            Color::Blue => (80.0, 80.0, 255.0),
+            Color::Magenta => (200.0, 0.0, 200.0),
+            Color::Yellow => (200.0, 200.0, 0.0),
+            Color::Red => (200.0, 0.0, 0.0),
+            _ => (200.0, 200.0, 200.0),
+        };
+        let (r1, g1, b1) = (50.0, 50.0, 50.0);
+        let r = (r1 + (r2 - r1) * t) as u8;
+        let g = (g1 + (g2 - g1) * t) as u8;
+        let b = (b1 + (b2 - b1) * t) as u8;
+        Color::Rgb(r, g, b)
+    }
+
+    /// Render the NxN parameter interaction matrix
+    fn render_interaction_matrix(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        results: &AnalysisResults,
+        entries: &[SensitivityEntry],
+        metric: &AnalysisMetricData,
+    ) {
+        let ndim = entries.len();
+        if ndim < 2 {
+            return;
+        }
+
+        let Some((matrix, max_abs)) = results.compute_interaction_matrix(metric) else {
+            return;
+        };
+
+        let color = metric_color(metric);
+
+        // Calculate label width (capped for compactness)
+        let label_width = entries
+            .iter()
+            .map(|e| e.param_label.len())
+            .max()
+            .unwrap_or(5)
+            .min(14) as u16;
+
+        let cell_width = 2u16; // ██ is 2 chars
+        let grid_width = ndim as u16 * cell_width;
+        let total_needed = label_width + 1 + grid_width;
+
+        if area.width < total_needed || area.height < ndim as u16 {
+            return;
+        }
+
+        // Right-align the matrix within the area, with right padding
+        let right_pad = 2u16;
+        let x_offset = area.width.saturating_sub(total_needed + right_pad);
+        let base_x = area.x + x_offset;
+
+        for (display_row, entry_i) in entries.iter().enumerate() {
+            if display_row as u16 >= area.height {
+                break;
+            }
+            let row_y = area.y + display_row as u16;
+
+            // Render label (right-aligned)
+            let label_text = if entry_i.param_label.len() > label_width as usize {
+                entry_i.param_label[..label_width as usize].to_string()
+            } else {
+                format!(
+                    "{:>width$}",
+                    entry_i.param_label,
+                    width = label_width as usize
+                )
+            };
+            let label_area = Rect::new(base_x, row_y, label_width, 1);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    label_text,
+                    Style::default().fg(Color::DarkGray),
+                )),
+                label_area,
+            );
+
+            // Render matrix cells
+            for (display_col, entry_j) in entries.iter().enumerate() {
+                let cell_x = base_x + label_width + 1 + (display_col as u16) * cell_width;
+                if cell_x + cell_width > area.x + area.width {
+                    break;
+                }
+
+                let i = entry_i.param_index;
+                let j = entry_j.param_index;
+
+                let cell_area = Rect::new(cell_x, row_y, cell_width, 1);
+
+                if i == j {
+                    // Diagonal - neutral
+                    frame.render_widget(
+                        Paragraph::new(Span::styled("░░", Style::default().fg(Color::DarkGray))),
+                        cell_area,
+                    );
+                } else {
+                    let value = matrix[i][j];
+                    let normalized = if max_abs > 0.0001 {
+                        (value.abs() / max_abs).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let cell_color = Self::interpolate_color(normalized, color);
+                    frame.render_widget(
+                        Paragraph::new(Span::styled("██", Style::default().fg(cell_color))),
+                        cell_area,
+                    );
+                }
+            }
         }
     }
 

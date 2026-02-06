@@ -891,6 +891,144 @@ impl AnalysisResults {
             }
         }
     }
+
+    /// Compute NxN interaction matrix between all parameter pairs.
+    /// Returns (matrix[dim_i][dim_j], max_absolute_value) or None if < 2 params.
+    /// Interaction = cross-derivative: joint effect minus sum of individual effects.
+    /// Diagonal entries are 0 (neutral).
+    pub fn compute_interaction_matrix(
+        &self,
+        metric: &AnalysisMetricData,
+    ) -> Option<(Vec<Vec<f64>>, f64)> {
+        let ndim = self.ndim();
+        let shape = self.shape();
+
+        if ndim < 2 || shape.iter().any(|&s| s < 2) {
+            return None;
+        }
+
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+
+        let mut matrix = vec![vec![0.0; ndim]; ndim];
+        let mut max_abs = 0.0_f64;
+
+        for i in 0..ndim {
+            for j in (i + 1)..ndim {
+                let f_min_min = self.avg_at_pair(&core_metric, shape, i, 0, j, 0);
+                let f_min_max = self.avg_at_pair(&core_metric, shape, i, 0, j, shape[j] - 1);
+                let f_max_min = self.avg_at_pair(&core_metric, shape, i, shape[i] - 1, j, 0);
+                let f_max_max =
+                    self.avg_at_pair(&core_metric, shape, i, shape[i] - 1, j, shape[j] - 1);
+
+                // Cross-derivative: interaction effect beyond additive individual effects
+                let interaction = (f_max_max - f_min_max - f_max_min + f_min_min) * scale;
+
+                matrix[i][j] = interaction;
+                matrix[j][i] = interaction;
+                max_abs = max_abs.max(interaction.abs());
+            }
+        }
+
+        Some((matrix, max_abs))
+    }
+
+    /// Average metric value with two dimensions fixed, averaging over all others
+    #[allow(clippy::too_many_arguments)]
+    fn avg_at_pair(
+        &self,
+        metric: &AnalysisMetric,
+        shape: &[usize],
+        dim1: usize,
+        idx1: usize,
+        dim2: usize,
+        idx2: usize,
+    ) -> f64 {
+        let ndim = shape.len();
+        let mut values = Vec::new();
+        self.collect_values_for_pair(
+            metric,
+            dim1,
+            idx1,
+            dim2,
+            idx2,
+            &mut vec![0; ndim],
+            0,
+            shape,
+            &mut values,
+        );
+        if values.is_empty() {
+            0.0
+        } else {
+            values.iter().sum::<f64>() / values.len() as f64
+        }
+    }
+
+    /// Helper to recursively collect metric values with two fixed dimensions
+    #[allow(clippy::too_many_arguments)]
+    fn collect_values_for_pair(
+        &self,
+        metric: &AnalysisMetric,
+        dim1: usize,
+        idx1: usize,
+        dim2: usize,
+        idx2: usize,
+        indices: &mut Vec<usize>,
+        current_dim: usize,
+        shape: &[usize],
+        values: &mut Vec<f64>,
+    ) {
+        if current_dim == shape.len() {
+            if let Some(point_data) = self.sweep_results.get(indices) {
+                let value = point_data.compute_metric(metric, self.sweep_results.birth_year);
+                values.push(value);
+            }
+            return;
+        }
+
+        if current_dim == dim1 {
+            indices[current_dim] = idx1;
+            self.collect_values_for_pair(
+                metric,
+                dim1,
+                idx1,
+                dim2,
+                idx2,
+                indices,
+                current_dim + 1,
+                shape,
+                values,
+            );
+        } else if current_dim == dim2 {
+            indices[current_dim] = idx2;
+            self.collect_values_for_pair(
+                metric,
+                dim1,
+                idx1,
+                dim2,
+                idx2,
+                indices,
+                current_dim + 1,
+                shape,
+                values,
+            );
+        } else {
+            for i in 0..shape[current_dim] {
+                indices[current_dim] = i;
+                self.collect_values_for_pair(
+                    metric,
+                    dim1,
+                    idx1,
+                    dim2,
+                    idx2,
+                    indices,
+                    current_dim + 1,
+                    shape,
+                    values,
+                );
+            }
+        }
+    }
 }
 
 /// State for the Analysis screen
