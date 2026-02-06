@@ -4,7 +4,10 @@ use crate::components::panels::LedgerPanel;
 use crate::components::portfolio_overview::{AccountBar, PortfolioOverviewChart};
 use crate::components::{Component, EventResult};
 use crate::data::keybindings_data::KeybindingsConfig;
-use crate::state::{AppState, PercentileView, ResultsPanel, SimulationResult, ValueDisplayMode};
+use crate::state::{
+    AppState, BreakdownGranularity, PercentileView, ResultsPanel, SimulationResult,
+    ValueDisplayMode,
+};
 use crate::util::format::{format_currency, format_currency_short};
 use crate::util::styles::{focused_block, focused_block_with_help};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -313,6 +316,11 @@ impl ResultsScreen {
         state: &AppState,
         focused: bool,
     ) {
+        if state.results_state.breakdown_granularity == BreakdownGranularity::Monthly {
+            self.render_monthly_breakdown(frame, area, state, focused);
+            return;
+        }
+
         // Get selected year for highlighting
         let years = Self::get_years_current(state);
         let year_index = state
@@ -435,7 +443,131 @@ impl ResultsScreen {
         let list = List::new(items).block(focused_block_with_help(
             &title,
             focused,
-            "[j/k] scroll [h/l] year [v]iew [$] real/nominal",
+            "[j/k] scroll [h/l] year [v]iew [$] real/nominal [g]ranularity",
+        ));
+
+        frame.render_widget(list, area);
+    }
+
+    fn render_monthly_breakdown(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        state: &AppState,
+        focused: bool,
+    ) {
+        static MONTH_NAMES: [&str; 12] = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+
+        let display_mode = state.results_state.value_display_mode;
+        let mode_label = display_mode.short_label();
+
+        let month_index = state.results_state.selected_month_index;
+
+        let items: Vec<ListItem> =
+            if let Some(monthly_results) = state.cached_monthly_results.as_ref() {
+                let total_rows = monthly_results.len();
+                let visible_count = (area.height as usize).saturating_sub(5);
+                let center = visible_count / 2;
+                let sel = month_index.min(total_rows.saturating_sub(1));
+
+                let start_idx = if sel <= center {
+                    0
+                } else if sel >= total_rows.saturating_sub(visible_count.saturating_sub(center)) {
+                    total_rows.saturating_sub(visible_count)
+                } else {
+                    sel.saturating_sub(center)
+                };
+
+                let mut items = vec![
+                    ListItem::new(Line::from(vec![Span::styled(
+                        format!("Months: {}  ({})", total_rows, mode_label),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )])),
+                    ListItem::new(Line::from("")),
+                    ListItem::new(Line::from(vec![Span::styled(
+                        format!(
+                            "{:>5} {:>4} {:>4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                            "Year",
+                            "Mon",
+                            "Age",
+                            "Income",
+                            "Withdraw",
+                            "Contrib",
+                            "Expense",
+                            "Apprec.",
+                            "Net Flow"
+                        ),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    )])),
+                ];
+
+                for (i, m) in monthly_results
+                    .iter()
+                    .enumerate()
+                    .skip(start_idx)
+                    .take(visible_count)
+                {
+                    let is_selected = i == sel;
+                    let month_name = MONTH_NAMES
+                        .get((m.month as usize).saturating_sub(1))
+                        .unwrap_or(&"???");
+
+                    // Apply inflation adjustment in Real mode
+                    let deflate = |v: f64| -> f64 {
+                        match display_mode {
+                            ValueDisplayMode::Nominal => v,
+                            ValueDisplayMode::Real if m.inflation_factor > 0.0 => {
+                                v / m.inflation_factor
+                            }
+                            _ => v,
+                        }
+                    };
+
+                    let row_text = format!(
+                        "{:>5} {:>4} {:>4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                        m.year,
+                        month_name,
+                        m.age,
+                        format_currency_short(deflate(m.income)),
+                        format_currency_short(deflate(m.withdrawals)),
+                        format_currency_short(deflate(m.contributions)),
+                        format_currency_short(deflate(m.expenses)),
+                        format_currency_short(deflate(m.appreciation)),
+                        format_currency_short(deflate(m.net_cash_flow)),
+                    );
+
+                    let style = if is_selected {
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+
+                    items.push(ListItem::new(Line::from(Span::styled(row_text, style))));
+                }
+
+                items
+            } else {
+                vec![ListItem::new(Line::from(
+                    "No monthly data (press [g] to rebuild)",
+                ))]
+            };
+
+        // Build title
+        let title = if state.results_state.viewing_monte_carlo {
+            let pct = state.results_state.percentile_view.short_label();
+            format!(" MONTHLY BREAKDOWN ({}) ({}) ", pct, mode_label)
+        } else {
+            format!(" MONTHLY BREAKDOWN ({}) ", mode_label)
+        };
+
+        let list = List::new(items).block(focused_block_with_help(
+            &title,
+            focused,
+            "[j/k] scroll [h/l] row [v]iew [$] real/nominal [g]ranularity",
         ));
 
         frame.render_widget(list, area);
@@ -554,10 +686,20 @@ impl Component for ResultsScreen {
         if KeybindingsConfig::matches(&key, &kb.navigation.down) {
             match panel {
                 ResultsPanel::YearlyBreakdown => {
-                    let years = Self::get_years_current(state);
-                    if state.results_state.selected_year_index + 1 < years.len() {
-                        state.results_state.selected_year_index += 1;
-                        // Scroll offset is calculated in render, not here
+                    if state.results_state.breakdown_granularity == BreakdownGranularity::Monthly {
+                        let count = state
+                            .cached_monthly_results
+                            .as_ref()
+                            .map(|r| r.len())
+                            .unwrap_or(0);
+                        if state.results_state.selected_month_index + 1 < count {
+                            state.results_state.selected_month_index += 1;
+                        }
+                    } else {
+                        let years = Self::get_years_current(state);
+                        if state.results_state.selected_year_index + 1 < years.len() {
+                            state.results_state.selected_year_index += 1;
+                        }
                     }
                 }
                 ResultsPanel::Ledger => {
@@ -573,9 +715,12 @@ impl Component for ResultsScreen {
         if KeybindingsConfig::matches(&key, &kb.navigation.up) {
             match panel {
                 ResultsPanel::YearlyBreakdown => {
-                    if state.results_state.selected_year_index > 0 {
+                    if state.results_state.breakdown_granularity == BreakdownGranularity::Monthly {
+                        if state.results_state.selected_month_index > 0 {
+                            state.results_state.selected_month_index -= 1;
+                        }
+                    } else if state.results_state.selected_year_index > 0 {
                         state.results_state.selected_year_index -= 1;
-                        // Scroll offset is calculated in render, not here
                     }
                 }
                 ResultsPanel::Ledger => {
@@ -591,12 +736,19 @@ impl Component for ResultsScreen {
         // h/l (prev/next year) for year selection (works in NetWorthChart, AccountChart, YearlyBreakdown)
         if KeybindingsConfig::matches(&key, &kb.tabs.results.prev_year) {
             match panel {
+                ResultsPanel::YearlyBreakdown
+                    if state.results_state.breakdown_granularity
+                        == BreakdownGranularity::Monthly =>
+                {
+                    if state.results_state.selected_month_index > 0 {
+                        state.results_state.selected_month_index -= 1;
+                    }
+                }
                 ResultsPanel::NetWorthChart
                 | ResultsPanel::AccountChart
                 | ResultsPanel::YearlyBreakdown => {
                     if state.results_state.selected_year_index > 0 {
                         state.results_state.selected_year_index -= 1;
-                        // Scroll offset is calculated in render, not here
                     }
                 }
                 _ => {}
@@ -605,13 +757,25 @@ impl Component for ResultsScreen {
         }
         if KeybindingsConfig::matches(&key, &kb.tabs.results.next_year) {
             match panel {
+                ResultsPanel::YearlyBreakdown
+                    if state.results_state.breakdown_granularity
+                        == BreakdownGranularity::Monthly =>
+                {
+                    let count = state
+                        .cached_monthly_results
+                        .as_ref()
+                        .map(|r| r.len())
+                        .unwrap_or(0);
+                    if state.results_state.selected_month_index + 1 < count {
+                        state.results_state.selected_month_index += 1;
+                    }
+                }
                 ResultsPanel::NetWorthChart
                 | ResultsPanel::AccountChart
                 | ResultsPanel::YearlyBreakdown => {
                     let years = Self::get_years_current(state);
                     if state.results_state.selected_year_index + 1 < years.len() {
                         state.results_state.selected_year_index += 1;
-                        // Scroll offset is calculated in render, not here
                     }
                 }
                 _ => {}
@@ -622,11 +786,16 @@ impl Component for ResultsScreen {
         // Home/End for first/last year (works in NetWorthChart, AccountChart, YearlyBreakdown)
         if KeybindingsConfig::matches(&key, &kb.tabs.results.first_year) {
             match panel {
+                ResultsPanel::YearlyBreakdown
+                    if state.results_state.breakdown_granularity
+                        == BreakdownGranularity::Monthly =>
+                {
+                    state.results_state.selected_month_index = 0;
+                }
                 ResultsPanel::NetWorthChart
                 | ResultsPanel::AccountChart
                 | ResultsPanel::YearlyBreakdown => {
                     state.results_state.selected_year_index = 0;
-                    // Scroll offset is calculated in render, not here
                 }
                 _ => {}
             }
@@ -634,12 +803,22 @@ impl Component for ResultsScreen {
         }
         if KeybindingsConfig::matches(&key, &kb.tabs.results.last_year) {
             match panel {
+                ResultsPanel::YearlyBreakdown
+                    if state.results_state.breakdown_granularity
+                        == BreakdownGranularity::Monthly =>
+                {
+                    let count = state
+                        .cached_monthly_results
+                        .as_ref()
+                        .map(|r| r.len())
+                        .unwrap_or(0);
+                    state.results_state.selected_month_index = count.saturating_sub(1);
+                }
                 ResultsPanel::NetWorthChart
                 | ResultsPanel::AccountChart
                 | ResultsPanel::YearlyBreakdown => {
                     let years = Self::get_years_current(state);
                     state.results_state.selected_year_index = years.len().saturating_sub(1);
-                    // Scroll offset is calculated in render, not here
                 }
                 _ => {}
             }
@@ -677,6 +856,11 @@ impl Component for ResultsScreen {
         if KeybindingsConfig::matches(&key, &kb.tabs.results.cycle_percentile) {
             if state.results_state.viewing_monte_carlo {
                 state.results_state.percentile_view = state.results_state.percentile_view.next();
+                // Rebuild monthly cache if in monthly mode (different percentile = different ledger)
+                if state.results_state.breakdown_granularity == BreakdownGranularity::Monthly {
+                    state.cached_monthly_results = None;
+                    state.get_or_build_monthly_results();
+                }
             }
             return EventResult::Handled;
         }
@@ -685,6 +869,19 @@ impl Component for ResultsScreen {
         if KeybindingsConfig::matches(&key, &kb.tabs.results.toggle_real) {
             state.results_state.value_display_mode =
                 state.results_state.value_display_mode.toggle();
+            return EventResult::Handled;
+        }
+
+        // g for toggling breakdown granularity (yearly/monthly)
+        if KeybindingsConfig::matches(&key, &kb.tabs.results.toggle_granularity) {
+            state.results_state.breakdown_granularity =
+                state.results_state.breakdown_granularity.toggle();
+            state.results_state.selected_month_index = 0;
+            // Clear and eagerly rebuild monthly cache for current percentile view
+            state.cached_monthly_results = None;
+            if state.results_state.breakdown_granularity == BreakdownGranularity::Monthly {
+                state.get_or_build_monthly_results();
+            }
             return EventResult::Handled;
         }
 

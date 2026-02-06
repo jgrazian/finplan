@@ -66,6 +66,28 @@ pub struct YearlyCashFlowSummary {
     pub net_cash_flow: f64,
 }
 
+/// Monthly summary of cash flows by category
+///
+/// Like `YearlyCashFlowSummary` but bucketed by (year, month).
+/// Built lazily from the ledger when the user requests monthly granularity.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MonthlyCashFlowSummary {
+    pub year: i16,
+    pub month: u8,
+    /// True income (salary, dividends, rental income, etc.)
+    pub income: f64,
+    /// True expenses (bills, purchases, etc.)
+    pub expenses: f64,
+    /// Contributions to investment accounts (401k, IRA deposits)
+    pub contributions: f64,
+    /// Withdrawals from investments (Sweep, liquidations)
+    pub withdrawals: f64,
+    /// Interest/appreciation on cash balances
+    pub appreciation: f64,
+    /// Net cash flow (income - expenses + appreciation)
+    pub net_cash_flow: f64,
+}
+
 /// Complete results from a single simulation run
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimulationResult {

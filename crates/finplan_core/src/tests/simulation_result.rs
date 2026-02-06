@@ -953,3 +953,127 @@ fn test_ledger_asset_purchase_and_sale_events() {
         final_balance
     );
 }
+
+/// Test that monthly cash flows aggregate correctly and match yearly totals
+#[test]
+fn test_monthly_cash_flows_match_yearly() {
+    use crate::model::RepeatInterval;
+    use crate::simulation::build_monthly_cash_flows;
+
+    let start_date = jiff::civil::date(2020, 1, 1);
+    let checking_account = AccountId(1);
+    let income_event_id = EventId(1);
+    let expense_event_id = EventId(2);
+
+    let params = SimulationConfig {
+        start_date: Some(start_date),
+        duration_years: 3,
+        birth_date: None,
+        inflation_profile: InflationProfile::None,
+        return_profiles: HashMap::new(),
+        asset_returns: HashMap::new(),
+        accounts: vec![Account {
+            account_id: checking_account,
+            flavor: AccountFlavor::Bank(Cash {
+                value: 100_000.0,
+                return_profile_id: ReturnProfileId(99),
+            }),
+        }],
+        events: vec![
+            // Monthly income
+            Event {
+                event_id: income_event_id,
+                trigger: EventTrigger::Repeating {
+                    start_condition: Some(Box::new(EventTrigger::Date(jiff::civil::date(
+                        2020, 2, 1,
+                    )))),
+                    interval: RepeatInterval::Monthly,
+                    end_condition: None,
+                    max_occurrences: None,
+                },
+                effects: vec![EventEffect::Income {
+                    to: checking_account,
+                    amount: TransferAmount::Fixed(5_000.0),
+                    amount_mode: AmountMode::Gross,
+                    income_type: IncomeType::Taxable,
+                }],
+                once: false,
+            },
+            // Monthly expense
+            Event {
+                event_id: expense_event_id,
+                trigger: EventTrigger::Repeating {
+                    start_condition: Some(Box::new(EventTrigger::Date(jiff::civil::date(
+                        2020, 2, 15,
+                    )))),
+                    interval: RepeatInterval::Monthly,
+                    end_condition: None,
+                    max_occurrences: None,
+                },
+                effects: vec![EventEffect::Expense {
+                    from: checking_account,
+                    amount: TransferAmount::Fixed(2_000.0),
+                }],
+                once: false,
+            },
+        ],
+        ..Default::default()
+    };
+
+    let result = simulate(&params, 42).unwrap();
+
+    // Build monthly cash flows from the ledger
+    let monthly = build_monthly_cash_flows(&result.ledger);
+
+    // Aggregate monthly into yearly totals
+    let mut yearly_from_monthly: std::collections::BTreeMap<i16, (f64, f64, f64)> =
+        std::collections::BTreeMap::new();
+    for m in &monthly {
+        let entry = yearly_from_monthly.entry(m.year).or_insert((0.0, 0.0, 0.0));
+        entry.0 += m.income;
+        entry.1 += m.expenses;
+        entry.2 += m.appreciation;
+    }
+
+    // Compare with yearly cash flows
+    for yearly in &result.yearly_cash_flows {
+        if let Some((monthly_income, monthly_expenses, monthly_appreciation)) =
+            yearly_from_monthly.get(&yearly.year)
+        {
+            assert!(
+                (yearly.income - monthly_income).abs() < 0.01,
+                "Year {}: yearly income {:.2} != monthly sum {:.2}",
+                yearly.year,
+                yearly.income,
+                monthly_income
+            );
+            assert!(
+                (yearly.expenses - monthly_expenses).abs() < 0.01,
+                "Year {}: yearly expenses {:.2} != monthly sum {:.2}",
+                yearly.year,
+                yearly.expenses,
+                monthly_expenses
+            );
+            assert!(
+                (yearly.appreciation - monthly_appreciation).abs() < 0.01,
+                "Year {}: yearly appreciation {:.2} != monthly sum {:.2}",
+                yearly.year,
+                yearly.appreciation,
+                monthly_appreciation
+            );
+        }
+    }
+
+    // Verify net_cash_flow = income + withdrawals - expenses - contributions + appreciation
+    for m in &monthly {
+        let expected_net = m.income + m.withdrawals - m.expenses - m.contributions + m.appreciation;
+        assert!(
+            (m.net_cash_flow - expected_net).abs() < 0.01,
+            "Month {}-{}: net_cash_flow {:.2} != expected {:.2}",
+            m.year,
+            m.month,
+            m.net_cash_flow,
+            expected_net
+        );
+    }
+}

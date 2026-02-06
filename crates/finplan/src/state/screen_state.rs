@@ -271,6 +271,32 @@ pub struct ScenarioState {
     pub comparison_scenarios: Vec<String>,
 }
 
+/// Granularity for the cash flow breakdown panel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BreakdownGranularity {
+    #[default]
+    Yearly,
+    Monthly,
+}
+
+impl BreakdownGranularity {
+    /// Toggle between yearly and monthly
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Yearly => Self::Monthly,
+            Self::Monthly => Self::Yearly,
+        }
+    }
+
+    /// Short label for display in titles
+    pub fn short_label(&self) -> &'static str {
+        match self {
+            Self::Yearly => "Yearly",
+            Self::Monthly => "Monthly",
+        }
+    }
+}
+
 /// Filter for the ledger view in Results tab
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LedgerFilter {
@@ -322,6 +348,10 @@ pub struct ResultsState {
     pub viewing_monte_carlo: bool,
     /// Display mode for monetary values (nominal vs real/inflation-adjusted)
     pub value_display_mode: ValueDisplayMode,
+    /// Breakdown granularity (yearly vs monthly)
+    pub breakdown_granularity: BreakdownGranularity,
+    /// Selected row index for monthly breakdown navigation
+    pub selected_month_index: usize,
 }
 
 // ========== Analysis Screen State (Parameter Sweep) ==========

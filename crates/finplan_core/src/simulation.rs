@@ -9,8 +9,8 @@ use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
     AccountFlavor, AccountId, CashFlowKind, ConvergenceMetric, EventTrigger, LedgerEntry,
     MeanAccumulators, MonteCarloConfig, MonteCarloProgress, MonteCarloStats, MonteCarloSummary,
-    SimulationResult, SimulationWarning, StateEvent, TaxStatus, WarningKind, YearlyCashFlowSummary,
-    final_net_worth,
+    MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus,
+    WarningKind, YearlyCashFlowSummary, final_net_worth,
 };
 use crate::simulation_state::{SimulationState, cached_spans};
 use rand::{RngCore, SeedableRng};
@@ -75,6 +75,78 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
     }
 
     yearly
+}
+
+/// Build monthly cash flow summaries from ledger entries.
+/// Called lazily (not during simulation) when the user wants monthly granularity.
+pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSummary> {
+    if ledger.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect unique (year, month) pairs from the ledger.
+    // Entries are chronological so we can track by (year, month) key.
+    let min_year = ledger.first().map(|e| e.date.year()).unwrap_or(2024);
+    let max_year = ledger.last().map(|e| e.date.year()).unwrap_or(min_year);
+    let num_months = ((max_year - min_year) as usize + 1) * 12;
+
+    // Index: (year - min_year) * 12 + (month - 1)
+    let mut monthly: Vec<MonthlyCashFlowSummary> = (0..num_months)
+        .map(|i| {
+            let year = min_year + (i / 12) as i16;
+            let month = (i % 12) as u8 + 1;
+            MonthlyCashFlowSummary {
+                year,
+                month,
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    for entry in ledger {
+        let year = entry.date.year();
+        let month = entry.date.month() as u8;
+        let idx = (year - min_year) as usize * 12 + (month as usize - 1);
+        let summary = &mut monthly[idx];
+
+        match &entry.event {
+            StateEvent::CashCredit { amount, kind, .. } => match kind {
+                CashFlowKind::Income => summary.income += amount,
+                CashFlowKind::LiquidationProceeds => summary.withdrawals += amount,
+                CashFlowKind::Appreciation => summary.appreciation += amount,
+                CashFlowKind::RmdWithdrawal => summary.withdrawals += amount,
+                _ => {}
+            },
+            StateEvent::CashDebit { amount, kind, .. } => match kind {
+                CashFlowKind::Expense => summary.expenses += amount,
+                CashFlowKind::Contribution => summary.contributions += amount,
+                CashFlowKind::InvestmentPurchase => {}
+                _ => {}
+            },
+            StateEvent::CashAppreciation {
+                previous_value,
+                new_value,
+                ..
+            } => {
+                summary.appreciation += new_value - previous_value;
+            }
+            _ => {}
+        }
+    }
+
+    for summary in &mut monthly {
+        summary.net_cash_flow =
+            summary.income + summary.withdrawals - summary.expenses - summary.contributions
+                + summary.appreciation;
+    }
+
+    // Remove trailing empty months (those after the last ledger entry)
+    let last_year = ledger.last().map(|e| e.date.year()).unwrap_or(min_year);
+    let last_month = ledger.last().map(|e| e.date.month() as u8).unwrap_or(12);
+    let last_idx = (last_year - min_year) as usize * 12 + (last_month as usize - 1);
+    monthly.truncate(last_idx + 1);
+
+    monthly
 }
 
 /// Extract the final SimulationResult from a completed simulation state.

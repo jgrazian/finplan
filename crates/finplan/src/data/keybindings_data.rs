@@ -194,6 +194,7 @@ pub struct ResultsBindings {
     pub cycle_filter: Vec<String>,
     pub run: Vec<String>,
     pub monte_carlo: Vec<String>,
+    pub toggle_granularity: Vec<String>,
 }
 
 impl Default for ResultsBindings {
@@ -208,6 +209,7 @@ impl Default for ResultsBindings {
             cycle_filter: vec!["f".into()],
             run: vec!["r".into()],
             monte_carlo: vec!["m".into()],
+            toggle_granularity: vec!["g".into()],
         }
     }
 }

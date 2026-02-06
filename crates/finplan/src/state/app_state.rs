@@ -51,6 +51,22 @@ pub struct YearResult {
     pub real_expenses: f64,
 }
 
+/// Monthly cash flow summary for TUI display (lazy-computed from ledger)
+#[derive(Debug, Clone)]
+pub struct MonthResult {
+    pub year: i32,
+    pub month: u8,
+    pub age: u8,
+    pub income: f64,
+    pub expenses: f64,
+    pub withdrawals: f64,
+    pub contributions: f64,
+    pub appreciation: f64,
+    pub net_cash_flow: f64,
+    /// Cumulative inflation factor for this year (divide nominal by this to get real)
+    pub inflation_factor: f64,
+}
+
 // ========== Monte Carlo Results ==========
 
 // Re-export MonteCarloStats from core
@@ -170,6 +186,9 @@ pub struct AppState {
     /// Monte Carlo simulation result (4 representative runs + stats)
     pub monte_carlo_result: Option<MonteCarloStoredResult>,
 
+    /// Lazily-computed monthly cash flow results (cached per current result)
+    pub cached_monthly_results: Option<Vec<MonthResult>>,
+
     /// Status of background simulation (for progress display)
     pub simulation_status: SimulationStatus,
 
@@ -220,6 +239,7 @@ impl Default for AppState {
             simulation_result: None,
             core_simulation_result: None,
             monte_carlo_result: None,
+            cached_monthly_results: None,
             simulation_status: SimulationStatus::default(),
             pending_simulation: None,
             dirty_scenarios: HashSet::new(),
@@ -279,6 +299,7 @@ impl AppState {
         self.simulation_result = None;
         self.core_simulation_result = None;
         self.monte_carlo_result = None;
+        self.cached_monthly_results = None;
 
         // Load analysis config for the new scenario
         if let Some(data) = self.app_data.simulations.get(name) {
@@ -320,6 +341,7 @@ impl AppState {
         self.simulation_result = None;
         self.core_simulation_result = None;
         self.monte_carlo_result = None;
+        self.cached_monthly_results = None;
 
         // Reset analysis state for new scenario
         self.analysis_state = AnalysisState::new();
@@ -525,6 +547,87 @@ impl AppState {
         self.cached_config.invalidate();
     }
 
+    /// Get or lazily build monthly cash flow results from the current core result's ledger.
+    /// Returns None if no core result is available.
+    pub fn get_or_build_monthly_results(&mut self) -> Option<&[MonthResult]> {
+        if self.cached_monthly_results.is_some() {
+            return self.cached_monthly_results.as_deref();
+        }
+
+        // Determine which core result to use (same logic as get_current_core_result)
+        let core_result: &finplan_core::model::SimulationResult =
+            if self.results_state.viewing_monte_carlo {
+                if let Some(mc) = &self.monte_carlo_result {
+                    match self.results_state.percentile_view {
+                        PercentileView::P5 => mc.get_percentile_core(0.05),
+                        PercentileView::P50 => mc.get_percentile_core(0.50),
+                        PercentileView::P95 => mc.get_percentile_core(0.95),
+                        PercentileView::Mean => mc.mean_core_result.as_ref(),
+                    }
+                } else {
+                    self.core_simulation_result.as_ref()
+                }
+            } else {
+                self.core_simulation_result.as_ref()
+            }?;
+
+        let monthly_summaries =
+            finplan_core::simulation::build_monthly_cash_flows(&core_result.ledger);
+
+        // Get birth date for age calculation
+        let birth_year = self
+            .data()
+            .parameters
+            .birth_date
+            .split('-')
+            .next()
+            .and_then(|y| y.parse::<i32>().ok())
+            .unwrap_or(1990);
+
+        // Get start date for inflation factor indexing
+        let start_year = self
+            .data()
+            .parameters
+            .start_date
+            .split('-')
+            .next()
+            .and_then(|y| y.parse::<i32>().ok())
+            .unwrap_or(2024);
+
+        let inflation_factors = &core_result.cumulative_inflation;
+
+        let month_results: Vec<MonthResult> = monthly_summaries
+            .iter()
+            .map(|m| {
+                let year = m.year as i32;
+                let age = (year - birth_year).max(0) as u8;
+
+                // Get inflation factor for this year
+                let year_index = (year - start_year).max(0) as usize;
+                let inflation_factor = inflation_factors
+                    .get(year_index)
+                    .copied()
+                    .unwrap_or_else(|| inflation_factors.last().copied().unwrap_or(1.0));
+
+                MonthResult {
+                    year,
+                    month: m.month,
+                    age,
+                    income: m.income,
+                    expenses: m.expenses,
+                    withdrawals: m.withdrawals,
+                    contributions: m.contributions,
+                    appreciation: m.appreciation,
+                    net_cash_flow: m.net_cash_flow,
+                    inflation_factor,
+                }
+            })
+            .collect();
+
+        self.cached_monthly_results = Some(month_results);
+        self.cached_monthly_results.as_deref()
+    }
+
     /// Mark current scenario as modified.
     /// Increments the data version (which invalidates caches) and marks scenario dirty.
     pub fn mark_modified(&mut self) {
@@ -671,6 +774,7 @@ impl AppState {
         self.core_simulation_result = Some(core_result);
         // Clear Monte Carlo results when running single simulation
         self.monte_carlo_result = None;
+        self.cached_monthly_results = None;
 
         // Reset results state when new simulation runs
         self.results_state = ResultsState::default();
@@ -752,6 +856,7 @@ impl AppState {
             mean_core_result,
         };
         self.monte_carlo_result = Some(stored_result);
+        self.cached_monthly_results = None;
 
         // Reset results state for MC viewing
         self.results_state = ResultsState::default();
@@ -1097,6 +1202,7 @@ impl AppState {
             self.simulation_result = None;
             self.core_simulation_result = None;
             self.monte_carlo_result = None;
+            self.cached_monthly_results = None;
             // Increment version when switching to different scenario data
             self.data_version = self.data_version.wrapping_add(1);
         }
