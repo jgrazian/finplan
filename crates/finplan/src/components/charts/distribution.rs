@@ -3,7 +3,7 @@
 //! Renders various distribution visualizations for return profiles.
 
 use crate::data::profiles_data::ReturnProfileData;
-use crate::util::format::format_percentage;
+use crate::util::format::{format_compact_currency, format_percentage};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -555,6 +555,122 @@ pub fn render_historical_histogram(
             format!("{:<6}", format_percentage(max_ret)),
             Style::default().fg(Color::DarkGray),
         ),
+    ]);
+    let label_area = Rect::new(area.x, label_y, area.width, 1);
+    frame.render_widget(Paragraph::new(label_line), label_area);
+}
+
+/// Render a histogram of sweep metric values for the sensitivity panel.
+pub fn render_sweep_histogram(
+    frame: &mut Frame,
+    area: Rect,
+    values: &[f64],
+    metric_color: Color,
+    is_pct: bool,
+) {
+    if values.is_empty() {
+        return;
+    }
+
+    let label_pad: u16 = 2;
+    let num_bins = (area.width.saturating_sub(label_pad) as usize).max(4);
+    let height = area.height.saturating_sub(1) as usize; // Reserve 1 row for x-axis
+
+    if height < 2 || area.width < 12 {
+        return;
+    }
+
+    let min_val = values.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max_val = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let range = max_val - min_val;
+
+    if range < 1e-9 {
+        // All values are the same; nothing to histogram
+        let fmt = if is_pct {
+            format!("  All values: {:.0}%", min_val)
+        } else {
+            format!("  All values: {}", format_compact_currency(min_val))
+        };
+        let line = Line::from(Span::styled(fmt, Style::default().fg(metric_color)));
+        frame.render_widget(Paragraph::new(line), area);
+        return;
+    }
+
+    let bin_width = range / num_bins as f64;
+    let mut bin_counts = vec![0usize; num_bins];
+
+    for &v in values {
+        let bin = ((v - min_val) / bin_width).floor() as usize;
+        let bin = bin.min(num_bins - 1);
+        bin_counts[bin] += 1;
+    }
+
+    let max_count = *bin_counts.iter().max().unwrap_or(&1);
+    if max_count == 0 {
+        return;
+    }
+
+    let height_units = height * 8;
+    let bar_heights: Vec<usize> = bin_counts
+        .iter()
+        .map(|&c| ((c as f64 / max_count as f64) * height_units as f64).round() as usize)
+        .collect();
+
+    let x_offset = label_pad as usize;
+
+    for row in 0..height {
+        let row_base = (height - 1 - row) * 8;
+        let row_top = row_base + 8;
+        let mut spans = Vec::new();
+
+        if x_offset > 0 {
+            spans.push(Span::raw(" ".repeat(x_offset)));
+        }
+
+        for &bar_h in &bar_heights {
+            let char_to_use = if bar_h >= row_top {
+                "█"
+            } else if bar_h > row_base {
+                let fill_level = bar_h - row_base;
+                BIN_CHARS[fill_level.min(8)]
+            } else {
+                " "
+            };
+
+            spans.push(Span::styled(char_to_use, Style::default().fg(metric_color)));
+        }
+
+        let line = Line::from(spans);
+        let row_area = Rect::new(area.x, area.y + row as u16, area.width, 1);
+        frame.render_widget(Paragraph::new(line), row_area);
+    }
+
+    // X-axis labels: min, mid, max
+    let label_y = area.y + height as u16;
+    let mid_val = (min_val + max_val) / 2.0;
+
+    let fmt_label = |v: f64| -> String {
+        if is_pct {
+            format!("{:.0}%", v)
+        } else {
+            format_compact_currency(v)
+        }
+    };
+
+    let min_label = fmt_label(min_val);
+    let mid_label = fmt_label(mid_val);
+    let max_label = fmt_label(max_val);
+
+    let available = area.width.saturating_sub(label_pad) as usize;
+    let gap1 = available.saturating_sub(min_label.len() + mid_label.len() + max_label.len()) / 2;
+
+    let label_line = Line::from(vec![
+        Span::raw(" ".repeat(x_offset)),
+        Span::styled(min_label, Style::default().fg(Color::DarkGray)),
+        Span::raw(" ".repeat(gap1)),
+        Span::styled(mid_label, Style::default().fg(Color::DarkGray)),
+        Span::raw(" ".repeat(gap1)),
+        Span::styled(max_label, Style::default().fg(Color::DarkGray)),
     ]);
     let label_area = Rect::new(area.x, label_y, area.width, 1);
     frame.render_widget(Paragraph::new(label_line), label_area);

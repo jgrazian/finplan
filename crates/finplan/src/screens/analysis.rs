@@ -21,7 +21,10 @@ use crate::{
 };
 use crate::{actions::analysis::handle_analysis_action, util::styles::focused_block_with_help};
 use crate::{
-    components::{Component, EventResult},
+    components::{
+        charts::render_sweep_histogram,
+        {Component, EventResult},
+    },
     util::styles::focused_block,
 };
 
@@ -219,19 +222,32 @@ impl AnalysisScreen {
             .as_ref()
             .map_or(0, |r| r.ndim());
 
-        let content_layout = Layout::default()
+        // T-shape layout: top section (full width) + bottom section (split horizontally)
+        let top_height = 1  // metric title
+            + 1             // spacer
+            + num_params.max(1) as u16  // tornado chart
+            + if has_results { 2 } else { 0 }; // baseline + range
+
+        let v_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(top_height), // [0] Top section
+                Constraint::Min(0),             // [1] Bottom section
+            ])
+            .split(inner);
+
+        // --- Top section: title, tornado, baseline (full width) ---
+        let top_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),                               // [0] Metric title
                 Constraint::Length(1),                               // [1] Spacer
                 Constraint::Length(num_params.max(1) as u16),        // [2] Tornado chart
                 Constraint::Length(if has_results { 2 } else { 0 }), // [3] Baseline + range
-                Constraint::Min(0),                                  // [4] Flexible space
-                Constraint::Length(1),                               // [5] Metric dots
             ])
-            .split(inner);
+            .split(v_layout[0]);
 
-        // Row 1: Selected metric title
+        // Row 0: Selected metric title
         let title_line = Line::from(vec![
             Span::styled("  ● ", Style::default().fg(color)),
             Span::styled(
@@ -239,39 +255,46 @@ impl AnalysisScreen {
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
         ]);
-        frame.render_widget(Paragraph::new(title_line), content_layout[0]);
+        frame.render_widget(Paragraph::new(title_line), top_layout[0]);
 
-        // Row 2: Tornado chart + interaction matrix
+        // Row 2: Tornado chart + interaction matrix (padded 2 chars each side)
         if let Some(results) = &state.analysis_state.results {
             let entries = results.compute_sensitivity(selected_metric);
             if !entries.is_empty() {
-                let chart_area = content_layout[2];
+                let raw = top_layout[2];
+                let h_pad = 2u16;
+                let chart_area = Rect::new(
+                    raw.x + h_pad,
+                    raw.y,
+                    raw.width.saturating_sub(h_pad * 2),
+                    raw.height,
+                );
 
                 if entries.len() >= 2 {
-                    // Calculate matrix width needed
-                    let matrix_label_w = entries
-                        .iter()
-                        .map(|e| e.param_label.len())
-                        .max()
-                        .unwrap_or(5)
-                        .min(14) as u16;
                     let matrix_grid_w = entries.len() as u16 * 2;
-                    let matrix_total_w = matrix_label_w + 1 + matrix_grid_w;
 
-                    if chart_area.width > matrix_total_w + 30 {
-                        // Split horizontally: tornado | interaction matrix
-                        let h_split = Layout::default()
-                            .direction(Direction::Horizontal)
-                            .constraints([
-                                Constraint::Min(30),
-                                Constraint::Length(matrix_total_w + 4),
-                            ])
-                            .split(chart_area);
+                    if chart_area.width > matrix_grid_w + 30 {
+                        // The tornado has ~6 chars of dead space at its right edge
+                        // (unused value_width padding + 2 internal trailing chars).
+                        // Shrink it so the visible value text ends ~4 chars before
+                        // the matrix, then overlay the matrix on the dead space.
+                        let tornado_area = Rect::new(
+                            chart_area.x,
+                            chart_area.y,
+                            chart_area.width - matrix_grid_w + 2,
+                            chart_area.height,
+                        );
+                        let matrix_area = Rect::new(
+                            chart_area.x + chart_area.width - matrix_grid_w,
+                            chart_area.y,
+                            matrix_grid_w,
+                            chart_area.height,
+                        );
 
-                        self.render_tornado_chart(frame, h_split[0], &entries, selected_metric);
+                        self.render_tornado_chart(frame, tornado_area, &entries, selected_metric);
                         self.render_interaction_matrix(
                             frame,
-                            h_split[1],
+                            matrix_area,
                             results,
                             &entries,
                             selected_metric,
@@ -287,7 +310,7 @@ impl AnalysisScreen {
                     "  Not enough data for sensitivity analysis",
                     Style::default().fg(Color::DarkGray),
                 ));
-                frame.render_widget(placeholder, content_layout[2]);
+                frame.render_widget(placeholder, top_layout[2]);
             }
 
             // Row 3: Baseline & range
@@ -310,13 +333,9 @@ impl AnalysisScreen {
                     Style::default().fg(Color::White),
                 ),
             ]);
-            if content_layout[3].height >= 2 {
-                let summary_area = Rect::new(
-                    content_layout[3].x,
-                    content_layout[3].y + 1,
-                    content_layout[3].width,
-                    1,
-                );
+            if top_layout[3].height >= 2 {
+                let summary_area =
+                    Rect::new(top_layout[3].x, top_layout[3].y + 1, top_layout[3].width, 1);
                 frame.render_widget(Paragraph::new(summary_line), summary_area);
             }
         } else if state.analysis_state.running {
@@ -324,40 +343,88 @@ impl AnalysisScreen {
                 "  Analysis in progress...",
                 Style::default().fg(Color::Yellow),
             ));
-            frame.render_widget(placeholder, content_layout[2]);
+            frame.render_widget(placeholder, top_layout[2]);
         } else {
             let placeholder = Paragraph::new(Span::styled(
                 "  Run analysis (r) to see sensitivity",
                 Style::default().fg(Color::DarkGray),
             ));
-            frame.render_widget(placeholder, content_layout[2]);
+            frame.render_widget(placeholder, top_layout[2]);
         }
 
-        // Row 5 (bottom): Metric selector dots
-        let mut dots: Vec<Span> = vec![Span::raw("  ")];
+        // --- Bottom section: metric dots (left ~30%) | histogram (right ~70%) ---
+        let bottom = v_layout[1];
+        let bottom_split = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(30), // [0] Metric selector
+                Constraint::Percentage(70), // [1] Histogram
+            ])
+            .split(bottom);
+
+        // Bottom-left: Metric selector (vertical list of dots)
+        let left = bottom_split[0];
         for (i, m) in AVAILABLE_METRICS.iter().enumerate() {
+            if i as u16 >= left.height {
+                break;
+            }
             let mc = metric_color(m);
             let is_selected = i == metric_idx;
-            if is_selected {
-                dots.push(Span::styled(
-                    "●",
-                    Style::default().fg(mc).add_modifier(Modifier::BOLD),
-                ));
-                dots.push(Span::styled(
-                    format!(" {} ", m.short_label()),
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD),
-                ));
+            let line = if is_selected {
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("●", Style::default().fg(mc).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        format!(" {}", m.short_label()),
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])
             } else {
-                dots.push(Span::styled("●", Style::default().fg(mc)));
-                dots.push(Span::styled(
-                    format!(" {} ", m.short_label()),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled("○", Style::default().fg(mc)),
+                    Span::styled(
+                        format!(" {}", m.short_label()),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ])
+            };
+            let row_area = Rect::new(left.x, left.y + 1 + i as u16, left.width, 1);
+            frame.render_widget(Paragraph::new(line), row_area);
+        }
+
+        // Bottom-right: Distribution histogram (with padding)
+        if let Some(results) = &state.analysis_state.results {
+            let right = bottom_split[1];
+            // Pad: 1 left, 2 right, 1 top
+            let padded = Rect::new(
+                right.x + 1,
+                right.y + 1,
+                (right.width as f64 * 0.9) as u16,
+                right.height.saturating_sub(1),
+            );
+            if padded.height >= 3 && padded.width >= 12 {
+                // Title line
+                let title = Line::from(Span::styled(
+                    "Distribution",
                     Style::default().fg(Color::DarkGray),
                 ));
+                let title_area = Rect::new(padded.x, padded.y, padded.width, 1);
+                frame.render_widget(Paragraph::new(title), title_area);
+
+                // Histogram below the title
+                let chart_area = Rect::new(
+                    padded.x,
+                    padded.y + 1,
+                    padded.width,
+                    padded.height.saturating_sub(1),
+                );
+                let values = results.get_all_metric_values(selected_metric);
+                render_sweep_histogram(frame, chart_area, &values, color, is_pct);
             }
         }
-        frame.render_widget(Paragraph::new(Line::from(dots)), content_layout[5]);
     }
 
     /// Render the tornado chart bars
@@ -457,23 +524,20 @@ impl AnalysisScreen {
         }
     }
 
-    /// Interpolate between dark gray and a target color based on t (0.0 to 1.0)
-    fn interpolate_color(t: f64, target: Color) -> Color {
-        let (r2, g2, b2) = match target {
-            Color::Rgb(r, g, b) => (r as f64, g as f64, b as f64),
-            Color::Green => (0.0, 200.0, 0.0),
-            Color::Cyan => (0.0, 200.0, 200.0),
-            Color::Blue => (80.0, 80.0, 255.0),
-            Color::Magenta => (200.0, 0.0, 200.0),
-            Color::Yellow => (200.0, 200.0, 0.0),
-            Color::Red => (200.0, 0.0, 0.0),
-            _ => (200.0, 200.0, 200.0),
-        };
-        let (r1, g1, b1) = (50.0, 50.0, 50.0);
-        let r = (r1 + (r2 - r1) * t) as u8;
-        let g = (g1 + (g2 - g1) * t) as u8;
-        let b = (b1 + (b2 - b1) * t) as u8;
-        Color::Rgb(r, g, b)
+    /// Map intensity (0.0 to 1.0) to a block character and color that uses the terminal's
+    /// native palette, so the matrix colors match the tornado chart exactly.
+    fn intensity_block(t: f64, target: Color) -> (Color, &'static str) {
+        if t < 0.15 {
+            (Color::DarkGray, "░░")
+        } else if t < 0.4 {
+            (target, "░░")
+        } else if t < 0.65 {
+            (target, "▒▒")
+        } else if t < 0.85 {
+            (target, "▓▓")
+        } else {
+            (target, "██")
+        }
     }
 
     /// Render the NxN parameter interaction matrix
@@ -496,25 +560,15 @@ impl AnalysisScreen {
 
         let color = metric_color(metric);
 
-        // Calculate label width (capped for compactness)
-        let label_width = entries
-            .iter()
-            .map(|e| e.param_label.len())
-            .max()
-            .unwrap_or(5)
-            .min(14) as u16;
-
         let cell_width = 2u16; // ██ is 2 chars
         let grid_width = ndim as u16 * cell_width;
-        let total_needed = label_width + 1 + grid_width;
 
-        if area.width < total_needed || area.height < ndim as u16 {
+        if area.width < grid_width || area.height < ndim as u16 {
             return;
         }
 
-        // Right-align the matrix within the area, with right padding
-        let right_pad = 2u16;
-        let x_offset = area.width.saturating_sub(total_needed + right_pad);
+        // Right-align the grid within the area
+        let x_offset = area.width.saturating_sub(grid_width);
         let base_x = area.x + x_offset;
 
         for (display_row, entry_i) in entries.iter().enumerate() {
@@ -523,28 +577,8 @@ impl AnalysisScreen {
             }
             let row_y = area.y + display_row as u16;
 
-            // Render label (right-aligned)
-            let label_text = if entry_i.param_label.len() > label_width as usize {
-                entry_i.param_label[..label_width as usize].to_string()
-            } else {
-                format!(
-                    "{:>width$}",
-                    entry_i.param_label,
-                    width = label_width as usize
-                )
-            };
-            let label_area = Rect::new(base_x, row_y, label_width, 1);
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    label_text,
-                    Style::default().fg(Color::DarkGray),
-                )),
-                label_area,
-            );
-
-            // Render matrix cells
             for (display_col, entry_j) in entries.iter().enumerate() {
-                let cell_x = base_x + label_width + 1 + (display_col as u16) * cell_width;
+                let cell_x = base_x + (display_col as u16) * cell_width;
                 if cell_x + cell_width > area.x + area.width {
                     break;
                 }
@@ -555,7 +589,6 @@ impl AnalysisScreen {
                 let cell_area = Rect::new(cell_x, row_y, cell_width, 1);
 
                 if i == j {
-                    // Diagonal - neutral
                     frame.render_widget(
                         Paragraph::new(Span::styled("░░", Style::default().fg(Color::DarkGray))),
                         cell_area,
@@ -567,9 +600,9 @@ impl AnalysisScreen {
                     } else {
                         0.0
                     };
-                    let cell_color = Self::interpolate_color(normalized, color);
+                    let (cell_color, block_char) = Self::intensity_block(normalized, color);
                     frame.render_widget(
-                        Paragraph::new(Span::styled("██", Style::default().fg(cell_color))),
+                        Paragraph::new(Span::styled(block_char, Style::default().fg(cell_color))),
                         cell_area,
                     );
                 }

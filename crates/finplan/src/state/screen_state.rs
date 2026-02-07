@@ -827,6 +827,14 @@ impl AnalysisResults {
         }
     }
 
+    /// Get all metric values across the entire sweep grid as a flat Vec.
+    pub fn get_all_metric_values(&self, metric: &AnalysisMetricData) -> Vec<f64> {
+        let core_metric = Self::to_core_metric(metric);
+        let scale = Self::metric_scale(metric);
+        let (values, _rows, _cols) = self.sweep_results.get_metric_grid(&core_metric);
+        values.iter().map(|v| v * scale).collect()
+    }
+
     /// Compute the overall min/max of a metric across all grid points.
     pub fn compute_metric_range(&self, metric: &AnalysisMetricData) -> (f64, f64) {
         let core_metric = Self::to_core_metric(metric);
