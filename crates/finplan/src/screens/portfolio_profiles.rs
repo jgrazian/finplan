@@ -15,7 +15,7 @@ use crate::modals::context::{ConfigContext, ModalContext, TaxConfigContext};
 use crate::modals::{AccountAction, ConfigAction, HoldingAction, ProfileAction};
 use crate::modals::{FormField, FormModal, MessageModal, ModalAction, ModalState, PickerModal};
 use crate::state::{AppState, PortfolioProfilesPanel};
-use crate::util::format::format_percentage;
+use crate::util::format::{format_compact_currency, format_percentage};
 use crate::util::styles::{focused_block, focused_block_with_help};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -31,6 +31,24 @@ use super::Screen;
 pub struct PortfolioProfilesScreen;
 
 impl PortfolioProfilesScreen {
+    /// Get non-brokerage accounts that can have a return profile mapping.
+    /// Returns (account_index, account_name, current_profile) for each mappable account.
+    fn get_mappable_accounts(state: &AppState) -> Vec<(usize, String, Option<ReturnProfileTag>)> {
+        state
+            .data()
+            .portfolios
+            .accounts
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, account)| {
+                account
+                    .account_type
+                    .as_property()
+                    .map(|prop| (idx, account.name.clone(), prop.return_profile.clone()))
+            })
+            .collect()
+    }
+
     /// Extract all unique assets from investment accounts
     fn get_unique_assets(state: &AppState) -> Vec<AssetTag> {
         let mut assets = HashSet::new();
@@ -74,7 +92,7 @@ impl PortfolioProfilesScreen {
         PortfolioOverviewChart::new(&accounts).render(frame, area);
     }
 
-    /// Render secondary panels (Asset Mappings and Tax & Inflation) at the bottom
+    /// Render secondary panels (Mappings and Tax & Inflation) at the bottom
     fn render_secondary_panels(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let mappings_collapsed = state.portfolio_profiles_state.mappings_collapsed;
         let config_collapsed = state.portfolio_profiles_state.config_collapsed;
@@ -100,7 +118,7 @@ impl PortfolioProfilesScreen {
         }
     }
 
-    /// Render collapsed asset mappings summary
+    /// Render collapsed mappings summary
     fn render_mappings_collapsed(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::AssetMappings;
@@ -118,13 +136,28 @@ impl PortfolioProfilesScreen {
         if unique_assets.len() > 3 {
             summary_parts.push(format!("+{}", unique_assets.len() - 3));
         }
+
+        // Add account mappings summary
+        let mappable_accounts = Self::get_mappable_accounts(state);
+        if !mappable_accounts.is_empty() {
+            let mapped_count = mappable_accounts
+                .iter()
+                .filter(|(_, _, prof)| prof.is_some())
+                .count();
+            summary_parts.push(format!(
+                "Accts: {}/{}",
+                mapped_count,
+                mappable_accounts.len()
+            ));
+        }
+
         let summary = if summary_parts.is_empty() {
-            "No assets".to_string()
+            "No mappings".to_string()
         } else {
             summary_parts.join(", ")
         };
 
-        let title = format!(" [+] ASSET MAPPINGS  {} ", summary);
+        let title = format!(" [+] MAPPINGS  {} ", summary);
         let block = focused_block(&title, is_focused);
 
         frame.render_widget(block, area);
@@ -168,39 +201,62 @@ impl PortfolioProfilesScreen {
         frame.render_widget(block, area);
     }
 
-    /// Render expanded asset mappings panel
+    /// Render expanded mappings panel (assets + accounts)
     fn render_asset_mappings(&self, frame: &mut Frame, area: Rect, state: &AppState) {
         let is_focused =
             state.portfolio_profiles_state.focused_panel == PortfolioProfilesPanel::AssetMappings;
         let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
 
         let unique_assets = Self::get_unique_assets(state);
-        // Use mode-specific mappings
+        let mappable_accounts = Self::get_mappable_accounts(state);
+        let asset_count = unique_assets.len();
+        let account_count = mappable_accounts.len();
+        let has_both = asset_count > 0 && account_count > 0;
+        // Total selectable items = assets + accounts (separator is display-only)
+        let total_items = asset_count + account_count;
+
+        // Use mode-specific mappings for assets
         let mappings = if is_historical {
             &state.data().historical_assets
         } else {
             &state.data().assets
         };
 
-        // Calculate scrolling
-        let visible_count = area.height.saturating_sub(2) as usize; // Account for borders
-        let selected_idx = state.portfolio_profiles_state.selected_mapping_index;
-        let scroll_offset =
-            calculate_centered_scroll(selected_idx, unique_assets.len(), visible_count);
+        // Total display lines (items + separator if both sections exist)
+        let total_display_lines = total_items + if has_both { 1 } else { 0 };
 
-        let items: Vec<ListItem> = unique_assets
-            .iter()
-            .enumerate()
-            .skip(scroll_offset)
-            .take(visible_count)
-            .map(|(idx, asset)| {
+        // Calculate scrolling
+        let visible_count = area.height.saturating_sub(2) as usize;
+        let selected_idx = state
+            .portfolio_profiles_state
+            .selected_mapping_index
+            .min(if total_items > 0 { total_items - 1 } else { 0 });
+        // Convert selected_idx to display line (account for separator)
+        let selected_display_line = if has_both && selected_idx >= asset_count {
+            selected_idx + 1 // +1 for separator line
+        } else {
+            selected_idx
+        };
+        let scroll_offset =
+            calculate_centered_scroll(selected_display_line, total_display_lines, visible_count);
+
+        // Build all display lines
+        let mut items: Vec<ListItem> = Vec::new();
+        let mut display_line = 0;
+
+        // Asset entries
+        for (idx, asset) in unique_assets.iter().enumerate() {
+            if display_line >= scroll_offset + visible_count {
+                break;
+            }
+            if display_line >= scroll_offset {
                 let mapping = mappings.get(asset);
                 let is_unmapped = mapping.is_none();
                 let has_suggestion = is_unmapped && ticker_profiles::is_known_ticker(&asset.0);
 
                 let mapping_str = if is_unmapped {
                     if has_suggestion {
-                        "(unmapped) [?]" // Indicates suggestion available
+                        "(unmapped) [?]"
                     } else {
                         "(unmapped)"
                     }
@@ -213,7 +269,6 @@ impl PortfolioProfilesScreen {
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else if has_suggestion {
-                    // Unmapped with suggestion available - highlight in cyan
                     Style::default().fg(Color::Cyan)
                 } else if is_unmapped {
                     Style::default().fg(Color::Red)
@@ -222,18 +277,61 @@ impl PortfolioProfilesScreen {
                 };
 
                 let content = format!("{} -> {}", asset.0, mapping_str);
-                ListItem::new(Line::from(Span::styled(content, style)))
-            })
-            .collect();
+                items.push(ListItem::new(Line::from(Span::styled(content, style))));
+            }
+            display_line += 1;
+        }
 
-        let title = " [-] ASSET MAPPINGS ";
+        // Separator line (display-only, not selectable)
+        if has_both {
+            if display_line >= scroll_offset && display_line < scroll_offset + visible_count {
+                items.push(ListItem::new(Line::from(Span::styled(
+                    "--- ACCOUNT MAPPINGS ---",
+                    Style::default().fg(Color::DarkGray),
+                ))));
+            }
+            display_line += 1;
+        }
+
+        // Account entries
+        for (acct_list_idx, (_acct_idx, name, profile)) in mappable_accounts.iter().enumerate() {
+            if display_line >= scroll_offset + visible_count {
+                break;
+            }
+            if display_line >= scroll_offset {
+                let item_idx = asset_count + acct_list_idx;
+                let mapping_str = profile
+                    .as_ref()
+                    .map(|p| p.0.as_str())
+                    .unwrap_or("(unmapped)");
+
+                let style = if item_idx == selected_idx {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if profile.is_none() {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default()
+                };
+
+                let content = format!("{} -> {}", name, mapping_str);
+                items.push(ListItem::new(Line::from(Span::styled(content, style))));
+            }
+            display_line += 1;
+        }
+
+        let title = " [-] MAPPINGS ";
 
         let mut block = focused_block(title, is_focused);
 
-        if is_focused && !unique_assets.is_empty() {
-            block = block.title_bottom(
-                Line::from(" [m]ap [a] Suggest [A]ll [Space] Collapse ").fg(Color::DarkGray),
-            );
+        if is_focused && total_items > 0 {
+            let help = if selected_idx >= asset_count {
+                " [m]ap [Space] Collapse "
+            } else {
+                " [m]ap [a] Suggest [A]ll [Space] Collapse "
+            };
+            block = block.title_bottom(Line::from(help).fg(Color::DarkGray));
         }
 
         let list = List::new(items).block(block);
@@ -327,10 +425,73 @@ impl PortfolioProfilesScreen {
         let title = " [-] TAX & INFLATION ";
 
         let block = focused_block_with_help(title, is_focused, "[e]dit [Space] Collapse");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
 
-        let paragraph = Paragraph::new(lines).block(block);
+        // Show bracket table to the right of config text when there's enough space
+        let min_text_width: u16 = 48;
+        let min_chart_width: u16 = 16;
+        let show_table = inner.width >= min_text_width + min_chart_width && inner.height >= 4;
 
-        frame.render_widget(paragraph, area);
+        if show_table {
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(min_text_width),
+                    Constraint::Length(inner.width.saturating_sub(min_text_width)),
+                ])
+                .split(inner);
+
+            frame.render_widget(Paragraph::new(lines), cols[0]);
+
+            let resolved = tax_config.to_tax_config();
+            Self::render_bracket_table(frame, cols[1], &resolved.federal_brackets);
+        } else {
+            frame.render_widget(Paragraph::new(lines), inner);
+        }
+    }
+
+    /// Render federal tax brackets as a simple table
+    fn render_bracket_table(
+        frame: &mut Frame,
+        area: Rect,
+        brackets: &[finplan_core::model::TaxBracket],
+    ) {
+        if brackets.is_empty() || area.height == 0 {
+            return;
+        }
+
+        let dim = Style::default().fg(Color::DarkGray);
+        let mut table_lines: Vec<Line> = Vec::new();
+
+        let header_style = Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD);
+
+        // Title row
+        table_lines.push(Line::from(Span::styled("Federal Brackets", header_style)));
+
+        // Column headers
+        table_lines.push(Line::from(vec![
+            Span::styled(" Income", dim),
+            Span::styled("  Rate", dim),
+        ]));
+
+        for (i, bracket) in brackets.iter().enumerate() {
+            if (i + 2) as u16 >= area.height {
+                break;
+            }
+
+            let threshold = format!(" {:<8}", format_compact_currency(bracket.threshold));
+            let rate_str = format!("  {:>2}%", (bracket.rate * 100.0).round() as u32);
+
+            table_lines.push(Line::from(vec![
+                Span::styled(threshold, dim),
+                Span::styled(rate_str, dim),
+            ]));
+        }
+
+        frame.render_widget(Paragraph::new(table_lines), area);
     }
 
     // ========== Formatters ==========
@@ -361,8 +522,15 @@ impl PortfolioProfilesScreen {
 
     fn handle_mappings_keys(&self, key: KeyEvent, state: &mut AppState) -> EventResult {
         let unique_assets = Self::get_unique_assets(state);
+        let mappable_accounts = Self::get_mappable_accounts(state);
+        let asset_count = unique_assets.len();
+        let account_count = mappable_accounts.len();
+        let total_items = asset_count + account_count;
         let is_historical = state.data().parameters.returns_mode == ReturnsMode::Historical;
         let kb = &state.keybindings;
+
+        let selected_idx = state.portfolio_profiles_state.selected_mapping_index;
+        let in_account_section = selected_idx >= asset_count;
 
         // Space toggle for collapse - keep hardcoded as space bar is intuitive
         if key.code == KeyCode::Char(' ') {
@@ -376,19 +544,18 @@ impl PortfolioProfilesScreen {
 
         // Navigation: down
         if KeybindingsConfig::matches(&key, &kb.navigation.down) {
-            if !unique_assets.is_empty() {
+            if total_items > 0 {
                 state.portfolio_profiles_state.selected_mapping_index =
-                    (state.portfolio_profiles_state.selected_mapping_index + 1)
-                        % unique_assets.len();
+                    (state.portfolio_profiles_state.selected_mapping_index + 1) % total_items;
             }
             return EventResult::Handled;
         }
 
         // Navigation: up
         if KeybindingsConfig::matches(&key, &kb.navigation.up) {
-            if !unique_assets.is_empty() {
+            if total_items > 0 {
                 if state.portfolio_profiles_state.selected_mapping_index == 0 {
-                    state.portfolio_profiles_state.selected_mapping_index = unique_assets.len() - 1;
+                    state.portfolio_profiles_state.selected_mapping_index = total_items - 1;
                 } else {
                     state.portfolio_profiles_state.selected_mapping_index -= 1;
                 }
@@ -400,59 +567,132 @@ impl PortfolioProfilesScreen {
         if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.map)
             || KeybindingsConfig::matches(&key, &kb.navigation.confirm)
         {
-            // Map the selected asset to a profile
-            if let Some(asset) =
-                unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
-            {
-                if is_historical {
-                    // Historical mode: cycle through preset profiles
-                    let mappings = &state.data().historical_assets;
-                    let current_mapping = mappings.get(asset);
-                    let current_idx = current_mapping
-                        .and_then(|tag| {
+            if in_account_section {
+                // Account mapping: cycle through profiles + None
+                let acct_list_idx = selected_idx - asset_count;
+                if let Some((acct_idx, _name, current_profile)) =
+                    mappable_accounts.get(acct_list_idx)
+                {
+                    if is_historical {
+                        // Historical mode: cycle through preset profiles + None
+                        let current_hist_idx = current_profile.as_ref().and_then(|tag| {
                             HISTORICAL_PRESETS
                                 .iter()
                                 .position(|(_, name, _)| *name == tag.0)
-                        })
-                        .unwrap_or(HISTORICAL_PRESETS.len());
+                        });
 
-                    let next_idx = if current_idx >= HISTORICAL_PRESETS.len() - 1 {
-                        0
+                        let new_profile = match current_hist_idx {
+                            None => {
+                                // Currently None -> first preset
+                                Some(ReturnProfileTag(HISTORICAL_PRESETS[0].1.to_string()))
+                            }
+                            Some(idx) if idx >= HISTORICAL_PRESETS.len() - 1 => {
+                                // Last preset -> None
+                                None
+                            }
+                            Some(idx) => {
+                                // Next preset
+                                Some(ReturnProfileTag(HISTORICAL_PRESETS[idx + 1].1.to_string()))
+                            }
+                        };
+
+                        if let Some(account) =
+                            state.data_mut().portfolios.accounts.get_mut(*acct_idx)
+                            && let Some(prop) = account.account_type.as_property_mut()
+                        {
+                            prop.return_profile = new_profile;
+                        }
+                        state.mark_modified();
                     } else {
-                        current_idx + 1
-                    };
+                        // Parametric mode: cycle through user-defined profiles + None
+                        let profiles = &state.data().profiles;
+                        if profiles.is_empty() {
+                            state.set_error(
+                                "No return profiles defined. Add a profile first.".to_string(),
+                            );
+                        } else {
+                            let current_prof_idx = current_profile
+                                .as_ref()
+                                .and_then(|tag| profiles.iter().position(|p| p.name == *tag));
 
-                    let (_, display_name, _) = HISTORICAL_PRESETS[next_idx];
-                    let new_profile = ReturnProfileTag(display_name.to_string());
-                    let asset_clone = asset.clone();
-                    state
-                        .data_mut()
-                        .historical_assets
-                        .insert(asset_clone, new_profile);
-                    state.mark_modified();
-                } else {
-                    // Parametric mode: cycle through user-defined profiles
-                    let profiles = &state.data().profiles;
-                    if !profiles.is_empty() {
-                        let current_mapping = state.data().assets.get(asset);
+                            let new_profile = match current_prof_idx {
+                                None => {
+                                    // Currently None -> first profile
+                                    Some(profiles[0].name.clone())
+                                }
+                                Some(idx) if idx >= profiles.len() - 1 => {
+                                    // Last profile -> None
+                                    None
+                                }
+                                Some(idx) => {
+                                    // Next profile
+                                    Some(profiles[idx + 1].name.clone())
+                                }
+                            };
+
+                            if let Some(account) =
+                                state.data_mut().portfolios.accounts.get_mut(*acct_idx)
+                                && let Some(prop) = account.account_type.as_property_mut()
+                            {
+                                prop.return_profile = new_profile;
+                            }
+                            state.mark_modified();
+                        }
+                    }
+                }
+            } else {
+                // Asset mapping: existing behavior
+                if let Some(asset) = unique_assets.get(selected_idx) {
+                    if is_historical {
+                        // Historical mode: cycle through preset profiles
+                        let mappings = &state.data().historical_assets;
+                        let current_mapping = mappings.get(asset);
                         let current_idx = current_mapping
-                            .and_then(|tag| profiles.iter().position(|p| &p.name == tag))
-                            .unwrap_or(profiles.len());
+                            .and_then(|tag| {
+                                HISTORICAL_PRESETS
+                                    .iter()
+                                    .position(|(_, name, _)| *name == tag.0)
+                            })
+                            .unwrap_or(HISTORICAL_PRESETS.len());
 
-                        let next_idx = if current_idx >= profiles.len() - 1 {
+                        let next_idx = if current_idx >= HISTORICAL_PRESETS.len() - 1 {
                             0
                         } else {
                             current_idx + 1
                         };
 
-                        let new_profile = profiles[next_idx].name.clone();
+                        let (_, display_name, _) = HISTORICAL_PRESETS[next_idx];
+                        let new_profile = ReturnProfileTag(display_name.to_string());
                         let asset_clone = asset.clone();
-                        state.data_mut().assets.insert(asset_clone, new_profile);
+                        state
+                            .data_mut()
+                            .historical_assets
+                            .insert(asset_clone, new_profile);
                         state.mark_modified();
                     } else {
-                        state.set_error(
-                            "No return profiles defined. Add a profile first.".to_string(),
-                        );
+                        // Parametric mode: cycle through user-defined profiles
+                        let profiles = &state.data().profiles;
+                        if !profiles.is_empty() {
+                            let current_mapping = state.data().assets.get(asset);
+                            let current_idx = current_mapping
+                                .and_then(|tag| profiles.iter().position(|p| &p.name == tag))
+                                .unwrap_or(profiles.len());
+
+                            let next_idx = if current_idx >= profiles.len() - 1 {
+                                0
+                            } else {
+                                current_idx + 1
+                            };
+
+                            let new_profile = profiles[next_idx].name.clone();
+                            let asset_clone = asset.clone();
+                            state.data_mut().assets.insert(asset_clone, new_profile);
+                            state.mark_modified();
+                        } else {
+                            state.set_error(
+                                "No return profiles defined. Add a profile first.".to_string(),
+                            );
+                        }
                     }
                 }
             }
@@ -460,10 +700,13 @@ impl PortfolioProfilesScreen {
         }
 
         // Suggest profile for selected asset (a key - uses portfolio.suggest)
+        // Only applies to asset section
         if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.suggest) {
-            if let Some(asset) =
-                unique_assets.get(state.portfolio_profiles_state.selected_mapping_index)
-            {
+            if in_account_section {
+                state.set_error("Suggest is only available for asset mappings".to_string());
+                return EventResult::Handled;
+            }
+            if let Some(asset) = unique_assets.get(selected_idx) {
                 if is_historical {
                     // Historical mode: check historical_assets
                     if state.data().historical_assets.contains_key(asset) {
@@ -517,7 +760,11 @@ impl PortfolioProfilesScreen {
         }
 
         // Suggest profiles for ALL unmapped known tickers (Shift+A)
+        // Only applies to asset section
         if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.suggest_all) {
+            if in_account_section {
+                return EventResult::Handled;
+            }
             let mut suggestions_applied = 0;
             for asset in &unique_assets {
                 if is_historical {
@@ -558,7 +805,6 @@ impl PortfolioProfilesScreen {
             }
             if suggestions_applied > 0 {
                 state.mark_modified();
-                // Success - mappings will be visible immediately in the UI
             } else {
                 state.set_error("No suggestions available for unmapped assets".to_string());
             }

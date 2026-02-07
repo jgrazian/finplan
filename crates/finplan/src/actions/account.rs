@@ -1,7 +1,6 @@
 // Account actions - category picking, type picking, CRUD operations
 
 use crate::data::portfolio_data::{AccountData, AccountType, AssetAccount, Debt, Property};
-use crate::data::profiles_data::ReturnProfileTag;
 use crate::modals::{
     FormField, FormModal, ModalAction, ModalState, PickerModal,
     context::{AccountTypeContext, ModalContext},
@@ -51,11 +50,7 @@ pub fn handle_category_pick(category: &str) -> ActionResult {
 }
 
 /// Handle account type selection - shows creation form
-pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
-    // Build list of available return profiles for Select fields
-    let mut profile_options: Vec<String> = vec!["".to_string()]; // Empty option for "none"
-    profile_options.extend(state.data().profiles.iter().map(|p| p.name.0.clone()));
-
+pub fn handle_type_pick(account_type: &str, _state: &AppState) -> ActionResult {
     // Parse the account type string to typed context
     let account_type_ctx = match account_type.parse::<AccountTypeContext>() {
         Ok(ctx) => ctx,
@@ -84,7 +79,6 @@ pub fn handle_type_pick(account_type: &str, state: &AppState) -> ActionResult {
                 FormField::text("Name", ""),
                 FormField::text("Description", ""),
                 FormField::currency("Value", 0.0),
-                FormField::select("Return Profile", profile_options, ""),
             ],
         ),
         AccountTypeContext::Mortgage
@@ -192,7 +186,7 @@ pub fn handle_edit_account(state: &mut AppState, ctx: ActionContext) -> ActionRe
             | AccountType::HSA(prop)
             | AccountType::Property(prop)
             | AccountType::Collectible(prop) => {
-                // Fields: [Name, Description, Value, Return Profile]
+                // Fields: [Name, Description, Value]
                 if let Some(name) = form.get_str(0) {
                     account.name = name.to_string();
                 }
@@ -200,7 +194,6 @@ pub fn handle_edit_account(state: &mut AppState, ctx: ActionContext) -> ActionRe
                 if let Some(val) = form.get_currency(2) {
                     prop.value = val;
                 }
-                prop.return_profile = form.get_optional_str(3).map(ReturnProfileTag);
             }
             AccountType::Mortgage(debt)
             | AccountType::LoanDebt(debt)
@@ -285,13 +278,6 @@ pub fn create_edit_account_form(account: &AccountData) -> FormModal {
                 FormField::text("Name", &account.name),
                 FormField::text("Description", account.description.as_deref().unwrap_or("")),
                 FormField::currency("Value", prop.value),
-                FormField::text(
-                    "Return Profile",
-                    prop.return_profile
-                        .as_ref()
-                        .map(|p| p.0.as_str())
-                        .unwrap_or(""),
-                ),
             ],
             ModalAction::EDIT_ACCOUNT,
         )
@@ -336,11 +322,10 @@ where
     let name = form.get_str(0).unwrap_or("").to_string();
     let desc = form.get_optional_str(1);
     let value = form.get_currency_or(2, 0.0);
-    let profile = form.get_optional_str(3);
 
     let prop = Property {
         value,
-        return_profile: profile.map(ReturnProfileTag),
+        return_profile: None,
     };
 
     Some(AccountData {

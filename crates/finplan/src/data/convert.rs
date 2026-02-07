@@ -384,18 +384,14 @@ fn build_asset_mappings(
     }
 
     // Register Property/Collectible assets with their return profiles
-    // Note: Properties currently only use parametric profiles
-    if data.parameters.returns_mode == ReturnsMode::Parametric {
-        for account in &data.portfolios.accounts {
-            if let AccountType::Property(prop) | AccountType::Collectible(prop) =
-                &account.account_type
-                && let Some((asset_id, Some(profile_name))) = ctx.property_assets.get(&account.name)
-                && let Some(&profile_id) = ctx.profile_ids.get(profile_name)
-            {
-                config.asset_returns.insert(*asset_id, profile_id);
-                // Use the property's value as the initial price
-                config.asset_prices.insert(*asset_id, prop.value);
-            }
+    for account in &data.portfolios.accounts {
+        if let AccountType::Property(prop) | AccountType::Collectible(prop) = &account.account_type
+            && let Some((asset_id, Some(profile_name))) = ctx.property_assets.get(&account.name)
+            && let Some(&profile_id) = ctx.profile_ids.get(profile_name)
+        {
+            config.asset_returns.insert(*asset_id, profile_id);
+            // Use the property's value as the initial price
+            config.asset_prices.insert(*asset_id, prop.value);
         }
     }
 
