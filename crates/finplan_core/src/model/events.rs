@@ -566,6 +566,25 @@ pub enum EventEffect {
         #[serde(default)]
         on_false: Option<Box<EventEffect>>,
     },
+
+    // === Equity Compensation ===
+    /// RSU vesting: shares vest and are deposited to an investment account.
+    /// The FMV at vesting is taxed as ordinary income.
+    /// Optionally sells a portion of shares to cover taxes (sell-to-cover).
+    RsuVesting {
+        /// Investment account where vested shares are deposited
+        to: AccountId,
+        /// Asset representing the company stock
+        asset: AssetCoord,
+        /// Number of shares vesting
+        units: TransferAmount,
+        /// If true, automatically sell shares to cover income taxes (sell-to-cover)
+        #[serde(default)]
+        sell_to_cover: bool,
+        /// Lot method for sell-to-cover liquidation
+        #[serde(default)]
+        lot_method: LotMethod,
+    },
 }
 
 /// An event with a trigger condition and effects

@@ -19,4 +19,5 @@ mod builder_dsl;
 mod contribution_limits;
 mod profiling;
 mod returns;
+mod rsu;
 mod simulation_result;

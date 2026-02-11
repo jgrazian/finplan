@@ -345,6 +345,30 @@ impl SimulationBuilder {
         )
     }
 
+    /// Quick method to add an RSU grant with vesting schedule
+    #[must_use]
+    pub fn rsu_grant(
+        self,
+        name: impl Into<String>,
+        account: impl Into<String>,
+        asset: impl Into<String>,
+        units_per_vest: f64,
+        total_vests: u32,
+        start_date: jiff::civil::Date,
+    ) -> Self {
+        let account_str = account.into();
+        self.event(
+            EventBuilder::rsu_vesting(name)
+                .to_account(&account_str)
+                .asset_in(&account_str, asset)
+                .units(units_per_vest)
+                .sell_to_cover()
+                .quarterly()
+                .starting_on(start_date)
+                .max_occurrences(total_vests),
+        )
+    }
+
     // =========================================================================
     // Build
     // =========================================================================
@@ -558,6 +582,17 @@ impl SimulationBuilder {
                     amount_mode: spec.amount_mode,
                     lot_method: spec.lot_method,
                     income_type: IncomeType::Taxable, // Default to taxable for asset sales
+                }]
+            }
+            EventType::RsuVesting(spec) => {
+                let account_id = self.resolve_account_ref(&spec.to_account, account_ids);
+                let asset_coord = self.resolve_asset_ref(&spec.asset, account_ids, asset_ids);
+                vec![EventEffect::RsuVesting {
+                    to: account_id,
+                    asset: asset_coord,
+                    units: self.resolve_amount(&spec.units),
+                    sell_to_cover: spec.sell_to_cover,
+                    lot_method: spec.lot_method,
                 }]
             }
             EventType::Custom(effects) => effects.clone(),

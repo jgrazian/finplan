@@ -52,6 +52,7 @@ pub(crate) enum EventType {
     Expense(ExpenseSpec),
     AssetPurchase(AssetPurchaseSpec),
     AssetSale(AssetSaleSpec),
+    RsuVesting(RsuVestingSpec),
     Custom(Vec<EventEffect>),
 }
 
@@ -82,6 +83,15 @@ pub(crate) struct AssetSaleSpec {
     pub amount: AmountSpec,
     pub sources: WithdrawalSourceSpec,
     pub amount_mode: AmountMode,
+    pub lot_method: LotMethod,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RsuVestingSpec {
+    pub to_account: AccountRef,
+    pub asset: AssetRef,
+    pub units: AmountSpec,
+    pub sell_to_cover: bool,
     pub lot_method: LotMethod,
 }
 
@@ -209,6 +219,26 @@ impl EventBuilder {
         }
     }
 
+    /// Create an RSU vesting event
+    pub fn rsu_vesting(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            description: None,
+            event_type: EventType::RsuVesting(RsuVestingSpec {
+                to_account: AccountRef::Name("default".into()),
+                asset: AssetRef::Named {
+                    account: "default".into(),
+                    asset: "default".into(),
+                },
+                units: AmountSpec::Fixed(0.0),
+                sell_to_cover: false,
+                lot_method: LotMethod::Fifo,
+            }),
+            trigger: TriggerSpec::Immediate,
+            once: false,
+        }
+    }
+
     /// Create a custom event with explicit effects
     pub fn custom(name: impl Into<String>) -> Self {
         Self {
@@ -224,7 +254,7 @@ impl EventBuilder {
     // Account/Asset Targeting
     // =========================================================================
 
-    /// Set the destination account by name (for income, withdrawals)
+    /// Set the destination account by name (for income, withdrawals, RSU vesting)
     pub fn to_account(mut self, name: impl Into<String>) -> Self {
         let name = name.into();
         match &mut self.event_type {
@@ -232,6 +262,9 @@ impl EventBuilder {
                 spec.to_account = AccountRef::Name(name);
             }
             EventType::AssetSale(spec) => {
+                spec.to_account = AccountRef::Name(name);
+            }
+            EventType::RsuVesting(spec) => {
                 spec.to_account = AccountRef::Name(name);
             }
             _ => {}
@@ -247,6 +280,9 @@ impl EventBuilder {
                 spec.to_account = AccountRef::Id(id);
             }
             EventType::AssetSale(spec) => {
+                spec.to_account = AccountRef::Id(id);
+            }
+            EventType::RsuVesting(spec) => {
                 spec.to_account = AccountRef::Id(id);
             }
             _ => {}
@@ -373,6 +409,7 @@ impl EventBuilder {
             EventType::Expense(spec) => spec.amount = amount,
             EventType::AssetPurchase(spec) => spec.amount = amount,
             EventType::AssetSale(spec) => spec.amount = amount,
+            EventType::RsuVesting(spec) => spec.units = amount,
             EventType::Custom(_) => {}
         }
         self
@@ -387,7 +424,7 @@ impl EventBuilder {
             EventType::Expense(spec) => spec.amount = amount,
             EventType::AssetPurchase(spec) => spec.amount = amount,
             EventType::AssetSale(spec) => spec.amount = amount,
-            EventType::Custom(_) => {}
+            EventType::RsuVesting(_) | EventType::Custom(_) => {}
         }
         self
     }
@@ -401,6 +438,7 @@ impl EventBuilder {
             EventType::Expense(spec) => spec.amount = amount,
             EventType::AssetPurchase(spec) => spec.amount = amount,
             EventType::AssetSale(spec) => spec.amount = amount,
+            EventType::RsuVesting(spec) => spec.units = amount,
             EventType::Custom(_) => {}
         }
         self
@@ -490,6 +528,44 @@ impl EventBuilder {
     pub fn lowest_cost_first(mut self) -> Self {
         if let EventType::AssetSale(spec) = &mut self.event_type {
             spec.lot_method = LotMethod::LowestCost;
+        }
+        self
+    }
+
+    // =========================================================================
+    // RSU-Specific Configuration
+    // =========================================================================
+
+    /// Set the asset for RSU vesting (by account and asset name)
+    #[must_use]
+    pub fn asset_in(
+        mut self,
+        account_name: impl Into<String>,
+        asset_name: impl Into<String>,
+    ) -> Self {
+        if let EventType::RsuVesting(spec) = &mut self.event_type {
+            spec.asset = AssetRef::Named {
+                account: account_name.into(),
+                asset: asset_name.into(),
+            };
+        }
+        self
+    }
+
+    /// Set the number of shares/units (for RSU vesting)
+    #[must_use]
+    pub fn units(mut self, count: f64) -> Self {
+        if let EventType::RsuVesting(spec) = &mut self.event_type {
+            spec.units = AmountSpec::Fixed(count);
+        }
+        self
+    }
+
+    /// Enable sell-to-cover for RSU vesting (sell shares to pay taxes)
+    #[must_use]
+    pub fn sell_to_cover(mut self) -> Self {
+        if let EventType::RsuVesting(spec) = &mut self.event_type {
+            spec.sell_to_cover = true;
         }
         self
     }

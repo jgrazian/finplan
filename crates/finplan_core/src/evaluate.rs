@@ -994,6 +994,99 @@ pub fn evaluate_effect_into(
                 Ok(())
             }
         }
+
+        EventEffect::RsuVesting {
+            to,
+            asset,
+            units,
+            sell_to_cover,
+            lot_method,
+        } => {
+            // 1. Evaluate the number of shares vesting
+            let num_units = evaluate_transfer_amount(
+                units,
+                &TransferEndpoint::External,
+                &TransferEndpoint::Asset {
+                    asset_coord: *asset,
+                },
+                state,
+            )?;
+
+            if num_units < 0.001 {
+                return Ok(());
+            }
+
+            // 2. Look up current asset price
+            let current_price = get_current_price(
+                &state.portfolio.market,
+                state.timeline.start_date,
+                state.timeline.current_date,
+                asset.asset_id,
+            )
+            .map_err(|_| LookupError::AssetNotFound(*asset))?;
+
+            // 3. Calculate gross FMV = units × current price
+            let gross_fmv = num_units * current_price;
+
+            // 4. Calculate income tax on the full FMV (ordinary income)
+            let ytd_income = state.taxes.ytd_tax.ordinary_income;
+            let brackets = &state.taxes.config.federal_brackets;
+            let state_rate = state.taxes.config.state_rate;
+
+            let federal_tax = calculate_federal_marginal_tax(gross_fmv, ytd_income, brackets);
+            let state_tax = gross_fmv * state_rate;
+            let total_tax = federal_tax + state_tax;
+
+            // 5. Deposit all vested shares as a new asset lot (cost basis = FMV at vesting)
+            out.push(EvalEvent::AddAssetLot {
+                to: *asset,
+                units: num_units,
+                cost_basis: gross_fmv,
+            });
+
+            // 6. Record income tax on the vesting event
+            out.push(EvalEvent::IncomeTax {
+                gross_income_amount: gross_fmv,
+                federal_tax,
+                state_tax,
+            });
+
+            // 7. If sell-to-cover, sell shares to cover the tax liability
+            if *sell_to_cover {
+                let shares_to_sell = total_tax / current_price;
+                let sell_proceeds = shares_to_sell * current_price;
+
+                // Subtract shares sold for tax coverage
+                // Since cost basis == current price (just vested), gain is zero
+                out.push(EvalEvent::SubtractAssetLot {
+                    from: *asset,
+                    lot_date: state.timeline.current_date,
+                    units: shares_to_sell,
+                    cost_basis: sell_proceeds,
+                    proceeds: sell_proceeds,
+                    short_term_gain: 0.0,
+                    long_term_gain: 0.0,
+                });
+
+                // Credit cash from the sold shares (covers the tax bill)
+                out.push(EvalEvent::CashCredit {
+                    to: *to,
+                    net_amount: sell_proceeds,
+                    kind: CashFlowKind::LiquidationProceeds,
+                });
+
+                // Debit cash to pay the taxes
+                out.push(EvalEvent::CashDebit {
+                    from: *to,
+                    net_amount: sell_proceeds,
+                    kind: CashFlowKind::Expense,
+                });
+            }
+
+            let _ = lot_method; // Reserved for future sell-to-cover lot selection
+
+            Ok(())
+        }
     }
 }
 
