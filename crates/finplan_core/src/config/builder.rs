@@ -590,7 +590,7 @@ impl SimulationBuilder {
                 vec![EventEffect::RsuVesting {
                     to: account_id,
                     asset: asset_coord,
-                    units: self.resolve_amount(&spec.units),
+                    units: spec.units,
                     sell_to_cover: spec.sell_to_cover,
                     lot_method: spec.lot_method,
                 }]

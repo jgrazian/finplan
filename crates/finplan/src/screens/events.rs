@@ -667,6 +667,23 @@ impl EventsScreen {
                     format!("Random ({}%): \"{}\"", prob_pct, on_true.0)
                 }
             }
+            EffectData::RsuVesting {
+                to,
+                asset,
+                units,
+                sell_to_cover,
+                ..
+            } => {
+                let stc = if *sell_to_cover {
+                    ", sell-to-cover"
+                } else {
+                    ""
+                };
+                format!(
+                    "RSU Vest \"{}\" to \"{}\": {} shares{}",
+                    asset.0, to.0, units, stc
+                )
+            }
         }
     }
 

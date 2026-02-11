@@ -11,11 +11,11 @@ use crate::data::portfolio_data::{AccountData, AccountType, AssetTag};
 use crate::data::profiles_data::{ProfileData, ReturnProfileTag};
 use crate::data::ticker_profiles;
 use crate::data::ticker_profiles::HISTORICAL_PRESETS;
-use crate::modals::context::{ConfigContext, ModalContext, TaxConfigContext};
-use crate::modals::{AccountAction, ConfigAction, HoldingAction, ProfileAction};
+use crate::modals::context::{ConfigContext, MappingContext, ModalContext, TaxConfigContext};
+use crate::modals::{AccountAction, ConfigAction, HoldingAction, MappingAction, ProfileAction};
 use crate::modals::{FormField, FormModal, MessageModal, ModalAction, ModalState, PickerModal};
 use crate::state::{AppState, PortfolioProfilesPanel};
-use crate::util::format::{format_compact_currency, format_percentage};
+use crate::util::format::{format_compact_currency, format_currency, format_percentage};
 use crate::util::styles::{focused_block, focused_block_with_help};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
@@ -240,6 +240,40 @@ impl PortfolioProfilesScreen {
         let scroll_offset =
             calculate_centered_scroll(selected_display_line, total_display_lines, visible_count);
 
+        // Compute fixed column widths — separate for asset and account sections
+        let asset_name_width = unique_assets
+            .iter()
+            .map(|a| a.0.len())
+            .max()
+            .unwrap_or(0)
+            .max(4);
+        let asset_profile_width = unique_assets
+            .iter()
+            .map(|a| {
+                mappings
+                    .get(a)
+                    .map(|p| p.0.len())
+                    .unwrap_or("(unmapped) [?]".len())
+            })
+            .max()
+            .unwrap_or(0)
+            .max(4);
+
+        let acct_name_width = mappable_accounts
+            .iter()
+            .map(|(_, n, _)| n.len())
+            .max()
+            .unwrap_or(0)
+            .max(4);
+        let acct_profile_width = mappable_accounts
+            .iter()
+            .map(|(_, _, p)| p.as_ref().map(|p| p.0.len()).unwrap_or("(unmapped)".len()))
+            .max()
+            .unwrap_or(0)
+            .max(4);
+
+        let asset_prices_map = &state.data().asset_prices;
+
         // Build all display lines
         let mut items: Vec<ListItem> = Vec::new();
         let mut display_line = 0;
@@ -276,7 +310,19 @@ impl PortfolioProfilesScreen {
                     Style::default()
                 };
 
-                let content = format!("{} -> {}", asset.0, mapping_str);
+                let price_suffix = match asset_prices_map.get(asset) {
+                    Some(price) => format!("  {}", format_currency(*price)),
+                    None => String::new(),
+                };
+
+                let content = format!(
+                    "{:<nw$}  ->  {:<pw$}{}",
+                    asset.0,
+                    mapping_str,
+                    price_suffix,
+                    nw = asset_name_width,
+                    pw = asset_profile_width,
+                );
                 items.push(ListItem::new(Line::from(Span::styled(content, style))));
             }
             display_line += 1;
@@ -315,7 +361,13 @@ impl PortfolioProfilesScreen {
                     Style::default()
                 };
 
-                let content = format!("{} -> {}", name, mapping_str);
+                let content = format!(
+                    "{:<nw$}  ->  {:<pw$}",
+                    name,
+                    mapping_str,
+                    nw = acct_name_width,
+                    pw = acct_profile_width,
+                );
                 items.push(ListItem::new(Line::from(Span::styled(content, style))));
             }
             display_line += 1;
@@ -329,7 +381,7 @@ impl PortfolioProfilesScreen {
             let help = if selected_idx >= asset_count {
                 " [m]ap [Space] Collapse "
             } else {
-                " [m]ap [a] Suggest [A]ll [Space] Collapse "
+                " [m]ap [e]dit price [a] Suggest [A]ll [Space] Collapse "
             };
             block = block.title_bottom(Line::from(help).fg(Color::DarkGray));
         }
@@ -699,6 +751,31 @@ impl PortfolioProfilesScreen {
             return EventResult::Handled;
         }
 
+        // Edit asset price (e key) - only in asset section
+        if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.edit) && !in_account_section {
+            if let Some(asset) = unique_assets.get(selected_idx) {
+                let current_price = state
+                    .data()
+                    .asset_prices
+                    .get(asset)
+                    .copied()
+                    .unwrap_or(100.0);
+                state.modal = ModalState::Form(
+                    FormModal::new(
+                        "Edit Asset Price",
+                        vec![FormField::currency("Price per Share", current_price)],
+                        ModalAction::EDIT_ASSET_PRICE,
+                    )
+                    .with_typed_context(ModalContext::Mapping(
+                        MappingContext::AssetPrice {
+                            asset_name: asset.0.clone(),
+                        },
+                    )),
+                );
+            }
+            return EventResult::Handled;
+        }
+
         // Suggest profile for selected asset (a key - uses portfolio.suggest)
         // Only applies to asset section
         if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.suggest) {
@@ -1041,6 +1118,7 @@ impl super::ModalHandler for PortfolioProfilesScreen {
                 | ModalAction::Profile(_)
                 | ModalAction::Holding(_)
                 | ModalAction::Config(_)
+                | ModalAction::Mapping(_)
         )
     }
 
@@ -1121,6 +1199,24 @@ impl super::ModalHandler for PortfolioProfilesScreen {
             }
             ModalAction::Config(ConfigAction::EditInflation) => {
                 actions::handle_edit_inflation(state, ctx)
+            }
+
+            // Mapping actions
+            ModalAction::Mapping(MappingAction::EditPrice) => {
+                if let Some(ModalContext::Mapping(MappingContext::AssetPrice { asset_name })) =
+                    modal_context.as_ref()
+                    && let Some(form) = value.as_form()
+                {
+                    let price = form.currency_or("Price per Share", 100.0);
+                    if price > 0.0 {
+                        state
+                            .data_mut()
+                            .asset_prices
+                            .insert(AssetTag(asset_name.clone()), price);
+                        state.mark_modified();
+                    }
+                }
+                ActionResult::close()
             }
 
             // This shouldn't happen if handles() is correct

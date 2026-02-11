@@ -90,7 +90,7 @@ pub(crate) struct AssetSaleSpec {
 pub(crate) struct RsuVestingSpec {
     pub to_account: AccountRef,
     pub asset: AssetRef,
-    pub units: AmountSpec,
+    pub units: f64,
     pub sell_to_cover: bool,
     pub lot_method: LotMethod,
 }
@@ -230,7 +230,7 @@ impl EventBuilder {
                     account: "default".into(),
                     asset: "default".into(),
                 },
-                units: AmountSpec::Fixed(0.0),
+                units: 0.0,
                 sell_to_cover: false,
                 lot_method: LotMethod::Fifo,
             }),
@@ -409,7 +409,7 @@ impl EventBuilder {
             EventType::Expense(spec) => spec.amount = amount,
             EventType::AssetPurchase(spec) => spec.amount = amount,
             EventType::AssetSale(spec) => spec.amount = amount,
-            EventType::RsuVesting(spec) => spec.units = amount,
+            EventType::RsuVesting(spec) => spec.units = value,
             EventType::Custom(_) => {}
         }
         self
@@ -438,8 +438,7 @@ impl EventBuilder {
             EventType::Expense(spec) => spec.amount = amount,
             EventType::AssetPurchase(spec) => spec.amount = amount,
             EventType::AssetSale(spec) => spec.amount = amount,
-            EventType::RsuVesting(spec) => spec.units = amount,
-            EventType::Custom(_) => {}
+            EventType::RsuVesting(_) | EventType::Custom(_) => {}
         }
         self
     }
@@ -556,7 +555,7 @@ impl EventBuilder {
     #[must_use]
     pub fn units(mut self, count: f64) -> Self {
         if let EventType::RsuVesting(spec) = &mut self.event_type {
-            spec.units = AmountSpec::Fixed(count);
+            spec.units = count;
         }
         self
     }

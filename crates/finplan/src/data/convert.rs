@@ -241,7 +241,8 @@ fn convert_accounts(
             .get(&account_data.name)
             .ok_or_else(|| ConvertError::AccountNotFound(account_data.name.clone()))?;
 
-        let flavor = convert_account_flavor(account_data, ctx, default_cash_profile)?;
+        let flavor =
+            convert_account_flavor(account_data, ctx, default_cash_profile, &data.asset_prices)?;
 
         config.accounts.push(Account { account_id, flavor });
     }
@@ -252,6 +253,7 @@ fn convert_account_flavor(
     account_data: &AccountData,
     ctx: &ResolveContext,
     default_cash_profile: ReturnProfileId,
+    asset_prices: &HashMap<AssetTag, f64>,
 ) -> Result<AccountFlavor, ConvertError> {
     match &account_data.account_type {
         AccountType::Checking(prop) | AccountType::Savings(prop) | AccountType::HSA(prop) => {
@@ -293,6 +295,7 @@ fn convert_account_flavor(
             ctx,
             TaxStatus::Taxable,
             default_cash_profile,
+            asset_prices,
         )?)),
 
         AccountType::Traditional401k(inv) | AccountType::TraditionalIRA(inv) => {
@@ -302,6 +305,7 @@ fn convert_account_flavor(
                 ctx,
                 TaxStatus::TaxDeferred,
                 default_cash_profile,
+                asset_prices,
             )?))
         }
 
@@ -312,6 +316,7 @@ fn convert_account_flavor(
                 ctx,
                 TaxStatus::TaxFree,
                 default_cash_profile,
+                asset_prices,
             )?))
         }
     }
@@ -323,17 +328,19 @@ fn convert_investment_container(
     ctx: &ResolveContext,
     tax_status: TaxStatus,
     default_cash_profile: ReturnProfileId,
+    asset_prices: &HashMap<AssetTag, f64>,
 ) -> Result<InvestmentContainer, ConvertError> {
     let positions: Vec<AssetLot> = inv
         .assets
         .iter()
         .filter_map(|av| {
+            let price = asset_prices.get(&av.asset).copied().unwrap_or(100.0);
             ctx.asset_ids
                 .get(&(account_name.to_string(), av.asset.0.clone()))
                 .map(|(_, asset_id)| AssetLot {
                     asset_id: *asset_id,
                     purchase_date: Date::constant(2020, 1, 1), // Default purchase date
-                    units: av.value / 100.0, // Assume $100 per unit as placeholder
+                    units: av.value / price,
                     cost_basis: av.value,
                 })
         })
@@ -376,8 +383,8 @@ fn build_asset_mappings(
             for ((_, asset_name), (_, asset_id)) in sorted_asset_ids {
                 if asset_name == &asset_tag.0 {
                     config.asset_returns.insert(*asset_id, profile_id);
-                    // Set a default price
-                    config.asset_prices.insert(*asset_id, 100.0);
+                    let price = data.asset_prices.get(asset_tag).copied().unwrap_or(100.0);
+                    config.asset_prices.insert(*asset_id, price);
                 }
             }
         }
@@ -692,6 +699,24 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
                 probability: *probability,
                 on_true: Box::new(EventEffect::TriggerEvent(on_true_id)),
                 on_false: on_false_effect,
+            })
+        }
+
+        EffectData::RsuVesting {
+            to,
+            asset,
+            units,
+            sell_to_cover,
+            lot_method,
+        } => {
+            let to_id = resolve_account(to, ctx)?;
+            let asset_coord = resolve_asset(to, asset, ctx)?;
+            Ok(EventEffect::RsuVesting {
+                to: to_id,
+                asset: asset_coord,
+                units: *units,
+                sell_to_cover: *sell_to_cover,
+                lot_method: convert_lot_method(lot_method),
             })
         }
     }

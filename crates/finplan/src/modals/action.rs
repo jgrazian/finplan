@@ -14,6 +14,7 @@ pub enum ModalAction {
     Effect(EffectAction),
     Optimize(OptimizeAction),
     Analysis(AnalysisAction),
+    Mapping(MappingAction),
     Amount(AmountAction),
 }
 
@@ -150,6 +151,12 @@ pub enum AnalysisAction {
     ConfigureChart { index: usize },
 }
 
+/// Mapping-specific actions (asset price editing in MAPPINGS panel)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MappingAction {
+    EditPrice,
+}
+
 /// Amount-specific actions (editing amount fields in effects)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AmountAction {
@@ -249,6 +256,9 @@ impl ModalAction {
     pub const TOGGLE_ANALYSIS_METRIC: Self = Self::Analysis(AnalysisAction::ToggleMetric);
     pub const CONFIGURE_ANALYSIS_SETTINGS: Self = Self::Analysis(AnalysisAction::ConfigureSettings);
     pub const RUN_ANALYSIS: Self = Self::Analysis(AnalysisAction::RunAnalysis);
+
+    // Mapping shortcuts
+    pub const EDIT_ASSET_PRICE: Self = Self::Mapping(MappingAction::EditPrice);
 
     // Amount shortcuts
     pub const PICK_AMOUNT_TYPE: Self = Self::Amount(AmountAction::PickType);

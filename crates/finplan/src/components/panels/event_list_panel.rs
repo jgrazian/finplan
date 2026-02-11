@@ -325,6 +325,11 @@ impl EventListPanel {
             } => {
                 format!("Random {}%: {}", (probability * 100.0) as u32, on_true.0)
             }
+            EffectData::RsuVesting {
+                to, asset, units, ..
+            } => {
+                format!("RSU {} -> {}: {} shares", asset.0, to.0, units)
+            }
         }
     }
 

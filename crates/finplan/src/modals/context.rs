@@ -24,6 +24,8 @@ pub enum ModalContext {
     Config(ConfigContext),
     /// Context for analysis operations (parameter sweep)
     Analysis(AnalysisContext),
+    /// Context for mapping operations (asset price editing)
+    Mapping(MappingContext),
     /// Context for amount editing (recursive amount builder)
     Amount(AmountContext),
 }
@@ -618,6 +620,7 @@ pub enum EffectTypeContext {
     AdjustBalance,
     CashTransfer,
     Random,
+    RsuVesting,
 }
 
 impl FromStr for EffectTypeContext {
@@ -638,6 +641,7 @@ impl FromStr for EffectTypeContext {
             "AdjustBalance" | "Adjust Balance" => Ok(Self::AdjustBalance),
             "CashTransfer" | "Cash Transfer" => Ok(Self::CashTransfer),
             "Random" => Ok(Self::Random),
+            "RsuVesting" | "RSU Vesting" => Ok(Self::RsuVesting),
             _ => Err(()),
         }
     }
@@ -659,6 +663,7 @@ impl EffectTypeContext {
             Self::AdjustBalance => "Adjust Balance",
             Self::CashTransfer => "Cash Transfer",
             Self::Random => "Random",
+            Self::RsuVesting => "RSU Vesting",
         }
     }
 }
@@ -701,6 +706,12 @@ pub enum AnalysisContext {
     Settings,
     /// Configuring a result chart (type, X/Y params, metric)
     ChartConfig { chart_index: usize },
+}
+
+/// Mapping context for asset price editing
+#[derive(Debug, Clone, PartialEq)]
+pub enum MappingContext {
+    AssetPrice { asset_name: String },
 }
 
 /// Amount editing context for recursive amount building
@@ -862,6 +873,14 @@ impl ModalContext {
     pub fn as_config(&self) -> Option<&ConfigContext> {
         match self {
             Self::Config(ctx) => Some(ctx),
+            _ => None,
+        }
+    }
+
+    /// Extract mapping context
+    pub fn as_mapping(&self) -> Option<&MappingContext> {
+        match self {
+            Self::Mapping(ctx) => Some(ctx),
             _ => None,
         }
     }

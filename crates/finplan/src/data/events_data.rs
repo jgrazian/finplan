@@ -509,6 +509,24 @@ pub enum EffectData {
         #[serde(skip_serializing_if = "Option::is_none")]
         on_false: Option<EventTag>,
     },
+
+    /// RSU vesting: shares vest and are deposited to an investment account.
+    /// The FMV at vesting is taxed as ordinary income.
+    /// Optionally sells a portion of shares to cover taxes (sell-to-cover).
+    RsuVesting {
+        /// Investment account where vested shares are deposited
+        to: AccountTag,
+        /// Asset representing the company stock
+        asset: AssetTag,
+        /// Number of shares vesting
+        units: f64,
+        /// If true, automatically sell shares to cover income taxes
+        #[serde(default)]
+        sell_to_cover: bool,
+        /// Lot method for sell-to-cover liquidation
+        #[serde(default)]
+        lot_method: LotMethodData,
+    },
 }
 
 fn default_true() -> bool {

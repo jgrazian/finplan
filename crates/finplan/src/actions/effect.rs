@@ -34,6 +34,7 @@ pub fn handle_manage_effects(state: &AppState, selected: &str) -> ActionResult {
             "Adjust Balance".to_string(),
             "Cash Transfer".to_string(),
             "Apply RMD".to_string(),
+            "RSU Vesting".to_string(),
             "Random".to_string(),
         ];
         return ActionResult::modal(ModalState::Picker(PickerModal::new(
@@ -440,6 +441,45 @@ fn build_edit_form_for_effect(
                 .start_editing(),
             ))
         }
+
+        EffectData::RsuVesting {
+            to,
+            asset,
+            units,
+            sell_to_cover,
+            lot_method,
+        } => {
+            let assets = get_assets_for_account(state, &to.0);
+            let units_str = format!("{}", units);
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "Edit RSU Vesting",
+                    vec![
+                        FormField::select("To Account", investment_accounts.clone(), &to.0),
+                        FormField::select("Asset", assets, &asset.0),
+                        FormField::text("Units (shares)", &units_str),
+                        FormField::select(
+                            "Sell to Cover",
+                            yes_no_options(),
+                            if *sell_to_cover { "Yes" } else { "No" },
+                        ),
+                        FormField::select(
+                            "Lot Method",
+                            lot_method_options(),
+                            lot_method_to_display(*lot_method),
+                        ),
+                    ],
+                    ModalAction::EDIT_EFFECT,
+                )
+                .with_kind(FormKind::AssetPurchase)
+                .with_typed_context(ModalContext::effect_edit(
+                    event_idx,
+                    effect_idx,
+                    EffectTypeContext::RsuVesting,
+                ))
+                .start_editing(),
+            ))
+        }
     }
 }
 
@@ -818,6 +858,38 @@ pub fn handle_effect_type_for_add(state: &AppState, effect_type: &str) -> Action
                 .start_editing(),
             ))
         }
+        "RSU Vesting" => {
+            if investment_accounts.is_empty() {
+                return ActionResult::error(
+                    "No investment accounts available. Create an investment account first.",
+                );
+            }
+            let assets = get_assets_for_account(state, &first_investment_account);
+            let first_asset = assets.first().cloned().unwrap_or_default();
+            ActionResult::modal(ModalState::Form(
+                FormModal::new(
+                    "New RSU Vesting",
+                    vec![
+                        FormField::select(
+                            "To Account",
+                            investment_accounts.clone(),
+                            &first_investment_account,
+                        ),
+                        FormField::select("Asset", assets, &first_asset),
+                        FormField::text("Units (shares)", "0"),
+                        FormField::select("Sell to Cover", yes_no_options(), "Yes"),
+                        FormField::select("Lot Method", lot_method_options(), "FIFO"),
+                    ],
+                    ModalAction::ADD_EFFECT,
+                )
+                .with_kind(FormKind::AssetPurchase)
+                .with_typed_context(ModalContext::effect_add(
+                    event_idx,
+                    EffectTypeContext::RsuVesting,
+                ))
+                .start_editing(),
+            ))
+        }
         "Random" => {
             if events.is_empty() {
                 return ActionResult::error(
@@ -1005,6 +1077,24 @@ pub fn handle_add_effect(state: &mut AppState, ctx: ActionContext) -> ActionResu
                 probability,
                 on_true: EventTag(on_true),
                 on_false,
+            }
+        }
+        EffectTypeContext::RsuVesting => {
+            let to_account = form.get_str(0).unwrap_or("").to_string();
+            let asset = form.get_str(1).unwrap_or("").to_string();
+            let units = form
+                .get_str(2)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let sell_to_cover = form.get_bool(3).unwrap_or(true);
+            let lot_method = form.get_str(4).map(parse_lot_method).unwrap_or_default();
+
+            EffectData::RsuVesting {
+                to: AccountTag(to_account),
+                asset: AssetTag(asset),
+                units,
+                sell_to_cover,
+                lot_method,
             }
         }
     };
@@ -1198,6 +1288,24 @@ pub fn handle_edit_effect(state: &mut AppState, ctx: ActionContext) -> ActionRes
                 probability,
                 on_true: EventTag(on_true),
                 on_false,
+            })
+        }
+        EffectTypeContext::RsuVesting => {
+            let to_account = form.get_str(0).unwrap_or("").to_string();
+            let asset = form.get_str(1).unwrap_or("").to_string();
+            let units = form
+                .get_str(2)
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let sell_to_cover = form.get_bool(3).unwrap_or(true);
+            let lot_method = form.get_str(4).map(parse_lot_method).unwrap_or_default();
+
+            Some(EffectData::RsuVesting {
+                to: AccountTag(to_account),
+                asset: AssetTag(asset),
+                units,
+                sell_to_cover,
+                lot_method,
             })
         }
     };

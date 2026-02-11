@@ -38,6 +38,11 @@ pub struct SimulationData {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub historical_assets: HashMap<AssetTag, ReturnProfileTag>,
 
+    /// Per-asset prices (e.g., price per share for RSU vesting calculations)
+    /// Defaults to $100.00 for assets not explicitly configured.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub asset_prices: HashMap<AssetTag, f64>,
+
     /// Events (income, expenses, transfers, etc.)
     #[serde(default)]
     pub events: Vec<EventData>,
@@ -62,6 +67,7 @@ impl Default for SimulationData {
             profiles: vec![],
             assets: HashMap::new(),
             historical_assets: HashMap::new(),
+            asset_prices: HashMap::new(),
             events: vec![],
             parameters: ParametersData::default(),
             analysis: AnalysisConfigData::default(),
@@ -166,6 +172,7 @@ mod tests {
                 ReturnProfileTag("S&P 500".to_string()),
             )]),
             historical_assets: HashMap::new(),
+            asset_prices: HashMap::new(),
             events: vec![
                 EventData {
                     name: EventTag("Monthly Salary".to_string()),

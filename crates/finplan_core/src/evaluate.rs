@@ -1002,15 +1002,8 @@ pub fn evaluate_effect_into(
             sell_to_cover,
             lot_method,
         } => {
-            // 1. Evaluate the number of shares vesting
-            let num_units = evaluate_transfer_amount(
-                units,
-                &TransferEndpoint::External,
-                &TransferEndpoint::Asset {
-                    asset_coord: *asset,
-                },
-                state,
-            )?;
+            // 1. Number of shares vesting (plain count)
+            let num_units = *units;
 
             if num_units < 0.001 {
                 return Ok(());

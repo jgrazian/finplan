@@ -577,7 +577,7 @@ pub enum EventEffect {
         /// Asset representing the company stock
         asset: AssetCoord,
         /// Number of shares vesting
-        units: TransferAmount,
+        units: f64,
         /// If true, automatically sell shares to cover income taxes (sell-to-cover)
         #[serde(default)]
         sell_to_cover: bool,
