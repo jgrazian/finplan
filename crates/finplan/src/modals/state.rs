@@ -176,6 +176,10 @@ pub struct PickerModal {
     pub action: ModalAction,
     /// Context data for the picker (e.g., indices for subsequent actions)
     pub context: Option<ModalContext>,
+    /// Scroll offset for when options exceed visible area
+    pub scroll_offset: usize,
+    /// Last known viewport height (set during rendering, used for key handling)
+    pub viewport_height: usize,
 }
 
 impl PickerModal {
@@ -186,6 +190,22 @@ impl PickerModal {
             selected_index: 0,
             action,
             context: None,
+            scroll_offset: 0,
+            viewport_height: 0,
+        }
+    }
+
+    /// Ensure the selected item is visible within the viewport
+    pub fn ensure_visible(&mut self) {
+        let vh = self.viewport_height;
+        if vh == 0 || vh >= self.options.len() {
+            self.scroll_offset = 0;
+            return;
+        }
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        } else if self.selected_index >= self.scroll_offset + vh {
+            self.scroll_offset = self.selected_index + 1 - vh;
         }
     }
 

@@ -585,7 +585,7 @@ impl App {
         self.status_bar.render(frame, chunks[2], &self.state);
 
         // Render modal overlay (if active)
-        render_modal(frame, &self.state);
+        render_modal(frame, &mut self.state);
     }
 
     fn render_active_screen(&mut self, frame: &mut Frame, area: Rect) {

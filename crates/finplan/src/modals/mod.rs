@@ -88,8 +88,8 @@ pub enum ModalResult {
 }
 
 /// Render the active modal as an overlay
-pub fn render_modal(frame: &mut Frame, state: &AppState) {
-    match &state.modal {
+pub fn render_modal(frame: &mut Frame, state: &mut AppState) {
+    match &mut state.modal {
         ModalState::None => {}
         ModalState::TextInput(modal) => {
             render_text_input_modal(frame, modal);
