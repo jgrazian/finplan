@@ -10,7 +10,7 @@ use crate::{
         AccountFlavor, AssetLot, EventId, EventTrigger, LedgerEntry, SimulationWarning, StateEvent,
         WarningKind,
     },
-    simulation_state::{SimulationState, cached_spans},
+    simulation_state::SimulationState,
 };
 
 /// Pre-allocated scratch buffers for simulation hot paths.
@@ -582,10 +582,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 );
 
                 if needs_cooldown {
-                    let tomorrow = state
-                        .timeline
-                        .current_date
-                        .saturating_add(*cached_spans::ONE_DAY);
+                    let tomorrow = crate::date_math::add_days(state.timeline.current_date, 1);
                     state
                         .event_state
                         .set_next_possible_trigger(event_id, tomorrow);

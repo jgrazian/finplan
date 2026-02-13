@@ -8,7 +8,6 @@ use crate::model::AssetCoord;
 use super::accounts::Account;
 use super::ids::{AccountId, AssetId, EventId};
 
-use jiff::ToSpan;
 use serde::{Deserialize, Serialize};
 
 /// How often a repeating event occurs
@@ -23,17 +22,23 @@ pub enum RepeatInterval {
 }
 
 impl RepeatInterval {
-    /// Convert to a `jiff::Span` for date arithmetic
+    /// Fast date advancement without going through `jiff::Span`.
     #[must_use]
     #[inline]
-    pub fn span(&self) -> jiff::Span {
+    pub fn add_to_date(&self, date: jiff::civil::Date) -> jiff::civil::Date {
+        use crate::date_math::{add_days, days_in_month};
         match self {
-            RepeatInterval::Never => 0.days(),
-            RepeatInterval::Weekly => 1.week(),
-            RepeatInterval::BiWeekly => 2.weeks(),
-            RepeatInterval::Monthly => 1.month(),
-            RepeatInterval::Quarterly => 3.months(),
-            RepeatInterval::Yearly => 1.year(),
+            RepeatInterval::Never => date,
+            RepeatInterval::Weekly => add_days(date, 7),
+            RepeatInterval::BiWeekly => add_days(date, 14),
+            RepeatInterval::Monthly => TriggerOffset::Months(1).add_to_date(date),
+            RepeatInterval::Quarterly => TriggerOffset::Months(3).add_to_date(date),
+            RepeatInterval::Yearly => {
+                let new_year = date.year() + 1;
+                let max_day = days_in_month(new_year, date.month());
+                let new_day = date.day().min(max_day);
+                jiff::civil::date(new_year, date.month(), new_day)
+            }
         }
     }
 }
@@ -286,65 +291,32 @@ pub enum TriggerOffset {
 }
 
 impl TriggerOffset {
-    /// Convert to a `jiff::Span` for date arithmetic.
-    /// This is relatively expensive - prefer using `add_to_date()` instead.
-    #[inline]
-    #[must_use]
-    pub fn to_span(&self) -> jiff::Span {
-        use jiff::ToSpan;
-        match self {
-            TriggerOffset::Days(d) => i64::from(*d).days(),
-            TriggerOffset::Months(m) => i64::from(*m).months(),
-            TriggerOffset::Years(y) => i64::from(*y).years(),
-        }
-    }
-
     /// Fast date addition that avoids expensive Span->DateArithmetic conversion.
     #[inline]
     #[must_use]
     pub fn add_to_date(&self, date: jiff::civil::Date) -> jiff::civil::Date {
         match self {
             TriggerOffset::Days(d) => {
-                // Direct day addition via SignedDuration avoids Span overhead
-                let duration = jiff::SignedDuration::from_hours(i64::from(*d) * 24);
-                date.checked_add(duration).unwrap_or(date)
+                // Direct Rata Die arithmetic — avoids all jiff Span/Duration overhead
+                crate::date_math::add_days(date, *d)
             }
             TriggerOffset::Months(m) => {
                 // Manual month arithmetic
                 let total_months = i32::from(date.year()) * 12 + i32::from(date.month()) - 1 + *m;
                 let new_year = total_months.div_euclid(12) as i16;
                 let new_month = (total_months.rem_euclid(12) + 1) as i8;
-                // Inline days_in_month to avoid creating a temporary jiff::civil::date
-                let max_day = days_in_month(new_year, new_month);
+                let max_day = crate::date_math::days_in_month(new_year, new_month);
                 let new_day = date.day().min(max_day);
                 jiff::civil::date(new_year, new_month, new_day)
             }
             TriggerOffset::Years(y) => {
                 let new_year = (i32::from(date.year()) + *y) as i16;
-                // Inline days_in_month to avoid creating a temporary jiff::civil::date
-                let max_day = days_in_month(new_year, date.month());
+                let max_day = crate::date_math::days_in_month(new_year, date.month());
                 let new_day = date.day().min(max_day);
                 jiff::civil::date(new_year, date.month(), new_day)
             }
         }
     }
-}
-
-/// Fast inline days-in-month calculation without creating a `jiff::civil::Date`.
-#[inline]
-fn days_in_month(year: i16, month: i8) -> i8 {
-    const DAYS: [i8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    if month == 2 && is_leap_year(year) {
-        29
-    } else {
-        DAYS[(month - 1) as usize]
-    }
-}
-
-/// Fast leap year check.
-#[inline]
-fn is_leap_year(year: i16) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 // Note: std::collections::HashMap is used in from_profiles for return_profiles parameter
 
+use crate::date_math::{days_in_month, fast_days_between};
 use crate::error::{LookupError, MarketError};
 use crate::model::{AssetId, ReturnProfileId};
 
@@ -80,9 +81,13 @@ fn apply_rates_to_value(
         };
     }
 
-    // Get the anniversary date (start_date + complete_years)
-    let anniversary = start_date.saturating_add(jiff::Span::new().years(complete_years as i64));
-    let remaining_days = (eval_date - anniversary).get_days();
+    // Get the anniversary date (start_date + complete_years) via direct construction
+    // — avoids jiff Span::years() → resign() → DateArithmetic::checked_add overhead
+    let ann_year = start_date.year() + complete_years as i16;
+    let max_day = days_in_month(ann_year, start_date.month());
+    let ann_day = start_date.day().min(max_day);
+    let anniversary = jiff::civil::date(ann_year, start_date.month(), ann_day);
+    let remaining_days = fast_days_between(anniversary, eval_date);
 
     if remaining_days > 0 {
         let yearly_rate = rates[complete_years].incremental;

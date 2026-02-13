@@ -5,31 +5,9 @@ use crate::model::{
     EventTrigger, LedgerEntry, Market, ReturnProfileId, RmdTable, SimulationWarning, StateEvent,
     TaxConfig, TaxSummary, WealthSnapshot,
 };
-use jiff::ToSpan;
 use rand::SeedableRng;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-
-/// Pre-computed spans for common intervals to avoid repeated jiff ToSpan calls.
-/// These are computed once at module load time.
-pub mod cached_spans {
-    use jiff::Span;
-    use std::sync::LazyLock;
-
-    /// 3-month span used for heartbeat time advancement
-    pub static HEARTBEAT: LazyLock<Span> = LazyLock::new(|| {
-        use jiff::ToSpan;
-        3.months()
-    });
-
-    /// 1-day span used for balance-based trigger cooldowns
-    /// This prevents AccountBalance/AssetBalance/NetWorth triggers from
-    /// re-firing in the inner loop on the same simulation date
-    pub static ONE_DAY: LazyLock<Span> = LazyLock::new(|| {
-        use jiff::ToSpan;
-        1.days()
-    });
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct AssetPrice {
@@ -135,9 +113,6 @@ pub struct SimEventState {
 
     /// Whether repeating events have been activated: None=not started, Some(bool)=started (active/paused)
     pub repeating_event_active: Vec<Option<bool>>,
-
-    /// Cached interval spans for repeating events (dense Vec)
-    pub repeating_event_spans: Vec<Option<jiff::Span>>,
 
     /// Events that have been permanently terminated (dense Vec indexed by EventId.0)
     pub terminated_events: Vec<bool>,
@@ -279,15 +254,6 @@ impl SimEventState {
         }
     }
 
-    /// Get cached interval span for repeating event
-    #[inline]
-    #[must_use]
-    pub fn interval_span(&self, id: EventId) -> Option<jiff::Span> {
-        self.repeating_event_spans
-            .get(id.0 as usize)
-            .and_then(|o| *o)
-    }
-
     /// Get how many times a repeating event has triggered
     #[inline]
     #[must_use]
@@ -329,52 +295,39 @@ pub struct SimHistory {
     pub ledger: Vec<LedgerEntry>,
 }
 
-/// Recursively traverse a trigger tree, collecting cacheable values.
-/// Collects Repeating interval spans and Age trigger dates.
+/// Recursively traverse a trigger tree, collecting Age trigger dates.
 /// Used during `SimulationState` initialization for performance caching.
-fn collect_trigger_cache_values(
+fn collect_age_trigger_dates(
     trigger: &EventTrigger,
     birth_date: jiff::civil::Date,
-    repeating_spans: &mut Vec<jiff::Span>,
     age_dates: &mut Vec<jiff::civil::Date>,
 ) {
     match trigger {
         EventTrigger::Repeating {
-            interval,
             start_condition,
             end_condition,
-            max_occurrences: _, // Not cached, checked at runtime
+            ..
         } => {
-            // Cache this Repeating's interval span
-            repeating_spans.push(interval.span());
-            // Recursively check start_condition and end_condition
             if let Some(cond) = start_condition {
-                collect_trigger_cache_values(cond, birth_date, repeating_spans, age_dates);
+                collect_age_trigger_dates(cond, birth_date, age_dates);
             }
             if let Some(cond) = end_condition {
-                collect_trigger_cache_values(cond, birth_date, repeating_spans, age_dates);
+                collect_age_trigger_dates(cond, birth_date, age_dates);
             }
         }
         EventTrigger::Age { years, months } => {
-            // Cache this Age trigger's computed date
             let target_months = months.unwrap_or(0);
-            let trigger_date = birth_date
-                .saturating_add(i64::from(*years).years().months(i64::from(target_months)));
+            let total_months = i32::from(*years) * 12 + i32::from(target_months);
+            let trigger_date =
+                crate::model::TriggerOffset::Months(total_months).add_to_date(birth_date);
             age_dates.push(trigger_date);
         }
         EventTrigger::And(triggers) | EventTrigger::Or(triggers) => {
-            // Recursively check all nested triggers
             for t in triggers {
-                collect_trigger_cache_values(t, birth_date, repeating_spans, age_dates);
+                collect_age_trigger_dates(t, birth_date, age_dates);
             }
         }
-        // Other trigger types don't need caching
-        EventTrigger::Date(_)
-        | EventTrigger::RelativeToEvent { .. }
-        | EventTrigger::AccountBalance { .. }
-        | EventTrigger::AssetBalance { .. }
-        | EventTrigger::NetWorth { .. }
-        | EventTrigger::Manual => {}
+        _ => {}
     }
 }
 
@@ -387,7 +340,8 @@ impl SimulationState {
         let start_date = params
             .start_date
             .unwrap_or_else(|| jiff::Zoned::now().date());
-        let end_date = start_date.saturating_add((params.duration_years as i64).years());
+        let end_date = crate::model::TriggerOffset::Years(params.duration_years as i32)
+            .add_to_date(start_date);
 
         // Build return profiles HashMap from Vec
         let return_profiles = params.return_profiles.clone();
@@ -477,27 +431,15 @@ impl SimulationState {
         // Dense Vecs for O(1) lookup indexed by EventId.0
         let mut events: Vec<Option<Event>> = vec![None; vec_size];
         let mut age_trigger_dates: Vec<Option<jiff::civil::Date>> = vec![None; vec_size];
-        let mut repeating_event_spans: Vec<Option<jiff::Span>> = vec![None; vec_size];
         let triggered_events: Vec<Option<jiff::civil::Date>> = vec![None; vec_size];
         let event_next_date: Vec<Option<jiff::civil::Date>> = vec![None; vec_size];
         let repeating_event_active: Vec<Option<bool>> = vec![None; vec_size];
 
-        // Load events and pre-cache spans/dates for performance
+        // Load events and pre-cache age trigger dates for performance
         for event in &params.events {
-            // Recursively scan trigger tree and cache values if exactly one of each type exists
-            let mut repeating_spans = Vec::new();
             let mut age_dates = Vec::new();
-            collect_trigger_cache_values(
-                &event.trigger,
-                birth_date,
-                &mut repeating_spans,
-                &mut age_dates,
-            );
+            collect_age_trigger_dates(&event.trigger, birth_date, &mut age_dates);
 
-            // Only cache if exactly one Repeating trigger exists in the tree
-            if repeating_spans.len() == 1 {
-                repeating_event_spans[event.event_id.0 as usize] = Some(repeating_spans[0]);
-            }
             // Only cache if exactly one Age trigger exists in the tree
             if age_dates.len() == 1 {
                 age_trigger_dates[event.event_id.0 as usize] = Some(age_dates[0]);
@@ -532,7 +474,6 @@ impl SimulationState {
                 age_trigger_dates,
                 event_next_date,
                 repeating_event_active,
-                repeating_event_spans,
                 terminated_events: vec![false; vec_size],
                 next_possible_trigger: vec![None; vec_size],
                 event_flow_ytd: FxHashMap::default(),

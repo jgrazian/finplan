@@ -238,12 +238,6 @@ pub fn evaluate_trigger(
             let is_started = active_status.is_some();
             let is_active = active_status.unwrap_or(false);
 
-            // Use cached interval span if available, otherwise compute it
-            let interval_span = state
-                .event_state
-                .interval_span(*event_id)
-                .unwrap_or_else(|| interval.span());
-
             // Check if end_condition is met - if so, terminate the event
             if let Some(end_cond) = end_condition
                 && let TriggerEvent::Triggered = evaluate_trigger(event_id, end_cond, state)?
@@ -273,7 +267,7 @@ pub fn evaluate_trigger(
 
                 if condition_met {
                     Ok(TriggerEvent::StartRepeating(
-                        state.timeline.current_date.saturating_add(interval_span),
+                        interval.add_to_date(state.timeline.current_date),
                     ))
                 } else {
                     Ok(if let Some(date) = next_try_date {
@@ -290,8 +284,9 @@ pub fn evaluate_trigger(
                 if let Some(next_date) = state.event_state.next_date(*event_id) {
                     if state.timeline.current_date >= next_date {
                         // Schedule next occurrence
-                        let next = next_date.saturating_add(interval_span);
-                        Ok(TriggerEvent::TriggerRepeating(next))
+                        Ok(TriggerEvent::TriggerRepeating(
+                            interval.add_to_date(next_date),
+                        ))
                     } else {
                         Ok(TriggerEvent::NotTriggered)
                     }

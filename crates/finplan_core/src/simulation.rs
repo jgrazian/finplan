@@ -12,7 +12,7 @@ use crate::model::{
     MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus,
     WarningKind, YearlyCashFlowSummary, final_net_worth,
 };
-use crate::simulation_state::{SimulationState, cached_spans};
+use crate::simulation_state::SimulationState;
 use rand::{RngCore, SeedableRng};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
@@ -313,10 +313,7 @@ fn find_next_checkpoint(state: &SimulationState) -> jiff::civil::Date {
     }
 
     // Heartbeat - advance at least quarterly
-    let heartbeat = state
-        .timeline
-        .current_date
-        .saturating_add(*cached_spans::HEARTBEAT);
+    let heartbeat = crate::model::TriggerOffset::Months(3).add_to_date(state.timeline.current_date);
     if heartbeat < next {
         next = heartbeat;
     }
@@ -473,7 +470,8 @@ fn advance_time(state: &mut SimulationState) {
     state.maybe_rollover_year();
 
     let next_checkpoint = find_next_checkpoint(state);
-    let days_passed = (next_checkpoint - state.timeline.current_date).get_days();
+    let days_passed =
+        crate::date_math::fast_days_between(state.timeline.current_date, next_checkpoint);
 
     if days_passed > 0 {
         compound_accounts(state, next_checkpoint, days_passed);
