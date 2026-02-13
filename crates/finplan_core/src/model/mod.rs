@@ -20,8 +20,8 @@ pub use events::{
 };
 pub use ids::{AccountId, AssetCoord, AssetId, EventId, ReturnProfileId};
 pub use market::{
-    HistoricalInflation, HistoricalReturns, HistoricalStatistics, InflationProfile, Market,
-    MultiAssetHistory, ReturnProfile, n_day_rate,
+    AssetInfo, HistoricalInflation, HistoricalReturns, HistoricalStatistics, InflationProfile,
+    Market, MultiAssetHistory, ReturnProfile, n_day_rate,
 };
 pub use records::{Record, RecordKind, TaxInfo, TransactionSource};
 pub use results::{

@@ -100,11 +100,25 @@ pub fn n_day_rate(yearly_rate: f64, n_days: f64) -> f64 {
     (1.0 + yearly_rate).powf(n_days / 365.0) - 1.0
 }
 
+/// Per-asset configuration including price, return profile, and optional tracking error.
+///
+/// When `tracking_error` is set, each year's return for this asset is perturbed by
+/// `N(0, tracking_error)` noise, modeling idiosyncratic deviation from its base profile.
+#[derive(Debug, Clone)]
+pub struct AssetInfo {
+    pub price: f64,
+    pub return_profile_id: ReturnProfileId,
+    pub tracking_error: Option<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Market {
     inflation_values: Vec<Rate>,
     returns: FxHashMap<ReturnProfileId, Vec<Rate>>,
-    assets: FxHashMap<AssetId, (f64, ReturnProfileId)>,
+    assets: FxHashMap<AssetId, AssetInfo>,
+    /// Per-asset return overrides for assets with tracking error.
+    /// These are derived from the base profile returns plus N(0, tracking_error) noise.
+    asset_return_overrides: FxHashMap<AssetId, Vec<Rate>>,
 }
 
 impl Market {
@@ -112,7 +126,7 @@ impl Market {
     pub fn new(
         inflation_values: &[f64],
         returns: FxHashMap<ReturnProfileId, Vec<f64>>,
-        assets: FxHashMap<AssetId, (f64, ReturnProfileId)>,
+        assets: FxHashMap<AssetId, AssetInfo>,
     ) -> Self {
         let mut inflation_rates = Vec::with_capacity(inflation_values.len());
         let mut cumulative = 1.0;
@@ -144,6 +158,7 @@ impl Market {
             inflation_values: inflation_rates,
             returns: returns_,
             assets,
+            asset_return_overrides: FxHashMap::default(),
         }
     }
 
@@ -157,7 +172,7 @@ impl Market {
         num_years: usize,
         inflation_profile: &InflationProfile,
         return_profiles: &HashMap<ReturnProfileId, ReturnProfile>,
-        assets: &FxHashMap<AssetId, (f64, ReturnProfileId)>,
+        assets: &FxHashMap<AssetId, AssetInfo>,
     ) -> Result<Self, MarketError> {
         // Use sample_sequence for inflation to support block bootstrap
         let inflation_values = inflation_profile.sample_sequence(rng, num_years)?;
@@ -175,7 +190,48 @@ impl Market {
             returns.insert(rp_id, rp_returns);
         }
 
-        Ok(Self::new(&inflation_values, returns, assets.clone()))
+        let mut market = Self::new(&inflation_values, returns, assets.clone());
+
+        // Generate per-asset return overrides for assets with tracking error.
+        // Sort asset IDs for deterministic RNG consumption order.
+        let mut te_assets: Vec<_> = assets
+            .iter()
+            .filter_map(|(id, info)| {
+                info.tracking_error
+                    .map(|te| (*id, info.return_profile_id, te))
+            })
+            .collect();
+        te_assets.sort_by_key(|(id, _, _)| id.0);
+
+        for (asset_id, rp_id, tracking_error) in te_assets {
+            if let Some(base_rates) = market.returns.get(&rp_id) {
+                let noise_dist = rand_distr::Normal::new(0.0, tracking_error).map_err(|_| {
+                    MarketError::InvalidDistributionParameters {
+                        profile_type: "Tracking error",
+                        mean: 0.0,
+                        std_dev: tracking_error,
+                        reason: "tracking_error must be non-negative and finite",
+                    }
+                })?;
+
+                let mut override_rates = Vec::with_capacity(base_rates.len());
+                let mut cumulative = 1.0;
+                for base_rate in base_rates {
+                    let noise: f64 = noise_dist.sample(rng);
+                    let perturbed = base_rate.incremental + noise;
+                    override_rates.push(Rate {
+                        incremental: perturbed,
+                        cumulative,
+                    });
+                    cumulative *= 1.0 + perturbed;
+                }
+                market
+                    .asset_return_overrides
+                    .insert(asset_id, override_rates);
+            }
+        }
+
+        Ok(market)
     }
 
     pub fn get_asset_value(
@@ -184,15 +240,17 @@ impl Market {
         eval_date: Date,
         asset_id: AssetId,
     ) -> Result<f64, MarketError> {
-        let (initial_value, return_profile_id) = *self
+        let info = self
             .assets
             .get(&asset_id)
             .ok_or(LookupError::AssetIdNotFound(asset_id))?;
+        // Use per-asset override returns if available, otherwise fall back to profile returns
         let returns = self
-            .returns
-            .get(&return_profile_id)
-            .ok_or(LookupError::ReturnProfileNotFound(return_profile_id))?;
-        apply_rates_to_value(returns, start_date, eval_date, initial_value)
+            .asset_return_overrides
+            .get(&asset_id)
+            .or_else(|| self.returns.get(&info.return_profile_id))
+            .ok_or(LookupError::ReturnProfileNotFound(info.return_profile_id))?;
+        apply_rates_to_value(returns, start_date, eval_date, info.price)
             .ok_or(MarketError::InsufficientRateData)
     }
 
@@ -1610,12 +1668,20 @@ mod tests {
     use crate::model::{AssetId, ReturnProfileId};
     use jiff::civil::date;
 
+    fn asset_info(price: f64, return_profile_id: ReturnProfileId) -> AssetInfo {
+        AssetInfo {
+            price,
+            return_profile_id,
+            tracking_error: None,
+        }
+    }
+
     #[test]
     fn test_get_asset_value() {
         let asset_id = AssetId(1);
         let rp_id = ReturnProfileId(1);
 
-        let assets = FxHashMap::from_iter([(asset_id, (1000.0, rp_id))]);
+        let assets = FxHashMap::from_iter([(asset_id, asset_info(1000.0, rp_id))]);
         let returns = FxHashMap::from_iter([(rp_id, vec![0.10, 0.05])]);
         let inflation = vec![0.02, 0.02];
 
@@ -1823,7 +1889,7 @@ mod tests {
         let mut return_profiles = HashMap::new();
         return_profiles.insert(rp_id, ReturnProfile::sp500_regime_switching_normal());
 
-        let assets = FxHashMap::from_iter([(asset_id, (1000.0, rp_id))]);
+        let assets = FxHashMap::from_iter([(asset_id, asset_info(1000.0, rp_id))]);
 
         let market = Market::from_profiles(
             &mut rng,
@@ -2013,7 +2079,7 @@ mod tests {
         let mut return_profiles = HashMap::new();
         return_profiles.insert(rp_id, ReturnProfile::sp500_bootstrap());
 
-        let assets = FxHashMap::from_iter([(asset_id, (1000.0, rp_id))]);
+        let assets = FxHashMap::from_iter([(asset_id, asset_info(1000.0, rp_id))]);
 
         let market = Market::from_profiles(
             &mut rng,
@@ -2187,9 +2253,9 @@ mod tests {
         profiles_order_c.insert(rp1, profile1);
 
         let assets = FxHashMap::from_iter([
-            (asset1, (1000.0, rp1)),
-            (asset2, (2000.0, rp2)),
-            (asset3, (3000.0, rp3)),
+            (asset1, asset_info(1000.0, rp1)),
+            (asset2, asset_info(2000.0, rp2)),
+            (asset3, asset_info(3000.0, rp3)),
         ]);
 
         let inflation = InflationProfile::us_historical_bootstrap(Some(5));
@@ -2265,5 +2331,74 @@ mod tests {
                 inf_c
             );
         }
+    }
+
+    #[test]
+    fn test_tracking_error_produces_different_returns() {
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+
+        let rp_id = ReturnProfileId(1);
+        let asset_no_te = AssetId(1);
+        let asset_with_te = AssetId(2);
+
+        let mut return_profiles = HashMap::new();
+        return_profiles.insert(rp_id, ReturnProfile::Fixed(0.08));
+
+        let assets = FxHashMap::from_iter([
+            (asset_no_te, asset_info(100.0, rp_id)),
+            (
+                asset_with_te,
+                AssetInfo {
+                    price: 100.0,
+                    return_profile_id: rp_id,
+                    tracking_error: Some(0.05),
+                },
+            ),
+        ]);
+
+        let market = Market::from_profiles(
+            &mut rng,
+            10,
+            &InflationProfile::Fixed(0.02),
+            &return_profiles,
+            &assets,
+        )
+        .unwrap();
+
+        let start = date(2024, 1, 1);
+
+        // Asset without tracking error should match the profile exactly
+        let val_no_te = market
+            .get_asset_value(start, date(2025, 1, 1), asset_no_te)
+            .unwrap();
+        assert!(
+            (val_no_te - 108.0).abs() < 1e-6,
+            "Asset without TE should get exactly 8% return, got {val_no_te}"
+        );
+
+        // Asset with tracking error should differ from the profile
+        let val_with_te = market
+            .get_asset_value(start, date(2025, 1, 1), asset_with_te)
+            .unwrap();
+        assert!(
+            (val_with_te - 108.0).abs() > 1e-6,
+            "Asset with TE should differ from 8% return, got {val_with_te}"
+        );
+
+        // Over multiple years, both should grow but with different trajectories
+        let mut any_differ = false;
+        for year in 1..=10 {
+            let eval = date(2024 + year, 1, 1);
+            let v1 = market.get_asset_value(start, eval, asset_no_te).unwrap();
+            let v2 = market.get_asset_value(start, eval, asset_with_te).unwrap();
+            if (v1 - v2).abs() > 1e-6 {
+                any_differ = true;
+            }
+        }
+        assert!(
+            any_differ,
+            "Assets with and without tracking error should have different return paths"
+        );
     }
 }

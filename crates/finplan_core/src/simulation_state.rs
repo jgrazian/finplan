@@ -1,9 +1,9 @@
 use crate::config::SimulationConfig;
 use crate::error::{LookupError, Result, SimulationError};
 use crate::model::{
-    Account, AccountFlavor, AccountId, AssetCoord, AssetId, Event, EventId, EventTrigger,
-    LedgerEntry, Market, ReturnProfileId, RmdTable, SimulationWarning, StateEvent, TaxConfig,
-    TaxSummary, WealthSnapshot,
+    Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, Event, EventId,
+    EventTrigger, LedgerEntry, Market, ReturnProfileId, RmdTable, SimulationWarning, StateEvent,
+    TaxConfig, TaxSummary, WealthSnapshot,
 };
 use jiff::ToSpan;
 use rand::SeedableRng;
@@ -394,7 +394,7 @@ impl SimulationState {
 
         // Extract assets from accounts and map to return profiles
         // Use configured asset_prices if available, otherwise default to $1.00 per unit
-        let mut assets: FxHashMap<AssetId, (f64, ReturnProfileId)> = FxHashMap::default();
+        let mut assets: FxHashMap<AssetId, AssetInfo> = FxHashMap::default();
         for account in &params.accounts {
             match &account.flavor {
                 AccountFlavor::Investment(inv) => {
@@ -407,18 +407,26 @@ impl SimulationState {
                                 .get(&lot.asset_id)
                                 .copied()
                                 .unwrap_or(1.0);
-                            assets
-                                .entry(lot.asset_id)
-                                .or_insert((price, return_profile_id));
+                            let tracking_error =
+                                params.asset_tracking_errors.get(&lot.asset_id).copied();
+                            assets.entry(lot.asset_id).or_insert(AssetInfo {
+                                price,
+                                return_profile_id,
+                                tracking_error,
+                            });
                         }
                     }
                 }
                 AccountFlavor::Property(asset) => {
                     if let Some(&return_profile_id) = params.asset_returns.get(&asset.asset_id) {
                         // Property uses asset.value as the initial price
-                        assets
-                            .entry(asset.asset_id)
-                            .or_insert((asset.value, return_profile_id));
+                        let tracking_error =
+                            params.asset_tracking_errors.get(&asset.asset_id).copied();
+                        assets.entry(asset.asset_id).or_insert(AssetInfo {
+                            price: asset.value,
+                            return_profile_id,
+                            tracking_error,
+                        });
                     }
                 }
                 _ => {}
@@ -431,7 +439,12 @@ impl SimulationState {
             assets.entry(asset_id).or_insert_with(|| {
                 // Use configured price or default to $1.00 per unit
                 let price = params.asset_prices.get(&asset_id).copied().unwrap_or(1.0);
-                (price, return_profile_id)
+                let tracking_error = params.asset_tracking_errors.get(&asset_id).copied();
+                AssetInfo {
+                    price,
+                    return_profile_id,
+                    tracking_error,
+                }
             });
         }
 

@@ -153,6 +153,12 @@ pub struct SimulationConfig {
     #[serde(default)]
     pub events: Vec<Event>,
 
+    /// Per-asset tracking error (annualized standard deviation of idiosyncratic noise).
+    /// Assets with tracking error get their base profile returns perturbed by N(0, tracking_error)
+    /// each year, modeling deviation from the benchmark.
+    #[serde(default)]
+    pub asset_tracking_errors: HashMap<AssetId, f64>,
+
     /// Whether to collect ledger entries during simulation (default: true)
     ///
     /// Disable for batch MC iterations and parameter sweeps to save CPU/memory.
@@ -168,6 +174,7 @@ impl Default for SimulationConfig {
             inflation_profile: InflationProfile::default(),
             asset_returns: HashMap::new(),
             asset_prices: HashMap::new(),
+            asset_tracking_errors: HashMap::new(),
             tax_config: TaxConfig::default(),
             start_date: None,
             birth_date: None,

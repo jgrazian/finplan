@@ -36,6 +36,7 @@ pub struct AssetBuilder {
     pub(crate) initial_price: f64,
     pub(crate) return_profile: Option<ReturnProfile>,
     pub(crate) return_profile_name: Option<String>,
+    pub(crate) tracking_error: Option<f64>,
 }
 
 /// A fully defined asset ready to be added to the simulation
@@ -46,6 +47,7 @@ pub struct AssetDefinition {
     pub initial_price: f64,
     pub return_profile: ReturnProfile,
     pub return_profile_name: Option<String>,
+    pub tracking_error: Option<f64>,
 }
 
 impl AssetBuilder {
@@ -58,6 +60,7 @@ impl AssetBuilder {
             initial_price: 1.0, // Default $1.00 per unit
             return_profile: None,
             return_profile_name: None,
+            tracking_error: None,
         }
     }
 
@@ -152,6 +155,15 @@ impl AssetBuilder {
         self
     }
 
+    /// Set per-asset tracking error (annualized standard deviation).
+    /// Adds N(0, tracking_error) noise to each year's return from the base profile,
+    /// modeling idiosyncratic risk for assets that don't perfectly track their benchmark.
+    #[must_use]
+    pub fn tracking_error(mut self, te: f64) -> Self {
+        self.tracking_error = Some(te);
+        self
+    }
+
     /// Build the asset definition
     #[must_use]
     pub fn build(self) -> AssetDefinition {
@@ -161,6 +173,7 @@ impl AssetBuilder {
             initial_price: self.initial_price,
             return_profile: self.return_profile.unwrap_or(ReturnProfile::Fixed(0.0)),
             return_profile_name: self.return_profile_name,
+            tracking_error: self.tracking_error,
         }
     }
 }

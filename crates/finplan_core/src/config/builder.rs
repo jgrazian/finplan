@@ -417,6 +417,9 @@ impl SimulationBuilder {
             self.config
                 .asset_prices
                 .insert(asset_id, asset_def.initial_price);
+            if let Some(te) = asset_def.tracking_error {
+                self.config.asset_tracking_errors.insert(asset_id, te);
+            }
 
             // Register in metadata
             self.metadata.register_asset(
