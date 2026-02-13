@@ -218,7 +218,8 @@ impl Market {
                 let mut cumulative = 1.0;
                 for base_rate in base_rates {
                     let noise: f64 = noise_dist.sample(rng);
-                    let perturbed = base_rate.incremental + noise;
+                    // Clamp so 1+r never goes negative (asset can't lose more than 100%)
+                    let perturbed = (base_rate.incremental + noise).max(-1.0);
                     override_rates.push(Rate {
                         incremental: perturbed,
                         cumulative,

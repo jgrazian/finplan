@@ -151,10 +151,10 @@ pub enum AnalysisAction {
     ConfigureChart { index: usize },
 }
 
-/// Mapping-specific actions (asset price editing in MAPPINGS panel)
+/// Mapping-specific actions (asset config editing in MAPPINGS panel)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MappingAction {
-    EditPrice,
+    EditAsset,
 }
 
 /// Amount-specific actions (editing amount fields in effects)
@@ -258,7 +258,7 @@ impl ModalAction {
     pub const RUN_ANALYSIS: Self = Self::Analysis(AnalysisAction::RunAnalysis);
 
     // Mapping shortcuts
-    pub const EDIT_ASSET_PRICE: Self = Self::Mapping(MappingAction::EditPrice);
+    pub const EDIT_ASSET_CONFIG: Self = Self::Mapping(MappingAction::EditAsset);
 
     // Amount shortcuts
     pub const PICK_AMOUNT_TYPE: Self = Self::Amount(AmountAction::PickType);

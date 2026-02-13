@@ -708,10 +708,10 @@ pub enum AnalysisContext {
     ChartConfig { chart_index: usize },
 }
 
-/// Mapping context for asset price editing
+/// Mapping context for asset configuration editing
 #[derive(Debug, Clone, PartialEq)]
 pub enum MappingContext {
-    AssetPrice { asset_name: String },
+    AssetConfig { asset_name: String },
 }
 
 /// Amount editing context for recursive amount building

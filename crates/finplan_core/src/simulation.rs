@@ -848,7 +848,7 @@ fn monte_carlo_core(
             return Err(SimulationError::Cancelled);
         }
 
-        seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        seed_results.sort_by(|a, b| a.1.total_cmp(&b.1));
 
         // Check convergence
         if let Some(ref mut tracker) = convergence_tracker {
@@ -867,7 +867,7 @@ fn monte_carlo_core(
     }
 
     // Final sort
-    seed_results.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    seed_results.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     // Calculate final statistics
     let actual_iterations = seed_results.len();

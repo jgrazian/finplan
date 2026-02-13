@@ -385,6 +385,9 @@ fn build_asset_mappings(
                     config.asset_returns.insert(*asset_id, profile_id);
                     let price = data.asset_prices.get(asset_tag).copied().unwrap_or(100.0);
                     config.asset_prices.insert(*asset_id, price);
+                    if let Some(&te) = data.asset_tracking_errors.get(asset_tag) {
+                        config.asset_tracking_errors.insert(*asset_id, te);
+                    }
                 }
             }
         }

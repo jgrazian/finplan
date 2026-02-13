@@ -799,11 +799,7 @@ impl AnalysisResults {
         }
 
         // Sort by absolute impact (most impactful first)
-        entries.sort_by(|a, b| {
-            b.abs_impact
-                .partial_cmp(&a.abs_impact)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        entries.sort_by(|a, b| b.abs_impact.total_cmp(&a.abs_impact));
 
         entries
     }

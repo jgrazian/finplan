@@ -190,11 +190,7 @@ pub fn optimize_nelder_mead(
         iteration += 1;
 
         // Sort simplex by objective (best first, worst last)
-        simplex.sort_by(|a, b| {
-            b.objective
-                .partial_cmp(&a.objective)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        simplex.sort_by(|a, b| b.objective.total_cmp(&a.objective));
 
         let cent = centroid(&simplex);
         let size = simplex_size(&simplex, &cent);
@@ -308,11 +304,7 @@ pub fn optimize_nelder_mead(
     }
 
     // Final sort to get best
-    simplex.sort_by(|a, b| {
-        b.objective
-            .partial_cmp(&a.objective)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    simplex.sort_by(|a, b| b.objective.total_cmp(&a.objective));
 
     // Find best feasible solution
     let best_feasible = simplex

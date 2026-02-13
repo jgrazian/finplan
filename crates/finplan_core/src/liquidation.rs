@@ -351,9 +351,7 @@ fn sort_lots_by_method(lots: &[AssetLot], method: LotMethod) -> Vec<AssetLot> {
             } else {
                 0.0
             };
-            b_per_unit
-                .partial_cmp(&a_per_unit)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            b_per_unit.total_cmp(&a_per_unit)
         }),
         LotMethod::LowestCost => sorted.sort_by(|a, b| {
             let a_per_unit = if a.units > 0.0 {
@@ -366,9 +364,7 @@ fn sort_lots_by_method(lots: &[AssetLot], method: LotMethod) -> Vec<AssetLot> {
             } else {
                 0.0
             };
-            a_per_unit
-                .partial_cmp(&b_per_unit)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a_per_unit.total_cmp(&b_per_unit)
         }),
         LotMethod::AverageCost => {} // No sorting needed
     }

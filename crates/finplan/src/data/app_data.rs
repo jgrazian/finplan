@@ -43,6 +43,11 @@ pub struct SimulationData {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub asset_prices: HashMap<AssetTag, f64>,
 
+    /// Per-asset tracking error (idiosyncratic risk).
+    /// When set, each year's return is perturbed by N(0, tracking_error) noise.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub asset_tracking_errors: HashMap<AssetTag, f64>,
+
     /// Events (income, expenses, transfers, etc.)
     #[serde(default)]
     pub events: Vec<EventData>,
@@ -68,6 +73,7 @@ impl Default for SimulationData {
             assets: HashMap::new(),
             historical_assets: HashMap::new(),
             asset_prices: HashMap::new(),
+            asset_tracking_errors: HashMap::new(),
             events: vec![],
             parameters: ParametersData::default(),
             analysis: AnalysisConfigData::default(),
@@ -173,6 +179,7 @@ mod tests {
             )]),
             historical_assets: HashMap::new(),
             asset_prices: HashMap::new(),
+            asset_tracking_errors: HashMap::new(),
             events: vec![
                 EventData {
                     name: EventTag("Monthly Salary".to_string()),

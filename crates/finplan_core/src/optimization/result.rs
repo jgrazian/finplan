@@ -72,11 +72,7 @@ impl ConvergenceHistory {
         self.evaluations
             .iter()
             .filter(|e| e.constraints_satisfied)
-            .max_by(|a, b| {
-                a.objective_value
-                    .partial_cmp(&b.objective_value)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by(|a, b| a.objective_value.total_cmp(&b.objective_value))
     }
 }
 

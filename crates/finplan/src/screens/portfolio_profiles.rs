@@ -311,15 +311,21 @@ impl PortfolioProfilesScreen {
                 };
 
                 let price_suffix = match asset_prices_map.get(asset) {
-                    Some(price) => format!("  {}", format_currency(*price)),
+                    Some(price) => format!("  {}/share", format_currency(*price)),
+                    None => String::new(),
+                };
+
+                let te_suffix = match state.data().asset_tracking_errors.get(asset) {
+                    Some(te) => format!("  σ={:.0}%", te * 100.0),
                     None => String::new(),
                 };
 
                 let content = format!(
-                    "{:<nw$}  ->  {:<pw$}{}",
+                    "{:<nw$}  ->  {:<pw$}{}{}",
                     asset.0,
                     mapping_str,
                     price_suffix,
+                    te_suffix,
                     nw = asset_name_width,
                     pw = asset_profile_width,
                 );
@@ -751,7 +757,7 @@ impl PortfolioProfilesScreen {
             return EventResult::Handled;
         }
 
-        // Edit asset price (e key) - only in asset section
+        // Edit asset config (e key) - only in asset section
         if KeybindingsConfig::matches(&key, &kb.tabs.portfolio.edit) && !in_account_section {
             if let Some(asset) = unique_assets.get(selected_idx) {
                 let current_price = state
@@ -760,14 +766,23 @@ impl PortfolioProfilesScreen {
                     .get(asset)
                     .copied()
                     .unwrap_or(100.0);
+                let current_te = state
+                    .data()
+                    .asset_tracking_errors
+                    .get(asset)
+                    .copied()
+                    .unwrap_or(0.0);
                 state.modal = ModalState::Form(
                     FormModal::new(
-                        "Edit Asset Price",
-                        vec![FormField::currency("Price per Share", current_price)],
-                        ModalAction::EDIT_ASSET_PRICE,
+                        "Edit Asset Config",
+                        vec![
+                            FormField::currency("Price per Share", current_price),
+                            FormField::percentage("Tracking Error", current_te),
+                        ],
+                        ModalAction::EDIT_ASSET_CONFIG,
                     )
                     .with_typed_context(ModalContext::Mapping(
-                        MappingContext::AssetPrice {
+                        MappingContext::AssetConfig {
                             asset_name: asset.0.clone(),
                         },
                     )),
@@ -1202,17 +1217,26 @@ impl super::ModalHandler for PortfolioProfilesScreen {
             }
 
             // Mapping actions
-            ModalAction::Mapping(MappingAction::EditPrice) => {
-                if let Some(ModalContext::Mapping(MappingContext::AssetPrice { asset_name })) =
+            ModalAction::Mapping(MappingAction::EditAsset) => {
+                if let Some(ModalContext::Mapping(MappingContext::AssetConfig { asset_name })) =
                     modal_context.as_ref()
                     && let Some(form) = value.as_form()
                 {
+                    let asset_tag = AssetTag(asset_name.clone());
                     let price = form.currency_or("Price per Share", 100.0);
                     if price > 0.0 {
                         state
                             .data_mut()
                             .asset_prices
-                            .insert(AssetTag(asset_name.clone()), price);
+                            .insert(asset_tag.clone(), price);
+                        state.mark_modified();
+                    }
+                    let te = form.percentage_or("Tracking Error", 0.0);
+                    if te > 0.0 {
+                        state.data_mut().asset_tracking_errors.insert(asset_tag, te);
+                        state.mark_modified();
+                    } else {
+                        state.data_mut().asset_tracking_errors.remove(&asset_tag);
                         state.mark_modified();
                     }
                 }
