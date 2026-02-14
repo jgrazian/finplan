@@ -444,6 +444,20 @@ impl SnapshotMeanAccumulator {
         self.count += 1;
     }
 
+    /// Merge another accumulator's sums into this one (for parallel reduction).
+    pub fn merge(&mut self, other: &Self) {
+        for (snap_idx, other_sums) in other.account_sums.iter().enumerate() {
+            if let Some(sums) = self.account_sums.get_mut(snap_idx) {
+                for (acc_idx, val) in other_sums.iter().enumerate() {
+                    if let Some(sum) = sums.get_mut(acc_idx) {
+                        *sum += val;
+                    }
+                }
+            }
+        }
+        self.count += other.count;
+    }
+
     /// Build the mean wealth snapshots
     #[must_use]
     pub fn build_mean_snapshots(&self) -> Vec<WealthSnapshot> {
@@ -522,6 +536,22 @@ impl TaxMeanAccumulator {
         self.count += 1;
     }
 
+    /// Merge another accumulator's sums into this one (for parallel reduction).
+    pub fn merge(&mut self, other: &Self) {
+        for (idx, other_sums) in other.sums.iter().enumerate() {
+            if let Some(sums) = self.sums.get_mut(idx) {
+                sums.ordinary_income += other_sums.ordinary_income;
+                sums.capital_gains += other_sums.capital_gains;
+                sums.tax_free_withdrawals += other_sums.tax_free_withdrawals;
+                sums.federal_tax += other_sums.federal_tax;
+                sums.state_tax += other_sums.state_tax;
+                sums.total_tax += other_sums.total_tax;
+                sums.early_withdrawal_penalties += other_sums.early_withdrawal_penalties;
+            }
+        }
+        self.count += other.count;
+    }
+
     /// Build the mean tax summaries
     #[must_use]
     pub fn build_mean_taxes(&self) -> Vec<TaxSummary> {
@@ -590,6 +620,21 @@ impl CashFlowMeanAccumulator {
         self.count += 1;
     }
 
+    /// Merge another accumulator's sums into this one (for parallel reduction).
+    pub fn merge(&mut self, other: &Self) {
+        for (idx, other_sums) in other.sums.iter().enumerate() {
+            if let Some(sums) = self.sums.get_mut(idx) {
+                sums.income += other_sums.income;
+                sums.expenses += other_sums.expenses;
+                sums.contributions += other_sums.contributions;
+                sums.withdrawals += other_sums.withdrawals;
+                sums.appreciation += other_sums.appreciation;
+                sums.net_cash_flow += other_sums.net_cash_flow;
+            }
+        }
+        self.count += other.count;
+    }
+
     /// Build the mean cash flow summaries
     pub fn build_mean_cash_flows(&self) -> Vec<YearlyCashFlowSummary> {
         let n = self.count as f64;
@@ -636,6 +681,16 @@ impl InflationMeanAccumulator {
         self.count += 1;
     }
 
+    /// Merge another accumulator's sums into this one (for parallel reduction).
+    pub fn merge(&mut self, other: &Self) {
+        for (idx, &val) in other.sums.iter().enumerate() {
+            if let Some(sum) = self.sums.get_mut(idx) {
+                *sum += val;
+            }
+        }
+        self.count += other.count;
+    }
+
     /// Build the mean inflation factors
     pub fn build_mean_inflation(&self) -> Vec<f64> {
         if self.count == 0 {
@@ -671,6 +726,14 @@ impl MeanAccumulators {
         self.taxes.accumulate(result);
         self.cash_flows.accumulate(result);
         self.inflation.accumulate(result);
+    }
+
+    /// Merge another set of accumulators into this one (for parallel reduction).
+    pub fn merge(&mut self, other: &Self) {
+        self.snapshots.merge(&other.snapshots);
+        self.taxes.merge(&other.taxes);
+        self.cash_flows.merge(&other.cash_flows);
+        self.inflation.merge(&other.inflation);
     }
 
     /// Build a synthetic `SimulationResult` with mean values

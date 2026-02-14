@@ -1,5 +1,3 @@
-use std::sync::Mutex;
-
 use rustc_hash::FxHashMap;
 
 use crate::apply::{SimulationScratch, process_events_with_scratch};
@@ -676,7 +674,6 @@ fn percentile_value(sorted: &[(u64, f64)], p: f64) -> f64 {
 /// Internal options controlling Monte Carlo execution behavior.
 struct MonteCarloOptions<'a> {
     progress: Option<&'a MonteCarloProgress>,
-    compute_mean: bool,
     run_phase2: bool,
 }
 
@@ -693,7 +690,6 @@ fn monte_carlo_core(
     config: &MonteCarloConfig,
     options: &MonteCarloOptions<'_>,
 ) -> Result<MonteCarloInternalResult, SimulationError> {
-    let batch_size = config.batch_size;
     let parallel_batches = config.parallel_batches;
 
     // Reset and check progress if tracking
@@ -737,6 +733,8 @@ fn monte_carlo_core(
 
     let cancelled = std::sync::atomic::AtomicBool::new(false);
 
+    let compute_means = config.compute_mean;
+
     loop {
         let current_count = seed_results.len();
         if current_count >= max_iterations {
@@ -750,41 +748,32 @@ fn monte_carlo_core(
             return Err(SimulationError::Cancelled);
         }
 
+        // Dispatch all remaining work this round, one batch per core.
+        // Each core gets an equal share of iterations.
         let remaining = max_iterations - current_count;
-        let target_this_round = remaining.min(batch_size * parallel_batches);
-        let num_batches = target_this_round.div_ceil(batch_size);
+        let num_batches = parallel_batches.min(remaining);
+        let per_batch = remaining / num_batches;
+        let extra = remaining % num_batches;
 
-        // Set up mean accumulator mutex if needed
-        let mean_accumulator: Option<Mutex<Option<MeanAccumulators>>> =
-            if options.compute_mean && config.compute_mean {
-                Some(Mutex::new(mean_accumulators.take()))
-            } else {
-                None
-            };
-
-        let batch_outputs: Vec<(Vec<(u64, f64)>, OnlineStats)> = (0..num_batches)
+        // Each batch returns its results, stats, and optional local mean accumulator.
+        // No shared Mutex — each thread accumulates independently, merge after.
+        type BatchOutput = (Vec<(u64, f64)>, OnlineStats, Option<MeanAccumulators>);
+        let batch_outputs: Vec<BatchOutput> = (0..num_batches)
             .into_par_iter()
             .map(|local_batch_idx| {
-                // Check cancellation at batch start
-                if let Some(progress) = options.progress
-                    && (cancelled.load(std::sync::atomic::Ordering::Relaxed)
-                        || progress.is_cancelled())
-                {
-                    cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                    return (Vec::new(), OnlineStats::new());
+                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                    return (Vec::new(), OnlineStats::new(), None);
                 }
 
                 let mut rng =
                     rand::rngs::SmallRng::seed_from_u64(batch_seed + local_batch_idx as u64);
                 let mut scratch = SimulationScratch::new();
                 let mut local_stats = OnlineStats::new();
-                let mut local_results = Vec::new();
+                let mut local_acc: Option<MeanAccumulators> = None;
 
-                let this_batch_size = if local_batch_idx == num_batches - 1 {
-                    target_this_round - local_batch_idx * batch_size
-                } else {
-                    batch_size
-                };
+                // Distribute remainder across first `extra` batches
+                let this_batch_size = per_batch + if local_batch_idx < extra { 1 } else { 0 };
+                let mut local_results = Vec::with_capacity(this_batch_size);
 
                 for _ in 0..this_batch_size {
                     if let Some(progress) = options.progress
@@ -800,18 +789,13 @@ fn monte_carlo_core(
                         local_stats.add(fnw);
                         local_results.push((seed, fnw));
 
-                        if let Some(ref acc_mutex) = mean_accumulator {
-                            let mut acc_guard = match acc_mutex.lock() {
-                                Ok(guard) => guard,
-                                Err(poisoned) => poisoned.into_inner(),
-                            };
-
-                            if let Some(acc) = acc_guard.as_mut() {
+                        if compute_means {
+                            if let Some(ref mut acc) = local_acc {
                                 acc.accumulate(&result);
                             } else {
                                 let mut new_acc = MeanAccumulators::new(&result);
                                 new_acc.accumulate(&result);
-                                *acc_guard = Some(new_acc);
+                                local_acc = Some(new_acc);
                             }
                         }
 
@@ -821,23 +805,24 @@ fn monte_carlo_core(
                     }
                 }
 
-                (local_results, local_stats)
+                (local_results, local_stats, local_acc)
             })
             .collect();
 
-        // Merge results
-        for (results, stats) in batch_outputs {
+        // Merge results from all batches (single-threaded, fast)
+        for (results, stats, local_acc) in batch_outputs {
             seed_results.extend(results);
             online_stats.merge(&stats);
+            if let Some(acc) = local_acc {
+                if let Some(ref mut existing) = mean_accumulators {
+                    existing.merge(&acc);
+                } else {
+                    mean_accumulators = Some(acc);
+                }
+            }
         }
 
         batch_seed += num_batches as u64;
-
-        // Extract mean accumulators for next round
-        mean_accumulators = mean_accumulator.and_then(|m| match m.into_inner() {
-            Ok(opt) => opt,
-            Err(poisoned) => poisoned.into_inner(),
-        });
 
         // Check cancellation after batch
         if let Some(progress) = options.progress
@@ -941,7 +926,6 @@ pub fn monte_carlo_simulate_with_config(
 ) -> Result<MonteCarloSummary, SimulationError> {
     let options = MonteCarloOptions {
         progress: None,
-        compute_mean: config.compute_mean,
         run_phase2: true,
     };
     let result = monte_carlo_core(params, config, &options)?;
@@ -980,7 +964,6 @@ pub fn monte_carlo_simulate_with_progress(
 ) -> Result<MonteCarloSummary, SimulationError> {
     let options = MonteCarloOptions {
         progress: Some(progress),
-        compute_mean: config.compute_mean,
         run_phase2: true,
     };
     let result = monte_carlo_core(params, config, &options)?;
@@ -1001,11 +984,12 @@ pub fn monte_carlo_stats_only(
     config: &MonteCarloConfig,
     progress: &MonteCarloProgress,
 ) -> Result<(MonteCarloStats, Vec<(f64, u64)>), SimulationError> {
+    let mut stats_config = config.clone();
+    stats_config.compute_mean = false;
     let options = MonteCarloOptions {
         progress: Some(progress),
-        compute_mean: false,
         run_phase2: false,
     };
-    let result = monte_carlo_core(params, config, &options)?;
+    let result = monte_carlo_core(params, &stats_config, &options)?;
     Ok((result.stats, result.percentile_seeds))
 }
