@@ -12,38 +12,22 @@ use crate::date_math::{days_in_month, fast_days_between};
 use crate::error::{LookupError, MarketError};
 use crate::model::{AssetId, ReturnProfileId};
 
-#[derive(Debug, Clone, Copy)]
-struct Rate {
-    incremental: f64,
-    cumulative: f64,
-}
-
-/// Helper to apply a series of rates to a value over a date range.
-/// Uses pre-computed cumulative rates for efficiency.
+/// Decompose a date range into complete years and remaining days.
+/// Returns `None` if `eval_date < start_date`.
 #[inline]
-fn apply_rates_to_value(
-    rates: &[Rate],
-    start_date: Date,
-    eval_date: Date,
-    initial_value: f64,
-) -> Option<f64> {
+fn decompose_years_days(start_date: Date, eval_date: Date) -> Option<(usize, i32)> {
     if eval_date < start_date {
         return None;
     }
-
     if eval_date == start_date {
-        return Some(initial_value);
+        return Some((0, 0));
     }
 
-    // Calculate complete years directly (O(1) instead of O(years) loop)
     let year_diff = eval_date.year() - start_date.year();
 
-    // Determine complete years by checking if we've passed the anniversary
     let complete_years = if year_diff <= 0 {
         0usize
     } else {
-        // Check if eval_date has passed the Nth anniversary of start_date
-        // Compare (month, day) to determine if anniversary has passed
         let start_month = start_date.month() as u8;
         let start_day = start_date.day();
         let eval_month = eval_date.month() as u8;
@@ -56,43 +40,98 @@ fn apply_rates_to_value(
         }
     };
 
-    // Apply complete years using cumulative rate
-    let value = if complete_years == 0 {
-        initial_value
-    } else if complete_years < rates.len() {
-        // rates[N].cumulative = product of (1 + r[i]) for i in 0..N
-        initial_value * rates[complete_years].cumulative
-    } else if complete_years == rates.len() {
-        // Need final cumulative: rates[N-1].cumulative * (1 + rates[N-1].incremental)
-        let last_idx = rates.len() - 1;
-        initial_value * rates[last_idx].cumulative * (1.0 + rates[last_idx].incremental)
-    } else {
-        // Not enough rate data
-        return None;
-    };
-
-    // Calculate remaining days for partial year using one date arithmetic op
-    if complete_years >= rates.len() {
-        // No partial year rate available
-        return if complete_years == rates.len() {
-            Some(value)
-        } else {
-            None
-        };
-    }
-
     // Get the anniversary date (start_date + complete_years) via direct construction
-    // — avoids jiff Span::years() → resign() → DateArithmetic::checked_add overhead
     let ann_year = start_date.year() + complete_years as i16;
     let max_day = days_in_month(ann_year, start_date.month());
     let ann_day = start_date.day().min(max_day);
     let anniversary = jiff::civil::date(ann_year, start_date.month(), ann_day);
     let remaining_days = fast_days_between(anniversary, eval_date);
 
+    Some((complete_years, remaining_days))
+}
+
+/// Apply a value using contiguous cumulative/daily slices (for inflation or asset overrides).
+/// `cumulative[i]` = product of (1+r[j]) for j in 0..i (cumulative[0] = 1.0).
+/// `daily[i]` = (1+r[i])^(1/365).
+#[inline]
+fn apply_value_from_slices(
+    cumulative: &[f64],
+    daily: &[f64],
+    num_rates: usize,
+    complete_years: usize,
+    remaining_days: i32,
+    initial_value: f64,
+) -> Option<f64> {
+    // Apply complete years using cumulative rate
+    let value = if complete_years == 0 {
+        initial_value
+    } else if complete_years < num_rates {
+        initial_value * cumulative[complete_years]
+    } else if complete_years == num_rates {
+        // Need final cumulative: cumulative[N-1] * (1 + rates[N-1])
+        // cumulative[N-1] * daily[N-1]^365 — but we stored cumulative as product up to index
+        // Actually cumulative[N] would be the full product, but we only have N entries.
+        // cumulative[i] = product of (1+r[j]) for j in 0..i, so:
+        // cumulative[N-1] * (1+r[N-1]) = product for j in 0..N = cumulative[N] if it existed
+        // We can compute (1+r[N-1]) = daily[N-1]^365
+        let last_idx = num_rates - 1;
+        initial_value * cumulative[last_idx] * daily[last_idx].powi(365)
+    } else {
+        return None;
+    };
+
+    if complete_years >= num_rates {
+        return if complete_years == num_rates {
+            Some(value)
+        } else {
+            None
+        };
+    }
+
     if remaining_days > 0 {
-        let yearly_rate = rates[complete_years].incremental;
-        let partial_rate = n_day_rate(yearly_rate, f64::from(remaining_days));
-        Some(value * (1.0 + partial_rate))
+        Some(value * daily[complete_years].powi(remaining_days))
+    } else {
+        Some(value)
+    }
+}
+
+/// Apply a value using year-major strided dense arrays (for return profiles).
+/// Arrays are laid out as: index = year * num_profiles + profile_idx.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn apply_value_dense(
+    profile_cumulative: &[f64],
+    profile_daily: &[f64],
+    num_profiles: usize,
+    profile_idx: usize,
+    num_years: usize,
+    complete_years: usize,
+    remaining_days: i32,
+    initial_value: f64,
+) -> Option<f64> {
+    let value = if complete_years == 0 {
+        initial_value
+    } else if complete_years < num_years {
+        let idx = complete_years * num_profiles + profile_idx;
+        initial_value * profile_cumulative[idx]
+    } else if complete_years == num_years {
+        let last_idx = (num_years - 1) * num_profiles + profile_idx;
+        initial_value * profile_cumulative[last_idx] * profile_daily[last_idx].powi(365)
+    } else {
+        return None;
+    };
+
+    if complete_years >= num_years {
+        return if complete_years == num_years {
+            Some(value)
+        } else {
+            None
+        };
+    }
+
+    if remaining_days > 0 {
+        let idx = complete_years * num_profiles + profile_idx;
+        Some(value * profile_daily[idx].powi(remaining_days))
     } else {
         Some(value)
     }
@@ -116,14 +155,49 @@ pub struct AssetInfo {
     pub tracking_error: Option<f64>,
 }
 
+/// Pre-computed per-asset return override rates (for tracking error).
+#[derive(Debug, Clone)]
+struct AssetOverrideRates {
+    cumulative: Vec<f64>,
+    daily: Vec<f64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Market {
-    inflation_values: Vec<Rate>,
-    returns: FxHashMap<ReturnProfileId, Vec<Rate>>,
-    assets: FxHashMap<AssetId, AssetInfo>,
-    /// Per-asset return overrides for assets with tracking error.
-    /// These are derived from the base profile returns plus N(0, tracking_error) noise.
-    asset_return_overrides: FxHashMap<AssetId, Vec<Rate>>,
+    num_profiles: usize,
+    num_years: usize,
+
+    // Return profiles — year-major contiguous layout
+    // Index: year * num_profiles + profile_id.0
+    profile_rates: Vec<f64>,
+    profile_cumulative: Vec<f64>,
+    profile_daily: Vec<f64>,
+
+    // Inflation — contiguous Vecs
+    inflation_rates: Vec<f64>,
+    inflation_cumulative: Vec<f64>,
+    inflation_daily: Vec<f64>,
+
+    // Assets — dense Vec indexed by AssetId.0
+    assets: Vec<Option<AssetInfo>>,
+
+    // Per-asset return overrides — dense Vec indexed by AssetId.0
+    asset_overrides: Vec<Option<AssetOverrideRates>>,
+}
+
+/// Build contiguous cumulative and daily arrays from a flat rates slice.
+/// For simple (non-strided) arrays like inflation or asset overrides.
+fn build_cumulative_daily(rates: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    let n = rates.len();
+    let mut cumulative = Vec::with_capacity(n);
+    let mut daily = Vec::with_capacity(n);
+    let mut cum = 1.0;
+    for &r in rates {
+        cumulative.push(cum);
+        daily.push((1.0 + r).powf(1.0 / 365.0));
+        cum *= 1.0 + r;
+    }
+    (cumulative, daily)
 }
 
 impl Market {
@@ -133,37 +207,53 @@ impl Market {
         returns: FxHashMap<ReturnProfileId, Vec<f64>>,
         assets: FxHashMap<AssetId, AssetInfo>,
     ) -> Self {
-        let mut inflation_rates = Vec::with_capacity(inflation_values.len());
-        let mut cumulative = 1.0;
+        // Determine dimensions
+        let num_profiles = returns
+            .keys()
+            .map(|id| id.0 as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let num_years = returns.values().map(|v| v.len()).max().unwrap_or(0);
 
-        for r in inflation_values {
-            inflation_rates.push(Rate {
-                incremental: *r,
-                cumulative,
-            });
-            cumulative *= 1.0 + r;
+        // Build year-major profile arrays
+        let total = num_years * num_profiles;
+        let mut profile_rates = vec![0.0; total];
+        let mut profile_cumulative = vec![1.0; total];
+        let mut profile_daily = vec![1.0; total];
+
+        for (&rp_id, rp_values) in &returns {
+            let pidx = rp_id.0 as usize;
+            let mut cum = 1.0;
+            for (year, &rate) in rp_values.iter().enumerate() {
+                let idx = year * num_profiles + pidx;
+                profile_rates[idx] = rate;
+                profile_cumulative[idx] = cum;
+                profile_daily[idx] = (1.0 + rate).powf(1.0 / 365.0);
+                cum *= 1.0 + rate;
+            }
         }
 
-        let mut returns_ = FxHashMap::default();
-        for (rp_id, rp_values) in returns {
-            let mut returns_rates = Vec::with_capacity(rp_values.len());
-            let mut cumulative = 1.0;
+        // Inflation
+        let (inflation_cumulative, inflation_daily) = build_cumulative_daily(inflation_values);
 
-            for r in rp_values {
-                returns_rates.push(Rate {
-                    incremental: r,
-                    cumulative,
-                });
-                cumulative *= 1.0 + r;
-            }
-            returns_.insert(rp_id, returns_rates);
+        // Dense assets
+        let num_assets = assets.keys().map(|id| id.0 as usize + 1).max().unwrap_or(0);
+        let mut dense_assets = vec![None; num_assets];
+        for (id, info) in assets {
+            dense_assets[id.0 as usize] = Some(info);
         }
 
         Self {
-            inflation_values: inflation_rates,
-            returns: returns_,
-            assets,
-            asset_return_overrides: FxHashMap::default(),
+            num_profiles,
+            num_years,
+            profile_rates,
+            profile_cumulative,
+            profile_daily,
+            inflation_rates: inflation_values.to_vec(),
+            inflation_cumulative,
+            inflation_daily,
+            assets: dense_assets,
+            asset_overrides: Vec::new(),
         }
     }
 
@@ -208,32 +298,37 @@ impl Market {
             .collect();
         te_assets.sort_by_key(|(id, _, _)| id.0);
 
-        for (asset_id, rp_id, tracking_error) in te_assets {
-            if let Some(base_rates) = market.returns.get(&rp_id) {
-                let noise_dist = rand_distr::Normal::new(0.0, tracking_error).map_err(|_| {
-                    MarketError::InvalidDistributionParameters {
-                        profile_type: "Tracking error",
-                        mean: 0.0,
-                        std_dev: tracking_error,
-                        reason: "tracking_error must be non-negative and finite",
-                    }
-                })?;
+        // Ensure asset_overrides Vec is large enough
+        let num_asset_slots = market.assets.len();
+        market.asset_overrides.resize(num_asset_slots, None);
 
-                let mut override_rates = Vec::with_capacity(base_rates.len());
-                let mut cumulative = 1.0;
-                for base_rate in base_rates {
-                    let noise: f64 = noise_dist.sample(rng);
-                    // Clamp so 1+r never goes negative (asset can't lose more than 100%)
-                    let perturbed = (base_rate.incremental + noise).max(-1.0);
-                    override_rates.push(Rate {
-                        incremental: perturbed,
-                        cumulative,
-                    });
-                    cumulative *= 1.0 + perturbed;
+        for (asset_id, rp_id, tracking_error) in te_assets {
+            let pidx = rp_id.0 as usize;
+            if pidx >= market.num_profiles {
+                continue;
+            }
+
+            let noise_dist = rand_distr::Normal::new(0.0, tracking_error).map_err(|_| {
+                MarketError::InvalidDistributionParameters {
+                    profile_type: "Tracking error",
+                    mean: 0.0,
+                    std_dev: tracking_error,
+                    reason: "tracking_error must be non-negative and finite",
                 }
-                market
-                    .asset_return_overrides
-                    .insert(asset_id, override_rates);
+            })?;
+
+            let mut override_rates = Vec::with_capacity(num_years);
+            for year in 0..num_years {
+                let base_rate = market.profile_rates[year * market.num_profiles + pidx];
+                let noise: f64 = noise_dist.sample(rng);
+                let perturbed = (base_rate + noise).max(-1.0);
+                override_rates.push(perturbed);
+            }
+
+            let (cumulative, daily) = build_cumulative_daily(&override_rates);
+            let aidx = asset_id.0 as usize;
+            if aidx < market.asset_overrides.len() {
+                market.asset_overrides[aidx] = Some(AssetOverrideRates { cumulative, daily });
             }
         }
 
@@ -246,18 +341,45 @@ impl Market {
         eval_date: Date,
         asset_id: AssetId,
     ) -> Result<f64, MarketError> {
+        let aidx = asset_id.0 as usize;
         let info = self
             .assets
-            .get(&asset_id)
+            .get(aidx)
+            .and_then(|o| o.as_ref())
             .ok_or(LookupError::AssetIdNotFound(asset_id))?;
-        // Use per-asset override returns if available, otherwise fall back to profile returns
-        let returns = self
-            .asset_return_overrides
-            .get(&asset_id)
-            .or_else(|| self.returns.get(&info.return_profile_id))
-            .ok_or(LookupError::ReturnProfileNotFound(info.return_profile_id))?;
-        apply_rates_to_value(returns, start_date, eval_date, info.price)
-            .ok_or(MarketError::InsufficientRateData)
+
+        let (complete_years, remaining_days) =
+            decompose_years_days(start_date, eval_date).ok_or(MarketError::InsufficientRateData)?;
+
+        // Use per-asset override returns if available
+        if let Some(Some(overrides)) = self.asset_overrides.get(aidx) {
+            return apply_value_from_slices(
+                &overrides.cumulative,
+                &overrides.daily,
+                overrides.cumulative.len(),
+                complete_years,
+                remaining_days,
+                info.price,
+            )
+            .ok_or(MarketError::InsufficientRateData);
+        }
+
+        // Fall back to profile returns
+        let pidx = info.return_profile_id.0 as usize;
+        if pidx >= self.num_profiles {
+            return Err(LookupError::ReturnProfileNotFound(info.return_profile_id).into());
+        }
+        apply_value_dense(
+            &self.profile_cumulative,
+            &self.profile_daily,
+            self.num_profiles,
+            pidx,
+            self.num_years,
+            complete_years,
+            remaining_days,
+            info.price,
+        )
+        .ok_or(MarketError::InsufficientRateData)
     }
 
     /// Calculate the inflation-adjusted value of a cash amount.
@@ -268,28 +390,21 @@ impl Market {
         eval_date: Date,
         cash_amount: f64,
     ) -> Result<f64, MarketError> {
-        apply_rates_to_value(&self.inflation_values, start_date, eval_date, cash_amount)
-            .ok_or(MarketError::InsufficientRateData)
-    }
-
-    /// Calculate the value of an amount after applying returns from a specific profile.
-    pub fn get_return_on_value(
-        &self,
-        start_date: Date,
-        eval_date: Date,
-        initial_value: f64,
-        return_profile_id: ReturnProfileId,
-    ) -> Result<f64, MarketError> {
-        let returns = self
-            .returns
-            .get(&return_profile_id)
-            .ok_or(LookupError::ReturnProfileNotFound(return_profile_id))?;
-        apply_rates_to_value(returns, start_date, eval_date, initial_value)
-            .ok_or(MarketError::InsufficientRateData)
+        let (complete_years, remaining_days) =
+            decompose_years_days(start_date, eval_date).ok_or(MarketError::InsufficientRateData)?;
+        apply_value_from_slices(
+            &self.inflation_cumulative,
+            &self.inflation_daily,
+            self.inflation_rates.len(),
+            complete_years,
+            remaining_days,
+            cash_amount,
+        )
+        .ok_or(MarketError::InsufficientRateData)
     }
 
     /// Get the return multiplier for a period (used for cash compounding).
-    /// Returns (1 + `n_day_rate`) for the given number of days at the `year_index` rate.
+    /// Returns pre-computed `daily^days` for the given number of days at the `year_index` rate.
     pub fn get_period_multiplier(
         &self,
         year_index: usize,
@@ -299,16 +414,16 @@ impl Market {
         if days <= 0 {
             return Ok(1.0);
         }
-        let returns = self
-            .returns
-            .get(&return_profile_id)
-            .ok_or(LookupError::ReturnProfileNotFound(return_profile_id))?;
-        if year_index >= returns.len() {
-            return Err(MarketError::InsufficientRateData);
+        let pidx = return_profile_id.0 as usize;
+        if pidx >= self.num_profiles || year_index >= self.num_years {
+            return Err(if pidx >= self.num_profiles {
+                LookupError::ReturnProfileNotFound(return_profile_id).into()
+            } else {
+                MarketError::InsufficientRateData
+            });
         }
-        let yearly_rate = returns[year_index].incremental;
-        let period_rate = n_day_rate(yearly_rate, days as f64);
-        Ok(1.0 + period_rate)
+        let idx = year_index * self.num_profiles + pidx;
+        Ok(self.profile_daily[idx].powi(days as i32))
     }
 
     /// Get cumulative inflation factors for each year of the simulation.
@@ -321,15 +436,12 @@ impl Market {
     /// by dividing: `real_value` = `nominal_value` / `cumulative_inflation`[`year_index`]
     #[must_use]
     pub fn get_cumulative_inflation_factors(&self) -> Vec<f64> {
-        // Build cumulative factors: [1.0, 1.0*(1+r0), 1.0*(1+r0)*(1+r1), ...]
-        // Note: inflation_values stores Rate { incremental, cumulative } where
-        // cumulative is the product BEFORE applying this year's rate
-        let mut factors = Vec::with_capacity(self.inflation_values.len() + 1);
+        let mut factors = Vec::with_capacity(self.inflation_rates.len() + 1);
         factors.push(1.0); // Year 0 = today's dollars
 
         let mut cumulative = 1.0;
-        for rate in &self.inflation_values {
-            cumulative *= 1.0 + rate.incremental;
+        for &rate in &self.inflation_rates {
+            cumulative *= 1.0 + rate;
             factors.push(cumulative);
         }
 

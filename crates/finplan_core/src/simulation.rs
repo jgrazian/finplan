@@ -372,37 +372,37 @@ fn compound_accounts(
     let year_index =
         (state.timeline.current_date.year() - state.timeline.start_date.year()) as usize;
 
-    let account_ids: Vec<AccountId> = state.portfolio.accounts.keys().copied().collect();
+    // Split borrows: market (read) vs accounts (write) vs ledger (write)
+    let market = &state.portfolio.market;
+    let collect_ledger = state.collect_ledger;
+    let ledger = &mut state.history.ledger;
 
-    for account_id in account_ids {
-        let Some(account) = state.portfolio.accounts.get_mut(&account_id) else {
-            continue;
-        };
+    for (&account_id, account) in &mut state.portfolio.accounts {
         match &mut account.flavor {
             AccountFlavor::Bank(cash) => {
                 compound_cash_balance(
                     &mut cash.value,
                     cash.return_profile_id,
-                    &state.portfolio.market,
+                    market,
                     year_index,
                     days_passed,
                     account_id,
                     next_checkpoint,
-                    state.collect_ledger,
-                    &mut state.history.ledger,
+                    collect_ledger,
+                    ledger,
                 );
             }
             AccountFlavor::Investment(inv) => {
                 compound_cash_balance(
                     &mut inv.cash.value,
                     inv.cash.return_profile_id,
-                    &state.portfolio.market,
+                    market,
                     year_index,
                     days_passed,
                     account_id,
                     next_checkpoint,
-                    state.collect_ledger,
-                    &mut state.history.ledger,
+                    collect_ledger,
+                    ledger,
                 );
             }
             AccountFlavor::Liability(loan) => {
@@ -412,8 +412,8 @@ fn compound_accounts(
                         (1.0 + loan.interest_rate).powf(f64::from(days_passed) / 365.0);
                     loan.principal *= multiplier;
 
-                    if state.collect_ledger && (loan.principal - previous_principal).abs() > 0.001 {
-                        state.history.ledger.push(LedgerEntry::new(
+                    if collect_ledger && (loan.principal - previous_principal).abs() > 0.001 {
+                        ledger.push(LedgerEntry::new(
                             next_checkpoint,
                             StateEvent::LiabilityInterestAccrual {
                                 account_id,
