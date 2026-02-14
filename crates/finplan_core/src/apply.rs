@@ -277,6 +277,7 @@ pub fn apply_eval_event_with_source(
                     units: *units,
                     cost_basis: *cost_basis,
                 });
+                state.portfolio.needs_lot_consolidation = true;
 
                 // Record to ledger
                 let ledger_event = StateEvent::AssetPurchase {

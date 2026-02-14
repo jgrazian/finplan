@@ -93,6 +93,9 @@ pub struct SimPortfolio {
     pub contributions_mtd: FxHashMap<AccountId, f64>,
     // === Net Worth Tracking ===
     pub wealth_snapshots: Vec<WealthSnapshot>,
+    // === Lot Consolidation ===
+    /// Set true when new lots are added; cleared after consolidation merges lots
+    pub needs_lot_consolidation: bool,
 }
 
 /// Event state with dense Vec storage for O(1) lookups on hot paths.
@@ -467,6 +470,7 @@ impl SimulationState {
                 contributions_ytd: FxHashMap::default(),
                 contributions_mtd: FxHashMap::default(),
                 wealth_snapshots: Vec::new(),
+                needs_lot_consolidation: false,
             },
             event_state: SimEventState {
                 events,

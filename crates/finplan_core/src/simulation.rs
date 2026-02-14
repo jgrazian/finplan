@@ -5,10 +5,10 @@ use crate::config::SimulationConfig;
 use crate::error::SimulationError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
-    AccountFlavor, AccountId, CashFlowKind, ConvergenceMetric, EventTrigger, LedgerEntry,
-    MeanAccumulators, MonteCarloConfig, MonteCarloProgress, MonteCarloStats, MonteCarloSummary,
-    MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus,
-    WarningKind, YearlyCashFlowSummary, final_net_worth,
+    AccountFlavor, AccountId, AssetId, AssetLot, CashFlowKind, ConvergenceMetric, EventTrigger,
+    LedgerEntry, MeanAccumulators, MonteCarloConfig, MonteCarloProgress, MonteCarloStats,
+    MonteCarloSummary, MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent,
+    TaxStatus, WarningKind, YearlyCashFlowSummary, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 use rand::{RngCore, SeedableRng};
@@ -464,6 +464,68 @@ fn capture_year_end_balances(state: &mut SimulationState, checkpoint: jiff::civi
     state.snapshot_wealth();
 }
 
+/// Consolidate asset lots older than 1 year into per-(asset, year) annual lots.
+///
+/// Lots with `purchase_date.year() <= current_year - 2` are guaranteed to be
+/// long-term (>365 days held) regardless of their month, so merging them
+/// preserves tax classification accuracy. Each group is replaced by a single
+/// lot dated Jul 1 of that year.
+fn consolidate_lots(state: &mut SimulationState) {
+    if !state.portfolio.needs_lot_consolidation {
+        return;
+    }
+
+    let cutoff_year = state.timeline.current_date.year() - 2;
+    let mut consolidated_any = false;
+
+    for account in state.portfolio.accounts.values_mut() {
+        if let AccountFlavor::Investment(inv) = &mut account.flavor {
+            // Partition: keep individual lots from recent years, consolidate old ones
+            let mut old: Vec<AssetLot> = Vec::new();
+            let mut recent: Vec<AssetLot> = Vec::new();
+
+            for lot in inv.positions.drain(..) {
+                if lot.purchase_date.year() <= cutoff_year {
+                    old.push(lot);
+                } else {
+                    recent.push(lot);
+                }
+            }
+
+            if old.is_empty() {
+                inv.positions = recent;
+                continue;
+            }
+            consolidated_any = true;
+
+            // Group old lots by (asset_id, year) and merge each group
+            let mut groups: FxHashMap<(AssetId, i16), (f64, f64)> = FxHashMap::default();
+            for lot in &old {
+                let key = (lot.asset_id, lot.purchase_date.year());
+                let entry = groups.entry(key).or_insert((0.0, 0.0));
+                entry.0 += lot.units;
+                entry.1 += lot.cost_basis;
+            }
+
+            inv.positions = recent;
+            for ((asset_id, year), (units, cost_basis)) in groups {
+                inv.positions.push(AssetLot {
+                    asset_id,
+                    purchase_date: jiff::civil::date(year, 7, 1),
+                    units,
+                    cost_basis,
+                });
+            }
+        }
+    }
+
+    if consolidated_any {
+        state.portfolio.needs_lot_consolidation = false;
+    }
+    // If nothing was old enough to consolidate, keep flag true —
+    // those lots will become eligible in a future year.
+}
+
 fn advance_time(state: &mut SimulationState) {
     state.maybe_rollover_year();
 
@@ -491,9 +553,10 @@ fn advance_time(state: &mut SimulationState) {
         state.reset_monthly_contributions();
     }
 
-    // Reset yearly contributions on year boundary
+    // Reset yearly contributions and consolidate lots on year boundary
     if prev_year != next_year {
         state.portfolio.contributions_ytd.clear();
+        consolidate_lots(state);
     }
 
     state.timeline.current_date = next_checkpoint;
