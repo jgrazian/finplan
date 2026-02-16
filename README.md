@@ -28,6 +28,14 @@ cargo run --bin finplan --release
 
 Scenarios are saved to `~/.finplan/scenarios/`.
 
+## Quick Start
+
+An example scenario is included in [`examples/example.yaml`](examples/example.yaml). To load it:
+
+1. Run `finplan` and navigate to the **Scenario** tab (`3`)
+2. Press `i` to import a YAML file
+3. Enter the path to `examples/example.yaml`
+
 ## Features
 
 **Account Types**

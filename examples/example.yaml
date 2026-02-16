@@ -1,0 +1,350 @@
+portfolios:
+  name: My Retirement Plan
+  description: Sample retirement planning scenario
+  accounts:
+    - name: Checking
+      description: Main checking account
+      type: Checking
+      value: 20000.0
+      return_profile: US T-Bills
+    - name: Savings
+      type: Savings
+      value: 5000.0
+      return_profile: US T-Bills
+    - name: Brokerage
+      description: Taxable investment account
+      type: Brokerage
+      assets:
+        - asset: VFIAX
+          value: 200000.0
+        - asset: VGPMX
+          value: 75000.0
+        - asset: VTIAX
+          value: 33000.0
+    - name: 401k
+      description: Employer 401(k)
+      type: Traditional401k
+      assets:
+        - asset: FXAIX
+          value: 42000.0
+    - name: Roth IRA
+      description: Roth retirement account
+      type: RothIRA
+      assets:
+        - asset: FXAIX
+          value: 23000.0
+    - name: Gold
+      description: Like the rock
+      type: Collectible
+      value: 11000.0
+      return_profile: Gold
+    - name: Mortgage
+      type: Mortgage
+      balance: 0.0
+      interest_rate: 0.054000000000000006
+    - name: House Value
+      type: Property
+      value: 0.0
+      return_profile: REITs
+profiles:
+  - name: HYSA
+    description: High-yield savings account
+    type: Fixed
+    rate: 0.045
+  - name: GOLD
+    description: Return rate of Gold
+    type: Normal
+    mean: 0.02
+    std_dev: 0.08
+  - name: S&P 500
+    description: Historical S&P 500 returns
+    type: Normal
+    mean: 0.095668
+    std_dev: 0.165244
+  - name: S&P Log Normal
+    type: LogNormal
+    mean: 0.055
+    std_dev: 0.161
+  - name: S&P 500 Regime Switching (Fat Tails)
+    description: Bull/bear regime switching with fat-tailed distributions
+    type: RegimeSwitching
+    bull_mean: 0.12
+    bull_std_dev: 0.092951600308978
+    bear_mean: -0.05
+    bear_std_dev: 0.17041126723312636
+    bull_to_bear_prob: 0.15
+    bear_to_bull_prob: 0.4
+assets:
+  VSMAX: S&P Log Normal
+  GOOGL: S&P Log Normal
+  VFIFX: S&P Log Normal
+  VTIAX: S&P Log Normal
+  VGPMX: S&P 500 Regime Switching (Fat Tails)
+  VIMAX: S&P Log Normal
+  VTSAX: S&P Log Normal
+  SPY: S&P Log Normal
+  VFIAX: S&P 500 Regime Switching (Fat Tails)
+historical_assets:
+  VIMAX: S&P 500
+  FIGFX: Intl Developed
+  FXAIX: S&P 500
+  SPY: S&P 500
+  VGPMX: Intl Developed
+  VSMAX: US Small Cap
+  JLGMX: Intl Developed
+  VFIAX: S&P 500
+  PLTR: S&P 500
+  VFIFX: US Small Cap
+  GOOGL: S&P 500
+  VTIAX: Intl Developed
+  VTSAX: S&P 500
+asset_prices:
+  PLTR: 100.0
+asset_tracking_errors:
+  PLTR: 0.2
+events:
+  - name: Bi-Weekly Salary
+    trigger:
+      type: Repeating
+      interval: biweekly
+      end:
+        type: RelativeToEvent
+        event: Retirement
+        offset:
+          unit: Months
+          value: 0
+    effects:
+      - type: Income
+        to: Checking
+        amount:
+          type: InflationAdjusted
+          inner:
+            type: Fixed
+            value: 4500.0
+        gross: true
+        taxable: true
+    once: false
+    enabled: true
+  - name: Living Expenses
+    description: Monthly living costs
+    trigger:
+      type: Repeating
+      interval: monthly
+    effects:
+      - type: Expense
+        from: Checking
+        amount:
+          type: InflationAdjusted
+          inner:
+            type: Fixed
+            value: 5500.0
+    once: false
+    enabled: true
+  - name: 401k Contibution
+    trigger:
+      type: Repeating
+      interval: yearly
+      end:
+        type: RelativeToEvent
+        event: Retirement
+        offset:
+          unit: Months
+          value: 0
+    effects:
+      - type: AssetPurchase
+        from: Checking
+        to_account: 401k
+        asset: FXAIX
+        amount:
+          type: Fixed
+          value: 24500.0
+    once: false
+    enabled: true
+  - name: Buy House
+    trigger:
+      type: Date
+      date: 2028-06-17
+    effects:
+      - type: AdjustBalance
+        account: Mortgage
+        amount:
+          type: Fixed
+          value: 480000.0
+      - type: AdjustBalance
+        account: House Value
+        amount:
+          type: Fixed
+          value: 600000.0
+    once: true
+    enabled: true
+  - name: Mortgage Payment
+    trigger:
+      type: Repeating
+      interval: monthly
+      start:
+        type: RelativeToEvent
+        event: Buy House
+        offset:
+          unit: Months
+          value: 0
+      end:
+        type: AccountBalance
+        account: Mortgage
+        threshold:
+          comparison: GreaterThanOrEqual
+          value: 0.0
+    effects:
+      - type: CashTransfer
+        from: Checking
+        to: Mortgage
+        amount:
+          type: Fixed
+          value: 3000.0
+    once: false
+    enabled: true
+  - name: Retirement
+    description: The age I want to retire at
+    trigger:
+      type: Age
+      years: 58
+    once: true
+    enabled: true
+  - name: Keep Checking Above Spending
+    trigger:
+      type: AccountBalance
+      account: Checking
+      threshold:
+        comparison: LessThanOrEqual
+        value: 20000.0
+    effects:
+      - type: Sweep
+        to: Checking
+        amount:
+          type: Fixed
+          value: 10000.0
+        strategy: penalty_aware
+        gross: false
+        taxable: true
+        lot_method: fifo
+    once: false
+    enabled: true
+  - name: Yearly Spend Post-Retirement
+    trigger:
+      type: Repeating
+      interval: yearly
+      start:
+        type: RelativeToEvent
+        event: Retirement
+        offset:
+          unit: Months
+          value: 0
+    effects:
+      - type: Sweep
+        to: Checking
+        amount:
+          type: TargetToBalance
+          target: 130000.0
+        strategy: penalty_aware
+        gross: false
+        taxable: true
+        lot_method: fifo
+    once: false
+    enabled: true
+  - name: Medicare Part B
+    description: Medicare Part B monthly premiums
+    trigger:
+      type: Repeating
+      interval: monthly
+      start:
+        type: Age
+        years: 65
+    effects:
+      - type: Expense
+        from: Checking
+        amount:
+          type: Fixed
+          value: 174.7
+    once: false
+    enabled: true
+  - name: Social Security
+    description: Monthly Social Security benefits
+    trigger:
+      type: Repeating
+      interval: monthly
+      start:
+        type: Age
+        years: 67
+    effects:
+      - type: Income
+        to: Checking
+        amount:
+          type: Fixed
+          value: 2000.0
+        gross: true
+        taxable: true
+    once: false
+    enabled: true
+  - name: RMD
+    description: Required Minimum Distributions from tax-deferred accounts
+    trigger:
+      type: Repeating
+      interval: yearly
+      start:
+        type: Age
+        years: 73
+    effects:
+      - type: ApplyRmd
+        destination: Checking
+        lot_method: fifo
+    once: false
+    enabled: true
+parameters:
+  birth_date: 1997-03-16
+  start_date: 2026-01-01
+  duration_years: 62
+  inflation:
+    type: USHistorical
+    distribution: lognormal
+  tax_config:
+    state_rate: 0.05
+    capital_gains_rate: 0.2
+    federal_brackets: single2024
+  returns_mode: historical
+  historical_block_size: 5
+analysis:
+  mc_iterations: 1000
+  default_steps: 5
+  sweep_parameters:
+    - event_name: Retirement
+      sweep_type: trigger_age
+      min_value: 35.0
+      max_value: 50.0
+      step_count: 6
+    - event_name: Living Expenses
+      sweep_type: effect_value
+      min_value: 4000.0
+      max_value: 10500.0
+      step_count: 6
+    - event_name: Buy House
+      sweep_type: effect_value
+      min_value: 850000.0
+      max_value: 1350000.0
+      step_count: 5
+  selected_metrics:
+    - p50_final_net_worth
+    - success_rate
+  chart_configs:
+    - chart_type: heatmap2_d
+      x_param_index: 0
+      y_param_index: 1
+      metric: p50_final_net_worth
+      color_scheme: cividis
+    - chart_type: heatmap2_d
+      x_param_index: 1
+      y_param_index: 2
+      metric: p50_final_net_worth
+      color_scheme: viridis
+    - chart_type: scatter1_d
+      x_param_index: 1
+      metric: success_rate
+      color_scheme: viridis
