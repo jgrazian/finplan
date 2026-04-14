@@ -45,11 +45,12 @@ export function AllocationPieChart({
             nameKey="name"
             cx="50%"
             cy="50%"
-            outerRadius={100}
-            label={({ name, ...rest }) => {
+            outerRadius={85}
+            label={(rest) => {
               const pct = (rest as unknown as Record<string, number>).percentage ?? 0;
-              return `${name} (${formatPercent(pct)})`;
+              return pct >= 0.03 ? formatPercent(pct) : "";
             }}
+            labelLine={false}
           >
             {positiveData.map((entry, index) => (
               <Cell

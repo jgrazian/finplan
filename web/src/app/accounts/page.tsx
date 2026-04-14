@@ -1,22 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { Account } from "@/lib/types";
+import type { Account, AllocationData } from "@/lib/types";
 import * as api from "@/lib/api";
 import { AccountList } from "@/components/accounts/AccountList";
 import { AccountForm } from "@/components/accounts/AccountForm";
 import { AppShell } from "@/components/layout/AppShell";
-import { formatCurrency } from "@/lib/utils";
+import { AllocationPieChart } from "@/components/charts/AllocationPieChart";
+import { formatCurrency, CATEGORY_COLORS } from "@/lib/utils";
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [allocation, setAllocation] = useState<AllocationData | null>(null);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
 
   const loadAccounts = useCallback(async () => {
     try {
-      const data = await api.getAccounts();
-      setAccounts(data);
+      const [accountsData, allocationData] = await Promise.all([
+        api.getAccounts(),
+        api.getAllocation(),
+      ]);
+      setAccounts(accountsData);
+      setAllocation(allocationData);
     } finally {
       setLoading(false);
     }
@@ -76,6 +82,30 @@ export default function AccountsPage() {
       )}
 
       <AccountList accounts={accounts} />
+
+      {allocation &&
+        (allocation.by_account.length > 0 || allocation.by_asset.length > 0) && (
+          <div className="mt-10">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">
+              Allocation
+            </h2>
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+              <AllocationPieChart
+                title="By Category"
+                data={allocation.by_category}
+                colorMap={CATEGORY_COLORS}
+              />
+              <AllocationPieChart
+                title="By Account"
+                data={allocation.by_account}
+              />
+              <AllocationPieChart
+                title="By Asset"
+                data={allocation.by_asset}
+              />
+            </div>
+          </div>
+        )}
     </div></AppShell>
   );
 }
