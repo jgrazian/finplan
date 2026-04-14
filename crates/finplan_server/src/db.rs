@@ -81,4 +81,51 @@ async fn migrate(pool: &SqlitePool) {
         .execute(pool)
         .await
         .expect("Failed to create holdings index");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS return_profiles (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       TEXT NOT NULL REFERENCES users(id),
+            name          TEXT NOT NULL,
+            description   TEXT,
+            profile_type  TEXT NOT NULL,
+            rate          REAL,
+            mean          REAL,
+            std_dev       REAL,
+            scale         REAL,
+            df            REAL,
+            sort_order    INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, name)
+        )",
+    )
+    .execute(pool)
+    .await
+    .expect("Failed to create return_profiles table");
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_return_profiles_user ON return_profiles(user_id)")
+        .execute(pool)
+        .await
+        .expect("Failed to create return_profiles user index");
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS asset_mappings (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     TEXT NOT NULL REFERENCES users(id),
+            asset_name  TEXT NOT NULL,
+            profile_id  INTEGER NOT NULL REFERENCES return_profiles(id) ON DELETE CASCADE,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, asset_name)
+        )",
+    )
+    .execute(pool)
+    .await
+    .expect("Failed to create asset_mappings table");
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_asset_mappings_user ON asset_mappings(user_id)")
+        .execute(pool)
+        .await
+        .expect("Failed to create asset_mappings user index");
 }

@@ -162,6 +162,106 @@ fn compute_total(
     }
 }
 
+// -- Return profile types --
+
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct ReturnProfileRow {
+    pub id: i64,
+    pub user_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub profile_type: String,
+    pub rate: Option<f64>,
+    pub mean: Option<f64>,
+    pub std_dev: Option<f64>,
+    pub scale: Option<f64>,
+    pub df: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReturnProfileResponse {
+    pub id: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub profile_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub std_dev: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub df: Option<f64>,
+}
+
+impl From<ReturnProfileRow> for ReturnProfileResponse {
+    fn from(row: ReturnProfileRow) -> Self {
+        ReturnProfileResponse {
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            profile_type: row.profile_type,
+            rate: row.rate,
+            mean: row.mean,
+            std_dev: row.std_dev,
+            scale: row.scale,
+            df: row.df,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub profile_type: String,
+    #[serde(default)]
+    pub rate: Option<f64>,
+    #[serde(default)]
+    pub mean: Option<f64>,
+    #[serde(default)]
+    pub std_dev: Option<f64>,
+    #[serde(default)]
+    pub scale: Option<f64>,
+    #[serde(default)]
+    pub df: Option<f64>,
+}
+
+/// Valid profile types accepted by the API.
+pub const VALID_PROFILE_TYPES: &[&str] = &["None", "Fixed", "Normal", "LogNormal", "StudentT"];
+
+pub fn is_valid_profile_type(t: &str) -> bool {
+    VALID_PROFILE_TYPES.contains(&t)
+}
+
+// -- Asset mapping types --
+
+#[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
+pub struct AssetMappingRow {
+    pub id: i64,
+    pub user_id: String,
+    pub asset_name: String,
+    pub profile_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssetMappingResponse {
+    pub asset_name: String,
+    pub profile_id: i64,
+    pub profile_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpsertMappingRequest {
+    pub profile_id: i64,
+}
+
 // -- Auth types --
 
 #[derive(Debug, Deserialize)]

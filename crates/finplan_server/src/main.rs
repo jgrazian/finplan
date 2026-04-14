@@ -36,6 +36,21 @@ fn api_routes() -> Router<SqlitePool> {
         )
         .route("/holdings/{id}", put(handlers::holdings::update_holding))
         .route("/holdings/{id}", delete(handlers::holdings::delete_holding))
+        // Return profiles
+        .route("/profiles", get(handlers::profiles::list_profiles))
+        .route("/profiles", post(handlers::profiles::create_profile))
+        .route("/profiles/{id}", put(handlers::profiles::update_profile))
+        .route("/profiles/{id}", delete(handlers::profiles::delete_profile))
+        // Asset mappings
+        .route("/mappings", get(handlers::mappings::list_mappings))
+        .route(
+            "/mappings/{asset_name}",
+            put(handlers::mappings::upsert_mapping),
+        )
+        .route(
+            "/mappings/{asset_name}",
+            delete(handlers::mappings::delete_mapping),
+        )
         // Allocation
         .route("/allocation", get(handlers::allocation::get_allocation))
 }

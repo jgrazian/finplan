@@ -124,12 +124,13 @@ pub async fn update_account(
         return Err(AppError::BadRequest("Account name cannot be empty".into()));
     }
 
+    // Empty string for return_profile clears the mapping; None leaves it alone.
     let row = sqlx::query_as::<_, AccountRow>(
         "UPDATE accounts SET \
             name = COALESCE(?, name), \
             description = COALESCE(?, description), \
             value = COALESCE(?, value), \
-            return_profile = COALESCE(?, return_profile), \
+            return_profile = NULLIF(COALESCE(?, return_profile), ''), \
             balance = COALESCE(?, balance), \
             interest_rate = COALESCE(?, interest_rate), \
             updated_at = datetime('now') \

@@ -1,4 +1,12 @@
-import type { Account, AllocationData, Holding, User } from "./types";
+import type {
+  Account,
+  AllocationData,
+  AssetMapping,
+  Holding,
+  ReturnProfile,
+  ReturnProfileType,
+  User,
+} from "./types";
 
 const BASE = "/api";
 
@@ -95,6 +103,49 @@ export const updateHolding = (
 
 export const deleteHolding = (holdingId: number) =>
   request<void>(`/holdings/${holdingId}`, { method: "DELETE" });
+
+// Return profiles
+export interface ProfilePayload {
+  name: string;
+  description?: string;
+  profile_type: ReturnProfileType;
+  rate?: number;
+  mean?: number;
+  std_dev?: number;
+  scale?: number;
+  df?: number;
+}
+
+export const getProfiles = () => request<ReturnProfile[]>("/profiles");
+
+export const createProfile = (data: ProfilePayload) =>
+  request<ReturnProfile>("/profiles", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const updateProfile = (id: number, data: ProfilePayload) =>
+  request<ReturnProfile>(`/profiles/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const deleteProfile = (id: number) =>
+  request<void>(`/profiles/${id}`, { method: "DELETE" });
+
+// Asset mappings
+export const getMappings = () => request<AssetMapping[]>("/mappings");
+
+export const upsertMapping = (assetName: string, profileId: number) =>
+  request<AssetMapping>(`/mappings/${encodeURIComponent(assetName)}`, {
+    method: "PUT",
+    body: JSON.stringify({ profile_id: profileId }),
+  });
+
+export const deleteMapping = (assetName: string) =>
+  request<void>(`/mappings/${encodeURIComponent(assetName)}`, {
+    method: "DELETE",
+  });
 
 // Allocation
 export const getAllocation = () => request<AllocationData>("/allocation");

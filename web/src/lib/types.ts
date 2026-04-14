@@ -69,6 +69,39 @@ export interface Account {
   holdings?: Holding[];
 }
 
+export type ReturnProfileType =
+  | "None"
+  | "Fixed"
+  | "Normal"
+  | "LogNormal"
+  | "StudentT";
+
+export const RETURN_PROFILE_TYPE_LABELS: Record<ReturnProfileType, string> = {
+  None: "None (0%)",
+  Fixed: "Fixed Rate",
+  Normal: "Normal Distribution",
+  LogNormal: "Log-Normal Distribution",
+  StudentT: "Student's t (Fat Tails)",
+};
+
+export interface ReturnProfile {
+  id: number;
+  name: string;
+  description?: string;
+  profile_type: ReturnProfileType;
+  rate?: number;
+  mean?: number;
+  std_dev?: number;
+  scale?: number;
+  df?: number;
+}
+
+export interface AssetMapping {
+  asset_name: string;
+  profile_id: number;
+  profile_name: string;
+}
+
 export interface AllocationSlice {
   name: string;
   value: number;

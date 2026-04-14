@@ -6,6 +6,7 @@ import { useAuth } from "@/lib/auth";
 
 const NAV_ITEMS = [
   { href: "/accounts", label: "Accounts" },
+  { href: "/profiles", label: "Return Profiles" },
 ];
 
 export function Sidebar() {
