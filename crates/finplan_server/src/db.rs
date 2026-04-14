@@ -94,6 +94,8 @@ async fn migrate(pool: &SqlitePool) {
             std_dev       REAL,
             scale         REAL,
             df            REAL,
+            preset        TEXT,
+            block_size    INTEGER,
             sort_order    INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
@@ -103,6 +105,16 @@ async fn migrate(pool: &SqlitePool) {
     .execute(pool)
     .await
     .expect("Failed to create return_profiles table");
+
+    // Backfill columns for databases created before Bootstrap support. SQLite
+    // lacks `ADD COLUMN IF NOT EXISTS`, so we ignore errors when the column
+    // already exists.
+    let _ = sqlx::query("ALTER TABLE return_profiles ADD COLUMN preset TEXT")
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE return_profiles ADD COLUMN block_size INTEGER")
+        .execute(pool)
+        .await;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_return_profiles_user ON return_profiles(user_id)")
         .execute(pool)

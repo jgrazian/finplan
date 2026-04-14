@@ -5,7 +5,8 @@ use sqlx::SqlitePool;
 use crate::auth::AuthUser;
 use crate::error::AppError;
 use crate::models::{
-    ProfileRequest, ReturnProfileResponse, ReturnProfileRow, is_valid_profile_type,
+    ProfileRequest, ReturnProfileResponse, ReturnProfileRow, is_valid_bootstrap_preset,
+    is_valid_profile_type,
 };
 
 fn validate_request(req: &ProfileRequest) -> Result<(), AppError> {
@@ -39,6 +40,23 @@ fn validate_request(req: &ProfileRequest) -> Result<(), AppError> {
                 ));
             }
         }
+        "Bootstrap" => {
+            let preset = req.preset.as_deref().ok_or_else(|| {
+                AppError::BadRequest("Bootstrap profile requires a preset".into())
+            })?;
+            if !is_valid_bootstrap_preset(preset) {
+                return Err(AppError::BadRequest(format!(
+                    "Unknown historical preset: {preset}"
+                )));
+            }
+            if let Some(bs) = req.block_size
+                && bs < 1
+            {
+                return Err(AppError::BadRequest(
+                    "block_size must be >= 1 (or omitted for i.i.d. sampling)".into(),
+                ));
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -49,7 +67,7 @@ pub async fn list_profiles(
     AuthUser(user_id): AuthUser,
 ) -> Result<Json<Vec<ReturnProfileResponse>>, AppError> {
     let rows = sqlx::query_as::<_, ReturnProfileRow>(
-        "SELECT id, user_id, name, description, profile_type, rate, mean, std_dev, scale, df \
+        "SELECT id, user_id, name, description, profile_type, rate, mean, std_dev, scale, df, preset, block_size \
          FROM return_profiles WHERE user_id = ? ORDER BY sort_order, id",
     )
     .bind(user_id)
@@ -68,9 +86,9 @@ pub async fn create_profile(
 
     let row = sqlx::query_as::<_, ReturnProfileRow>(
         "INSERT INTO return_profiles \
-         (user_id, name, description, profile_type, rate, mean, std_dev, scale, df) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         RETURNING id, user_id, name, description, profile_type, rate, mean, std_dev, scale, df",
+         (user_id, name, description, profile_type, rate, mean, std_dev, scale, df, preset, block_size) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+         RETURNING id, user_id, name, description, profile_type, rate, mean, std_dev, scale, df, preset, block_size",
     )
     .bind(user_id)
     .bind(req.name.trim())
@@ -81,6 +99,8 @@ pub async fn create_profile(
     .bind(req.std_dev)
     .bind(req.scale)
     .bind(req.df)
+    .bind(&req.preset)
+    .bind(req.block_size)
     .fetch_one(&pool)
     .await
     .map_err(|err| match err {
@@ -117,9 +137,10 @@ pub async fn update_profile(
         "UPDATE return_profiles SET \
             name = ?, description = ?, profile_type = ?, \
             rate = ?, mean = ?, std_dev = ?, scale = ?, df = ?, \
+            preset = ?, block_size = ?, \
             updated_at = datetime('now') \
          WHERE id = ? AND user_id = ? \
-         RETURNING id, user_id, name, description, profile_type, rate, mean, std_dev, scale, df",
+         RETURNING id, user_id, name, description, profile_type, rate, mean, std_dev, scale, df, preset, block_size",
     )
     .bind(&new_name)
     .bind(&req.description)
@@ -129,6 +150,8 @@ pub async fn update_profile(
     .bind(req.std_dev)
     .bind(req.scale)
     .bind(req.df)
+    .bind(&req.preset)
+    .bind(req.block_size)
     .bind(id)
     .bind(&user_id)
     .fetch_optional(&pool)

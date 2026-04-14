@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ReturnProfile, ReturnProfileType } from "@/lib/types";
-import { RETURN_PROFILE_TYPE_LABELS } from "@/lib/types";
+import { HISTORICAL_PRESETS, RETURN_PROFILE_TYPE_LABELS } from "@/lib/types";
 import type { ProfilePayload } from "@/lib/api";
 
 interface ProfileFormProps {
@@ -19,16 +19,33 @@ const DF_LABELS: Record<DfPreset, string> = {
   "2": "Very fat tails (df=2)",
 };
 
+type BlockSizeOption = "" | "3" | "5" | "10";
+
+const BLOCK_SIZE_LABELS: Record<BlockSizeOption, string> = {
+  "": "i.i.d. (independent samples)",
+  "3": "3 years (short-term momentum)",
+  "5": "5 years (medium-term cycles)",
+  "10": "10 years (long-term trends)",
+};
+
 // Defaults match crates/finplan/src/actions/profile.rs
 const DEFAULT_PARAMS: Record<
   ReturnProfileType,
-  { rate?: number; mean?: number; std_dev?: number; scale?: number; df?: number }
+  {
+    rate?: number;
+    mean?: number;
+    std_dev?: number;
+    scale?: number;
+    df?: number;
+    preset?: string;
+  }
 > = {
   None: {},
   Fixed: { rate: 0.07 },
   Normal: { mean: 0.07, std_dev: 0.15 },
   LogNormal: { mean: 0.07, std_dev: 0.15 },
   StudentT: { mean: 0.0957, scale: 0.1652, df: 5 },
+  Bootstrap: { preset: "sp500" },
 };
 
 function toPct(n: number | undefined): string {
@@ -66,6 +83,14 @@ export function ProfileForm({ initial, onSubmit, onCancel }: ProfileFormProps) {
   const [df, setDf] = useState<DfPreset>(
     initial?.df === 2 ? "2" : initial?.df === 3 ? "3" : "5"
   );
+  const [preset, setPreset] = useState<string>(
+    initial?.preset ?? defaults.preset ?? "sp500"
+  );
+  const [blockSize, setBlockSize] = useState<BlockSizeOption>(() => {
+    const bs = initial?.block_size;
+    if (bs === 3 || bs === 5 || bs === 10) return String(bs) as BlockSizeOption;
+    return "";
+  });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -77,6 +102,10 @@ export function ProfileForm({ initial, onSubmit, onCancel }: ProfileFormProps) {
     setStdDev(toPct(d.std_dev));
     setScale(toPct(d.scale));
     if (t === "StudentT") setDf("5");
+    if (t === "Bootstrap") {
+      setPreset(d.preset ?? "sp500");
+      setBlockSize("");
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -98,6 +127,9 @@ export function ProfileForm({ initial, onSubmit, onCancel }: ProfileFormProps) {
       payload.mean = parsePct(mean);
       payload.scale = parsePct(scale);
       payload.df = parseFloat(df);
+    } else if (profileType === "Bootstrap") {
+      payload.preset = preset;
+      payload.block_size = blockSize === "" ? undefined : parseInt(blockSize, 10);
     }
 
     setSubmitting(true);
@@ -224,6 +256,48 @@ export function ProfileForm({ initial, onSubmit, onCancel }: ProfileFormProps) {
             />
           </div>
         </div>
+      )}
+
+      {profileType === "Bootstrap" && (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Historical Preset
+            </label>
+            <select
+              value={preset}
+              onChange={(e) => setPreset(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+            >
+              {HISTORICAL_PRESETS.map((p) => (
+                <option key={p.key} value={p.key}>
+                  {p.name} — {p.description}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Block Size
+            </label>
+            <select
+              value={blockSize}
+              onChange={(e) => setBlockSize(e.target.value as BlockSizeOption)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+            >
+              {(Object.keys(BLOCK_SIZE_LABELS) as BlockSizeOption[]).map(
+                (opt) => (
+                  <option key={opt} value={opt}>
+                    {BLOCK_SIZE_LABELS[opt]}
+                  </option>
+                )
+              )}
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Block bootstrap preserves autocorrelation in historical returns.
+            </p>
+          </div>
+        </>
       )}
 
       {profileType === "StudentT" && (

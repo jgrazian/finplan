@@ -177,6 +177,8 @@ pub struct ReturnProfileRow {
     pub std_dev: Option<f64>,
     pub scale: Option<f64>,
     pub df: Option<f64>,
+    pub preset: Option<String>,
+    pub block_size: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -196,6 +198,10 @@ pub struct ReturnProfileResponse {
     pub scale: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub df: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_size: Option<i64>,
 }
 
 impl From<ReturnProfileRow> for ReturnProfileResponse {
@@ -210,6 +216,8 @@ impl From<ReturnProfileRow> for ReturnProfileResponse {
             std_dev: row.std_dev,
             scale: row.scale,
             df: row.df,
+            preset: row.preset,
+            block_size: row.block_size,
         }
     }
 }
@@ -230,13 +238,44 @@ pub struct ProfileRequest {
     pub scale: Option<f64>,
     #[serde(default)]
     pub df: Option<f64>,
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
+    pub block_size: Option<i64>,
 }
 
 /// Valid profile types accepted by the API.
-pub const VALID_PROFILE_TYPES: &[&str] = &["None", "Fixed", "Normal", "LogNormal", "StudentT"];
+pub const VALID_PROFILE_TYPES: &[&str] = &[
+    "None",
+    "Fixed",
+    "Normal",
+    "LogNormal",
+    "StudentT",
+    "Bootstrap",
+];
 
 pub fn is_valid_profile_type(t: &str) -> bool {
     VALID_PROFILE_TYPES.contains(&t)
+}
+
+/// Preset keys recognized for Bootstrap (historical) profiles.
+/// Matches `ReturnProfileData::get_historical_returns` in the TUI.
+pub const VALID_BOOTSTRAP_PRESETS: &[&str] = &[
+    "sp500",
+    "us_small_cap",
+    "us_tbills",
+    "us_long_bonds",
+    "intl_developed",
+    "emerging_markets",
+    "reits",
+    "gold",
+    "us_agg_bonds",
+    "us_corporate_bonds",
+    "tips",
+];
+
+pub fn is_valid_bootstrap_preset(p: &str) -> bool {
+    VALID_BOOTSTRAP_PRESETS.contains(&p)
 }
 
 // -- Asset mapping types --

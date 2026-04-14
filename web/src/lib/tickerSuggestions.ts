@@ -116,3 +116,27 @@ export function getSuggestion(ticker: string): ProfileSuggestion | null {
     std_dev: hit.std_dev,
   };
 }
+
+/// Map a parametric profile_name to its historical preset key, mirroring
+/// get_historical_preset_key in ticker_profiles.rs. Used to suggest a
+/// Bootstrap profile when the user prefers historical data.
+const PROFILE_NAME_TO_PRESET: Record<string, string> = {
+  "US Total Market": "sp500",
+  "S&P 500": "sp500",
+  "US Small Cap": "us_small_cap",
+  "US Aggregate Bond": "us_agg_bonds",
+  "International Developed": "intl_developed",
+  "Emerging Markets": "emerging_markets",
+  REITs: "reits",
+  "Money Market": "us_tbills",
+  "Long-Term Treasury": "us_long_bonds",
+  TIPS: "tips",
+  "US Corporate Bond": "us_corporate_bonds",
+  Gold: "gold",
+};
+
+export function getHistoricalPresetForTicker(ticker: string): string | null {
+  const suggestion = getSuggestion(ticker);
+  if (!suggestion) return null;
+  return PROFILE_NAME_TO_PRESET[suggestion.profile_name] ?? null;
+}

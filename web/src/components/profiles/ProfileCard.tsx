@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReturnProfile } from "@/lib/types";
+import { presetLabel } from "@/lib/types";
 import { formatPercent } from "@/lib/utils";
 
 interface ProfileCardProps {
@@ -26,6 +27,14 @@ function describeProfile(p: ReturnProfile): string {
             p.scale * 100
           )}, df=${p.df ?? ""}`
         : "";
+    case "Bootstrap": {
+      if (!p.preset) return "";
+      const block =
+        p.block_size && p.block_size > 1
+          ? `, block=${p.block_size}`
+          : ", i.i.d.";
+      return `${presetLabel(p.preset)}${block}`;
+    }
   }
 }
 
@@ -41,6 +50,8 @@ function typeLabel(t: ReturnProfile["profile_type"]): string {
       return "Log-Normal";
     case "StudentT":
       return "Student's t";
+    case "Bootstrap":
+      return "Historical";
   }
 }
 

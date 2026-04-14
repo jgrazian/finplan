@@ -114,6 +114,8 @@ export interface ProfilePayload {
   std_dev?: number;
   scale?: number;
   df?: number;
+  preset?: string;
+  block_size?: number;
 }
 
 export const getProfiles = () => request<ReturnProfile[]>("/profiles");

@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import type { Account, AssetMapping, ReturnProfile } from "@/lib/types";
 import * as api from "@/lib/api";
-import { getSuggestion } from "@/lib/tickerSuggestions";
+import { getHistoricalPresetForTicker, getSuggestion } from "@/lib/tickerSuggestions";
 
 interface MappingsPanelProps {
   accounts: Account[];
@@ -15,6 +15,7 @@ interface MappingsPanelProps {
 interface AssetRow {
   name: string;
   mapping?: AssetMapping;
+  suggestedProfileId?: number;
   suggestedProfileName?: string;
 }
 
@@ -47,20 +48,41 @@ export function MappingsPanel({
     return map;
   }, [profiles]);
 
+  // Index bootstrap profiles by their historical preset so a preset-based
+  // ticker suggestion can match against Bootstrap profiles too.
+  const bootstrapByPreset = useMemo(() => {
+    const map = new Map<string, ReturnProfile>();
+    for (const p of profiles) {
+      if (p.profile_type === "Bootstrap" && p.preset) {
+        // Prefer i.i.d. profiles for the suggestion if multiple exist.
+        if (!map.has(p.preset) || !p.block_size) {
+          map.set(p.preset, p);
+        }
+      }
+    }
+    return map;
+  }, [profiles]);
+
   const rows: AssetRow[] = useMemo(() => {
     return uniqueAssets.map((name) => {
       const suggestion = getSuggestion(name);
-      const suggestedProfileName =
-        suggestion && profileByName.has(suggestion.profile_name)
-          ? suggestion.profile_name
-          : undefined;
+      let suggestedProfile: ReturnProfile | undefined;
+      if (suggestion && profileByName.has(suggestion.profile_name)) {
+        suggestedProfile = profileByName.get(suggestion.profile_name);
+      } else {
+        const preset = getHistoricalPresetForTicker(name);
+        if (preset && bootstrapByPreset.has(preset)) {
+          suggestedProfile = bootstrapByPreset.get(preset);
+        }
+      }
       return {
         name,
         mapping: mappingByAsset.get(name),
-        suggestedProfileName,
+        suggestedProfileId: suggestedProfile?.id,
+        suggestedProfileName: suggestedProfile?.name,
       };
     });
-  }, [uniqueAssets, mappingByAsset, profileByName]);
+  }, [uniqueAssets, mappingByAsset, profileByName, bootstrapByPreset]);
 
   // Account-level return profile mappings (non-brokerage investment accounts).
   const mappableAccounts = useMemo(
@@ -93,11 +115,8 @@ export function MappingsPanel({
   async function applyAllSuggestions() {
     const pending: Array<Promise<unknown>> = [];
     for (const row of rows) {
-      if (row.mapping || !row.suggestedProfileName) continue;
-      const profile = profileByName.get(row.suggestedProfileName);
-      if (profile) {
-        pending.push(api.upsertMapping(row.name, profile.id));
-      }
+      if (row.mapping || row.suggestedProfileId === undefined) continue;
+      pending.push(api.upsertMapping(row.name, row.suggestedProfileId));
     }
     if (pending.length === 0) return;
     await Promise.all(pending);
@@ -105,7 +124,7 @@ export function MappingsPanel({
   }
 
   const hasSuggestions = rows.some(
-    (r) => !r.mapping && r.suggestedProfileName
+    (r) => !r.mapping && r.suggestedProfileId !== undefined
   );
 
   if (profiles.length === 0) {
