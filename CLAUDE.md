@@ -25,8 +25,28 @@ finplan/
 │   ├── finplan/        # Terminal UI application (~2600 LOC)
 │   └── finplan_server/ # HTTP API server, SQLite-backed (~5000 LOC)
 ├── spec/               # Detailed specifications
+├── scripts/            # gen-bindings.sh
 └── web/                # Next.js frontend
+    ├── lib/api/generated/  # ts-rs output — never edit, run gen-bindings.sh
+    ├── lib/api/            # typed client over those bindings
+    ├── lib/view/           # API shapes -> screen view models
+    └── components/         # presentational components
 ```
+
+## TypeScript bindings
+
+Every request/response type in `finplan_server` derives `ts_rs::TS`, and
+`./scripts/gen-bindings.sh` writes one `.ts` file per type into
+`web/lib/api/generated/`. The output is committed; after changing an API struct,
+regenerate and commit, or the frontend types silently drift from the server.
+Export settings (destination, `i64 -> number`) live in `.cargo/config.toml`.
+
+ts-rs exports from a generated test, so a plain `cargo test` also refreshes the
+bindings — `git diff --exit-code web/lib/api/generated` is the drift check.
+
+Only `web/lib/view/*` maps the generated shapes onto the screens' view models,
+so a server-side change surfaces there as a type error rather than as a wrong
+number on screen.
 
 ## Key Entry Points
 

@@ -18,9 +18,11 @@ const TRIGGER_KINDS: TriggerKind[] = [
   "Repeating",
   "NetWorth",
   "AccountBalance",
+  "AssetBalance",
   "RelativeToEvent",
   "And",
   "Or",
+  "Manual",
 ];
 
 /** Inspects the selected event, in the same drawer pattern as Portfolio's. */
@@ -28,12 +30,12 @@ export function EventInspector({
   event,
   onApply,
   onAddEffect,
-  onOpenTaxConfig,
+  onDelete,
 }: {
   event: PlanEvent;
   onApply?: () => void;
   onAddEffect?: () => void;
-  onOpenTaxConfig?: () => void;
+  onDelete?: () => void;
 }) {
   return (
     <div
@@ -55,7 +57,7 @@ export function EventInspector({
       <div>
         <SectionHeading className="mb-[6px]">Trigger</SectionHeading>
         <Field className="mb-[8px]">
-          <Select style={{ minHeight: 32 }} defaultValue={event.triggerKind}>
+          <Select style={{ minHeight: 32 }} value={event.triggerKind} disabled>
             {TRIGGER_KINDS.map((k) => (
               <option key={k}>{k}</option>
             ))}
@@ -80,9 +82,11 @@ export function EventInspector({
         <SectionHeading
           className="mb-[6px]"
           action={
-            <Button variant="ghost" onClick={onAddEffect}>
-              Add effect
-            </Button>
+            onAddEffect && (
+              <Button variant="ghost" onClick={onAddEffect}>
+                Add effect
+              </Button>
+            )
           }
         >
           Effects
@@ -107,10 +111,12 @@ export function EventInspector({
       </label>
 
       <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-        <Button variant="ghost" onClick={onOpenTaxConfig}>
-          Tax config…
-        </Button>
-        <Button variant="primary" style={{ marginLeft: "auto" }} onClick={onApply}>
+        {onDelete && (
+          <Button variant="ghost" onClick={onDelete}>
+            Delete
+          </Button>
+        )}
+        <Button variant="primary" style={{ marginLeft: "auto" }} onClick={onApply} disabled={!onApply}>
           Apply
         </Button>
       </div>

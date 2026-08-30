@@ -11,6 +11,7 @@ use super::{hash_password, normalize_email, verify_password};
 use crate::error::{ApiError, ApiResult};
 use crate::seed;
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -20,7 +21,8 @@ pub fn router() -> Router<AppState> {
         .route("/me", get(me))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct Credentials {
     pub email: String,
     pub password: String,
@@ -28,7 +30,8 @@ pub struct Credentials {
     pub display_name: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, TS)]
+#[ts(export)]
 pub struct UserResponse {
     pub id: String,
     pub email: String,

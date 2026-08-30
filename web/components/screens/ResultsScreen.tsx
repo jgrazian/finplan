@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { SplitPane } from "@/components/layout";
 import {
   CashFlowTable,
@@ -10,12 +10,11 @@ import {
   RunSummary,
   SuccessRate,
   WarningList,
-  WhatIfPanel,
-  type WhatIfOverrides,
 } from "@/components/results";
-import { Hr } from "@/components/ui";
-import { buildAccountSeries, buildBands, MOCK_RESULTS } from "@/lib/mock/results";
-import type { Percentile } from "@/lib/types";
+import { Button, Hr } from "@/components/ui";
+import type { Percentile, ResultsData } from "@/lib/types";
+import type { Run } from "@/lib/api/types";
+import { EmptyState } from "./EmptyState";
 
 const NEXT_PERCENTILE: Record<Percentile, Percentile> = {
   p50: "p95",
@@ -23,17 +22,17 @@ const NEXT_PERCENTILE: Record<Percentile, Percentile> = {
   p5: "p50",
 };
 
-function chartCopy(view: ChartView, percentile: Percentile, ages: number[]) {
+function chartCopy(view: ChartView, percentile: Percentile, ages: string) {
   if (view === "stack") {
     return {
       title: "Net worth by account",
-      subtitle: `${percentile.toUpperCase()} representative run · ages ${ages[0]}–${ages[ages.length - 1]}`,
+      subtitle: `${percentile.toUpperCase()} representative run · ${ages}`,
     };
   }
   if (view === "bar") {
     return {
       title: "Net worth by year",
-      subtitle: `${percentile.toUpperCase()} representative run · ages ${ages[0]}–${ages[ages.length - 1]}`,
+      subtitle: `${percentile.toUpperCase()} representative run · ${ages}`,
     };
   }
   return {
@@ -42,32 +41,65 @@ function chartCopy(view: ChartView, percentile: Percentile, ages: number[]) {
   };
 }
 
-/** Artboard 1a — one chart frame, four treatments, live percentile switch. */
-export function ResultsScreen() {
+/** Results tab: the run's success rate, its net-worth paths and its warnings. */
+export function ResultsScreen({
+  results,
+  run,
+  active,
+  loading,
+  error,
+  onRun,
+  onCancel,
+}: {
+  results: ResultsData | undefined;
+  run: Run | undefined;
+  /** A run is queued or executing right now. */
+  active: boolean;
+  loading: boolean;
+  error: string | undefined;
+  onRun: () => void;
+  onCancel: () => void;
+}) {
   const [view, setView] = useState<ChartView>("fan");
   const [percentile, setPercentile] = useState<Percentile>("p50");
-  const [overrides, setOverrides] = useState<WhatIfOverrides>({
-    retirementAge: 62,
-    annualSpendK: 145,
-  });
-  const [applied, setApplied] = useState<WhatIfOverrides | null>(null);
 
-  const results = MOCK_RESULTS;
+  if (error) {
+    return <EmptyState title="The run did not finish" detail={error} />;
+  }
+  if (active) {
+    return <RunProgress run={run} onCancel={onCancel} />;
+  }
+  if (loading) {
+    return <EmptyState title="Loading results…" detail="Fetching the scenario's last run." />;
+  }
+  if (!results) {
+    return (
+      <div style={{ padding: "40px 24px", maxWidth: 520 }}>
+        <h4 style={{ margin: "0 0 6px" }}>No results yet</h4>
+        <p
+          style={{
+            margin: "0 0 14px",
+            fontSize: 13,
+            lineHeight: 1.5,
+            color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+          }}
+        >
+          Nothing has been simulated for this scenario. A run compiles the plan and
+          executes it thousands of times against sampled market returns.
+        </p>
+        <Button variant="primary" shortcut="r" onClick={onRun}>
+          Run
+        </Button>
+      </div>
+    );
+  }
 
-  // Re-runs only when overrides are applied, so dragging a slider does not
-  // imply the plan has been re-simulated.
-  const { bands, accountSeries } = useMemo(() => {
-    if (!applied) {
-      return { bands: results.bands, accountSeries: results.accountSeries };
-    }
-    const next = buildBands({
-      retirementAge: applied.retirementAge,
-      annualSpend: applied.annualSpendK * 1000,
-    });
-    return { bands: next, accountSeries: buildAccountSeries(next.p50) };
-  }, [applied, results]);
-
-  const copy = chartCopy(view, percentile, bands.ages);
+  const { bands, stats } = results;
+  const span =
+    bands.ages.length > 0
+      ? `${bands.ages[0]}–${bands.ages[bands.ages.length - 1]}`
+      : "no horizon";
+  const copy = chartCopy(view, percentile, span);
 
   return (
     <SplitPane
@@ -75,10 +107,10 @@ export function ResultsScreen() {
       main={
         <div style={{ padding: "22px 24px" }}>
           <SuccessRate
-            successRate={results.stats.successRate}
-            iterations={results.stats.numIterations}
-            converged={results.stats.converged}
-            finalAge={results.finalAge}
+            successRate={stats.successRate}
+            iterations={stats.numIterations}
+            converged={stats.converged}
+            horizonLabel={results.horizonLabel}
           />
 
           <ChartToolbar
@@ -92,7 +124,7 @@ export function ResultsScreen() {
 
           <NetWorthChart
             bands={bands}
-            accountSeries={accountSeries}
+            accountSeries={results.accountSeries}
             view={view}
             percentile={percentile}
           />
@@ -119,15 +151,41 @@ export function ResultsScreen() {
             gap: 20,
           }}
         >
-          <RunSummary stats={results.stats} bands={bands} />
+          <RunSummary stats={stats} bands={bands} />
           <Hr flush />
-          <WhatIfPanel
-            value={overrides}
-            onChange={setOverrides}
-            onRerun={() => setApplied(overrides)}
-          />
+          <Button block variant="primary" shortcut="r" onClick={onRun}>
+            Re-run
+          </Button>
         </div>
       }
     />
+  );
+}
+
+/** Live progress while the worker pool chews through the iterations. */
+function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => void }) {
+  const done = run?.completed_iterations ?? 0;
+  const total = run?.iterations ?? 0;
+  const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+
+  return (
+    <div style={{ padding: "40px 24px", maxWidth: 520 }}>
+      <h4 style={{ margin: "0 0 8px" }}>
+        {run?.status === "queued" ? "Queued…" : "Simulating…"}
+      </h4>
+      <div style={{ display: "flex", height: 10, border: "1px solid var(--color-divider)" }}>
+        <div style={{ width: `${pct}%`, background: "var(--color-accent)" }} />
+      </div>
+      <p
+        style={{
+          margin: "8px 0 14px",
+          fontSize: 12,
+          color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+        }}
+      >
+        {done.toLocaleString("en-US")} of {total.toLocaleString("en-US")} iterations
+      </p>
+      <Button onClick={onCancel}>Cancel run</Button>
+    </div>
   );
 }

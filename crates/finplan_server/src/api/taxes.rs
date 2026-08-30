@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -19,13 +20,15 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct Bracket {
     pub threshold: f64,
     pub rate: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct TaxConfig {
     pub id: i64,
     pub name: String,
@@ -36,7 +39,8 @@ pub struct TaxConfig {
     pub federal_brackets: Vec<Bracket>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreateTaxConfig {
     pub name: String,
     #[serde(default)]
@@ -58,7 +62,8 @@ fn default_penalty() -> f64 {
     0.10
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct UpdateTaxConfig {
     #[serde(default)]
     pub name: Option<String>,

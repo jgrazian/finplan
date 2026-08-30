@@ -14,17 +14,23 @@ import { DistributionCurve } from "./DistributionCurve";
 import { pct } from "./distribution";
 
 const DISTRIBUTIONS: DistributionKind[] = [
+  "None",
   "Fixed",
   "Normal",
   "LogNormal",
+  "StudentT",
+  "RegimeSwitching",
   "Bootstrap",
-  "Historical",
 ];
 
 /**
- * Inspects the selected return profile. Historical and Bootstrap presets are
- * sampled from real series, so their parameters are read-only — duplicating
- * one yields an editable copy.
+ * Inspects the selected return profile.
+ *
+ * The parameter fields display rather than edit: nothing here is wired to
+ * `PATCH /return-profiles/{id}` yet, so they are read-only for every profile.
+ * `readOnly` is the narrower statement that this profile is a sampled preset,
+ * whose shape comes from data and could not be typed in even once editing
+ * lands — duplicating one yields a parameterised copy.
  */
 export function ProfileInspector({
   profile,
@@ -60,7 +66,7 @@ export function ProfileInspector({
         <Select
           style={{ minHeight: 32 }}
           value={profile.kind}
-          disabled={readOnly}
+          disabled={readOnly || !onKindChange}
           onChange={(e) => onKindChange?.(e.target.value as DistributionKind)}
         >
           {DISTRIBUTIONS.map((d) => (
@@ -71,18 +77,15 @@ export function ProfileInspector({
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Field label="Mean return">
-          <CompactInput value={pct(profile.mean)} readOnly={readOnly} />
+          <CompactInput value={pct(profile.mean)} readOnly />
         </Field>
         <Field label="Volatility">
-          <CompactInput
-            value={profile.sd === 0 ? "0" : pct(profile.sd)}
-            readOnly={readOnly}
-          />
+          <CompactInput value={profile.sd === 0 ? "0" : pct(profile.sd)} readOnly />
         </Field>
       </div>
 
       <Field label="Sample source">
-        <CompactInput value={profile.source} readOnly={readOnly} />
+        <CompactInput value={profile.source} readOnly />
       </Field>
 
       <DistributionCurve kind={profile.kind} mean={profile.mean} sd={profile.sd} />

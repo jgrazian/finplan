@@ -1,5 +1,6 @@
 export { Blueprint } from "./Blueprint";
 export { Button } from "./Button";
+export { Dialog, DialogRow } from "./Dialog";
 export type { ButtonProps } from "./Button";
 export { CompactInput, Field, Input, RangeField, Select } from "./Field";
 export { Hr } from "./Hr";

@@ -4,6 +4,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
+use ts_rs::TS;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -46,7 +47,17 @@ impl ApiError {
         ApiError::Internal(msg.into())
     }
 
+    /// A foreign-key violation means the caller named a row that does not
+    /// exist — an unset account or event id, say. That is the request's fault,
+    /// not the server's, so it must not surface as a 500.
+    fn is_dangling_reference(&self) -> bool {
+        matches!(self, ApiError::Database(sqlx::Error::Database(db)) if db.is_foreign_key_violation())
+    }
+
     fn status(&self) -> StatusCode {
+        if self.is_dangling_reference() {
+            return StatusCode::BAD_REQUEST;
+        }
         match self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
@@ -59,6 +70,9 @@ impl ApiError {
     }
 
     fn code(&self) -> &'static str {
+        if self.is_dangling_reference() {
+            return "bad_request";
+        }
         match self {
             ApiError::BadRequest(_) => "bad_request",
             ApiError::Unauthorized => "unauthorized",
@@ -71,15 +85,17 @@ impl ApiError {
     }
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
-    error: ErrorDetail,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct ErrorBody {
+    pub error: ErrorDetail,
 }
 
-#[derive(Serialize)]
-struct ErrorDetail {
-    code: &'static str,
-    message: String,
+#[derive(Serialize, TS)]
+#[ts(export)]
+pub struct ErrorDetail {
+    pub code: &'static str,
+    pub message: String,
 }
 
 impl IntoResponse for ApiError {
@@ -89,6 +105,20 @@ impl IntoResponse for ApiError {
 
         // Database and internal failures may carry implementation detail, so log
         // the real cause and return a generic message to the client.
+        if self.is_dangling_reference() {
+            tracing::debug!(error = %self, "request referenced a row that does not exist");
+            return (
+                status,
+                Json(ErrorBody {
+                    error: ErrorDetail {
+                        code,
+                        message: "a referenced account, asset or event does not exist".to_string(),
+                    },
+                }),
+            )
+                .into_response();
+        }
+
         let message = match &self {
             ApiError::Database(err) => {
                 tracing::error!(error = %err, "database error");

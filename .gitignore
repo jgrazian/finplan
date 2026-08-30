@@ -28,6 +28,8 @@ node_modules
 dist
 build
 *.db
+*.db-shm
+*.db-wal
 next-env.d.ts
 flamegraph.svg
 perf.data*

@@ -640,3 +640,34 @@ async fn positions_are_confined_to_investment_accounts() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn an_effect_naming_a_missing_event_is_a_bad_request() {
+    let mut app = TestApp::new().await;
+    app.login_as("dangling@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+
+    // A `PauseEvent` whose target was never chosen: the id is not a row, so the
+    // insert trips a foreign key. That is the caller's mistake, and reporting it
+    // as a 500 would leave a client with nothing to act on.
+    let (status, body) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/events"),
+            json!({
+                "name": "pauses nothing",
+                "trigger": {"kind": "Date", "on_date": "2030-01-01"},
+                "effects": [{"kind": "PauseEvent", "target_event_id": 0}]
+            }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "bad_request");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("does not exist"),
+        "message should say what was wrong: {body}"
+    );
+}

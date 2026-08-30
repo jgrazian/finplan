@@ -3,23 +3,44 @@
 import { useState } from "react";
 import { SubTabBar } from "@/components/layout";
 import type { SegmentOption } from "@/components/ui";
+import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
+import type { Account, InflationProfile, ReturnProfile } from "@/lib/types";
 import { AccountsScreen } from "./AccountsScreen";
-import { ProfilesScreen } from "./ProfilesScreen";
+import { AssetsReturnsScreen } from "./AssetsReturnsScreen";
 
-type PortfolioSection = "accounts" | "profiles";
+type PortfolioSection = "accounts" | "returns";
 
 const SECTIONS: ReadonlyArray<SegmentOption<PortfolioSection>> = [
   { value: "accounts", label: "Accounts" },
-  { value: "profiles", label: "Profiles" },
+  { value: "returns", label: "Assets & returns" },
 ];
 
 const CAPTIONS: Record<PortfolioSection, string | undefined> = {
   accounts: undefined,
-  profiles: "Return behaviour is data, not code — every asset points at one of these.",
+  returns:
+    "Two tabs became one: a ticker only exists to point at a return profile, so the profile is the group.",
 };
 
-/** Portfolio tab: accounts (1d) and return/inflation profiles (3c). */
-export function PortfolioScreen() {
+/** Portfolio tab: the scenario's accounts, and its assets under the profiles that drive them. */
+export function PortfolioScreen({
+  scenarioId,
+  accounts,
+  raw,
+  returnProfiles,
+  inflationProfiles,
+  activeInflationProfile,
+  onActivateInflation,
+  onChanged,
+}: {
+  scenarioId: number;
+  accounts: Account[];
+  raw: RawWorkspace;
+  returnProfiles: ReturnProfile[];
+  inflationProfiles: InflationProfile[];
+  activeInflationProfile: string | undefined;
+  onActivateInflation?: (profile: InflationProfile) => void;
+  onChanged: () => void;
+}) {
   const [section, setSection] = useState<PortfolioSection>("accounts");
 
   return (
@@ -31,7 +52,24 @@ export function PortfolioScreen() {
         onChange={setSection}
         caption={CAPTIONS[section]}
       />
-      {section === "accounts" ? <AccountsScreen /> : <ProfilesScreen />}
+      {section === "accounts" ? (
+        <AccountsScreen
+          scenarioId={scenarioId}
+          accounts={accounts}
+          raw={raw}
+          onChanged={onChanged}
+        />
+      ) : (
+        <AssetsReturnsScreen
+          scenarioId={scenarioId}
+          raw={raw}
+          returnProfiles={returnProfiles}
+          inflationProfiles={inflationProfiles}
+          activeInflationProfile={activeInflationProfile}
+          onActivateInflation={onActivateInflation}
+          onChanged={onChanged}
+        />
+      )}
     </>
   );
 }

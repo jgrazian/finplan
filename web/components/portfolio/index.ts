@@ -1,4 +1,10 @@
+export { AddLotDialog } from "./AddLotDialog";
+export { NewAccountDialog } from "./NewAccountDialog";
+export { NewAssetDialog } from "./NewAssetDialog";
 export { AccountInspector } from "./AccountInspector";
+export { AssetInspector } from "./AssetInspector";
+export type { AssetDraft } from "./AssetInspector";
+export { AssetProfileList } from "./AssetProfileList";
 export { AccountsTable } from "./AccountsTable";
 export { PositionsTable } from "./PositionsTable";
 export { ReferencedBy } from "./ReferencedBy";

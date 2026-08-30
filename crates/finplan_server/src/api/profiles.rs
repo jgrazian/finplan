@@ -11,6 +11,7 @@ use crate::auth::session::CurrentUser;
 use crate::compile::HISTORY_PRESETS;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -32,8 +33,9 @@ pub fn router() -> Router<AppState> {
 
 /// The distribution shapes a profile can take. `RegimeSwitching` nests two more
 /// distributions, so this mirrors the recursive Rust enum.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
+#[ts(export)]
 pub enum DistributionSpec {
     None,
     Fixed {
@@ -296,18 +298,21 @@ async fn load_distribution(state: &AppState, id: i64, depth: usize) -> ApiResult
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct Profile {
     pub id: i64,
     pub name: String,
     pub description: Option<String>,
     pub distribution: DistributionSpec,
-    /// Names of assets and accounts pointing at this profile.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Names of assets and accounts pointing at this profile. Always present,
+    /// empty when nothing references it: an omitted key would make the
+    /// generated TypeScript claim a field the wire format does not carry.
     pub used_by: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreateProfile {
     pub name: String,
     #[serde(default)]
@@ -315,7 +320,8 @@ pub struct CreateProfile {
     pub distribution: DistributionSpec,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct UpdateProfile {
     #[serde(default)]
     pub name: Option<String>,

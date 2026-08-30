@@ -30,6 +30,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64ct = { version = "1", features = ["alloc"] }
 sha2 = "0.10"
+ts-rs = "12.0.1"
+
+[features]
+# Pretty-prints the generated TypeScript. Only wanted while regenerating the
+# bindings, so it stays off the default build: `format` drags in dprint.
+ts-format = ["ts-rs/format"]
 
 [dev-dependencies]
 tempfile = "3"

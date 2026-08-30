@@ -70,14 +70,23 @@ export interface TimelineTick {
   label: string;
 }
 
-/** Milestone ages, labelled by what happens there rather than by number. */
-export function milestoneTicks(scale: TimelineScale): TimelineTick[] {
-  const MILESTONES: Array<[number, string]> = [
-    [45, "age 45"],
-    [62, "retire"],
-    [67, "SS"],
-    [75, "RMD"],
-    [80, "80"],
-  ];
-  return MILESTONES.map(([age, label]) => ({ age, x: scale.x(age), label }));
+/**
+ * Evenly spaced ticks across the plan's horizon.
+ *
+ * The axis is the scenario's own — ages when it has a birth date, calendar
+ * years when it does not — so the labels come from the caller rather than from
+ * a fixed list of retirement milestones.
+ */
+export function milestoneTicks(
+  scale: TimelineScale,
+  label: (position: number) => string,
+  count = 5,
+): TimelineTick[] {
+  const { a0, a1 } = scale;
+  const span = a1 - a0;
+  const steps = Math.max(1, Math.min(count - 1, span));
+  return Array.from({ length: steps + 1 }, (_, i) => {
+    const age = Math.round(a0 + (span * i) / steps);
+    return { age, x: scale.x(age), label: label(age) };
+  });
 }

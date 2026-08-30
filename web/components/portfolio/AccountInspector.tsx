@@ -18,13 +18,16 @@ export function AccountInspector({
   onRevert,
   onApply,
   onAddLot,
+  onDelete,
   dirty,
 }: {
   account: Account;
   onFieldChange?: (field: "balance" | "returnProfileId", value: string) => void;
   onRevert?: () => void;
   onApply?: () => void;
+  /** Omitted where the flavor cannot hold lots. */
   onAddLot?: () => void;
+  onDelete?: () => void;
   dirty?: boolean;
 }) {
   const badge = taxBadge(account);
@@ -51,12 +54,14 @@ export function AccountInspector({
         <Field label="Balance">
           <CompactInput
             value={fmtCurrency(account.balance)}
+            readOnly={!onFieldChange}
             onChange={(e) => onFieldChange?.("balance", e.target.value)}
           />
         </Field>
         <Field label="Return profile">
           <CompactInput
             value={account.returnProfileId}
+            readOnly={!onFieldChange}
             onChange={(e) => onFieldChange?.("returnProfileId", e.target.value)}
           />
         </Field>
@@ -71,10 +76,15 @@ export function AccountInspector({
       <ReferencedBy eventIds={account.referencedBy} />
 
       <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-        <Button style={{ flex: 1 }} onClick={onRevert} disabled={!dirty}>
+        {onDelete && (
+          <Button variant="ghost" onClick={onDelete}>
+            Delete
+          </Button>
+        )}
+        <Button style={{ marginLeft: "auto" }} onClick={onRevert} disabled={!dirty}>
           Revert
         </Button>
-        <Button variant="primary" style={{ flex: 1 }} onClick={onApply} disabled={!dirty}>
+        <Button variant="primary" onClick={onApply} disabled={!dirty}>
           Apply
         </Button>
       </div>

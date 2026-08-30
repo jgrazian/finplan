@@ -15,6 +15,7 @@ use crate::auth::session::CurrentUser;
 use crate::compile::rows::ScenarioGraph;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -25,7 +26,8 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct Event {
     pub id: i64,
     pub name: String,
@@ -37,7 +39,8 @@ pub struct Event {
     pub effects: Vec<EffectSpec>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct EventBody {
     pub name: String,
     #[serde(default)]

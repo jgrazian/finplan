@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -19,7 +20,8 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
 pub struct Asset {
     pub id: i64,
     pub name: String,
@@ -33,7 +35,8 @@ pub struct Asset {
 const COLUMNS: &str =
     "id, name, description, initial_price, return_profile_id, tracking_error, sort_order";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreateAsset {
     pub name: String,
     #[serde(default)]
@@ -51,7 +54,8 @@ fn one() -> f64 {
     1.0
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct UpdateAsset {
     #[serde(default)]
     pub name: Option<String>,

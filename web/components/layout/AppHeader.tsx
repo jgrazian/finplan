@@ -79,7 +79,7 @@ export function AppHeader<T extends string>({
         ))}
       </Select>
 
-      {active?.dirty && <Tag tone="outline">unsaved</Tag>}
+      {active?.dirty && <Tag tone="outline">results stale</Tag>}
       {trailing}
 
       <Button variant="primary" shortcut="r" onClick={onRun}>

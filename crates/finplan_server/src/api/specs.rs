@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, Transaction};
 
 use crate::error::{ApiError, ApiResult};
+use ts_rs::TS;
 
 /// Matches `compile::MAX_DEPTH`, enforced on the way in so a pathological
 /// payload is rejected at write time rather than at simulation time.
@@ -25,8 +26,9 @@ fn check_depth(depth: usize) -> ApiResult<()> {
 
 // ── transfer amounts ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
+#[ts(export)]
 pub enum AmountSpec {
     Fixed {
         value: f64,
@@ -171,7 +173,8 @@ impl AmountSpec {
 
 // ── triggers ────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum Comparison {
     GreaterThanOrEqual,
     LessThanOrEqual,
@@ -186,7 +189,8 @@ impl Comparison {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum OffsetUnit {
     Days,
     Months,
@@ -203,7 +207,8 @@ impl OffsetUnit {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum Interval {
     Never,
     Weekly,
@@ -226,8 +231,9 @@ impl Interval {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
+#[ts(export)]
 pub enum TriggerSpec {
     Date {
         on_date: String,
@@ -469,20 +475,23 @@ fn validate_date(text: &str) -> ApiResult<String> {
 
 // ── effects ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, TS)]
+#[ts(export)]
 pub enum AmountMode {
     Gross,
     #[default]
     Net,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum IncomeType {
     Taxable,
     TaxFree,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, TS)]
+#[ts(export)]
 pub enum LotMethod {
     #[default]
     Fifo,
@@ -492,7 +501,8 @@ pub enum LotMethod {
     AverageCost,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum WithdrawalStrategy {
     TaxEfficientEarly,
     TaxDeferredFirst,
@@ -501,8 +511,9 @@ pub enum WithdrawalStrategy {
     PenaltyAware,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "mode")]
+#[ts(export)]
 pub enum WithdrawalSourcesSpec {
     SingleAsset {
         account_id: i64,
@@ -522,14 +533,16 @@ pub enum WithdrawalSourcesSpec {
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AssetRef {
     pub account_id: i64,
     pub asset_id: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind")]
+#[ts(export)]
 pub enum EffectSpec {
     Income {
         to_account_id: i64,

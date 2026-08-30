@@ -10,6 +10,7 @@ use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -19,7 +20,8 @@ pub fn router() -> Router<AppState> {
         .route("/scenarios/{id}/compile", post(compile_check))
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
 pub struct Scenario {
     pub id: i64,
     pub name: String,
@@ -37,7 +39,8 @@ pub struct Scenario {
 const SCENARIO_COLUMNS: &str = "id, name, description, start_date, birth_date, duration_years,
      inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreateScenario {
     pub name: String,
     #[serde(default)]
@@ -57,7 +60,8 @@ fn default_duration() -> i64 {
     30
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct UpdateScenario {
     #[serde(default)]
     pub name: Option<String>,
@@ -225,7 +229,8 @@ async fn destroy(
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
 pub struct DuplicateRequest {
     pub name: String,
 }
@@ -255,7 +260,8 @@ async fn duplicate(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct CompileReport {
     pub ok: bool,
     pub accounts: usize,

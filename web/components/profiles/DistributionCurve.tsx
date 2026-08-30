@@ -12,12 +12,26 @@ export function DistributionCurve({
   sd,
 }: {
   kind: string;
-  mean: number;
-  sd: number;
+  mean: number | null;
+  sd: number | null;
 }) {
   const { w, h } = CURVE_GEOMETRY;
   const isFixed = sd === 0;
   const q = quantiles(mean, sd);
+
+  // Nothing to draw for a distribution with no parameters — a bell curve here
+  // would be a picture of an assumption the profile does not make.
+  if (sd == null) {
+    return (
+      <div>
+        <SectionHeading className="mb-[6px]">Sampled, not parameterised</SectionHeading>
+        <Blueprint style={{ padding: "12px 10px", fontSize: 12 }}>
+          {kind} draws its shape from data rather than from a mean and a spread,
+          so there is no curve to plot.
+        </Blueprint>
+      </div>
+    );
+  }
 
   return (
     <div>

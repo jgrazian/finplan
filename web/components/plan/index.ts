@@ -1,3 +1,4 @@
+export { NewEventDialog } from "./NewEventDialog";
 export { EffectCard } from "./EffectCard";
 export { EventInspector } from "./EventInspector";
 export { EventsTable } from "./EventsTable";

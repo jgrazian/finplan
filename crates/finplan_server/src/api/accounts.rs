@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -30,7 +31,8 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum TaxStatus {
     Taxable,
     TaxDeferred,
@@ -47,7 +49,8 @@ impl TaxStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum ContributionPeriod {
     Monthly,
     Yearly,
@@ -63,8 +66,9 @@ impl ContributionPeriod {
 }
 
 /// The flavor-specific half of an account.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "flavor")]
+#[ts(export)]
 pub enum FlavorSpec {
     Bank {
         #[serde(default)]
@@ -127,7 +131,8 @@ impl FlavorSpec {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct Account {
     pub id: i64,
     pub name: String,
@@ -138,7 +143,8 @@ pub struct Account {
     pub positions: Vec<Position>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
 pub struct Position {
     pub id: i64,
     pub asset_id: i64,
@@ -147,7 +153,8 @@ pub struct Position {
     pub cost_basis: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreateAccount {
     pub name: String,
     #[serde(default)]
@@ -158,7 +165,8 @@ pub struct CreateAccount {
     pub flavor: FlavorSpec,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct UpdateAccount {
     #[serde(default)]
     pub name: Option<String>,
@@ -169,7 +177,12 @@ pub struct UpdateAccount {
     /// Replaces the detail row wholesale. The flavor itself cannot change:
     /// switching a 401k into a mortgage would silently invalidate every event
     /// and position pointing at it.
+    ///
+    /// Skipped in the TypeScript bindings: `FlavorSpec | null` has no flattened
+    /// form, so the web client composes the union itself as
+    /// `UpdateAccount & (FlavorSpec | {})` in `web/lib/api/types.ts`.
     #[serde(default, flatten)]
+    #[ts(skip)]
     pub flavor: Option<FlavorSpec>,
 }
 
@@ -495,7 +508,8 @@ async fn destroy(
 
 // ── positions ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreatePosition {
     pub asset_id: i64,
     /// Defaults to the scenario start date, i.e. an opening holding.

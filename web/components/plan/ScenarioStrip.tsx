@@ -1,14 +1,8 @@
 "use client";
 
-import { Button, CompactInput, Field, SectionHeading, Select } from "@/components/ui";
+import { Button, CompactInput, Field, SectionHeading } from "@/components/ui";
 import { fmtInt } from "@/lib/format";
-import type { ScenarioParams, WithdrawalOrder } from "@/lib/types";
-
-const WITHDRAWAL_ORDERS: WithdrawalOrder[] = [
-  "TaxEfficientEarly",
-  "ProRata",
-  "PenaltyAware",
-];
+import type { ScenarioParams } from "@/lib/types";
 
 /**
  * Scenario parameters, pinned above the event list. The Scenario tab was six
@@ -57,6 +51,7 @@ export function ScenarioStrip({
           <CompactInput
             style={{ minHeight: 30 }}
             value={params.start}
+            readOnly={!onChange}
             onChange={(e) => onChange?.({ ...params, start: e.target.value })}
           />
         </Field>
@@ -67,6 +62,7 @@ export function ScenarioStrip({
           <CompactInput
             style={{ minHeight: 30 }}
             value={params.birthDate}
+            readOnly={!onChange}
             onChange={(e) => onChange?.({ ...params, birthDate: e.target.value })}
           />
         </Field>
@@ -74,20 +70,10 @@ export function ScenarioStrip({
           <CompactInput style={{ minHeight: 30 }} value={fmtInt(params.iterations)} readOnly />
         </Field>
         <Field label="Inflation">
-          <CompactInput style={{ minHeight: 30 }} value={params.inflationProfileId} readOnly />
+          <CompactInput style={{ minHeight: 30 }} value={params.inflationProfile} readOnly />
         </Field>
-        <Field label="Withdrawal order">
-          <Select
-            style={{ minHeight: 30 }}
-            value={params.withdrawalOrder}
-            onChange={(e) =>
-              onChange?.({ ...params, withdrawalOrder: e.target.value as WithdrawalOrder })
-            }
-          >
-            {WITHDRAWAL_ORDERS.map((o) => (
-              <option key={o}>{o}</option>
-            ))}
-          </Select>
+        <Field label="Tax config">
+          <CompactInput style={{ minHeight: 30 }} value={params.taxConfig} readOnly />
         </Field>
       </div>
     </div>

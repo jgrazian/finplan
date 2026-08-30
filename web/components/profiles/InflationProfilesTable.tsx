@@ -17,7 +17,8 @@ export function InflationProfilesTable({
 }: {
   profiles: InflationProfile[];
   activeId: string;
-  onActivate: (id: string) => void;
+  /** Omitted while no scenario is loaded to attach the profile to. */
+  onActivate?: (profile: InflationProfile) => void;
 }) {
   return (
     <Table>
@@ -53,14 +54,16 @@ export function InflationProfilesTable({
                 {active ? (
                   <Tag tone="accent">in use</Tag>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => onActivate(q.id)}
-                    className="tag tag-outline"
-                    style={{ background: "transparent", cursor: "pointer" }}
-                  >
-                    select
-                  </button>
+                  onActivate && (
+                    <button
+                      type="button"
+                      onClick={() => onActivate(q)}
+                      className="tag tag-outline"
+                      style={{ background: "transparent", cursor: "pointer" }}
+                    >
+                      select
+                    </button>
+                  )
                 )}
               </Td>
             </tr>

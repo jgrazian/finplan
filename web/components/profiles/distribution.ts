@@ -34,13 +34,21 @@ export function distributionPath(sd: number, geo: CurveGeometry = CURVE_GEOMETRY
   return `${points.join(" ")} L${w - pad} ${baseline} L${pad} ${baseline} Z`;
 }
 
-/** Percent label, one decimal — the convention across every profile figure. */
-export function pct(v: number): string {
-  return `${v.toFixed(1)}%`;
+/**
+ * Percent label, one decimal — the convention across every profile figure.
+ * A resampled or regime-switching distribution has no closed-form mean, and a
+ * dash is the honest reading of that.
+ */
+export function pct(v: number | null): string {
+  return v == null ? "—" : `${v.toFixed(1)}%`;
 }
 
 /** Normal-approximation quantiles around the mean. */
-export function quantiles(mean: number, sd: number): { p5: string; p95: string } {
+export function quantiles(
+  mean: number | null,
+  sd: number | null,
+): { p5: string; p95: string } {
+  if (mean == null || sd == null) return { p5: "—", p95: "—" };
   return {
     p5: pct(mean - 1.645 * sd),
     p95: pct(mean + 1.645 * sd),

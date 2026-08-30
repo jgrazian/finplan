@@ -15,9 +15,11 @@ export function PositionsTable({
       <SectionHeading
         className="mb-[4px]"
         action={
-          <Button variant="ghost" onClick={onAddLot}>
-            Add lot
-          </Button>
+          onAddLot && (
+            <Button variant="ghost" onClick={onAddLot}>
+              Add lot
+            </Button>
+          )
         }
       >
         Positions

@@ -1,13 +1,15 @@
 /**
- * TypeScript mirror of the `finplan_core` data model.
+ * View models for the screens.
  *
- * These shapes deliberately track the Rust types so the mock layer can be
- * swapped for real engine output without touching components:
- *   Account/AccountFlavor/TaxStatus  → crates/finplan_core/src/model/accounts.rs
- *   MonteCarloStats/SimulationResult → crates/finplan_core/src/model/results.rs
+ * The API's own shapes live in `lib/api/generated`, written straight from the
+ * Rust structs. These are the presentation-side types the components consume:
+ * flattened, pre-formatted and ordered for display. `lib/view/*` is the only
+ * place that maps one onto the other, so a server change surfaces there as a
+ * type error rather than as a wrong number on screen.
  */
 
 // ── ids ───────────────────────────────────────────────────────────────────
+/** Display identity — a name where the domain has one, else the row id. */
 export type AccountId = string;
 export type AssetId = string;
 export type EventId = string;
@@ -16,12 +18,8 @@ export type ReturnProfileId = string;
 // ── accounts ──────────────────────────────────────────────────────────────
 export type TaxStatus = "Taxable" | "TaxDeferred" | "TaxFree";
 
-/** Discriminant of `AccountFlavor`; `n/a` tax status applies to the last two. */
-export type AccountFlavorKind =
-  | "Bank"
-  | "Investment"
-  | "Property"
-  | "Liability";
+/** Discriminant of `FlavorSpec`; the last two carry no tax treatment. */
+export type AccountFlavorKind = "Bank" | "Investment" | "Property" | "Liability";
 
 export type ContributionLimitPeriod = "Monthly" | "Yearly";
 
@@ -40,16 +38,19 @@ export interface AssetLot {
 
 export interface Account {
   accountId: AccountId;
+  /** Database id, for the mutation endpoints. */
+  serverId: number;
   name: string;
   flavor: AccountFlavorKind;
   /** Absent for Property and Liability, which have no tax treatment. */
   taxStatus?: TaxStatus;
   /** Signed: liabilities are negative. */
   balance: number;
+  /** Name of the return profile driving this account's cash or value. */
   returnProfileId: ReturnProfileId;
   contributionLimit?: ContributionLimit;
   positions: AssetLot[];
-  /** Ids of events that read or write this account. */
+  /** Names of events that read or write this account. */
   referencedBy: EventId[];
 }
 
@@ -66,14 +67,16 @@ export interface MonteCarloStats {
   maxFinalNetWorth: number;
   percentileValues: Array<[number, number]>;
   converged?: boolean;
-  /** Iteration count at which the convergence metric was met. */
-  convergedAt?: number;
+  /** Which statistic convergence was judged on, and where it settled. */
+  convergenceMetric?: string;
+  convergenceValue?: number;
   lifetimeTaxes: number;
 }
 
 /** Net-worth paths, one value per year, aligned to `years`. */
 export interface NetWorthBands {
   years: number[];
+  /** Age at each year, or the calendar year again when no birth date is set. */
   ages: number[];
   p5: number[];
   p50: number[];
@@ -95,14 +98,10 @@ export interface YearlyCashFlow {
   taxes: number;
 }
 
-export type WarningKind =
-  | "EffectSkipped"
-  | "EvaluationFailed"
-  | "IterationLimitHit";
-
 export interface SimulationWarning {
   id: string;
-  kind: WarningKind;
+  /** `WarningKind` from the engine; treated as opaque text here. */
+  kind: string;
   title: string;
   detail: string;
 }
@@ -113,40 +112,50 @@ export interface ResultsData {
   accountSeries: AccountSeries[];
   cashFlows: YearlyCashFlow[];
   warnings: SimulationWarning[];
-  /** Plan horizon, used in the success-rate caption. */
-  finalAge: number;
+  /** End of the plan horizon, e.g. `age 81` or `2061` without a birth date. */
+  horizonLabel: string;
 }
 
 // ── scenario ──────────────────────────────────────────────────────────────
 export interface Scenario {
   id: string;
+  serverId: number;
   name: string;
+  /** The plan changed after the last successful run, so results are stale. */
   dirty: boolean;
 }
 
 // ── events ────────────────────────────────────────────────────────────────
-/** Discriminant of `EventTrigger` (crates/finplan_core/src/model/events.rs). */
+/** Discriminant of `TriggerSpec`. */
 export type TriggerKind =
   | "Date"
   | "Age"
   | "Repeating"
   | "NetWorth"
   | "AccountBalance"
+  | "AssetBalance"
   | "RelativeToEvent"
   | "And"
-  | "Or";
+  | "Or"
+  | "Manual";
 
-/** Discriminant of `EventEffect`. */
+/** Discriminant of `EffectSpec`. */
 export type EffectKind =
   | "Income"
   | "Expense"
   | "CashTransfer"
   | "AssetPurchase"
+  | "AssetSale"
   | "Sweep"
+  | "AdjustBalance"
   | "ApplyRmd"
+  | "RsuVesting"
+  | "DeleteAccount"
   | "PauseEvent"
+  | "ResumeEvent"
   | "TriggerEvent"
-  | "TerminateEvent";
+  | "TerminateEvent"
+  | "Random";
 
 export interface EventEffect {
   kind: EffectKind;
@@ -156,58 +165,72 @@ export interface EventEffect {
 
 export interface PlanEvent {
   id: EventId;
+  /** Database id, for the mutation endpoints. */
+  serverId: number;
   /** Short trigger summary for the list, e.g. "Repeating · monthly". */
   trigger: string;
   triggerKind: TriggerKind;
   /** Long form shown in the inspector. */
   triggerDetail: string;
-  /** Next fire date, or an estimate for balance-driven triggers. */
+  /** Next fire date, or a description for balance-driven triggers. */
   next: string;
-  /** Inclusive [startAge, endAge]; equal ages mark a one-shot. */
+  /**
+   * Inclusive [start, end] on the timeline's axis (ages, or calendar years
+   * when the scenario has no birth date); equal values mark a one-shot.
+   */
   span: [number, number];
   amount: string;
   effects: EventEffect[];
   firesOnce?: boolean;
+  enabled: boolean;
 }
 
-/** Scenario-level parameters that apply to every event. */
+/** Scenario-level parameters, shown above the event list. */
 export interface ScenarioParams {
   start: string;
   durationYears: number;
+  /** Empty when the scenario has none; `Age` triggers require one. */
   birthDate: string;
   iterations: number;
-  inflationProfileId: string;
-  withdrawalOrder: WithdrawalOrder;
+  /** Name of the scenario's inflation profile, or `—`. */
+  inflationProfile: string;
+  /** Name of the scenario's tax configuration, or `—`. */
+  taxConfig: string;
 }
 
-export type WithdrawalOrder = "TaxEfficientEarly" | "ProRata" | "PenaltyAware";
-
 // ── return / inflation profiles ───────────────────────────────────────────
-/** Shape of `ReturnProfile` (crates/finplan_core/src/model/market.rs). */
+/** Discriminant of `DistributionSpec`. */
 export type DistributionKind =
+  | "None"
   | "Fixed"
   | "Normal"
   | "LogNormal"
-  | "Bootstrap"
-  | "Historical";
+  | "StudentT"
+  | "RegimeSwitching"
+  | "Bootstrap";
 
 export interface ReturnProfile {
   id: ReturnProfileId;
+  serverId: number;
   kind: DistributionKind;
   /** Provenance of the samples, e.g. "US total market · 1928–2024". */
   source: string;
-  /** Annual mean return, in percent. */
-  mean: number;
-  /** Annual standard deviation, in percent; 0 for Fixed. */
-  sd: number;
+  /**
+   * Annual mean return in percent, and its standard deviation. Null where the
+   * distribution has no closed-form summary — a resampled history or a regime
+   * blend — so the UI shows a dash rather than inventing a figure.
+   */
+  mean: number | null;
+  sd: number | null;
   /** Assets or accounts drawing on this profile. */
   usedBy: string[];
 }
 
 export interface InflationProfile {
   id: string;
+  serverId: number;
   kind: DistributionKind;
-  mean: number;
-  sd: number;
+  mean: number | null;
+  sd: number | null;
   note: string;
 }

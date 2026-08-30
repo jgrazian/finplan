@@ -10,6 +10,7 @@ use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use ts_rs::TS;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -22,7 +23,8 @@ pub fn router() -> Router<AppState> {
         .route("/runs/{id}/results", get(results))
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
 pub struct Run {
     pub id: i64,
     pub scenario_id: i64,
@@ -39,7 +41,8 @@ pub struct Run {
 const RUN_COLUMNS: &str = "id, scenario_id, status, iterations, completed_iterations, seed,
      error_message, created_at, started_at, finished_at";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct CreateRun {
     #[serde(default = "default_iterations")]
     pub iterations: i64,
@@ -244,7 +247,8 @@ struct StatsRow {
     convergence_value: Option<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct Stats {
     pub num_iterations: i64,
     pub success_rate: f64,
@@ -259,28 +263,32 @@ pub struct Stats {
     pub percentile_values: Vec<PercentileValue>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct PercentileValue {
     pub percentile: f64,
     pub final_net_worth: f64,
 }
 
 /// Net-worth path for one percentile (or the mean, when `percentile` is null).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct Band {
     pub percentile: Option<f64>,
     pub dates: Vec<String>,
     pub net_worth: Vec<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct AccountSeries {
     pub account_id: i64,
     pub label: String,
     pub values: Vec<f64>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct CashFlow {
     pub year: i64,
     pub income: f64,
@@ -292,7 +300,8 @@ pub struct CashFlow {
     pub taxes: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct Warning {
     pub kind: String,
     pub date: Option<String>,
@@ -300,7 +309,8 @@ pub struct Warning {
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct Results {
     pub run_id: i64,
     pub scenario_id: i64,
@@ -313,7 +323,8 @@ pub struct Results {
     pub warnings: Vec<Warning>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
 pub struct ResultsQuery {
     /// Which path the per-account series and cash flows describe. Defaults to
     /// the median; pass `mean` for the averaged path.

@@ -2,6 +2,7 @@
 
 import { SectionHeading } from "@/components/ui";
 import type { EventId, PlanEvent } from "@/lib/types";
+import type { PlanAxis } from "@/lib/view/axis";
 import { layoutMarks, makeTimelineScale, milestoneTicks } from "./timeline";
 
 const VIEW_W = 660;
@@ -17,18 +18,19 @@ const AXIS_Y = 50;
  */
 export function MiniTimeline({
   events,
-  ageRange,
+  axis,
   selectedId,
   onSelect,
 }: {
   events: PlanEvent[];
-  ageRange: [number, number];
+  /** The scenario's own horizon — ages, or years without a birth date. */
+  axis: PlanAxis;
   selectedId: EventId;
   onSelect: (id: EventId) => void;
 }) {
-  const scale = makeTimelineScale(ageRange);
+  const scale = makeTimelineScale(axis.range);
   const marks = layoutMarks(events, scale);
-  const ticks = milestoneTicks(scale);
+  const ticks = milestoneTicks(scale, axis.label);
 
   return (
     <div

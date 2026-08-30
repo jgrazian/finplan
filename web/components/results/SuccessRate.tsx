@@ -10,12 +10,13 @@ export function SuccessRate({
   successRate,
   iterations,
   converged,
-  finalAge,
+  horizonLabel,
 }: {
   successRate: number;
   iterations: number;
   converged?: boolean;
-  finalAge: number;
+  /** End of the plan horizon, e.g. `age 81` — or `2061` with no birth date. */
+  horizonLabel: string;
 }) {
   const pct = successRate * 100;
   const lasted = Math.round(iterations * successRate);
@@ -82,7 +83,7 @@ export function SuccessRate({
           }}
         >
           <span>
-            {fmtInt(lasted)} plans lasted through age {finalAge}
+            {fmtInt(lasted)} plans lasted through {horizonLabel}
           </span>
           <span>{fmtInt(ranDry)} ran dry</span>
         </div>
