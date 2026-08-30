@@ -5,6 +5,7 @@
 ```bash
 cargo build             # Build all crates
 cargo run --bin finplan # Run the TUI
+cargo run --bin finplan-server # Run the API server
 cargo test              # Run all tests
 cargo fmt               # Format code (REQUIRED before commits)
 ```
@@ -21,9 +22,10 @@ IMPORTIANT:
 finplan/
 ├── crates/
 │   ├── finplan_core/   # Simulation engine library (~2500 LOC)
-│   └── finplan/        # Terminal UI application (~2600 LOC)
+│   ├── finplan/        # Terminal UI application (~2600 LOC)
+│   └── finplan_server/ # HTTP API server, SQLite-backed (~5000 LOC)
 ├── spec/               # Detailed specifications
-└── web/                # Next.js frontend (not actively developed)
+└── web/                # Next.js frontend
 ```
 
 ## Key Entry Points
@@ -34,6 +36,9 @@ finplan/
 | Monte Carlo | `crates/finplan_core/src/simulation.rs:474` - `monte_carlo_simulate_with_config()` |
 | TUI entry | `crates/finplan/src/main.rs` |
 | App event loop | `crates/finplan/src/app.rs:116` - `App::run()` |
+| Server entry | `crates/finplan_server/src/main.rs` |
+| DB -> engine config | `crates/finplan_server/src/compile/mod.rs` - `compile()` |
+| Schema | `crates/finplan_server/migrations/0001_init.sql` |
 
 ## finplan_core Navigation
 
@@ -105,6 +110,7 @@ finplan/
 ```bash
 cargo test -p finplan_core           # Core library tests
 cargo test -p finplan_core -- basic  # Specific test
+cargo test -p finplan_server         # API integration tests
 ```
 
 Key test files:

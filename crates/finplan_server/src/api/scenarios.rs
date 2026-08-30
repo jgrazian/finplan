@@ -1,0 +1,286 @@
+//! Scenario CRUD, plus a compile-check endpoint.
+
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+
+use crate::auth::session::CurrentUser;
+use crate::compile::{self, rows::ScenarioGraph};
+use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::state::AppState;
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/scenarios", get(list).post(create))
+        .route("/scenarios/{id}", get(fetch).patch(update).delete(destroy))
+        .route("/scenarios/{id}/duplicate", post(duplicate))
+        .route("/scenarios/{id}/compile", post(compile_check))
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct Scenario {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub start_date: String,
+    pub birth_date: Option<String>,
+    pub duration_years: i64,
+    pub inflation_profile_id: Option<i64>,
+    pub tax_config_id: Option<i64>,
+    pub collect_ledger: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+const SCENARIO_COLUMNS: &str = "id, name, description, start_date, birth_date, duration_years,
+     inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at";
+
+#[derive(Debug, Deserialize)]
+pub struct CreateScenario {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub start_date: String,
+    #[serde(default)]
+    pub birth_date: Option<String>,
+    #[serde(default = "default_duration")]
+    pub duration_years: i64,
+    #[serde(default)]
+    pub inflation_profile_id: Option<i64>,
+    #[serde(default)]
+    pub tax_config_id: Option<i64>,
+}
+
+fn default_duration() -> i64 {
+    30
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateScenario {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub birth_date: Option<String>,
+    #[serde(default)]
+    pub duration_years: Option<i64>,
+    #[serde(default)]
+    pub inflation_profile_id: Option<i64>,
+    #[serde(default)]
+    pub tax_config_id: Option<i64>,
+    #[serde(default)]
+    pub collect_ledger: Option<bool>,
+}
+
+fn validate_date(text: &str, field: &str) -> ApiResult<String> {
+    text.parse::<jiff::civil::Date>()
+        .map(|d| d.to_string())
+        .map_err(|e| ApiError::bad_request(format!("invalid {field} '{text}': {e}")))
+}
+
+async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<Scenario>>> {
+    let rows: Vec<Scenario> = sqlx::query_as(&format!(
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE user_id = ?1 ORDER BY updated_at DESC"
+    ))
+    .bind(&user.id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
+}
+
+async fn fetch(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Scenario>> {
+    let row: Option<Scenario> = sqlx::query_as(&format!(
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1 AND user_id = ?2"
+    ))
+    .bind(id)
+    .bind(&user.id)
+    .fetch_optional(&state.db)
+    .await?;
+    row.map(Json).ok_or(ApiError::NotFound("scenario"))
+}
+
+async fn create(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(body): Json<CreateScenario>,
+) -> ApiResult<(StatusCode, Json<Scenario>)> {
+    let start_date = validate_date(&body.start_date, "start_date")?;
+    let birth_date = body
+        .birth_date
+        .as_deref()
+        .map(|d| validate_date(d, "birth_date"))
+        .transpose()?;
+
+    if body.name.trim().is_empty() {
+        return Err(ApiError::bad_request("scenario name cannot be empty"));
+    }
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO scenarios
+            (user_id, name, description, start_date, birth_date, duration_years,
+             inflation_profile_id, tax_config_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8) RETURNING id",
+    )
+    .bind(&user.id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(&start_date)
+    .bind(&birth_date)
+    .bind(body.duration_years)
+    .bind(body.inflation_profile_id)
+    .bind(body.tax_config_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
+
+    let row: Scenario = sqlx::query_as(&format!(
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
+    ))
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+async fn update(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateScenario>,
+) -> ApiResult<Json<Scenario>> {
+    super::owned_scenario(&state.db, id, &user.id).await?;
+
+    let start_date = body
+        .start_date
+        .as_deref()
+        .map(|d| validate_date(d, "start_date"))
+        .transpose()?;
+    let birth_date = body
+        .birth_date
+        .as_deref()
+        .map(|d| validate_date(d, "birth_date"))
+        .transpose()?;
+
+    // COALESCE leaves any field the caller omitted untouched.
+    sqlx::query(
+        "UPDATE scenarios SET
+            name                 = COALESCE(?2, name),
+            description          = COALESCE(?3, description),
+            start_date           = COALESCE(?4, start_date),
+            birth_date           = COALESCE(?5, birth_date),
+            duration_years       = COALESCE(?6, duration_years),
+            inflation_profile_id = COALESCE(?7, inflation_profile_id),
+            tax_config_id        = COALESCE(?8, tax_config_id),
+            collect_ledger       = COALESCE(?9, collect_ledger),
+            updated_at           = datetime('now')
+          WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(body.name.as_deref().map(str::trim))
+    .bind(&body.description)
+    .bind(&start_date)
+    .bind(&birth_date)
+    .bind(body.duration_years)
+    .bind(body.inflation_profile_id)
+    .bind(body.tax_config_id)
+    .bind(body.collect_ledger.map(i64::from))
+    .execute(&state.db)
+    .await
+    .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
+
+    let row: Scenario = sqlx::query_as(&format!(
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
+    ))
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(row))
+}
+
+async fn destroy(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    let affected = sqlx::query("DELETE FROM scenarios WHERE id = ?1 AND user_id = ?2")
+        .bind(id)
+        .bind(&user.id)
+        .execute(&state.db)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("scenario"));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DuplicateRequest {
+    pub name: String,
+}
+
+/// Deep-copy a scenario, remapping every internal foreign key to the new rows.
+///
+/// The copy is done id-by-id rather than with a bulk `INSERT ... SELECT`
+/// because assets, accounts, events, triggers, amounts and effects all point at
+/// each other; a table-at-a-time copy would leave the clone referencing the
+/// original's rows.
+async fn duplicate(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(body): Json<DuplicateRequest>,
+) -> ApiResult<(StatusCode, Json<Scenario>)> {
+    let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let new_id = crate::domain::clone_scenario(&state.db, &graph, body.name.trim()).await?;
+
+    let row: Scenario = sqlx::query_as(&format!(
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
+    ))
+    .bind(new_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+#[derive(Debug, Serialize)]
+pub struct CompileReport {
+    pub ok: bool,
+    pub accounts: usize,
+    pub assets: usize,
+    pub events: usize,
+    pub return_profiles: usize,
+    pub duration_years: usize,
+}
+
+/// Lower the scenario without running it. Lets the UI surface configuration
+/// errors before a user commits to a long Monte Carlo run.
+async fn compile_check(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<CompileReport>> {
+    let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let compiled = compile::compile(&graph)?;
+
+    Ok(Json(CompileReport {
+        ok: true,
+        accounts: compiled.config.accounts.len(),
+        assets: compiled.config.asset_prices.len(),
+        events: compiled.config.events.len(),
+        return_profiles: compiled.config.return_profiles.len(),
+        duration_years: compiled.config.duration_years,
+    }))
+}
