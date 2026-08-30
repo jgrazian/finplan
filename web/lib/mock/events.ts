@@ -1,0 +1,105 @@
+import type { PlanEvent, ScenarioParams } from "@/lib/types";
+
+export const MOCK_SCENARIO_PARAMS: ScenarioParams = {
+  start: "2026-01-01",
+  durationYears: 36,
+  birthDate: "1981-04-12",
+  iterations: 10_000,
+  inflationProfileId: "us-cpi-hist",
+  withdrawalOrder: "TaxEfficientEarly",
+};
+
+/** Plan horizon in years of age, shared by the timeline strip. */
+export const PLAN_AGE_RANGE: [number, number] = [45, 80];
+
+export const MOCK_EVENTS: PlanEvent[] = [
+  {
+    id: "salary",
+    trigger: "Repeating · monthly",
+    triggerKind: "Repeating",
+    triggerDetail: "start Date(2026-01-01) · end Age(62)",
+    next: "2026-09-01",
+    span: [45, 62],
+    amount: "$11,400 / mo",
+    effects: [{ kind: "Income", detail: "→ HYSA · W2 · inflation-adjusted" }],
+  },
+  {
+    id: "401k-contribution",
+    trigger: "Repeating · monthly",
+    triggerKind: "Repeating",
+    triggerDetail: "start Date(2026-01-01) · end Age(62)",
+    next: "2026-09-01",
+    span: [45, 62],
+    amount: "$1,958 / mo",
+    effects: [
+      { kind: "CashTransfer", detail: "HYSA → 401(k)" },
+      { kind: "AssetPurchase", detail: "401(k) / VTI · SourceBalance" },
+    ],
+  },
+  {
+    id: "living-expenses",
+    trigger: "Repeating · monthly",
+    triggerKind: "Repeating",
+    triggerDetail: "no end condition",
+    next: "2026-09-01",
+    span: [45, 80],
+    amount: "$6,100 / mo",
+    effects: [{ kind: "Expense", detail: "from HYSA · inflation-adjusted" }],
+  },
+  {
+    id: "retire",
+    trigger: "Age 62",
+    triggerKind: "Age",
+    triggerDetail: "years 62 · once",
+    next: "2043-04-12",
+    span: [62, 62],
+    amount: "—",
+    firesOnce: true,
+    effects: [
+      { kind: "PauseEvent", detail: "salary" },
+      { kind: "PauseEvent", detail: "401k-contribution" },
+      { kind: "TriggerEvent", detail: "retirement-sweep" },
+    ],
+  },
+  {
+    id: "retirement-sweep",
+    trigger: "Repeating · monthly",
+    triggerKind: "Repeating",
+    triggerDetail: "start RelativeToEvent(retire, +0d)",
+    next: "2043-05-01",
+    span: [62, 80],
+    amount: "$12,083 / mo",
+    effects: [{ kind: "Sweep", detail: "TaxEfficientEarly → HYSA · FIFO" }],
+  },
+  {
+    id: "social-security",
+    trigger: "Age 67",
+    triggerKind: "Age",
+    triggerDetail: "years 67 · then monthly",
+    next: "2048-04-12",
+    span: [67, 80],
+    amount: "$3,667 / mo",
+    effects: [{ kind: "Income", detail: "→ HYSA · SocialSecurity" }],
+  },
+  {
+    id: "rmd-age-75",
+    trigger: "Age 75 · yearly",
+    triggerKind: "Age",
+    triggerDetail: "years 75 · then yearly",
+    next: "2056-12-31",
+    span: [75, 80],
+    amount: "IRS table",
+    effects: [{ kind: "ApplyRmd", detail: "destination HYSA · FIFO" }],
+  },
+  {
+    id: "mortgage-payoff",
+    trigger: "AccountBalance",
+    triggerKind: "AccountBalance",
+    triggerDetail: "Mortgage ≤ $0 · once",
+    next: "est. 2038-07",
+    span: [57, 57],
+    amount: "—",
+    firesOnce: true,
+    effects: [{ kind: "TerminateEvent", detail: "mortgage-payment" }],
+  },
+];

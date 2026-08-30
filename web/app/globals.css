@@ -1,0 +1,124 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&display=swap');
+@import "tailwindcss";
+@import "./design-system.css";
+
+/* Expose the Industry tokens to Tailwind utilities, so `text-accent-700`,
+   `border-divider`, `font-heading` etc. resolve to the same values the
+   design-system classes use. Tokens stay defined in design-system.css. */
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-ink: var(--color-text);
+  --color-divider: var(--color-divider);
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+}
+
+/* ── App chrome ────────────────────────────────────────────────────────────
+   Lifted verbatim from the canvas document's own <style> block, where the
+   artboards define the shell they all share. */
+
+.app {
+  background: var(--color-bg);
+  border: 1px solid var(--color-divider);
+  box-shadow: var(--shadow-md);
+}
+
+.tabbar {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.tabbar a,
+.tabbar button,
+.tabbar span {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 9px 18px;
+  text-decoration: none;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+  border-right: 1px solid var(--color-divider);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tabbar a:hover,
+.tabbar button:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-accent-800);
+}
+
+.tabbar .on {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.kb {
+  font: 500 10px ui-monospace, Menlo, monospace;
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  opacity: .6;
+}
+
+.stat-l {
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+.stat-v {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 26px;
+  line-height: 1.05;
+}
+
+.rowsel {
+  cursor: pointer;
+}
+
+.rowsel:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+/* Inline tabs for the 6b header grammar. */
+.tab-inline {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 15px 12px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+.tab-inline:hover {
+  color: var(--color-accent-800);
+}
+
+.tab-inline[aria-current="page"] {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+/* Range inputs in the What-if panel sit on the ground, not in an input well. */
+.range {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  accent-color: var(--color-accent);
+  min-height: 0;
+}
