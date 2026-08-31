@@ -90,7 +90,7 @@ export function AssetsReturnsScreen({
 
   const apply = (asset: AssetRow, draft: AssetDraft) => {
     const ticker = draft.ticker.trim();
-    const price = Number(draft.price);
+    const price = draft.price;
     // `PATCH` coalesces nulls onto the stored row, so it cannot police these
     // the way `POST` does: a blank ticker or a zero price would be written.
     if (ticker === "") return editing.fail("An asset needs a ticker.");

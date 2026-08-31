@@ -122,3 +122,71 @@
   accent-color: var(--color-accent);
   min-height: 0;
 }
+/* ── Affixed number fields ─────────────────────────────────────────────────
+   A `$` or a trailing `years` reads as part of the figure but is not text
+   anyone should type or step over, so static spans flank a bare input inside
+   one shared `.input` well. The input sizes itself to its own text through a
+   hidden mirror, which keeps the suffix against the number rather than at the
+   far edge of the field. */
+
+.numfield {
+  display: flex;
+  align-items: center;
+  cursor: text;
+}
+
+.numfield:focus-within {
+  border-color: var(--color-accent);
+}
+
+.numfield[data-disabled="true"] {
+  cursor: default;
+  opacity: .6;
+}
+
+.numfield-grow {
+  display: inline-grid;
+  min-width: 0;
+}
+
+.numfield-grow > * {
+  grid-area: 1 / 1;
+}
+
+.numfield-mirror {
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.numfield input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.numfield-prefix {
+  margin-right: 1px;
+}
+
+.numfield-suffix {
+  margin-left: 5px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+/* Date wells open their picker from anywhere in the field (see DateInput),
+   so the calendar glyph is a cue rather than the only target. */
+.input[type="date"]::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: .5;
+}
+
+.input[type="date"]:hover::-webkit-calendar-picker-indicator {
+  opacity: .85;
+}

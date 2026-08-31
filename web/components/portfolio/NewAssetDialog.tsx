@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
+import { CurrencyInput, Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Profile } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -23,7 +23,7 @@ export function NewAssetDialog({
   onCreated: () => void;
 }) {
   const [name, setName] = useState("");
-  const [price, setPrice] = useState("100");
+  const [price, setPrice] = useState(100);
   const [profileId, setProfileId] = useState(profiles[0]?.id ?? 0);
   const submit = useSubmit();
 
@@ -36,7 +36,7 @@ export function NewAssetDialog({
           () =>
             api.assets.create(scenarioId, {
               name,
-              initial_price: Number(price) || 0,
+              initial_price: price,
               return_profile_id: profileId,
               sort_order: 0,
             }),
@@ -55,7 +55,7 @@ export function NewAssetDialog({
           <Input value={name} onChange={(e) => setName(e.target.value)} required />
         </Field>
         <Field label="Opening price">
-          <Input type="number" step="any" value={price} onChange={(e) => setPrice(e.target.value)} />
+          <CurrencyInput value={price} onValueChange={setPrice} aria-label="Opening price" />
         </Field>
       </DialogRow>
       <Field label="Return profile">

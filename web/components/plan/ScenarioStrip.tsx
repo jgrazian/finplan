@@ -1,6 +1,13 @@
 "use client";
 
-import { Button, CompactInput, Field, SectionHeading } from "@/components/ui";
+import {
+  Button,
+  CompactInput,
+  DateInput,
+  Field,
+  NumberInput,
+  SectionHeading,
+} from "@/components/ui";
 import { fmtInt } from "@/lib/format";
 import type { ScenarioParams } from "@/lib/types";
 
@@ -17,7 +24,8 @@ export function ScenarioStrip({
 }: {
   scenarioName: string;
   params: ScenarioParams;
-  onChange?: (next: ScenarioParams) => void;
+  /** Emits only what the edited field changed; absent leaves the strip read-only. */
+  onChange?: (patch: Partial<ScenarioParams>) => void;
   onRun?: () => void;
 }) {
   return (
@@ -47,23 +55,34 @@ export function ScenarioStrip({
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12 }}>
+        {/* A date field empties itself mid-pick, so only a real date is a change. */}
         <Field label="Start">
-          <CompactInput
+          <DateInput
             style={{ minHeight: 30 }}
             value={params.start}
             readOnly={!onChange}
-            onChange={(e) => onChange?.({ ...params, start: e.target.value })}
+            onChange={(e) => e.target.value && onChange?.({ start: e.target.value })}
           />
         </Field>
         <Field label="Duration">
-          <CompactInput style={{ minHeight: 30 }} value={`${params.durationYears} years`} readOnly />
+          <NumberInput
+            style={{ minHeight: 30 }}
+            value={params.durationYears}
+            suffix="years"
+            decimals={0}
+            min={1}
+            max={120}
+            readOnly={!onChange}
+            aria-label="Duration in years"
+            onCommit={(years) => onChange?.({ durationYears: years })}
+          />
         </Field>
         <Field label="Birth date">
-          <CompactInput
+          <DateInput
             style={{ minHeight: 30 }}
             value={params.birthDate}
             readOnly={!onChange}
-            onChange={(e) => onChange?.({ ...params, birthDate: e.target.value })}
+            onChange={(e) => e.target.value && onChange?.({ birthDate: e.target.value })}
           />
         </Field>
         <Field label="Iterations">

@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
+import {
+  CurrencyInput,
+  DateInput,
+  Dialog,
+  DialogRow,
+  Field,
+  Select,
+  UnitInput,
+} from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Asset } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -27,8 +35,8 @@ export function AddLotDialog({
   onCreated: () => void;
 }) {
   const [assetId, setAssetId] = useState(assets[0]?.id ?? 0);
-  const [units, setUnits] = useState("0");
-  const [basis, setBasis] = useState("0");
+  const [units, setUnits] = useState(0);
+  const [basis, setBasis] = useState(0);
   const [date, setDate] = useState("");
   const submit = useSubmit();
 
@@ -41,8 +49,8 @@ export function AddLotDialog({
           () =>
             api.accounts.addPosition(scenarioId, accountId, {
               asset_id: assetId,
-              units: Number(units) || 0,
-              cost_basis: Number(basis) || 0,
+              units,
+              cost_basis: basis,
               // Omitted means the scenario's start date: an opening holding.
               purchase_date: date.trim() === "" ? null : date,
             }),
@@ -69,16 +77,19 @@ export function AddLotDialog({
           </Select>
         </Field>
         <Field label="Units">
-          <Input type="number" step="any" value={units} onChange={(e) => setUnits(e.target.value)} />
+          <UnitInput unit="Units" value={units} onValueChange={setUnits} aria-label="Units" />
         </Field>
       </DialogRow>
       <DialogRow>
         <Field label="Cost basis (total paid)">
-          <Input type="number" step="any" value={basis} onChange={(e) => setBasis(e.target.value)} />
+          <CurrencyInput
+            value={basis}
+            onValueChange={setBasis}
+            aria-label="Cost basis, total paid"
+          />
         </Field>
         <Field label="Purchase date">
-          <Input
-            type="date"
+          <DateInput
             value={date}
             placeholder="plan start"
             onChange={(e) => setDate(e.target.value)}

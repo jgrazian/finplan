@@ -4,6 +4,8 @@ import { useState } from "react";
 import {
   Blueprint,
   Button,
+  CurrencyInput,
+  DateInput,
   Dialog,
   DialogRow,
   Field,
@@ -124,8 +126,7 @@ export function NewEventDialog({
 
       {trigger.form === "Once on a date" && (
         <Field label="Date">
-          <Input
-            type="date"
+          <DateInput
             value={trigger.date}
             onChange={(e) => setTrigger({ ...trigger, date: e.target.value })}
             required
@@ -242,8 +243,7 @@ function BoundField({
           <option value="age">at age</option>
         </Select>
         {value.kind === "date" && (
-          <Input
-            type="date"
+          <DateInput
             value={value.date}
             onChange={(e) => onChange({ ...value, date: e.target.value })}
           />
@@ -305,11 +305,10 @@ function EffectFields({
         </Field>
         {fields.amount && (
           <Field label="Amount per occurrence">
-            <Input
-              type="number"
-              step="any"
+            <CurrencyInput
               value={effect.amount}
-              onChange={(e) => onChange({ amount: e.target.value })}
+              onValueChange={(amount) => onChange({ amount })}
+              aria-label="Amount per occurrence"
             />
           </Field>
         )}

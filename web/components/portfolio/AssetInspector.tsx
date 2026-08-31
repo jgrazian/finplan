@@ -6,6 +6,7 @@ import {
   Blueprint,
   Button,
   CompactInput,
+  CurrencyInput,
   Field,
   Hr,
   SectionHeading,
@@ -24,7 +25,7 @@ import type { AssetRow } from "@/lib/view/assets";
 export interface AssetDraft {
   ticker: string;
   name: string;
-  price: string;
+  price: number;
   profileServerId: number;
 }
 
@@ -38,7 +39,7 @@ function draftOf(asset: AssetRow): AssetDraft {
   return {
     ticker: asset.ticker,
     name: asset.name,
-    price: String(asset.price),
+    price: asset.price,
     profileServerId: asset.profileServerId,
   };
 }
@@ -104,11 +105,11 @@ export function AssetInspector({
           <CompactInput value={draft.ticker} onChange={(e) => set("ticker", e.target.value)} />
         </Field>
         <Field label="Opening price">
-          <CompactInput
-            type="number"
-            step="any"
+          <CurrencyInput
+            style={{ minHeight: 32 }}
             value={draft.price}
-            onChange={(e) => set("price", e.target.value)}
+            onValueChange={(price) => set("price", price)}
+            aria-label="Opening price"
           />
         </Field>
       </div>

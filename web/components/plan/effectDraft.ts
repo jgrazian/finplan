@@ -34,7 +34,8 @@ export const STRATEGIES: WithdrawalStrategy[] = [
 
 export interface EffectDraft {
   form: EffectForm;
-  amount: string;
+  /** Dollars per occurrence — every form that shows it moves cash. */
+  amount: number;
   /** Grow the amount with inflation, i.e. it is stated in today's money. */
   inflationAdjusted: boolean;
   fromAccountId: number;
@@ -48,7 +49,7 @@ export interface EffectDraft {
 export function emptyEffect(accountId: number, assetId: number): EffectDraft {
   return {
     form: "Income",
-    amount: "0",
+    amount: 0,
     inflationAdjusted: true,
     fromAccountId: accountId,
     toAccountId: accountId,
@@ -98,7 +99,7 @@ export function effectProblem(draft: EffectDraft, index: number): string | null 
 }
 
 function amountSpec(draft: EffectDraft): AmountSpec {
-  const fixed: AmountSpec = { kind: "Fixed", value: Number(draft.amount) || 0 };
+  const fixed: AmountSpec = { kind: "Fixed", value: draft.amount };
   return draft.inflationAdjusted ? { kind: "InflationAdjusted", inner: fixed } : fixed;
 }
 

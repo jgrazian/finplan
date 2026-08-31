@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
+import {
+  DateInput,
+  Dialog,
+  DialogRow,
+  Field,
+  Input,
+  NumberInput,
+  Select,
+} from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Profile, Scenario, TaxConfig } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -27,7 +35,7 @@ export function NewScenarioDialog({
   const [name, setName] = useState("");
   const [start, setStart] = useState(new Date().toISOString().slice(0, 10));
   const [birth, setBirth] = useState("");
-  const [years, setYears] = useState("30");
+  const [years, setYears] = useState(30);
   const [inflationId, setInflationId] = useState(inflationProfiles[0]?.id ?? 0);
   const [taxId, setTaxId] = useState(taxConfigs[0]?.id ?? 0);
   const submit = useSubmit();
@@ -44,7 +52,7 @@ export function NewScenarioDialog({
                 name,
                 start_date: start,
                 birth_date: birth.trim() === "" ? null : birth,
-                duration_years: Number(years) || 30,
+                duration_years: years || 30,
                 inflation_profile_id: inflationId || null,
                 tax_config_id: taxId || null,
               }),
@@ -61,14 +69,22 @@ export function NewScenarioDialog({
       </Field>
       <DialogRow>
         <Field label="Start date">
-          <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} required />
+          <DateInput value={start} onChange={(e) => setStart(e.target.value)} required />
         </Field>
-        <Field label="Horizon (years)">
-          <Input type="number" value={years} onChange={(e) => setYears(e.target.value)} />
+        <Field label="Horizon">
+          <NumberInput
+            value={years}
+            suffix="years"
+            decimals={0}
+            min={1}
+            max={120}
+            onValueChange={setYears}
+            aria-label="Horizon in years"
+          />
         </Field>
       </DialogRow>
       <Field label="Birth date — required for age-based triggers">
-        <Input type="date" value={birth} onChange={(e) => setBirth(e.target.value)} />
+        <DateInput value={birth} onChange={(e) => setBirth(e.target.value)} />
       </Field>
       <DialogRow>
         <Field label="Inflation profile">

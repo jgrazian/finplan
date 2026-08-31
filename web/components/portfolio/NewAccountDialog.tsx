@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
+import { CurrencyInput, Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type {
   Asset,
@@ -41,38 +41,37 @@ export function NewAccountDialog({
 }) {
   const [flavor, setFlavor] = useState<Flavor>("Bank");
   const [name, setName] = useState("");
-  const [cash, setCash] = useState("0");
+  const [cash, setCash] = useState(0);
   const [profileId, setProfileId] = useState(profiles[0]?.id ?? 0);
   const [taxStatus, setTaxStatus] = useState<TaxStatus>("Taxable");
-  const [limit, setLimit] = useState("");
+  const [limit, setLimit] = useState<number | null>(null);
   const [period, setPeriod] = useState<ContributionPeriod>("Yearly");
   const [assetId, setAssetId] = useState(assets[0]?.id ?? 0);
-  const [value, setValue] = useState("0");
-  const [principal, setPrincipal] = useState("0");
+  const [value, setValue] = useState(0);
+  const [principal, setPrincipal] = useState(0);
   const [rate, setRate] = useState("6.0");
 
   const submit = useSubmit();
-  const num = (text: string) => Number(text) || 0;
 
   const spec = (): FlavorSpec => {
     switch (flavor) {
       case "Bank":
-        return { flavor, cash_value: num(cash), return_profile_id: profileId };
+        return { flavor, cash_value: cash, return_profile_id: profileId };
       case "Investment":
         return {
           flavor,
           tax_status: taxStatus,
-          cash_value: num(cash),
+          cash_value: cash,
           cash_return_profile_id: profileId,
           // The server rejects one without the other, so they travel together.
-          contribution_limit: limit.trim() === "" ? null : num(limit),
-          contribution_period: limit.trim() === "" ? null : period,
+          contribution_limit: limit,
+          contribution_period: limit == null ? null : period,
         };
       case "Property":
-        return { flavor, asset_id: assetId, value: num(value) };
+        return { flavor, asset_id: assetId, value };
       case "Liability":
         // Stored as a positive amount owed, and the rate as a fraction.
-        return { flavor, principal: num(principal), interest_rate: num(rate) / 100 };
+        return { flavor, principal, interest_rate: (Number(rate) || 0) / 100 };
     }
   };
 
@@ -115,7 +114,7 @@ export function NewAccountDialog({
       {flavor === "Bank" && (
         <DialogRow>
           <Field label="Opening balance">
-            <Input type="number" step="any" value={cash} onChange={(e) => setCash(e.target.value)} />
+            <CurrencyInput value={cash} onValueChange={setCash} aria-label="Opening balance" />
           </Field>
           <ProfileField value={profileId} onChange={setProfileId} profiles={profiles} label="Return profile" />
         </DialogRow>
@@ -132,7 +131,7 @@ export function NewAccountDialog({
               </Select>
             </Field>
             <Field label="Opening cash">
-              <Input type="number" step="any" value={cash} onChange={(e) => setCash(e.target.value)} />
+              <CurrencyInput value={cash} onValueChange={setCash} aria-label="Opening cash" />
             </Field>
           </DialogRow>
           <ProfileField
@@ -143,18 +142,18 @@ export function NewAccountDialog({
           />
           <DialogRow>
             <Field label="Contribution limit (optional)">
-              <Input
-                type="number"
-                step="any"
+              <CurrencyInput
+                nullable
                 value={limit}
                 placeholder="none"
-                onChange={(e) => setLimit(e.target.value)}
+                onValueChange={setLimit}
+                aria-label="Contribution limit"
               />
             </Field>
             <Field label="Limit period">
               <Select
                 value={period}
-                disabled={limit.trim() === ""}
+                disabled={limit == null}
                 onChange={(e) => setPeriod(e.target.value as ContributionPeriod)}
               >
                 {PERIODS.map((p) => (
@@ -178,7 +177,7 @@ export function NewAccountDialog({
             </Select>
           </Field>
           <Field label="Value">
-            <Input type="number" step="any" value={value} onChange={(e) => setValue(e.target.value)} />
+            <CurrencyInput value={value} onValueChange={setValue} aria-label="Value" />
           </Field>
         </DialogRow>
       )}
@@ -186,11 +185,10 @@ export function NewAccountDialog({
       {flavor === "Liability" && (
         <DialogRow>
           <Field label="Principal owed">
-            <Input
-              type="number"
-              step="any"
+            <CurrencyInput
               value={principal}
-              onChange={(e) => setPrincipal(e.target.value)}
+              onValueChange={setPrincipal}
+              aria-label="Principal owed"
             />
           </Field>
           <Field label="Interest rate (%)">

@@ -10,6 +10,7 @@ import {
 } from "@/components/plan";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
+import type { UpdateScenario } from "@/lib/api/types";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import type { EventId, PlanEvent, ScenarioParams } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
@@ -41,6 +42,25 @@ export function PlanScreen({
   const [adding, setAdding] = useState(false);
   const selected = events.find((e) => e.id === picked) ?? events[0];
 
+  /**
+   * The strip's fields save as they are edited. `null` on the wire means
+   * "leave this column alone", so a cleared birth date is a no-op the reload
+   * puts back rather than an erasure.
+   */
+  const saveParams = async (patch: Partial<ScenarioParams>) => {
+    const body: UpdateScenario = {};
+    if (patch.start != null) body.start_date = patch.start;
+    if (patch.birthDate) body.birth_date = patch.birthDate;
+    if (patch.durationYears != null) body.duration_years = patch.durationYears;
+    try {
+      await api.scenarios.update(scenarioId, body);
+      onChanged();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : String(err));
+      onChanged();
+    }
+  };
+
   const remove = async (event: PlanEvent) => {
     if (!confirm(`Delete ${event.id}?`)) return;
     try {
@@ -55,7 +75,12 @@ export function PlanScreen({
 
   return (
     <>
-      <ScenarioStrip scenarioName={scenarioName} params={params} onRun={onRun} />
+      <ScenarioStrip
+        scenarioName={scenarioName}
+        params={params}
+        onChange={saveParams}
+        onRun={onRun}
+      />
 
       {events.length === 0 ? (
         <div style={{ padding: "34px 24px", maxWidth: 520 }}>
