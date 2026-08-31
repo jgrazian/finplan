@@ -4,6 +4,7 @@
  * Requests go to a same-origin `/api/...` path that `next.config.ts` rewrites
  * onto the Rust server, so the session cookie rides along without CORS.
  */
+import { serverMonitor } from "@/lib/status/monitor";
 import type { ErrorBody } from "./generated";
 
 /** A non-2xx response, carrying the server's own error code and message. */
@@ -23,6 +24,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The request never reached the server, or the answer never came back.
+ *
+ * Distinct from `ApiError`, which is the server refusing in its own words: a
+ * caller can say "not saved — the server did not answer" only for this one.
+ */
+export class NetworkError extends Error {
+  constructor(message = "the server did not answer") {
+    super(message);
+    this.name = "NetworkError";
+  }
+}
+
 type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 async function request<T>(
@@ -30,14 +44,40 @@ async function request<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    method,
-    credentials: "include",
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  // Every outcome is reported to the monitor, which owns the reconnect
+  // schedule and the status bar. A refused write is graver than a refused
+  // read: it is the moment "changes will not save" becomes true.
+  const writing = method !== "GET";
 
-  if (!response.ok) throw await toApiError(response);
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      method,
+      credentials: "include",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    serverMonitor.failed(writing ? "write" : "read");
+    throw new NetworkError();
+  }
+
+  if (!response.ok) {
+    const error = await toApiError(response);
+    if (error.isUnauthorized) {
+      serverMonitor.expireSession();
+      serverMonitor.reached();
+    } else if (response.status >= 500) {
+      serverMonitor.failed(writing ? "write" : "read");
+    } else {
+      // A 4xx is an answer, not an outage — the server is up and disagreeing.
+      // Validation belongs under the field that caused it, never in the bar.
+      serverMonitor.reached();
+    }
+    throw error;
+  }
+
+  serverMonitor.reached();
 
   // 204 on every delete, and `/health` answers in plain text.
   if (response.status === 204) return undefined as T;

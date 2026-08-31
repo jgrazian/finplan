@@ -11,6 +11,7 @@ import {
   ResultsScreen,
 } from "@/components/screens";
 import { NewScenarioDialog } from "@/components/scenario/NewScenarioDialog";
+import { SessionExpiredDialog, StatusBar } from "@/components/status";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Scenario as ApiScenario } from "@/lib/api/types";
@@ -18,6 +19,7 @@ import { useAsync } from "@/lib/hooks/useAsync";
 import { useRun } from "@/lib/hooks/useRun";
 import { useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
+import { useServerStatus } from "@/lib/status/useServerStatus";
 import type { InflationProfile, Scenario } from "@/lib/types";
 
 type TabId = "portfolio" | "plan" | "results" | "analysis";
@@ -46,7 +48,12 @@ export default function Page() {
     );
   }
 
-  return <Workbench initials={initials(session.user.display_name ?? session.user.email)} onSignOut={session.signOut} />;
+  return (
+    <Workbench
+      initials={initials(session.user.display_name ?? session.user.email)}
+      onSignOut={session.signOut}
+    />
+  );
 }
 
 function initials(name: string): string {
@@ -82,11 +89,17 @@ function Workbench({
 
   const workspace = useWorkspace(scenarioId, ITERATIONS);
   const run = useRun(workspace.scenario, workspace.axis);
+  const status = useServerStatus();
 
   const start = useCallback(() => {
     setTab("results");
     void run.start(ITERATIONS);
   }, [run]);
+
+  const refresh = useCallback(() => {
+    scenarios.reload();
+    workspace.reload();
+  }, [scenarios, workspace]);
 
   // Keyboard parity with the TUI: `r` runs, as the header's keycap advertises.
   useEffect(() => {
@@ -125,15 +138,22 @@ function Workbench({
           onScenarioChange={(id) => setPicked(Number(id))}
           userInitials={initials}
           onRun={start}
+          offline={status.offline}
           trailing={
             <>
-              <Button onClick={() => setCreating(true)}>New scenario</Button>
+              <Button onClick={() => setCreating(true)} disabled={status.offline}>
+                New scenario
+              </Button>
               <Button variant="ghost" onClick={onSignOut}>
                 Sign out
               </Button>
             </>
           }
         />
+
+        {/* Server state lives here, directly under the nav and above every
+            screen, so it is in the same place whatever you are looking at. */}
+        <StatusBar onRetry={refresh} onRunAgain={start} onSignIn={onSignOut} />
 
         {scenarios.error ? (
           <EmptyState title="Cannot reach the API" detail={scenarios.error.message} />
@@ -158,6 +178,7 @@ function Workbench({
             )}
             {tab === "portfolio" && (
               <PortfolioScreen
+                offline={status.offline}
                 scenarioId={workspace.scenario.id}
                 accounts={workspace.accounts}
                 raw={workspace.raw}
@@ -170,6 +191,7 @@ function Workbench({
             )}
             {tab === "plan" && (
               <PlanScreen
+                offline={status.offline}
                 scenarioId={workspace.scenario.id}
                 scenarioName={workspace.scenario.name}
                 params={workspace.params}
@@ -184,6 +206,8 @@ function Workbench({
           </>
         )}
       </AppShell>
+
+      {status.issue?.kind === "session" && <SessionExpiredDialog onSignIn={onSignOut} />}
 
       {creating && (
         <NewScenarioDialog

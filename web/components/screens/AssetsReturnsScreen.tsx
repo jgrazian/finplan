@@ -42,6 +42,7 @@ export function AssetsReturnsScreen({
   activeInflationProfile,
   onActivateInflation,
   onChanged,
+  offline,
 }: {
   scenarioId: number;
   raw: RawWorkspace;
@@ -50,6 +51,8 @@ export function AssetsReturnsScreen({
   activeInflationProfile: string | undefined;
   onActivateInflation?: (profile: InflationProfile) => void;
   onChanged: () => void;
+  /** Writes are being refused: nothing here can be added, remapped or edited. */
+  offline?: boolean;
 }) {
   const [picked, setPicked] = useState<AssetsSelection>();
   const [adding, setAdding] = useState(false);
@@ -135,7 +138,12 @@ export function AssetsReturnsScreen({
                 <Button variant="ghost" disabled>
                   New profile
                 </Button>
-                <Button shortcut="a" onClick={() => setAdding(true)}>
+                <Button
+                  shortcut="a"
+                  onClick={() => setAdding(true)}
+                  disabled={offline}
+                  title={offline ? "No connection to the server." : undefined}
+                >
                   Add asset
                 </Button>
               </div>
@@ -145,7 +153,7 @@ export function AssetsReturnsScreen({
               groups={groups}
               selection={selection}
               onSelect={setPicked}
-              onRemap={remapping.busy ? undefined : remap}
+              onRemap={remapping.busy || offline ? undefined : remap}
             />
 
             {remapping.error && (
@@ -175,7 +183,7 @@ export function AssetsReturnsScreen({
               <InflationProfilesTable
                 profiles={inflationProfiles}
                 activeId={activeInflationProfile ?? ""}
-                onActivate={onActivateInflation}
+                onActivate={offline ? undefined : onActivateInflation}
               />
             )}
           </div>
@@ -190,6 +198,7 @@ export function AssetsReturnsScreen({
               onApply={(draft) => apply(selectedAsset, draft)}
               busy={editing.busy}
               error={editing.error}
+              offline={offline}
             />
           ) : selectedProfile ? (
             <ProfileInspector

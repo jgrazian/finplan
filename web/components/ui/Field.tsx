@@ -63,6 +63,7 @@ export function DateInput({
       onClick={(e) => {
         onClick?.(e);
         const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
+        if (el.readOnly || el.disabled) return;
         try {
           el.showPicker?.();
         } catch {

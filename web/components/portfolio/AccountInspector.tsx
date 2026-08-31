@@ -20,6 +20,7 @@ export function AccountInspector({
   onAddLot,
   onDelete,
   dirty,
+  offline,
 }: {
   account: Account;
   onFieldChange?: (field: "balance" | "returnProfileId", value: string) => void;
@@ -29,6 +30,8 @@ export function AccountInspector({
   onAddLot?: () => void;
   onDelete?: () => void;
   dirty?: boolean;
+  /** Writes are being refused, so add and delete cannot be offered. */
+  offline?: boolean;
 }) {
   const badge = taxBadge(account);
 
@@ -71,13 +74,13 @@ export function AccountInspector({
       </div>
 
       <Hr flush />
-      <PositionsTable lots={account.positions} onAddLot={onAddLot} />
+      <PositionsTable lots={account.positions} onAddLot={onAddLot} addDisabled={offline} />
       <Hr flush />
       <ReferencedBy eventIds={account.referencedBy} />
 
       <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
         {onDelete && (
-          <Button variant="ghost" onClick={onDelete}>
+          <Button variant="ghost" onClick={onDelete} disabled={offline}>
             Delete
           </Button>
         )}

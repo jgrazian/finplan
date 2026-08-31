@@ -11,8 +11,18 @@ import {
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
+import { useServerStatus } from "@/lib/status/useServerStatus";
 import { accountShares } from "@/lib/view/accounts";
 import type { Account, AccountId } from "@/lib/types";
+
+/** `14:02` — the clock the status bar and this note both quote. */
+function clockOf(at: number): string {
+  return new Date(at).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
 
 /** Portfolio › Accounts — the list, with a persistent inspector drawer. */
 export function AccountsScreen({
@@ -20,14 +30,18 @@ export function AccountsScreen({
   accounts,
   raw,
   onChanged,
+  offline,
 }: {
   scenarioId: number;
   accounts: Account[];
   raw: RawWorkspace;
   onChanged: () => void;
+  /** Writes are being refused, so add and delete cannot be offered. */
+  offline?: boolean;
 }) {
   const [picked, setPicked] = useState<AccountId>();
   const [dialog, setDialog] = useState<"account" | "lot">();
+  const { lastContact } = useServerStatus();
 
   const shares = useMemo(() => accountShares(accounts), [accounts]);
   // Derived rather than reset in an effect: switching scenarios replaces every
@@ -60,7 +74,12 @@ export function AccountsScreen({
                   {accounts.length}
                 </span>
               </h4>
-              <Button shortcut="a" onClick={() => setDialog("account")}>
+              <Button
+                shortcut="a"
+                onClick={() => setDialog("account")}
+                disabled={offline}
+                title={offline ? "No connection to the server." : undefined}
+              >
                 Add account
               </Button>
             </div>
@@ -85,8 +104,18 @@ export function AccountsScreen({
                     color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
                   }}
                 >
-                  Balances mark investment holdings at each asset&rsquo;s opening price —
-                  the same figure the simulation starts from.
+                  {offline ? (
+                    <>
+                      Reading is untouched — this is the last state the server
+                      confirmed{lastContact ? `, at ${clockOf(lastContact)}` : ""}. Add
+                      and delete are disabled because they cannot be held locally.
+                    </>
+                  ) : (
+                    <>
+                      Balances mark investment holdings at each asset&rsquo;s opening
+                      price — the same figure the simulation starts from.
+                    </>
+                  )}
                 </p>
               </>
             )}
@@ -100,6 +129,7 @@ export function AccountsScreen({
                 selected.flavor === "Investment" ? () => setDialog("lot") : undefined
               }
               onDelete={() => remove(selected)}
+              offline={offline}
             />
           ) : null
         }

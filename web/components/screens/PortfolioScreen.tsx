@@ -31,6 +31,7 @@ export function PortfolioScreen({
   activeInflationProfile,
   onActivateInflation,
   onChanged,
+  offline,
 }: {
   scenarioId: number;
   accounts: Account[];
@@ -40,6 +41,8 @@ export function PortfolioScreen({
   activeInflationProfile: string | undefined;
   onActivateInflation?: (profile: InflationProfile) => void;
   onChanged: () => void;
+  /** Writes are being refused: add and delete cannot be offered. */
+  offline?: boolean;
 }) {
   const [section, setSection] = useState<PortfolioSection>("accounts");
 
@@ -58,6 +61,7 @@ export function PortfolioScreen({
           accounts={accounts}
           raw={raw}
           onChanged={onChanged}
+          offline={offline}
         />
       ) : (
         <AssetsReturnsScreen
@@ -68,6 +72,7 @@ export function PortfolioScreen({
           activeInflationProfile={activeInflationProfile}
           onActivateInflation={onActivateInflation}
           onChanged={onChanged}
+          offline={offline}
         />
       )}
     </>

@@ -23,6 +23,7 @@ export function AppHeader<T extends string>({
   onScenarioChange,
   userInitials,
   onRun,
+  offline,
   trailing,
 }: {
   tabs: ReadonlyArray<TabDef<T>>;
@@ -33,6 +34,8 @@ export function AppHeader<T extends string>({
   onScenarioChange: (id: string) => void;
   userInitials: string;
   onRun?: () => void;
+  /** Nothing can reach the server, so a run cannot be started. */
+  offline?: boolean;
   /** Extra controls between the scenario switcher and Run. */
   trailing?: ReactNode;
 }) {
@@ -82,7 +85,13 @@ export function AppHeader<T extends string>({
       {active?.dirty && <Tag tone="outline">results stale</Tag>}
       {trailing}
 
-      <Button variant="primary" shortcut="r" onClick={onRun}>
+      <Button
+        variant="primary"
+        shortcut="r"
+        onClick={onRun}
+        disabled={offline}
+        title={offline ? "No connection to the server." : undefined}
+      >
         Run
       </Button>
 

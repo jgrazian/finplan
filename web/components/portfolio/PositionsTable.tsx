@@ -6,9 +6,12 @@ import type { AssetLot } from "@/lib/types";
 export function PositionsTable({
   lots,
   onAddLot,
+  addDisabled,
 }: {
   lots: AssetLot[];
   onAddLot?: () => void;
+  /** Offered but refused: there is no connection to save a lot through. */
+  addDisabled?: boolean;
 }) {
   return (
     <div>
@@ -16,7 +19,7 @@ export function PositionsTable({
         className="mb-[4px]"
         action={
           onAddLot && (
-            <Button variant="ghost" onClick={onAddLot}>
+            <Button variant="ghost" onClick={onAddLot} disabled={addDisabled}>
               Add lot
             </Button>
           )

@@ -28,6 +28,7 @@ export function PlanScreen({
   raw,
   onChanged,
   onRun,
+  offline,
 }: {
   scenarioId: number;
   scenarioName: string;
@@ -37,6 +38,8 @@ export function PlanScreen({
   raw: RawWorkspace;
   onChanged: () => void;
   onRun?: () => void;
+  /** Writes are being refused, so add and delete cannot be offered. */
+  offline?: boolean;
 }) {
   const [picked, setPicked] = useState<EventId>();
   const [adding, setAdding] = useState(false);
@@ -46,19 +49,17 @@ export function PlanScreen({
    * The strip's fields save as they are edited. `null` on the wire means
    * "leave this column alone", so a cleared birth date is a no-op the reload
    * puts back rather than an erasure.
+   *
+   * A refusal is rethrown rather than shown here: it belongs under the field
+   * that caused it, which is what the strip does with it.
    */
   const saveParams = async (patch: Partial<ScenarioParams>) => {
     const body: UpdateScenario = {};
     if (patch.start != null) body.start_date = patch.start;
     if (patch.birthDate) body.birth_date = patch.birthDate;
     if (patch.durationYears != null) body.duration_years = patch.durationYears;
-    try {
-      await api.scenarios.update(scenarioId, body);
-      onChanged();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
-      onChanged();
-    }
+    await api.scenarios.update(scenarioId, body);
+    onChanged();
   };
 
   const remove = async (event: PlanEvent) => {
@@ -80,6 +81,7 @@ export function PlanScreen({
         params={params}
         onChange={saveParams}
         onRun={onRun}
+        offline={offline}
       />
 
       {events.length === 0 ? (
@@ -97,7 +99,12 @@ export function PlanScreen({
             retirement age pausing one and starting another. Without any, the
             simulation just compounds the opening balances.
           </p>
-          <Button variant="primary" shortcut="a" onClick={() => setAdding(true)}>
+          <Button
+            variant="primary"
+            shortcut="a"
+            onClick={() => setAdding(true)}
+            disabled={offline}
+          >
             Add event
           </Button>
         </div>
@@ -128,7 +135,12 @@ export function PlanScreen({
                     {events.length}
                   </span>
                 </h4>
-                <Button shortcut="a" onClick={() => setAdding(true)}>
+                <Button
+                  shortcut="a"
+                  onClick={() => setAdding(true)}
+                  disabled={offline}
+                  title={offline ? "No connection to the server." : undefined}
+                >
                   Add event
                 </Button>
               </div>
@@ -150,7 +162,10 @@ export function PlanScreen({
 
           <aside>
             {selected && (
-              <EventInspector event={selected} onDelete={() => remove(selected)} />
+              <EventInspector
+                event={selected}
+                onDelete={offline ? undefined : () => remove(selected)}
+              />
             )}
           </aside>
         </div>

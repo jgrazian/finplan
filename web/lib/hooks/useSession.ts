@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/http";
+import { serverMonitor } from "@/lib/status/monitor";
 import type { UserResponse } from "@/lib/api/types";
 
 export interface Session {
@@ -29,7 +30,13 @@ export function useSession(): Session {
   useEffect(() => {
     let current = true;
     api.auth.me().then(
-      (me) => current && setUser(me),
+      (me) => {
+        if (!current) return;
+        setUser(me);
+        // A 401 is only an expiry once there is a session to expire; before
+        // this, it is simply the signed-out state.
+        serverMonitor.sessionStarted();
+      },
       (err: unknown) => {
         if (!current) return;
         setUser(null);
@@ -48,6 +55,7 @@ export function useSession(): Session {
     setError(undefined);
     try {
       setUser(await action());
+      serverMonitor.sessionStarted();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -65,7 +73,13 @@ export function useSession(): Session {
         api.auth.register({ email, password, display_name: displayName }),
       ),
     signOut: async () => {
-      await api.auth.logout();
+      try {
+        await api.auth.logout();
+      } catch {
+        // An expired cookie cannot be logged out; the local session ends
+        // either way, which is the whole point of pressing it.
+      }
+      serverMonitor.sessionEnded();
       setUser(null);
     },
   };

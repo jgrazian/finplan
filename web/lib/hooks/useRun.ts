@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api/client";
 import type { Results, Run, Scenario as ApiScenario } from "@/lib/api/types";
 import { isTerminal } from "@/lib/api/types";
+import { serverMonitor } from "@/lib/status/monitor";
 import type { ResultsData } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 import { toResultsData } from "@/lib/view/results";
@@ -87,6 +88,22 @@ export function useRun(
   }, [scenarioId, update]);
 
   const active = run != null && !isTerminal(run.status);
+
+  // A failed run is server state, so it belongs in the status bar rather than
+  // only in the screen it happened to be started from. Synced rather than
+  // pushed at the moment of failure, so switching scenarios clears it too.
+  useEffect(() => {
+    if (run?.status === "failed") {
+      serverMonitor.runFailed({
+        completed: run.completed_iterations,
+        total: run.iterations,
+        message: run.error_message,
+        hasResults: raw != null,
+      });
+    } else {
+      serverMonitor.runCleared();
+    }
+  }, [run, raw]);
 
   // Poll while the job is in flight; the API has no push channel.
   useEffect(() => {

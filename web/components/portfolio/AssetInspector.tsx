@@ -59,6 +59,7 @@ export function AssetInspector({
   onApply,
   busy,
   error,
+  offline,
 }: {
   asset: AssetRow;
   /** The profile the asset currently points at, for the inherited figures. */
@@ -68,6 +69,8 @@ export function AssetInspector({
   onApply: (draft: AssetDraft) => void;
   busy?: boolean;
   error?: string;
+  /** No connection: the fields close rather than take edits that cannot save. */
+  offline?: boolean;
 }) {
   const [draft, setDraft] = useState<AssetDraft>(() => draftOf(asset));
   const set = <K extends keyof AssetDraft>(key: K, value: AssetDraft[K]) =>
@@ -97,17 +100,26 @@ export function AssetInspector({
       </div>
 
       <Field label="Name">
-        <CompactInput value={draft.name} onChange={(e) => set("name", e.target.value)} />
+        <CompactInput
+          value={draft.name}
+          readOnly={offline}
+          onChange={(e) => set("name", e.target.value)}
+        />
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Field label="Ticker">
-          <CompactInput value={draft.ticker} onChange={(e) => set("ticker", e.target.value)} />
+          <CompactInput
+            value={draft.ticker}
+            readOnly={offline}
+            onChange={(e) => set("ticker", e.target.value)}
+          />
         </Field>
         <Field label="Opening price">
           <CurrencyInput
             style={{ minHeight: 32 }}
             value={draft.price}
+            readOnly={offline}
             onValueChange={(price) => set("price", price)}
             aria-label="Opening price"
           />
@@ -118,6 +130,7 @@ export function AssetInspector({
         <Select
           style={{ minHeight: 32 }}
           value={draft.profileServerId}
+          disabled={offline}
           onChange={(e) => set("profileServerId", Number(e.target.value))}
         >
           {profiles.map((p) => (
@@ -193,7 +206,8 @@ export function AssetInspector({
         <Button
           variant="primary"
           style={{ flex: 1 }}
-          disabled={!dirty || busy}
+          disabled={!dirty || busy || offline}
+          title={offline ? "No connection to the server." : undefined}
           onClick={() => onApply(draft)}
         >
           Apply
