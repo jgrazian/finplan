@@ -165,6 +165,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           scenarios={headerScenarios}
           activeScenarioId={scenarioId == null ? "" : String(scenarioId)}
           onScenarioChange={(id) => setPicked(Number(id))}
+          onNewScenario={() => setCreating(true)}
           userInitials={initials(user.display_name ?? user.email)}
           onAccount={() => {
             // The Data list shows each scenario's last run, which a run
@@ -175,13 +176,6 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           accountOpen={onAccount}
           onRun={start}
           offline={status.offline}
-          trailing={
-            /* Sign out lives in the account screen the avatar opens; the nav
-               is for the scenario, not for the account. */
-            <Button onClick={() => setCreating(true)} disabled={status.offline}>
-              New scenario
-            </Button>
-          }
         />
 
         {/* Server state lives here, directly under the nav and above every

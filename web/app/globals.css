@@ -281,7 +281,8 @@
 /* Field state — a save the server refused — lives under its own input, never
    in the bar, and the field keeps the value that was typed. */
 .field-unsaved .input,
-.input.field-unsaved {
+.input.field-unsaved,
+.field-unsaved .dd-trigger {
   border-color: var(--color-accent-900);
   box-shadow: inset 0 0 0 1px var(--color-accent-900);
 }
@@ -333,4 +334,206 @@
 
 .radio:has(input:disabled):hover .dot {
   border-color: var(--color-divider);
+}
+
+/* ── Dropdown ──────────────────────────────────────────────────────────────
+   A native <select>'s popup cannot be styled at all, so the control is rebuilt
+   from a button and a listbox (11a/11b). The trigger is the text field with a
+   chevron rather than a new object, and the menu is flush to it: no gap, no
+   radius, no border-top, elevation carried by the shadow alone. */
+
+.dd {
+  position: relative;
+  font-family: var(--font-body);
+}
+
+.dd-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-divider);
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.dd-trigger:hover,
+.dd-trigger:focus-visible {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+.dd-trigger:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.dd-trigger:disabled:hover {
+  border-color: var(--color-divider);
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+/* The value is the one part that can outrun the well — a scenario name is
+   arbitrary text — so it clips and the chevron holds its place. */
+.dd-value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dd-value.dd-empty {
+  color: color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.dd-trigger .cv {
+  flex: none;
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--color-accent-700);
+  border-bottom: 1.5px solid var(--color-accent-700);
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+
+.dd[data-open="true"] .dd-trigger {
+  border-color: var(--color-accent);
+  background: var(--color-bg);
+}
+
+.dd[data-open="true"] .dd-trigger .cv {
+  transform: rotate(225deg) translate(-2px, -2px);
+}
+
+.dd-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  border: 1px solid var(--color-accent);
+  border-top: 0;
+  box-shadow: var(--shadow-lg);
+}
+
+/* Rows read as a table: label left, secondary value right, hairlines between. */
+.dd-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--color-divider);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dd-menu > .dd-opt:first-child {
+  border-top: 0;
+}
+
+/* Hover and the keyboard's active row are one state — the pointer moves it too,
+   so the list never highlights two rows at once. */
+.dd-opt:hover,
+.dd-opt.act {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.dd-opt[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.dd-opt[aria-disabled="true"] {
+  opacity: .45;
+  cursor: default;
+  background: none;
+}
+
+.dd-opt .mk {
+  flex: none;
+  width: 12px;
+  color: var(--color-accent-700);
+}
+
+.dd-opt[aria-selected="true"] .mk {
+  color: currentColor;
+}
+
+.dd-opt .dd-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dd-opt .sub {
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 11px;
+  opacity: .6;
+}
+
+/* A row that runs a command rather than naming a value — "New scenario…" at
+   the foot of the switcher. It takes the accent the way a ghost button does,
+   and pins to the bottom so a scrolling list cannot carry it off. Its ground
+   is opaque for that reason: rows pass underneath it. */
+.dd-opt.dd-action {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--color-bg);
+  color: var(--color-accent-700);
+}
+
+.dd-opt.dd-action:hover,
+.dd-opt.dd-action.act {
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg));
+}
+
+/* Groups (11b). The header is a band, not a row, so it takes the mono label
+   type the rest of the app uses for column headings. */
+.dd-head {
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  font: 600 10px ui-monospace, Menlo, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.dd-menu > .dd-group:not(:first-child) > .dd-head {
+  border-top: 1px solid var(--color-divider);
+}
+
+/* Inline (11b): the control sits inside a sentence, so it shrinks to its value
+   and the menu grows to its content instead of to the paragraph. */
+.dd-inline {
+  display: inline-block;
+  width: auto;
+  vertical-align: middle;
+}
+
+.dd-inline .dd-trigger {
+  min-height: 26px;
+  padding: 2px 9px;
+  font-size: 14px;
+}
+
+.dd-inline .dd-trigger .cv {
+  margin-left: 10px;
+}
+
+.dd-inline .dd-menu {
+  right: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: 280px;
 }

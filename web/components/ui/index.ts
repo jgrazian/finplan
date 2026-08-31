@@ -1,6 +1,8 @@
 export { Blueprint } from "./Blueprint";
 export { Button } from "./Button";
 export { Dialog, DialogRow } from "./Dialog";
+export { Dropdown } from "./Dropdown";
+export type { DropdownOption, DropdownProps } from "./Dropdown";
 export type { ButtonProps } from "./Button";
 export { CompactInput, DateInput, Field, Input, RangeField, Select } from "./Field";
 export { CurrencyInput, NumberInput, UnitInput } from "./NumberInput";

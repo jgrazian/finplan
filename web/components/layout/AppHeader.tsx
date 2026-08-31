@@ -1,13 +1,19 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { Button, Select, Tag } from "@/components/ui";
+import { type ReactNode, useMemo } from "react";
+import { Button, Dropdown, type DropdownOption, Tag } from "@/components/ui";
 import type { Scenario } from "@/lib/types";
 
 export interface TabDef<T extends string> {
   id: T;
   label: string;
 }
+
+/**
+ * The switcher's last row creates a scenario instead of choosing one. Scenario
+ * ids are the server's, so a decorated key cannot collide with one.
+ */
+const NEW_SCENARIO = "\u0000new-scenario";
 
 /**
  * Header grammar 6b — one row: brand, inline tabs, scenario switcher, Run,
@@ -21,6 +27,7 @@ export function AppHeader<T extends string>({
   scenarios,
   activeScenarioId,
   onScenarioChange,
+  onNewScenario,
   userInitials,
   onAccount,
   accountOpen,
@@ -34,6 +41,8 @@ export function AppHeader<T extends string>({
   scenarios: Scenario[];
   activeScenarioId: string;
   onScenarioChange: (id: string) => void;
+  /** Picked from the switcher's last row; omit to leave that row out. */
+  onNewScenario?: () => void;
   userInitials: string;
   /** Opens account settings in place of the tab screens. */
   onAccount?: () => void;
@@ -46,6 +55,22 @@ export function AppHeader<T extends string>({
   trailing?: ReactNode;
 }) {
   const active = scenarios.find((s) => s.id === activeScenarioId);
+
+  const options = useMemo(() => {
+    const rows: Array<DropdownOption<string>> = scenarios.map((s) => ({
+      value: s.id,
+      label: s.name,
+    }));
+    if (onNewScenario) {
+      rows.push({
+        value: NEW_SCENARIO,
+        label: "New scenario…",
+        action: true,
+        disabled: offline,
+      });
+    }
+    return rows;
+  }, [offline, onNewScenario, scenarios]);
 
   return (
     <header
@@ -75,18 +100,15 @@ export function AppHeader<T extends string>({
         ))}
       </nav>
 
-      <Select
-        style={{ minHeight: 30, width: 170 }}
-        aria-label="Scenario"
+      <Dropdown
+        style={{ width: 170 }}
+        ariaLabel="Scenario"
+        placeholder="No scenario"
+        options={options}
         value={activeScenarioId}
-        onChange={(e) => onScenarioChange(e.target.value)}
-      >
-        {scenarios.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </Select>
+        maxMenuHeight={280}
+        onChange={(id) => (id === NEW_SCENARIO ? onNewScenario?.() : onScenarioChange(id))}
+      />
 
       {active?.dirty && <Tag tone="outline">results stale</Tag>}
       {trailing}
