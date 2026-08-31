@@ -17,19 +17,33 @@ PRAGMA foreign_keys = ON;
 -- Identity
 -- ===========================================================================
 
+-- The `default_*` columns are the user's own, not any scenario's: they seed
+-- new work, and a scenario that has been created keeps whatever it was given.
 CREATE TABLE users (
-    id            TEXT    PRIMARY KEY,
-    email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-    password_hash TEXT    NOT NULL,
-    display_name  TEXT,
-    created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    id                     TEXT    PRIMARY KEY,
+    email                  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash          TEXT    NOT NULL,
+    display_name           TEXT,
+    birth_date             TEXT,                       -- seeds a new scenario
+    default_iterations     INTEGER NOT NULL DEFAULT 2000 CHECK (default_iterations > 0),
+    default_duration_years INTEGER NOT NULL DEFAULT 30
+                               CHECK (default_duration_years BETWEEN 1 AND 120),
+    auto_run               INTEGER NOT NULL DEFAULT 0 CHECK (auto_run IN (0,1)),
+    created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Sessions store a SHA-256 of the opaque bearer token, never the token itself.
+--
+-- `public_id` is what a client is told a session is called, so listing the
+-- devices signed in to an account never hands out anything derived from a
+-- credential. The user agent is stored verbatim; naming the device from it is
+-- presentation, and belongs in the client.
 CREATE TABLE sessions (
     token_hash TEXT    PRIMARY KEY,
+    public_id  TEXT    NOT NULL UNIQUE,
     user_id    TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_agent TEXT,
     created_at TEXT    NOT NULL DEFAULT (datetime('now')),
     expires_at TEXT    NOT NULL,
     last_seen  TEXT    NOT NULL DEFAULT (datetime('now'))

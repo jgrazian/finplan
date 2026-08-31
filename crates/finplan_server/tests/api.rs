@@ -81,8 +81,29 @@ impl TestApp {
         self.send("POST", path, Some(body)).await
     }
 
+    async fn put(&self, path: &str, body: Value) -> (StatusCode, Value) {
+        self.send("PUT", path, Some(body)).await
+    }
+
     async fn delete(&self, path: &str) -> (StatusCode, Value) {
         self.send("DELETE", path, None).await
+    }
+
+    async fn delete_with(&self, path: &str, body: Value) -> (StatusCode, Value) {
+        self.send("DELETE", path, Some(body)).await
+    }
+
+    /// Poll a queued run until it settles, and report how it settled.
+    async fn await_run(&self, run_id: i64) -> String {
+        for _ in 0..200 {
+            let (_, current) = self.get(&format!("/api/runs/{run_id}")).await;
+            let status = current["status"].as_str().unwrap_or_default().to_string();
+            if matches!(status.as_str(), "succeeded" | "failed" | "canceled") {
+                return status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        panic!("run {run_id} never finished");
     }
 
     /// Register a user and keep the session cookie for subsequent calls.
@@ -669,5 +690,225 @@ async fn an_effect_naming_a_missing_event_is_a_bad_request() {
             .unwrap()
             .contains("does not exist"),
         "message should say what was wrong: {body}"
+    );
+}
+
+#[tokio::test]
+async fn the_profile_form_can_clear_a_field_it_previously_set() {
+    let mut app = TestApp::new().await;
+    app.login_as("profile@example.com").await;
+
+    let (status, user) = app
+        .put(
+            "/api/auth/profile",
+            json!({
+                "email": "profile@example.com",
+                "display_name": "Dana A.",
+                "birth_date": "1981-04-12"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(user["display_name"], "Dana A.");
+    assert_eq!(user["birth_date"], "1981-04-12");
+
+    // The whole block is replaced, not merged, so an emptied field actually
+    // empties — the thing a COALESCE-style PATCH cannot express.
+    let (status, user) = app
+        .put(
+            "/api/auth/profile",
+            json!({"email": "profile@example.com", "display_name": "", "birth_date": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(user["display_name"], Value::Null);
+    assert_eq!(user["birth_date"], Value::Null);
+
+    let (_, me) = app.get("/api/auth/me").await;
+    assert_eq!(me["birth_date"], Value::Null);
+}
+
+#[tokio::test]
+async fn preferences_are_bounded_by_the_servers_own_limits() {
+    let mut app = TestApp::new().await;
+    app.login_as("prefs@example.com").await;
+
+    let (_, me) = app.get("/api/auth/me").await;
+    assert_eq!(me["default_iterations"], 2000, "seeded default");
+    assert_eq!(me["auto_run"], false);
+
+    let (status, user) = app
+        .put(
+            "/api/auth/preferences",
+            json!({"default_iterations": 5000, "default_duration_years": 45, "auto_run": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(user["default_iterations"], 5000);
+    assert_eq!(user["auto_run"], true);
+
+    let (status, _) = app
+        .put(
+            "/api/auth/preferences",
+            json!({"default_iterations": 999_999, "default_duration_years": 45, "auto_run": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "over --max-iterations");
+
+    let (status, _) = app
+        .put(
+            "/api/auth/preferences",
+            json!({"default_iterations": 5000, "default_duration_years": 0, "auto_run": false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "a zero-year horizon");
+}
+
+#[tokio::test]
+async fn changing_the_password_ends_every_other_session() {
+    let mut app = TestApp::new().await;
+    app.login_as("rotate@example.com").await;
+    let first = app.cookie.clone().expect("session cookie");
+
+    // A second sign-in from somewhere else.
+    let (status, _) = app
+        .post(
+            "/api/auth/login",
+            json!({"email": "rotate@example.com", "password": "correct-horse-battery-staple"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, sessions) = app.get("/api/auth/sessions").await;
+    assert_eq!(sessions.as_array().unwrap().len(), 2);
+    assert_eq!(
+        sessions
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["current"] == true)
+            .count(),
+        1,
+        "exactly one row is this device"
+    );
+
+    let (status, body) = app
+        .post(
+            "/api/auth/password",
+            json!({"current_password": "wrong-one-entirely", "new_password": "a-much-longer-one"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (status, _) = app
+        .post(
+            "/api/auth/password",
+            json!({
+                "current_password": "correct-horse-battery-staple",
+                "new_password": "a-much-longer-one"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The session that made the change survives; the other one is gone.
+    assert_eq!(app.cookie.as_ref(), Some(&first));
+    let (status, sessions) = app.get("/api/auth/sessions").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sessions.as_array().unwrap().len(), 1);
+    assert_eq!(sessions[0]["current"], true);
+}
+
+#[tokio::test]
+async fn a_session_can_be_revoked_by_its_opaque_id() {
+    let mut app = TestApp::new().await;
+    app.login_as("devices@example.com").await;
+    let (status, _) = app
+        .post(
+            "/api/auth/login",
+            json!({"email": "devices@example.com", "password": "correct-horse-battery-staple"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, sessions) = app.get("/api/auth/sessions").await;
+    let other = sessions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["current"] == false)
+        .expect("the other device");
+    let id = other["id"].as_str().unwrap().to_string();
+    assert!(!id.is_empty(), "the id is opaque, not the token hash");
+
+    let (status, _) = app.delete(&format!("/api/auth/sessions/{id}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, sessions) = app.get("/api/auth/sessions").await;
+    assert_eq!(sessions.as_array().unwrap().len(), 1);
+
+    let (status, _) = app.delete(&format!("/api/auth/sessions/{id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "already gone");
+}
+
+#[tokio::test]
+async fn deleting_an_account_takes_its_scenarios_with_it() {
+    let mut app = TestApp::new().await;
+    app.login_as("goodbye@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+
+    let (status, _) = app
+        .delete_with("/api/auth/me", json!({"password": "not-the-password"}))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "the password is re-typed");
+
+    let (status, _) = app
+        .delete_with(
+            "/api/auth/me",
+            json!({"password": "correct-horse-battery-staple"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // The session went with the user, so the cookie no longer resolves.
+    let (status, _) = app.get(&format!("/api/scenarios/{scenario_id}")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // And the email is free again.
+    let (status, _) = app
+        .post(
+            "/api/auth/register",
+            json!({"email": "goodbye@example.com", "password": "correct-horse-battery-staple"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[tokio::test]
+async fn a_scenario_row_carries_its_last_successful_run() {
+    let mut app = TestApp::new().await;
+    app.login_as("history@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+
+    let (_, list) = app.get("/api/scenarios").await;
+    assert_eq!(list[0]["last_run_at"], Value::Null, "nothing has run yet");
+    assert_eq!(list[0]["last_success_rate"], Value::Null);
+
+    let (status, run) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/runs"),
+            json!({"iterations": 20, "seed": 7, "percentiles": [0.5]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(run_id).await, "succeeded");
+
+    let (_, list) = app.get("/api/scenarios").await;
+    assert!(list[0]["last_run_at"].is_string(), "{}", list[0]);
+    assert!(
+        list[0]["last_success_rate"].is_number(),
+        "the figure the Data list shows: {}",
+        list[0]
     );
 }

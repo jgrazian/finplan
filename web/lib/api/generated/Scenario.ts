@@ -12,4 +12,11 @@ export type Scenario = {
   collect_ledger: boolean;
   created_at: string;
   updated_at: string;
+  /**
+   * When this scenario last produced results, and what they said. Carried
+   * on the row so a list of scenarios can be shown with its own history
+   * without a request per scenario.
+   */
+  last_run_at: string | null;
+  last_success_rate: number | null;
 };

@@ -40,19 +40,35 @@ pub fn hash_token(token: &str) -> String {
 }
 
 /// Persist a new session row and return the plaintext token.
-pub async fn issue(db: &Db, user_id: &str) -> ApiResult<String> {
+///
+/// The user agent is stored verbatim so the account screen can list the
+/// devices holding a key to this account; turning it into "Chrome · macOS" is
+/// presentation and stays in the client.
+pub async fn issue(db: &Db, user_id: &str, user_agent: Option<&str>) -> ApiResult<String> {
     let session = generate_token();
     sqlx::query(
-        "INSERT INTO sessions (token_hash, user_id, expires_at)
-         VALUES (?1, ?2, datetime('now', ?3))",
+        "INSERT INTO sessions (token_hash, public_id, user_id, expires_at, user_agent)
+         VALUES (?1, ?2, ?3, datetime('now', ?4), ?5)",
     )
     .bind(&session.token_hash)
+    .bind(uuid::Uuid::new_v4().to_string())
     .bind(user_id)
     .bind(format!("+{SESSION_TTL_DAYS} days"))
+    .bind(user_agent)
     .execute(db)
     .await?;
 
     Ok(session.token)
+}
+
+/// The caller's `User-Agent`, clipped to something a row can hold.
+#[must_use]
+pub fn user_agent_of(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.chars().take(300).collect::<String>())
+        .filter(|v| !v.is_empty())
 }
 
 pub async fn revoke(db: &Db, token: &str) -> ApiResult<()> {
@@ -127,6 +143,9 @@ fn extract_token(parts: &Parts) -> Option<String> {
 pub struct CurrentUser {
     pub id: String,
     pub email: String,
+    /// The opaque id of the session this request arrived on, so the account
+    /// screen can mark one row in the device list "this device".
+    pub session_id: String,
 }
 
 impl FromRequestParts<AppState> for CurrentUser {
@@ -139,8 +158,8 @@ impl FromRequestParts<AppState> for CurrentUser {
         let token = extract_token(parts).ok_or(ApiError::Unauthorized)?;
         let token_hash = hash_token(&token);
 
-        let row: Option<(String, String)> = sqlx::query_as(
-            "SELECT u.id, u.email
+        let row: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT u.id, u.email, s.public_id
                FROM sessions s
                JOIN users u ON u.id = s.user_id
               WHERE s.token_hash = ?1 AND s.expires_at > datetime('now')",
@@ -149,7 +168,7 @@ impl FromRequestParts<AppState> for CurrentUser {
         .fetch_optional(&state.db)
         .await?;
 
-        let (id, email) = row.ok_or(ApiError::Unauthorized)?;
+        let (id, email, session_id) = row.ok_or(ApiError::Unauthorized)?;
 
         // Touch the session so idle-time can be reasoned about later.
         let _ =
@@ -158,6 +177,10 @@ impl FromRequestParts<AppState> for CurrentUser {
                 .execute(&state.db)
                 .await;
 
-        Ok(CurrentUser { id, email })
+        Ok(CurrentUser {
+            id,
+            email,
+            session_id,
+        })
     }
 }

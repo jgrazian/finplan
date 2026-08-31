@@ -34,10 +34,23 @@ pub struct Scenario {
     pub collect_ledger: bool,
     pub created_at: String,
     pub updated_at: String,
+    /// When this scenario last produced results, and what they said. Carried
+    /// on the row so a list of scenarios can be shown with its own history
+    /// without a request per scenario.
+    pub last_run_at: Option<String>,
+    pub last_success_rate: Option<f64>,
 }
 
+/// The trailing two columns are the last *succeeded* run, so a failed attempt
+/// never overwrites the figure a scenario is still fairly described by.
 const SCENARIO_COLUMNS: &str = "id, name, description, start_date, birth_date, duration_years,
-     inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at";
+     inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at,
+     (SELECT r.finished_at FROM runs r
+       WHERE r.scenario_id = scenarios.id AND r.status = 'succeeded'
+       ORDER BY r.finished_at DESC LIMIT 1) AS last_run_at,
+     (SELECT st.success_rate FROM run_stats st JOIN runs r ON r.id = st.run_id
+       WHERE r.scenario_id = scenarios.id AND r.status = 'succeeded'
+       ORDER BY r.finished_at DESC LIMIT 1) AS last_success_rate";
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]

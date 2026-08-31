@@ -22,6 +22,8 @@ export function AppHeader<T extends string>({
   activeScenarioId,
   onScenarioChange,
   userInitials,
+  onAccount,
+  accountOpen,
   onRun,
   offline,
   trailing,
@@ -33,6 +35,10 @@ export function AppHeader<T extends string>({
   activeScenarioId: string;
   onScenarioChange: (id: string) => void;
   userInitials: string;
+  /** Opens account settings in place of the tab screens. */
+  onAccount?: () => void;
+  /** Account settings is what is on screen, so the avatar reads as current. */
+  accountOpen?: boolean;
   onRun?: () => void;
   /** Nothing can reach the server, so a run cannot be started. */
   offline?: boolean;
@@ -98,12 +104,18 @@ export function AppHeader<T extends string>({
       <button
         type="button"
         className="btn btn-secondary btn-icon"
-        aria-label="Account"
+        aria-label="Account settings"
+        aria-current={accountOpen ? "page" : undefined}
+        title="Account settings"
+        onClick={onAccount}
         style={{
           fontSize: 9.5,
           fontFamily: "ui-monospace, Menlo, monospace",
           width: 30,
           height: 30,
+          ...(accountOpen
+            ? { background: "var(--color-accent)", color: "var(--color-bg)" }
+            : null),
         }}
       >
         {userInitials}

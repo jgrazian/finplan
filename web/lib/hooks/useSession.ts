@@ -14,6 +14,10 @@ export interface Session {
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, displayName?: string) => Promise<void>;
   signOut: () => Promise<void>;
+  /** Replace the cached user after the account screen saves a change. */
+  update: (user: UserResponse) => void;
+  /** The account no longer exists; the server has already cleared the cookie. */
+  forget: () => void;
 }
 
 /**
@@ -79,6 +83,11 @@ export function useSession(): Session {
         // An expired cookie cannot be logged out; the local session ends
         // either way, which is the whole point of pressing it.
       }
+      serverMonitor.sessionEnded();
+      setUser(null);
+    },
+    update: setUser,
+    forget: () => {
       serverMonitor.sessionEnded();
       setUser(null);
     },

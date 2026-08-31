@@ -17,19 +17,24 @@ import type {
   CreateScenario,
   CreateTaxConfig,
   Credentials,
+  DeleteAccount,
   Event,
   EventBody,
+  PasswordChange,
   Position,
   Profile,
   Results,
   Run,
   Scenario,
+  SessionInfo,
   TaxConfig,
   UpdateAccountBody,
   UpdateAsset,
+  UpdatePreferences,
   UpdateProfile,
   UpdateScenario,
   UpdateTaxConfig,
+  UpdateUserProfile,
   UserResponse,
 } from "./types";
 
@@ -41,6 +46,22 @@ export const api = {
     login: (body: Credentials) => http.post<UserResponse>("/auth/login", body),
     register: (body: Credentials) => http.post<UserResponse>("/auth/register", body),
     logout: () => http.post<void>("/auth/logout"),
+  },
+
+  /**
+   * The account itself. Profile and preferences are PUTs rather than PATCHes:
+   * the account form is one Save over every field, so an emptied field has to
+   * mean "clear it" — which a merge cannot say.
+   */
+  account: {
+    updateProfile: (body: UpdateUserProfile) => http.put<UserResponse>("/auth/profile", body),
+    updatePreferences: (body: UpdatePreferences) =>
+      http.put<UserResponse>("/auth/preferences", body),
+    changePassword: (body: PasswordChange) => http.post<void>("/auth/password", body),
+    sessions: () => http.get<SessionInfo[]>("/auth/sessions"),
+    revokeSession: (id: string) => http.delete(`/auth/sessions/${encodeURIComponent(id)}`),
+    /** Unrecoverable, and cascades to every scenario, run and session. */
+    remove: (body: DeleteAccount) => http.delete("/auth/me", body),
   },
 
   scenarios: {

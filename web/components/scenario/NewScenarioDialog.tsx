@@ -11,7 +11,7 @@ import {
   Select,
 } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import type { Profile, Scenario, TaxConfig } from "@/lib/api/types";
+import type { Profile, Scenario, TaxConfig, UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 
 /**
@@ -22,11 +22,14 @@ import { useSubmit } from "@/lib/hooks/useSubmit";
  * a scenario that has none.
  */
 export function NewScenarioDialog({
+  defaults,
   inflationProfiles,
   taxConfigs,
   onClose,
   onCreated,
 }: {
+  /** Account settings: the birth date and horizon a new scenario inherits. */
+  defaults: UserResponse;
   inflationProfiles: Profile[];
   taxConfigs: TaxConfig[];
   onClose: () => void;
@@ -34,8 +37,8 @@ export function NewScenarioDialog({
 }) {
   const [name, setName] = useState("");
   const [start, setStart] = useState(new Date().toISOString().slice(0, 10));
-  const [birth, setBirth] = useState("");
-  const [years, setYears] = useState(30);
+  const [birth, setBirth] = useState(defaults.birth_date ?? "");
+  const [years, setYears] = useState(defaults.default_duration_years);
   const [inflationId, setInflationId] = useState(inflationProfiles[0]?.id ?? 0);
   const [taxId, setTaxId] = useState(taxConfigs[0]?.id ?? 0);
   const submit = useSubmit();
@@ -52,7 +55,7 @@ export function NewScenarioDialog({
                 name,
                 start_date: start,
                 birth_date: birth.trim() === "" ? null : birth,
-                duration_years: years || 30,
+                duration_years: years || defaults.default_duration_years,
                 inflation_profile_id: inflationId || null,
                 tax_config_id: taxId || null,
               }),

@@ -1,0 +1,107 @@
+"use client";
+
+import { useState } from "react";
+import { Button, rowStyle } from "@/components/ui";
+import type { Scenario, UserResponse } from "@/lib/api/types";
+import { DataPanel } from "./DataPanel";
+import { PreferencesPanel } from "./PreferencesPanel";
+import { ProfilePanel } from "./ProfilePanel";
+import { SecurityPanel } from "./SecurityPanel";
+
+type SectionId = "profile" | "security" | "data" | "preferences";
+
+const SECTIONS: ReadonlyArray<{ id: SectionId; label: string; note: string }> = [
+  { id: "profile", label: "Profile", note: "Name, email, birth date" },
+  { id: "security", label: "Security", note: "Password and devices" },
+  { id: "data", label: "Data", note: "Scenarios, export, deletion" },
+  { id: "preferences", label: "Preferences", note: "Run and scenario defaults" },
+];
+
+/**
+ * Account settings — the inspector pattern the rest of the app uses, turned
+ * inward.
+ *
+ * A section list drives one panel, exactly as the Portfolio outline drives the
+ * rail, so nothing new has to be learned to find the password field. It takes
+ * the whole content area rather than opening as a modal: these are destinations
+ * you navigate to, not a decision to commit or abandon.
+ */
+export function AccountScreen({
+  user,
+  scenarios,
+  onUserChange,
+  onSignOut,
+  onDeleted,
+  offline,
+}: {
+  user: UserResponse;
+  scenarios: Scenario[];
+  onUserChange: (user: UserResponse) => void;
+  onSignOut: () => void;
+  /** The account is gone: everything above this has to be torn down. */
+  onDeleted: () => void;
+  /** Writes are being refused, so the forms close rather than lie. */
+  offline?: boolean;
+}) {
+  const [section, setSection] = useState<SectionId>("profile");
+  const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "250px 1fr", alignItems: "stretch" }}>
+      <div style={{ borderRight: "1px solid var(--color-divider)", padding: "14px 0" }}>
+        <h6 style={{ margin: "0 0 8px", padding: "0 16px" }}>Account</h6>
+        {/* Buttons rather than rows with a click handler: this is navigation,
+            and it should reach the keyboard without being reimplemented. */}
+        <nav style={{ display: "flex", flexDirection: "column" }} aria-label="Account sections">
+          {SECTIONS.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              className="rowsel acct-section"
+              aria-current={entry.id === section ? "page" : undefined}
+              style={rowStyle(entry.id === section)}
+              onClick={() => setSection(entry.id)}
+            >
+              <span style={{ fontFamily: "var(--font-heading)", fontWeight: 600, fontSize: 14 }}>
+                {entry.label}
+              </span>
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
+                }}
+              >
+                {entry.note}
+              </span>
+            </button>
+          ))}
+        </nav>
+        <div style={{ padding: "14px 16px 0" }}>
+          <Button variant="ghost" onClick={onSignOut}>
+            Sign out
+          </Button>
+        </div>
+      </div>
+
+      <div style={{ padding: "20px 24px 24px" }}>
+        <h3 style={{ margin: "0 0 16px" }}>{active.label}</h3>
+
+        {section === "profile" && (
+          <ProfilePanel user={user} onSaved={onUserChange} readOnly={offline} />
+        )}
+        {section === "security" && <SecurityPanel readOnly={offline} />}
+        {section === "data" && (
+          <DataPanel
+            user={user}
+            scenarios={scenarios}
+            onDeleted={onDeleted}
+            readOnly={offline}
+          />
+        )}
+        {section === "preferences" && (
+          <PreferencesPanel user={user} onSaved={onUserChange} readOnly={offline} />
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AccountScreen } from "@/components/account";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { AppHeader, AppShell, type TabDef } from "@/components/layout";
 import {
@@ -14,10 +15,10 @@ import { NewScenarioDialog } from "@/components/scenario/NewScenarioDialog";
 import { SessionExpiredDialog, StatusBar } from "@/components/status";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import type { Scenario as ApiScenario } from "@/lib/api/types";
+import type { Scenario as ApiScenario, UserResponse } from "@/lib/api/types";
 import { useAsync } from "@/lib/hooks/useAsync";
 import { useRun } from "@/lib/hooks/useRun";
-import { useSession } from "@/lib/hooks/useSession";
+import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import type { InflationProfile, Scenario } from "@/lib/types";
@@ -31,8 +32,13 @@ const TABS: ReadonlyArray<TabDef<TabId>> = [
   { id: "analysis", label: "Analysis" },
 ];
 
-/** Iterations a Run asks for. The server caps this at `--max-iterations`. */
-const ITERATIONS = 2_000;
+/**
+ * How long an edit has to settle before an automatic re-run starts.
+ *
+ * Long enough that saving three fields in a row queues one run rather than
+ * three, short enough that the chart is not visibly lagging the plan.
+ */
+const AUTO_RUN_SETTLE_MS = 1_500;
 
 export default function Page() {
   const session = useSession();
@@ -48,12 +54,7 @@ export default function Page() {
     );
   }
 
-  return (
-    <Workbench
-      initials={initials(session.user.display_name ?? session.user.email)}
-      onSignOut={session.signOut}
-    />
-  );
+  return <Workbench session={session} user={session.user} />;
 }
 
 function initials(name: string): string {
@@ -61,15 +62,13 @@ function initials(name: string): string {
   return (parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2)).toUpperCase();
 }
 
-function Workbench({
-  initials,
-  onSignOut,
-}: {
-  initials: string;
-  onSignOut: () => void;
-}) {
+function Workbench({ session, user }: { session: Session; user: UserResponse }) {
   const [tab, setTab] = useState<TabId>("results");
+  // Account settings is a destination rather than a fifth tab: it is about the
+  // account, not the scenario the tabs all describe.
+  const [onAccount, setOnAccount] = useState(false);
   const [picked, setPicked] = useState<number>();
+  const iterations = user.default_iterations;
 
   const scenarios = useAsync(() => api.scenarios.list(), []);
   const libraries = useAsync(
@@ -87,19 +86,46 @@ function Workbench({
   const scenarioId =
     picked != null && list.some((s) => s.id === picked) ? picked : list[0]?.id;
 
-  const workspace = useWorkspace(scenarioId, ITERATIONS);
+  const workspace = useWorkspace(scenarioId, iterations);
   const run = useRun(workspace.scenario, workspace.axis);
   const status = useServerStatus();
 
   const start = useCallback(() => {
+    setOnAccount(false);
     setTab("results");
-    void run.start(ITERATIONS);
-  }, [run]);
+    void run.start(iterations);
+  }, [run, iterations]);
 
   const refresh = useCallback(() => {
     scenarios.reload();
     workspace.reload();
   }, [scenarios, workspace]);
+
+  // Auto re-run, when the preference asks for it.
+  //
+  // Driven off the scenario's own `updated_at` rather than a local edit flag,
+  // so it counts what the server actually accepted. The first sighting of a
+  // scenario is not an edit — otherwise opening the app would start a run —
+  // and the run is left in the background rather than pulling the screen to
+  // Results out from under whatever is being edited.
+  const autoRun = user.auto_run && !status.offline;
+  const updatedAt = workspace.scenario?.updated_at;
+  const seen = useRef<{ id?: number; at?: string }>({});
+  const startQuietly = useRef(run.start);
+  useEffect(() => {
+    startQuietly.current = run.start;
+  }, [run.start]);
+
+  useEffect(() => {
+    if (scenarioId == null || updatedAt == null) return;
+    const previous = seen.current;
+    seen.current = { id: scenarioId, at: updatedAt };
+    if (previous.id !== scenarioId || previous.at == null || previous.at === updatedAt) return;
+    if (!autoRun) return;
+
+    const timer = setTimeout(() => void startQuietly.current(iterations), AUTO_RUN_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [scenarioId, updatedAt, autoRun, iterations]);
 
   // Keyboard parity with the TUI: `r` runs, as the header's keycap advertises.
   useEffect(() => {
@@ -132,30 +158,50 @@ function Workbench({
         <AppHeader
           tabs={TABS}
           activeTab={tab}
-          onTabChange={setTab}
+          onTabChange={(id) => {
+            setOnAccount(false);
+            setTab(id);
+          }}
           scenarios={headerScenarios}
           activeScenarioId={scenarioId == null ? "" : String(scenarioId)}
           onScenarioChange={(id) => setPicked(Number(id))}
-          userInitials={initials}
+          userInitials={initials(user.display_name ?? user.email)}
+          onAccount={() => {
+            // The Data list shows each scenario's last run, which a run
+            // started since the list loaded would have moved on from.
+            scenarios.reload();
+            setOnAccount(true);
+          }}
+          accountOpen={onAccount}
           onRun={start}
           offline={status.offline}
           trailing={
-            <>
-              <Button onClick={() => setCreating(true)} disabled={status.offline}>
-                New scenario
-              </Button>
-              <Button variant="ghost" onClick={onSignOut}>
-                Sign out
-              </Button>
-            </>
+            /* Sign out lives in the account screen the avatar opens; the nav
+               is for the scenario, not for the account. */
+            <Button onClick={() => setCreating(true)} disabled={status.offline}>
+              New scenario
+            </Button>
           }
         />
 
         {/* Server state lives here, directly under the nav and above every
             screen, so it is in the same place whatever you are looking at. */}
-        <StatusBar onRetry={refresh} onRunAgain={start} onSignIn={onSignOut} />
+        <StatusBar
+          onRetry={refresh}
+          onRunAgain={start}
+          onSignIn={() => void session.signOut()}
+        />
 
-        {scenarios.error ? (
+        {onAccount ? (
+          <AccountScreen
+            user={user}
+            scenarios={list}
+            offline={status.offline}
+            onUserChange={session.update}
+            onSignOut={() => void session.signOut()}
+            onDeleted={session.forget}
+          />
+        ) : scenarios.error ? (
           <EmptyState title="Cannot reach the API" detail={scenarios.error.message} />
         ) : workspace.error ? (
           <EmptyState title="Cannot load this scenario" detail={workspace.error.message} />
@@ -207,10 +253,13 @@ function Workbench({
         )}
       </AppShell>
 
-      {status.issue?.kind === "session" && <SessionExpiredDialog onSignIn={onSignOut} />}
+      {status.issue?.kind === "session" && (
+        <SessionExpiredDialog onSignIn={() => void session.signOut()} />
+      )}
 
       {creating && (
         <NewScenarioDialog
+          defaults={user}
           inflationProfiles={inflationProfiles}
           taxConfigs={taxConfigs}
           onClose={() => setCreating(false)}

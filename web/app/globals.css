@@ -301,3 +301,36 @@
   margin-top: 1px;
   color: var(--color-accent-900);
 }
+
+/* ── Account settings ──────────────────────────────────────────────────────
+   The section list is the Portfolio outline's row, turned into a button so
+   navigation reaches the keyboard without reimplementing it. */
+
+.acct-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 9px 16px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.acct-section:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* A checkbox that cannot be changed has to look like one: the dot carries the
+   whole control, so `disabled` on the hidden input is otherwise invisible. */
+.radio:has(input:disabled) {
+  cursor: default;
+  opacity: .55;
+}
+
+.radio:has(input:disabled):hover .dot {
+  border-color: var(--color-divider);
+}
