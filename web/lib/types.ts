@@ -30,10 +30,34 @@ export interface ContributionLimit {
 
 /** A single purchase lot for cost-basis tracking. */
 export interface AssetLot {
+  /** Database id of the position row, for delete. */
+  positionId: number;
   assetId: AssetId;
+  /** Database id of the asset behind `assetId`, for the add-position form. */
+  assetServerId: number;
   purchaseDate: string; // ISO date
   units: number;
   costBasis: number;
+  /** Units marked at the asset's opening price — what the balance counts. */
+  value: number;
+}
+
+/**
+ * The other side of a property/debt pair.
+ *
+ * The schema has no edge between the two — what pairs them is an event that
+ * settles both, so the link is read back off the plan rather than stored.
+ */
+export interface LinkedAccount {
+  accountId: AccountId;
+  name: string;
+  flavor: AccountFlavorKind;
+  /** Signed, as the list shows it: a debt is negative. */
+  balance: number;
+  /** Annual rate as a fraction; liabilities only. */
+  interestRate?: number;
+  /** Names of the events that pair them. */
+  through: EventId[];
 }
 
 export interface Account {
@@ -48,6 +72,23 @@ export interface Account {
   balance: number;
   /** Name of the return profile driving this account's cash or value. */
   returnProfileId: ReturnProfileId;
+  /**
+   * The profile row the account itself owns — a bank account's, or an
+   * investment account's *cash* profile. Absent for property and liability,
+   * whose growth comes from an asset or an interest rate instead, so this is
+   * also the test for whether the profile field can be edited at all.
+   */
+  returnProfileServerId?: number;
+  /** Untracked cash: the whole balance of a bank account, nothing elsewhere. */
+  cashValue: number;
+  /** The asset a property is marked against. */
+  assetServerId?: number;
+  /** Annual rate as a fraction; liabilities only. */
+  interestRate?: number;
+  /** The property or debt on the other side of this one, if an event pairs them. */
+  linked: LinkedAccount[];
+  /** What the account holds, in one line — the list's widest column. */
+  holdings: string;
   contributionLimit?: ContributionLimit;
   positions: AssetLot[];
   /** Names of events that read or write this account. */

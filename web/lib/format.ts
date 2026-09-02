@@ -30,3 +30,19 @@ export function fmtUnits(v: number): string {
     maximumFractionDigits: 1,
   });
 }
+
+/**
+ * `$563k`, falling back to the exact figure under the rounding floor —
+ * `fmtCompact` reads everything below $1,000 as `$0`, which is fine on a chart
+ * axis and wrong beside a bar labelling a real balance.
+ */
+export function fmtCompactOrExact(v: number): string {
+  const abs = Math.abs(v);
+  if (abs < 1000) return fmtCurrency(v);
+  return (v < 0 ? "\u2212" : "") + fmtCompact(abs);
+}
+
+/** One decimal, for a share sitting next to the bar that draws it — `8.9%`. */
+export function fmtShareFine(fraction: number): string {
+  return (fraction * 100).toFixed(1) + "%";
+}

@@ -238,6 +238,9 @@ export function Dropdown<T extends string | number>({
           return;
         case "Escape":
           e.preventDefault();
+          // The menu consumed the key; a drawer listening for Escape to revert
+          // its draft must not also act on it.
+          e.stopPropagation();
           close();
           return;
         case "Tab":
