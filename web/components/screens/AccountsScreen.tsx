@@ -14,6 +14,7 @@ import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type {
   Account as ApiAccount,
+  Asset,
   CreatePosition,
   FlavorSpec,
   UpdateAccountBody,
@@ -100,10 +101,27 @@ export function AccountsScreen({
   /** Bumped after each save, to hand the form a clean slate for the next lot. */
   const [lotNonce, setLotNonce] = useState(0);
   const [savedAt, setSavedAt] = useState<Map<AccountId, number>>(new Map());
+  /**
+   * Tickers made from this screen, held until the workspace reload catches up.
+   * Without them the form would select an asset that is not yet in the list it
+   * was handed, and show its placeholder for a beat.
+   */
+  const [pending, setPending] = useState<Asset[]>([]);
   const { lastContact } = useServerStatus();
   // Two trackers: an edit reports in the drawer's footer, a lot in its own form.
   const editing = useSubmit();
   const lot = useSubmit();
+
+  const assets = useMemo(() => {
+    const known = new Set(raw.assets.map((a) => a.id));
+    const fresh = pending.filter((a) => !known.has(a.id));
+    return fresh.length > 0 ? [...raw.assets, ...fresh] : raw.assets;
+  }, [raw.assets, pending]);
+
+  const assetCreated = (asset: Asset) => {
+    setPending((list) => [...list, asset]);
+    onChanged();
+  };
 
   const shares = useMemo(() => accountShares(accounts), [accounts]);
   const colors = useMemo(() => accountColors(accounts), [accounts]);
@@ -236,7 +254,7 @@ export function AccountsScreen({
               key={selected.accountId}
               account={selected}
               profiles={raw.returnProfiles}
-              assets={raw.assets}
+              assets={assets}
               onApply={(draft) => apply(selected, draft)}
               onSelectAccount={select}
               onAddLot={
@@ -246,15 +264,13 @@ export function AccountsScreen({
                 addingLot && selected.flavor === "Investment" ? (
                   <AddPositionForm
                     key={lotNonce}
-                    assets={raw.assets}
+                    scenarioId={scenarioId}
+                    assets={assets}
                     profiles={raw.returnProfiles}
                     taxStatus={selected.taxStatus}
                     busy={lot.busy}
-                    error={
-                      raw.assets.length === 0
-                        ? "This scenario has no assets to hold yet."
-                        : lot.error
-                    }
+                    error={lot.error}
+                    onAssetCreated={assetCreated}
                     onCancel={() => setAddingLot(false)}
                     onSubmit={(body, again) => addPosition(selected, body, again)}
                   />
@@ -274,9 +290,10 @@ export function AccountsScreen({
         <NewAccountDialog
           scenarioId={scenarioId}
           profiles={raw.returnProfiles}
-          assets={raw.assets}
+          assets={assets}
           onClose={() => setCreating(false)}
           onCreated={onChanged}
+          onAssetCreated={assetCreated}
         />
       )}
     </>

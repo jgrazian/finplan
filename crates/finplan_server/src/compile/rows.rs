@@ -59,7 +59,8 @@ pub struct AssetRow {
     pub name: String,
     pub description: Option<String>,
     pub initial_price: f64,
-    pub return_profile_id: i64,
+    /// Null where the asset is unmapped; the compiler gives it flat zero growth.
+    pub return_profile_id: Option<i64>,
     pub tracking_error: Option<f64>,
     pub sort_order: i64,
 }

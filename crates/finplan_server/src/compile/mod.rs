@@ -39,6 +39,10 @@ fn parse_date(text: &str, field: &str) -> ApiResult<Date> {
 /// unbounded recursion. Depth is generous; real expressions nest a handful deep.
 const MAX_DEPTH: usize = 64;
 
+/// The id the synthesised flat-zero profile is interned under. Negative, so it
+/// can never collide with a `return_profiles` row.
+const UNMAPPED_PROFILE: i64 = -1;
+
 fn depth_check(depth: usize, what: &str) -> ApiResult<()> {
     if depth > MAX_DEPTH {
         return Err(ApiError::unprocessable(format!(
@@ -85,7 +89,9 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
     };
 
     for asset in &graph.assets {
-        note(asset.return_profile_id, &mut referenced_profiles, &mut seen);
+        if let Some(id) = asset.return_profile_id {
+            note(id, &mut referenced_profiles, &mut seen);
+        }
     }
     for bank in graph.bank.values() {
         note(bank.return_profile_id, &mut referenced_profiles, &mut seen);
@@ -116,7 +122,21 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
     for asset in &graph.assets {
         let dense = id_map.asset(asset.id)?;
         asset_prices.insert(dense, asset.initial_price);
-        asset_returns.insert(dense, id_map.profile(asset.return_profile_id)?);
+        // An unmapped asset has a price but nothing driving it. Rather than
+        // refuse the run, every one of them shares a single synthesised profile
+        // that returns zero — the asset holds its opening price for the whole
+        // simulation. Interned under a sentinel id, since no row can hold one.
+        let returns = match asset.return_profile_id {
+            Some(profile_id) => id_map.profile(profile_id)?,
+            None => {
+                let profile = id_map.intern_profile(UNMAPPED_PROFILE)?;
+                return_profiles
+                    .entry(profile)
+                    .or_insert(ReturnProfile::None);
+                profile
+            }
+        };
+        asset_returns.insert(dense, returns);
         if let Some(te) = asset.tracking_error
             && te > 0.0
         {

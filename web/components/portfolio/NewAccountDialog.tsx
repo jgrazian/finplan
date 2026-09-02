@@ -1,7 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { CurrencyInput, Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
+import {
+  CurrencyInput,
+  Dialog,
+  DialogRow,
+  Dropdown,
+  Field,
+  Input,
+  Select,
+} from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type {
   Asset,
@@ -12,12 +20,16 @@ import type {
   TaxStatus,
 } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { NewAssetInline } from "./NewAssetInline";
 
 const FLAVORS = ["Bank", "Investment", "Property", "Liability"] as const;
 type Flavor = (typeof FLAVORS)[number];
 
 const TAX_STATUSES: TaxStatus[] = ["Taxable", "TaxDeferred", "TaxFree"];
 const PERIODS: ContributionPeriod[] = ["Yearly", "Monthly"];
+
+/** The dropdown row that makes an asset rather than naming one. */
+const NEW_ASSET = -1;
 
 /**
  * Creates an account of any of the four flavors.
@@ -32,12 +44,15 @@ export function NewAccountDialog({
   assets,
   onClose,
   onCreated,
+  onAssetCreated,
 }: {
   scenarioId: number;
   profiles: Profile[];
   assets: Asset[];
   onClose: () => void;
   onCreated: () => void;
+  /** A ticker made here, so the screen can reload and keep it selectable. */
+  onAssetCreated: (asset: Asset) => void;
 }) {
   const [flavor, setFlavor] = useState<Flavor>("Bank");
   const [name, setName] = useState("");
@@ -46,7 +61,8 @@ export function NewAccountDialog({
   const [taxStatus, setTaxStatus] = useState<TaxStatus>("Taxable");
   const [limit, setLimit] = useState<number | null>(null);
   const [period, setPeriod] = useState<ContributionPeriod>("Yearly");
-  const [assetId, setAssetId] = useState(assets[0]?.id ?? 0);
+  const [assetId, setAssetId] = useState<number | null>(assets[0]?.id ?? null);
+  const [makingAsset, setMakingAsset] = useState(false);
   const [value, setValue] = useState(0);
   const [principal, setPrincipal] = useState(0);
   const [rate, setRate] = useState("6.0");
@@ -68,7 +84,9 @@ export function NewAccountDialog({
           contribution_period: limit == null ? null : period,
         };
       case "Property":
-        return { flavor, asset_id: assetId, value };
+        // Guarded by `noAssets`, which stops the submit before it reaches here
+        // while nothing is chosen.
+        return { flavor, asset_id: assetId ?? 0, value };
       case "Liability":
         // Stored as a positive amount owed, and the rate as a fraction.
         return { flavor, principal, interest_rate: (Number(rate) || 0) / 100 };
@@ -76,6 +94,9 @@ export function NewAccountDialog({
   };
 
   const create = () => {
+    // Enter reaches the dialog's form from inside the inline asset block too;
+    // while that block is open it is the thing being committed, not this.
+    if (makingAsset || noAssets) return;
     const body: CreateAccount = { name, sort_order: 0, ...spec() };
     submit.run(() => api.accounts.create(scenarioId, body), () => {
       onCreated();
@@ -83,7 +104,7 @@ export function NewAccountDialog({
     });
   };
 
-  const noAssets = flavor === "Property" && assets.length === 0;
+  const noAssets = flavor === "Property" && assetId == null && !makingAsset;
 
   return (
     <Dialog
@@ -94,7 +115,7 @@ export function NewAccountDialog({
       busy={submit.busy}
       error={
         noAssets
-          ? "A property account is valued by an asset. Create an asset first."
+          ? "A property account is valued by an asset — choose New asset\u2026 above."
           : submit.error
       }
     >
@@ -166,20 +187,46 @@ export function NewAccountDialog({
       )}
 
       {flavor === "Property" && (
-        <DialogRow>
-          <Field label="Underlying asset">
-            <Select value={assetId} onChange={(e) => setAssetId(Number(e.target.value))}>
-              {assets.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Value">
-            <CurrencyInput value={value} onValueChange={setValue} aria-label="Value" />
-          </Field>
-        </DialogRow>
+        <>
+          <DialogRow>
+            <Field label="Underlying asset">
+              <Dropdown
+                className="dd-field"
+                options={[
+                  ...assets.map((a) => ({
+                    value: a.id,
+                    label: a.name,
+                    detail: a.description ?? undefined,
+                  })),
+                  { value: NEW_ASSET, label: "New asset…", action: true },
+                ]}
+                value={assetId}
+                onChange={(id) => {
+                  if (id === NEW_ASSET) return setMakingAsset(true);
+                  setMakingAsset(false);
+                  setAssetId(id);
+                }}
+                placeholder="No assets yet"
+                ariaLabel="Underlying asset"
+              />
+            </Field>
+            <Field label="Value">
+              <CurrencyInput value={value} onValueChange={setValue} aria-label="Value" />
+            </Field>
+          </DialogRow>
+          {makingAsset && (
+            <NewAssetInline
+              scenarioId={scenarioId}
+              suggestedName={name.trim()}
+              onCreated={(asset) => {
+                setAssetId(asset.id);
+                setMakingAsset(false);
+                onAssetCreated(asset);
+              }}
+              onCancel={() => setMakingAsset(false)}
+            />
+          )}
+        </>
       )}
 
       {flavor === "Liability" && (

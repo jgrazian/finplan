@@ -85,6 +85,10 @@ impl TestApp {
         self.send("PUT", path, Some(body)).await
     }
 
+    async fn patch(&self, path: &str, body: Value) -> (StatusCode, Value) {
+        self.send("PATCH", path, Some(body)).await
+    }
+
     async fn delete(&self, path: &str) -> (StatusCode, Value) {
         self.send("DELETE", path, None).await
     }
@@ -291,6 +295,76 @@ async fn scenario_compiles_with_every_account_flavor() {
     assert_eq!(report["accounts"], 2);
     assert_eq!(report["assets"], 1);
     assert_eq!(report["duration_years"], 10);
+}
+
+#[tokio::test]
+async fn an_unmapped_asset_compiles_at_flat_zero_growth() {
+    let mut app = TestApp::new().await;
+    app.login_as("unmapped@example.com").await;
+    let (scenario_id, _, brokerage) = app.seed_scenario().await;
+
+    // No return profile: a ticker jotted down mid-sentence, to be mapped later.
+    let (status, asset) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/assets"),
+            json!({"name": "TBD", "initial_price": 50.0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "create failed: {asset}");
+    assert!(
+        asset["return_profile_id"].is_null(),
+        "expected unmapped: {asset}"
+    );
+    let asset_id = asset["id"].as_i64().unwrap();
+
+    // Held, so the compiler has to give it a return one way or another.
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/accounts/{brokerage}/positions"),
+            json!({"asset_id": asset_id, "units": 10.0, "cost_basis": 500.0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, report) = app
+        .post(&format!("/api/scenarios/{scenario_id}/compile"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "compile failed: {report}");
+    assert_eq!(report["assets"], 2);
+
+    // Mapping it afterwards is a PATCH, and unmapping it again is the same
+    // PATCH with an explicit null — which is why the field is doubly optional.
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let profile_id = profiles.as_array().unwrap()[0]["id"].as_i64().unwrap();
+
+    let (status, mapped) = app
+        .patch(
+            &format!("/api/scenarios/{scenario_id}/assets/{asset_id}"),
+            json!({"return_profile_id": profile_id}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "map failed: {mapped}");
+    assert_eq!(mapped["return_profile_id"], profile_id);
+
+    // A PATCH that says nothing about the mapping leaves it alone.
+    let (_, renamed) = app
+        .patch(
+            &format!("/api/scenarios/{scenario_id}/assets/{asset_id}"),
+            json!({"name": "STILL-TBD"}),
+        )
+        .await;
+    assert_eq!(renamed["return_profile_id"], profile_id);
+
+    let (_, unmapped) = app
+        .patch(
+            &format!("/api/scenarios/{scenario_id}/assets/{asset_id}"),
+            json!({"return_profile_id": null}),
+        )
+        .await;
+    assert!(
+        unmapped["return_profile_id"].is_null(),
+        "expected unmapped: {unmapped}"
+    );
 }
 
 #[tokio::test]

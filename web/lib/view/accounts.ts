@@ -140,7 +140,9 @@ function profileLabel(
   assetById: Map<number, Asset>,
   profileName: Map<number, string>,
 ): string {
-  const name = (id: number | undefined) =>
+  // Null as well as undefined: an unmapped asset has no profile to name, and
+  // the dash is the honest answer for both.
+  const name = (id: number | null | undefined) =>
     id == null ? "—" : (profileName.get(id) ?? `profile ${id}`);
 
   switch (account.flavor) {

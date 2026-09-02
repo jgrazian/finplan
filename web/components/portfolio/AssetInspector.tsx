@@ -26,8 +26,12 @@ export interface AssetDraft {
   ticker: string;
   name: string;
   price: number;
-  profileServerId: number;
+  /** Null leaves the asset unmapped, which the engine holds flat at 0%. */
+  profileServerId: number | null;
 }
+
+/** The `<option>` value standing in for "no profile"; `null` is not a value. */
+const UNMAPPED = -1;
 
 const FIGURE = {
   fontFamily: "var(--font-heading)",
@@ -129,10 +133,14 @@ export function AssetInspector({
       <Field label="Return profile">
         <Select
           style={{ minHeight: 32 }}
-          value={draft.profileServerId}
+          value={draft.profileServerId ?? UNMAPPED}
           disabled={offline}
-          onChange={(e) => set("profileServerId", Number(e.target.value))}
+          onChange={(e) => {
+            const id = Number(e.target.value);
+            set("profileServerId", id === UNMAPPED ? null : id);
+          }}
         >
+          <option value={UNMAPPED}>Unmapped — held flat at 0%</option>
           {profiles.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
@@ -142,23 +150,36 @@ export function AssetInspector({
       </Field>
 
       <Blueprint style={{ padding: "9px 11px" }}>
-        <StatLabel>inherited from {profile?.id ?? "—"}</StatLabel>
-        <div style={{ display: "flex", gap: 18, marginTop: 4 }}>
-          <div>
-            <StatLabel>mean</StatLabel>
-            <div style={FIGURE}>{pct(profile?.mean ?? null)}</div>
-          </div>
-          <div>
-            <StatLabel>vol</StatLabel>
-            <div style={FIGURE}>{profile?.sd === 0 ? "—" : pct(profile?.sd ?? null)}</div>
-          </div>
-          <div>
-            <StatLabel>5th–95th</StatLabel>
-            <div style={FIGURE}>
-              {q.p5} … {q.p95}
+        {draft.profileServerId == null ? (
+          <>
+            <StatLabel>no profile</StatLabel>
+            <p style={{ margin: "5px 0 0", fontSize: 12, lineHeight: 1.5 }}>
+              A run still compiles: the asset holds its opening price for the
+              whole simulation. Anything held in it is therefore flat in real
+              terms, which is almost never what you mean for long.
+            </p>
+          </>
+        ) : (
+          <>
+            <StatLabel>inherited from {profile?.id ?? "—"}</StatLabel>
+            <div style={{ display: "flex", gap: 18, marginTop: 4 }}>
+              <div>
+                <StatLabel>mean</StatLabel>
+                <div style={FIGURE}>{pct(profile?.mean ?? null)}</div>
+              </div>
+              <div>
+                <StatLabel>vol</StatLabel>
+                <div style={FIGURE}>{profile?.sd === 0 ? "—" : pct(profile?.sd ?? null)}</div>
+              </div>
+              <div>
+                <StatLabel>5th–95th</StatLabel>
+                <div style={FIGURE}>
+                  {q.p5} … {q.p95}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </Blueprint>
 
       <Hr flush />

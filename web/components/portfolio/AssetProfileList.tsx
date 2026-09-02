@@ -11,6 +11,9 @@ const MONO = { fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 } as c
 const MUTED = "color-mix(in srgb, var(--color-text) 62%, transparent)";
 const ASSET_RULE = "1px solid color-mix(in srgb, var(--color-text) 7%, transparent)";
 
+/** Stands in for the unmapped bucket wherever a profile's server id is the key. */
+const UNMAPPED = -1;
+
 /**
  * The outline: return profiles as group rows, the assets they drive nested
  * under them. Dragging an asset onto another group remaps it — the one edit
@@ -26,15 +29,16 @@ export function AssetProfileList({
   groups: ProfileGroup[];
   selection: AssetsSelection | undefined;
   onSelect: (selection: AssetsSelection) => void;
-  /** Omitted while a remap is already in flight. */
-  onRemap?: (asset: AssetRow, profileServerId: number) => void;
+  /** Null unmaps: the bucket at the top is a drop target like any group.
+   *  Omitted while a remap is already in flight. */
+  onRemap?: (asset: AssetRow, profileServerId: number | null) => void;
 }) {
   const [dropTarget, setDropTarget] = useState<number>();
 
   const isSelected = (row: { group: ProfileGroup; asset?: AssetRow }) =>
     row.asset
       ? selection?.kind === "asset" && selection.id === row.asset.serverId
-      : selection?.kind === "profile" && selection.id === row.group.profile.id;
+      : selection?.kind === "profile" && selection.id === row.group.profile?.id;
 
   return (
     <div
@@ -53,25 +57,27 @@ export function AssetProfileList({
           />
         ) : (
           <GroupLine
-            key={`p${row.group.profile.id}`}
+            key={`p${row.group.profile?.id ?? UNMAPPED}`}
             group={row.group}
             selected={isSelected(row)}
-            dropping={dropTarget === row.group.profile.serverId}
-            onSelect={() => onSelect({ kind: "profile", id: row.group.profile.id })}
+            dropping={dropTarget === (row.group.profile?.serverId ?? UNMAPPED)}
+            onSelect={
+              row.group.profile &&
+              (() => onSelect({ kind: "profile", id: row.group.profile!.id }))
+            }
             onDropAsset={
               onRemap &&
               ((assetId) => {
                 setDropTarget(undefined);
+                const target = row.group.profile?.serverId ?? null;
                 const asset = groups
                   .flatMap((g) => g.assets)
                   .find((a) => a.serverId === assetId);
-                if (asset && asset.profileServerId !== row.group.profile.serverId) {
-                  onRemap(asset, row.group.profile.serverId);
-                }
+                if (asset && asset.profileServerId !== target) onRemap(asset, target);
               })
             }
             onDropTarget={(over) =>
-              setDropTarget(over ? row.group.profile.serverId : undefined)
+              setDropTarget(over ? (row.group.profile?.serverId ?? UNMAPPED) : undefined)
             }
           />
         ),
@@ -91,14 +97,15 @@ function GroupLine({
   group: ProfileGroup;
   selected: boolean;
   dropping: boolean;
-  onSelect: () => void;
+  /** Absent on the unmapped bucket: it names no profile, so it inspects none. */
+  onSelect?: (() => void) | null;
   onDropAsset?: (assetId: number) => void;
   onDropTarget: (over: boolean) => void;
 }) {
   const { profile, assets } = group;
   return (
     <div
-      {...selectable(selected, onSelect)}
+      {...(onSelect ? selectable(selected, onSelect) : {})}
       style={{
         ...rowStyle(selected),
         ...(dropping
@@ -139,18 +146,29 @@ function GroupLine({
           borderTop: "1px solid var(--color-divider)",
         }}
       >
-        <span style={MONO}>{profile.id}</span>
-        <Tag tone="accent">{profile.kind}</Tag>
+        <span style={MONO}>{profile ? profile.id : "unmapped"}</span>
+        <Tag tone={profile ? "accent" : "outline"}>{profile ? profile.kind : "No profile"}</Tag>
         <span style={{ fontSize: 12, color: MUTED }}>
           {assets.length === 0
             ? "no assets"
             : `${assets.length} asset${assets.length === 1 ? "" : "s"}`}
+          {!profile && " — drag onto a profile to map"}
         </span>
         <span style={{ marginLeft: "auto", display: "flex", gap: 16, fontSize: 13 }}>
-          <span>{pct(profile.mean)}</span>
-          <span style={{ color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}>
-            {profile.sd === 0 ? "—" : `± ${pct(profile.sd)}`}
-          </span>
+          {profile ? (
+            <>
+              <span>{pct(profile.mean)}</span>
+              <span
+                style={{ color: "color-mix(in srgb, var(--color-text) 55%, transparent)" }}
+              >
+                {profile.sd === 0 ? "—" : `± ${pct(profile.sd)}`}
+              </span>
+            </>
+          ) : (
+            // Not a dash: the engine really does hold these flat, and saying so
+            // here is the only place the consequence is visible.
+            <span style={{ color: MUTED }}>held flat at 0%</span>
+          )}
         </span>
       </div>
     </div>

@@ -4,6 +4,11 @@ export type UpdateAsset = {
   name?: string | null;
   description?: string | null;
   initial_price?: number | null;
+  /**
+   * Doubly optional: absent leaves the mapping alone, an explicit null
+   * unmaps the asset. Every other field here reads absent as "unchanged",
+   * which would otherwise make unmapping unsayable.
+   */
   return_profile_id?: number | null;
   tracking_error?: number | null;
   sort_order?: number | null;

@@ -174,7 +174,10 @@ CREATE TABLE assets (
     name              TEXT    NOT NULL,
     description       TEXT,
     initial_price     REAL    NOT NULL DEFAULT 1.0 CHECK (initial_price > 0),
-    return_profile_id INTEGER NOT NULL REFERENCES return_profiles(id),
+    -- Null while the asset is unmapped: it has a price, but nothing yet making
+    -- it move. A run compiles one at flat zero growth rather than refusing,
+    -- which is what lets a ticker be created in passing and mapped later.
+    return_profile_id INTEGER REFERENCES return_profiles(id),
     tracking_error    REAL    CHECK (tracking_error IS NULL OR tracking_error >= 0),
     sort_order        INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT    NOT NULL DEFAULT (datetime('now')),

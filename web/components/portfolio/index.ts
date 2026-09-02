@@ -1,6 +1,7 @@
 export { AddPositionForm } from "./AddPositionForm";
 export { NewAccountDialog } from "./NewAccountDialog";
 export { NewAssetDialog } from "./NewAssetDialog";
+export { NewAssetInline } from "./NewAssetInline";
 export { AccountInspector } from "./AccountInspector";
 export type { AccountDraft } from "./accountDraft";
 export { AccountTerms } from "./AccountTerms";

@@ -15,6 +15,7 @@ import {
 import type { Asset, CreatePosition, Profile } from "@/lib/api/types";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
 import type { TaxStatus } from "@/lib/types";
+import { NewAssetInline } from "./NewAssetInline";
 
 type Mode = "value" | "units";
 
@@ -36,6 +37,9 @@ const FIGURE = {
 
 const DAY_MS = 86_400_000;
 
+/** The dropdown row that makes an asset rather than naming one. */
+const NEW_ASSET = -1;
+
 /** A holding is long-term once it has been held a year, which is what the rate turns on. */
 function heldLongTerm(iso: string): boolean {
   const bought = Date.parse(iso);
@@ -55,26 +59,32 @@ function heldLongTerm(iso: string): boolean {
  * the account stays on screen and repeat entry is one Enter away.
  */
 export function AddPositionForm({
+  scenarioId,
   assets,
   profiles,
   taxStatus,
   busy,
   error,
+  onAssetCreated,
   onCancel,
   onSubmit,
 }: {
+  scenarioId: number;
   assets: Asset[];
   profiles: Profile[];
   /** Basis is only offered where a sale could realise a gain. */
   taxStatus: TaxStatus | undefined;
   busy?: boolean;
   error?: string;
+  /** A ticker made here, so the screen can reload and keep it selectable. */
+  onAssetCreated: (asset: Asset) => void;
   onCancel: () => void;
   /** `again` keeps the form open for the next lot. */
   onSubmit: (body: CreatePosition, again: boolean) => void;
 }) {
   const [mode, setMode] = useState<Mode>("value");
   const [assetId, setAssetId] = useState(assets[0]?.id);
+  const [makingAsset, setMakingAsset] = useState(assets.length === 0);
   const [amount, setAmount] = useState(0);
   const [tracking, setTracking] = useState(false);
   const [basis, setBasis] = useState(0);
@@ -93,7 +103,7 @@ export function AddPositionForm({
   const tracked = offersBasis && tracking;
 
   const submit = (again: boolean) => {
-    if (assetId == null || units <= 0 || busy) return;
+    if (assetId == null || units <= 0 || busy || makingAsset) return;
     onSubmit(
       {
         asset_id: assetId,
@@ -188,9 +198,12 @@ export function AddPositionForm({
           <Field label="of">
             <Dropdown
               className="dd-field dd-figure"
-              options={assets.map((a) => ({ value: a.id, label: a.name }))}
+              options={[
+                ...assets.map((a) => ({ value: a.id, label: a.name })),
+                { value: NEW_ASSET, label: "New asset…", action: true },
+              ]}
               value={assetId ?? null}
-              onChange={setAssetId}
+              onChange={(id) => (id === NEW_ASSET ? setMakingAsset(true) : setAssetId(id))}
               placeholder="asset"
               ariaLabel="Asset held"
             />
@@ -210,7 +223,7 @@ export function AddPositionForm({
           <span
             style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
           >
-            {asset ? (asset.description ?? asset.name) : "No assets yet"}
+            {asset ? (asset.description ?? asset.name) : "No asset chosen"}
             {profile ? ` · ${profile.name}` : ""}
           </span>
           {asset && (
@@ -221,6 +234,22 @@ export function AddPositionForm({
             </span>
           )}
         </div>
+
+        {makingAsset && (
+          <div style={{ marginTop: 10 }}>
+            <NewAssetInline
+              scenarioId={scenarioId}
+              onCreated={(asset) => {
+                // Selected straight away; the reload the screen kicks off is
+                // what puts it in the list behind this.
+                setAssetId(asset.id);
+                setMakingAsset(false);
+                onAssetCreated(asset);
+              }}
+              onCancel={() => setMakingAsset(false)}
+            />
+          </div>
+        )}
 
         {offersBasis && (
           <div
@@ -304,7 +333,7 @@ export function AddPositionForm({
         >
           <Button
             variant="ghost"
-            disabled={busy || units <= 0}
+            disabled={busy || units <= 0 || makingAsset}
             onClick={() => submit(true)}
           >
             Save &amp; add another
@@ -315,7 +344,7 @@ export function AddPositionForm({
           <Button
             variant="primary"
             shortcut="⌘⏎"
-            disabled={busy || units <= 0}
+            disabled={busy || units <= 0 || makingAsset}
             onClick={() => submit(false)}
           >
             Add position

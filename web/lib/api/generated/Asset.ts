@@ -5,7 +5,11 @@ export type Asset = {
   name: string;
   description: string | null;
   initial_price: number;
-  return_profile_id: number;
+  /**
+   * Null while the asset is unmapped — it has a price, but nothing yet
+   * making it move. A run compiles such an asset at flat zero growth.
+   */
+  return_profile_id: number | null;
   tracking_error: number | null;
   sort_order: number;
 };

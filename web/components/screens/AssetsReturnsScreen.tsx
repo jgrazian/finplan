@@ -85,7 +85,7 @@ export function AssetsReturnsScreen({
     );
   }
 
-  const remap = (asset: AssetRow, profileServerId: number) =>
+  const remap = (asset: AssetRow, profileServerId: number | null) =>
     remapping.run(
       () => api.assets.update(scenarioId, asset.serverId, { return_profile_id: profileServerId }),
       onChanged,
@@ -230,13 +230,15 @@ function resolve(
   if (selection.kind === "asset") {
     return findAsset(groups, selection.id) ? selection : undefined;
   }
-  return groups.some((g) => g.profile.id === selection.id) ? selection : undefined;
+  return groups.some((g) => g.profile?.id === selection.id) ? selection : undefined;
 }
 
 /** The first profile that actually drives something, else the first profile. */
 function fallback(
   groups: ReturnType<typeof groupAssetsByProfile>,
 ): AssetsSelection | undefined {
-  const group = groups.find((g) => g.assets.length > 0) ?? groups[0];
-  return group ? { kind: "profile", id: group.profile.id } : undefined;
+  // The unmapped bucket names no profile, so it can never be the fallback.
+  const mapped = groups.filter((g) => g.profile != null);
+  const group = mapped.find((g) => g.assets.length > 0) ?? mapped[0];
+  return group?.profile ? { kind: "profile", id: group.profile.id } : undefined;
 }

@@ -4,7 +4,10 @@ export type CreateAsset = {
   name: string;
   description?: string | null;
   initial_price: number;
-  return_profile_id: number;
+  /**
+   * Omitted or null creates the asset unmapped.
+   */
+  return_profile_id?: number | null;
   tracking_error?: number | null;
   sort_order: number;
 };

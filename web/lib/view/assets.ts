@@ -28,16 +28,21 @@ export interface AssetRow {
   /** Its longer description, blank where none was given. */
   name: string;
   price: number;
-  /** Name of the profile driving it, and the id a PATCH needs. */
-  profileId: ReturnProfileId;
-  profileServerId: number;
+  /**
+   * Name of the profile driving it, and the id a PATCH needs. Both null while
+   * the asset is unmapped — it has a price and nothing moving it, which the
+   * engine reads as flat zero growth.
+   */
+  profileId: ReturnProfileId | null;
+  profileServerId: number | null;
   units: number;
   costBasis: number;
   holdings: AssetHolding[];
 }
 
 export interface ProfileGroup {
-  profile: ReturnProfile;
+  /** Null for the unmapped bucket, which is a hole in the outline, not a row. */
+  profile: ReturnProfile | null;
   assets: AssetRow[];
 }
 
@@ -53,29 +58,40 @@ export function groupAssetsByProfile(
 ): ProfileGroup[] {
   const holdings = holdingsByAsset(accounts);
   const byProfile = new Map<number, AssetRow[]>();
+  const unmapped: AssetRow[] = [];
 
   for (const asset of assets) {
     const held = holdings.get(asset.id) ?? [];
-    const rows = byProfile.get(asset.return_profile_id);
+    const mapping = asset.return_profile_id;
     const row: AssetRow = {
       serverId: asset.id,
       ticker: asset.name,
       name: asset.description ?? "",
       price: asset.initial_price,
-      profileId: profiles.find((p) => p.serverId === asset.return_profile_id)?.id ?? "—",
-      profileServerId: asset.return_profile_id,
+      profileId:
+        mapping == null ? null : (profiles.find((p) => p.serverId === mapping)?.id ?? null),
+      profileServerId: mapping,
       units: held.reduce((sum, h) => sum + h.units, 0),
       costBasis: held.reduce((sum, h) => sum + h.costBasis, 0),
       holdings: held,
     };
+    if (mapping == null) {
+      unmapped.push(row);
+      continue;
+    }
+    const rows = byProfile.get(mapping);
     if (rows) rows.push(row);
-    else byProfile.set(asset.return_profile_id, [row]);
+    else byProfile.set(mapping, [row]);
   }
 
-  return profiles.map((profile) => ({
+  const mapped = profiles.map((profile) => ({
     profile,
     assets: byProfile.get(profile.serverId) ?? [],
   }));
+
+  // The bucket leads the outline when it has anything in it: an unmapped asset
+  // is a to-do, not a category, and it holds its price flat until it is cleared.
+  return unmapped.length > 0 ? [{ profile: null, assets: unmapped }, ...mapped] : mapped;
 }
 
 /** Flattens the outline for rendering: a group row, then each of its assets. */

@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
@@ -27,7 +27,9 @@ pub struct Asset {
     pub name: String,
     pub description: Option<String>,
     pub initial_price: f64,
-    pub return_profile_id: i64,
+    /// Null while the asset is unmapped — it has a price, but nothing yet
+    /// making it move. A run compiles such an asset at flat zero growth.
+    pub return_profile_id: Option<i64>,
     pub tracking_error: Option<f64>,
     pub sort_order: i64,
 }
@@ -43,7 +45,9 @@ pub struct CreateAsset {
     pub description: Option<String>,
     #[serde(default = "one")]
     pub initial_price: f64,
-    pub return_profile_id: i64,
+    /// Omitted or null creates the asset unmapped.
+    #[serde(default)]
+    pub return_profile_id: Option<i64>,
     #[serde(default)]
     pub tracking_error: Option<f64>,
     #[serde(default)]
@@ -52,6 +56,17 @@ pub struct CreateAsset {
 
 fn one() -> f64 {
     1.0
+}
+
+/// Distinguish "field absent" from "field present and null". Serde collapses
+/// the two into `None` for a plain `Option`; wrapping the deserialize in a
+/// second layer keeps them apart.
+fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(de).map(Some)
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -63,8 +78,12 @@ pub struct UpdateAsset {
     pub description: Option<String>,
     #[serde(default)]
     pub initial_price: Option<f64>,
-    #[serde(default)]
-    pub return_profile_id: Option<i64>,
+    /// Doubly optional: absent leaves the mapping alone, an explicit null
+    /// unmaps the asset. Every other field here reads absent as "unchanged",
+    /// which would otherwise make unmapping unsayable.
+    #[serde(default, deserialize_with = "double_option")]
+    #[ts(optional, type = "number | null")]
+    pub return_profile_id: Option<Option<i64>>,
     #[serde(default)]
     pub tracking_error: Option<f64>,
     #[serde(default)]
@@ -123,7 +142,9 @@ async fn create(
     Json(body): Json<CreateAsset>,
 ) -> ApiResult<(StatusCode, Json<Asset>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    owned_profile(&state, body.return_profile_id, &user.id).await?;
+    if let Some(profile_id) = body.return_profile_id {
+        owned_profile(&state, profile_id, &user.id).await?;
+    }
 
     if body.initial_price <= 0.0 {
         return Err(ApiError::bad_request("initial_price must be positive"));
@@ -162,7 +183,10 @@ async fn update(
     Json(body): Json<UpdateAsset>,
 ) -> ApiResult<Json<Asset>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    if let Some(profile_id) = body.return_profile_id {
+    // `Some(None)` is a deliberate unmap, `None` is silence about the mapping.
+    let remap = body.return_profile_id.is_some();
+    let profile_id = body.return_profile_id.flatten();
+    if let Some(profile_id) = profile_id {
         owned_profile(&state, profile_id, &user.id).await?;
     }
 
@@ -171,7 +195,7 @@ async fn update(
             name              = COALESCE(?3, name),
             description       = COALESCE(?4, description),
             initial_price     = COALESCE(?5, initial_price),
-            return_profile_id = COALESCE(?6, return_profile_id),
+            return_profile_id = CASE WHEN ?9 THEN ?6 ELSE return_profile_id END,
             tracking_error    = COALESCE(?7, tracking_error),
             sort_order        = COALESCE(?8, sort_order),
             updated_at        = datetime('now')
@@ -182,9 +206,10 @@ async fn update(
     .bind(body.name.as_deref().map(str::trim))
     .bind(&body.description)
     .bind(body.initial_price)
-    .bind(body.return_profile_id)
+    .bind(profile_id)
     .bind(body.tracking_error)
     .bind(body.sort_order)
+    .bind(remap)
     .execute(&state.db)
     .await
     .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?
