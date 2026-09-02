@@ -72,7 +72,7 @@ export function NewScenarioDialog({
       </Field>
       <DialogRow>
         <Field label="Start date">
-          <DateInput value={start} onChange={(e) => setStart(e.target.value)} required />
+          <DateInput value={start} onValueChange={setStart} required />
         </Field>
         <Field label="Horizon">
           <NumberInput
@@ -87,7 +87,7 @@ export function NewScenarioDialog({
         </Field>
       </DialogRow>
       <Field label="Birth date — required for age-based triggers">
-        <DateInput value={birth} onChange={(e) => setBirth(e.target.value)} />
+        <DateInput value={birth} onValueChange={setBirth} />
       </Field>
       <DialogRow>
         <Field label="Inflation profile">

@@ -128,7 +128,7 @@ export function NewEventDialog({
         <Field label="Date">
           <DateInput
             value={trigger.date}
-            onChange={(e) => setTrigger({ ...trigger, date: e.target.value })}
+            onValueChange={(date) => setTrigger({ ...trigger, date })}
             required
           />
         </Field>
@@ -245,7 +245,7 @@ function BoundField({
         {value.kind === "date" && (
           <DateInput
             value={value.date}
-            onChange={(e) => onChange({ ...value, date: e.target.value })}
+            onValueChange={(date) => onChange({ ...value, date })}
           />
         )}
         {value.kind === "age" && (

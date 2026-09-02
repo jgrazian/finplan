@@ -46,35 +46,6 @@ export function Select({
   );
 }
 
-/**
- * Native date field. Clicking anywhere in the well opens the platform picker,
- * not just the calendar glyph at its right edge.
- */
-export function DateInput({
-  className,
-  onClick,
-  ...rest
-}: InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <Input
-      {...rest}
-      type="date"
-      className={className}
-      onClick={(e) => {
-        onClick?.(e);
-        const el = e.currentTarget as HTMLInputElement & { showPicker?: () => void };
-        if (el.readOnly || el.disabled) return;
-        try {
-          el.showPicker?.();
-        } catch {
-          // No user activation, or a browser without showPicker: the glyph
-          // still opens it.
-        }
-      }}
-    />
-  );
-}
-
 /** Compact input used inside the inspector drawer, where rows are 32px. */
 export function CompactInput({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
   return <Input className={className} style={{ minHeight: 32 }} {...rest} />;

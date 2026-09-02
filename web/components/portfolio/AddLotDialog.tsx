@@ -92,7 +92,7 @@ export function AddLotDialog({
           <DateInput
             value={date}
             placeholder="plan start"
-            onChange={(e) => setDate(e.target.value)}
+            onValueChange={setDate}
           />
         </Field>
       </DialogRow>

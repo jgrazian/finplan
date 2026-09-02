@@ -116,7 +116,7 @@ export function ScenarioStrip({
             style={{ minHeight: 30 }}
             value={shown.start}
             readOnly={readOnly}
-            onChange={(e) => e.target.value && void save({ start: e.target.value })}
+            onValueChange={(iso) => iso && void save({ start: iso })}
           />
           {refused.start && <UnsavedNote>{refused.start}</UnsavedNote>}
         </Field>
@@ -141,7 +141,7 @@ export function ScenarioStrip({
             style={{ minHeight: 30 }}
             value={shown.birthDate}
             readOnly={readOnly}
-            onChange={(e) => e.target.value && void save({ birthDate: e.target.value })}
+            onValueChange={(iso) => iso && void save({ birthDate: iso })}
           />
           {refused.birthDate && <UnsavedNote>{refused.birthDate}</UnsavedNote>}
         </Field>

@@ -86,7 +86,7 @@ export function ProfilePanel({
           <DateInput
             value={draft.birthDate}
             readOnly={readOnly}
-            onChange={(e) => set({ birthDate: e.target.value })}
+            onValueChange={(birthDate) => set({ birthDate })}
           />
         </Field>
       </div>
