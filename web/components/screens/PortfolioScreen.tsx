@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
 import { SubTabBar } from "@/components/layout";
 import type { SegmentOption } from "@/components/ui";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
+import { useNav } from "@/lib/nav";
 import type { Account, InflationProfile, ReturnProfile } from "@/lib/types";
 import { AccountsScreen } from "./AccountsScreen";
 import { AssetsReturnsScreen } from "./AssetsReturnsScreen";
@@ -44,7 +44,11 @@ export function PortfolioScreen({
   /** Writes are being refused: add and delete cannot be offered. */
   offline?: boolean;
 }) {
-  const [section, setSection] = useState<PortfolioSection>("accounts");
+  // The sub-tab is in the query, so a refresh comes back to the same half of
+  // the tab. Anything else in `sec` reads as the default rather than as an
+  // error: a hand-edited URL should land somewhere, not nowhere.
+  const nav = useNav();
+  const section: PortfolioSection = nav.section === "returns" ? "returns" : "accounts";
 
   return (
     <>
@@ -52,7 +56,7 @@ export function PortfolioScreen({
         ariaLabel="Portfolio section"
         options={SECTIONS}
         value={section}
-        onChange={setSection}
+        onChange={nav.setSection}
         caption={CAPTIONS[section]}
       />
       {section === "accounts" ? (

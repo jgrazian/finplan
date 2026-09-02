@@ -30,6 +30,7 @@ finplan/
     ├── lib/api/generated/  # ts-rs output — never edit, run gen-bindings.sh
     ├── lib/api/            # typed client over those bindings
     ├── lib/view/           # API shapes -> screen view models
+    ├── lib/nav/            # the query string as app state (scenario/tab/row)
     └── components/         # presentational components
 ```
 

@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import { Button, rowStyle } from "@/components/ui";
 import type { Scenario, UserResponse } from "@/lib/api/types";
+import { useNav } from "@/lib/nav";
 import { DataPanel } from "./DataPanel";
 import { PreferencesPanel } from "./PreferencesPanel";
 import { ProfilePanel } from "./ProfilePanel";
@@ -43,8 +43,10 @@ export function AccountScreen({
   /** Writes are being refused, so the forms close rather than lie. */
   offline?: boolean;
 }) {
-  const [section, setSection] = useState<SectionId>("profile");
-  const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+  // The section is the query's sub-tab, the same slot the Portfolio tab's
+  // segmented control uses, so a link to the password field is just a URL.
+  const nav = useNav();
+  const active = SECTIONS.find((s) => s.id === nav.section) ?? SECTIONS[0];
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "250px 1fr", alignItems: "stretch" }}>
@@ -58,9 +60,9 @@ export function AccountScreen({
               key={entry.id}
               type="button"
               className="rowsel acct-section"
-              aria-current={entry.id === section ? "page" : undefined}
-              style={rowStyle(entry.id === section)}
-              onClick={() => setSection(entry.id)}
+              aria-current={entry.id === active.id ? "page" : undefined}
+              style={rowStyle(entry.id === active.id)}
+              onClick={() => nav.setSection(entry.id)}
             >
               <span style={{ fontFamily: "var(--font-heading)", fontWeight: 600, fontSize: 14 }}>
                 {entry.label}
@@ -86,11 +88,11 @@ export function AccountScreen({
       <div style={{ padding: "20px 24px 24px" }}>
         <h3 style={{ margin: "0 0 16px" }}>{active.label}</h3>
 
-        {section === "profile" && (
+        {active.id === "profile" && (
           <ProfilePanel user={user} onSaved={onUserChange} readOnly={offline} />
         )}
-        {section === "security" && <SecurityPanel readOnly={offline} />}
-        {section === "data" && (
+        {active.id === "security" && <SecurityPanel readOnly={offline} />}
+        {active.id === "data" && (
           <DataPanel
             user={user}
             scenarios={scenarios}
@@ -98,7 +100,7 @@ export function AccountScreen({
             readOnly={offline}
           />
         )}
-        {section === "preferences" && (
+        {active.id === "preferences" && (
           <PreferencesPanel user={user} onSaved={onUserChange} readOnly={offline} />
         )}
       </div>

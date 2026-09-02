@@ -51,6 +51,29 @@ export type AssetsSelection =
   | { kind: "profile"; id: ReturnProfileId }
   | { kind: "asset"; id: number };
 
+/**
+ * `profile:US equities` / `asset:12` — both levels of the outline as one URL
+ * token, since only one of them is ever selected.
+ *
+ * A profile is named, an asset is not: a ticker can be renamed to one that
+ * another asset already had, and the row id cannot.
+ */
+export function encodeAssetsSelection(selection: AssetsSelection): string {
+  return `${selection.kind}:${selection.id}`;
+}
+
+/** The reverse; anything malformed reads as no selection, not as an error. */
+export function decodeAssetsSelection(token: string | undefined): AssetsSelection | undefined {
+  const cut = token?.indexOf(":") ?? -1;
+  if (token == null || cut < 0) return undefined;
+  const id = token.slice(cut + 1);
+  // A profile id is its name, so only the empty one is impossible.
+  if (token.slice(0, cut) === "profile") return id === "" ? undefined : { kind: "profile", id };
+  if (token.slice(0, cut) !== "asset") return undefined;
+  const serverId = Number(id);
+  return Number.isSafeInteger(serverId) ? { kind: "asset", id: serverId } : undefined;
+}
+
 export function groupAssetsByProfile(
   assets: Asset[],
   accounts: ApiAccount[],

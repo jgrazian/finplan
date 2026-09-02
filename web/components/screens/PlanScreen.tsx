@@ -12,7 +12,8 @@ import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { UpdateScenario } from "@/lib/api/types";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
-import type { EventId, PlanEvent, ScenarioParams } from "@/lib/types";
+import { useNav } from "@/lib/nav";
+import type { PlanEvent, ScenarioParams } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 
 /**
@@ -41,9 +42,12 @@ export function PlanScreen({
   /** Writes are being refused, so add and delete cannot be offered. */
   offline?: boolean;
 }) {
-  const [picked, setPicked] = useState<EventId>();
   const [adding, setAdding] = useState(false);
-  const selected = events.find((e) => e.id === picked) ?? events[0];
+  // The selected event is in the query, by name, so a link opens the drawer on
+  // it. Derived rather than stored: an event deleted here or renamed elsewhere
+  // falls back to the first row instead of leaving the drawer empty.
+  const nav = useNav();
+  const selected = events.find((e) => e.id === nav.selection) ?? events[0];
 
   /**
    * The strip's fields save as they are edited. `null` on the wire means
@@ -148,7 +152,7 @@ export function PlanScreen({
               <EventsTable
                 events={events}
                 selectedId={selected?.id ?? ""}
-                onSelect={setPicked}
+                onSelect={nav.setSelection}
               />
             </div>
 
@@ -156,7 +160,7 @@ export function PlanScreen({
               events={events}
               axis={axis}
               selectedId={selected?.id ?? ""}
-              onSelect={setPicked}
+              onSelect={nav.setSelection}
             />
           </div>
 

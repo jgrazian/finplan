@@ -20,12 +20,14 @@ import { useAsync } from "@/lib/hooks/useAsync";
 import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
+import { NavProvider, type TabId, useNav } from "@/lib/nav";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import type { InflationProfile, Scenario } from "@/lib/types";
 
-type TabId = "portfolio" | "plan" | "results" | "analysis";
+/** The four tabs that describe the scenario; account settings is not one. */
+type ScreenTab = Exclude<TabId, "account">;
 
-const TABS: ReadonlyArray<TabDef<TabId>> = [
+const TABS: ReadonlyArray<TabDef<ScreenTab>> = [
   { id: "portfolio", label: "Portfolio" },
   { id: "plan", label: "Plan" },
   { id: "results", label: "Results" },
@@ -40,7 +42,13 @@ const TABS: ReadonlyArray<TabDef<TabId>> = [
  */
 const AUTO_RUN_SETTLE_MS = 1_500;
 
-export default function Page() {
+/**
+ * The application, from the session outwards.
+ *
+ * A client component, so the route above it can stay a server one and
+ * enumerate the tab paths it serves.
+ */
+export function App() {
   const session = useSession();
 
   if (session.user === undefined) {
@@ -54,7 +62,11 @@ export default function Page() {
     );
   }
 
-  return <Workbench session={session} user={session.user} />;
+  return (
+    <NavProvider>
+      <Workbench session={session} user={session.user} />
+    </NavProvider>
+  );
 }
 
 function initials(name: string): string {
@@ -63,11 +75,11 @@ function initials(name: string): string {
 }
 
 function Workbench({ session, user }: { session: Session; user: UserResponse }) {
-  const [tab, setTab] = useState<TabId>("results");
-  // Account settings is a destination rather than a fifth tab: it is about the
-  // account, not the scenario the tabs all describe.
-  const [onAccount, setOnAccount] = useState(false);
-  const [picked, setPicked] = useState<number>();
+  // Which scenario, which tab and which row all come out of the query string,
+  // so a refresh returns to the screen it left. Account settings is a
+  // destination rather than a fifth tab: it is about the account, not the
+  // scenario the tabs all describe, so it is a tab id the header does not list.
+  const nav = useNav();
   const iterations = user.default_iterations;
 
   const scenarios = useAsync(() => api.scenarios.list(), []);
@@ -81,20 +93,28 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   const list = useMemo(() => scenarios.data ?? [], [scenarios.data]);
 
   // The list is sorted most-recently-updated first, so that is the default
-  // until the switcher picks something else. Derived, so a scenario that is
-  // deleted elsewhere falls back rather than leaving a dangling id.
+  // until the query names something else. Derived, so a scenario deleted
+  // elsewhere — or a stale id in a bookmarked URL — falls back rather than
+  // leaving the screen pointed at nothing.
   const scenarioId =
-    picked != null && list.some((s) => s.id === picked) ? picked : list[0]?.id;
+    nav.scenario != null && list.some((s) => s.id === nav.scenario)
+      ? nav.scenario
+      : list[0]?.id;
+
+  // Write that fallback back, so the URL names the scenario actually open and
+  // the next refresh is not a second guess. Quietly: nothing was navigated to.
+  useEffect(() => {
+    if (scenarioId != null) nav.adoptScenario(scenarioId);
+  }, [nav, scenarioId]);
 
   const workspace = useWorkspace(scenarioId, iterations);
   const run = useRun(workspace.scenario, workspace.axis);
   const status = useServerStatus();
 
   const start = useCallback(() => {
-    setOnAccount(false);
-    setTab("results");
+    nav.setTab("results");
     void run.start(iterations);
-  }, [run, iterations]);
+  }, [nav, run, iterations]);
 
   const refresh = useCallback(() => {
     scenarios.reload();
@@ -157,23 +177,20 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
       <AppShell>
         <AppHeader
           tabs={TABS}
-          activeTab={tab}
-          onTabChange={(id) => {
-            setOnAccount(false);
-            setTab(id);
-          }}
+          activeTab={nav.tab}
+          onTabChange={nav.setTab}
           scenarios={headerScenarios}
           activeScenarioId={scenarioId == null ? "" : String(scenarioId)}
-          onScenarioChange={(id) => setPicked(Number(id))}
+          onScenarioChange={(id) => nav.setScenario(Number(id))}
           onNewScenario={() => setCreating(true)}
           userInitials={initials(user.display_name ?? user.email)}
           onAccount={() => {
             // The Data list shows each scenario's last run, which a run
             // started since the list loaded would have moved on from.
             scenarios.reload();
-            setOnAccount(true);
+            nav.setTab("account");
           }}
-          accountOpen={onAccount}
+          accountOpen={nav.tab === "account"}
           onRun={start}
           offline={status.offline}
         />
@@ -186,7 +203,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           onSignIn={() => void session.signOut()}
         />
 
-        {onAccount ? (
+        {nav.tab === "account" ? (
           <AccountScreen
             user={user}
             scenarios={list}
@@ -205,7 +222,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           <EmptyState title="Loading…" detail="Fetching the scenario." />
         ) : (
           <>
-            {tab === "results" && (
+            {nav.tab === "results" && (
               <ResultsScreen
                 results={run.results}
                 run={run.run}
@@ -216,7 +233,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onCancel={run.cancel}
               />
             )}
-            {tab === "portfolio" && (
+            {nav.tab === "portfolio" && (
               <PortfolioScreen
                 offline={status.offline}
                 scenarioId={workspace.scenario.id}
@@ -229,7 +246,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onActivateInflation={activateInflation}
               />
             )}
-            {tab === "plan" && (
+            {nav.tab === "plan" && (
               <PlanScreen
                 offline={status.offline}
                 scenarioId={workspace.scenario.id}
@@ -242,7 +259,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onRun={start}
               />
             )}
-            {tab === "analysis" && <PlaceholderScreen label="Analysis" />}
+            {nav.tab === "analysis" && <PlaceholderScreen label="Analysis" />}
           </>
         )}
       </AppShell>
@@ -258,7 +275,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           taxConfigs={taxConfigs}
           onClose={() => setCreating(false)}
           onCreated={(created) => {
-            setPicked(created.id);
+            nav.setScenario(created.id);
             scenarios.reload();
           }}
         />

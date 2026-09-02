@@ -22,6 +22,7 @@ import type {
 import { fmtCurrency } from "@/lib/format";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { useNav } from "@/lib/nav";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import { accountColors, accountShares, portfolioSummary } from "@/lib/view/accounts";
 import type { Account, AccountId } from "@/lib/types";
@@ -95,7 +96,6 @@ export function AccountsScreen({
   /** Writes are being refused, so add, edit and delete cannot be offered. */
   offline?: boolean;
 }) {
-  const [picked, setPicked] = useState<AccountId>();
   const [creating, setCreating] = useState(false);
   const [addingLot, setAddingLot] = useState(false);
   /** Bumped after each save, to hand the form a clean slate for the next lot. */
@@ -108,6 +108,9 @@ export function AccountsScreen({
    */
   const [pending, setPending] = useState<Asset[]>([]);
   const { lastContact } = useServerStatus();
+  // The selected account is in the query, by name, so a refresh or a shared
+  // link opens the drawer on the same row.
+  const nav = useNav();
   // Two trackers: an edit reports in the drawer's footer, a lot in its own form.
   const editing = useSubmit();
   const lot = useSubmit();
@@ -129,11 +132,11 @@ export function AccountsScreen({
 
   // Derived rather than reset in an effect: switching scenarios replaces every
   // id, and the first row is the right fallback whenever the pick is stale.
-  const selected = accounts.find((a) => a.accountId === picked) ?? accounts[0];
+  const selected = accounts.find((a) => a.accountId === nav.selection) ?? accounts[0];
   const selectedRaw = raw.accounts.find((a) => a.id === selected?.serverId);
 
   const select = (id: AccountId) => {
-    setPicked(id);
+    nav.setSelection(id);
     setAddingLot(false);
   };
 

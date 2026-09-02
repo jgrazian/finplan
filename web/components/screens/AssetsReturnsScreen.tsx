@@ -13,10 +13,13 @@ import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { useNav } from "@/lib/nav";
 import type { InflationProfile, ReturnProfile } from "@/lib/types";
 import {
   type AssetRow,
   type AssetsSelection,
+  decodeAssetsSelection,
+  encodeAssetsSelection,
   findAsset,
   groupAssetsByProfile,
 } from "@/lib/view/assets";
@@ -54,8 +57,10 @@ export function AssetsReturnsScreen({
   /** Writes are being refused: nothing here can be added, remapped or edited. */
   offline?: boolean;
 }) {
-  const [picked, setPicked] = useState<AssetsSelection>();
   const [adding, setAdding] = useState(false);
+  // One query token carries both levels of the outline, since only one of them
+  // is ever selected: `sel=profile:US equities`, or `sel=asset:12`.
+  const nav = useNav();
   // Two trackers, because the two writes report in different places: a remap
   // is driven from the list, an edit from the rail.
   const remapping = useSubmit();
@@ -68,7 +73,8 @@ export function AssetsReturnsScreen({
 
   // Derived rather than reset in an effect: switching scenarios replaces every
   // asset id, and the first profile is the right fallback for a stale pick.
-  const selection = resolve(picked, groups) ?? fallback(groups);
+  const selection =
+    resolve(decodeAssetsSelection(nav.selection), groups) ?? fallback(groups);
   const selectedAsset =
     selection?.kind === "asset" ? findAsset(groups, selection.id) : undefined;
   const selectedProfile =
@@ -152,7 +158,7 @@ export function AssetsReturnsScreen({
             <AssetProfileList
               groups={groups}
               selection={selection}
-              onSelect={setPicked}
+              onSelect={(next) => nav.setSelection(encodeAssetsSelection(next))}
               onRemap={remapping.busy || offline ? undefined : remap}
             />
 
