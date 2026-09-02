@@ -5,7 +5,6 @@ import {
   Blueprint,
   Button,
   CurrencyInput,
-  DateInput,
   Dialog,
   DialogRow,
   Field,
@@ -15,16 +14,17 @@ import {
   Select,
 } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import type { Account, Asset, Event as ApiEvent, Interval } from "@/lib/api/types";
+import type { Account, Asset, Event as ApiEvent } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { TriggerFields } from "./TriggerFields";
 import {
-  type BoundDraft,
-  INTERVALS,
   TRIGGER_FORMS,
   type TriggerDraft,
   type TriggerForm,
   emptyTrigger,
   toTriggerSpec,
+  triggerProblem,
+  withForm,
 } from "./triggerDraft";
 import {
   EFFECT_FORMS,
@@ -63,7 +63,9 @@ export function NewEventDialog({
 
   const [name, setName] = useState("");
   const [firesOnce, setFiresOnce] = useState(false);
-  const [trigger, setTrigger] = useState<TriggerDraft>(emptyTrigger);
+  const [trigger, setTrigger] = useState<TriggerDraft>(() =>
+    emptyTrigger(firstAccount, firstAsset),
+  );
   const [effects, setEffects] = useState<EffectDraft[]>([
     emptyEffect(firstAccount, firstAsset),
   ]);
@@ -74,8 +76,9 @@ export function NewEventDialog({
 
   const create = () => {
     // A missing target would trip a foreign key. The server answers 400 for
-    // that, but naming the offending effect here saves the round trip.
-    const problem = effects.map(effectProblem).find((p) => p != null);
+    // that, but naming the offending field here saves the round trip.
+    const problem =
+      triggerProblem(trigger) ?? effects.map(effectProblem).find((p) => p != null);
     if (problem) return submit.fail(problem);
 
     submit.run(
@@ -115,7 +118,7 @@ export function NewEventDialog({
         <Field label="Trigger">
           <Select
             value={trigger.form}
-            onChange={(e) => setTrigger({ ...trigger, form: e.target.value as TriggerForm })}
+            onChange={(e) => setTrigger(withForm(trigger, e.target.value as TriggerForm))}
           >
             {TRIGGER_FORMS.map((f) => (
               <option key={f}>{f}</option>
@@ -124,54 +127,11 @@ export function NewEventDialog({
         </Field>
       </DialogRow>
 
-      {trigger.form === "Once on a date" && (
-        <Field label="Date">
-          <DateInput
-            value={trigger.date}
-            onValueChange={(date) => setTrigger({ ...trigger, date })}
-            required
-          />
-        </Field>
-      )}
-
-      {trigger.form === "Once at an age" && (
-        <Field label="Age — the scenario needs a birth date for this">
-          <Input
-            type="number"
-            value={trigger.age}
-            onChange={(e) => setTrigger({ ...trigger, age: e.target.value })}
-          />
-        </Field>
-      )}
-
-      {trigger.form === "Repeating" && (
-        <>
-          <Field label="Every">
-            <Select
-              value={trigger.interval}
-              onChange={(e) => setTrigger({ ...trigger, interval: e.target.value as Interval })}
-            >
-              {INTERVALS.map((i) => (
-                <option key={i}>{i}</option>
-              ))}
-            </Select>
-          </Field>
-          <DialogRow>
-            <BoundField
-              label="Starting"
-              fallback="at plan start"
-              value={trigger.start}
-              onChange={(start) => setTrigger({ ...trigger, start })}
-            />
-            <BoundField
-              label="Ending"
-              fallback="never"
-              value={trigger.end}
-              onChange={(end) => setTrigger({ ...trigger, end })}
-            />
-          </DialogRow>
-        </>
-      )}
+      <TriggerFields
+        trigger={trigger}
+        context={{ accounts, assets, events }}
+        onChange={setTrigger}
+      />
 
       <label className="radio">
         <input
@@ -216,48 +176,6 @@ export function NewEventDialog({
         ))}
       </div>
     </Dialog>
-  );
-}
-
-/** A repeating trigger's start or end: nothing, a date, or an age. */
-function BoundField({
-  label,
-  fallback,
-  value,
-  onChange,
-}: {
-  label: string;
-  fallback: string;
-  value: BoundDraft;
-  onChange: (next: BoundDraft) => void;
-}) {
-  return (
-    <Field label={label}>
-      <div style={{ display: "flex", gap: 6 }}>
-        <Select
-          value={value.kind}
-          onChange={(e) => onChange({ ...value, kind: e.target.value as BoundDraft["kind"] })}
-        >
-          <option value="none">{fallback}</option>
-          <option value="date">on date</option>
-          <option value="age">at age</option>
-        </Select>
-        {value.kind === "date" && (
-          <DateInput
-            value={value.date}
-            onValueChange={(date) => onChange({ ...value, date })}
-          />
-        )}
-        {value.kind === "age" && (
-          <Input
-            type="number"
-            style={{ width: 72 }}
-            value={value.age}
-            onChange={(e) => onChange({ ...value, age: e.target.value })}
-          />
-        )}
-      </div>
-    </Field>
   );
 }
 

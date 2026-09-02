@@ -264,8 +264,15 @@
   pointer-events: none;
 }
 
+/* The ghost is drawn over the well, so the segments have to go quiet under
+   it — the hints and the slashes both, or the furniture shows through the
+   words as `plan/ start`. */
 .dp-ghosted .dp-seg::placeholder {
   color: transparent;
+}
+
+.dp-ghosted .dp-sep {
+  visibility: hidden;
 }
 
 .dp-ghosted:focus-within .dp-ghost {
@@ -274,6 +281,10 @@
 
 .dp-ghosted:focus-within .dp-seg::placeholder {
   color: color-mix(in srgb, var(--color-text) 38%, transparent);
+}
+
+.dp-ghosted:focus-within .dp-sep {
+  visibility: visible;
 }
 
 /* Carries `required` for the form around the well; never seen, never tabbed
