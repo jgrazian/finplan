@@ -7,7 +7,7 @@
  * place that maps one onto the other, so a server change surfaces there as a
  * type error rather than as a wrong number on screen.
  */
-import type { DistributionSpec } from "@/lib/api/types";
+import type { AssetClass, DistributionSpec } from "@/lib/api/types";
 
 // ── ids ───────────────────────────────────────────────────────────────────
 /** Display identity — a name where the domain has one, else the row id. */
@@ -257,6 +257,12 @@ export interface ReturnProfile {
   kind: DistributionKind;
   /** What the user wrote about it, blank where nothing was written. */
   description: string;
+  /**
+   * What kind of holding this profile is for, where anyone has said. Null is
+   * the ordinary state: it only means a ticker will never auto-select this
+   * profile, not that anything is missing.
+   */
+  assetClass: AssetClass | null;
   /**
    * The distribution itself, not just its summary. The row draws the profile's
    * shape, and a Student-t and a normal with the same mean and spread are

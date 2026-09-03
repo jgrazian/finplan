@@ -10,7 +10,8 @@
  * across accounts, so they are gathered here once rather than by the inspector
  * on every selection.
  */
-import type { Account as ApiAccount, Asset } from "@/lib/api/types";
+import type { Account as ApiAccount, Asset, Profile } from "@/lib/api/types";
+import { tickerDefaults } from "@/lib/tickers";
 import type { ReturnProfile, ReturnProfileId } from "@/lib/types";
 
 /** One account's stake in an asset, its lots summed. */
@@ -149,4 +150,59 @@ function holdingsByAsset(accounts: ApiAccount[]): Map<number, AssetHolding[]> {
     }
   }
   return out;
+}
+
+/** One asset with a blank the ticker table can fill, and what it would write. */
+export interface TickerFill {
+  serverId: number;
+  ticker: string;
+  /** The name it would be given; absent where it already has one. */
+  name?: string;
+  /** The profile it would be mapped to; absent where it is already mapped. */
+  profileServerId?: number;
+}
+
+/**
+ * The assets whose ticker says more than the row does.
+ *
+ * Only blanks count. An asset someone has named "the house fund" is not
+ * improved by being renamed to what a table thinks `VNQ` is, and an asset
+ * pointed at a deliberately pessimistic profile must not be moved off it — so a
+ * filled field is never a candidate, and the two halves are decided separately.
+ *
+ * This is the same lookup the drawer offers one asset at a time. It is worth
+ * having twice because the case that matters is a library of assets created
+ * before any of this existed, where doing it one drawer at a time is the tedium
+ * that stops it being done at all.
+ */
+export function tickerFills(rows: AssetRow[], profiles: Profile[]): TickerFill[] {
+  const out: TickerFill[] = [];
+  for (const row of rows) {
+    const known = tickerDefaults(row.ticker, profiles);
+    if (!known) continue;
+    const name = row.name.trim() === "" ? known.name : undefined;
+    const profileServerId = row.profileServerId == null ? known.profile?.id : undefined;
+    if (name == null && profileServerId == null) continue;
+    out.push({ serverId: row.serverId, ticker: row.ticker, name, profileServerId });
+  }
+  return out;
+}
+
+/**
+ * `3 assets can be named and mapped from their tickers — VTI, BND, VNQ`.
+ *
+ * The verb is whichever halves are actually missing, and the tickers are named
+ * rather than counted up to the point where naming them is longer than the row
+ * they would send you to.
+ */
+export function fillSummary(fills: TickerFill[]): string {
+  const naming = fills.some((f) => f.name != null);
+  const mapping = fills.some((f) => f.profileServerId != null);
+  const verb = naming && mapping ? "named and mapped" : naming ? "named" : "mapped";
+  const shown = fills.slice(0, 4).map((f) => f.ticker);
+  const rest = fills.length - shown.length;
+  const list = rest > 0 ? `${shown.join(", ")} +${rest} more` : shown.join(", ");
+  return `${fills.length} asset${fills.length === 1 ? "" : "s"} can be ${verb} from ${
+    fills.length === 1 ? "its ticker" : "their tickers"
+  } — ${list}`;
 }

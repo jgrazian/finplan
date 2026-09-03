@@ -16,7 +16,7 @@ import {
 } from "@/components/profiles";
 import { Button, Select } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import type { Profile, UpdateProfile } from "@/lib/api/types";
+import type { Profile, UpdateAsset, UpdateProfile } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import { useAsync } from "@/lib/hooks/useAsync";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -29,6 +29,8 @@ import {
   assetsTotal,
   decodeAssetsSelection,
   encodeAssetsSelection,
+  fillSummary,
+  tickerFills,
   toAssetRows,
 } from "@/lib/view/assets";
 import { withHistories } from "@/lib/view/profiles";
@@ -88,6 +90,7 @@ export function AssetsScreen({
   const remapping = useSubmit();
   const editingAsset = useSubmit();
   const editingProfile = useSubmit();
+  const filling = useSubmit();
 
   // The histories a Bootstrap profile resamples, series and all. A static
   // table the server owns, fetched once on mount rather than threaded through
@@ -107,6 +110,13 @@ export function AssetsScreen({
     [raw.assets, raw.accounts, returnProfiles],
   );
   const total = useMemo(() => assetsTotal(rows), [rows]);
+  // Assets whose ticker knows something the row does not: a blank name, an
+  // unmapped profile, or both. Recomputed off the reloaded rows, so the offer
+  // disappears by itself once it has been taken.
+  const fills = useMemo(
+    () => tickerFills(rows, raw.returnProfiles),
+    [rows, raw.returnProfiles],
+  );
 
   // Derived rather than reset in an effect: switching scenarios replaces every
   // asset id, and the first row is the right fallback for a stale pick.
@@ -154,6 +164,27 @@ export function AssetsScreen({
     );
   };
 
+  /**
+   * Fill every blank the tickers can fill, in one write each.
+   *
+   * Each PATCH carries only the halves that were missing: an absent key means
+   * "unchanged" to the route, so an asset that was merely unmapped keeps the
+   * name it had, and one that was merely unnamed keeps the profile it was on.
+   */
+  const fillFromTickers = () =>
+    filling.run(
+      () =>
+        Promise.all(
+          fills.map((fill) => {
+            const body: UpdateAsset = {};
+            if (fill.name != null) body.description = fill.name;
+            if (fill.profileServerId != null) body.return_profile_id = fill.profileServerId;
+            return api.assets.update(scenarioId, fill.serverId, body);
+          }),
+        ),
+      onChanged,
+    );
+
   const applyAsset = (asset: AssetRow, draft: AssetDraft) => {
     const ticker = draft.ticker.trim();
     const price = draft.price;
@@ -195,6 +226,11 @@ export function AssetsScreen({
           .create({
             name: copyName(profile.id, returnProfiles),
             description: profile.description || null,
+            // A copy is a copy, class included. Two profiles of one class is a
+            // legitimate library — an optimistic and a pessimistic equity
+            // assumption — and the resolver's tie-break is by name, so a
+            // "… copy" never displaces the original it was made from.
+            asset_class: profile.assetClass,
             distribution: profile.distribution,
           })
           .then(adopt),
@@ -221,6 +257,46 @@ export function AssetsScreen({
                 </Button>
               }
             />
+
+            {/* The offer stands down while rows are ticked: that is a selection
+                waiting on an action, and two bars stacked in one slot read as
+                two pending things rather than one. */}
+            {fills.length > 0 && checked.size === 0 && !offline && (
+              <div className="sbar sbar-notice" style={{ marginBottom: -1 }}>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{ flex: "none" }}
+                  aria-hidden
+                >
+                  <circle cx="8" cy="8" r="6.2" />
+                  <path d="M8 7.4v3.4" />
+                  <circle cx="8" cy="5.2" r="0.6" fill="currentColor" stroke="none" />
+                </svg>
+                <span>
+                  {fillSummary(fills)}
+                  <span className="sbar-note" style={{ marginLeft: 8 }}>
+                    Only blanks are filled; anything already set is left alone.
+                  </span>
+                </span>
+                <div className="sact">
+                  <button
+                    type="button"
+                    className="sbtn"
+                    disabled={filling.busy}
+                    onClick={fillFromTickers}
+                  >
+                    {filling.busy ? "Filling…" : "Fill them in"}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {checked.size > 0 && (
               <div
@@ -287,8 +363,10 @@ export function AssetsScreen({
               />
             )}
 
-            {remapping.error && (
-              <p style={{ ...NOTE, color: "var(--color-accent-700)" }}>{remapping.error}</p>
+            {(remapping.error ?? filling.error) && (
+              <p style={{ ...NOTE, color: "var(--color-accent-700)" }}>
+                {remapping.error ?? filling.error}
+              </p>
             )}
 
             <p style={NOTE}>

@@ -699,6 +699,70 @@ async fn invalid_tax_brackets_are_rejected() {
 }
 
 #[tokio::test]
+async fn a_profiles_asset_class_is_stored_seeded_and_clearable() {
+    let mut app = TestApp::new().await;
+    app.login_as("classes@example.com").await;
+
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let by_name = |name: &str| -> Value {
+        profiles
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap()
+            .clone()
+    };
+
+    // The starter library is what a ticker resolves against, so its classes are
+    // the part that has to be right without anyone setting them.
+    assert_eq!(by_name("US Total Market")["asset_class"], "UsEquity");
+    assert_eq!(by_name("US Aggregate Bonds")["asset_class"], "Bonds");
+    assert_eq!(by_name("Cash / T-Bills")["asset_class"], "Cash");
+    // Neither describes a holding, so neither should ever be auto-selected.
+    assert!(by_name("Savings Account")["asset_class"].is_null());
+    assert!(by_name("No Growth")["asset_class"].is_null());
+
+    let id = by_name("US Total Market")["id"].as_i64().unwrap();
+    let path = format!("/api/return-profiles/{id}");
+
+    // A rename says nothing about the class, which is the whole point of
+    // storing it rather than reading it back off the name.
+    let (status, renamed) = app
+        .patch(&path, json!({"name": "Equities (my assumptions)"}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["asset_class"], "UsEquity");
+
+    let (status, moved) = app
+        .patch(&path, json!({"asset_class": "GlobalEquity"}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(moved["asset_class"], "GlobalEquity");
+
+    // An explicit null unclassifies; absent would have left it alone.
+    let (status, cleared) = app.patch(&path, json!({"asset_class": null})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(cleared["asset_class"].is_null());
+
+    let (status, _) = app.patch(&path, json!({"asset_class": "Nonsense"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Created with one, and it comes back on the row.
+    let (status, made) = app
+        .post(
+            "/api/return-profiles",
+            json!({
+                "name": "My bonds", "asset_class": "Bonds",
+                "distribution": {"kind": "Fixed", "rate": 0.03}
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(made["asset_class"], "Bonds");
+}
+
+#[tokio::test]
 async fn inflation_profiles_reject_unsupported_distributions() {
     let mut app = TestApp::new().await;
     app.login_as("inflation@example.com").await;
@@ -734,6 +798,64 @@ async fn positions_are_confined_to_investment_accounts() {
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_lot_can_be_resized_and_removed() {
+    let mut app = TestApp::new().await;
+    app.login_as("resize@example.com").await;
+    let (scenario_id, checking, brokerage) = app.seed_scenario().await;
+
+    let (_, account) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/accounts/{brokerage}"
+        ))
+        .await;
+    let position = account["positions"][0]["id"].as_i64().unwrap();
+    let path = format!("/api/scenarios/{scenario_id}/accounts/{brokerage}/positions/{position}");
+
+    // Units alone: everything absent is left as it was stored.
+    let (status, resized) = app.patch(&path, json!({"units": 250.0})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resized["units"], 250.0);
+    assert_eq!(resized["cost_basis"], 40_000.0);
+
+    let (status, _) = app.patch(&path, json!({"units": -1.0})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The account in the path owns the lot; another one does not, even under
+    // the same scenario.
+    let (status, _) = app
+        .patch(
+            &format!("/api/scenarios/{scenario_id}/accounts/{checking}/positions/{position}"),
+            json!({"units": 1.0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = app.delete(&path).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = app.patch(&path, json!({"units": 1.0})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_account_can_be_renamed_but_not_to_nothing() {
+    let mut app = TestApp::new().await;
+    app.login_as("rename@example.com").await;
+    let (scenario_id, checking, _) = app.seed_scenario().await;
+    let path = format!("/api/scenarios/{scenario_id}/accounts/{checking}");
+
+    let (status, renamed) = app
+        .patch(&path, json!({"name": "  Joint checking  "}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["name"], "Joint checking");
+    // The flavor detail is untouched by a rename that does not carry one.
+    assert_eq!(renamed["cash_value"], 10_000.0);
+
+    let (status, _) = app.patch(&path, json!({"name": "   "})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

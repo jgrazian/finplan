@@ -63,6 +63,7 @@ export function toViewReturnProfiles(profiles: Profile[]): ReturnProfile[] {
       serverId: profile.id,
       kind: profile.distribution.kind,
       description: profile.description ?? "",
+      assetClass: profile.asset_class,
       distribution: profile.distribution,
       mean,
       sd,

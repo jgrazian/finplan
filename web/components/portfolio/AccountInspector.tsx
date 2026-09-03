@@ -1,9 +1,9 @@
 "use client";
 
 import { type ReactNode, useState } from "react";
-import { Blueprint, Button, Dropdown, Tag } from "@/components/ui";
+import { Blueprint, Button, CompactInput, Dropdown, Tag } from "@/components/ui";
 import type { Asset, Profile } from "@/lib/api/types";
-import type { Account, AccountId } from "@/lib/types";
+import type { Account, AccountId, AssetLot } from "@/lib/types";
 import { AccountTerms } from "./AccountTerms";
 import { AccountValuation } from "./AccountValuation";
 import { LinkedAccounts } from "./LinkedAccounts";
@@ -52,7 +52,9 @@ export function AccountInspector({
   assets,
   onApply,
   onAddLot,
-  addLotForm,
+  onEditLot,
+  editingLotId,
+  lotForm,
   onSelectAccount,
   onDelete,
   busy,
@@ -68,8 +70,12 @@ export function AccountInspector({
   onApply: (draft: AccountDraft) => void;
   /** Omitted where the kind cannot hold lots. */
   onAddLot?: () => void;
-  /** The add-position form, rendered under the positions table when open. */
-  addLotForm?: ReactNode;
+  /** Opens one stored lot for editing; omitted where the kind holds none. */
+  onEditLot?: (lot: AssetLot) => void;
+  /** The lot the form below the table is open on, marked in it. */
+  editingLotId?: number;
+  /** The add- or edit-position form, rendered under the positions table. */
+  lotForm?: ReactNode;
   /** Opening the other end of a property/debt pair. */
   onSelectAccount: (id: AccountId) => void;
   onDelete?: () => void;
@@ -121,9 +127,17 @@ export function AccountInspector({
         <div
           style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}
         >
-          <h5 style={{ margin: 0 }}>{account.name}</h5>
+          <h5 style={{ margin: 0 }}>{draft.name.trim() || account.name}</h5>
           <Tag tone={badge.tone}>{badge.label}</Tag>
         </div>
+        <DirtyField label="Name" changed={changed.name} style={{ marginTop: 8 }}>
+          <CompactInput
+            value={draft.name}
+            readOnly={offline}
+            aria-label="Account name"
+            onChange={(e) => set("name", e.target.value)}
+          />
+        </DirtyField>
         <DirtyField label="Kind" changed={changed.kind} style={{ marginTop: 8 }}>
           <Dropdown
             className="dd-field"
@@ -181,7 +195,9 @@ export function AccountInspector({
         <div>
           <PositionsTable
             lots={account.positions}
-            onAddLot={addLotForm ? undefined : onAddLot}
+            onAddLot={lotForm ? undefined : onAddLot}
+            onSelect={offline ? undefined : onEditLot}
+            selectedId={editingLotId}
             addDisabled={offline}
             basisTracked={draft.kind === "investment"}
             note={
@@ -191,7 +207,7 @@ export function AccountInspector({
                 : "No cost basis — gains are not taxed on sale here.")
             }
           />
-          {addLotForm}
+          {lotForm}
         </div>
       ) : (
         draft.kind === "cash" && (

@@ -3,6 +3,8 @@ import { type AccountKind, kindOf } from "./accountKind";
 
 /** The fields a PATCH on the account can carry, across all five kinds. */
 export interface AccountDraft {
+  /** What the account is called; unique across the scenario, as the server has it. */
+  name: string;
   kind: AccountKind;
   /** Investment flavor only; the kind sets it coarsely, Terms refines it. */
   taxStatus: TaxStatus | undefined;
@@ -43,6 +45,7 @@ function amountOf(account: Account): number {
 
 export function draftOf(account: Account): AccountDraft {
   return {
+    name: account.name,
     kind: kindOf(account),
     taxStatus: account.taxStatus,
     amount: amountOf(account),
@@ -56,6 +59,7 @@ export function draftOf(account: Account): AccountDraft {
 
 /** Which fields hold an edit — one flag per thing the footer can count. */
 export interface ChangedFields {
+  name: boolean;
   kind: boolean;
   taxStatus: boolean;
   amount: boolean;
@@ -70,6 +74,7 @@ export function changedFields(
   pristine: AccountDraft,
 ): ChangedFields {
   return {
+    name: draft.name !== pristine.name,
     kind: draft.kind !== pristine.kind,
     // A kind change moves the tax status with it; counting both would report
     // two edits for one decision.

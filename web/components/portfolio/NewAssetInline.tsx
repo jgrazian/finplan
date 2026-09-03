@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { Blueprint, Button, CompactInput, CurrencyInput, Field } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import type { Asset } from "@/lib/api/types";
+import type { Asset, Profile } from "@/lib/api/types";
+import { tickerDefaults } from "@/lib/tickers";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 
@@ -15,10 +16,12 @@ const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
  * none that fit. Sending you to Assets & returns to make one loses the account
  * or lot you were halfway through describing, so the asset is made here.
  *
- * It is deliberately two fields. The return profile, which is the only other
- * thing an asset has, is left unset: an unmapped asset compiles at flat zero
- * growth rather than refusing to run, so the plan stays valid and the mapping
- * is a later, deliberate decision on the screen built for it.
+ * It stays two fields. An asset's other two — its name and the profile that
+ * makes it move — are read off the ticker where the ticker is one the bundled
+ * table knows, which is most of what a plan is built out of. What was inferred
+ * is shown under the field before anything is created, and an unrecognised
+ * ticker is created exactly as it always was: named only by its symbol, and
+ * unmapped, which compiles at flat zero growth rather than refusing to run.
  *
  * Renders as a block rather than a dialog because one of its callers is already
  * inside a dialog and the other is inside a drawer; a second modal over either
@@ -27,11 +30,14 @@ const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
  */
 export function NewAssetInline({
   scenarioId,
+  profiles,
   suggestedName,
   onCreated,
   onCancel,
 }: {
   scenarioId: number;
+  /** The library a recognised ticker is mapped into. */
+  profiles: Profile[];
   /** Prefills the ticker, e.g. from the account being named. */
   suggestedName?: string;
   /** The created row, so the caller can select it before the reload lands. */
@@ -43,6 +49,8 @@ export function NewAssetInline({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
+  const known = tickerDefaults(name, profiles);
+
   const create = () => {
     const ticker = name.trim();
     if (ticker === "") return setError("An asset needs a ticker.");
@@ -52,7 +60,13 @@ export function NewAssetInline({
     setBusy(true);
     setError(undefined);
     api.assets
-      .create(scenarioId, { name: ticker, initial_price: price, sort_order: 0 })
+      .create(scenarioId, {
+        name: ticker,
+        description: known?.name ?? null,
+        initial_price: price,
+        return_profile_id: known?.profile?.id ?? null,
+        sort_order: 0,
+      })
       .then(onCreated)
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setBusy(false));
@@ -104,8 +118,22 @@ export function NewAssetInline({
         </div>
 
         <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: MUTED }}>
-          Created unmapped: it holds this price for the whole simulation until
-          you give it a return profile on Assets &amp; returns.
+          {known == null ? (
+            <>
+              Created unmapped: it holds this price for the whole simulation
+              until you give it a return profile on Assets &amp; returns.
+            </>
+          ) : (
+            <>
+              <strong style={{ fontWeight: 500, color: "var(--color-text)" }}>
+                {known.name}
+              </strong>{" "}
+              · {known.classLabel} ·{" "}
+              {known.profile
+                ? `grows by ${known.profile.name}`
+                : "no matching profile — held flat at 0%"}
+            </>
+          )}
         </p>
 
         {error && (

@@ -10,7 +10,8 @@ import {
   Select,
   Tag,
 } from "@/components/ui";
-import type { HistoryPreset, UpdateProfile } from "@/lib/api/types";
+import type { AssetClass, HistoryPreset, UpdateProfile } from "@/lib/api/types";
+import { ASSET_CLASSES, CLASS_LABEL } from "@/lib/tickers";
 import type { DistributionKind, ReturnProfile } from "@/lib/types";
 import { DISTRIBUTIONS, DistributionTerms, KIND_LABEL } from "./DistributionTerms";
 import { ShapePanel } from "./Shape";
@@ -23,9 +24,14 @@ import {
   specOf,
 } from "./distributionDraft";
 
+/** The `<option>` value standing in for "no class"; `null` is not a value. */
+const UNCLASSIFIED = "";
+
 /** What the drawer is editing: everything a PATCH to the profile can carry. */
 interface ProfileDraft {
   description: string;
+  /** Null is the ordinary state: nothing auto-selects an unclassified profile. */
+  assetClass: AssetClass | null;
   dist: DistributionDraft;
 }
 
@@ -62,6 +68,7 @@ export function ProfileInspector({
 }) {
   const pristine: ProfileDraft = {
     description: profile.description,
+    assetClass: profile.assetClass,
     dist: draftOf(profile.distribution, presets),
   };
   const [draft, setDraft] = useState<ProfileDraft>(pristine);
@@ -70,7 +77,9 @@ export function ProfileInspector({
   // the shape before Apply, which is the only way to compare two of them.
   const history = presets.find((p) => p.id === draft.dist.preset)?.returns;
   const dirty =
-    draft.description !== pristine.description || !sameSpec(draft.dist, pristine.dist);
+    draft.description !== pristine.description ||
+    draft.assetClass !== pristine.assetClass ||
+    !sameSpec(draft.dist, pristine.dist);
   const problem = problemWith(draft.dist);
 
   return (
@@ -96,6 +105,40 @@ export function ProfileInspector({
           onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
         />
       </Field>
+
+      <Field label="Asset class">
+        <Select
+          style={{ minHeight: 32 }}
+          value={draft.assetClass ?? UNCLASSIFIED}
+          disabled={offline}
+          onChange={(e) =>
+            setDraft((d) => ({
+              ...d,
+              assetClass:
+                e.target.value === UNCLASSIFIED ? null : (e.target.value as AssetClass),
+            }))
+          }
+        >
+          <option value={UNCLASSIFIED}>Unclassified — never auto-selected</option>
+          {ASSET_CLASSES.map((c) => (
+            <option key={c} value={c}>
+              {CLASS_LABEL[c]}
+            </option>
+          ))}
+        </Select>
+      </Field>
+      <p
+        style={{
+          margin: "-6px 0 0",
+          fontSize: 11.5,
+          lineHeight: 1.5,
+          color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
+        }}
+      >
+        What this assumption is <em>for</em>, as opposed to what it is called. A
+        new asset whose ticker is a known fund of this class is mapped here
+        automatically — and stays mapped if you rename the profile.
+      </p>
 
       <Field label="Distribution">
         <Select
@@ -176,7 +219,15 @@ export function ProfileInspector({
           style={{ flex: 1 }}
           disabled={!dirty || busy || offline || problem != null}
           title={offline ? "No connection to the server." : undefined}
-          onClick={() => onApply({ description: draft.description.trim(), distribution: spec })}
+          onClick={() =>
+            onApply({
+              description: draft.description.trim(),
+              // Always sent, so clearing the class is sayable: null here means
+              // unclassify, where absent would have meant "leave it alone".
+              asset_class: draft.assetClass,
+              distribution: spec,
+            })
+          }
         >
           Apply
         </Button>

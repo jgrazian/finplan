@@ -27,7 +27,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/scenarios/{scenario_id}/accounts/{id}/positions/{position_id}",
-            axum::routing::delete(delete_position),
+            axum::routing::patch(update_position).delete(delete_position),
         )
 }
 
@@ -436,6 +436,12 @@ async fn update(
             .await?;
     let existing_flavor = existing_flavor.ok_or(ApiError::NotFound("account"))?;
 
+    // An absent name leaves the stored one alone; a blank one is a mistake, and
+    // COALESCE would write it as the account's name.
+    if body.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+        return Err(ApiError::bad_request("an account needs a name"));
+    }
+
     if let Some(flavor) = &body.flavor {
         flavor.validate()?;
         if flavor.name() != existing_flavor {
@@ -517,6 +523,21 @@ pub struct CreatePosition {
     pub purchase_date: Option<String>,
     pub units: f64,
     pub cost_basis: f64,
+}
+
+/// Every field of a lot is resizable in place. Absent means unchanged, so a
+/// client that only wants to resize a holding sends `units` alone.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
+pub struct UpdatePosition {
+    #[serde(default)]
+    pub asset_id: Option<i64>,
+    #[serde(default)]
+    pub purchase_date: Option<String>,
+    #[serde(default)]
+    pub units: Option<f64>,
+    #[serde(default)]
+    pub cost_basis: Option<f64>,
 }
 
 async fn list_positions(
@@ -610,6 +631,67 @@ async fn add_position(
     ))
 }
 
+async fn update_position(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((scenario_id, id, position_id)): Path<(i64, i64, i64)>,
+    Json(body): Json<UpdatePosition>,
+) -> ApiResult<Json<Position>> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+
+    // Same rule as the insert: a lot is non-negative in both figures, and a
+    // date has to be a date before it reaches the engine's timeline.
+    if body.units.is_some_and(|u| u < 0.0) || body.cost_basis.is_some_and(|b| b < 0.0) {
+        return Err(ApiError::bad_request(
+            "units and cost_basis must be non-negative",
+        ));
+    }
+    let purchase_date = match body.purchase_date.as_deref() {
+        Some(d) => Some(
+            d.parse::<jiff::civil::Date>()
+                .map_err(|e| ApiError::bad_request(format!("invalid purchase_date '{d}': {e}")))?
+                .to_string(),
+        ),
+        None => None,
+    };
+
+    // The join is what confines the write to the caller's scenario: the
+    // position id alone says nothing about who owns the account under it.
+    let affected = sqlx::query(
+        "UPDATE positions SET
+            asset_id      = COALESCE(?4, asset_id),
+            purchase_date = COALESCE(?5, purchase_date),
+            units         = COALESCE(?6, units),
+            cost_basis    = COALESCE(?7, cost_basis)
+          WHERE id = ?1 AND account_id = ?2
+            AND account_id IN (SELECT id FROM accounts WHERE scenario_id = ?3)",
+    )
+    .bind(position_id)
+    .bind(id)
+    .bind(scenario_id)
+    .bind(body.asset_id)
+    .bind(purchase_date)
+    .bind(body.units)
+    .bind(body.cost_basis)
+    .execute(&state.db)
+    .await?
+    .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("position"));
+    }
+    super::touch_scenario(&state.db, scenario_id).await?;
+
+    let row: Position = sqlx::query_as(
+        "SELECT id, asset_id, purchase_date, units, cost_basis
+           FROM positions WHERE id = ?1",
+    )
+    .bind(position_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(row))
+}
+
 async fn delete_position(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -617,12 +699,17 @@ async fn delete_position(
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
-    let affected = sqlx::query("DELETE FROM positions WHERE id = ?1 AND account_id = ?2")
-        .bind(position_id)
-        .bind(id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
+    let affected = sqlx::query(
+        "DELETE FROM positions
+          WHERE id = ?1 AND account_id = ?2
+            AND account_id IN (SELECT id FROM accounts WHERE scenario_id = ?3)",
+    )
+    .bind(position_id)
+    .bind(id)
+    .bind(scenario_id)
+    .execute(&state.db)
+    .await?
+    .rows_affected();
 
     if affected == 0 {
         return Err(ApiError::NotFound("position"));

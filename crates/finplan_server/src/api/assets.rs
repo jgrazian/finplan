@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
@@ -58,17 +58,6 @@ fn one() -> f64 {
     1.0
 }
 
-/// Distinguish "field absent" from "field present and null". Serde collapses
-/// the two into `None` for a plain `Option`; wrapping the deserialize in a
-/// second layer keeps them apart.
-fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::deserialize(de).map(Some)
-}
-
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct UpdateAsset {
@@ -81,7 +70,7 @@ pub struct UpdateAsset {
     /// Doubly optional: absent leaves the mapping alone, an explicit null
     /// unmaps the asset. Every other field here reads absent as "unchanged",
     /// which would otherwise make unmapping unsayable.
-    #[serde(default, deserialize_with = "double_option")]
+    #[serde(default, deserialize_with = "crate::api::double_option")]
     #[ts(optional, type = "number | null")]
     pub return_profile_id: Option<Option<i64>>,
     #[serde(default)]

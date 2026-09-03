@@ -1,5 +1,7 @@
+"use client";
+
 import type { ReactNode } from "react";
-import { Button, SectionHeading, Table, Td } from "@/components/ui";
+import { Button, SectionHeading, Table, Td, rowStyle } from "@/components/ui";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
 import type { AssetLot } from "@/lib/types";
 
@@ -8,11 +10,17 @@ import type { AssetLot } from "@/lib/types";
  * the same figure the account's balance is the sum of. Cost basis and purchase
  * date belong to the lot rather than to the line, so they sit in the row's
  * title rather than taking two more columns in a 372px drawer.
+ *
+ * A row opens the lot for editing, the same way an account row opens the
+ * account: resizing a holding and deleting one both happen in the form the
+ * click opens, under the table, rather than in controls crowding every line.
  */
 export function PositionsTable({
   lots,
   onAddLot,
   addDisabled,
+  onSelect,
+  selectedId,
   basisTracked = true,
   note,
 }: {
@@ -20,6 +28,10 @@ export function PositionsTable({
   onAddLot?: () => void;
   /** Offered but refused: there is no connection to save a lot through. */
   addDisabled?: boolean;
+  /** Opens a lot for editing; omitted where lots cannot be edited at all. */
+  onSelect?: (lot: AssetLot) => void;
+  /** The lot the form below the table is open on. */
+  selectedId?: number;
   /** False where a sale realises no gain, so the basis on a lot is never read. */
   basisTracked?: boolean;
   /** A line under the table saying what this kind does differently. */
@@ -53,22 +65,33 @@ export function PositionsTable({
       ) : (
         <Table compact>
           <tbody>
-            {lots.map((lot) => (
-              <tr
-                key={lot.positionId}
-                title={
-                  basisTracked
-                    ? `Basis ${fmtCurrency(lot.costBasis)} · purchased ${lot.purchaseDate}`
-                    : undefined
-                }
-              >
-                <Td>{lot.assetId}</Td>
-                <Td align="right" muted>
-                  {fmtUnits(lot.units)} u
-                </Td>
-                <Td align="right">{fmtCurrency(lot.value)}</Td>
-              </tr>
-            ))}
+            {lots.map((lot) => {
+              const selected = lot.positionId === selectedId;
+              return (
+                <tr
+                  key={lot.positionId}
+                  className={onSelect ? "rowsel" : undefined}
+                  style={rowStyle(selected)}
+                  aria-selected={selected}
+                  onClick={onSelect ? () => onSelect(lot) : undefined}
+                  title={
+                    basisTracked
+                      ? `Basis ${fmtCurrency(lot.costBasis)} · purchased ${lot.purchaseDate}${
+                          onSelect ? " · click to edit" : ""
+                        }`
+                      : onSelect
+                        ? "Click to edit"
+                        : undefined
+                  }
+                >
+                  <Td>{lot.assetId}</Td>
+                  <Td align="right" muted>
+                    {fmtUnits(lot.units)} u
+                  </Td>
+                  <Td align="right">{fmtCurrency(lot.value)}</Td>
+                </tr>
+              );
+            })}
           </tbody>
         </Table>
       )}

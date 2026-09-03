@@ -18,6 +18,7 @@ import {
 } from "@/components/ui";
 import type { DistributionSpec, Profile } from "@/lib/api/types";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
+import { tickerDefaults } from "@/lib/tickers";
 import type { ReturnProfile } from "@/lib/types";
 import type { AssetRow } from "@/lib/view/assets";
 
@@ -93,6 +94,13 @@ export function AssetInspector({
   const dirty = (Object.keys(pristine) as Array<keyof AssetDraft>).some(
     (k) => draft[k] !== pristine[k],
   );
+
+  // What the bundled ticker table knows about the symbol in the field, offered
+  // only where it would fill a blank: an asset someone has already named or
+  // mapped is theirs, and a lookup does not get to overrule it.
+  const known = tickerDefaults(draft.ticker, profiles);
+  const fillsName = known != null && draft.name.trim() === "";
+  const fillsProfile = known?.profile != null && draft.profileServerId == null;
   // The block describes what the asset points at now, not what the unsaved
   // draft would point at: the figures are the stored profile's until Apply.
   const spec = profile?.distribution ?? HELD_FLAT;
@@ -140,6 +148,40 @@ export function AssetInspector({
           />
         </Field>
       </div>
+
+      {known && (fillsName || fillsProfile) && !offline && (
+        <p
+          style={{
+            margin: "-4px 0 0",
+            fontSize: 11.5,
+            lineHeight: 1.5,
+            color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+          }}
+        >
+          {draft.ticker.trim().toUpperCase()} is {known.name}
+          {known.profile ? ` · ${known.profile.name}` : ""}.{" "}
+          <button
+            type="button"
+            className="linkbtn"
+            style={{ fontSize: 11.5 }}
+            onClick={() =>
+              setDraft((d) => ({
+                ...d,
+                name: fillsName ? known.name : d.name,
+                profileServerId: fillsProfile
+                  ? (known.profile?.id ?? null)
+                  : d.profileServerId,
+              }))
+            }
+          >
+            {fillsName && fillsProfile
+              ? "Fill both"
+              : fillsName
+                ? "Use that name"
+                : "Map it"}
+          </button>
+        </p>
+      )}
 
       <Field label="Return profile">
         <Select

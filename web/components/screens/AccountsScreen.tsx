@@ -5,9 +5,9 @@ import { SplitPane } from "@/components/layout";
 import {
   AccountInspector,
   AccountsTable,
-  AddPositionForm,
   NewAccountDialog,
   PortfolioSummary,
+  PositionForm,
   type AccountDraft,
 } from "@/components/portfolio";
 import { Button } from "@/components/ui";
@@ -18,6 +18,7 @@ import type {
   CreatePosition,
   FlavorSpec,
   UpdateAccountBody,
+  UpdatePosition,
 } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
@@ -25,7 +26,10 @@ import { useSubmit } from "@/lib/hooks/useSubmit";
 import { useNav } from "@/lib/nav";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import { accountColors, accountShares, portfolioSummary } from "@/lib/view/accounts";
-import type { Account, AccountId } from "@/lib/types";
+import type { Account, AccountId, AssetLot } from "@/lib/types";
+
+/** What the one form under the positions table is open on. */
+type LotEditor = { kind: "add" } | { kind: "edit"; positionId: number };
 
 /** `14:02` — the clock the status bar and this note both quote. */
 function clockOf(at: number): string {
@@ -97,7 +101,12 @@ export function AccountsScreen({
   offline?: boolean;
 }) {
   const [creating, setCreating] = useState(false);
-  const [addingLot, setAddingLot] = useState(false);
+  /**
+   * What the form under the positions table is doing, if anything: adding a lot
+   * or editing the one whose row was clicked. One piece of state, because the
+   * form is one form and only ever open on one subject.
+   */
+  const [lotEditor, setLotEditor] = useState<LotEditor>();
   /** Bumped after each save, to hand the form a clean slate for the next lot. */
   const [lotNonce, setLotNonce] = useState(0);
   const [savedAt, setSavedAt] = useState<Map<AccountId, number>>(new Map());
@@ -137,7 +146,7 @@ export function AccountsScreen({
 
   const select = (id: AccountId) => {
     nav.setSelection(id);
-    setAddingLot(false);
+    setLotEditor(undefined);
   };
 
   const remove = async (account: Account) => {
@@ -148,7 +157,11 @@ export function AccountsScreen({
 
   const apply = (account: Account, draft: AccountDraft) => {
     if (!selectedRaw) return;
-    const body: UpdateAccountBody = flavorOf(selectedRaw, draft);
+    const name = draft.name.trim();
+    // The server refuses a blank name, but saying so here keeps the drawer's
+    // own field from being the one thing a round trip is spent on.
+    if (name === "") return editing.fail("An account needs a name.");
+    const body: UpdateAccountBody = { name, ...flavorOf(selectedRaw, draft) };
     editing.run(
       () => api.accounts.update(scenarioId, account.serverId, body),
       () => {
@@ -164,9 +177,29 @@ export function AccountsScreen({
       () => {
         onChanged();
         if (again) setLotNonce((n) => n + 1);
-        else setAddingLot(false);
+        else setLotEditor(undefined);
       },
     );
+
+  const savePosition = (account: Account, positionId: number, body: UpdatePosition) =>
+    lot.run(
+      () => api.accounts.updatePosition(scenarioId, account.serverId, positionId, body),
+      () => {
+        onChanged();
+        setLotEditor(undefined);
+      },
+    );
+
+  const removePosition = (account: Account, lotRow: AssetLot) => {
+    if (!confirm(`Remove the ${lotRow.assetId} lot from ${account.name}?`)) return;
+    lot.run(
+      () => api.accounts.removePosition(scenarioId, account.serverId, lotRow.positionId),
+      () => {
+        onChanged();
+        setLotEditor(undefined);
+      },
+    );
+  };
 
   return (
     <>
@@ -261,23 +294,35 @@ export function AccountsScreen({
               onApply={(draft) => apply(selected, draft)}
               onSelectAccount={select}
               onAddLot={
-                selected.flavor === "Investment" ? () => setAddingLot(true) : undefined
+                selected.flavor === "Investment"
+                  ? () => setLotEditor({ kind: "add" })
+                  : undefined
               }
-              addLotForm={
-                addingLot && selected.flavor === "Investment" ? (
-                  <AddPositionForm
-                    key={lotNonce}
-                    scenarioId={scenarioId}
-                    assets={assets}
-                    profiles={raw.returnProfiles}
-                    taxStatus={selected.taxStatus}
-                    busy={lot.busy}
-                    error={lot.error}
-                    onAssetCreated={assetCreated}
-                    onCancel={() => setAddingLot(false)}
-                    onSubmit={(body, again) => addPosition(selected, body, again)}
-                  />
-                ) : undefined
+              onEditLot={
+                selected.flavor === "Investment"
+                  ? (row) => setLotEditor({ kind: "edit", positionId: row.positionId })
+                  : undefined
+              }
+              editingLotId={lotEditor?.kind === "edit" ? lotEditor.positionId : undefined}
+              lotForm={
+                selected.flavor === "Investment"
+                  ? lotForm(selected, lotEditor, {
+                      // Keyed by what it is open on, so clicking a second lot
+                      // starts a fresh draft on that lot rather than carrying
+                      // the first one's figures across.
+                      key: lotEditor?.kind === "edit" ? lotEditor.positionId : lotNonce,
+                      scenarioId,
+                      assets,
+                      profiles: raw.returnProfiles,
+                      busy: lot.busy,
+                      error: lot.error,
+                      onAssetCreated: assetCreated,
+                      onCancel: () => setLotEditor(undefined),
+                      onAdd: (body, again) => addPosition(selected, body, again),
+                      onSave: (positionId, body) => savePosition(selected, positionId, body),
+                      onDelete: (row) => removePosition(selected, row),
+                    })
+                  : undefined
               }
               onDelete={() => remove(selected)}
               busy={editing.busy}
@@ -300,5 +345,51 @@ export function AccountsScreen({
         />
       )}
     </>
+  );
+}
+
+/**
+ * The add- or edit-position form, or nothing while neither is open.
+ *
+ * Written as a function rather than inline because the two cases differ in
+ * what they submit — a create body, or a patch against one stored lot — and a
+ * ternary carrying both is longer than the branch it saves. An edit whose lot
+ * has since gone (deleted in another tab, say) renders as no form at all.
+ */
+function lotForm(
+  account: Account,
+  editor: LotEditor | undefined,
+  props: {
+    key: number;
+    scenarioId: number;
+    assets: Asset[];
+    profiles: RawWorkspace["returnProfiles"];
+    busy: boolean;
+    error: string | undefined;
+    onAssetCreated: (asset: Asset) => void;
+    onCancel: () => void;
+    onAdd: (body: CreatePosition, again: boolean) => void;
+    onSave: (positionId: number, body: UpdatePosition) => void;
+    onDelete: (lot: AssetLot) => void;
+  },
+) {
+  if (!editor) return undefined;
+  const { key, onAdd, onSave, onDelete, ...common } = props;
+
+  if (editor.kind === "add") {
+    return <PositionForm key={`add-${key}`} {...common} taxStatus={account.taxStatus} onSubmit={onAdd} />;
+  }
+
+  const lot = account.positions.find((p) => p.positionId === editor.positionId);
+  if (!lot) return undefined;
+  return (
+    <PositionForm
+      key={`edit-${key}`}
+      {...common}
+      taxStatus={account.taxStatus}
+      lot={lot}
+      onSubmit={(body) => onSave(lot.positionId, body)}
+      onDelete={() => onDelete(lot)}
+    />
   );
 }

@@ -31,6 +31,68 @@ pub fn router() -> Router<AppState> {
         .route("/history-presets", get(list_presets))
 }
 
+/// What kind of holding a profile describes.
+///
+/// A profile's *name* is the user's — renamed, translated, duplicated — so it
+/// cannot be what a client matches on when it decides which profile a ticker
+/// belongs to. This is the stable half: a stored fact about what the assumption
+/// is for, which survives everything that can happen to a name.
+///
+/// Null on a profile is the ordinary state and not a defect. It means nobody
+/// has said what the profile is for, so nothing picks it automatically — which
+/// is exactly right for a profile someone built by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum AssetClass {
+    UsEquity,
+    UsSmallCap,
+    GlobalEquity,
+    IntlEquity,
+    Bonds,
+    Reit,
+    Cash,
+    Commodity,
+    Crypto,
+    Balanced,
+}
+
+impl AssetClass {
+    const ALL: [AssetClass; 10] = [
+        AssetClass::UsEquity,
+        AssetClass::UsSmallCap,
+        AssetClass::GlobalEquity,
+        AssetClass::IntlEquity,
+        AssetClass::Bonds,
+        AssetClass::Reit,
+        AssetClass::Cash,
+        AssetClass::Commodity,
+        AssetClass::Crypto,
+        AssetClass::Balanced,
+    ];
+
+    /// Stored as its own name, so the column reads as itself in a query.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AssetClass::UsEquity => "UsEquity",
+            AssetClass::UsSmallCap => "UsSmallCap",
+            AssetClass::GlobalEquity => "GlobalEquity",
+            AssetClass::IntlEquity => "IntlEquity",
+            AssetClass::Bonds => "Bonds",
+            AssetClass::Reit => "Reit",
+            AssetClass::Cash => "Cash",
+            AssetClass::Commodity => "Commodity",
+            AssetClass::Crypto => "Crypto",
+            AssetClass::Balanced => "Balanced",
+        }
+    }
+
+    /// Text that names no class reads as none rather than as an error: a column
+    /// written by a newer build should leave an older one working.
+    fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.as_str() == text)
+    }
+}
+
 /// The distribution shapes a profile can take. `RegimeSwitching` nests two more
 /// distributions, so this mirrors the recursive Rust enum.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -206,6 +268,18 @@ impl DistributionSpec {
     }
 }
 
+/// One `return_profiles` row, before its distribution is assembled. Named
+/// rather than a tuple because five columns is past where positions are
+/// readable — and two handlers select exactly these.
+#[derive(Debug, sqlx::FromRow)]
+struct ProfileRow {
+    id: i64,
+    name: String,
+    description: Option<String>,
+    asset_class: Option<String>,
+    distribution_id: i64,
+}
+
 /// One `distributions` row, as read back for reassembly.
 #[derive(Debug, sqlx::FromRow)]
 struct DistRow {
@@ -304,6 +378,9 @@ pub struct Profile {
     pub id: i64,
     pub name: String,
     pub description: Option<String>,
+    /// What the profile is for, where anyone has said. Null is the normal
+    /// state for a hand-made profile and simply means nothing auto-selects it.
+    pub asset_class: Option<AssetClass>,
     pub distribution: DistributionSpec,
     /// Names of assets and accounts pointing at this profile. Always present,
     /// empty when nothing references it: an omitted key would make the
@@ -317,6 +394,8 @@ pub struct CreateProfile {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(default)]
+    pub asset_class: Option<AssetClass>,
     pub distribution: DistributionSpec,
 }
 
@@ -327,6 +406,12 @@ pub struct UpdateProfile {
     pub name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Doubly optional: absent leaves the class alone, an explicit null
+    /// unclassifies the profile. Every other field here reads absent as
+    /// "unchanged", which would otherwise make unclassifying unsayable.
+    #[serde(default, deserialize_with = "crate::api::double_option")]
+    #[ts(optional)]
+    pub asset_class: Option<Option<AssetClass>>,
     #[serde(default)]
     pub distribution: Option<DistributionSpec>,
 }
@@ -352,8 +437,8 @@ async fn list_return(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> ApiResult<Json<Vec<Profile>>> {
-    let rows: Vec<(i64, String, Option<String>, i64)> = sqlx::query_as(
-        "SELECT id, name, description, distribution_id
+    let rows: Vec<ProfileRow> = sqlx::query_as(
+        "SELECT id, name, description, asset_class, distribution_id
            FROM return_profiles WHERE user_id = ?1 ORDER BY name",
     )
     .bind(&user.id)
@@ -361,13 +446,14 @@ async fn list_return(
     .await?;
 
     let mut out = Vec::with_capacity(rows.len());
-    for (id, name, description, distribution_id) in rows {
+    for row in rows {
         out.push(Profile {
-            id,
-            name,
-            description,
-            distribution: load_distribution(&state, distribution_id, 0).await?,
-            used_by: references(&state, id).await?,
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            asset_class: row.asset_class.as_deref().and_then(AssetClass::parse),
+            distribution: load_distribution(&state, row.distribution_id, 0).await?,
+            used_by: references(&state, row.id).await?,
         });
     }
     Ok(Json(out))
@@ -378,8 +464,8 @@ async fn fetch_return(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<Profile>> {
-    let row: Option<(i64, String, Option<String>, i64)> = sqlx::query_as(
-        "SELECT id, name, description, distribution_id
+    let row: Option<ProfileRow> = sqlx::query_as(
+        "SELECT id, name, description, asset_class, distribution_id
            FROM return_profiles WHERE id = ?1 AND user_id = ?2",
     )
     .bind(id)
@@ -387,15 +473,15 @@ async fn fetch_return(
     .fetch_optional(&state.db)
     .await?;
 
-    let (id, name, description, distribution_id) =
-        row.ok_or(ApiError::NotFound("return profile"))?;
+    let row = row.ok_or(ApiError::NotFound("return profile"))?;
 
     Ok(Json(Profile {
-        id,
-        name,
-        description,
-        distribution: load_distribution(&state, distribution_id, 0).await?,
-        used_by: references(&state, id).await?,
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        asset_class: row.asset_class.as_deref().and_then(AssetClass::parse),
+        distribution: load_distribution(&state, row.distribution_id, 0).await?,
+        used_by: references(&state, row.id).await?,
     }))
 }
 
@@ -408,12 +494,14 @@ async fn create_return(
     let distribution_id = body.distribution.insert(&mut tx, &user.id, 0).await?;
 
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO return_profiles (user_id, name, description, distribution_id)
-         VALUES (?1,?2,?3,?4) RETURNING id",
+        "INSERT INTO return_profiles
+            (user_id, name, description, asset_class, distribution_id)
+         VALUES (?1,?2,?3,?4,?5) RETURNING id",
     )
     .bind(&user.id)
     .bind(body.name.trim())
     .bind(&body.description)
+    .bind(body.asset_class.map(AssetClass::as_str))
     .bind(distribution_id)
     .fetch_one(&mut *tx)
     .await
@@ -427,6 +515,7 @@ async fn create_return(
             id,
             name: body.name.trim().to_string(),
             description: body.description,
+            asset_class: body.asset_class,
             distribution: body.distribution,
             used_by: Vec::new(),
         }),
@@ -457,10 +546,15 @@ async fn update_return(
         None => old_distribution,
     };
 
+    // `Some(None)` is a deliberate unclassify, `None` is silence about the class.
+    let reclassify = body.asset_class.is_some();
+    let asset_class = body.asset_class.flatten().map(AssetClass::as_str);
+
     sqlx::query(
         "UPDATE return_profiles SET
             name            = COALESCE(?3, name),
             description     = COALESCE(?4, description),
+            asset_class     = CASE WHEN ?7 THEN ?6 ELSE asset_class END,
             distribution_id = ?5,
             updated_at      = datetime('now')
           WHERE id = ?1 AND user_id = ?2",
@@ -470,6 +564,8 @@ async fn update_return(
     .bind(body.name.as_deref().map(str::trim))
     .bind(&body.description)
     .bind(distribution_id)
+    .bind(asset_class)
+    .bind(reclassify)
     .execute(&mut *tx)
     .await
     .map_err(|e| on_unique_violation(e, "a return profile with that name already exists"))?;
@@ -546,6 +642,9 @@ async fn list_inflation(
             id,
             name,
             description,
+            // Inflation is not a holding, so it has no class to be one of; the
+            // two share a wire shape, not a meaning for every field of it.
+            asset_class: None,
             distribution: load_distribution(&state, distribution_id, 0).await?,
             used_by: Vec::new(),
         });
@@ -583,6 +682,7 @@ async fn create_inflation(
             id,
             name: body.name.trim().to_string(),
             description: body.description,
+            asset_class: None,
             distribution: body.distribution,
             used_by: Vec::new(),
         }),

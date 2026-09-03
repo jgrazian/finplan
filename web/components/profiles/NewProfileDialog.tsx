@@ -3,13 +3,17 @@
 import { useState } from "react";
 import { Dialog, Field, Input, Select } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import type { HistoryPreset, Profile } from "@/lib/api/types";
+import type { AssetClass, HistoryPreset, Profile } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { ASSET_CLASSES, CLASS_LABEL } from "@/lib/tickers";
 import type { DistributionKind } from "@/lib/types";
 import { DISTRIBUTIONS, DistributionTerms, KIND_LABEL } from "./DistributionTerms";
 import { ShapePanel } from "./Shape";
 import { RETURN_SCALE } from "./distribution";
 import { draftOf, problemWith, specOf } from "./distributionDraft";
+
+/** The `<option>` value standing in for "no class"; `null` is not a value. */
+const UNCLASSIFIED = "";
 
 /**
  * Creates a return profile — a market assumption assets and accounts can share.
@@ -30,6 +34,7 @@ export function NewProfileDialog({
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [assetClass, setAssetClass] = useState<AssetClass | null>(null);
   const [dist, setDist] = useState(() => draftOf({ kind: "Normal", mean: 0.07, std_dev: 0.15 }, presets));
   const submit = useSubmit();
   const problem = problemWith(dist);
@@ -47,6 +52,7 @@ export function NewProfileDialog({
               .create({
                 name: name.trim(),
                 description: description.trim() || null,
+                asset_class: assetClass,
                 distribution: specOf(dist),
               })
               .then(onCreated),
@@ -66,6 +72,26 @@ export function NewProfileDialog({
           placeholder="What this profile stands for"
           onChange={(e) => setDescription(e.target.value)}
         />
+      </Field>
+      <Field label="Asset class">
+        <Select
+          value={assetClass ?? UNCLASSIFIED}
+          onChange={(e) =>
+            setAssetClass(
+              e.target.value === UNCLASSIFIED ? null : (e.target.value as AssetClass),
+            )
+          }
+        >
+          {/* The default, because a profile made by hand is usually a variant
+              of something the library already covers — and two profiles of one
+              class make which one a ticker lands on a coin toss. */}
+          <option value={UNCLASSIFIED}>Unclassified — never auto-selected</option>
+          {ASSET_CLASSES.map((c) => (
+            <option key={c} value={c}>
+              {CLASS_LABEL[c]}
+            </option>
+          ))}
+        </Select>
       </Field>
       <Field label="Distribution">
         <Select

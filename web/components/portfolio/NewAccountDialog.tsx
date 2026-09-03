@@ -217,6 +217,7 @@ export function NewAccountDialog({
           {makingAsset && (
             <NewAssetInline
               scenarioId={scenarioId}
+              profiles={profiles}
               suggestedName={name.trim()}
               onCreated={(asset) => {
                 setAssetId(asset.id);

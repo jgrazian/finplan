@@ -5,6 +5,7 @@ import { CurrencyInput, Dialog, DialogRow, Field, Input, Select } from "@/compon
 import { api } from "@/lib/api/client";
 import type { Profile } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { tickerDefaults } from "@/lib/tickers";
 
 /** The `<option>` standing in for "no profile"; `null` is not a value. */
 const UNMAPPED = -1;
@@ -14,6 +15,11 @@ const UNMAPPED = -1;
  * a property account can be valued by. The return profile is what makes it
  * move — and may be left off, in which case the asset holds its opening price
  * for the whole simulation until it is mapped.
+ *
+ * Name and profile follow the ticker while nobody has said otherwise: `VTI` is
+ * the total US market, and a total-market fund belongs on the library's US
+ * equity profile. Typing into either field takes it off the ticker for good, so
+ * a later correction to the symbol cannot overwrite what was chosen by hand.
  */
 export function NewAssetDialog({
   scenarioId,
@@ -26,10 +32,20 @@ export function NewAssetDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
-  const [name, setName] = useState("");
+  const [ticker, setTicker] = useState("");
   const [price, setPrice] = useState(100);
-  const [profileId, setProfileId] = useState<number | null>(profiles[0]?.id ?? null);
+  /** Null while the name is still the ticker's; a string once it is the user's. */
+  const [name, setName] = useState<string | null>(null);
+  /** Undefined while the mapping is still the ticker's — `null` means unmapped. */
+  const [profileId, setProfileId] = useState<number | null | undefined>(undefined);
   const submit = useSubmit();
+
+  const known = tickerDefaults(ticker, profiles);
+  const effectiveName = name ?? known?.name ?? "";
+  const effectiveProfile =
+    profileId === undefined
+      ? (known?.profile?.id ?? profiles[0]?.id ?? null)
+      : profileId;
 
   return (
     <Dialog
@@ -39,9 +55,10 @@ export function NewAssetDialog({
         submit.run(
           () =>
             api.assets.create(scenarioId, {
-              name,
+              name: ticker,
+              description: effectiveName.trim() === "" ? null : effectiveName.trim(),
               initial_price: price,
-              return_profile_id: profileId,
+              return_profile_id: effectiveProfile,
               sort_order: 0,
             }),
           () => {
@@ -55,16 +72,28 @@ export function NewAssetDialog({
       error={submit.error}
     >
       <DialogRow>
-        <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} required />
+        <Field label="Ticker">
+          <Input
+            value={ticker}
+            placeholder="VTI"
+            onChange={(e) => setTicker(e.target.value)}
+            required
+          />
         </Field>
         <Field label="Opening price">
           <CurrencyInput value={price} onValueChange={setPrice} aria-label="Opening price" />
         </Field>
       </DialogRow>
+      <Field label="Name">
+        <Input
+          value={effectiveName}
+          placeholder={known ? known.name : "optional"}
+          onChange={(e) => setName(e.target.value)}
+        />
+      </Field>
       <Field label="Return profile">
         <Select
-          value={profileId ?? UNMAPPED}
+          value={effectiveProfile ?? UNMAPPED}
           onChange={(e) => {
             const id = Number(e.target.value);
             setProfileId(id === UNMAPPED ? null : id);
@@ -78,6 +107,21 @@ export function NewAssetDialog({
           <option value={UNMAPPED}>Unmapped — held flat at 0%</option>
         </Select>
       </Field>
+      {known && (
+        <p
+          style={{
+            margin: 0,
+            fontSize: 11.5,
+            lineHeight: 1.5,
+            color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+          }}
+        >
+          Recognised as {known.classLabel}
+          {known.profile
+            ? `, mapped to ${known.profile.name}.`
+            : ", and nothing in your library describes it — leave it unmapped or pick a profile."}
+        </p>
+      )}
     </Dialog>
   );
 }

@@ -12,9 +12,14 @@ import {
   SegmentedControl,
   type SegmentOption,
 } from "@/components/ui";
-import type { Asset, CreatePosition, Profile } from "@/lib/api/types";
+import type {
+  Asset,
+  CreatePosition,
+  Profile,
+  UpdatePosition,
+} from "@/lib/api/types";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
-import type { TaxStatus } from "@/lib/types";
+import type { AssetLot, TaxStatus } from "@/lib/types";
 import { NewAssetInline } from "./NewAssetInline";
 
 type Mode = "value" | "units";
@@ -46,29 +51,7 @@ function heldLongTerm(iso: string): boolean {
   return Number.isFinite(bought) && Date.now() - bought >= 365 * DAY_MS;
 }
 
-/**
- * Add a position — the amount first, the lot detail opt-in.
- *
- * Four required fields become two. Amount and ticker are one sentence; units
- * and value are the same field under a switch, converted at the asset's opening
- * price. Cost basis and purchase date stay available but are demoted to a
- * checkbox, and in a tax-deferred or tax-free account they are not offered at
- * all — nothing in the simulation reads them there.
- *
- * It opens under the positions table inside the drawer rather than over it, so
- * the account stays on screen and repeat entry is one Enter away.
- */
-export function AddPositionForm({
-  scenarioId,
-  assets,
-  profiles,
-  taxStatus,
-  busy,
-  error,
-  onAssetCreated,
-  onCancel,
-  onSubmit,
-}: {
+interface Common {
   scenarioId: number;
   assets: Asset[];
   profiles: Profile[];
@@ -79,16 +62,69 @@ export function AddPositionForm({
   /** A ticker made here, so the screen can reload and keep it selectable. */
   onAssetCreated: (asset: Asset) => void;
   onCancel: () => void;
-  /** `again` keeps the form open for the next lot. */
+}
+
+/** Adding: the fields start empty and `again` keeps the form open for the next lot. */
+interface AddProps extends Common {
+  lot?: undefined;
   onSubmit: (body: CreatePosition, again: boolean) => void;
-}) {
-  const [mode, setMode] = useState<Mode>("value");
-  const [assetId, setAssetId] = useState(assets[0]?.id);
-  const [makingAsset, setMakingAsset] = useState(assets.length === 0);
-  const [amount, setAmount] = useState(0);
-  const [tracking, setTracking] = useState(false);
-  const [basis, setBasis] = useState(0);
-  const [date, setDate] = useState("");
+}
+
+/** Editing: the same fields, prefilled, and the lot can be removed outright. */
+interface EditProps extends Common {
+  lot: AssetLot;
+  onSubmit: (body: UpdatePosition) => void;
+  onDelete: () => void;
+}
+
+export type PositionFormProps = AddProps | EditProps;
+
+/**
+ * One lot — the amount first, the lot detail opt-in.
+ *
+ * Four required fields become two. Amount and ticker are one sentence; units
+ * and value are the same field under a switch, converted at the asset's opening
+ * price. Cost basis and purchase date stay available but are demoted to a
+ * checkbox, and in a tax-deferred or tax-free account they are not offered at
+ * all — nothing in the simulation reads them there.
+ *
+ * It opens under the positions table inside the drawer rather than over it, so
+ * the account stays on screen and repeat entry is one Enter away.
+ *
+ * Adding and editing are the same form because they are the same four facts.
+ * The differences are all at the edges: an edit opens on the stored figures, is
+ * written in units (the shape the lot is actually stored in, so re-saving it
+ * unchanged cannot drift), sends only the fields it governs, and can delete.
+ */
+export function PositionForm(props: PositionFormProps) {
+  const {
+    scenarioId,
+    assets,
+    profiles,
+    taxStatus,
+    busy,
+    error,
+    onAssetCreated,
+    onCancel,
+    lot,
+  } = props;
+  const editing = lot != null;
+
+  // Basis is per lot because the engine's liquidation strategies pick between
+  // lots, and the gain each one realises depends on what it was bought for.
+  // Where gains are never realised, the field is noise.
+  const offersBasis = taxStatus === "Taxable";
+
+  const [mode, setMode] = useState<Mode>(editing ? "units" : "value");
+  const [assetId, setAssetId] = useState(lot?.assetServerId ?? assets[0]?.id);
+  const [makingAsset, setMakingAsset] = useState(!editing && assets.length === 0);
+  const [amount, setAmount] = useState(lot?.units ?? 0);
+  // An existing lot already has a basis and a date, so there is nothing to opt
+  // into: the checkbox is on, and turning it off is the way to say the lot
+  // should be marked at what it is worth instead.
+  const [tracking, setTracking] = useState(editing && offersBasis);
+  const [basis, setBasis] = useState(lot?.costBasis ?? 0);
+  const [date, setDate] = useState(lot?.purchaseDate ?? "");
 
   const asset = assets.find((a) => a.id === assetId);
   const price = asset?.initial_price ?? 0;
@@ -96,15 +132,23 @@ export function AddPositionForm({
   const value = mode === "units" ? amount * price : amount;
   const profile = profiles.find((p) => p.id === asset?.return_profile_id);
 
-  // Basis is per lot because the engine's liquidation strategies pick between
-  // lots, and the gain each one realises depends on what it was bought for.
-  // Where gains are never realised, the field is noise.
-  const offersBasis = taxStatus === "Taxable";
   const tracked = offersBasis && tracking;
 
   const submit = (again: boolean) => {
     if (assetId == null || units <= 0 || busy || makingAsset) return;
-    onSubmit(
+    if (props.lot) {
+      props.onSubmit({
+        asset_id: assetId,
+        units,
+        // Null is "unchanged", which is what a basis nothing reads should be:
+        // rewriting it here would quietly lose the figure if the account is
+        // ever converted to one where a sale realises a gain.
+        cost_basis: offersBasis ? (tracked ? basis : value) : null,
+        purchase_date: tracked && date.trim() !== "" ? date : null,
+      });
+      return;
+    }
+    props.onSubmit(
       {
         asset_id: assetId,
         units,
@@ -154,7 +198,7 @@ export function AddPositionForm({
             marginBottom: 10,
           }}
         >
-          <h6 style={{ margin: 0 }}>Add position</h6>
+          <h6 style={{ margin: 0 }}>{editing ? "Edit position" : "Add position"}</h6>
           <SegmentedControl
             options={MODES}
             value={mode}
@@ -239,6 +283,7 @@ export function AddPositionForm({
           <div style={{ marginTop: 10 }}>
             <NewAssetInline
               scenarioId={scenarioId}
+              profiles={profiles}
               onCreated={(asset) => {
                 // Selected straight away; the reload the screen kicks off is
                 // what puts it in the list behind this.
@@ -301,7 +346,7 @@ export function AddPositionForm({
                     <DateInput
                       style={{ minHeight: 32 }}
                       value={date}
-                      placeholder="plan start"
+                      placeholder={editing ? "unchanged" : "plan start"}
                       onValueChange={setDate}
                     />
                   </Field>
@@ -331,13 +376,19 @@ export function AddPositionForm({
             flexWrap: "wrap",
           }}
         >
-          <Button
-            variant="ghost"
-            disabled={busy || units <= 0 || makingAsset}
-            onClick={() => submit(true)}
-          >
-            Save &amp; add another
-          </Button>
+          {props.lot ? (
+            <Button variant="ghost" disabled={busy} onClick={props.onDelete}>
+              Delete
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              disabled={busy || units <= 0 || makingAsset}
+              onClick={() => submit(true)}
+            >
+              Save &amp; add another
+            </Button>
+          )}
           <Button style={{ marginLeft: "auto" }} onClick={onCancel}>
             Cancel
           </Button>
@@ -347,7 +398,7 @@ export function AddPositionForm({
             disabled={busy || units <= 0 || makingAsset}
             onClick={() => submit(false)}
           >
-            Add position
+            {editing ? "Save changes" : "Add position"}
           </Button>
         </div>
       </div>

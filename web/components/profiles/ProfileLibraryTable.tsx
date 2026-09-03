@@ -2,6 +2,7 @@
 
 import type { KeyboardEvent } from "react";
 import { Tag, type TagTone, rowStyle } from "@/components/ui";
+import { CLASS_LABEL } from "@/lib/tickers";
 import type { DistributionKind, ReturnProfile } from "@/lib/types";
 import { KIND_LABEL } from "./DistributionTerms";
 import { ShapeAxis, ShapeSpark } from "./Shape";
@@ -108,9 +109,22 @@ export function ProfileLibraryTable({
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
                 }}
-                title={profile.id}
+                title={
+                  profile.assetClass
+                    ? `${profile.id} · ${CLASS_LABEL[profile.assetClass]}`
+                    : profile.id
+                }
               >
                 {profile.id}
+                {/* What a ticker of this class resolves to. Unclassified rows
+                    say nothing rather than saying "none": the absence is the
+                    ordinary case, and a column of dashes would read as a
+                    defect. */}
+                {profile.assetClass && (
+                  <span style={{ fontSize: 11, marginLeft: 6, color: FAINT }}>
+                    {CLASS_LABEL[profile.assetClass]}
+                  </span>
+                )}
               </span>
               <span>
                 <Tag tone={kindTone(profile.kind)}>{KIND_LABEL[profile.kind]}</Tag>

@@ -1,4 +1,4 @@
-export { AddPositionForm } from "./AddPositionForm";
+export { PositionForm } from "./PositionForm";
 export { NewAccountDialog } from "./NewAccountDialog";
 export { NewAssetDialog } from "./NewAssetDialog";
 export { NewAssetInline } from "./NewAssetInline";

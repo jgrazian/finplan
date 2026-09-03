@@ -4,20 +4,37 @@
 //! user is given a small library of market assumptions and a default tax table
 //! at registration. These are ordinary rows: the user can edit or delete them.
 
+use crate::api::profiles::AssetClass;
 use crate::db::Db;
 use crate::error::ApiResult;
 
-/// (name, description, distribution kind, mean/rate, std_dev)
+/// (name, description, distribution kind, mean/rate, std_dev, asset class)
 ///
 /// The figures are the long-run historical constants the engine ships with, in
 /// `finplan_core::model::market`.
-const RETURN_PROFILES: &[(&str, &str, &str, f64, f64)] = &[
+///
+/// The class is what a ticker's asset class is matched against, so it is what
+/// lets the web client map `VTI` onto the first of these without reading its
+/// name. Two carry none: "Savings Account" describes a bank balance rather than
+/// a holding, and "No Growth" is the absence of an assumption — neither should
+/// ever be what a ticker resolves to.
+type SeedProfile = (
+    &'static str,
+    &'static str,
+    &'static str,
+    f64,
+    f64,
+    Option<AssetClass>,
+);
+
+const RETURN_PROFILES: &[SeedProfile] = &[
     (
         "US Total Market",
         "S&P 500, 1928-2024: 9.9% mean, 19.6% sd",
         "Normal",
         0.0990829,
         0.1962,
+        Some(AssetClass::UsEquity),
     ),
     (
         "US Small Cap",
@@ -25,6 +42,7 @@ const RETURN_PROFILES: &[(&str, &str, &str, f64, f64)] = &[
         "Normal",
         0.112028,
         0.2988,
+        Some(AssetClass::UsSmallCap),
     ),
     (
         "US Aggregate Bonds",
@@ -32,6 +50,7 @@ const RETURN_PROFILES: &[(&str, &str, &str, f64, f64)] = &[
         "Normal",
         0.0301011,
         0.0574,
+        Some(AssetClass::Bonds),
     ),
     (
         "International Developed",
@@ -39,6 +58,7 @@ const RETURN_PROFILES: &[(&str, &str, &str, f64, f64)] = &[
         "Normal",
         0.0602527,
         0.2251,
+        Some(AssetClass::IntlEquity),
     ),
     (
         "REITs",
@@ -46,6 +66,7 @@ const RETURN_PROFILES: &[(&str, &str, &str, f64, f64)] = &[
         "Normal",
         0.0642145,
         0.1959,
+        Some(AssetClass::Reit),
     ),
     (
         "Cash / T-Bills",
@@ -53,6 +74,7 @@ const RETURN_PROFILES: &[(&str, &str, &str, f64, f64)] = &[
         "Normal",
         0.0337398,
         0.0308,
+        Some(AssetClass::Cash),
     ),
     (
         "Savings Account",
@@ -60,8 +82,9 @@ const RETURN_PROFILES: &[(&str, &str, &str, f64, f64)] = &[
         "Fixed",
         0.02,
         0.0,
+        None,
     ),
-    ("No Growth", "Holds nominal value", "None", 0.0, 0.0),
+    ("No Growth", "Holds nominal value", "None", 0.0, 0.0, None),
 ];
 
 /// 2024 US federal brackets, single filer.
@@ -78,7 +101,7 @@ const FEDERAL_BRACKETS: &[(f64, f64)] = &[
 pub async fn seed_user_library(db: &Db, user_id: &str) -> ApiResult<()> {
     let mut tx = db.begin().await?;
 
-    for (name, description, kind, mean, std_dev) in RETURN_PROFILES {
+    for (name, description, kind, mean, std_dev, asset_class) in RETURN_PROFILES {
         let (rate, mean_col, std_col) = match *kind {
             "Fixed" => (Some(*mean), None, None),
             "Normal" => (None, Some(*mean), Some(*std_dev)),
@@ -98,13 +121,15 @@ pub async fn seed_user_library(db: &Db, user_id: &str) -> ApiResult<()> {
         .await?;
 
         sqlx::query(
-            "INSERT INTO return_profiles (user_id, name, description, distribution_id)
-             VALUES (?1,?2,?3,?4)",
+            "INSERT INTO return_profiles
+                (user_id, name, description, distribution_id, asset_class)
+             VALUES (?1,?2,?3,?4,?5)",
         )
         .bind(user_id)
         .bind(name)
         .bind(description)
         .bind(distribution_id)
+        .bind(asset_class.map(AssetClass::as_str))
         .execute(&mut *tx)
         .await?;
     }

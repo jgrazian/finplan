@@ -31,6 +31,7 @@ import type {
   TaxConfig,
   UpdateAccountBody,
   UpdateAsset,
+  UpdatePosition,
   UpdatePreferences,
   UpdateProfile,
   UpdateScenario,
@@ -99,6 +100,16 @@ export const api = {
       http.get<Position[]>(`${scenario(scenarioId)}/accounts/${id}/positions`),
     addPosition: (scenarioId: number, id: number, body: CreatePosition) =>
       http.post<Position>(`${scenario(scenarioId)}/accounts/${id}/positions`, body),
+    updatePosition: (
+      scenarioId: number,
+      id: number,
+      positionId: number,
+      body: UpdatePosition,
+    ) =>
+      http.patch<Position>(
+        `${scenario(scenarioId)}/accounts/${id}/positions/${positionId}`,
+        body,
+      ),
     removePosition: (scenarioId: number, id: number, positionId: number) =>
       http.delete(`${scenario(scenarioId)}/accounts/${id}/positions/${positionId}`),
   },
