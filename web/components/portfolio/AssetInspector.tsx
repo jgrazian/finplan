@@ -112,7 +112,6 @@ export function AssetInspector({
         display: "flex",
         flexDirection: "column",
         gap: 12,
-        height: "100%",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
@@ -287,7 +286,10 @@ export function AssetInspector({
         <p style={{ margin: 0, fontSize: 12, color: "var(--color-accent-700)" }}>{error}</p>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
+      {/* The rail is stretched to the height of the asset list beside it, so a
+          footer pinned to its bottom would strand Apply an arm's length below
+          the fields it applies to. It follows the content instead. */}
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         <Button
           style={{ flex: 1 }}
           disabled={!dirty || busy}

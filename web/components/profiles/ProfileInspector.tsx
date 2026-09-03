@@ -89,7 +89,6 @@ export function ProfileInspector({
         display: "flex",
         flexDirection: "column",
         gap: 12,
-        height: "100%",
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
@@ -198,7 +197,7 @@ export function ProfileInspector({
         </p>
       )}
 
-      <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         {/* Revert exists only while there is something to revert; an always-on
             copy of it would read as a third thing the drawer does. */}
         {dirty && (
