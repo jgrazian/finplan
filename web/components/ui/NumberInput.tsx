@@ -265,3 +265,8 @@ export function UnitInput({ unit, ...rest }: NumberInputProps & { unit: ReactNod
 export function CurrencyInput(props: NumberInputProps) {
   return <NumberInput decimals={2} {...props} prefix="$" />;
 }
+
+/** `9.9%` — a rate as typed, with the sign available for a bear regime. */
+export function PercentInput(props: NumberInputProps) {
+  return <NumberInput decimals={1} group={false} allowNegative {...props} suffix="%" />;
+}

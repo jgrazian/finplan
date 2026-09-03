@@ -6,7 +6,8 @@
  * history, and a regime model blends two distributions — so those report null
  * and the UI shows a dash instead of a fabricated figure.
  */
-import type { DistributionSpec, Profile } from "@/lib/api/types";
+import type { DistributionSpec, HistoryPreset, Profile } from "@/lib/api/types";
+import { historyStats } from "@/lib/history";
 import type { InflationProfile, ReturnProfile } from "@/lib/types";
 
 interface Summary {
@@ -56,12 +57,13 @@ function summarize(distribution: DistributionSpec): Summary {
 
 export function toViewReturnProfiles(profiles: Profile[]): ReturnProfile[] {
   return profiles.map((profile) => {
-    const { mean, sd, source } = summarize(profile.distribution);
+    const { mean, sd } = summarize(profile.distribution);
     return {
       id: profile.name,
       serverId: profile.id,
       kind: profile.distribution.kind,
-      source: profile.description ?? source,
+      description: profile.description ?? "",
+      distribution: profile.distribution,
       mean,
       sd,
       usedBy: profile.used_by,
@@ -76,6 +78,7 @@ export function toViewInflationProfiles(profiles: Profile[]): InflationProfile[]
       id: profile.name,
       serverId: profile.id,
       kind: profile.distribution.kind,
+      distribution: profile.distribution,
       mean,
       sd,
       note: profile.description ?? source,
@@ -84,9 +87,26 @@ export function toViewInflationProfiles(profiles: Profile[]): InflationProfile[]
 }
 
 /**
- * A resampled history has no parameters to edit — its shape comes from the
- * data. Duplicating one yields an editable copy.
+ * Attaches the years behind each `Bootstrap` profile, and the figures they
+ * imply.
+ *
+ * `summarize` reports null for a resampled history because the wire format on
+ * its own carries only a preset name. Once the preset table has loaded the
+ * client holds the observations, and a mean and a spread it measured are worth
+ * more than a dash — they are facts about the history, not a fitted curve. The
+ * profile still draws from the years, which is why they are carried too.
  */
-export function isReadOnlyPreset(profile: ReturnProfile): boolean {
-  return profile.kind === "Bootstrap";
+export function withHistories(
+  profiles: ReturnProfile[],
+  presets: HistoryPreset[],
+): ReturnProfile[] {
+  if (presets.length === 0) return profiles;
+  const byId = new Map(presets.map((p) => [p.id, p.returns]));
+  return profiles.map((profile) => {
+    if (profile.distribution.kind !== "Bootstrap") return profile;
+    const history = byId.get(profile.distribution.preset);
+    if (!history) return profile;
+    const stats = historyStats(history);
+    return stats ? { ...profile, history, mean: stats.mean, sd: stats.sd } : profile;
+  });
 }

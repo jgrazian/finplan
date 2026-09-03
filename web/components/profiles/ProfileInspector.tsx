@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Button,
   CompactInput,
@@ -9,42 +10,69 @@ import {
   Select,
   Tag,
 } from "@/components/ui";
+import type { HistoryPreset, UpdateProfile } from "@/lib/api/types";
 import type { DistributionKind, ReturnProfile } from "@/lib/types";
-import { DistributionCurve } from "./DistributionCurve";
-import { pct } from "./distribution";
+import { DISTRIBUTIONS, DistributionTerms, KIND_LABEL } from "./DistributionTerms";
+import { ShapePanel } from "./Shape";
+import { RETURN_SCALE } from "./distribution";
+import {
+  type DistributionDraft,
+  draftOf,
+  problemWith,
+  sameSpec,
+  specOf,
+} from "./distributionDraft";
 
-const DISTRIBUTIONS: DistributionKind[] = [
-  "None",
-  "Fixed",
-  "Normal",
-  "LogNormal",
-  "StudentT",
-  "RegimeSwitching",
-  "Bootstrap",
-];
+/** What the drawer is editing: everything a PATCH to the profile can carry. */
+interface ProfileDraft {
+  description: string;
+  dist: DistributionDraft;
+}
 
 /**
- * Inspects the selected return profile.
+ * The profile half of the drawer — the one place a distribution is edited.
  *
- * The parameter fields display rather than edit: nothing here is wired to
- * `PATCH /return-profiles/{id}` yet, so they are read-only for every profile.
- * `readOnly` is the narrower statement that this profile is a sampled preset,
- * whose shape comes from data and could not be typed in even once editing
- * lands — duplicating one yields a parameterised copy.
+ * Changing Distribution swaps only the terms block; the name, the description
+ * and what uses the profile stay put, and the numbers a narrower kind does not
+ * take are held until Apply rather than dropped, so a mis-click on the select
+ * costs nothing. The shape redraws as the terms are typed, which is the point
+ * of having it here at all: the figures say 9.9% and 19.6%, and the curve says
+ * what that means for a bad year.
+ *
+ * Mount with a `key` of the profile so switching rows starts a fresh draft.
  */
 export function ProfileInspector({
   profile,
-  readOnly,
-  onKindChange,
-  onDuplicate,
+  presets,
   onApply,
+  onDuplicate,
+  busy,
+  error,
+  offline,
 }: {
   profile: ReturnProfile;
-  readOnly?: boolean;
-  onKindChange?: (kind: DistributionKind) => void;
-  onDuplicate?: () => void;
-  onApply?: () => void;
+  /** The histories the server offers, for a Bootstrap profile's preset. */
+  presets: HistoryPreset[];
+  onApply: (body: UpdateProfile) => void;
+  onDuplicate: () => void;
+  busy?: boolean;
+  error?: string;
+  /** No connection: the fields close rather than take edits that cannot save. */
+  offline?: boolean;
 }) {
+  const pristine: ProfileDraft = {
+    description: profile.description,
+    dist: draftOf(profile.distribution, presets),
+  };
+  const [draft, setDraft] = useState<ProfileDraft>(pristine);
+  const spec = specOf(draft.dist);
+  // The draft's history, not the stored profile's: switching preset redraws
+  // the shape before Apply, which is the only way to compare two of them.
+  const history = presets.find((p) => p.id === draft.dist.preset)?.returns;
+  const dirty =
+    draft.description !== pristine.description || !sameSpec(draft.dist, pristine.dist);
+  const problem = problemWith(draft.dist);
+
   return (
     <div
       style={{
@@ -56,48 +84,60 @@ export function ProfileInspector({
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-        <h5 style={{ margin: 0, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 14 }}>
-          {profile.id}
-        </h5>
-        <Tag tone="outline">{profile.kind}</Tag>
+        <h5 style={{ margin: 0 }}>{profile.id}</h5>
+        <Tag tone="outline">profile</Tag>
       </div>
+
+      <Field label="Description">
+        <CompactInput
+          value={draft.description}
+          readOnly={offline}
+          placeholder="What this profile stands for"
+          onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
+        />
+      </Field>
 
       <Field label="Distribution">
         <Select
           style={{ minHeight: 32 }}
-          value={profile.kind}
-          disabled={readOnly || !onKindChange}
-          onChange={(e) => onKindChange?.(e.target.value as DistributionKind)}
+          value={draft.dist.kind}
+          disabled={offline}
+          onChange={(e) =>
+            setDraft((d) => ({
+              ...d,
+              dist: { ...d.dist, kind: e.target.value as DistributionKind },
+            }))
+          }
         >
-          {DISTRIBUTIONS.map((d) => (
-            <option key={d}>{d}</option>
+          {DISTRIBUTIONS.map((kind) => (
+            <option key={kind} value={kind}>
+              {KIND_LABEL[kind]}
+            </option>
           ))}
         </Select>
       </Field>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="Mean return">
-          <CompactInput value={pct(profile.mean)} readOnly />
-        </Field>
-        <Field label="Volatility">
-          <CompactInput value={profile.sd === 0 ? "0" : pct(profile.sd)} readOnly />
-        </Field>
+      <DistributionTerms
+        draft={draft.dist}
+        presets={presets}
+        readOnly={offline}
+        onChange={(patch) => setDraft((d) => ({ ...d, dist: { ...d.dist, ...patch } }))}
+      />
+
+      <div>
+        <SectionHeading className="mb-[6px]">Shape · annual return</SectionHeading>
+        <ShapePanel spec={spec} scale={RETURN_SCALE} history={history} />
       </div>
-
-      <Field label="Sample source">
-        <CompactInput value={profile.source} readOnly />
-      </Field>
-
-      <DistributionCurve kind={profile.kind} mean={profile.mean} sd={profile.sd} />
 
       <Hr flush />
 
       <div>
-        <SectionHeading className="mb-[6px]">Assets on this profile</SectionHeading>
+        <SectionHeading className="mb-[6px]">Used by</SectionHeading>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {profile.usedBy.length === 0 ? (
             <span className="text-muted" style={{ fontSize: 12 }}>
-              No assets reference this profile.
+              Nothing points at this profile yet — an asset or an account&rsquo;s cash
+              can.
             </span>
           ) : (
             profile.usedBy.map((u) => (
@@ -109,11 +149,35 @@ export function ProfileInspector({
         </div>
       </div>
 
+      {(problem ?? error) && (
+        <p style={{ margin: 0, fontSize: 12, color: "var(--color-accent-700)" }}>
+          {problem ?? error}
+        </p>
+      )}
+
       <div style={{ display: "flex", gap: 8, marginTop: "auto" }}>
-        <Button style={{ flex: 1 }} onClick={onDuplicate}>
+        {/* Revert exists only while there is something to revert; an always-on
+            copy of it would read as a third thing the drawer does. */}
+        {dirty && (
+          <Button style={{ flex: 1 }} disabled={busy} onClick={() => setDraft(pristine)}>
+            Revert
+          </Button>
+        )}
+        <Button
+          style={{ flex: 1 }}
+          onClick={onDuplicate}
+          disabled={busy || offline}
+          title="Copy this profile, so a shared one can be changed for one scenario"
+        >
           Duplicate
         </Button>
-        <Button variant="primary" style={{ flex: 1 }} onClick={onApply} disabled={readOnly}>
+        <Button
+          variant="primary"
+          style={{ flex: 1 }}
+          disabled={!dirty || busy || offline || problem != null}
+          title={offline ? "No connection to the server." : undefined}
+          onClick={() => onApply({ description: draft.description.trim(), distribution: spec })}
+        >
           Apply
         </Button>
       </div>

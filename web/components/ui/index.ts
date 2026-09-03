@@ -6,7 +6,7 @@ export type { DropdownOption, DropdownProps } from "./Dropdown";
 export type { ButtonProps } from "./Button";
 export { CompactInput, Field, Input, RangeField, Select } from "./Field";
 export { DateInput } from "./DateInput";
-export { CurrencyInput, NumberInput, UnitInput } from "./NumberInput";
+export { CurrencyInput, NumberInput, PercentInput, UnitInput } from "./NumberInput";
 export type { NumberInputProps } from "./NumberInput";
 export { Hr } from "./Hr";
 export { Kbd } from "./Kbd";

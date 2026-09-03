@@ -8,7 +8,7 @@ export { AccountTerms } from "./AccountTerms";
 export { AccountValuation } from "./AccountValuation";
 export { AssetInspector } from "./AssetInspector";
 export type { AssetDraft } from "./AssetInspector";
-export { AssetProfileList } from "./AssetProfileList";
+export { AssetsTable } from "./AssetsTable";
 export { AccountsTable } from "./AccountsTable";
 export { DirtyField } from "./DirtyField";
 export { LinkedAccounts } from "./LinkedAccounts";

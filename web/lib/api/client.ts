@@ -20,6 +20,7 @@ import type {
   DeleteAccount,
   Event,
   EventBody,
+  HistoryPreset,
   PasswordChange,
   Position,
   Profile,
@@ -127,7 +128,8 @@ export const api = {
     remove: (id: number) => http.delete(`/inflation-profiles/${id}`),
   },
 
-  historyPresets: () => http.get<string[]>("/history-presets"),
+  /** The bootstrap histories the engine ships with, series and all. */
+  historyPresets: () => http.get<HistoryPreset[]>("/history-presets"),
 
   taxConfigs: {
     list: () => http.get<TaxConfig[]>("/tax-configs"),

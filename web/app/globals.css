@@ -1049,3 +1049,41 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+
+/* ── Multi-select box ──────────────────────────────────────────────────────
+   Square where .radio's dot is round, because it is a different act: a dot
+   picks one of a set, a box gathers rows for one action over all of them. */
+.check {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.check input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.check .box {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 1px solid var(--color-accent);
+}
+
+.check:hover .box {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.check input:checked + .box {
+  background: var(--color-accent);
+  box-shadow: inset 0 0 0 2px var(--color-bg);
+}
+
+.check input:focus-visible + .box {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

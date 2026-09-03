@@ -509,7 +509,7 @@ pub const HISTORY_PRESETS: &[&str] = &[
     "tips",
 ];
 
-fn historical_returns(preset: &str) -> ApiResult<HistoricalReturns> {
+pub(crate) fn historical_returns(preset: &str) -> ApiResult<HistoricalReturns> {
     Ok(match preset {
         "sp500" => HistoricalReturns::sp500(),
         "us_small_cap" => HistoricalReturns::us_small_cap(),

@@ -7,6 +7,7 @@
  * place that maps one onto the other, so a server change surfaces there as a
  * type error rather than as a wrong number on screen.
  */
+import type { DistributionSpec } from "@/lib/api/types";
 
 // ── ids ───────────────────────────────────────────────────────────────────
 /** Display identity — a name where the domain has one, else the row id. */
@@ -254,8 +255,14 @@ export interface ReturnProfile {
   id: ReturnProfileId;
   serverId: number;
   kind: DistributionKind;
-  /** Provenance of the samples, e.g. "US total market · 1928–2024". */
-  source: string;
+  /** What the user wrote about it, blank where nothing was written. */
+  description: string;
+  /**
+   * The distribution itself, not just its summary. The row draws the profile's
+   * shape, and a Student-t and a normal with the same mean and spread are
+   * different pictures — which is the whole reason to pick one over the other.
+   */
+  distribution: DistributionSpec;
   /**
    * Annual mean return in percent, and its standard deviation. Null where the
    * distribution has no closed-form summary — a resampled history or a regime
@@ -263,6 +270,13 @@ export interface ReturnProfile {
    */
   mean: number | null;
   sd: number | null;
+  /**
+   * The years behind a `Bootstrap` profile, as fractions. Attached once the
+   * preset table has loaded; until then, and for every other kind, absent.
+   * A resampled history is the one shape that cannot be drawn from its
+   * parameters, because it has none — these are its parameters.
+   */
+  history?: readonly number[];
   /** Assets or accounts drawing on this profile. */
   usedBy: string[];
 }
@@ -274,4 +288,5 @@ export interface InflationProfile {
   mean: number | null;
   sd: number | null;
   note: string;
+  distribution: DistributionSpec;
 }

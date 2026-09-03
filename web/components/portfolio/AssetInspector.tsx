@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { pct, quantiles } from "@/components/profiles";
+import { RETURN_SCALE, ShapePanel, pct } from "@/components/profiles";
 import {
   Blueprint,
   Button,
@@ -16,7 +16,7 @@ import {
   Tag,
   Td,
 } from "@/components/ui";
-import type { Profile } from "@/lib/api/types";
+import type { DistributionSpec, Profile } from "@/lib/api/types";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
 import type { ReturnProfile } from "@/lib/types";
 import type { AssetRow } from "@/lib/view/assets";
@@ -32,6 +32,9 @@ export interface AssetDraft {
 
 /** The `<option>` value standing in for "no profile"; `null` is not a value. */
 const UNMAPPED = -1;
+
+/** An unmapped asset is held flat, which is what a None profile draws. */
+const HELD_FLAT: DistributionSpec = { kind: "None" };
 
 const FIGURE = {
   fontFamily: "var(--font-heading)",
@@ -49,18 +52,22 @@ function draftOf(asset: AssetRow): AssetDraft {
 }
 
 /**
- * The asset half of the polymorphic inspector.
+ * The asset half of the drawer.
  *
- * The figures under "inherited from" are the profile's, not the asset's: an
- * asset has no return of its own, which is the whole reason the list nests it
- * under one. Mount with a `key` of the asset id so switching rows starts a
- * fresh draft rather than carrying edits across.
+ * The block under the return profile is the profile's, not the asset's, and it
+ * is read-only here: an asset has no return of its own, which is the whole
+ * reason it points at one. Editing the profile is a different subject, so it is
+ * a move to the library rather than a second set of fields for the same row.
+ *
+ * Mount with a `key` of the asset id so switching rows starts a fresh draft
+ * rather than carrying edits across.
  */
 export function AssetInspector({
   asset,
   profile,
   profiles,
   onApply,
+  onEditProfile,
   busy,
   error,
   offline,
@@ -71,6 +78,8 @@ export function AssetInspector({
   /** Every profile the asset could be remapped onto. */
   profiles: Profile[];
   onApply: (draft: AssetDraft) => void;
+  /** Moves the drawer onto the profile itself; absent while unmapped. */
+  onEditProfile?: () => void;
   busy?: boolean;
   error?: string;
   /** No connection: the fields close rather than take edits that cannot save. */
@@ -84,7 +93,9 @@ export function AssetInspector({
   const dirty = (Object.keys(pristine) as Array<keyof AssetDraft>).some(
     (k) => draft[k] !== pristine[k],
   );
-  const q = quantiles(profile?.mean ?? null, profile?.sd ?? null);
+  // The block describes what the asset points at now, not what the unsaved
+  // draft would point at: the figures are the stored profile's until Apply.
+  const spec = profile?.distribution ?? HELD_FLAT;
 
   return (
     <div
@@ -98,7 +109,7 @@ export function AssetInspector({
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
         <h5 style={{ margin: 0, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 15 }}>
-          {asset.ticker}
+          {draft.ticker || "—"}
         </h5>
         <Tag tone="outline">asset</Tag>
       </div>
@@ -150,7 +161,7 @@ export function AssetInspector({
       </Field>
 
       <Blueprint style={{ padding: "9px 11px" }}>
-        {draft.profileServerId == null ? (
+        {profile == null ? (
           <>
             <StatLabel>no profile</StatLabel>
             <p style={{ margin: "5px 0 0", fontSize: 12, lineHeight: 1.5 }}>
@@ -161,23 +172,36 @@ export function AssetInspector({
           </>
         ) : (
           <>
-            <StatLabel>inherited from {profile?.id ?? "—"}</StatLabel>
-            <div style={{ display: "flex", gap: 18, marginTop: 4 }}>
+            <div
+              style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}
+            >
+              <StatLabel>inherited · {profile.kind}</StatLabel>
+              {onEditProfile && (
+                <button type="button" className="linkbtn" style={{ fontSize: 11 }} onClick={onEditProfile}>
+                  Edit profile ›
+                </button>
+              )}
+            </div>
+            {/* Mean and spread only: the shape below carries the 5th, the
+                median and the 95th, written under the marks that place them. */}
+            <div style={{ display: "flex", gap: 18, margin: "4px 0 6px" }}>
               <div>
                 <StatLabel>mean</StatLabel>
-                <div style={FIGURE}>{pct(profile?.mean ?? null)}</div>
+                <div style={FIGURE}>{pct(profile.mean)}</div>
               </div>
               <div>
                 <StatLabel>vol</StatLabel>
-                <div style={FIGURE}>{profile?.sd === 0 ? "—" : pct(profile?.sd ?? null)}</div>
-              </div>
-              <div>
-                <StatLabel>5th–95th</StatLabel>
-                <div style={FIGURE}>
-                  {q.p5} … {q.p95}
-                </div>
+                <div style={FIGURE}>{profile.sd === 0 ? "—" : pct(profile.sd)}</div>
               </div>
             </div>
+            <ShapePanel
+              spec={spec}
+              scale={RETURN_SCALE}
+              height={64}
+              footer={false}
+              frame={false}
+              history={profile.history}
+            />
           </>
         )}
       </Blueprint>
@@ -193,9 +217,14 @@ export function AssetInspector({
           </span>
         ) : (
           <>
-            <div style={{ fontSize: 12.5, color: "color-mix(in srgb, var(--color-text) 62%, transparent)" }}>
-              {asset.holdings.length} account{asset.holdings.length === 1 ? "" : "s"} ·{" "}
-              {fmtUnits(asset.units)} sh · basis {fmtCurrency(asset.costBasis)}
+            <div
+              style={{
+                fontSize: 12.5,
+                color: "color-mix(in srgb, var(--color-text) 62%, transparent)",
+              }}
+            >
+              {asset.heldIn} · {fmtUnits(asset.units)} sh · {fmtCurrency(asset.value)} · basis{" "}
+              {fmtCurrency(asset.costBasis)}
             </div>
             <Table compact className="mt-[6px]">
               <tbody>

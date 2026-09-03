@@ -6,22 +6,24 @@ import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
 import type { Account, InflationProfile, ReturnProfile } from "@/lib/types";
 import { AccountsScreen } from "./AccountsScreen";
-import { AssetsReturnsScreen } from "./AssetsReturnsScreen";
+import { AssetsScreen } from "./AssetsScreen";
 
 type PortfolioSection = "accounts" | "returns";
 
+// The value stays `returns` though the label no longer says so: it is in every
+// URL anyone has bookmarked, and renaming it would break those to no end.
 const SECTIONS: ReadonlyArray<SegmentOption<PortfolioSection>> = [
   { value: "accounts", label: "Accounts" },
-  { value: "returns", label: "Assets & returns" },
+  { value: "returns", label: "Assets" },
 ];
 
 const CAPTIONS: Record<PortfolioSection, string | undefined> = {
   accounts: undefined,
   returns:
-    "Two tabs became one: a ticker only exists to point at a return profile, so the profile is the group.",
+    "Holdings are the list. A return profile is what a holding points at, so it is a column — and a library of its own further down.",
 };
 
-/** Portfolio tab: the scenario's accounts, and its assets under the profiles that drive them. */
+/** Portfolio tab: the scenario's accounts, and the assets they hold. */
 export function PortfolioScreen({
   scenarioId,
   accounts,
@@ -68,7 +70,7 @@ export function PortfolioScreen({
           offline={offline}
         />
       ) : (
-        <AssetsReturnsScreen
+        <AssetsScreen
           scenarioId={scenarioId}
           raw={raw}
           returnProfiles={returnProfiles}

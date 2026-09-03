@@ -607,6 +607,41 @@ async fn delete_inflation(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_presets() -> Json<&'static [&'static str]> {
-    Json(HISTORY_PRESETS)
+/// One bootstrap history the engine ships with, and the observations behind it.
+///
+/// The years are sent, not a mean and a spread. A resampled history has no
+/// closed-form summary — that is the whole reason to pick one over a Normal —
+/// so a client that only had two figures could not draw it, and one that drew
+/// a bell from them would be drawing the distribution the user declined.
+/// Eleven series of at most a century of `f64` is a few kilobytes.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct HistoryPreset {
+    /// The value a `Bootstrap` distribution stores.
+    pub id: String,
+    /// Display name, e.g. `S&P 500`.
+    pub name: String,
+    /// Calendar year of `returns[0]`.
+    pub start_year: i32,
+    /// Annual total returns as fractions, one per year.
+    pub returns: Vec<f64>,
+}
+
+async fn list_presets() -> Json<Vec<HistoryPreset>> {
+    Json(
+        HISTORY_PRESETS
+            .iter()
+            .filter_map(|id| {
+                // Every id in the table resolves; `filter_map` rather than an
+                // unwrap so a mismatch drops one row instead of the process.
+                let history = crate::compile::historical_returns(id).ok()?;
+                Some(HistoryPreset {
+                    id: (*id).to_string(),
+                    name: history.name.to_string(),
+                    start_year: i32::from(history.start_year),
+                    returns: history.returns.to_vec(),
+                })
+            })
+            .collect(),
+    )
 }

@@ -1,14 +1,14 @@
 /**
- * `api::assets::Asset` → the Assets & returns screen's grouped list.
+ * `api::assets::Asset` → the Assets screen's rows.
  *
- * A ticker only exists to point at a return profile, so the profile — not the
- * asset — is the outline level: every asset hangs under the profile that makes
- * it move. Profiles with no assets still appear, because an account can point
- * at one directly for its cash or its property value.
+ * Holdings are the list. A return profile is what a holding points at, so it
+ * is a column on the asset rather than the level above it — a library of
+ * profiles sits below the table, where a row can be edited without first
+ * finding an asset that happens to use it.
  *
- * The holdings behind an asset are not on the asset row at all; they are lots
- * scattered across accounts, so they are gathered here once rather than by the
- * inspector on every selection.
+ * The lots behind an asset are not on the asset row at all; they are scattered
+ * across accounts, so they are gathered here once rather than by the inspector
+ * on every selection.
  */
 import type { Account as ApiAccount, Asset } from "@/lib/api/types";
 import type { ReturnProfile, ReturnProfileId } from "@/lib/types";
@@ -36,24 +36,22 @@ export interface AssetRow {
   profileId: ReturnProfileId | null;
   profileServerId: number | null;
   units: number;
+  /** Units marked at the opening price — what a balance counts. */
+  value: number;
   costBasis: number;
   holdings: AssetHolding[];
+  /** The accounts holding it, in one line: `401(k) · Brokerage · Roth IRA`. */
+  heldIn: string;
 }
 
-export interface ProfileGroup {
-  /** Null for the unmapped bucket, which is a hole in the outline, not a row. */
-  profile: ReturnProfile | null;
-  assets: AssetRow[];
-}
-
-/** Either level of the outline; the inspector switches on `kind`. */
+/** Either level of the screen; the inspector switches on `kind`. */
 export type AssetsSelection =
   | { kind: "profile"; id: ReturnProfileId }
   | { kind: "asset"; id: number };
 
 /**
- * `profile:US equities` / `asset:12` — both levels of the outline as one URL
- * token, since only one of them is ever selected.
+ * `profile:US equities` / `asset:12` — both levels as one URL token, since only
+ * one of them is ever selected.
  *
  * A profile is named, an asset is not: a ticker can be renamed to one that
  * another asset already had, and the row id cannot.
@@ -74,19 +72,17 @@ export function decodeAssetsSelection(token: string | undefined): AssetsSelectio
   return Number.isSafeInteger(serverId) ? { kind: "asset", id: serverId } : undefined;
 }
 
-export function groupAssetsByProfile(
+export function toAssetRows(
   assets: Asset[],
   accounts: ApiAccount[],
   profiles: ReturnProfile[],
-): ProfileGroup[] {
+): AssetRow[] {
   const holdings = holdingsByAsset(accounts);
-  const byProfile = new Map<number, AssetRow[]>();
-  const unmapped: AssetRow[] = [];
-
-  for (const asset of assets) {
+  return assets.map((asset) => {
     const held = holdings.get(asset.id) ?? [];
     const mapping = asset.return_profile_id;
-    const row: AssetRow = {
+    const units = held.reduce((sum, h) => sum + h.units, 0);
+    return {
       serverId: asset.id,
       ticker: asset.name,
       name: asset.description ?? "",
@@ -94,45 +90,38 @@ export function groupAssetsByProfile(
       profileId:
         mapping == null ? null : (profiles.find((p) => p.serverId === mapping)?.id ?? null),
       profileServerId: mapping,
-      units: held.reduce((sum, h) => sum + h.units, 0),
+      units,
+      value: units * asset.initial_price,
       costBasis: held.reduce((sum, h) => sum + h.costBasis, 0),
       holdings: held,
+      heldIn: heldInLabel(held),
     };
-    if (mapping == null) {
-      unmapped.push(row);
-      continue;
-    }
-    const rows = byProfile.get(mapping);
-    if (rows) rows.push(row);
-    else byProfile.set(mapping, [row]);
-  }
-
-  const mapped = profiles.map((profile) => ({
-    profile,
-    assets: byProfile.get(profile.serverId) ?? [],
-  }));
-
-  // The bucket leads the outline when it has anything in it: an unmapped asset
-  // is a to-do, not a category, and it holds its price flat until it is cleared.
-  return unmapped.length > 0 ? [{ profile: null, assets: unmapped }, ...mapped] : mapped;
+  });
 }
 
-/** Flattens the outline for rendering: a group row, then each of its assets. */
-export function flatten(
-  groups: ProfileGroup[],
-): Array<{ group: ProfileGroup; asset?: AssetRow }> {
-  return groups.flatMap((group) => [
-    { group },
-    ...group.assets.map((asset) => ({ group, asset })),
-  ]);
+/** What every holding of every asset is worth at its opening price. */
+export function assetsTotal(rows: AssetRow[]): number {
+  return rows.reduce((sum, row) => sum + row.value, 0);
 }
 
-export function findAsset(groups: ProfileGroup[], id: number): AssetRow | undefined {
-  for (const group of groups) {
-    const found = group.assets.find((a) => a.serverId === id);
-    if (found) return found;
+/** Asset ids per profile row id, for the library's "Used by" column. */
+export function assetsPerProfile(rows: AssetRow[]): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const row of rows) {
+    if (row.profileServerId == null) continue;
+    out.set(row.profileServerId, (out.get(row.profileServerId) ?? 0) + 1);
   }
-  return undefined;
+  return out;
+}
+
+/**
+ * Account names up to three, then a count. Four names is wider than the column
+ * and says less than the number does.
+ */
+function heldInLabel(held: AssetHolding[]): string {
+  if (held.length === 0) return "—";
+  if (held.length > 3) return `${held.length} accounts`;
+  return held.map((h) => h.account).join(" · ");
 }
 
 /** asset id → one entry per account holding it, its lots summed. */

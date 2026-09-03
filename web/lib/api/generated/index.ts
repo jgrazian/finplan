@@ -29,6 +29,7 @@ export type { ErrorDetail } from "./ErrorDetail";
 export type { Event } from "./Event";
 export type { EventBody } from "./EventBody";
 export type { FlavorSpec } from "./FlavorSpec";
+export type { HistoryPreset } from "./HistoryPreset";
 export type { IncomeType } from "./IncomeType";
 export type { Interval } from "./Interval";
 export type { LotMethod } from "./LotMethod";

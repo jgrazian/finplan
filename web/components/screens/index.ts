@@ -1,5 +1,5 @@
 export { AccountsScreen } from "./AccountsScreen";
-export { AssetsReturnsScreen } from "./AssetsReturnsScreen";
+export { AssetsScreen } from "./AssetsScreen";
 export { EmptyState } from "./EmptyState";
 export { PlaceholderScreen } from "./PlaceholderScreen";
 export { PlanScreen } from "./PlanScreen";
