@@ -57,14 +57,21 @@ export function EventsTable({
                 key={e.id}
                 ref={attachRow(serverId)}
                 className={dragging === serverId ? "rowsel dragging" : "rowsel"}
-                style={rowStyle(selected)}
+                style={{ ...rowStyle(selected), opacity: e.enabled ? undefined : 0.55 }}
                 aria-selected={selected}
                 onClick={() => onSelect(e.id)}
               >
                 <Td style={{ padding: 0 }}>
                   <DragHandle label={e.id} props={handleProps(serverId)} />
                 </Td>
-                <Td style={MONO}>{e.id}</Td>
+                <Td style={MONO}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {e.id}
+                    {/* Disabled is not deleted, and a row that looked the same
+                        either way would leave the run quietly short an event. */}
+                    {!e.enabled && <Tag>off</Tag>}
+                  </span>
+                </Td>
                 <Td style={{ fontSize: 13 }}>{e.trigger}</Td>
                 <Td>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>

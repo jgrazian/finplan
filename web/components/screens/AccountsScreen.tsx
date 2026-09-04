@@ -20,7 +20,7 @@ import type {
   UpdateAccountBody,
   UpdatePosition,
 } from "@/lib/api/types";
-import { fmtCurrency } from "@/lib/format";
+import { fmtClock, fmtCurrency } from "@/lib/format";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -31,15 +31,6 @@ import type { Account, AccountId, AssetLot } from "@/lib/types";
 
 /** What the one form under the positions table is open on. */
 type LotEditor = { kind: "add" } | { kind: "edit"; positionId: number };
-
-/** `14:02` — the clock the status bar and this note both quote. */
-function clockOf(at: number): string {
-  return new Date(at).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
 
 /**
  * The flavor half of the PATCH.
@@ -273,7 +264,7 @@ export function AccountsScreen({
                   {offline ? (
                     <span>
                       Reading is untouched — this is the last state the server
-                      confirmed{lastContact ? `, at ${clockOf(lastContact)}` : ""}. Editing
+                      confirmed{lastContact ? `, at ${fmtClock(lastContact)}` : ""}. Editing
                       is disabled because it cannot be held locally.
                     </span>
                   ) : (

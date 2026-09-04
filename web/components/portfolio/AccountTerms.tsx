@@ -1,11 +1,10 @@
 "use client";
 
-import { CompactInput, CurrencyInput, Dropdown, Field, NumberInput } from "@/components/ui";
+import { CompactInput, CurrencyInput, DirtyField, Dropdown, Field, NumberInput } from "@/components/ui";
 import type { Asset, Profile } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import type { Account, TaxStatus } from "@/lib/types";
 import type { AccountDraft, ChangedFields, SetDraft } from "./accountDraft";
-import { DirtyField } from "./DirtyField";
 
 const GRID = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } as const;
 

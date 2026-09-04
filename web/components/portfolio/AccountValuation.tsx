@@ -1,10 +1,9 @@
 "use client";
 
-import { CurrencyInput } from "@/components/ui";
+import { CurrencyInput, DirtyField } from "@/components/ui";
 import { fmtCurrency } from "@/lib/format";
 import type { Account } from "@/lib/types";
 import type { AccountDraft, ChangedFields, SetDraft } from "./accountDraft";
-import { DirtyField } from "./DirtyField";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 55%, transparent)";
 

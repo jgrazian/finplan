@@ -1,8 +1,9 @@
 "use client";
 
 import { type ReactNode, useState } from "react";
-import { Blueprint, Button, CompactInput, Dropdown, Tag } from "@/components/ui";
+import { Blueprint, Button, CompactInput, DirtyField, Dropdown, Tag } from "@/components/ui";
 import type { Asset, Profile } from "@/lib/api/types";
+import { fmtClock } from "@/lib/format";
 import type { Account, AccountId, AssetLot } from "@/lib/types";
 import { AccountTerms } from "./AccountTerms";
 import { AccountValuation } from "./AccountValuation";
@@ -23,7 +24,6 @@ import {
   isReachable,
   taxStatusFor,
 } from "./accountKind";
-import { DirtyField } from "./DirtyField";
 import { taxBadge } from "./taxStatus";
 
 export type { AccountDraft } from "./accountDraft";
@@ -284,7 +284,7 @@ export function AccountInspector({
                 >
                   <path d="M13.5 4.5 6.4 11.6 2.9 8.1" />
                 </svg>
-                <span>Saved {clockOf(savedAt)} · results marked stale</span>
+                <span>Saved {fmtClock(savedAt)} · results marked stale</span>
               </>
             )}
             {onDelete && (
@@ -338,11 +338,3 @@ function ConversionNote({ children }: { children: ReactNode }) {
   );
 }
 
-/** `14:06` — the clock the status bar and this line both quote. */
-function clockOf(at: number): string {
-  return new Date(at).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}

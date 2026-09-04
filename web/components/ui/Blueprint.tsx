@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, ReactNode, Ref } from "react";
 import { cx } from "./cx";
 
 /**
@@ -10,15 +10,18 @@ export function Blueprint({
   className,
   style,
   corners = true,
+  ref,
 }: {
   children?: ReactNode;
   className?: string;
   style?: CSSProperties;
   /** Omit the registration marks when frames sit flush against each other. */
   corners?: boolean;
+  /** For a frame in a draggable list: the box a drop point is measured against. */
+  ref?: Ref<HTMLDivElement>;
 }) {
   return (
-    <div className={cx("blueprint", className)} style={style}>
+    <div ref={ref} className={cx("blueprint", className)} style={style}>
       {corners && (
         <>
           <i className="corner tl" />

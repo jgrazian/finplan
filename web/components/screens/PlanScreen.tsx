@@ -2,16 +2,20 @@
 
 import { useState } from "react";
 import {
+  type EventDraft,
   EventInspector,
   EventsTable,
   MiniTimeline,
   NewEventDialog,
   ScenarioStrip,
+  eventProblem,
+  toEventBody,
 } from "@/components/plan";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { UpdateScenario } from "@/lib/api/types";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
+import { useSubmit } from "@/lib/hooks/useSubmit";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
 import type { PlanEvent, ScenarioParams } from "@/lib/types";
@@ -44,12 +48,24 @@ export function PlanScreen({
   offline?: boolean;
 }) {
   const [adding, setAdding] = useState(false);
+  const [savedAt, setSavedAt] = useState<Map<number, number>>(new Map());
+  const editing = useSubmit();
   // The selected event is in the query, by name, so a link opens the drawer on
   // it. Derived rather than stored: an event deleted here or renamed elsewhere
   // falls back to the first row instead of leaving the drawer empty.
   const nav = useNav();
   const selected = events.find((e) => e.id === nav.selection) ?? events[0];
+  const selectedRaw = raw.events.find((e) => e.id === selected?.serverId);
   const saveOrder = useReorderWrite(onChanged);
+  // The pickers' choices, plus the two things that let a condition explain
+  // itself: the plan's birth date, and which event is being edited.
+  const context = {
+    accounts: raw.accounts,
+    assets: raw.assets,
+    events: raw.events,
+    birthDate: params.birthDate || undefined,
+    selfId: selectedRaw?.id,
+  };
 
   /**
    * The strip's fields save as they are edited. `null` on the wire means
@@ -66,6 +82,27 @@ export function PlanScreen({
     if (patch.durationYears != null) body.duration_years = patch.durationYears;
     await api.scenarios.update(scenarioId, body);
     onChanged();
+  };
+
+  /**
+   * Saves the drawer's whole event. PUT, not PATCH — a trigger is a tree, and
+   * there is no partial merge into one that means anything, so what the drawer
+   * holds is what the event becomes.
+   */
+  const apply = (event: PlanEvent, draft: EventDraft) => {
+    const problem = eventProblem(draft);
+    if (problem) return editing.fail(problem);
+    const name = draft.name.trim();
+    editing.run(
+      () => api.events.replace(scenarioId, event.serverId, toEventBody(draft)),
+      () => {
+        setSavedAt((m) => new Map(m).set(event.serverId, Date.now()));
+        // The query holds the selection by name, so a rename has to carry it —
+        // otherwise saving one drops the drawer back onto the first row.
+        if (name !== event.id) nav.setSelection(name);
+        onChanged();
+      },
+    );
   };
 
   const remove = async (event: PlanEvent) => {
@@ -115,9 +152,13 @@ export function PlanScreen({
           </Button>
         </div>
       ) : (
-        /* Not SplitPane: the timeline strip spans the full height of the list
-           column and sits flush against its bottom edge. */
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 344px" }}>
+        /* Not SplitPane: the timeline strip belongs to the list column, directly
+           under the table it summarises. The column still stretches to the
+           drawer's height — the hairline between them runs the full way down —
+           but nothing inside it claims that slack, so a tall drawer cannot
+           drag the strip away from the list and park it at the bottom of the
+           screen. */
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 400px" }}>
           <div
             style={{
               borderRight: "1px solid var(--color-divider)",
@@ -126,7 +167,7 @@ export function PlanScreen({
               minWidth: 0,
             }}
           >
-            <div style={{ padding: "16px 20px", flex: 1 }}>
+            <div style={{ padding: "16px 20px" }}>
               <div
                 style={{
                   display: "flex",
@@ -171,11 +212,21 @@ export function PlanScreen({
             />
           </div>
 
-          <aside>
-            {selected && (
+          <aside style={{ minWidth: 0 }}>
+            {selected && selectedRaw && (
               <EventInspector
+                // A fresh draft per row: edits are not carried across events.
+                key={selectedRaw.id}
                 event={selected}
+                raw={selectedRaw}
+                context={context}
+                onApply={(draft) => apply(selected, draft)}
                 onDelete={offline ? undefined : () => remove(selected)}
+                onSelectEvent={nav.setSelection}
+                busy={editing.busy}
+                error={editing.error}
+                savedAt={savedAt.get(selected.serverId)}
+                offline={offline}
               />
             )}
           </aside>
@@ -188,6 +239,7 @@ export function PlanScreen({
           accounts={raw.accounts}
           assets={raw.assets}
           events={raw.events}
+          birthDate={params.birthDate || undefined}
           onClose={() => setAdding(false)}
           onCreated={onChanged}
         />

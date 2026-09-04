@@ -25,6 +25,28 @@ export interface EventNames {
   event: (id: number) => string;
 }
 
+/**
+ * The naming closure every description here takes.
+ *
+ * An id that names nothing still reads as something — a deleted account inside
+ * an effect prints `account 12` rather than blank, so the row says what it is
+ * pointing at even when the target is gone.
+ */
+export function namesOf(rows: {
+  accounts: { id: number; name: string }[];
+  assets: { id: number; name: string }[];
+  events: { id: number; name: string }[];
+}): EventNames {
+  const account = new Map(rows.accounts.map((a) => [a.id, a.name]));
+  const asset = new Map(rows.assets.map((a) => [a.id, a.name]));
+  const event = new Map(rows.events.map((e) => [e.id, e.name]));
+  return {
+    account: (id) => account.get(id) ?? `account ${id}`,
+    asset: (id) => asset.get(id) ?? `asset ${id}`,
+    event: (id) => event.get(id) ?? `event ${id}`,
+  };
+}
+
 export function toViewEvents(
   events: ApiEvent[],
   scenario: Scenario,
@@ -253,7 +275,7 @@ function conditionLabel(trigger: TriggerSpec, names: EventNames): string {
   }
 }
 
-function detailTrigger(trigger: TriggerSpec, names: EventNames): string {
+export function detailTrigger(trigger: TriggerSpec, names: EventNames): string {
   switch (trigger.kind) {
     case "Age":
       return trigger.months == null
@@ -377,7 +399,7 @@ function describeSources(sources: WithdrawalSourcesSpec, names: EventNames): str
   }
 }
 
-function describeEffect(effect: EffectSpec, names: EventNames): EventEffect {
+export function describeEffect(effect: EffectSpec, names: EventNames): EventEffect {
   const kind: EffectKind = effect.kind;
   const amount = (a: AmountSpec) => describeAmount(a, names);
 

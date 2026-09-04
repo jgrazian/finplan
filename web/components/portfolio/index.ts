@@ -10,7 +10,6 @@ export { AssetInspector } from "./AssetInspector";
 export type { AssetDraft } from "./AssetInspector";
 export { AssetsTable } from "./AssetsTable";
 export { AccountsTable } from "./AccountsTable";
-export { DirtyField } from "./DirtyField";
 export { LinkedAccounts } from "./LinkedAccounts";
 export { PortfolioSummary } from "./PortfolioSummary";
 export { PositionsTable } from "./PositionsTable";

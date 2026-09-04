@@ -46,3 +46,12 @@ export function fmtCompactOrExact(v: number): string {
 export function fmtShareFine(fraction: number): string {
   return (fraction * 100).toFixed(1) + "%";
 }
+
+/** `14:06` — the clock every "saved at" line in the app quotes. */
+export function fmtClock(at: number): string {
+  return new Date(at).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}

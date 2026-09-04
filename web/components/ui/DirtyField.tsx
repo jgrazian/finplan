@@ -1,12 +1,14 @@
 import type { CSSProperties, ReactNode } from "react";
-import { Field, cx } from "@/components/ui";
+import { Field } from "./Field";
+import { cx } from "./cx";
 
 /**
  * A field that shows whether it is holding an edit.
  *
  * The accent marks the input and its label together, so a change made in a part
  * of the drawer that has since scrolled away is still visibly one of the "n
- * unsaved" the footer counts.
+ * unsaved" the footer counts. Both the account drawer and the event one keep
+ * score this way.
  */
 export function DirtyField({
   label,

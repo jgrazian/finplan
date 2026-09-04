@@ -10,7 +10,8 @@ const VIEW_H = 68;
 const AXIS_Y = 50;
 
 /**
- * Artboard 3b — the plan at a glance, pinned to the footer of the event list.
+ * Artboard 3b — the plan at a glance, directly under the event list it
+ * summarises.
  * Spans draw as bars and one-shot triggers as points, both on the age axis;
  * the selected event is the only one at full opacity. Clicking a mark selects
  * its event, so the strip is a second way into the same selection the table

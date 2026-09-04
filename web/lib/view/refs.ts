@@ -133,3 +133,47 @@ function walkEffect(effect: EffectSpec, out: Set<number>): void {
       return;
   }
 }
+
+/**
+ * Which events drive this one — the reverse edge of the four event-control
+ * effects, the way `accountRefs` is the reverse edge of the account ones.
+ *
+ * `triggers` is the subset that actually fires it, which is all a `Manual`
+ * trigger has to show for itself: without this it would be a drawer saying
+ * "something else starts this" and leaving you to find out what.
+ */
+export function eventRefs(
+  eventId: number,
+  events: ApiEvent[],
+): { triggers: ApiEvent[]; all: ApiEvent[] } {
+  const triggers: ApiEvent[] = [];
+  const all: ApiEvent[] = [];
+
+  for (const event of events) {
+    if (event.id === eventId) continue;
+    const verbs = new Set<string>();
+    for (const effect of event.effects) collectVerbs(effect, eventId, verbs);
+    if (verbs.size === 0) continue;
+    all.push(event);
+    if (verbs.has("TriggerEvent")) triggers.push(event);
+  }
+  return { triggers, all };
+}
+
+/** An event-control effect can sit inside a `Random` branch, so this recurses. */
+function collectVerbs(effect: EffectSpec, eventId: number, out: Set<string>): void {
+  switch (effect.kind) {
+    case "TriggerEvent":
+    case "PauseEvent":
+    case "ResumeEvent":
+    case "TerminateEvent":
+      if (effect.target_event_id === eventId) out.add(effect.kind);
+      return;
+    case "Random":
+      collectVerbs(effect.on_true, eventId, out);
+      if (effect.on_false) collectVerbs(effect.on_false, eventId, out);
+      return;
+    default:
+      return;
+  }
+}
