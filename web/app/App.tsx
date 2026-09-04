@@ -256,7 +256,6 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 events={workspace.events}
                 raw={workspace.raw}
                 onChanged={workspace.reload}
-                onRun={start}
               />
             )}
             {nav.tab === "analysis" && <PlaceholderScreen label="Analysis" />}

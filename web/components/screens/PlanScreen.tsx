@@ -3,17 +3,16 @@
 import { useState } from "react";
 import {
   type EventDraft,
-  EventInspector,
-  EventsTable,
-  MiniTimeline,
-  NewEventDialog,
+  EventEditor,
+  EventRail,
+  PlanTimeline,
   ScenarioStrip,
   eventProblem,
   toEventBody,
 } from "@/components/plan";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import type { UpdateScenario } from "@/lib/api/types";
+import type { Event as ApiEvent, EventBody, UpdateScenario } from "@/lib/api/types";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
@@ -22,8 +21,43 @@ import type { PlanEvent, ScenarioParams } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 
 /**
- * Plan tab: the scenario's parameters, its events, and the drawer inspecting
- * whichever event the table or the timeline strip has selected.
+ * What Add event makes: a yearly repeat that does nothing yet.
+ *
+ * The old dialog asked for a name, a trigger and an effect before it would
+ * create anything, which is three decisions to make about an event you have
+ * not started thinking about. The editor asks the same questions better, and
+ * with the row already on the rail there is something to abandon rather than a
+ * form to cancel. Yearly because it is the interval that reads as a placeholder
+ * — nobody means "every year" and forgets to change it, the way they might with
+ * monthly.
+ */
+function blankEvent(name: string): EventBody {
+  return {
+    name,
+    description: null,
+    fires_once: false,
+    enabled: true,
+    // Omitted, so it lands at the end of the rail rather than on top of it.
+    sort_order: null,
+    trigger: {
+      kind: "Repeating",
+      interval: "Yearly",
+      start_condition: null,
+      end_condition: null,
+      max_occurrences: null,
+    },
+    effects: [],
+  };
+}
+
+/**
+ * Plan tab, in the shape of artboard 10a: the scenario as a line across the
+ * top, the events as a rail on the left, the editor for the selected one
+ * filling the width beside it, and the whole plan as a band of lanes along the
+ * bottom.
+ *
+ * Two columns rather than three, so the editor is wide enough to put when an
+ * event fires beside what it does instead of stacking them down a 400px rail.
  */
 export function PlanScreen({
   scenarioId,
@@ -33,7 +67,6 @@ export function PlanScreen({
   events,
   raw,
   onChanged,
-  onRun,
   offline,
 }: {
   scenarioId: number;
@@ -43,16 +76,14 @@ export function PlanScreen({
   events: PlanEvent[];
   raw: RawWorkspace;
   onChanged: () => void;
-  onRun?: () => void;
   /** Writes are being refused, so add and delete cannot be offered. */
   offline?: boolean;
 }) {
-  const [adding, setAdding] = useState(false);
   const [savedAt, setSavedAt] = useState<Map<number, number>>(new Map());
   const editing = useSubmit();
-  // The selected event is in the query, by name, so a link opens the drawer on
+  // The selected event is in the query, by name, so a link opens the editor on
   // it. Derived rather than stored: an event deleted here or renamed elsewhere
-  // falls back to the first row instead of leaving the drawer empty.
+  // falls back to the first row instead of leaving the editor empty.
   const nav = useNav();
   const selected = events.find((e) => e.id === nav.selection) ?? events[0];
   const selectedRaw = raw.events.find((e) => e.id === selected?.serverId);
@@ -85,8 +116,8 @@ export function PlanScreen({
   };
 
   /**
-   * Saves the drawer's whole event. PUT, not PATCH — a trigger is a tree, and
-   * there is no partial merge into one that means anything, so what the drawer
+   * Saves the editor's whole event. PUT, not PATCH — a trigger is a tree, and
+   * there is no partial merge into one that means anything, so what the editor
    * holds is what the event becomes.
    */
   const apply = (event: PlanEvent, draft: EventDraft) => {
@@ -98,8 +129,51 @@ export function PlanScreen({
       () => {
         setSavedAt((m) => new Map(m).set(event.serverId, Date.now()));
         // The query holds the selection by name, so a rename has to carry it —
-        // otherwise saving one drops the drawer back onto the first row.
+        // otherwise saving one drops the editor back onto the first row.
         if (name !== event.id) nav.setSelection(name);
+        onChanged();
+      },
+    );
+  };
+
+  /**
+   * Adds an event and opens it. No dialog: an empty event is a valid one, and
+   * the editor beside the rail is a better place to answer what it does than a
+   * modal that asks the same things in a narrower column.
+   */
+  const add = () => {
+    const name = freeName("New Event", raw.events);
+    editing.run(
+      () => api.events.create(scenarioId, blankEvent(name)),
+      () => {
+        nav.setSelection(name);
+        onChanged();
+      },
+    );
+  };
+
+  /**
+   * Copies the saved event, under a name no other event has, and opens the
+   * copy. Offered only when the editor is clean, so "duplicate" cannot quietly
+   * mean two different things depending on what is typed but not applied.
+   */
+  const duplicate = (source: ApiEvent) => {
+    const name = freeName(`${source.name} copy`, raw.events);
+    editing.run(
+      () =>
+        api.events.create(scenarioId, {
+          name,
+          description: source.description,
+          fires_once: source.fires_once,
+          enabled: source.enabled,
+          // Omitted, so the copy lands at the end rather than on top of the
+          // event it was made from.
+          sort_order: null,
+          trigger: source.trigger,
+          effects: source.effects,
+        }),
+      () => {
+        nav.setSelection(name);
         onChanged();
       },
     );
@@ -123,7 +197,6 @@ export function PlanScreen({
         scenarioName={scenarioName}
         params={params}
         onChange={saveParams}
-        onRun={onRun}
         offline={offline}
       />
 
@@ -145,82 +218,56 @@ export function PlanScreen({
           <Button
             variant="primary"
             shortcut="a"
-            onClick={() => setAdding(true)}
-            disabled={offline}
+            onClick={add}
+            disabled={offline || editing.busy}
           >
             Add event
           </Button>
+          {editing.error && (
+            <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--color-accent-900)" }}>
+              {editing.error}
+            </p>
+          )}
         </div>
       ) : (
-        /* Not SplitPane: the timeline strip belongs to the list column, directly
-           under the table it summarises. The column still stretches to the
-           drawer's height — the hairline between them runs the full way down —
-           but nothing inside it claims that slack, so a tall drawer cannot
-           drag the strip away from the list and park it at the bottom of the
-           screen. */
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 400px" }}>
+        <>
+          {/* The rail and the editor stretch to each other's height, so the
+              hairline between them runs the full way down whichever is taller,
+              and both can push their footers — the reorder note, the resolved
+              fire dates, what references this event — to the bottom. */}
           <div
             style={{
-              borderRight: "1px solid var(--color-divider)",
-              display: "flex",
-              flexDirection: "column",
-              minWidth: 0,
+              display: "grid",
+              gridTemplateColumns: "300px 1fr",
+              alignItems: "stretch",
+              minHeight: 460,
             }}
           >
-            <div style={{ padding: "16px 20px" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  justifyContent: "space-between",
-                  marginBottom: 8,
-                }}
-              >
-                <h4 style={{ margin: 0 }}>
-                  Events{" "}
-                  <span className="text-muted" style={{ fontSize: 13 }}>
-                    {events.length}
-                  </span>
-                </h4>
-                <Button
-                  shortcut="a"
-                  onClick={() => setAdding(true)}
-                  disabled={offline}
-                  title={offline ? "No connection to the server." : undefined}
-                >
-                  Add event
-                </Button>
-              </div>
-
-              <EventsTable
+            <div style={{ borderRight: "1px solid var(--color-divider)", minWidth: 0 }}>
+              <EventRail
                 events={events}
                 selectedId={selected?.id ?? ""}
                 onSelect={nav.setSelection}
+                onAdd={add}
+                adding={editing.busy}
                 onReorder={
                   offline
                     ? undefined
                     : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))
                 }
+                offline={offline}
               />
             </div>
 
-            <MiniTimeline
-              events={events}
-              axis={axis}
-              selectedId={selected?.id ?? ""}
-              onSelect={nav.setSelection}
-            />
-          </div>
-
-          <aside style={{ minWidth: 0 }}>
             {selected && selectedRaw && (
-              <EventInspector
+              <EventEditor
                 // A fresh draft per row: edits are not carried across events.
                 key={selectedRaw.id}
                 event={selected}
                 raw={selectedRaw}
                 context={context}
                 onApply={(draft) => apply(selected, draft)}
+                onDuplicate={offline ? undefined : () => duplicate(selectedRaw)}
                 onDelete={offline ? undefined : () => remove(selected)}
                 onSelectEvent={nav.setSelection}
                 busy={editing.busy}
@@ -229,21 +276,28 @@ export function PlanScreen({
                 offline={offline}
               />
             )}
-          </aside>
-        </div>
+          </div>
+
+          <PlanTimeline
+            events={events}
+            axis={axis}
+            selectedId={selected?.id ?? ""}
+            onSelect={nav.setSelection}
+          />
+        </>
       )}
 
-      {adding && (
-        <NewEventDialog
-          scenarioId={scenarioId}
-          accounts={raw.accounts}
-          assets={raw.assets}
-          events={raw.events}
-          birthDate={params.birthDate || undefined}
-          onClose={() => setAdding(false)}
-          onCreated={onChanged}
-        />
-      )}
     </>
   );
+}
+
+/** `New Event`, then `New Event 2`: the server enforces unique names, so an
+ *  event has to arrive with one rather than be refused for a name nobody
+ *  chose. */
+function freeName(base: string, events: ApiEvent[]): string {
+  const taken = new Set(events.map((e) => e.name));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    if (!taken.has(`${base} ${n}`)) return `${base} ${n}`;
+  }
 }

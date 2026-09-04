@@ -1,10 +1,9 @@
-export { NewEventDialog } from "./NewEventDialog";
 export { EffectsBlock, EffectTerms } from "./EffectFields";
-export { EventInspector } from "./EventInspector";
+export { EventEditor } from "./EventEditor";
 export type { EventDraft } from "./eventDraft";
 export { toEventBody, eventProblem } from "./eventDraft";
 export type { TriggerContext } from "./TriggerFields";
-export { EventsTable } from "./EventsTable";
-export { MiniTimeline } from "./MiniTimeline";
+export { EventRail } from "./EventRail";
+export { PlanTimeline } from "./PlanTimeline";
 export { ScenarioStrip } from "./ScenarioStrip";
 export * from "./timeline";

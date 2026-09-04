@@ -1,72 +1,51 @@
 import type { PlanEvent } from "@/lib/types";
-
-/** Horizontal extent of the timeline track, in the strip's viewBox units. */
-export interface TimelineScale {
-  x0: number;
-  x1: number;
-  a0: number;
-  a1: number;
-  /** Age → x. */
-  x: (age: number) => number;
-}
-
-export function makeTimelineScale(
-  ageRange: [number, number],
-  x0 = 148,
-  x1 = 648,
-): TimelineScale {
-  const [a0, a1] = ageRange;
-  return {
-    x0,
-    x1,
-    a0,
-    a1,
-    x: (age) => x0 + ((age - a0) / (a1 - a0)) * (x1 - x0),
-  };
-}
+import { ON_CONDITION } from "@/lib/view/events";
 
 /** A one-shot trigger draws as a point; anything with duration draws as a bar. */
 export function isPointEvent(event: PlanEvent): boolean {
   return event.span[0] === event.span[1];
 }
 
-export interface TimelineMark {
+/**
+ * Whether the event's dates are knowable at all.
+ *
+ * A balance-driven trigger has no fire date until the run produces one, so its
+ * span is the whole horizon rather than a measured stretch. The band draws
+ * those dashed: a solid bar across the plan would claim it fires throughout,
+ * which is a different statement from "somewhere in here, if the balance goes".
+ */
+export function isUndated(event: PlanEvent): boolean {
+  return event.next === ON_CONDITION;
+}
+
+/** One event's lane geometry, as percentages across the band's track. */
+export interface Lane {
   id: string;
   isPoint: boolean;
-  /** Bar geometry. */
-  x: number;
-  w: number;
-  /** Lane centre-line. */
-  y: number;
+  undated: boolean;
+  left: number;
+  /** Zero for a point, which draws as a dot at `left` instead. */
+  width: number;
 }
 
-/**
- * Lays events into `lanes` rotating rows so overlapping spans stay legible in
- * a strip too short to give each event its own line.
- */
-export function layoutMarks(
-  events: PlanEvent[],
-  scale: TimelineScale,
-  lanes = 3,
-  laneTop = 14,
-  laneHeight = 11,
-): TimelineMark[] {
-  return events.map((e, i) => {
-    const x1 = scale.x(e.span[0]);
-    const x2 = scale.x(e.span[1]);
-    return {
-      id: e.id,
-      isPoint: isPointEvent(e),
-      x: x1,
-      w: Math.max(x2 - x1, 2),
-      y: laneTop + (i % lanes) * laneHeight,
-    };
-  });
+export function laneOf(event: PlanEvent, [a0, a1]: [number, number]): Lane {
+  // A one-year horizon still has to divide by something.
+  const span = Math.max(a1 - a0, 1);
+  const at = (position: number) =>
+    Math.min(100, Math.max(0, ((position - a0) / span) * 100));
+  const left = at(event.span[0]);
+  const right = at(event.span[1]);
+  return {
+    id: event.id,
+    isPoint: isPointEvent(event),
+    undated: isUndated(event),
+    left,
+    width: Math.max(right - left, 0),
+  };
 }
 
-export interface TimelineTick {
-  age: number;
-  x: number;
+export interface AxisTick {
+  position: number;
   label: string;
 }
 
@@ -75,18 +54,18 @@ export interface TimelineTick {
  *
  * The axis is the scenario's own — ages when it has a birth date, calendar
  * years when it does not — so the labels come from the caller rather than from
- * a fixed list of retirement milestones.
+ * a fixed list of retirement milestones. The band lays them out with
+ * `space-between`, so only the labels are needed, not their positions.
  */
-export function milestoneTicks(
-  scale: TimelineScale,
+export function axisTicks(
+  [a0, a1]: [number, number],
   label: (position: number) => string,
   count = 5,
-): TimelineTick[] {
-  const { a0, a1 } = scale;
+): AxisTick[] {
   const span = a1 - a0;
   const steps = Math.max(1, Math.min(count - 1, span));
   return Array.from({ length: steps + 1 }, (_, i) => {
-    const age = Math.round(a0 + (span * i) / steps);
-    return { age, x: scale.x(age), label: label(age) };
+    const position = Math.round(a0 + (span * i) / steps);
+    return { position, label: label(position) };
   });
 }

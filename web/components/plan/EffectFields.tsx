@@ -91,11 +91,14 @@ export function EffectsBlock({
   context,
   onChange,
   disabled,
+  label = "Effects",
 }: {
   effects: EffectDraft[];
   context: TriggerContext;
   onChange: (next: EffectDraft[]) => void;
   disabled?: boolean;
+  /** What the list is called where it lands — "What" in the plan editor. */
+  label?: string;
 }) {
   const firstAccount = context.accounts[0]?.id ?? 0;
   const firstAsset = context.assets[0]?.id ?? 0;
@@ -140,7 +143,7 @@ export function EffectsBlock({
             </Button>
           }
         >
-          Effects{" "}
+          {label}{" "}
           <span className="text-muted" style={{ fontWeight: 400 }}>
             {effects.length > 0 && effects.length}
           </span>

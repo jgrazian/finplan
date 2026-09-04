@@ -200,12 +200,19 @@ const INTERVAL_STEP: Record<Interval, [number, number]> = {
  * The date the inspector labels "next fire". A repeating event that started in
  * the past is stepped forward to the first occurrence still ahead.
  */
+/**
+ * The `next` of an event whose trigger has no knowable date — a balance
+ * crossing, or a Manual one. The timeline reads it back, so it is a constant
+ * rather than a string written twice.
+ */
+export const ON_CONDITION = "on condition";
+
 function nextFireLabel(
   trigger: TriggerSpec,
   first: string | null,
   today: string,
 ): string {
-  if (!first) return "on condition";
+  if (!first) return ON_CONDITION;
   if (trigger.kind !== "Repeating" || first >= today) return first;
 
   const [months, days] = INTERVAL_STEP[trigger.interval];
@@ -322,9 +329,16 @@ const PER_INTERVAL: Record<Interval, string> = {
 };
 
 /** The list's Amount column: the first effect that moves money, per period. */
+/**
+ * The `amount` of an event whose effects name no figure — a marker, a pause,
+ * an RMD the engine sizes itself. The rail reads it back to know it has
+ * nothing to print, so it is a constant rather than a dash written twice.
+ */
+export const NO_AMOUNT = "—";
+
 function summarizeAmount(event: ApiEvent, names: EventNames): string {
   const amount = event.effects.map((e) => amountOf(e)).find((a) => a != null);
-  if (!amount) return "—";
+  if (!amount) return NO_AMOUNT;
   const per = event.trigger.kind === "Repeating" ? PER_INTERVAL[event.trigger.interval] : "";
   return describeAmount(amount, names) + per;
 }
