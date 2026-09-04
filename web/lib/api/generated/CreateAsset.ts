@@ -9,5 +9,10 @@ export type CreateAsset = {
    */
   return_profile_id?: number | null;
   tracking_error?: number | null;
-  sort_order: number;
+  /**
+   * Omitted appends to the end of the scenario's list, which is where a new
+   * asset belongs — pinning it at 0 would put it in front of every row the
+   * user has already dragged into place.
+   */
+  sort_order?: number | null;
 };

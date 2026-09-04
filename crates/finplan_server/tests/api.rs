@@ -1108,3 +1108,217 @@ async fn a_scenario_row_carries_its_last_successful_run() {
         list[0]
     );
 }
+
+/// Names in a list's order, so an assertion reads as the list does.
+fn names(list: &Value) -> Vec<String> {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn ids(list: &Value) -> Vec<i64> {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["id"].as_i64().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn every_list_can_be_dragged_into_a_new_order() {
+    let mut app = TestApp::new().await;
+    app.login_as("order@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+
+    // A new row lands at the end of the list rather than in front of it — the
+    // whole point of an order the user chose.
+    for name in ["BND", "VXUS"] {
+        let (status, _) = app
+            .post(
+                &format!("/api/scenarios/{scenario_id}/assets"),
+                json!({"name": name, "initial_price": 50.0}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let (_, assets) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    assert_eq!(names(&assets), ["VTI", "BND", "VXUS"], "created in order");
+
+    let asset_ids = ids(&assets);
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/assets/reorder"),
+            json!({"ids": [asset_ids[2], asset_ids[0], asset_ids[1]]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, assets) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    assert_eq!(names(&assets), ["VXUS", "VTI", "BND"], "dragged to the top");
+
+    // Accounts, the same way.
+    let (_, accounts) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+    let account_ids = ids(&accounts);
+    let reversed: Vec<i64> = account_ids.iter().rev().copied().collect();
+    let before = names(&accounts);
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/accounts/reorder"),
+            json!({"ids": reversed}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, accounts) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+    let after = names(&accounts);
+    assert_eq!(after, before.iter().rev().cloned().collect::<Vec<_>>());
+
+    // The library is the user's rather than the scenario's, and reorders whole.
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let profile_ids = ids(&profiles);
+    let last = *profile_ids.last().unwrap();
+    let moved: Vec<i64> = std::iter::once(last)
+        .chain(profile_ids.iter().copied().filter(|id| *id != last))
+        .collect();
+    let (status, _) = app
+        .post("/api/return-profiles/reorder", json!({"ids": moved}))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    assert_eq!(ids(&profiles)[0], last, "the bottom profile is now the top");
+
+    // An id the collection does not hold is dropped rather than refused: a list
+    // a beat out of date should still reorder under the user's hand.
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/assets/reorder"),
+            json!({"ids": [asset_ids[1], 999_999, asset_ids[0], asset_ids[2]]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, assets) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    assert_eq!(names(&assets), ["BND", "VTI", "VXUS"]);
+
+    // A partial list places what it names and leaves the rest behind it.
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/assets/reorder"),
+            json!({"ids": [asset_ids[2]]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, assets) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    assert_eq!(names(&assets), ["VXUS", "BND", "VTI"]);
+}
+
+#[tokio::test]
+async fn lots_keep_the_order_they_were_dragged_into() {
+    let mut app = TestApp::new().await;
+    app.login_as("lots@example.com").await;
+    let (scenario_id, _, brokerage) = app.seed_scenario().await;
+
+    let (_, assets) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    let asset_id = ids(&assets)[0];
+
+    // Deliberately out of date order, to prove the list is not just re-sorting
+    // by purchase date behind the caller's back.
+    for date in ["2024-06-01", "2022-01-01", "2023-03-01"] {
+        let (status, _) = app
+            .post(
+                &format!("/api/scenarios/{scenario_id}/accounts/{brokerage}/positions"),
+                json!({"asset_id": asset_id, "purchase_date": date, "units": 1.0, "cost_basis": 10.0}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
+    }
+
+    let path = format!("/api/scenarios/{scenario_id}/accounts/{brokerage}/positions");
+    let (_, lots) = app.get(&path).await;
+    let dates: Vec<&str> = lots
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["purchase_date"].as_str().unwrap())
+        .collect();
+    let seeded = lots.as_array().unwrap().len();
+    assert_eq!(
+        &dates[seeded - 3..],
+        ["2024-06-01", "2022-01-01", "2023-03-01"],
+        "added in the order they were added, not sorted by date"
+    );
+
+    let lot_ids = ids(&lots);
+    let reversed: Vec<i64> = lot_ids.iter().rev().copied().collect();
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/accounts/{brokerage}/positions/reorder"),
+            json!({"ids": reversed}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, lots) = app.get(&path).await;
+    assert_eq!(ids(&lots), reversed);
+
+    // And the account's own row carries the same order the list does.
+    let (_, account) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/accounts/{brokerage}"
+        ))
+        .await;
+    assert_eq!(ids(&account["positions"]), reversed);
+}
+
+#[tokio::test]
+async fn a_reordered_list_survives_being_duplicated() {
+    let mut app = TestApp::new().await;
+    app.login_as("dup-order@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+
+    let (_, accounts) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+    let reversed: Vec<i64> = ids(&accounts).iter().rev().copied().collect();
+    let expected: Vec<String> = names(&accounts).into_iter().rev().collect();
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/accounts/reorder"),
+            json!({"ids": reversed}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, copy) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/duplicate"),
+            json!({"name": "Copy"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{copy}");
+    let copy_id = copy["id"].as_i64().unwrap();
+
+    let (_, copied) = app.get(&format!("/api/scenarios/{copy_id}/accounts")).await;
+    assert_eq!(
+        names(&copied),
+        expected,
+        "the copy reads as the original did"
+    );
+}

@@ -90,6 +90,54 @@
   background: color-mix(in srgb, var(--color-accent) 8%, transparent);
 }
 
+/* — the grip every reorderable list is dragged by — */
+
+/* Faint rather than hidden: a list nobody can tell is draggable is a list
+   nobody drags. It sharpens under the pointer and takes the accent under its
+   own, so the row it belongs to is never in doubt. */
+.grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 22%, transparent);
+  cursor: grab;
+  /* Otherwise a touch drag scrolls the page out from under the row. */
+  touch-action: none;
+}
+
+tr:hover > * > .grip,
+.rowsel:hover .grip,
+.griprow:hover .grip {
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+}
+
+.grip:hover,
+.grip:focus-visible,
+.grip[data-dragging] {
+  color: var(--color-accent);
+}
+
+.grip:active,
+.grip[data-dragging] {
+  cursor: grabbing;
+}
+
+.grip:disabled {
+  cursor: default;
+  color: color-mix(in srgb, var(--color-text) 12%, transparent);
+}
+
+/* The row being carried stays in place and goes quiet; the accent line is what
+   says where it is going. Moving it would reflow the rows it is measured
+   against, which is how a drop lands one row off. */
+.dragging {
+  opacity: 0.42;
+}
+
 /* Inline tabs for the 6b header grammar. */
 .tab-inline {
   font-family: var(--font-heading);

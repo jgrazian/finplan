@@ -1,8 +1,17 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Button, SectionHeading, Table, Td, rowStyle } from "@/components/ui";
+import {
+  Button,
+  DragHandle,
+  DropLine,
+  SectionHeading,
+  Table,
+  Td,
+  rowStyle,
+} from "@/components/ui";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
+import { useReorder } from "@/lib/hooks/useReorder";
 import type { AssetLot } from "@/lib/types";
 
 /**
@@ -14,6 +23,9 @@ import type { AssetLot } from "@/lib/types";
  * A row opens the lot for editing, the same way an account row opens the
  * account: resizing a holding and deleting one both happen in the form the
  * click opens, under the table, rather than in controls crowding every line.
+ *
+ * Lots came back oldest purchase first and can now be dragged out of it — the
+ * one you keep checking belongs at the top, whenever it was bought.
  */
 export function PositionsTable({
   lots,
@@ -21,6 +33,7 @@ export function PositionsTable({
   addDisabled,
   onSelect,
   selectedId,
+  onReorder,
   basisTracked = true,
   note,
 }: {
@@ -32,12 +45,20 @@ export function PositionsTable({
   onSelect?: (lot: AssetLot) => void;
   /** The lot the form below the table is open on. */
   selectedId?: number;
+  /** Position ids in their new order. Omitted where lots cannot be moved. */
+  onReorder?: (ids: number[]) => void | Promise<unknown>;
   /** False where a sale realises no gain, so the basis on a lot is never read. */
   basisTracked?: boolean;
   /** A line under the table saying what this kind does differently. */
   note?: ReactNode;
 }) {
   const total = lots.reduce((sum, lot) => sum + lot.value, 0);
+  const byId = new Map(lots.map((lot) => [lot.positionId, lot]));
+  // Destructured rather than kept as one object: a `ref` prop taken off a
+  // value marks the whole value as a ref to the React compiler, and the rest of
+  // what the hook returns is ordinary render state.
+  const { order, attachList, attachRow, dragging, indicator, handleProps, listStyle } =
+    useReorder({ keys: lots.map((l) => l.positionId), onReorder });
   return (
     <div>
       <SectionHeading
@@ -63,37 +84,52 @@ export function PositionsTable({
           No lots — this account holds no tracked positions.
         </p>
       ) : (
-        <Table compact>
-          <tbody>
-            {lots.map((lot) => {
-              const selected = lot.positionId === selectedId;
-              return (
-                <tr
-                  key={lot.positionId}
-                  className={onSelect ? "rowsel" : undefined}
-                  style={rowStyle(selected)}
-                  aria-selected={selected}
-                  onClick={onSelect ? () => onSelect(lot) : undefined}
-                  title={
-                    basisTracked
-                      ? `Basis ${fmtCurrency(lot.costBasis)} · purchased ${lot.purchaseDate}${
-                          onSelect ? " · click to edit" : ""
-                        }`
-                      : onSelect
-                        ? "Click to edit"
-                        : undefined
-                  }
-                >
-                  <Td>{lot.assetId}</Td>
-                  <Td align="right" muted>
-                    {fmtUnits(lot.units)} u
-                  </Td>
-                  <Td align="right">{fmtCurrency(lot.value)}</Td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </Table>
+        <div ref={attachList} style={listStyle}>
+          <DropLine at={indicator} />
+          <Table compact>
+            <tbody>
+              {order.map((positionId) => {
+                const lot = byId.get(positionId);
+                if (!lot) return null;
+                const selected = lot.positionId === selectedId;
+                const carried = dragging === positionId;
+                return (
+                  <tr
+                    key={lot.positionId}
+                    ref={attachRow(positionId)}
+                    className={[onSelect && "rowsel", carried && "dragging"]
+                      .filter(Boolean)
+                      .join(" ")}
+                    style={rowStyle(selected)}
+                    aria-selected={selected}
+                    onClick={onSelect ? () => onSelect(lot) : undefined}
+                    title={
+                      basisTracked
+                        ? `Basis ${fmtCurrency(lot.costBasis)} · purchased ${lot.purchaseDate}${
+                            onSelect ? " · click to edit" : ""
+                          }`
+                        : onSelect
+                          ? "Click to edit"
+                          : undefined
+                    }
+                  >
+                    <Td style={{ padding: 0, width: 20 }}>
+                      <DragHandle
+                        label={`the ${lot.assetId} lot`}
+                        props={handleProps(positionId)}
+                      />
+                    </Td>
+                    <Td>{lot.assetId}</Td>
+                    <Td align="right" muted>
+                      {fmtUnits(lot.units)} u
+                    </Td>
+                    <Td align="right">{fmtCurrency(lot.value)}</Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </div>
       )}
       {note && (
         <div

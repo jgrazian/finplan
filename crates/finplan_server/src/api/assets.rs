@@ -2,10 +2,11 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use super::ReorderRequest;
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
@@ -14,6 +15,7 @@ use ts_rs::TS;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/scenarios/{scenario_id}/assets", get(list).post(create))
+        .route("/scenarios/{scenario_id}/assets/reorder", post(reorder))
         .route(
             "/scenarios/{scenario_id}/assets/{id}",
             get(fetch).patch(update).delete(destroy),
@@ -50,8 +52,11 @@ pub struct CreateAsset {
     pub return_profile_id: Option<i64>,
     #[serde(default)]
     pub tracking_error: Option<f64>,
+    /// Omitted appends to the end of the scenario's list, which is where a new
+    /// asset belongs — pinning it at 0 would put it in front of every row the
+    /// user has already dragged into place.
     #[serde(default)]
-    pub sort_order: i64,
+    pub sort_order: Option<i64>,
 }
 
 fn one() -> f64 {
@@ -143,7 +148,10 @@ async fn create(
         "INSERT INTO assets
             (scenario_id, name, description, initial_price, return_profile_id,
              tracking_error, sort_order)
-         VALUES (?1,?2,?3,?4,?5,?6,?7) RETURNING id",
+         VALUES (?1,?2,?3,?4,?5,?6,
+                 COALESCE(?7, (SELECT COALESCE(MAX(sort_order), -1) + 1
+                                 FROM assets WHERE scenario_id = ?1)))
+         RETURNING id",
     )
     .bind(scenario_id)
     .bind(body.name.trim())
@@ -163,6 +171,26 @@ async fn create(
         .fetch_one(&state.db)
         .await?;
     Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// Put the scenario's assets in the order the body names.
+async fn reorder(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(scenario_id): Path<i64>,
+    Json(body): Json<ReorderRequest>,
+) -> ApiResult<StatusCode> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+
+    let current: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM assets WHERE scenario_id = ?1 ORDER BY sort_order, id")
+            .bind(scenario_id)
+            .fetch_all(&state.db)
+            .await?;
+
+    super::apply_order(&state.db, "assets", &current, &body.ids).await?;
+    super::touch_scenario(&state.db, scenario_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn update(

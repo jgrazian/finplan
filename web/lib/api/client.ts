@@ -24,6 +24,7 @@ import type {
   PasswordChange,
   Position,
   Profile,
+  ReorderRequest,
   Results,
   Run,
   Scenario,
@@ -86,6 +87,9 @@ export const api = {
       http.patch<Asset>(`${scenario(scenarioId)}/assets/${id}`, body),
     remove: (scenarioId: number, id: number) =>
       http.delete(`${scenario(scenarioId)}/assets/${id}`),
+    /** One write for the whole list, rather than a PATCH per row moved. */
+    reorder: (scenarioId: number, ids: ReorderRequest["ids"]) =>
+      http.post<void>(`${scenario(scenarioId)}/assets/reorder`, { ids }),
   },
 
   accounts: {
@@ -96,6 +100,8 @@ export const api = {
       http.patch<Account>(`${scenario(scenarioId)}/accounts/${id}`, body),
     remove: (scenarioId: number, id: number) =>
       http.delete(`${scenario(scenarioId)}/accounts/${id}`),
+    reorder: (scenarioId: number, ids: ReorderRequest["ids"]) =>
+      http.post<void>(`${scenario(scenarioId)}/accounts/reorder`, { ids }),
     positions: (scenarioId: number, id: number) =>
       http.get<Position[]>(`${scenario(scenarioId)}/accounts/${id}/positions`),
     addPosition: (scenarioId: number, id: number, body: CreatePosition) =>
@@ -112,6 +118,8 @@ export const api = {
       ),
     removePosition: (scenarioId: number, id: number, positionId: number) =>
       http.delete(`${scenario(scenarioId)}/accounts/${id}/positions/${positionId}`),
+    reorderPositions: (scenarioId: number, id: number, ids: ReorderRequest["ids"]) =>
+      http.post<void>(`${scenario(scenarioId)}/accounts/${id}/positions/reorder`, { ids }),
   },
 
   events: {
@@ -123,6 +131,9 @@ export const api = {
       http.put<Event>(`${scenario(scenarioId)}/events/${id}`, body),
     remove: (scenarioId: number, id: number) =>
       http.delete(`${scenario(scenarioId)}/events/${id}`),
+    /** Presentation only: an event fires on its trigger, not on its place. */
+    reorder: (scenarioId: number, ids: ReorderRequest["ids"]) =>
+      http.post<void>(`${scenario(scenarioId)}/events/reorder`, { ids }),
   },
 
   returnProfiles: {
@@ -131,12 +142,17 @@ export const api = {
     update: (id: number, body: UpdateProfile) =>
       http.patch<Profile>(`/return-profiles/${id}`, body),
     remove: (id: number) => http.delete(`/return-profiles/${id}`),
+    /** The library is the user's, so this reorders it for every scenario. */
+    reorder: (ids: ReorderRequest["ids"]) =>
+      http.post<void>("/return-profiles/reorder", { ids }),
   },
 
   inflationProfiles: {
     list: () => http.get<Profile[]>("/inflation-profiles"),
     create: (body: CreateProfile) => http.post<Profile>("/inflation-profiles", body),
     remove: (id: number) => http.delete(`/inflation-profiles/${id}`),
+    reorder: (ids: ReorderRequest["ids"]) =>
+      http.post<void>("/inflation-profiles/reorder", { ids }),
   },
 
   /** The bootstrap histories the engine ships with, series and all. */

@@ -54,6 +54,7 @@ export function AccountInspector({
   onAddLot,
   onEditLot,
   editingLotId,
+  onReorderLots,
   lotForm,
   onSelectAccount,
   onDelete,
@@ -74,6 +75,8 @@ export function AccountInspector({
   onEditLot?: (lot: AssetLot) => void;
   /** The lot the form below the table is open on, marked in it. */
   editingLotId?: number;
+  /** Position ids in their new order; omitted where writes are refused. */
+  onReorderLots?: (ids: number[]) => void | Promise<unknown>;
   /** The add- or edit-position form, rendered under the positions table. */
   lotForm?: ReactNode;
   /** Opening the other end of a property/debt pair. */
@@ -198,6 +201,7 @@ export function AccountInspector({
             onAddLot={lotForm ? undefined : onAddLot}
             onSelect={offline ? undefined : onEditLot}
             selectedId={editingLotId}
+            onReorder={onReorderLots}
             addDisabled={offline}
             basisTracked={draft.kind === "investment"}
             note={

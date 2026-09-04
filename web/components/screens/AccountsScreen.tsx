@@ -22,6 +22,7 @@ import type {
 } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
+import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { useNav } from "@/lib/nav";
 import { useServerStatus } from "@/lib/status/useServerStatus";
@@ -123,6 +124,7 @@ export function AccountsScreen({
   // Two trackers: an edit reports in the drawer's footer, a lot in its own form.
   const editing = useSubmit();
   const lot = useSubmit();
+  const saveOrder = useReorderWrite(onChanged);
 
   const assets = useMemo(() => {
     const known = new Set(raw.assets.map((a) => a.id));
@@ -252,6 +254,11 @@ export function AccountsScreen({
                   colors={colors}
                   selectedId={selected?.accountId ?? ""}
                   onSelect={select}
+                  onReorder={
+                    offline
+                      ? undefined
+                      : (ids) => saveOrder(() => api.accounts.reorder(scenarioId, ids))
+                  }
                 />
                 <div
                   style={{
@@ -304,6 +311,14 @@ export function AccountsScreen({
                   : undefined
               }
               editingLotId={lotEditor?.kind === "edit" ? lotEditor.positionId : undefined}
+              onReorderLots={
+                offline
+                  ? undefined
+                  : (ids) =>
+                      saveOrder(() =>
+                        api.accounts.reorderPositions(scenarioId, selected.serverId, ids),
+                      )
+              }
               lotForm={
                 selected.flavor === "Investment"
                   ? lotForm(selected, lotEditor, {

@@ -5,10 +5,11 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use super::ReorderRequest;
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::state::AppState;
@@ -17,6 +18,7 @@ use ts_rs::TS;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/scenarios/{scenario_id}/accounts", get(list).post(create))
+        .route("/scenarios/{scenario_id}/accounts/reorder", post(reorder))
         .route(
             "/scenarios/{scenario_id}/accounts/{id}",
             get(fetch).patch(update).delete(destroy),
@@ -24,6 +26,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/scenarios/{scenario_id}/accounts/{id}/positions",
             get(list_positions).post(add_position),
+        )
+        .route(
+            "/scenarios/{scenario_id}/accounts/{id}/positions/reorder",
+            post(reorder_positions),
         )
         .route(
             "/scenarios/{scenario_id}/accounts/{id}/positions/{position_id}",
@@ -159,8 +165,11 @@ pub struct CreateAccount {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// Omitted appends to the end of the scenario's list, which is where a new
+    /// account belongs — pinning it at 0 would put it in front of every row the
+    /// user has already dragged into place.
     #[serde(default)]
-    pub sort_order: i64,
+    pub sort_order: Option<i64>,
     #[serde(flatten)]
     pub flavor: FlavorSpec,
 }
@@ -269,7 +278,7 @@ async fn load_account(state: &AppState, scenario_id: i64, id: i64) -> ApiResult<
 
     let positions: Vec<Position> = sqlx::query_as(
         "SELECT id, asset_id, purchase_date, units, cost_basis
-           FROM positions WHERE account_id = ?1 ORDER BY purchase_date, id",
+           FROM positions WHERE account_id = ?1 ORDER BY sort_order, purchase_date, id",
     )
     .bind(id)
     .fetch_all(&state.db)
@@ -378,6 +387,27 @@ async fn list(
     Ok(Json(out))
 }
 
+/// Put the scenario's accounts in the order the body names.
+async fn reorder(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(scenario_id): Path<i64>,
+    Json(body): Json<ReorderRequest>,
+) -> ApiResult<StatusCode> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE scenario_id = ?1 ORDER BY sort_order, id",
+    )
+    .bind(scenario_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    super::apply_order(&state.db, "accounts", &current, &body.ids).await?;
+    super::touch_scenario(&state.db, scenario_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn fetch(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -399,7 +429,10 @@ async fn create(
     let mut tx = state.db.begin().await?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO accounts (scenario_id, name, description, flavor, sort_order)
-         VALUES (?1,?2,?3,?4,?5) RETURNING id",
+         VALUES (?1,?2,?3,?4,
+                 COALESCE(?5, (SELECT COALESCE(MAX(sort_order), -1) + 1
+                                 FROM accounts WHERE scenario_id = ?1)))
+         RETURNING id",
     )
     .bind(scenario_id)
     .bind(body.name.trim())
@@ -550,13 +583,39 @@ async fn list_positions(
         "SELECT p.id, p.asset_id, p.purchase_date, p.units, p.cost_basis
            FROM positions p JOIN accounts a ON a.id = p.account_id
           WHERE p.account_id = ?1 AND a.scenario_id = ?2
-          ORDER BY p.purchase_date, p.id",
+          ORDER BY p.sort_order, p.purchase_date, p.id",
     )
     .bind(id)
     .bind(scenario_id)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(rows))
+}
+
+/// Put one account's lots in the order the body names.
+async fn reorder_positions(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((scenario_id, id)): Path<(i64, i64)>,
+    Json(body): Json<ReorderRequest>,
+) -> ApiResult<StatusCode> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+
+    // The join is what confines the renumbering to the caller's scenario: a
+    // position id on its own says nothing about who owns the account under it.
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT p.id FROM positions p JOIN accounts a ON a.id = p.account_id
+          WHERE p.account_id = ?1 AND a.scenario_id = ?2
+          ORDER BY p.sort_order, p.purchase_date, p.id",
+    )
+    .bind(id)
+    .bind(scenario_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    super::apply_order(&state.db, "positions", &current, &body.ids).await?;
+    super::touch_scenario(&state.db, scenario_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn add_position(
@@ -606,8 +665,10 @@ async fn add_position(
     }
 
     let position_id: i64 = sqlx::query_scalar(
-        "INSERT INTO positions (account_id, asset_id, purchase_date, units, cost_basis)
-         VALUES (?1,?2,?3,?4,?5) RETURNING id",
+        "INSERT INTO positions (account_id, asset_id, purchase_date, units, cost_basis, sort_order)
+         VALUES (?1,?2,?3,?4,?5,
+                 (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM positions WHERE account_id = ?1))
+         RETURNING id",
     )
     .bind(id)
     .bind(body.asset_id)

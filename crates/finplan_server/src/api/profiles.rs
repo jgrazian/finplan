@@ -2,11 +2,12 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, Transaction};
 
+use super::ReorderRequest;
 use crate::auth::session::CurrentUser;
 use crate::compile::HISTORY_PRESETS;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
@@ -16,6 +17,7 @@ use ts_rs::TS;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/return-profiles", get(list_return).post(create_return))
+        .route("/return-profiles/reorder", post(reorder_return))
         .route(
             "/return-profiles/{id}",
             get(fetch_return).patch(update_return).delete(delete_return),
@@ -24,6 +26,7 @@ pub fn router() -> Router<AppState> {
             "/inflation-profiles",
             get(list_inflation).post(create_inflation),
         )
+        .route("/inflation-profiles/reorder", post(reorder_inflation))
         .route(
             "/inflation-profiles/{id}",
             axum::routing::delete(delete_inflation),
@@ -439,7 +442,7 @@ async fn list_return(
 ) -> ApiResult<Json<Vec<Profile>>> {
     let rows: Vec<ProfileRow> = sqlx::query_as(
         "SELECT id, name, description, asset_class, distribution_id
-           FROM return_profiles WHERE user_id = ?1 ORDER BY name",
+           FROM return_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
     )
     .bind(&user.id)
     .fetch_all(&state.db)
@@ -457,6 +460,26 @@ async fn list_return(
         });
     }
     Ok(Json(out))
+}
+
+/// Put the user's return-profile library in the order the body names.
+///
+/// The library is the user's, not a scenario's: dragging a profile here moves
+/// it for every plan that points at one, which is what a library is.
+async fn reorder_return(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(body): Json<ReorderRequest>,
+) -> ApiResult<StatusCode> {
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM return_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    super::apply_order(&state.db, "return_profiles", &current, &body.ids).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn fetch_return(
@@ -495,8 +518,11 @@ async fn create_return(
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO return_profiles
-            (user_id, name, description, asset_class, distribution_id)
-         VALUES (?1,?2,?3,?4,?5) RETURNING id",
+            (user_id, name, description, asset_class, distribution_id, sort_order)
+         VALUES (?1,?2,?3,?4,?5,
+                 (SELECT COALESCE(MAX(sort_order), -1) + 1
+                    FROM return_profiles WHERE user_id = ?1))
+         RETURNING id",
     )
     .bind(&user.id)
     .bind(body.name.trim())
@@ -630,7 +656,7 @@ async fn list_inflation(
 ) -> ApiResult<Json<Vec<Profile>>> {
     let rows: Vec<(i64, String, Option<String>, i64)> = sqlx::query_as(
         "SELECT id, name, description, distribution_id
-           FROM inflation_profiles WHERE user_id = ?1 ORDER BY name",
+           FROM inflation_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
     )
     .bind(&user.id)
     .fetch_all(&state.db)
@@ -652,6 +678,23 @@ async fn list_inflation(
     Ok(Json(out))
 }
 
+/// Put the user's inflation-profile library in the order the body names.
+async fn reorder_inflation(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(body): Json<ReorderRequest>,
+) -> ApiResult<StatusCode> {
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM inflation_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    super::apply_order(&state.db, "inflation_profiles", &current, &body.ids).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn create_inflation(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -663,8 +706,11 @@ async fn create_inflation(
     let distribution_id = body.distribution.insert(&mut tx, &user.id, 0).await?;
 
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO inflation_profiles (user_id, name, description, distribution_id)
-         VALUES (?1,?2,?3,?4) RETURNING id",
+        "INSERT INTO inflation_profiles (user_id, name, description, distribution_id, sort_order)
+         VALUES (?1,?2,?3,?4,
+                 (SELECT COALESCE(MAX(sort_order), -1) + 1
+                    FROM inflation_profiles WHERE user_id = ?1))
+         RETURNING id",
     )
     .bind(&user.id)
     .bind(body.name.trim())

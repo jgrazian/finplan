@@ -131,16 +131,27 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
             .await?;
         }
 
-        for lot in graph.positions.get(&account.id).into_iter().flatten() {
+        // Enumerated rather than copying a stored rank: the graph loads lots
+        // in `sort_order`, so the position in that list *is* the order, and
+        // the copy is renumbered densely from it.
+        for (rank, lot) in graph
+            .positions
+            .get(&account.id)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
             sqlx::query(
-                "INSERT INTO positions (account_id, asset_id, purchase_date, units, cost_basis)
-                 VALUES (?1,?2,?3,?4,?5)",
+                "INSERT INTO positions
+                    (account_id, asset_id, purchase_date, units, cost_basis, sort_order)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
             )
             .bind(id)
             .bind(remap(&assets, lot.asset_id, "asset")?)
             .bind(&lot.purchase_date)
             .bind(lot.units)
             .bind(lot.cost_basis)
+            .bind(rank as i64)
             .execute(&mut *tx)
             .await?;
         }

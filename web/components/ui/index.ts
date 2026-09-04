@@ -1,6 +1,7 @@
 export { Blueprint } from "./Blueprint";
 export { Button } from "./Button";
 export { Dialog, DialogRow } from "./Dialog";
+export { DragHandle, DropLine } from "./DragHandle";
 export { Dropdown } from "./Dropdown";
 export type { DropdownOption, DropdownProps } from "./Dropdown";
 export type { ButtonProps } from "./Button";

@@ -3,10 +3,11 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use super::ReorderRequest;
 use super::specs::{
     AmountSpec, Comparison, EffectParent, EffectSpec, Interval, OffsetUnit, TriggerParent,
     TriggerSpec,
@@ -20,6 +21,7 @@ use ts_rs::TS;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/scenarios/{scenario_id}/events", get(list).post(create))
+        .route("/scenarios/{scenario_id}/events/reorder", post(reorder))
         .route(
             "/scenarios/{scenario_id}/events/{id}",
             get(fetch).put(replace).delete(destroy),
@@ -49,8 +51,11 @@ pub struct EventBody {
     pub fires_once: bool,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Omitted appends a new event to the end of the list and leaves a replaced
+    /// one where it already sat — the PUT that saves an edited trigger must not
+    /// silently drag the row back to the top.
     #[serde(default)]
-    pub sort_order: i64,
+    pub sort_order: Option<i64>,
     pub trigger: TriggerSpec,
     #[serde(default)]
     pub effects: Vec<EffectSpec>,
@@ -427,6 +432,26 @@ async fn list(
     Ok(Json(out))
 }
 
+/// Put the scenario's events in the order the body names.
+async fn reorder(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(scenario_id): Path<i64>,
+    Json(body): Json<ReorderRequest>,
+) -> ApiResult<StatusCode> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+
+    let current: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM events WHERE scenario_id = ?1 ORDER BY sort_order, id")
+            .bind(scenario_id)
+            .fetch_all(&state.db)
+            .await?;
+
+    super::apply_order(&state.db, "events", &current, &body.ids).await?;
+    super::touch_scenario(&state.db, scenario_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn fetch(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -447,7 +472,10 @@ async fn create(
     let mut tx = state.db.begin().await?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO events (scenario_id, name, description, fires_once, enabled, sort_order)
-         VALUES (?1,?2,?3,?4,?5,?6) RETURNING id",
+         VALUES (?1,?2,?3,?4,?5,
+                 COALESCE(?6, (SELECT COALESCE(MAX(sort_order), -1) + 1
+                                 FROM events WHERE scenario_id = ?1)))
+         RETURNING id",
     )
     .bind(scenario_id)
     .bind(body.name.trim())
@@ -492,7 +520,8 @@ async fn replace(
 
     sqlx::query(
         "UPDATE events SET name = ?3, description = ?4, fires_once = ?5, enabled = ?6,
-                           sort_order = ?7, updated_at = datetime('now')
+                           sort_order = COALESCE(?7, sort_order),
+                           updated_at = datetime('now')
           WHERE id = ?1 AND scenario_id = ?2",
     )
     .bind(id)

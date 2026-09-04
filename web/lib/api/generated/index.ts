@@ -39,6 +39,7 @@ export type { PasswordChange } from "./PasswordChange";
 export type { PercentileValue } from "./PercentileValue";
 export type { Position } from "./Position";
 export type { Profile } from "./Profile";
+export type { ReorderRequest } from "./ReorderRequest";
 export type { Results } from "./Results";
 export type { ResultsQuery } from "./ResultsQuery";
 export type { Run } from "./Run";

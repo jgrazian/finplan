@@ -3,7 +3,16 @@ import type { ContributionPeriod } from "./ContributionPeriod";
 import type { TaxStatus } from "./TaxStatus";
 
 export type CreateAccount =
-  & { name: string; description?: string | null; sort_order: number }
+  & {
+    name: string;
+    description?: string | null;
+    /**
+     * Omitted appends to the end of the scenario's list, which is where a new
+     * account belongs — pinning it at 0 would put it in front of every row the
+     * user has already dragged into place.
+     */
+    sort_order?: number | null;
+  }
   & (
     | { "flavor": "Bank"; cash_value: number; return_profile_id: number }
     | {

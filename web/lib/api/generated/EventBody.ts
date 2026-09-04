@@ -7,7 +7,12 @@ export type EventBody = {
   description?: string | null;
   fires_once: boolean;
   enabled: boolean;
-  sort_order: number;
+  /**
+   * Omitted appends a new event to the end of the list and leaves a replaced
+   * one where it already sat — the PUT that saves an edited trigger must not
+   * silently drag the row back to the top.
+   */
+  sort_order?: number | null;
   trigger: TriggerSpec;
   effects: Array<EffectSpec>;
 };

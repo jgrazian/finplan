@@ -19,6 +19,7 @@ import { api } from "@/lib/api/client";
 import type { Profile, UpdateAsset, UpdateProfile } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import { useAsync } from "@/lib/hooks/useAsync";
+import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
@@ -91,6 +92,7 @@ export function AssetsScreen({
   const editingAsset = useSubmit();
   const editingProfile = useSubmit();
   const filling = useSubmit();
+  const saveOrder = useReorderWrite(onChanged);
 
   // The histories a Bootstrap profile resamples, series and all. A static
   // table the server owns, fetched once on mount rather than threaded through
@@ -349,6 +351,11 @@ export function AssetsScreen({
                 selectedId={selectedAsset?.serverId}
                 checked={checked}
                 onSelect={(row) => select({ kind: "asset", id: row.serverId })}
+                onReorder={
+                  offline
+                    ? undefined
+                    : (ids) => saveOrder(() => api.assets.reorder(scenarioId, ids))
+                }
                 onCheck={
                   remapping.busy || offline
                     ? undefined
@@ -393,6 +400,11 @@ export function AssetsScreen({
                 profiles={returnProfiles}
                 selectedId={selectedProfile?.id}
                 onSelect={(p) => select({ kind: "profile", id: p.id })}
+                onReorder={
+                  offline
+                    ? undefined
+                    : (ids) => saveOrder(() => api.returnProfiles.reorder(ids))
+                }
               />
               <p style={NOTE}>
                 A profile with no assets is unremarkable here — an account can
@@ -414,6 +426,11 @@ export function AssetsScreen({
                   profiles={inflationProfiles}
                   activeId={activeInflationProfile ?? ""}
                   onActivate={offline ? undefined : onActivateInflation}
+                  onReorder={
+                    offline
+                      ? undefined
+                      : (ids) => saveOrder(() => api.inflationProfiles.reorder(ids))
+                  }
                 />
               )}
             </div>

@@ -9,9 +9,12 @@ pub mod scenarios;
 pub mod specs;
 pub mod taxes;
 
+use std::collections::HashSet;
+
 use axum::Router;
 use axum::routing::get;
 use serde::{Deserialize, Deserializer};
+use ts_rs::TS;
 
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
@@ -63,6 +66,67 @@ pub async fn owned_scenario(db: &Db, scenario_id: i64, user_id: &str) -> ApiResu
             .await?;
 
     exists.map(|_| ()).ok_or(ApiError::NotFound("scenario"))
+}
+
+/// The body every reorder route takes: the collection's row ids, in the order
+/// the list should now be in.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ReorderRequest {
+    pub ids: Vec<i64>,
+}
+
+/// The order `requested` asks for, reconciled against what the collection
+/// actually holds.
+///
+/// Named rows come first, in the order named; anything the caller did not name
+/// keeps its place behind them. An id that is not in the collection is dropped
+/// rather than refused: a list a beat out of date — a row deleted in another
+/// tab, one belonging to a scenario the caller does not own — should still
+/// reorder under the user's hand rather than fail there.
+fn reconcile(current: &[i64], requested: &[i64]) -> Vec<i64> {
+    let known: HashSet<i64> = current.iter().copied().collect();
+    let mut placed: HashSet<i64> = HashSet::new();
+    let mut order: Vec<i64> = requested
+        .iter()
+        .copied()
+        .filter(|id| known.contains(id) && placed.insert(*id))
+        .collect();
+    order.extend(current.iter().copied().filter(|id| !placed.contains(id)));
+    order
+}
+
+/// Renumber `table`'s `sort_order` so the collection reads back as `requested`.
+///
+/// `current` is the collection's ids in their present order, already narrowed
+/// to what the caller owns — this writes by primary key, so that query is the
+/// only thing standing between a request and someone else's rows.
+///
+/// One transaction: a half-applied renumbering is a list with two rows claiming
+/// the same place, which sorts by id and looks like the drag simply misfired.
+pub async fn apply_order(
+    db: &Db,
+    table: &'static str,
+    current: &[i64],
+    requested: &[i64],
+) -> ApiResult<()> {
+    let order = reconcile(current, requested);
+    if order == current {
+        return Ok(());
+    }
+
+    // `table` is a literal from this crate's own call sites, never request data.
+    let sql = format!("UPDATE {table} SET sort_order = ?1 WHERE id = ?2");
+    let mut tx = db.begin().await?;
+    for (rank, id) in order.iter().enumerate() {
+        sqlx::query(&sql)
+            .bind(rank as i64)
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// Bump a scenario's `updated_at`, so clients can tell when cached results have

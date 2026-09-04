@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { UpdateScenario } from "@/lib/api/types";
+import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
 import type { PlanEvent, ScenarioParams } from "@/lib/types";
@@ -48,6 +49,7 @@ export function PlanScreen({
   // falls back to the first row instead of leaving the drawer empty.
   const nav = useNav();
   const selected = events.find((e) => e.id === nav.selection) ?? events[0];
+  const saveOrder = useReorderWrite(onChanged);
 
   /**
    * The strip's fields save as they are edited. `null` on the wire means
@@ -153,6 +155,11 @@ export function PlanScreen({
                 events={events}
                 selectedId={selected?.id ?? ""}
                 onSelect={nav.setSelection}
+                onReorder={
+                  offline
+                    ? undefined
+                    : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))
+                }
               />
             </div>
 

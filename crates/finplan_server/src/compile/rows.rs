@@ -322,7 +322,7 @@ impl ScenarioGraph {
         let position_rows: Vec<PositionRow> = sqlx::query_as(
             "SELECT p.id, p.account_id, p.asset_id, p.purchase_date, p.units, p.cost_basis
                FROM positions p JOIN accounts a ON a.id = p.account_id
-              WHERE a.scenario_id = ?1 ORDER BY p.purchase_date, p.id",
+              WHERE a.scenario_id = ?1 ORDER BY p.sort_order, p.purchase_date, p.id",
         )
         .bind(scenario_id)
         .fetch_all(db)

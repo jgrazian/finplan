@@ -1,7 +1,8 @@
 "use client";
 
 import type { KeyboardEvent } from "react";
-import { Tag, type TagTone, rowStyle } from "@/components/ui";
+import { DragHandle, DropLine, Tag, type TagTone, rowStyle } from "@/components/ui";
+import { useReorder } from "@/lib/hooks/useReorder";
 import { CLASS_LABEL } from "@/lib/tickers";
 import type { DistributionKind, ReturnProfile } from "@/lib/types";
 import { KIND_LABEL } from "./DistributionTerms";
@@ -10,7 +11,7 @@ import { RETURN_SCALE, bandIsFigures, bandLabel, pct } from "./distribution";
 
 const FAINT = "color-mix(in srgb, var(--color-text) 40%, transparent)";
 const SHAPE_WIDTH = 250;
-const COLUMNS = "minmax(170px, 1fr) 104px 250px 66px 116px 158px";
+const COLUMNS = "14px minmax(170px, 1fr) 104px 250px 66px 116px 158px";
 
 /**
  * How loudly a kind announces itself. A parametric distribution is the normal
@@ -31,19 +32,38 @@ export function kindTone(kind: DistributionKind): TagTone {
  * a name/kind/mean table is dead space — carries the thing the numbers are a
  * summary of. A profile with no assets is unremarkable here: an account can
  * point at one directly for its cash or its property value.
+ *
+ * The library is the user's rather than the scenario's, so dragging a row here
+ * reorders it for every plan — which is what a library is.
  */
 export function ProfileLibraryTable({
   profiles,
   selectedId,
   onSelect,
+  onReorder,
 }: {
   profiles: ReturnProfile[];
   /** Name of the profile driving the drawer, or undefined. */
   selectedId: string | undefined;
   onSelect: (profile: ReturnProfile) => void;
+  /** Server ids in their new order. Omitted where writes are refused. */
+  onReorder?: (ids: number[]) => void | Promise<unknown>;
 }) {
+  const byServerId = new Map(profiles.map((p) => [p.serverId, p]));
+  // Destructured rather than kept as one object: a `ref` prop taken off a
+  // value marks the whole value as a ref to the React compiler, and the rest of
+  // what the hook returns is ordinary render state.
+  const { order, attachList, attachRow, dragging, indicator, handleProps, listStyle } =
+    useReorder({ keys: profiles.map((p) => p.serverId), onReorder });
+
   return (
-    <div role="listbox" aria-label="Return profile library">
+    <div
+      role="listbox"
+      aria-label="Return profile library"
+      ref={attachList}
+      style={listStyle}
+    >
+      <DropLine at={indicator} />
       <div
         style={{
           display: "grid",
@@ -54,6 +74,7 @@ export function ProfileLibraryTable({
           borderBottom: "1px solid var(--color-text)",
         }}
       >
+        <span />
         <span className="stat-l">Profile</span>
         <span className="stat-l">Kind</span>
         <ShapeAxis
@@ -73,13 +94,16 @@ export function ProfileLibraryTable({
         </span>
       </div>
 
-      {profiles.map((profile) => {
+      {order.map((serverId) => {
+        const profile = byServerId.get(serverId);
+        if (!profile) return null;
         const selected = profile.id === selectedId;
         const used = profile.usedBy.join(" · ");
         return (
           <div
             key={profile.id}
-            className="rowsel"
+            ref={attachRow(serverId)}
+            className={dragging === serverId ? "rowsel dragging" : "rowsel"}
             role="option"
             aria-selected={selected}
             tabIndex={0}
@@ -102,6 +126,7 @@ export function ProfileLibraryTable({
                 borderBottom: "1px solid var(--color-divider)",
               }}
             >
+              <DragHandle label={profile.id} props={handleProps(serverId)} />
               <span
                 style={{
                   fontSize: 13,

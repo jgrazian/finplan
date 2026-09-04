@@ -2,9 +2,10 @@
 
 import type { KeyboardEvent } from "react";
 import { RETURN_SCALE, ShapeAxis, ShapeSpark, pct } from "@/components/profiles";
-import { rowStyle } from "@/components/ui";
+import { DragHandle, DropLine, rowStyle } from "@/components/ui";
 import type { DistributionSpec } from "@/lib/api/types";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
+import { useReorder } from "@/lib/hooks/useReorder";
 import type { ReturnProfile } from "@/lib/types";
 import type { AssetRow } from "@/lib/view/assets";
 
@@ -19,7 +20,7 @@ const SHAPE_WIDTH = 140;
  * Declared once so the header and its rows cannot drift apart. The name is the
  * only column that flexes: everything else is a figure whose width is its own.
  */
-const COLUMNS = "26px 64px minmax(110px, 1fr) 88px 96px 124px 140px 140px 54px";
+const COLUMNS = "14px 26px 64px minmax(110px, 1fr) 88px 96px 124px 140px 140px 54px";
 
 /**
  * An unmapped asset is not a hole in the table — the engine really does hold
@@ -34,6 +35,9 @@ const HELD_FLAT: DistributionSpec = { kind: "None" };
  * what it is: a thing the asset points at. What the column carries is the
  * profile's shape, drawn on the scale in the header — so eleven rows can be
  * read against each other without opening any of them.
+ *
+ * The order is the user's, dragged by the grip in the left gutter: the point of
+ * a holdings list is that the things you watch are near the top.
  */
 export function AssetsTable({
   rows,
@@ -42,6 +46,7 @@ export function AssetsTable({
   checked,
   onSelect,
   onCheck,
+  onReorder,
 }: {
   rows: AssetRow[];
   profiles: ReturnProfile[];
@@ -52,11 +57,25 @@ export function AssetsTable({
   onSelect: (row: AssetRow) => void;
   /** Omitted while a remap is in flight, or when writes are refused. */
   onCheck?: (row: AssetRow, on: boolean) => void;
+  /** Server ids in their new order. Omitted where writes are refused. */
+  onReorder?: (ids: number[]) => void | Promise<unknown>;
 }) {
   const byId = new Map(profiles.map((p) => [p.serverId, p]));
+  const byServerId = new Map(rows.map((r) => [r.serverId, r]));
+  // Destructured rather than kept as one object: a `ref` prop taken off a
+  // value marks the whole value as a ref to the React compiler, and the rest of
+  // what the hook returns is ordinary render state.
+  const { order, attachList, attachRow, dragging, indicator, handleProps, listStyle } =
+    useReorder({ keys: rows.map((r) => r.serverId), onReorder });
 
   return (
-    <div role="listbox" aria-label="Assets">
+    <div
+      role="listbox"
+      aria-label="Assets"
+      ref={attachList}
+      style={listStyle}
+    >
+      <DropLine at={indicator} />
       <div
         style={{
           display: "grid",
@@ -67,6 +86,7 @@ export function AssetsTable({
           borderBottom: "1px solid var(--color-text)",
         }}
       >
+        <span />
         <span />
         <span className="stat-l">Ticker</span>
         <span className="stat-l">Name</span>
@@ -90,7 +110,9 @@ export function AssetsTable({
         </span>
       </div>
 
-      {rows.map((row) => {
+      {order.map((serverId) => {
+        const row = byServerId.get(serverId);
+        if (!row) return null;
         const profile = row.profileServerId == null ? undefined : byId.get(row.profileServerId);
         const spec = profile?.distribution ?? HELD_FLAT;
         const selected = row.serverId === selectedId;
@@ -98,7 +120,8 @@ export function AssetsTable({
         return (
           <div
             key={row.serverId}
-            className="rowsel"
+            ref={attachRow(serverId)}
+            className={dragging === serverId ? "rowsel dragging" : "rowsel"}
             role="option"
             aria-selected={selected}
             tabIndex={0}
@@ -121,6 +144,7 @@ export function AssetsTable({
                 borderBottom: "1px solid var(--color-divider)",
               }}
             >
+              <DragHandle label={row.ticker} props={handleProps(serverId)} />
               {onCheck ? (
                 <label
                   className="check"
