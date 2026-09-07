@@ -17,7 +17,7 @@ import type {
 } from "@/lib/api/types";
 import type { EffectKind, EventEffect, PlanEvent } from "@/lib/types";
 import type { PlanAxis } from "./axis";
-import { addYears, money } from "./format";
+import { addYears, money, ratePercent } from "./format";
 
 export interface EventNames {
   account: (id: number) => string;
@@ -368,13 +368,15 @@ export function describeAmount(amount: AmountSpec, names: EventNames): string {
     case "InflationAdjusted":
       return `${rec(amount.inner)} infl-adj`;
     case "Scale":
-      return `${amount.factor}× ${rec(amount.inner)}`;
+      // Held as a multiplier and said as a percentage, the way the editor asks
+      // for it — `0.04` is the 4% withdrawal rate anyone would say out loud.
+      return `${Number(ratePercent(amount.factor).toFixed(4))}% of ${rec(amount.inner)}`;
     case "SourceBalance":
       return "source balance";
     case "ZeroTargetBalance":
       return "to zero";
     case "TargetToBalance":
-      return `up to ${money(amount.value)}`;
+      return `top up to ${money(amount.value)}`;
     case "AssetBalance":
       return `${names.asset(amount.asset_id)} in ${names.account(amount.account_id)}`;
     case "AccountTotalBalance":

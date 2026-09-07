@@ -16,7 +16,8 @@ import {
 } from "@/components/ui";
 import type { AmountMode, LotMethod } from "@/lib/api/types";
 import { useReorder } from "@/lib/hooks/useReorder";
-import { describeAmount, describeEffect, namesOf } from "@/lib/view/events";
+import { describeEffect, namesOf } from "@/lib/view/events";
+import { AmountExpression } from "./AmountFields";
 import { Note, type TriggerContext } from "./TriggerFields";
 import {
   AMOUNT_MODES,
@@ -28,9 +29,11 @@ import {
   STRATEGIES,
   VERBS,
   type Verb,
+  collapseAmount,
   effectConversion,
   effectProblem,
   emptyEffect,
+  expandAmount,
   shape,
   toEffectSpec,
 } from "./effectDraft";
@@ -53,16 +56,22 @@ function Row({ children }: { children: ReactNode }) {
 }
 
 /**
- * Something the form cannot draw, said in the words the list already uses for
- * it. Shown rather than hidden: an effect nobody can see is one that gets
- * forgotten and then wondered about when the numbers come out wrong.
+ * The button that changes what the field above it *is* — the way into the
+ * amount expression — and, where there is something to say, a line saying it.
+ *
+ * Also where something the form cannot draw gets said in the words the list
+ * already uses for it. Shown rather than hidden: an effect nobody can see is
+ * one that gets forgotten and then wondered about when the numbers come out
+ * wrong.
  */
-function AsSaved({ children, action }: { children: ReactNode; action?: ReactNode }) {
+function Aside({ children, action }: { children?: ReactNode; action?: ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 12, lineHeight: 1.45, color: MUTED, minWidth: 0 }}>
-        {children}
-      </span>
+      {children != null && (
+        <span style={{ fontSize: 12, lineHeight: 1.45, color: MUTED, minWidth: 0 }}>
+          {children}
+        </span>
+      )}
       {action}
     </div>
   );
@@ -295,16 +304,38 @@ export function EffectTerms({
 
   if (effect.raw) {
     return (
-      <AsSaved>
+      <Aside>
         <strong style={{ fontWeight: 600 }}>{effect.raw.kind}</strong> ·{" "}
         {describeEffect(effect.raw, names).detail}
         <br />
         Built outside this form and saved back untouched.
-      </AsSaved>
+      </Aside>
     );
   }
 
   const family = FAMILY[effect.form];
+
+  /**
+   * Gross or net. Drawn beside the figure in the simple case and under the
+   * expression in the other, because an expression is a block rather than a
+   * field and a select sitting alongside it would read as part of the tree.
+   */
+  const amountModeField = (
+    <Field label="Amount is">
+      <Select
+        value={effect.amountMode}
+        aria-label="Amount is"
+        disabled={disabled}
+        onChange={(e) => onChange({ amountMode: e.target.value as AmountMode })}
+      >
+        {AMOUNT_MODES.map((m) => (
+          <option key={m.value} value={m.value}>
+            {m.label}
+          </option>
+        ))}
+      </Select>
+    </Field>
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
@@ -389,7 +420,7 @@ export function EffectTerms({
       </Row>
 
       {fields.strategy && effect.rawSources && (
-        <AsSaved
+        <Aside
           action={
             <Button
               variant="ghost"
@@ -401,55 +432,48 @@ export function EffectTerms({
           }
         >
           Draws from a named source list this form cannot draw, kept as saved.
-        </AsSaved>
+        </Aside>
       )}
 
       {/* how much */}
-      {fields.amount && !effect.rawAmount && (
-        <Row>
-          <Field label="Amount per occurrence">
-            <CurrencyInput
-              value={effect.amount}
-              readOnly={disabled}
-              onValueChange={(amount) => onChange({ amount })}
-              aria-label="Amount per occurrence"
-            />
-          </Field>
-          {fields.mode && (
-            <Field label="Amount is">
-              <Select
-                value={effect.amountMode}
-                aria-label="Amount is"
-                disabled={disabled}
-                onChange={(e) => onChange({ amountMode: e.target.value as AmountMode })}
-              >
-                {AMOUNT_MODES.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-          )}
-        </Row>
-      )}
-
-      {fields.amount && effect.rawAmount && (
-        <AsSaved
-          action={
-            <Button
-              variant="ghost"
+      {fields.amount &&
+        (effect.rawAmount ? (
+          <>
+            <AmountExpression
+              amount={effect.rawAmount}
+              context={context}
               disabled={disabled}
-              onClick={() => onChange({ rawAmount: undefined })}
-            >
-              Use a fixed amount
-            </Button>
-          }
-        >
-          Amount: {describeAmount(effect.rawAmount, names)} — computed from the plan
-          rather than typed, and kept as saved.
-        </AsSaved>
-      )}
+              onChange={(rawAmount) => onChange({ rawAmount })}
+              onCollapse={() => onChange(collapseAmount(effect))}
+            />
+            {fields.mode && <Row>{amountModeField}</Row>}
+          </>
+        ) : (
+          <>
+            <Row>
+              <Field label="Amount per occurrence">
+                <CurrencyInput
+                  value={effect.amount}
+                  readOnly={disabled}
+                  onValueChange={(amount) => onChange({ amount })}
+                  aria-label="Amount per occurrence"
+                />
+              </Field>
+              {fields.mode && amountModeField}
+            </Row>
+            <Aside
+              action={
+                <Button
+                  variant="ghost"
+                  disabled={disabled}
+                  onClick={() => onChange(expandAmount(effect))}
+                >
+                  Advanced expression
+                </Button>
+              }
+            />
+          </>
+        ))}
 
       {/* the kind that takes no amount at all */}
       {effect.form === "ApplyRmd" && (

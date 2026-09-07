@@ -9,12 +9,16 @@
  * only in their verb, and a block whose one field is an event id should not be
  * drawn four ways, so they share a form and the verb is a select inside it.
  *
- * The rest of the lossiness is in the amounts. An effect's amount is its own
+ * Amounts have two settings rather than one. An effect's amount is its own
  * recursive language — `Min(AccountCashBalance, Scale(0.04, Fixed))` is a legal
- * withdrawal rule — and the form asks for a number. So an amount it cannot
- * express is held in `rawAmount` and written back untouched, and the same for a
- * sweep's source list in `rawSources` and a whole `Random` in `raw`. Editing an
- * event's name never rewrites the parts of it this form cannot draw.
+ * withdrawal rule — but almost every amount anyone writes is a figure, so the
+ * form asks for a figure and keeps the tree out of the way. `rawAmount` holds
+ * the expression whenever there is one, either because it came off the wire
+ * that way or because the editor was asked for one, and `AmountExpression`
+ * draws it in full: nothing about an amount is beyond this form.
+ *
+ * What is still held verbatim is a sweep's source list, in `rawSources`, and a
+ * whole `Random`, in `raw`. Editing an event's name never rewrites either.
  */
 import type { TagTone } from "@/components/ui/Tag";
 import type {
@@ -25,6 +29,7 @@ import type {
   WithdrawalSourcesSpec,
   WithdrawalStrategy,
 } from "@/lib/api/types";
+import { amountProblem } from "./amountDraft";
 
 export const EFFECT_FORMS = [
   "Income",
@@ -105,8 +110,8 @@ export interface EffectDraft {
   /** Grow the amount with inflation, i.e. it is stated in today's money. */
   inflationAdjusted: boolean;
   /**
-   * An amount the form cannot express, exactly as the server sent it. Set, it
-   * is what gets written and the two fields above mean nothing.
+   * The amount as an expression. Set, it is what gets written and the two
+   * fields above mean nothing — see `expandAmount` and `collapseAmount`.
    */
   rawAmount?: AmountSpec;
   /** Whether the amount is what arrives, or what is taken before tax. */
@@ -293,6 +298,10 @@ export function effectProblem(draft: EffectDraft, index: number): string | null 
   if (fields.asset && !(fields.anyAsset && draft.anyAsset) && draft.assetId === 0) {
     return say("needs an asset");
   }
+  if (fields.amount && draft.rawAmount) {
+    const problem = amountProblem(draft.rawAmount);
+    if (problem) return say(`has an amount that ${problem}`);
+  }
   return null;
 }
 
@@ -302,6 +311,27 @@ function amountSpec(draft: EffectDraft): AmountSpec {
   if (draft.rawAmount) return draft.rawAmount;
   const fixed: AmountSpec = { kind: "Fixed", value: draft.amount };
   return draft.inflationAdjusted ? { kind: "InflationAdjusted", inner: fixed } : fixed;
+}
+
+/**
+ * Into the expression editor, and back out of it.
+ *
+ * Expanding is lossless by construction — the figure and its inflation tick
+ * are exactly a one- or two-node tree, so the editor opens on what the field
+ * was already saying. Collapsing only keeps a figure where the expression
+ * still is one; anything else falls back to the figure the draft last held,
+ * which is the one the field will show.
+ */
+export function expandAmount(draft: EffectDraft): Partial<EffectDraft> {
+  return { rawAmount: amountSpec(draft) };
+}
+
+export function collapseAmount(draft: EffectDraft): Partial<EffectDraft> {
+  const read = draft.rawAmount ? readAmount(draft.rawAmount) : null;
+  return {
+    rawAmount: undefined,
+    ...(read ? { amount: read.value, inflationAdjusted: read.inflationAdjusted } : {}),
+  };
 }
 
 function sourcesSpec(draft: EffectDraft): WithdrawalSourcesSpec {
