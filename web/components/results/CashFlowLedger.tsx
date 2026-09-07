@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Blueprint, Table, Td, Th } from "@/components/ui";
 import { api } from "@/lib/api/client";
+import { SERIES } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import type {
   LedgerCategory,
@@ -266,6 +267,7 @@ export function CashFlowLedger({
                     open={open}
                     span={columns.length + (hasLedger ? 2 : 0)}
                     runId={runId}
+                    series={SERIES[percentile]}
                     filter={filter}
                     onToggle={() => toggleYear(row.year)}
                   />
@@ -309,6 +311,7 @@ function YearRow({
   open,
   span,
   runId,
+  series,
   filter,
   onToggle,
 }: {
@@ -319,6 +322,8 @@ function YearRow({
   open: boolean;
   span: number;
   runId: number | undefined;
+  /** The path the row's figures came from, so its drawer reads the same one. */
+  series: string;
   filter: LedgerFilter;
   onToggle: () => void;
 }) {
@@ -400,6 +405,7 @@ function YearRow({
             >
               <LedgerDrawer
                 runId={runId}
+                series={series}
                 year={row.year}
                 factor={row.inflationFactor}
                 filter={filter}
@@ -421,17 +427,19 @@ function YearRow({
  */
 function LedgerDrawer({
   runId,
+  series,
   year,
   factor,
   filter,
 }: {
   runId: number | undefined;
+  series: string;
   year: number;
   /** The year's cumulative inflation, so items and totals share dollars. */
   factor: number;
   filter: LedgerFilter;
 }) {
-  const state = useLedgerYear(runId, year, factor, filter);
+  const state = useLedgerYear(runId, series, year, factor, filter);
   if (state.error) {
     return (
       <p style={{ margin: 0, fontSize: 12, color: MUTED }}>
@@ -558,6 +566,7 @@ const IDLE: LedgerState = { entries: [], total: 0, loading: false };
 /** What one completed fetch produced, tagged with the request that asked for it. */
 interface Loaded {
   runId: number;
+  series: string;
   year: number;
   category?: LedgerCategory;
   entries: LedgerEntry[];
@@ -578,6 +587,7 @@ interface Loaded {
  */
 function useLedgerYear(
   runId: number | undefined,
+  series: string,
   year: number,
   factor: number,
   filter: LedgerFilter,
@@ -590,11 +600,12 @@ function useLedgerYear(
     let live = true;
 
     api.runs
-      .ledger(runId, { year, category })
+      .ledger(runId, { series, year, category })
       .then((page) => {
         if (!live) return;
         setLoaded({
           runId,
+          series,
           year,
           category,
           entries: toLedgerEntries(page, factor),
@@ -603,17 +614,30 @@ function useLedgerYear(
       })
       .catch((err: Error) => {
         if (live) {
-          setLoaded({ runId, year, category, entries: [], total: 0, error: err.message });
+          setLoaded({
+            runId,
+            series,
+            year,
+            category,
+            entries: [],
+            total: 0,
+            error: err.message,
+          });
         }
       });
 
     return () => {
       live = false;
     };
-  }, [category, factor, runId, year]);
+  }, [category, factor, runId, series, year]);
 
   if (runId == null) return IDLE;
-  if (loaded?.runId !== runId || loaded.year !== year || loaded.category !== category) {
+  if (
+    loaded?.runId !== runId ||
+    loaded.series !== series ||
+    loaded.year !== year ||
+    loaded.category !== category
+  ) {
     return { entries: [], total: 0, loading: true };
   }
   return {

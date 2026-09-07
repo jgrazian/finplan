@@ -8,6 +8,7 @@
 export * from "./generated";
 
 import type { FlavorSpec, UpdateAccount } from "./generated";
+import type { Percentile } from "@/lib/types";
 
 /**
  * `PATCH /scenarios/{id}/accounts/{id}` takes an optional flattened flavor.
@@ -22,3 +23,17 @@ export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancele
 export function isTerminal(status: string): boolean {
   return status === "succeeded" || status === "failed" || status === "canceled";
 }
+
+/**
+ * The `series` query naming one of the run's stored paths.
+ *
+ * A run keeps the whole fan, but its per-account series, cash flows and ledger
+ * describe one path at a time — so every request that reads them says which,
+ * and they all have to say the same thing to agree on screen. The server
+ * resolves the value to the nearest path it actually stored.
+ */
+export const SERIES: Record<Percentile, string> = {
+  p5: "0.05",
+  p50: "0.5",
+  p95: "0.95",
+};

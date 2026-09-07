@@ -1439,3 +1439,67 @@ async fn a_year_of_the_ledger_can_be_read_back_and_filtered() {
         "the page total disagrees with the index the table drew its count from"
     );
 }
+
+/// The chart's P5 / P50 / P95 switch is a `series` query, because the fan is
+/// stored per percentile but the per-account series and cash flows describe one
+/// path at a time. A percentile the run did not store resolves to the nearest
+/// one it did, so a client naming "the bad case" as 0.05 gets a path back
+/// whatever marks the run happened to be started with.
+#[tokio::test]
+async fn results_follow_the_percentile_the_caller_asks_for() {
+    let mut app = TestApp::new().await;
+    app.login_as("series@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+
+    let (status, run) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/runs"),
+            json!({"iterations": 120, "seed": 7, "percentiles": [0.05, 0.5, 0.95]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(run_id).await, "succeeded");
+
+    /// Final worth of every account on the path a `series` query names.
+    async fn final_worth(app: &TestApp, run_id: i64, query: &str) -> f64 {
+        let (status, results) = app.get(&format!("/api/runs/{run_id}/results{query}")).await;
+        assert_eq!(status, StatusCode::OK, "{results}");
+        let series = results["account_series"].as_array().unwrap();
+        assert!(!series.is_empty(), "no account series for {query}");
+        series
+            .iter()
+            .map(|s| {
+                let values = s["values"].as_array().unwrap();
+                values.last().unwrap().as_f64().unwrap()
+            })
+            .sum()
+    }
+
+    let low = final_worth(&app, run_id, "?series=0.05").await;
+    let median = final_worth(&app, run_id, "?series=0.5").await;
+    let high = final_worth(&app, run_id, "?series=0.95").await;
+
+    assert!(
+        low < median && median < high,
+        "the series query returned the same path for every percentile: \
+         {low} / {median} / {high}"
+    );
+    assert_eq!(
+        final_worth(&app, run_id, "").await,
+        median,
+        "the default series is no longer the median path"
+    );
+
+    // 0.9 was never stored, so the 0.95 path answers for it.
+    assert_eq!(
+        final_worth(&app, run_id, "?series=0.9").await,
+        high,
+        "an unstored percentile did not fall back to the nearest stored path"
+    );
+
+    let (status, bad) = app
+        .get(&format!("/api/runs/{run_id}/results?series=later"))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+}

@@ -8,6 +8,10 @@
  * series is collapsed to one point per year so the chart's year ticks and the
  * yearly cash-flow table line up.
  *
+ * The per-account series, the cash flows and the ledger are not a fan at all:
+ * they describe the one path the request named, which `series` says here so
+ * that everything drawn from them is attributed to it.
+ *
  * And every dollar is deflated. The engine works in nominal dollars, so a
  * balance at the end of a 35-year plan is quoted in dollars worth roughly half
  * what today's are — which makes a rising net-worth line unreadable as a
@@ -21,6 +25,7 @@ import type {
   LedgerSummary,
   MonteCarloStats,
   NetWorthBands,
+  Percentile,
   ResultsData,
   SimulationWarning,
   YearlyCashFlow,
@@ -39,6 +44,9 @@ const SERIES_COLORS = [
   "#2f4a63",
   "#cfe4f7",
 ];
+
+/** The percentile each named path stands for, for picking it out of the fan. */
+const TARGET: Record<Percentile, number> = { p5: 0.05, p50: 0.5, p95: 0.95 };
 
 const WARNING_TITLES: Record<string, string> = {
   EffectSkipped: "Effect skipped",
@@ -73,6 +81,8 @@ export function toResultsData(
   results: Results,
   scenario: Scenario,
   axis: PlanAxis,
+  /** The path the request asked for, and so the one the payload describes. */
+  series: Percentile,
 ): ResultsData {
   const paths = results.bands.filter((b) => b.percentile != null);
   const reference = nearest(paths, 0.5) ?? results.bands[0];
@@ -94,22 +104,24 @@ export function toResultsData(
       ? keep.map((i) => deflate(band.net_worth[i] ?? 0, band.inflation[i]))
       : keep.map(() => 0);
 
-  const p50 = at(reference);
   const bands: NetWorthBands = {
     years: dates.map(yearOf),
     ages: dates.map(axis.at),
     p5: at(nearest(paths, 0.05)),
-    p50,
+    p50: at(reference),
     p95: at(nearest(paths, 0.95)),
   };
 
-  const cashFlows = toCashFlows(results, axis, factorFor, bands);
+  // The path everything outside the fan describes — the same band the API
+  // filled the per-account series and cash flows from.
+  const seriesBand = nearest(paths, TARGET[series]) ?? reference;
+  const cashFlows = toCashFlows(results, axis, factorFor, bands[series], bands.years);
   const baseYear = bands.years[0] ?? yearOf(scenario.start_date);
 
   return {
     stats: toStats(results, cashFlows, finalFactor(reference)),
     bands,
-    accountSeries: toAccountSeries(results, keep, reference),
+    accountSeries: toAccountSeries(results, keep, seriesBand),
     cashFlows,
     warnings: toWarnings(results),
     horizonLabel: axis.label(bands.ages[bands.ages.length - 1]),
@@ -182,20 +194,20 @@ function toStats(
 }
 
 /**
- * Account values share the reference path's snapshots, so they share its
- * inflation too — which keeps the stacked areas summing to the net-worth line
- * drawn over them.
+ * Account values share the snapshots of the path they were read from, so they
+ * share its inflation too — which keeps the stacked bands summing to that
+ * path's net-worth line rather than to a median the request never asked for.
  */
 function toAccountSeries(
   results: Results,
   keep: number[],
-  reference: Band,
+  path: Band,
 ): AccountSeries[] {
   return results.account_series.map((series, index) => ({
     accountId: String(series.account_id),
     label: series.label,
     color: SERIES_COLORS[index % SERIES_COLORS.length],
-    values: keep.map((i) => deflate(series.values[i] ?? 0, reference.inflation[i])),
+    values: keep.map((i) => deflate(series.values[i] ?? 0, path.inflation[i])),
   }));
 }
 
@@ -205,10 +217,12 @@ function toCashFlows(
   results: Results,
   axis: PlanAxis,
   factorFor: (year: number) => number,
-  bands: NetWorthBands,
+  /** Wealth along the same path the flows describe. */
+  path: number[],
+  years: number[],
 ): YearlyCashFlow[] {
   const ledgers = new Map(results.ledger_years.map((y) => [y.year, y]));
-  const netWorth = new Map(bands.years.map((year, i) => [year, bands.p50[i]]));
+  const netWorth = new Map(years.map((year, i) => [year, path[i]]));
 
   return results.cash_flows.map((flow) => {
     const factor = factorFor(flow.year);
@@ -255,7 +269,7 @@ function emptyResults(
 ): ResultsData {
   const bands: NetWorthBands = { years: [], ages: [], p5: [], p50: [], p95: [] };
   const final = results.inflation[results.inflation.length - 1]?.factor ?? 1;
-  const cashFlows = toCashFlows(results, YEAR_AXIS, factorFor, bands);
+  const cashFlows = toCashFlows(results, YEAR_AXIS, factorFor, bands.p50, bands.years);
   return {
     stats: toStats(results, cashFlows, final),
     bands,

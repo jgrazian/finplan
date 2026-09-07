@@ -1,6 +1,7 @@
 "use client";
 
 import { Button, SegmentedControl } from "@/components/ui";
+import type { ScaleKind } from "@/components/charts";
 import type { ChartView } from "./types";
 import type { Percentile } from "@/lib/types";
 
@@ -10,12 +11,19 @@ const VIEW_OPTIONS = [
   { value: "bar" as const, label: "Bars" },
 ];
 
-/** Title, subtitle, view switch and the `v` percentile cycle. */
+const SCALE_OPTIONS = [
+  { value: "linear" as const, label: "Linear" },
+  { value: "log" as const, label: "Log" },
+];
+
+/** Title, subtitle, view and axis switches, and the `v` percentile cycle. */
 export function ChartToolbar({
   title,
   subtitle,
   view,
   onViewChange,
+  scaleKind,
+  onScaleKindChange,
   percentile,
   onCyclePercentile,
 }: {
@@ -23,6 +31,8 @@ export function ChartToolbar({
   subtitle: string;
   view: ChartView;
   onViewChange: (v: ChartView) => void;
+  scaleKind: ScaleKind;
+  onScaleKindChange: (kind: ScaleKind) => void;
   percentile: Percentile;
   onCyclePercentile: () => void;
 }) {
@@ -53,6 +63,12 @@ export function ChartToolbar({
           options={VIEW_OPTIONS}
           value={view}
           onChange={onViewChange}
+        />
+        <SegmentedControl
+          ariaLabel="Value axis"
+          options={SCALE_OPTIONS}
+          value={scaleKind}
+          onChange={onScaleKindChange}
         />
         <Button shortcut="v" onClick={onCyclePercentile}>
           {percentile.toUpperCase()}

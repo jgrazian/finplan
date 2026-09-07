@@ -55,3 +55,20 @@ export function fmtClock(at: number): string {
     hour12: false,
   });
 }
+
+/**
+ * A value-axis tick: `$2M`, `$1.5M`, `$245k`, `$40`. Trailing zeros are dropped
+ * — a log axis labels round numbers, and `$2.00M` reads as a measurement rather
+ * than as the gridline it marks. Under $1,000 the exact figure is kept, because
+ * a log axis floor can sit far below `fmtCompact`'s rounding floor.
+ */
+export function fmtAxis(v: number): string {
+  const abs = Math.abs(v);
+  if (abs < 1000) return fmtCurrency(v);
+  const sign = v < 0 ? "\u2212" : "";
+  const [scaled, unit] = abs >= 1e6 ? [abs / 1e6, "M"] : [abs / 1e3, "k"];
+  const digits = scaled.toLocaleString("en-US", {
+    maximumFractionDigits: scaled < 10 ? 2 : 0,
+  });
+  return `${sign}$${digits}${unit}`;
+}

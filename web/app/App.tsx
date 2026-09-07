@@ -229,6 +229,8 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 active={run.active}
                 loading={run.loading}
                 error={run.error}
+                percentile={run.percentile}
+                onPercentileChange={run.setPercentile}
                 onRun={start}
                 onCancel={run.cancel}
               />

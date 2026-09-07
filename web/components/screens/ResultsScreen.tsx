@@ -11,6 +11,7 @@ import {
   SuccessRate,
   WarningList,
 } from "@/components/results";
+import type { ScaleKind } from "@/components/charts";
 import { Button, Hr } from "@/components/ui";
 import type { Percentile, ResultsData } from "@/lib/types";
 import type { Run } from "@/lib/api/types";
@@ -31,13 +32,13 @@ function chartCopy(
   if (view === "stack") {
     return {
       title: "Net worth by account",
-      subtitle: `${percentile.toUpperCase()} representative run · ${ages} · ${dollars}`,
+      subtitle: `${percentile.toUpperCase()} run, stacked to the total · ${ages} · ${dollars}`,
     };
   }
   if (view === "bar") {
     return {
       title: "Net worth by year",
-      subtitle: `${percentile.toUpperCase()} representative run · ${ages} · ${dollars}`,
+      subtitle: `${percentile.toUpperCase()} run, each year split by account · ${ages} · ${dollars}`,
     };
   }
   return {
@@ -53,6 +54,8 @@ export function ResultsScreen({
   active,
   loading,
   error,
+  percentile,
+  onPercentileChange,
   onRun,
   onCancel,
 }: {
@@ -62,11 +65,18 @@ export function ResultsScreen({
   active: boolean;
   loading: boolean;
   error: string | undefined;
+  /**
+   * Which path is on screen. Owned by the run rather than by this screen: the
+   * composition, the cash flows and the ledger all come from the server one
+   * path at a time, so changing it is a fetch.
+   */
+  percentile: Percentile;
+  onPercentileChange: (percentile: Percentile) => void;
   onRun: () => void;
   onCancel: () => void;
 }) {
   const [view, setView] = useState<ChartView>("fan");
-  const [percentile, setPercentile] = useState<Percentile>("p50");
+  const [scaleKind, setScaleKind] = useState<ScaleKind>("linear");
 
   if (error) {
     return <EmptyState title="The run did not finish" detail={error} />;
@@ -106,7 +116,12 @@ export function ResultsScreen({
       : "no horizon";
   // Every figure on this screen is real, so the chart says so once rather than
   // every panel repeating it.
-  const dollars = `${results.baseYear} dollars`;
+  // The axis is called out in the subtitle: a log chart read as a linear one
+  // flatters every plan, so the frame has to say which one it is drawing.
+  const dollars =
+    scaleKind === "log"
+      ? `${results.baseYear} dollars · log scale`
+      : `${results.baseYear} dollars`;
   const copy = chartCopy(view, percentile, span, dollars);
 
   return (
@@ -126,8 +141,10 @@ export function ResultsScreen({
             subtitle={copy.subtitle}
             view={view}
             onViewChange={setView}
+            scaleKind={scaleKind}
+            onScaleKindChange={setScaleKind}
             percentile={percentile}
-            onCyclePercentile={() => setPercentile((p) => NEXT_PERCENTILE[p])}
+            onCyclePercentile={() => onPercentileChange(NEXT_PERCENTILE[percentile])}
           />
 
           <NetWorthChart
@@ -135,6 +152,7 @@ export function ResultsScreen({
             accountSeries={results.accountSeries}
             view={view}
             percentile={percentile}
+            scaleKind={scaleKind}
           />
 
           <div style={{ marginTop: 24 }}>

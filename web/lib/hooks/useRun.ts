@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api/client";
 import type { Results, Run, Scenario as ApiScenario } from "@/lib/api/types";
-import { isTerminal } from "@/lib/api/types";
+import { SERIES, isTerminal } from "@/lib/api/types";
 import { serverMonitor } from "@/lib/status/monitor";
-import type { ResultsData } from "@/lib/types";
+import type { Percentile, ResultsData } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 import { toResultsData } from "@/lib/view/results";
 
@@ -22,6 +22,9 @@ export interface RunState {
   active: boolean;
   loading: boolean;
   error: string | undefined;
+  /** Which stored path the per-account series, cash flows and ledger describe. */
+  percentile: Percentile;
+  setPercentile: (percentile: Percentile) => void;
   start: (iterations: number) => Promise<void>;
   cancel: () => Promise<void>;
 }
@@ -48,6 +51,7 @@ export function useRun(
   axis: PlanAxis | undefined,
 ): RunState {
   const [loaded, setLoaded] = useState<Loaded>();
+  const [percentile, setPercentile] = useState<Percentile>("p50");
   const scenarioId = scenario?.id;
 
   // State is keyed by scenario rather than cleared when one changes, so the
@@ -66,19 +70,21 @@ export function useRun(
     [],
   );
 
-  // Adopt the newest successful run for this scenario.
+  // Adopt the newest successful run for this scenario. Its results are left to
+  // the effect below, which is also the one that reads them again when the
+  // percentile changes.
   useEffect(() => {
     if (scenarioId == null) return;
     let live = true;
 
     api.runs
       .list(scenarioId)
-      .then(async (runs) => {
+      .then((runs) => {
         const latest = runs.find((r) => r.status === "succeeded");
         if (!live) return;
-        if (!latest) return update(scenarioId, { loading: false });
-        const results = await api.runs.results(latest.id);
-        if (live) update(scenarioId, { run: latest, raw: results, loading: false });
+        // Still loading if there is a run to read: the effect below has to
+        // fetch its results before the screen has anything to draw.
+        update(scenarioId, latest ? { run: latest, loading: true } : { loading: false });
       })
       .catch((err: Error) => live && update(scenarioId, { error: err.message, loading: false }));
 
@@ -86,6 +92,33 @@ export function useRun(
       live = false;
     };
   }, [scenarioId, update]);
+
+  const runId = run?.id;
+  const runStatus = run?.status;
+
+  /**
+   * The finished run's results, along the selected path.
+   *
+   * The payload carries the fan for every stored percentile, but the
+   * per-account series, the cash flows and the ledger describe one path only —
+   * so P5 / P50 / P95 is a different request rather than a different slice of
+   * one. `loading` is deliberately not raised on a switch: the results already
+   * on screen stay there until the new ones land, and a stale response is
+   * dropped by the cleanup below rather than overwriting a newer one.
+   */
+  useEffect(() => {
+    if (scenarioId == null || runId == null || runStatus !== "succeeded") return;
+    let live = true;
+
+    api.runs
+      .results(runId, SERIES[percentile])
+      .then((raw) => live && update(scenarioId, { raw, loading: false }))
+      .catch((err: Error) => live && update(scenarioId, { error: err.message, loading: false }));
+
+    return () => {
+      live = false;
+    };
+  }, [scenarioId, runId, runStatus, percentile, update]);
 
   const active = run != null && !isTerminal(run.status);
 
@@ -115,8 +148,9 @@ export function useRun(
         const next = await api.runs.get(run.id);
         if (!live) return;
         if (next.status === "succeeded") {
-          // Results are large, so they are fetched once the job is done.
-          update(scenarioId, { run: next, raw: await api.runs.results(next.id) });
+          // Results are large, so they are fetched once the job is done — by
+          // the effect that owns them, which this only has to wait for.
+          update(scenarioId, { run: next, loading: true });
         } else if (next.status === "failed") {
           update(scenarioId, { run: next, error: next.error_message ?? "the run failed" });
         } else {
@@ -166,7 +200,7 @@ export function useRun(
   }, [run, scenarioId, update]);
 
   const results =
-    raw && scenario && axis ? toResultsData(raw, scenario, axis) : undefined;
+    raw && scenario && axis ? toResultsData(raw, scenario, axis, percentile) : undefined;
 
-  return { run, results, active, loading, error, start, cancel };
+  return { run, results, active, loading, error, percentile, setPercentile, start, cancel };
 }

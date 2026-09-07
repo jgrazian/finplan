@@ -1,4 +1,4 @@
 export { ChartCanvas } from "./ChartCanvas";
 export { Legend } from "./Legend";
-export { BarSeries, FanSeries, StackedSeries } from "./series";
+export { FanSeries, StackedBarSeries, StackedSeries } from "./series";
 export * from "./geometry";

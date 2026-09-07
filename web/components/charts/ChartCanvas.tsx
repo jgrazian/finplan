@@ -71,7 +71,7 @@ export function ChartCanvas({
         ))}
         {vTicks.map((t, i) => (
           <text key={`vt-${i}`} x={geo.left - 8} y={t.y + 3} textAnchor="end" {...TICK_TEXT}>
-            {i === 0 ? "0" : format(t.value)}
+            {format(t.value)}
           </text>
         ))}
 

@@ -591,18 +591,32 @@ async fn results(
 
 /// Which stored path a `series` query names: the mean, an explicit percentile,
 /// or — by default — whichever stored percentile sits closest to the median.
+///
+/// An explicit percentile resolves to the nearest stored path rather than to
+/// itself. A run keeps the percentiles it was started with, and a caller asking
+/// for `0.05` is naming the run that stands for the bad case, not asserting
+/// that a path was stored at exactly that mark — so a run stored at 0.1 answers
+/// with the path it has instead of with an empty series.
 fn resolve_series(series: Option<&str>, stored: &[Option<f64>]) -> ApiResult<Option<f64>> {
     Ok(match series {
         Some("mean") => None,
-        Some(other) => Some(other.parse::<f64>().map_err(|_| {
-            ApiError::bad_request("series must be 'mean' or a percentile such as 0.5")
-        })?),
-        None => stored.iter().flatten().copied().min_by(|a, b| {
-            (a - 0.5)
-                .abs()
-                .partial_cmp(&(b - 0.5).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
+        Some(other) => {
+            let target = other.parse::<f64>().map_err(|_| {
+                ApiError::bad_request("series must be 'mean' or a percentile such as 0.5")
+            })?;
+            nearest_stored(stored, target).or(Some(target))
+        }
+        None => nearest_stored(stored, 0.5),
+    })
+}
+
+/// The stored percentile closest to `target`, if the run stored any at all.
+fn nearest_stored(stored: &[Option<f64>], target: f64) -> Option<f64> {
+    stored.iter().flatten().copied().min_by(|a, b| {
+        (a - target)
+            .abs()
+            .partial_cmp(&(b - target).abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
     })
 }
 
