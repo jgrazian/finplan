@@ -1,93 +1,98 @@
 import { StatLabel } from "@/components/ui";
-import { fmtInt } from "@/lib/format";
+import { fmtInt, fmtPercent } from "@/lib/format";
 
-/**
- * The payoff figure. One large number rather than a dial, so it does not
- * compete with the chart below it, paired with a bar that shows the same
- * fraction as area.
- */
+/** Funding across the path and terminal wealth are different measurements. */
 export function SuccessRate({
   successRate,
+  fundingSuccessRate,
   iterations,
   converged,
   horizonLabel,
 }: {
+  /** The legacy metric: fraction with positive final net worth. */
   successRate: number;
+  /** Absent on runs that predate checkpoint funding checks. */
+  fundingSuccessRate?: number;
   iterations: number;
   converged?: boolean;
-  /** End of the plan horizon, e.g. `age 81` — or `2061` with no birth date. */
   horizonLabel: string;
 }) {
-  const pct = successRate * 100;
-  const lasted = Math.round(iterations * successRate);
-  const ranDry = iterations - lasted;
+  const measured = fundingSuccessRate != null;
+  const fraction = fundingSuccessRate ?? successRate;
+  const pct = fraction * 100;
+  const passed = Math.round(iterations * fraction);
+  const other = iterations - passed;
+  const label = measured ? "Cash funding check" : "Positive ending net worth";
 
   return (
-    <div style={{ display: "flex", alignItems: "flex-end", gap: 40, marginBottom: 20 }}>
-      <div>
-        <StatLabel>probability of success</StatLabel>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-          <span
-            style={{
-              fontFamily: "var(--font-heading)",
-              fontWeight: 600,
-              fontSize: 64,
-              lineHeight: 0.9,
-            }}
-          >
-            {pct.toFixed(1)}
-          </span>
-          <span
-            style={{
-              fontFamily: "var(--font-heading)",
-              fontSize: 24,
-              color: "var(--color-accent-700)",
-            }}
-          >
-            %
-          </span>
+    <section aria-label="Simulation outcome definitions" style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 32, flexWrap: "wrap" }}>
+        <div>
+          <StatLabel>{label}</StatLabel>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+            <span
+              style={{
+                fontFamily: "var(--font-heading)",
+                fontWeight: 600,
+                fontSize: 64,
+                lineHeight: 1,
+              }}
+            >
+              {pct.toFixed(1)}
+            </span>
+            <span style={{ fontSize: 24 }}>%</span>
+          </div>
+          <div style={{ fontSize: 12 }}>{fmtInt(iterations)} Monte Carlo iterations</div>
         </div>
-        <div
-          style={{
-            fontSize: 12,
-            color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
-          }}
-        >
-          {fmtInt(iterations)} Monte Carlo iterations
-          {converged ? " · converged" : ""}
-        </div>
-      </div>
-
-      <div style={{ flex: 1, paddingBottom: 6 }}>
-        <div
-          style={{ display: "flex", height: 10, border: "1px solid var(--color-divider)" }}
-          role="img"
-          aria-label={`${pct.toFixed(1)}% of runs succeeded`}
-        >
-          <div style={{ width: `${pct}%`, background: "var(--color-accent)" }} />
+        <div style={{ flex: 1, minWidth: 200, paddingBottom: 6 }}>
+          <div
+            style={{ display: "flex", height: 10, border: "1px solid var(--color-divider)" }}
+            role="img"
+            aria-label={`${label}: ${pct.toFixed(1)}%`}
+          >
+            <div style={{ width: `${pct}%`, background: "var(--color-accent)" }} />
+            <div
+              style={{
+                flex: 1,
+                background:
+                  "repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--color-text) 22%, transparent) 3px 4px)",
+              }}
+            />
+          </div>
           <div
             style={{
-              flex: 1,
-              background:
-                "repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--color-text) 22%, transparent) 3px 4px)",
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              fontSize: 12,
+              marginTop: 6,
             }}
-          />
-        </div>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            fontSize: 11,
-            marginTop: 6,
-            color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
-          }}
-        >
-          <span>
-            {fmtInt(lasted)} plans lasted through {horizonLabel}
-          </span>
-          <span>{fmtInt(ranDry)} ran dry</span>
+          >
+            <span>
+              {fmtInt(passed)} {measured ? "passed the funding check" : "ended above zero"}
+            </span>
+            <span>
+              {fmtInt(other)} {measured ? "had a shortfall or event warning" : "ended at or below zero"}
+            </span>
+          </div>
         </div>
       </div>
-    </div>
+      <p style={{ fontSize: 13, margin: "10px 0 0", maxWidth: 850 }}>
+        {measured
+          ? `Through ${horizonLabel}: no cash account below −$0.005 after same-date events settled, and no skipped effects, evaluation failures, or iteration-limit warnings. A later recovery does not erase a shortfall.`
+          : "This run only measured terminal net worth, not whether cash funded the plan along the way. Re-run to measure cash funding."}
+      </p>
+      {measured && (
+        <p style={{ fontSize: 13, margin: "6px 0 0" }}>
+          Positive ending net worth: <strong>{fmtPercent(successRate)}</strong>.
+          This is separate from the funding check; investments and property do not
+          automatically fund spending.
+        </p>
+      )}
+      <p style={{ fontSize: 12, margin: "6px 0 0" }}>
+        These are outcomes under the modeled assumptions, not a guarantee or a check for missing expenses.
+        {converged ? " The configured convergence statistic converged." : ""}
+      </p>
+    </section>
   );
 }

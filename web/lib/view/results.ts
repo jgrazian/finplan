@@ -52,6 +52,7 @@ const WARNING_TITLES: Record<string, string> = {
   EffectSkipped: "Effect skipped",
   EvaluationFailed: "Evaluation failed",
   IterationLimitHit: "Iteration limit hit",
+  CashShortfall: "Unfunded cash account",
 };
 
 /** Nominal → real. A missing or nonsensical factor leaves the figure alone. */
@@ -178,6 +179,7 @@ function toStats(
   return {
     numIterations: stats.num_iterations,
     successRate: stats.success_rate,
+    fundingSuccessRate: stats.funding_success_rate ?? undefined,
     meanFinalNetWorth: deflate(stats.mean_final_net_worth, final),
     stdDevFinalNetWorth: deflate(stats.std_dev_final_net_worth, final),
     minFinalNetWorth: deflate(stats.min_final_net_worth, final),

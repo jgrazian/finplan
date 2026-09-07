@@ -1,14 +1,21 @@
-/** Compact currency, matching the canvas's `fmt()` exactly. */
+/** Compact currency without hiding debt or small nonzero balances. */
 export function fmtCompact(v: number): string {
-  if (v >= 1e6) return "$" + (v / 1e6).toFixed(v < 1e7 ? 2 : 1) + "M";
-  if (v >= 1e3) return "$" + Math.round(v / 1e3) + "k";
-  return "$0";
+  if (!Number.isFinite(v)) return "—";
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "−" : "";
+  if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(abs < 1e7 ? 2 : 1) + "M";
+  if (abs >= 1e3) return sign + "$" + Math.round(abs / 1e3) + "k";
+  return fmtCurrency(v);
 }
 
 /** Full currency with thousands separators, e.g. `$188,400`. */
 export function fmtCurrency(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  const abs = Math.abs(v);
   const sign = v < 0 ? "−" : "";
-  return sign + "$" + Math.round(Math.abs(v)).toLocaleString("en-US");
+  // Even a sub-dollar balance is not zero. Keep cents and identify sub-cent amounts.
+  if (abs > 0 && abs < 1) return sign + (abs < 0.01 ? "<$0.01" : "$" + abs.toFixed(2));
+  return sign + "$" + Math.round(abs).toLocaleString("en-US");
 }
 
 export function fmtPercent(fraction: number, digits = 1): string {
@@ -31,16 +38,8 @@ export function fmtUnits(v: number): string {
   });
 }
 
-/**
- * `$563k`, falling back to the exact figure under the rounding floor —
- * `fmtCompact` reads everything below $1,000 as `$0`, which is fine on a chart
- * axis and wrong beside a bar labelling a real balance.
- */
-export function fmtCompactOrExact(v: number): string {
-  const abs = Math.abs(v);
-  if (abs < 1000) return fmtCurrency(v);
-  return (v < 0 ? "\u2212" : "") + fmtCompact(abs);
-}
+/** Compatibility name for compact currency with small balances preserved. */
+export const fmtCompactOrExact = fmtCompact;
 
 /** One decimal, for a share sitting next to the bar that draws it — `8.9%`. */
 export function fmtShareFine(fraction: number): string {
@@ -60,9 +59,10 @@ export function fmtClock(at: number): string {
  * A value-axis tick: `$2M`, `$1.5M`, `$245k`, `$40`. Trailing zeros are dropped
  * — a log axis labels round numbers, and `$2.00M` reads as a measurement rather
  * than as the gridline it marks. Under $1,000 the exact figure is kept, because
- * a log axis floor can sit far below `fmtCompact`'s rounding floor.
+ * a log axis floor can sit far below the compact thousands unit.
  */
 export function fmtAxis(v: number): string {
+  if (!Number.isFinite(v)) return "—";
   const abs = Math.abs(v);
   if (abs < 1000) return fmtCurrency(v);
   const sign = v < 0 ? "\u2212" : "";

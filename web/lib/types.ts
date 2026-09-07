@@ -109,6 +109,8 @@ export interface MonteCarloStats {
   numIterations: number;
   /** Fraction in [0,1] of runs ending with positive net worth. */
   successRate: number;
+  /** No settled cash shortfalls or event warnings; absent on older runs. */
+  fundingSuccessRate?: number;
   meanFinalNetWorth: number;
   stdDevFinalNetWorth: number;
   minFinalNetWorth: number;

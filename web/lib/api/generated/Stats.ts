@@ -3,7 +3,15 @@ import type { PercentileValue } from "./PercentileValue";
 
 export type Stats = {
   num_iterations: number;
+  /**
+   * Fraction of paths with positive terminal net worth, not funding success.
+   */
   success_rate: number;
+  /**
+   * No settled cash shortfalls or event warnings. Null for historical runs
+   * that did not measure this; rerun instead of inferring it from snapshots.
+   */
+  funding_success_rate: number | null;
   mean_final_net_worth: number;
   std_dev_final_net_worth: number;
   min_final_net_worth: number;

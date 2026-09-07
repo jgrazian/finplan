@@ -2,6 +2,7 @@
 
 import { type Scale, areaPath, bandPath, barColumn, linePath } from "./geometry";
 import type { AccountSeries } from "@/lib/types";
+import { stackSeries } from "./stack";
 
 /** P5–P95 band with a solid median and dashed edges. */
 export function FanSeries({
@@ -39,7 +40,7 @@ export function FanSeries({
   );
 }
 
-/** Per-account composition of the selected run, stacked to the total. */
+/** Signed account composition: assets above zero and debt below it. */
 export function StackedSeries({
   series,
   scale,
@@ -51,7 +52,7 @@ export function StackedSeries({
   // top of its own fill edge rather than under the one above it.
   return (
     <g>
-      {stackBands(series, scale.count)
+      {stackSeries(series, scale.count).bands
         .reverse()
         .map((band, i) => (
           <path key={i} d={areaPath(band.top, band.bottom, scale)} fill={band.color} />
@@ -74,7 +75,7 @@ export function StackedBarSeries({
   scale: Scale;
   highlight?: number | null;
 }) {
-  const bands = stackBands(series, scale.count);
+  const { bands } = stackSeries(series, scale.count);
 
   return (
     <g>
@@ -85,9 +86,8 @@ export function StackedBarSeries({
             {bands.map((band, j) => {
               const top = scale.y(band.top[i]);
               const height = scale.y(band.bottom[i]) - top;
-              // An account worth nothing this year — or, on a log axis, worth
-              // less than the floor — has no segment to draw.
-              if (height < 0.2) return null;
+              // Debt bands have ordered edges too; only actual zero is omitted.
+              if (height <= 0) return null;
               return (
                 <rect
                   key={j}
@@ -104,25 +104,4 @@ export function StackedBarSeries({
       })}
     </g>
   );
-}
-
-interface StackBand {
-  color: string;
-  /** The running total under this account, at every index. */
-  bottom: number[];
-  /** …and with it, which is where the next one starts. */
-  top: number[];
-}
-
-/** The stack's edges, in the order the accounts are laid down: bottom first. */
-function stackBands(series: AccountSeries[], count: number): StackBand[] {
-  const running = new Array<number>(count).fill(0);
-  return series.map((s) => {
-    const bottom = [...running];
-    const top = bottom.map((v, i) => v + (s.values[i] ?? 0));
-    top.forEach((v, i) => {
-      running[i] = v;
-    });
-    return { color: s.color, bottom, top };
-  });
 }

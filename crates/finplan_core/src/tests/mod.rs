@@ -17,6 +17,7 @@ mod accounts;
 mod basic;
 mod builder_dsl;
 mod contribution_limits;
+mod funding;
 mod profiling;
 mod returns;
 mod rsu;

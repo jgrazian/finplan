@@ -231,6 +231,7 @@ mod tests {
     fn test_check_constraints_empty() {
         let constraints = OptimizationConstraints::default();
         let stats = MonteCarloStats {
+            funding_success_rate: None,
             num_iterations: 100,
             success_rate: 0.95,
             mean_final_net_worth: 1_000_000.0,
@@ -252,6 +253,7 @@ mod tests {
             ..Default::default()
         };
         let good_stats = MonteCarloStats {
+            funding_success_rate: None,
             num_iterations: 100,
             success_rate: 0.95,
             mean_final_net_worth: 1_000_000.0,

@@ -229,6 +229,101 @@ impl TestApp {
 }
 
 #[tokio::test]
+async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() {
+    let mut app = TestApp::new().await;
+    app.login_as("funding@example.com").await;
+    let (scenario_id, checking, _) = app.seed_scenario().await;
+    let base = format!("/api/scenarios/{scenario_id}");
+    let (status, _) = app.patch(&base, json!({"duration_years": 1})).await;
+    assert_eq!(status, StatusCode::OK);
+    // Deterministic balances make both the old and new metric exact.
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    for profile in profiles.as_array().unwrap() {
+        let (status, _) = app
+            .patch(
+                &format!("/api/return-profiles/{}", profile["id"]),
+                json!({"distribution": {"kind": "Fixed", "rate": 0.0}}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    let (status, run) = app
+        .post(
+            &format!("{base}/runs"),
+            json!({"iterations": 4, "seed": 42}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let run_id = run["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(run_id).await, "succeeded");
+    let (_, healthy) = app.get(&format!("/api/runs/{run_id}/results")).await;
+    assert_eq!(healthy["stats"]["funding_success_rate"], 1.0);
+
+    // A single expense overdraws checking, even though brokerage keeps net worth positive.
+    let (status, _) = app
+        .post(
+            &format!("{base}/events"),
+            json!({
+                "name": "Unfunded spending", "enabled": true, "fires_once": true,
+                "trigger": {"kind": "Date", "on_date": "2026-02-01"},
+                "effects": [{"kind": "Expense", "from_account_id": checking,
+                    "amount": {"kind": "Fixed", "value": 20000.0}}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (_, run) = app
+        .post(
+            &format!("{base}/runs"),
+            json!({"iterations": 4, "seed": 42}),
+        )
+        .await;
+    let run_id = run["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(run_id).await, "succeeded");
+    for series in ["0.05", "0.5", "0.95"] {
+        let (status, results) = app
+            .get(&format!("/api/runs/{run_id}/results?series={series}"))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(results["stats"]["success_rate"], 1.0);
+        assert_eq!(results["stats"]["funding_success_rate"], 0.0);
+        assert!(
+            results["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w["kind"] == "CashShortfall" && w["date"] == "2026-02-01")
+        );
+    }
+
+    // Historical rows must remain explicitly unmeasured, not inferred from success_rate.
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        app._dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query("UPDATE run_stats SET funding_success_rate = NULL WHERE run_id = ?1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (_, legacy) = app.get(&format!("/api/runs/{run_id}/results")).await;
+    assert_eq!(legacy["stats"]["funding_success_rate"], Value::Null);
+    assert_eq!(legacy["stats"]["success_rate"], 1.0);
+    // The engine's persisted statistics also accept old serialized results.
+    let mut stats = legacy["stats"].clone();
+    stats
+        .as_object_mut()
+        .unwrap()
+        .remove("funding_success_rate");
+    stats["percentile_values"] = json!([]);
+    let old: finplan_core::model::MonteCarloStats = serde_json::from_value(stats).unwrap();
+    assert_eq!(old.funding_success_rate, None);
+    pool.close().await;
+}
+
+#[tokio::test]
 async fn registration_seeds_a_usable_library() {
     let mut app = TestApp::new().await;
     app.login_as("seed@example.com").await;

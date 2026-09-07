@@ -11,6 +11,8 @@ import {
   makeScale,
 } from "@/components/charts";
 import { fmtAxis } from "@/lib/format";
+import { linePath } from "@/components/charts/geometry";
+import { resolveScaleKind, stackSeries } from "@/components/charts/stack";
 import type { AccountSeries, NetWorthBands, Percentile } from "@/lib/types";
 import { ChartReadout } from "./ChartReadout";
 import type { ChartView } from "./types";
@@ -40,8 +42,8 @@ export function NetWorthChart({
   const { hoverIndex, pinnedIndex } = focus;
 
   const active = bands[percentile];
-  const totals = useMemo(
-    () => stackTotals(accountSeries, bands.years.length),
+  const stack = useMemo(
+    () => stackSeries(accountSeries, bands.years.length),
     [accountSeries, bands.years.length],
   );
 
@@ -50,21 +52,20 @@ export function NetWorthChart({
   // draw one run and would otherwise be pressed into the bottom of a frame
   // built for a run they never plot.
   const plotted = useMemo(
-    () => (view === "fan" ? [bands.p5, bands.p50, bands.p95] : [totals]),
-    [view, totals, bands],
+    () => (view === "fan" ? [bands.p5, bands.p50, bands.p95] : [stack.positive, stack.negative]),
+    [view, stack, bands],
   );
 
-  const scale = useMemo(
-    () =>
-      makeScale(bands.years.length, domainFor(scaleKind, plotted), {
-        mode: view === "bar" ? "band" : "point",
-        kind: scaleKind,
-      }),
-    [bands.years.length, plotted, scaleKind, view],
-  );
+  const scale = useMemo(() => {
+    const { kind } = resolveScaleKind(scaleKind, view, plotted);
+    return makeScale(bands.years.length, domainFor(kind, plotted), {
+      mode: view === "bar" ? "band" : "point",
+      kind,
+    });
+  }, [bands.years.length, plotted, scaleKind, view]);
 
   const index = focus.index;
-  const cursorValue = view === "fan" ? active[index] : (totals[index] ?? 0);
+  const cursorValue = view === "fan" ? active[index] : (stack.total[index] ?? 0);
 
   return (
     <>
@@ -91,6 +92,11 @@ export function NetWorthChart({
             highlight={hoverIndex ?? pinnedIndex}
           />
         )}
+        {view !== "fan" && (
+          <path d={linePath(stack.total, scale)} fill="none" stroke="#1d1f20" strokeWidth={2}>
+            <title>Net worth: positive balances less debt</title>
+          </path>
+        )}
       </ChartCanvas>
 
       <ChartReadout
@@ -100,12 +106,5 @@ export function NetWorthChart({
         accountSeries={accountSeries}
       />
     </>
-  );
-}
-
-/** The stack's top edge — what the account bands add up to, year by year. */
-function stackTotals(series: AccountSeries[], count: number): number[] {
-  return Array.from({ length: count }, (_, i) =>
-    series.reduce((sum, s) => sum + (s.values[i] ?? 0), 0),
   );
 }

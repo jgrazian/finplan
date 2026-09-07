@@ -14,6 +14,7 @@ import {
   useYearFocus,
 } from "@/components/results";
 import type { ScaleKind } from "@/components/charts";
+import { resolveScaleKind } from "@/components/charts/stack";
 import { Button, Hr } from "@/components/ui";
 import type { Percentile, ResultsData } from "@/lib/types";
 import type { Run } from "@/lib/api/types";
@@ -35,7 +36,7 @@ function chartCopy(
   if (view === "stack") {
     return {
       title: "Net worth by account",
-      subtitle: `${percentile.toUpperCase()} run, stacked to the total · ${ages} · ${dollars}`,
+      subtitle: `${percentile.toUpperCase()} run, balances above zero and debt below · ${ages} · ${dollars}`,
     };
   }
   if (view === "bar") {
@@ -124,8 +125,9 @@ export function ResultsScreen({
   // every panel repeating it.
   // The axis is called out in the subtitle: a log chart read as a linear one
   // flatters every plan, so the frame has to say which one it is drawing.
+  const chartScale = resolveScaleKind(scaleKind, view, [bands.p5, bands.p50, bands.p95]);
   const dollars =
-    scaleKind === "log"
+    chartScale.kind === "log"
       ? `${results.baseYear} dollars · log scale`
       : `${results.baseYear} dollars`;
   const copy = chartCopy(view, percentile, span, dollars);
@@ -138,6 +140,7 @@ export function ResultsScreen({
         <div style={{ padding: "22px 24px" }}>
           <SuccessRate
             successRate={stats.successRate}
+            fundingSuccessRate={stats.fundingSuccessRate}
             iterations={stats.numIterations}
             converged={stats.converged}
             horizonLabel={results.horizonLabel}
@@ -148,18 +151,22 @@ export function ResultsScreen({
             subtitle={copy.subtitle}
             view={view}
             onViewChange={setView}
-            scaleKind={scaleKind}
+            scaleKind={chartScale.kind}
+            logDisabledReason={chartScale.reason}
             onScaleKindChange={setScaleKind}
             percentile={percentile}
             onCyclePercentile={() => onPercentileChange(NEXT_PERCENTILE[percentile])}
           />
 
+          {chartScale.reason && (
+            <p style={{ fontSize: 12, marginBottom: 10 }}>{chartScale.reason}</p>
+          )}
           <NetWorthChart
             bands={bands}
             accountSeries={results.accountSeries}
             view={view}
             percentile={percentile}
-            scaleKind={scaleKind}
+            scaleKind={chartScale.kind}
             focus={focus}
           />
 

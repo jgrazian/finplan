@@ -359,16 +359,16 @@ impl AccountsPanel {
                     } else {
                         format!("{}█", buffer)
                     };
-                    (format!("{:>6}", &asset.asset.0), display_val)
+                    (format!("{:>6}", asset.asset.0), display_val)
                 } else {
                     (
-                        format!("{:>6}", &asset.asset.0),
+                        format!("{:>6}", asset.asset.0),
                         format_currency_short(asset.value),
                     )
                 }
             } else {
                 (
-                    format!("{:>6}", &asset.asset.0),
+                    format!("{:>6}", asset.asset.0),
                     format_currency_short(asset.value),
                 )
             };

@@ -106,11 +106,9 @@ impl<'a> PortfolioOverviewChart<'a> {
         // Render horizontal bars
         let available_height = inner_area.height as usize;
         let row_height = 1 + self.line_spacing as usize;
-        let max_bars = if row_height > 0 {
-            available_height / row_height
-        } else {
-            available_height
-        };
+        let max_bars = available_height
+            .checked_div(row_height)
+            .unwrap_or(available_height);
 
         let mut y_offset = 0u16;
         for account in self.accounts.iter().take(max_bars) {

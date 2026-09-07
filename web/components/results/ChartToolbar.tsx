@@ -24,6 +24,7 @@ export function ChartToolbar({
   onViewChange,
   scaleKind,
   onScaleKindChange,
+  logDisabledReason,
   percentile,
   onCyclePercentile,
 }: {
@@ -32,6 +33,7 @@ export function ChartToolbar({
   view: ChartView;
   onViewChange: (v: ChartView) => void;
   scaleKind: ScaleKind;
+  logDisabledReason?: string;
   onScaleKindChange: (kind: ScaleKind) => void;
   percentile: Percentile;
   onCyclePercentile: () => void;
@@ -66,7 +68,11 @@ export function ChartToolbar({
         />
         <SegmentedControl
           ariaLabel="Value axis"
-          options={SCALE_OPTIONS}
+          options={SCALE_OPTIONS.map((option) => ({
+            ...option,
+            disabled: option.value === "log" && logDisabledReason != null,
+            title: option.value === "log" ? logDisabledReason : undefined,
+          }))}
           value={scaleKind}
           onChange={onScaleKindChange}
         />

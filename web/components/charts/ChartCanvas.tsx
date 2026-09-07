@@ -91,6 +91,18 @@ export function ChartCanvas({
 
         {children}
 
+        {scale.kind === "linear" && (
+          <line
+            x1={geo.left}
+            x2={geo.w - geo.right}
+            y1={scale.y(0)}
+            y2={scale.y(0)}
+            stroke="#1d1f20"
+            strokeOpacity={0.6}
+          >
+            <title>Zero balance</title>
+          </line>
+        )}
         <line
           x1={geo.left}
           x2={geo.w - geo.right}

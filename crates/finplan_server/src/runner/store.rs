@@ -39,6 +39,7 @@ fn warning_kind_name(kind: WarningKind) -> &'static str {
         WarningKind::EffectSkipped => "EffectSkipped",
         WarningKind::EvaluationFailed => "EvaluationFailed",
         WarningKind::IterationLimitHit => "IterationLimitHit",
+        WarningKind::CashShortfall => "CashShortfall",
     }
 }
 
@@ -96,8 +97,9 @@ pub async fn persist(
     sqlx::query(
         "INSERT INTO run_stats (run_id, num_iterations, success_rate, mean_final_net_worth,
                                 std_dev_final_net_worth, min_final_net_worth, max_final_net_worth,
-                                lifetime_taxes, converged, convergence_metric, convergence_value)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                lifetime_taxes, converged, convergence_metric, convergence_value,
+                                funding_success_rate)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )
     .bind(run_id)
     .bind(stats.num_iterations as i64)
@@ -110,6 +112,7 @@ pub async fn persist(
     .bind(stats.converged.map(i64::from))
     .bind(stats.convergence_metric.as_ref().map(|m| format!("{m:?}")))
     .bind(stats.convergence_value)
+    .bind(stats.funding_success_rate)
     .execute(&mut *tx)
     .await?;
 

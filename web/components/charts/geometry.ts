@@ -28,7 +28,7 @@ export type ScaleMode = "point" | "band";
 /** Linear reads absolute dollars; log reads growth rate. */
 export type ScaleKind = "linear" | "log";
 
-/** The stretch of value the plot height is spent on. `min` is 0 when linear. */
+/** The stretch of value plotted, including debt below zero on linear axes. */
 export interface Domain {
   min: number;
   max: number;
@@ -42,7 +42,7 @@ export interface Scale {
   x: (i: number) => number;
   /** Value → y, clamped to the plot. */
   y: (v: number) => number;
-  /** Bottom of the value domain — zero on a linear axis, never zero on a log one. */
+  /** Bottom of the value domain; strictly positive on a log axis. */
   min: number;
   /** Top of the value domain. */
   max: number;
@@ -100,23 +100,24 @@ function clamp01(t: number): number {
   return Number.isFinite(t) ? Math.min(1, Math.max(0, t)) : 0;
 }
 
-/** Zero to the design's 5% headroom above the highest figure plotted. */
+/** Include zero and both signed extremes, with 5% headroom at either end. */
 export function linearDomain(...series: number[][]): Domain {
-  return { min: 0, max: peak(series) * 1.05 || 1 };
+  const min = Math.min(0, ...series.flatMap((s) => s.filter(Number.isFinite)));
+  const max = peak(series);
+  return min === 0 && max === 0 ? { min: 0, max: 1 } : { min: min * 1.05, max: max * 1.05 };
 }
 
 /**
- * A log axis has no zero to stand on, so it needs a floor. The floor drops to
- * the decade below the smallest positive figure — but never much more than four
- * decades under the top, because a path that dips to $40 in one bad year should
- * not cost the other thirty-five most of the plot height.
+ * A log axis has no zero to stand on. The floor is the decade at or below
+ * the smallest positive value; small outcomes must not be clipped for aesthetics.
+ * Callers must use a linear axis if any plotted value is zero or negative.
  */
 export function logDomain(...series: number[][]): Domain {
   const top = peak(series);
   if (!(top > 0)) return { min: 1, max: 10 };
   const smallest = smallestPositive(series);
   const floor = smallest > 0 ? decadeBelow(smallest) : decadeBelow(top / 100);
-  return { min: Math.max(floor, decadeBelow(top) / 1e3), max: top * 1.05 };
+  return { min: floor, max: top * 1.05 };
 }
 
 /** The domain a kind of axis wants over the same numbers. */
@@ -129,7 +130,7 @@ function decadeBelow(v: number): number {
 }
 
 function peak(series: number[][]): number {
-  return Math.max(0, ...series.flatMap((s) => (s.length ? [Math.max(...s)] : [])));
+  return Math.max(0, ...series.flatMap((s) => s.filter(Number.isFinite)));
 }
 
 function smallestPositive(series: number[][]): number {

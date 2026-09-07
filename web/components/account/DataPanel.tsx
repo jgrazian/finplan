@@ -69,7 +69,7 @@ export function DataPanel({
               <tr>
                 <Th>Scenario</Th>
                 <Th>Last run</Th>
-                <Th align="right">Success</Th>
+                <Th align="right" title="Fraction of runs ending with positive net worth; not a funding check.">Positive at end</Th>
                 <Th align="right" />
               </tr>
             </thead>

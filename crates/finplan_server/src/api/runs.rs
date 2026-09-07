@@ -238,6 +238,7 @@ async fn destroy(
 struct StatsRow {
     num_iterations: i64,
     success_rate: f64,
+    funding_success_rate: Option<f64>,
     mean_final_net_worth: f64,
     std_dev_final_net_worth: f64,
     min_final_net_worth: f64,
@@ -252,7 +253,11 @@ struct StatsRow {
 #[ts(export)]
 pub struct Stats {
     pub num_iterations: i64,
+    /// Fraction of paths with positive terminal net worth, not funding success.
     pub success_rate: f64,
+    /// No settled cash shortfalls or event warnings. Null for historical runs
+    /// that did not measure this; rerun instead of inferring it from snapshots.
+    pub funding_success_rate: Option<f64>,
     pub mean_final_net_worth: f64,
     pub std_dev_final_net_worth: f64,
     pub min_final_net_worth: f64,
@@ -407,7 +412,7 @@ async fn results(
     }
 
     let stats_row: StatsRow = sqlx::query_as(
-        "SELECT num_iterations, success_rate, mean_final_net_worth, std_dev_final_net_worth,
+        "SELECT num_iterations, success_rate, funding_success_rate, mean_final_net_worth, std_dev_final_net_worth,
                 min_final_net_worth, max_final_net_worth, lifetime_taxes,
                 converged, convergence_metric, convergence_value
            FROM run_stats WHERE run_id = ?1",
@@ -428,6 +433,7 @@ async fn results(
     let stats = Stats {
         num_iterations: stats_row.num_iterations,
         success_rate: stats_row.success_rate,
+        funding_success_rate: stats_row.funding_success_rate,
         mean_final_net_worth: stats_row.mean_final_net_worth,
         std_dev_final_net_worth: stats_row.std_dev_final_net_worth,
         min_final_net_worth: stats_row.min_final_net_worth,

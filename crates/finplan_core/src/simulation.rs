@@ -207,6 +207,7 @@ fn simulate_inner(
 
     let mut state = SimulationState::from_parameters(params, seed)?;
     state.snapshot_wealth();
+    let mut cash_shortfall_recorded = false;
 
     while state.timeline.current_date < state.timeline.end_date {
         let mut something_happened = true;
@@ -259,13 +260,48 @@ fn simulate_inner(
             metrics.record_time_step();
         }
 
+        // Expense and funding events may fire in separate same-date passes.
+        // Test only once they have all settled, not between individual effects.
+        record_cash_shortfall(&mut state, &mut cash_shortfall_recorded);
         advance_time(&mut state);
     }
 
+    // The final advance can change balances even when there are no more events.
+    record_cash_shortfall(&mut state, &mut cash_shortfall_recorded);
     state.snapshot_wealth();
     state.finalize_year_taxes();
 
     Ok(build_simulation_result(&mut state))
+}
+
+/// Record the first settled cash deficit, independently of ledger collection.
+/// Keep one warning per path so an unfunded monthly expense cannot flood results.
+fn record_cash_shortfall(state: &mut SimulationState, recorded: &mut bool) {
+    if *recorded {
+        return;
+    }
+    let lowest = state
+        .portfolio
+        .accounts
+        .values()
+        .filter_map(crate::model::Account::cash_balance)
+        .min_by(f64::total_cmp);
+    if let Some(balance) = lowest
+        && balance < -0.005
+    {
+        *recorded = true;
+        state.warnings.push(SimulationWarning {
+            date: state.timeline.current_date,
+            event_id: None,
+            message: format!(
+                "A cash account is overdrawn by ${:.2} in nominal dollars after this date's events settle. \
+                 Other assets do not automatically fund spending; add a withdrawal or transfer \
+                 rule, or reduce spending. Later recovery does not erase this shortfall.",
+                -balance
+            ),
+            kind: WarningKind::CashShortfall,
+        });
+    }
 }
 
 // ── Time advancement ─────────────────────────────────────────────────
@@ -566,6 +602,7 @@ fn advance_time(state: &mut SimulationState) {
 
 struct OnlineStats {
     count: usize,
+    funded_count: usize,
     sum: f64,
     sum_sq: f64,
 }
@@ -574,19 +611,22 @@ impl OnlineStats {
     fn new() -> Self {
         Self {
             count: 0,
+            funded_count: 0,
             sum: 0.0,
             sum_sq: 0.0,
         }
     }
 
-    fn add(&mut self, value: f64) {
+    fn add(&mut self, value: f64, funded: bool) {
         self.count += 1;
+        self.funded_count += usize::from(funded);
         self.sum += value;
         self.sum_sq += value * value;
     }
 
     fn merge(&mut self, other: &OnlineStats) {
         self.count += other.count;
+        self.funded_count += other.funded_count;
         self.sum += other.sum;
         self.sum_sq += other.sum_sq;
     }
@@ -772,7 +812,7 @@ fn monte_carlo_core(
         return Err(SimulationError::Cancelled);
     }
 
-    // Disable ledger for batch iterations (only need final_net_worth)
+    // Funding checks and warnings still run without the ledger.
     let mut batch_params = params.clone();
     batch_params.collect_ledger = false;
 
@@ -849,7 +889,8 @@ fn monte_carlo_core(
                     let seed = rng.next_u64();
                     if let Ok(result) = simulate_with_scratch(&batch_params, seed, &mut scratch) {
                         let fnw = final_net_worth(&result);
-                        local_stats.add(fnw);
+                        // A skipped/failed effect is not evidence that the plan was funded.
+                        local_stats.add(fnw, result.warnings.is_empty());
                         local_results.push((seed, fnw));
 
                         if compute_means {
@@ -956,6 +997,11 @@ fn monte_carlo_core(
     let stats = MonteCarloStats {
         num_iterations: actual_iterations,
         success_rate,
+        funding_success_rate: Some(if actual_iterations > 0 {
+            online_stats.funded_count as f64 / actual_iterations as f64
+        } else {
+            0.0
+        }),
         mean_final_net_worth,
         std_dev_final_net_worth,
         min_final_net_worth,

@@ -37,6 +37,8 @@ pub enum WarningKind {
     EvaluationFailed,
     /// Iteration limit was hit, indicating a possible infinite loop
     IterationLimitHit,
+    /// A cash account remained overdrawn after all events at a checkpoint settled.
+    CashShortfall,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -371,8 +373,14 @@ impl Default for MonteCarloConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloStats {
     pub num_iterations: usize,
-    /// Fraction of runs with positive final net worth
+    /// Fraction of runs with positive final net worth. This does not measure funding.
     pub success_rate: f64,
+    /// Fraction of runs with no cash shortfalls at settled checkpoints and no
+    /// event-processing warnings. Cash deficits smaller than half a cent are
+    /// ignored. Same-date funding is allowed; later recovery does not erase a
+    /// shortfall. None for statistics produced before this check was recorded.
+    #[serde(default)]
+    pub funding_success_rate: Option<f64>,
     pub mean_final_net_worth: f64,
     pub std_dev_final_net_worth: f64,
     pub min_final_net_worth: f64,

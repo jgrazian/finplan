@@ -5,6 +5,8 @@ import { useId } from "react";
 export interface SegmentOption<T extends string> {
   value: T;
   label: string;
+  disabled?: boolean;
+  title?: string;
 }
 
 /**
@@ -30,10 +32,11 @@ export function SegmentedControl<T extends string>({
   return (
     <div className="seg" role="radiogroup" aria-label={ariaLabel}>
       {options.map((opt) => (
-        <label className="seg-opt" key={opt.value}>
+        <label className="seg-opt" key={opt.value} title={opt.title} style={opt.disabled ? { opacity: 0.5 } : undefined}>
           <input
             type="radio"
             name={group}
+            disabled={opt.disabled}
             checked={value === opt.value}
             onChange={() => onChange(opt.value)}
           />

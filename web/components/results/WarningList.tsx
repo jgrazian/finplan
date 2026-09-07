@@ -21,7 +21,7 @@ export function WarningList({ warnings }: { warnings: SimulationWarning[] }) {
         ))}
         {warnings.length === 0 && (
           <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
-            No warnings — every run completed cleanly.
+            No warnings recorded for this selected path.
           </p>
         )}
       </div>
