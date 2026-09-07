@@ -4,6 +4,7 @@ import { type ReactNode, useMemo, useState } from "react";
 import { SplitPane } from "@/components/layout";
 import {
   AssetInspector,
+  AssetMixCard,
   AssetsTable,
   NewAssetDialog,
   type AssetDraft,
@@ -27,7 +28,7 @@ import type { InflationProfile, ReturnProfile } from "@/lib/types";
 import {
   type AssetRow,
   type AssetsSelection,
-  assetsTotal,
+  assetMix,
   decodeAssetsSelection,
   encodeAssetsSelection,
   fillSummary,
@@ -111,7 +112,10 @@ export function AssetsScreen({
     () => toAssetRows(raw.assets, raw.accounts, returnProfiles),
     [raw.assets, raw.accounts, returnProfiles],
   );
-  const total = useMemo(() => assetsTotal(rows), [rows]);
+  // The portfolio split by the thing that moves it. One computation feeds
+  // three places — the total over the table, the breakdown above it and the
+  // share column inside it — so a colour and a percentage cannot disagree.
+  const mix = useMemo(() => assetMix(rows), [rows]);
   // Assets whose ticker knows something the row does not: a blank name, an
   // unmapped profile, or both. Recomputed off the reloaded rows, so the offer
   // disappears by itself once it has been taken.
@@ -245,9 +249,17 @@ export function AssetsScreen({
         railWidth={360}
         main={
           <div style={{ padding: "14px 20px 18px" }}>
+            {mix.total > 0 && (
+              <AssetMixCard
+                mix={mix}
+                selectedProfileId={selectedProfile?.id}
+                onSelect={(id) => select({ kind: "profile", id })}
+              />
+            )}
+
             <SectionBar
               title="Assets"
-              count={`${rows.length}${rows.length > 0 ? ` · ${fmtCurrency(total)}` : ""}`}
+              count={`${rows.length}${rows.length > 0 ? ` · ${fmtCurrency(mix.total)}` : ""}`}
               action={
                 <Button
                   shortcut="a"
@@ -347,7 +359,7 @@ export function AssetsScreen({
             ) : (
               <AssetsTable
                 rows={rows}
-                profiles={returnProfiles}
+                mix={mix}
                 selectedId={selectedAsset?.serverId}
                 checked={checked}
                 onSelect={(row) => select({ kind: "asset", id: row.serverId })}

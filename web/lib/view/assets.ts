@@ -100,9 +100,120 @@ export function toAssetRows(
   });
 }
 
-/** What every holding of every asset is worth at its opening price. */
-export function assetsTotal(rows: AssetRow[]): number {
+/**
+ * What every holding of every asset is worth at its opening price. The screen
+ * reads it off `assetMix`, which is the same figure with its breakdown attached.
+ */
+function assetsTotal(rows: AssetRow[]): number {
   return rows.reduce((sum, row) => sum + row.value, 0);
+}
+
+// ── the mix by return profile ────────────────────────────────────────
+
+/**
+ * One ramp, darkest first, shared by the breakdown bar, its legend and the
+ * table's share column — so a colour means the same profile wherever it appears.
+ */
+const PROFILE_COLORS = [
+  "#1d2d3d",
+  "#2d4459",
+  "#41617f",
+  "#5980a6",
+  "#749dc4",
+  "#8fb0cc",
+  "#a8c0d6",
+  "#c2d3e1",
+];
+
+/**
+ * What the holdings pointing at nothing are drawn in — deliberately outside the
+ * ramp, because "held flat at 0%" is not one assumption among the others.
+ */
+const UNMAPPED_COLOR = "color-mix(in srgb, var(--color-text) 22%, transparent)";
+
+/** One return profile's share of the portfolio, and the swatch that means it. */
+export interface AssetMixSlice {
+  /** The profile's name, or null where the holdings point at nothing. */
+  profileId: ReturnProfileId | null;
+  /** Its row id — the key an asset row actually carries. */
+  profileServerId: number | null;
+  /** `profileId`, or `Unmapped`; what the legend reads. */
+  label: string;
+  value: number;
+  /** Fraction of `total`. */
+  share: number;
+  color: string;
+  /** How many holdings sit on it — the legend's tooltip, not its label. */
+  assets: number;
+}
+
+export interface AssetMix {
+  /** What every holding is worth: the figure the slices are shares of. */
+  total: number;
+  /** Biggest first, unmapped last. Nothing worth nothing is a slice at all. */
+  slices: AssetMixSlice[];
+  /** Profile row id (`null` — unmapped) → its swatch. */
+  colors: ReadonlyMap<number | null, string>;
+}
+
+/**
+ * The portfolio split by the thing that moves it.
+ *
+ * The table below is an itemisation of one figure; this is that figure, broken
+ * down by return profile rather than by account or by ticker — which is what
+ * makes it answer something the rows cannot, since eight holdings can be one
+ * bet. A profile carrying nothing is absent here on purpose: it is a row in the
+ * library, not a slice of anything.
+ */
+export function assetMix(rows: AssetRow[]): AssetMix {
+  const total = assetsTotal(rows);
+
+  const groups = new Map<
+    number | null,
+    { profileId: ReturnProfileId | null; value: number; assets: number }
+  >();
+  for (const row of rows) {
+    // An unheld asset has a price and no units, so it is worth nothing and
+    // belongs to no slice — it would draw a legend entry over an empty segment.
+    if (row.value <= 0) continue;
+    const group = groups.get(row.profileServerId);
+    if (group) {
+      group.value += row.value;
+      group.assets += 1;
+    } else {
+      groups.set(row.profileServerId, { profileId: row.profileId, value: row.value, assets: 1 });
+    }
+  }
+
+  const ordered = [...groups].sort(([leftId, left], [rightId, right]) =>
+    (leftId == null) !== (rightId == null)
+      ? leftId == null
+        ? 1
+        : -1
+      : right.value - left.value,
+  );
+
+  // Assigned over the sorted list, so the darkest tone is always the largest
+  // slice and the bar reads left to right as light arriving.
+  let ramp = 0;
+  const slices = ordered.map(([profileServerId, group]) => ({
+    profileId: group.profileId,
+    profileServerId,
+    label: group.profileId ?? "Unmapped",
+    value: group.value,
+    share: total > 0 ? group.value / total : 0,
+    color:
+      profileServerId == null
+        ? UNMAPPED_COLOR
+        : PROFILE_COLORS[ramp++ % PROFILE_COLORS.length],
+    assets: group.assets,
+  }));
+
+  return {
+    total,
+    slices,
+    colors: new Map(slices.map((slice) => [slice.profileServerId, slice.color])),
+  };
 }
 
 /** Asset ids per profile row id, for the library's "Used by" column. */

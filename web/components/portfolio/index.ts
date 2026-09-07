@@ -7,6 +7,7 @@ export type { AccountDraft } from "./accountDraft";
 export { AccountTerms } from "./AccountTerms";
 export { AccountValuation } from "./AccountValuation";
 export { AssetInspector } from "./AssetInspector";
+export { AssetMixCard } from "./AssetMixCard";
 export type { AssetDraft } from "./AssetInspector";
 export { AssetsTable } from "./AssetsTable";
 export { AccountsTable } from "./AccountsTable";
