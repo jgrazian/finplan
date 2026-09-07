@@ -287,6 +287,31 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(results["stats"]["success_rate"], 1.0);
         assert_eq!(results["stats"]["funding_success_rate"], 0.0);
+        assert_eq!(results["series_id"], series);
+        let real = &results["real_net_worth"];
+        assert_eq!(real["terminal"]["num_iterations"], 4);
+        assert_eq!(real["terminal"]["base_date"], "2026-01-01");
+        // These deterministic paths all include a cash shortfall. They still
+        // contribute to EVERY real quantile, not just the funding metric.
+        let path = results["bands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["path_id"] == series)
+            .unwrap();
+        for point in real["points"].as_array().unwrap() {
+            let i = path["dates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .rposition(|d| *d == point["date"])
+                .unwrap();
+            let expected =
+                path["net_worth"][i].as_f64().unwrap() / path["inflation"][i].as_f64().unwrap();
+            for rank in ["p5", "p50", "p95"] {
+                assert!((point[rank].as_f64().unwrap() - expected).abs() < 1e-8);
+            }
+        }
         assert!(
             results["warnings"]
                 .as_array()
@@ -308,7 +333,14 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("DELETE FROM run_real_stats WHERE run_id = ?1")
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .unwrap();
     let (_, legacy) = app.get(&format!("/api/runs/{run_id}/results")).await;
+    assert_eq!(legacy["real_net_worth"], Value::Null);
+    assert!(!legacy["bands"].as_array().unwrap().is_empty());
     assert_eq!(legacy["stats"]["funding_success_rate"], Value::Null);
     assert_eq!(legacy["stats"]["success_rate"], 1.0);
     // The engine's persisted statistics also accept old serialized results.
@@ -1593,8 +1625,70 @@ async fn results_follow_the_percentile_the_caller_asks_for() {
         "an unstored percentile did not fall back to the nearest stored path"
     );
 
+    let (_, low_result) = app
+        .get(&format!("/api/runs/{run_id}/results?series=0.05"))
+        .await;
+    let (_, high_result) = app
+        .get(&format!("/api/runs/{run_id}/results?series=0.9"))
+        .await;
+    assert_eq!(high_result["series_id"], "0.95");
+    assert_eq!(
+        low_result["real_net_worth"], high_result["real_net_worth"],
+        "selecting a path must not change the envelope"
+    );
+    let real = &high_result["real_net_worth"];
+    assert_eq!(real["terminal"]["num_iterations"], 120);
+    for point in real["points"].as_array().unwrap() {
+        let p5 = point["p5"].as_f64().unwrap();
+        let p50 = point["p50"].as_f64().unwrap();
+        let p95 = point["p95"].as_f64().unwrap();
+        assert!(p5 <= p50 && p50 <= p95);
+    }
+    let (_, ledger) = app
+        .get(&format!("/api/runs/{run_id}/ledger?series=0.9"))
+        .await;
+    assert_eq!(ledger["run_id"], run_id);
+    assert_eq!(ledger["series_id"], high_result["series_id"]);
+
     let (status, bad) = app
         .get(&format!("/api/runs/{run_id}/results?series=later"))
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    for invalid in ["NaN", "inf", "-1", "1.1"] {
+        assert_eq!(
+            app.get(&format!("/api/runs/{run_id}/results?series={invalid}"))
+                .await
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let owner = app.cookie.clone();
+    app.login_as("other-series@example.com").await;
+    for endpoint in ["results", "ledger"] {
+        assert_eq!(
+            app.get(&format!("/api/runs/{run_id}/{endpoint}")).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    app.cookie = owner;
+    assert_eq!(
+        app.delete(&format!("/api/runs/{run_id}")).await.0,
+        StatusCode::NO_CONTENT
+    );
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        app._dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    for table in ["run_real_stats", "run_real_quantiles"] {
+        let count: i64 =
+            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE run_id = ?1"))
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0, "deleting a run must delete its real measurements");
+    }
+    pool.close().await;
 }

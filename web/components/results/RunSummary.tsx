@@ -1,47 +1,37 @@
 import { SectionHeading, Stat } from "@/components/ui";
 import { fmtCompact, fmtInt } from "@/lib/format";
-import type { MonteCarloStats, NetWorthBands } from "@/lib/types";
+import type { MonteCarloStats } from "@/lib/types";
 
-/**
- * The rail's run statistics.
- *
- * Every dollar here is real, in the plan's first-year money. The heading says
- * which year that is, and the inflation stat says how far the nominal figures
- * the engine produced were from these — without it, a reader who knows what
- * the engine reports has no way to reconcile the two.
- */
+/** Real distribution statistics are independent of the selected path. */
 export function RunSummary({
-  stats,
-  bands,
-  baseYear,
-  totalInflation,
+  stats, baseDate, pathLabel, dollarLabel, totalInflation,
 }: {
   stats: MonteCarloStats;
-  bands: NetWorthBands;
-  baseYear: number;
-  /** Cumulative inflation over the horizon, e.g. 2.4 for prices multiplying by 2.4. */
+  baseDate: string;
+  pathLabel: string;
+  dollarLabel: string;
   totalInflation: number;
 }) {
-  const last = bands.p50.length - 1;
+  const quantile = (p: number) => stats.percentileValues.find(([rank]) => rank === p)?.[1] ?? Number.NaN;
   return (
     <div>
-      <SectionHeading className="mb-[10px]">Run · {baseYear} dollars</SectionHeading>
+      <SectionHeading className="mb-[10px]">All paths · {baseDate} dollars</SectionHeading>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Stat label="iterations" value={fmtInt(stats.numIterations)} />
         {stats.convergenceMetric && (
-          <Stat
-            label={`converged on ${stats.convergenceMetric}`}
-            value={
-              stats.convergenceValue == null
-                ? (stats.converged ? "yes" : "no")
-                : stats.convergenceValue.toPrecision(3)
-            }
-          />
+          <Stat label={`converged on nominal ${stats.convergenceMetric}`} value={
+            stats.convergenceValue == null ? (stats.converged ? "yes" : "no") : stats.convergenceValue.toPrecision(3)
+          } />
         )}
-        <Stat label="median final" value={fmtCompact(bands.p50[last])} />
-        <Stat label="p5 final" value={fmtCompact(bands.p5[last])} />
-        <Stat label="lifetime taxes" value={fmtCompact(stats.lifetimeTaxes)} />
-        <Stat label="prices over the plan" value={`×${totalInflation.toFixed(2)}`} />
+        <Stat label="real median final (P50)" value={fmtCompact(quantile(0.5))} />
+        <Stat label="real P5 final" value={fmtCompact(quantile(0.05))} />
+        <Stat label="real P95 final" value={fmtCompact(quantile(0.95))} />
+        <Stat label="real mean final" value={fmtCompact(stats.meanFinalNetWorth)} />
+        {!stats.percentileValues.length && <p>Not measured for this run. Rerun for real terminal statistics.</p>}
+        <SectionHeading>Selected path</SectionHeading>
+        <p style={{ margin: 0, fontSize: 12 }}>{pathLabel} · {dollarLabel}</p>
+        <Stat label="path lifetime taxes" value={fmtCompact(stats.lifetimeTaxes)} />
+        <Stat label="path prices over the plan" value={Number.isFinite(totalInflation) ? `×${totalInflation.toFixed(2)}` : "—"} />
       </div>
     </div>
   );

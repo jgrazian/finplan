@@ -105,7 +105,17 @@ Tests: `crates/finplan_server/tests/api.rs`, a new runner-recovery test module,
 
 ## B. Review #3 — statistical envelopes versus representative paths (P1)
 
-### Implementation path
+**Implemented.** Real pointwise envelopes and terminal aggregates now come from
+all iterations, independently of representative paths ranked by terminal nominal
+net worth. Migration `0006_run_real_quantiles.sql` stores the new measurements;
+historical runs remain explicitly unmeasured. The web uses response-owned path
+IDs for atomic detail changes and identifies dollar base dates. Exact type-7
+annual vectors were selected after benchmarking against t-digests.
+
+See [measurement contract, benchmark results and test coverage](results_quantiles_benchmarks.md).
+Review #4's immutable inputs and broader request/recovery work remain separate.
+
+### Implementation path (completed)
 
 1. Make the immediate copy accurate in `web/components/screens/ResultsScreen.tsx`,
    `results/RunSummary.tsx`, `ChartReadout.tsx`, and `web/lib/view/results.ts`:

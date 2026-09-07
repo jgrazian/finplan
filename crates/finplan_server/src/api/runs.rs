@@ -276,10 +276,14 @@ pub struct PercentileValue {
     pub final_net_worth: f64,
 }
 
-/// Net-worth path for one percentile (or the mean, when `percentile` is null).
+/// A representative path ranked by terminal NOMINAL net worth, not a
+/// pointwise quantile. Null percentile is the synthetic nominal mean, which
+/// has no coherent ledger and must not be deflated using mean inflation.
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct Band {
+    /// Run-local identity, also accepted by results/ledger `series` queries.
+    pub path_id: String,
     pub percentile: Option<f64>,
     pub dates: Vec<String>,
     pub net_worth: Vec<f64>,
@@ -289,8 +293,8 @@ pub struct Band {
     pub inflation: Vec<f64>,
 }
 
-/// Cumulative inflation for one plan year. Factor 1.0 is the plan's first
-/// year, so dividing a nominal figure by it restates it in today's dollars.
+/// Cumulative inflation for one plan year. Factor 1.0 is the plan's base
+/// year; the engine uses annual factors without within-year interpolation.
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct InflationPoint {
@@ -368,6 +372,41 @@ pub struct Warning {
     pub message: String,
 }
 
+/// Real-dollar pointwise quantiles over ALL iterations, not selected paths.
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
+pub struct RealQuantilePoint {
+    pub date: String,
+    pub p5: f64,
+    pub p50: f64,
+    pub p95: f64,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
+pub struct RealTerminalStats {
+    pub base_date: String,
+    pub num_iterations: i64,
+    pub mean: f64,
+    /// Population standard deviation.
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct RealNetWorthSummary {
+    /// Each iteration is deflated before aggregation. Annual factors relative
+    /// to base_date; no within-year interpolation. Includes warning paths;
+    /// hard simulation errors or invalid numbers fail the entire run.
+    pub terminal: RealTerminalStats,
+    /// Plan start, Dec 31 checkpoints, terminal date; duplicate dates collapsed.
+    /// Exact type-7 quantiles: linear interpolation at (N - 1) * p.
+    /// This envelope has no path ID, account decomposition or ledger.
+    pub points: Vec<RealQuantilePoint>,
+}
+
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct Results {
@@ -375,6 +414,10 @@ pub struct Results {
     pub scenario_id: i64,
     pub stats: Stats,
     pub bands: Vec<Band>,
+    /// Null for historical runs; never inferred from stored representative paths.
+    pub real_net_worth: Option<RealNetWorthSummary>,
+    /// Actual run-local path ID shared by accounts, cash flows and ledger.
+    pub series_id: String,
     /// Per-account decomposition of the path named by `series_percentile`.
     pub account_series: Vec<AccountSeries>,
     pub series_percentile: Option<f64>,
@@ -391,7 +434,7 @@ pub struct Results {
 #[ts(export, optional_fields = nullable)]
 pub struct ResultsQuery {
     /// Which path the per-account series and cash flows describe. Defaults to
-    /// the median; pass `mean` for the averaged path.
+    /// the terminal nominal median-ranked path; `mean` is a synthetic nominal average.
     #[serde(default)]
     pub series: Option<String>,
 }
@@ -471,9 +514,8 @@ async fn results(
         .fetch_all(&state.db)
         .await?;
 
-        // Each path inflates at its own realised rate, so a band is deflated by
-        // its own factors rather than by a shared index — which is what makes
-        // the real fan the spread of real outcomes, not of nominal ones.
+        // Deflating a representative path does NOT turn it into a pointwise
+        // real quantile. Those are stored separately in run_real_quantiles.
         let factors = inflation_by_year(&state, id, *percentile).await?;
         let inflation = points
             .iter()
@@ -482,6 +524,7 @@ async fn results(
 
         let (dates, net_worth) = points.into_iter().unzip();
         bands.push(Band {
+            path_id: path_id(*percentile),
             percentile: *percentile,
             dates,
             net_worth,
@@ -571,7 +614,21 @@ async fn results(
         .map(|(year, factor)| InflationPoint { year, factor })
         .collect();
 
+    let real_terminal: Option<RealTerminalStats> = sqlx::query_as(
+        "SELECT base_date, num_iterations, mean, std_dev, min, max FROM run_real_stats WHERE run_id = ?1",
+    ).bind(id).fetch_optional(&state.db).await?;
+    let real_net_worth = if let Some(terminal) = real_terminal {
+        let points = sqlx::query_as(
+            "SELECT as_of_date AS date, p5, p50, p95 FROM run_real_quantiles WHERE run_id = ?1 ORDER BY as_of_date",
+        ).bind(id).fetch_all(&state.db).await?;
+        Some(RealNetWorthSummary { terminal, points })
+    } else {
+        None
+    };
+
     Ok(Json(Results {
+        real_net_worth,
+        series_id: path_id(series_percentile),
         run_id: run.id,
         scenario_id: run.scenario_id,
         stats,
@@ -595,6 +652,10 @@ async fn results(
 
 // ── path selection ──────────────────────────────────────────────────────────
 
+fn path_id(percentile: Option<f64>) -> String {
+    percentile.map_or_else(|| "mean".into(), |p| p.to_string())
+}
+
 /// Which stored path a `series` query names: the mean, an explicit percentile,
 /// or — by default — whichever stored percentile sits closest to the median.
 ///
@@ -605,14 +666,18 @@ async fn results(
 /// with the path it has instead of with an empty series.
 fn resolve_series(series: Option<&str>, stored: &[Option<f64>]) -> ApiResult<Option<f64>> {
     Ok(match series {
-        Some("mean") => None,
+        Some("mean") if stored.contains(&None) => None,
+        Some("mean") => return Err(ApiError::NotFound("stored mean series")),
         Some(other) => {
             let target = other.parse::<f64>().map_err(|_| {
                 ApiError::bad_request("series must be 'mean' or a percentile such as 0.5")
             })?;
-            nearest_stored(stored, target).or(Some(target))
+            if !(0.0..=1.0).contains(&target) {
+                return Err(ApiError::bad_request("series percentile must be in 0..1"));
+            }
+            Some(nearest_stored(stored, target).ok_or(ApiError::NotFound("representative path"))?)
         }
-        None => nearest_stored(stored, 0.5),
+        None => Some(nearest_stored(stored, 0.5).ok_or(ApiError::NotFound("representative path"))?),
     })
 }
 
@@ -771,6 +836,8 @@ pub struct LedgerQuery {
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct LedgerPage {
+    pub run_id: i64,
+    pub series_id: String,
     pub entries: Vec<LedgerEntry>,
     /// Entries matching the filter, of which `entries` is one page.
     pub total: i64,
@@ -844,5 +911,10 @@ async fn ledger(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(LedgerPage { total, entries }))
+    Ok(Json(LedgerPage {
+        run_id: id,
+        series_id: path_id(percentile),
+        total,
+        entries,
+    }))
 }

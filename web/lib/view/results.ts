@@ -1,23 +1,7 @@
-/**
- * `api::runs::Results` → the Results screen's `ResultsData`.
- *
- * Three shape changes happen here. The API returns one band per stored
- * percentile; the chart wants three named series, so the nearest stored path to
- * 5 / 50 / 95 is chosen. The engine snapshots wealth at the plan start and
- * again at every year end, which puts two points in the opening year — the
- * series is collapsed to one point per year so the chart's year ticks and the
- * yearly cash-flow table line up.
- *
- * The per-account series, the cash flows and the ledger are not a fan at all:
- * they describe the one path the request named, which `series` says here so
- * that everything drawn from them is attributed to it.
- *
- * And every dollar is deflated. The engine works in nominal dollars, so a
- * balance at the end of a 35-year plan is quoted in dollars worth roughly half
- * what today's are — which makes a rising net-worth line unreadable as a
- * statement about whether the plan works. This module is the single place that
- * divides by the path's own realised inflation, so everything downstream of it
- * is in the plan's first-year dollars and can be compared with everything else.
+/** Independent pointwise real quantiles plus ONE nominal-terminal-ranked path.
+ * Only path details are deflated here; the engine aggregates real observations
+ * before computing the envelope/terminal stats. Never divide nominal aggregates
+ * by a representative (or averaged) inflation path.
  */
 import type { Band, Results, Scenario } from "@/lib/api/types";
 import type {
@@ -25,13 +9,12 @@ import type {
   LedgerSummary,
   MonteCarloStats,
   NetWorthBands,
-  Percentile,
   ResultsData,
   SimulationWarning,
   YearlyCashFlow,
 } from "@/lib/types";
 import type { PlanAxis } from "./axis";
-import { yearOf } from "./format";
+import { yearOf } from "./format.ts";
 
 /** Stack colours, darkest first, matching the Results artboard. */
 const SERIES_COLORS = [
@@ -44,9 +27,6 @@ const SERIES_COLORS = [
   "#2f4a63",
   "#cfe4f7",
 ];
-
-/** The percentile each named path stands for, for picking it out of the fan. */
-const TARGET: Record<Percentile, number> = { p5: 0.05, p50: 0.5, p95: 0.95 };
 
 const WARNING_TITLES: Record<string, string> = {
   EffectSkipped: "Effect skipped",
@@ -82,67 +62,48 @@ export function toResultsData(
   results: Results,
   scenario: Scenario,
   axis: PlanAxis,
-  /** The path the request asked for, and so the one the payload describes. */
-  series: Percentile,
 ): ResultsData {
-  const paths = results.bands.filter((b) => b.percentile != null);
-  const reference = nearest(paths, 0.5) ?? results.bands[0];
-  const factorFor = inflationIndex(results);
-
-  if (!reference || reference.dates.length === 0) {
-    return emptyResults(results, factorFor);
-  }
-
-  // One index per calendar year, keeping that year's last snapshot.
-  const keep = lastIndexPerYear(reference.dates);
-  const dates = keep.map((i) => reference.dates[i]);
-
-  // Each path is deflated by its own realised inflation rather than by a shared
-  // index: the fan is then the spread of real outcomes, which is the question
-  // being asked of it, and not the spread of nominal ones.
-  const at = (band: Band | undefined) =>
-    band
-      ? keep.map((i) => deflate(band.net_worth[i] ?? 0, band.inflation[i]))
-      : keep.map(() => 0);
-
+  // Trust the response's actual resolved ID, never the current UI request.
+  const path = results.bands.find((b) => b.path_id === results.series_id);
+  const isReal = path?.percentile != null && results.inflation.length > 0;
+  const factorFor = isReal ? inflationIndex(results) : () => 1;
+  const keep = lastIndexPerYear(path?.dates ?? []);
+  const dates = keep.map((i) => path!.dates[i]);
+  const pathValues = keep.map((i) => deflate(path!.net_worth[i], isReal ? path!.inflation[i] : 1));
+  const real = results.real_net_worth;
+  const byDate = new Map(real?.points.map((point) => [point.date, point]));
+  const hasEnvelope = isReal && dates.length > 0 && dates.every((date) => byDate.has(date));
+  const at = (key: "p5" | "p50" | "p95") =>
+    hasEnvelope ? dates.map((date) => byDate.get(date)![key]) : [];
   const bands: NetWorthBands = {
     years: dates.map(yearOf),
     ages: dates.map(axis.at),
-    p5: at(nearest(paths, 0.05)),
-    p50: at(reference),
-    p95: at(nearest(paths, 0.95)),
+    p5: at("p5"),
+    p50: at("p50"),
+    p95: at("p95"),
   };
-
-  // The path everything outside the fan describes — the same band the API
-  // filled the per-account series and cash flows from.
-  const seriesBand = nearest(paths, TARGET[series]) ?? reference;
-  const cashFlows = toCashFlows(results, axis, factorFor, bands[series], bands.years);
-  const baseYear = bands.years[0] ?? yearOf(scenario.start_date);
-
+  const cashFlows = toCashFlows(results, axis, factorFor, pathValues, bands.years);
+  const baseDate = real?.terminal.base_date ?? path?.dates[0] ?? scenario.start_date;
+  const pathLabel = path == null ? "Path unavailable" : path.percentile == null
+    ? "Synthetic nominal mean (not a path)"
+    : `P${Number((path.percentile * 100).toFixed(2))} nominal-terminal-ranked path`;
   return {
-    stats: toStats(results, cashFlows, finalFactor(reference)),
+    runId: results.run_id,
+    pathId: results.series_id,
+    pathLabel,
+    pathValues,
+    hasEnvelope,
+    stats: toStats(results, cashFlows),
     bands,
-    accountSeries: toAccountSeries(results, keep, seriesBand),
+    accountSeries: path ? toAccountSeries(results, keep, path, isReal) : [],
     cashFlows,
     warnings: toWarnings(results),
-    horizonLabel: axis.label(bands.ages[bands.ages.length - 1]),
-    baseYear,
-    totalInflation: finalFactor(reference),
+    horizonLabel: dates.length ? axis.label(bands.ages[bands.ages.length - 1]) : "—",
+    baseYear: yearOf(baseDate),
+    baseDate,
+    dollarLabel: isReal ? `${baseDate} dollars (annual inflation)` : "nominal dollars",
+    totalInflation: isReal ? finalFactor(path) : Number.NaN,
   };
-}
-
-/** The stored path closest to `target`, or undefined if none were stored. */
-function nearest(paths: Band[], target: number): Band | undefined {
-  let best: Band | undefined;
-  let bestDistance = Infinity;
-  for (const band of paths) {
-    const distance = Math.abs((band.percentile ?? 0) - target);
-    if (distance < bestDistance) {
-      best = band;
-      bestDistance = distance;
-    }
-  }
-  return best;
 }
 
 /** Cumulative inflation over the whole horizon of one path. */
@@ -157,37 +118,29 @@ function lastIndexPerYear(dates: string[]): number[] {
   return [...lastByYear.values()].sort((a, b) => a - b);
 }
 
-/**
- * Aggregates over final net worth are deflated by the median path's total
- * inflation: they describe wealth at one moment — the end of the plan — and
- * belong to no single path, so no other factor is theirs to use.
- *
- * Lifetime taxes are the exception. A sum over 35 years cannot be restated by
- * dividing the total, so it is re-summed from the per-year figures the cash
- * flows already carry, each deflated at the year it was paid.
+/** Already-real aggregates; legacy data is unavailable, not an approximation.
+ * Lifetime taxes belong only to the selected path, summed at each year's factor.
  */
 function toStats(
   results: Results,
   cashFlows: YearlyCashFlow[],
-  final: number,
 ): MonteCarloStats {
   const stats = results.stats;
+  const real = results.real_net_worth;
+  const final = real?.points.at(-1);
   const lifetimeTaxes = cashFlows.length
     ? cashFlows.reduce((sum, flow) => sum + flow.taxes, 0)
-    : deflate(stats.lifetime_taxes, final);
+    : Number.NaN;
 
   return {
     numIterations: stats.num_iterations,
     successRate: stats.success_rate,
     fundingSuccessRate: stats.funding_success_rate ?? undefined,
-    meanFinalNetWorth: deflate(stats.mean_final_net_worth, final),
-    stdDevFinalNetWorth: deflate(stats.std_dev_final_net_worth, final),
-    minFinalNetWorth: deflate(stats.min_final_net_worth, final),
-    maxFinalNetWorth: deflate(stats.max_final_net_worth, final),
-    percentileValues: stats.percentile_values.map((p) => [
-      p.percentile,
-      deflate(p.final_net_worth, final),
-    ]),
+    meanFinalNetWorth: real?.terminal.mean ?? Number.NaN,
+    stdDevFinalNetWorth: real?.terminal.std_dev ?? Number.NaN,
+    minFinalNetWorth: real?.terminal.min ?? Number.NaN,
+    maxFinalNetWorth: real?.terminal.max ?? Number.NaN,
+    percentileValues: final ? [[0.05, final.p5], [0.5, final.p50], [0.95, final.p95]] : [],
     converged: stats.converged ?? undefined,
     convergenceMetric: stats.convergence_metric ?? undefined,
     convergenceValue: stats.convergence_value ?? undefined,
@@ -204,12 +157,13 @@ function toAccountSeries(
   results: Results,
   keep: number[],
   path: Band,
+  isReal: boolean,
 ): AccountSeries[] {
   return results.account_series.map((series, index) => ({
     accountId: String(series.account_id),
     label: series.label,
     color: SERIES_COLORS[index % SERIES_COLORS.length],
-    values: keep.map((i) => deflate(series.values[i] ?? 0, path.inflation[i])),
+    values: keep.map((i) => deflate(series.values[i] ?? 0, isReal ? path.inflation[i] : 1)),
   }));
 }
 
@@ -314,31 +268,3 @@ function toWarnings(results: Results): SimulationWarning[] {
     detail: warning.date ? `${warning.date} — ${warning.message}` : warning.message,
   }));
 }
-
-/** A run that stored no wealth snapshots still has stats worth showing. */
-function emptyResults(
-  results: Results,
-  factorFor: (year: number) => number,
-): ResultsData {
-  const bands: NetWorthBands = { years: [], ages: [], p5: [], p50: [], p95: [] };
-  const final = results.inflation[results.inflation.length - 1]?.factor ?? 1;
-  const cashFlows = toCashFlows(results, YEAR_AXIS, factorFor, bands.p50, bands.years);
-  return {
-    stats: toStats(results, cashFlows, final),
-    bands,
-    accountSeries: [],
-    cashFlows,
-    warnings: toWarnings(results),
-    horizonLabel: "—",
-    baseYear: results.inflation[0]?.year ?? new Date().getFullYear(),
-    totalInflation: final,
-  };
-}
-
-/** Stand-in for a run with no snapshots to derive a real axis from. */
-const YEAR_AXIS: PlanAxis = {
-  unit: "year",
-  range: [0, 0],
-  at: (isoDate) => yearOf(isoDate),
-  label: (position) => String(position),
-};

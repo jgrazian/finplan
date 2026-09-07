@@ -100,10 +100,9 @@ export interface Account {
 export type Percentile = "p5" | "p50" | "p95";
 
 /**
- * Aggregate statistics, with every dollar figure restated in the plan's
- * first-year dollars. The cross-iteration aggregates — mean, min, max, the
- * spread — are deflated by the median path's final inflation, since they
- * describe end-of-plan wealth and belong to no single path.
+ * Real terminal aggregates measured after deflating EACH iteration. Unmeasured
+ * legacy values are NaN (displayed as unavailable), never nominal approximations.
+ * Lifetime taxes are separately attributed to the selected path and its units.
  */
 export interface MonteCarloStats {
   numIterations: number;
@@ -123,7 +122,7 @@ export interface MonteCarloStats {
   lifetimeTaxes: number;
 }
 
-/** Net-worth paths, one value per year, aligned to `years`. */
+/** Pointwise real quantiles, NOT representative paths. Empty if unmeasured. */
 export interface NetWorthBands {
   years: number[];
   /** Age at each year, or the calendar year again when no birth date is set. */
@@ -210,6 +209,14 @@ export interface SimulationWarning {
 }
 
 export interface ResultsData {
+  runId: number;
+  /** Actual server-resolved path ID, shared by every detail panel and ledger. */
+  pathId: string;
+  pathLabel: string;
+  pathValues: number[];
+  hasEnvelope: boolean;
+  baseDate: string;
+  dollarLabel: string;
   stats: MonteCarloStats;
   bands: NetWorthBands;
   accountSeries: AccountSeries[];
@@ -223,9 +230,8 @@ export interface ResultsData {
    */
   baseYear: number;
   /**
-   * Cumulative inflation over the whole horizon, e.g. 2.4 for a plan whose
-   * prices multiply by 2.4. 1 when the run recorded no inflation, which is
-   * also the case for a run stored before it was tracked.
+   * Selected path's cumulative inflation, e.g. 2.4 for prices multiplying by
+   * 2.4. NaN when unmeasured, or for a synthetic nominal mean.
    */
   totalInflation: number;
 }

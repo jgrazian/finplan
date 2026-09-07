@@ -6,7 +6,7 @@ import type { ChartView } from "./types";
 import type { Percentile } from "@/lib/types";
 
 const VIEW_OPTIONS = [
-  { value: "fan" as const, label: "Fan" },
+  { value: "fan" as const, label: "Envelope" },
   { value: "stack" as const, label: "By account" },
   { value: "bar" as const, label: "Bars" },
 ];
@@ -42,13 +42,14 @@ export function ChartToolbar({
     <div
       style={{
         display: "flex",
+        flexWrap: "wrap",
         alignItems: "center",
         justifyContent: "space-between",
         gap: 16,
         marginBottom: 14,
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: 12 }}>
         <h4 style={{ margin: 0 }}>{title}</h4>
         <span
           style={{
@@ -77,7 +78,7 @@ export function ChartToolbar({
           onChange={onScaleKindChange}
         />
         <Button shortcut="v" onClick={onCyclePercentile}>
-          {percentile.toUpperCase()}
+          Select {percentile.toUpperCase()} path
         </Button>
       </div>
     </div>

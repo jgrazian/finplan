@@ -3,7 +3,7 @@
 export type ResultsQuery = {
   /**
    * Which path the per-account series and cash flows describe. Defaults to
-   * the median; pass `mean` for the averaged path.
+   * the terminal nominal median-ranked path; `mean` is a synthetic nominal average.
    */
   series?: string | null;
 };

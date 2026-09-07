@@ -2,6 +2,8 @@
 import type { LedgerEntry } from "./LedgerEntry";
 
 export type LedgerPage = {
+  run_id: number;
+  series_id: string;
   entries: Array<LedgerEntry>;
   /**
    * Entries matching the filter, of which `entries` is one page.

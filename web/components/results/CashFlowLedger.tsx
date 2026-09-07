@@ -3,13 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Blueprint, Table, Td, Th } from "@/components/ui";
 import { api } from "@/lib/api/client";
-import { SERIES } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import type {
   LedgerCategory,
   LedgerEntry,
   LedgerFilter,
-  Percentile,
   YearlyCashFlow,
 } from "@/lib/types";
 import { toLedgerEntries } from "@/lib/view/ledger";
@@ -157,16 +155,18 @@ function countFor(row: YearlyCashFlow, filter: LedgerFilter): number {
  */
 export function CashFlowLedger({
   rows,
-  percentile,
+  series,
+  pathLabel,
   runId,
-  baseYear,
+  dollarLabel,
 }: {
   rows: YearlyCashFlow[];
-  percentile: Percentile;
+  series: string;
+  pathLabel: string;
   /** The run whose ledger an expanded year reads from. */
   runId: number | undefined;
-  /** The year every figure is stated in. */
-  baseYear: number;
+  /** Explicit real base date, or nominal units for historical data. */
+  dollarLabel: string;
 }) {
   const [visible, setVisible] = useStoredColumns(COLUMN_STORE, COLUMNS, DEFAULT_COLUMNS);
   const [filter, setFilter] = useState<LedgerFilter>("all");
@@ -194,9 +194,9 @@ export function CashFlowLedger({
           flexWrap: "wrap",
         }}
       >
-        <h6 style={{ margin: 0 }}>Cash flow — {percentile.toUpperCase()} run</h6>
+        <h6 style={{ margin: 0 }}>Cash flow — {pathLabel}</h6>
         <span style={{ fontSize: 11, color: MUTED }}>
-          {rows.length} years in {baseYear} dollars ·{" "}
+          {rows.length} years · {dollarLabel} ·{" "}
           {hasLedger
             ? "expand a year to read the effects that produced its numbers"
             : "this scenario is not collecting a ledger, so there is nothing to expand"}
@@ -267,7 +267,7 @@ export function CashFlowLedger({
                     open={open}
                     span={columns.length + (hasLedger ? 2 : 0)}
                     runId={runId}
-                    series={SERIES[percentile]}
+                    series={series}
                     filter={filter}
                     onToggle={() => toggleYear(row.year)}
                   />
@@ -603,6 +603,9 @@ function useLedgerYear(
       .ledger(runId, { series, year, category })
       .then((page) => {
         if (!live) return;
+        if (page.run_id !== runId || page.series_id !== series) {
+          throw new Error("Ledger response does not match the selected path");
+        }
         setLoaded({
           runId,
           series,

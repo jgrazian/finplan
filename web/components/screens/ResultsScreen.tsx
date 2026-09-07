@@ -29,25 +29,29 @@ const NEXT_PERCENTILE: Record<Percentile, Percentile> = {
 
 function chartCopy(
   view: ChartView,
-  percentile: Percentile,
+  pathLabel: string,
   ages: string,
   dollars: string,
+  hasEnvelope: boolean,
 ) {
   if (view === "stack") {
     return {
       title: "Net worth by account",
-      subtitle: `${percentile.toUpperCase()} run, balances above zero and debt below · ${ages} · ${dollars}`,
+      subtitle: `${pathLabel}, balances above zero and debt below · ${ages} · ${dollars}`,
     };
   }
   if (view === "bar") {
     return {
       title: "Net worth by year",
-      subtitle: `${percentile.toUpperCase()} run, each year split by account · ${ages} · ${dollars}`,
+      subtitle: `${pathLabel}, each year split by account · ${ages} · ${dollars}`,
     };
   }
+  if (!hasEnvelope) {
+    return { title: "Net worth — representative path", subtitle: `${pathLabel} · ${dollars}` };
+  }
   return {
-    title: "Net worth — P5 / P50 / P95 band",
-    subtitle: `shaded band spans the 5th to 95th percentile run · ${dollars}`,
+    title: "Net worth — envelope and path",
+    subtitle: `Pointwise P5–P95 shading, P50 dashed · solid: ${pathLabel} · ${dollars}`,
   };
 }
 
@@ -70,9 +74,8 @@ export function ResultsScreen({
   loading: boolean;
   error: string | undefined;
   /**
-   * Which path is on screen. Owned by the run rather than by this screen: the
-   * composition, the cash flows and the ledger all come from the server one
-   * path at a time, so changing it is a fetch.
+   * Requested nominal-terminal rank. The loaded ResultsData owns the actual
+   * path ID/label until a replacement arrives; changing this starts a fetch.
    */
   percentile: Percentile;
   onPercentileChange: (percentile: Percentile) => void;
@@ -85,13 +88,13 @@ export function ResultsScreen({
   // whatever horizon is loaded — zero while there is none.
   const focus = useYearFocus(results?.bands.years.length ?? 0);
 
-  if (error) {
+  if (error && !results) {
     return <EmptyState title="The run did not finish" detail={error} />;
   }
   if (active) {
     return <RunProgress run={run} onCancel={onCancel} />;
   }
-  if (loading) {
+  if (loading && !results) {
     return <EmptyState title="Loading results…" detail="Fetching the scenario's last run." />;
   }
   if (!results) {
@@ -121,16 +124,12 @@ export function ResultsScreen({
     bands.ages.length > 0
       ? `${bands.ages[0]}–${bands.ages[bands.ages.length - 1]}`
       : "no horizon";
-  // Every figure on this screen is real, so the chart says so once rather than
-  // every panel repeating it.
-  // The axis is called out in the subtitle: a log chart read as a linear one
-  // flatters every plan, so the frame has to say which one it is drawing.
-  const chartScale = resolveScaleKind(scaleKind, view, [bands.p5, bands.p50, bands.p95]);
-  const dollars =
-    chartScale.kind === "log"
-      ? `${results.baseYear} dollars · log scale`
-      : `${results.baseYear} dollars`;
-  const copy = chartCopy(view, percentile, span, dollars);
+  // Label real base dates (or nominal legacy units) and the axis explicitly.
+  const chartScale = resolveScaleKind(scaleKind, view, [
+    bands.p5, bands.p50, bands.p95, results.pathValues,
+  ]);
+  const dollars = `${results.dollarLabel}${chartScale.kind === "log" ? " · log scale" : ""}`;
+  const copy = chartCopy(view, results.pathLabel, span, dollars, results.hasEnvelope);
   const breakdown = accountBreakdown(results.accountSeries, focus.index);
 
   return (
@@ -146,6 +145,15 @@ export function ResultsScreen({
             horizonLabel={results.horizonLabel}
           />
 
+          <p style={{ fontSize: 12 }}>
+            Representative paths are selected by terminal nominal net worth, not by real wealth
+            or their rank at earlier dates. The pointwise envelope has no single cash-flow ledger.
+          </p>
+          {!results.hasEnvelope && (
+            <p role="status">Real envelope unavailable for this result. Rerun to measure all-path real quantiles; only the selected path is shown.</p>
+          )}
+          {loading && <p role="status">Loading selected path… Showing {results.pathLabel} until its replacement arrives.</p>}
+          {error && <p role="alert">Could not load results: {error}. Showing the last loaded path.</p>}
           <ChartToolbar
             title={copy.title}
             subtitle={copy.subtitle}
@@ -165,7 +173,8 @@ export function ResultsScreen({
             bands={bands}
             accountSeries={results.accountSeries}
             view={view}
-            percentile={percentile}
+            pathValues={results.pathValues}
+            pathLabel={results.pathLabel}
             scaleKind={chartScale.kind}
             focus={focus}
           />
@@ -173,9 +182,11 @@ export function ResultsScreen({
           <div style={{ marginTop: 24 }}>
             <CashFlowLedger
               rows={results.cashFlows}
-              percentile={percentile}
-              runId={run?.id}
-              baseYear={results.baseYear}
+              key={`${results.runId}:${results.pathId}`}
+              series={results.pathId}
+              pathLabel={results.pathLabel}
+              runId={results.runId}
+              dollarLabel={results.dollarLabel}
             />
           </div>
         </div>
@@ -189,6 +200,7 @@ export function ResultsScreen({
             gap: 20,
           }}
         >
+          <p style={{ margin: 0, fontSize: 12 }}>{results.pathLabel} · {results.dollarLabel}</p>
           <AccountBreakdown
             breakdown={breakdown}
             year={bands.years[focus.index]}
@@ -200,8 +212,9 @@ export function ResultsScreen({
           <Hr flush />
           <RunSummary
             stats={stats}
-            bands={bands}
-            baseYear={results.baseYear}
+            baseDate={results.baseDate}
+            pathLabel={results.pathLabel}
+            dollarLabel={results.dollarLabel}
             totalInflation={results.totalInflation}
           />
           <Hr flush />

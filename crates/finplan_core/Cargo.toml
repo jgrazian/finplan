@@ -14,7 +14,12 @@ rustc-hash = "2"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+tdigest = "0.2"
 
 [[bench]]
 name = "simulation_benchmarks"
+harness = false
+
+[[bench]]
+name = "results_quantiles"
 harness = false

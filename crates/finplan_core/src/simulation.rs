@@ -1,5 +1,8 @@
 use rustc_hash::FxHashMap;
 
+mod quantiles;
+use quantiles::RealAccumulator;
+
 use crate::apply::{SimulationScratch, process_events_with_scratch};
 use crate::config::SimulationConfig;
 use crate::error::SimulationError;
@@ -784,6 +787,7 @@ struct MonteCarloInternalResult {
     stats: MonteCarloStats,
     percentile_runs: Vec<(f64, SimulationResult)>,
     mean_accumulators: Option<MeanAccumulators>,
+    real_net_worth: Option<crate::model::RealNetWorthSummary>,
     percentile_seeds: Vec<(f64, u64)>,
 }
 
@@ -793,6 +797,11 @@ fn monte_carlo_core(
     config: &MonteCarloConfig,
     options: &MonteCarloOptions<'_>,
 ) -> Result<MonteCarloInternalResult, SimulationError> {
+    if config.iterations == 0 || config.parallel_batches == 0 {
+        return Err(SimulationError::Config(
+            "iterations and parallel_batches must be positive".into(),
+        ));
+    }
     let parallel_batches = config.parallel_batches;
 
     // Reset and check progress if tracking
@@ -804,7 +813,8 @@ fn monte_carlo_core(
     }
 
     // Validate by running one simulation
-    let _ = simulate(params, 0)?;
+    let template = simulate(params, 0)?;
+    let mut real_accumulator = options.run_phase2.then(|| RealAccumulator::new(&template));
 
     if let Some(progress) = options.progress
         && progress.is_cancelled()
@@ -821,6 +831,12 @@ fn monte_carlo_core(
         .convergence
         .as_ref()
         .map_or(config.iterations, |c| c.max_iterations);
+
+    if max_iterations < min_iterations {
+        return Err(SimulationError::Config(
+            "max_iterations must be at least iterations".into(),
+        ));
+    }
 
     let mut convergence_tracker = config
         .convergence
@@ -860,12 +876,17 @@ fn monte_carlo_core(
 
         // Each batch returns its results, stats, and optional local mean accumulator.
         // No shared Mutex — each thread accumulates independently, merge after.
-        type BatchOutput = (Vec<(u64, f64)>, OnlineStats, Option<MeanAccumulators>);
-        let batch_outputs: Vec<BatchOutput> = (0..num_batches)
+        type BatchOutput = (
+            Vec<(u64, f64)>,
+            OnlineStats,
+            Option<MeanAccumulators>,
+            Option<RealAccumulator>,
+        );
+        let batch_outputs: Result<Vec<BatchOutput>, SimulationError> = (0..num_batches)
             .into_par_iter()
             .map(|local_batch_idx| {
                 if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                    return (Vec::new(), OnlineStats::new(), None);
+                    return Err(SimulationError::Cancelled);
                 }
 
                 let mut rng =
@@ -873,6 +894,7 @@ fn monte_carlo_core(
                 let mut scratch = SimulationScratch::new();
                 let mut local_stats = OnlineStats::new();
                 let mut local_acc: Option<MeanAccumulators> = None;
+                let mut local_real = options.run_phase2.then(|| RealAccumulator::new(&template));
 
                 // Distribute remainder across first `extra` batches
                 let this_batch_size = per_batch + if local_batch_idx < extra { 1 } else { 0 };
@@ -887,8 +909,19 @@ fn monte_carlo_core(
                     }
 
                     let seed = rng.next_u64();
-                    if let Ok(result) = simulate_with_scratch(&batch_params, seed, &mut scratch) {
+                    {
+                        // Never silently discard/retry failed iterations: doing so biases
+                        // both distributions and success rates toward survivors.
+                        let result = simulate_with_scratch(&batch_params, seed, &mut scratch)?;
                         let fnw = final_net_worth(&result);
+                        if !fnw.is_finite() {
+                            return Err(SimulationError::Config(
+                                "nonfinite terminal net worth".into(),
+                            ));
+                        }
+                        if let Some(acc) = &mut local_real {
+                            acc.accumulate(&result)?;
+                        }
                         // A skipped/failed effect is not evidence that the plan was funded.
                         local_stats.add(fnw, result.warnings.is_empty());
                         local_results.push((seed, fnw));
@@ -909,12 +942,15 @@ fn monte_carlo_core(
                     }
                 }
 
-                (local_results, local_stats, local_acc)
+                Ok((local_results, local_stats, local_acc, local_real))
             })
             .collect();
 
         // Merge results from all batches (single-threaded, fast)
-        for (results, stats, local_acc) in batch_outputs {
+        for (results, stats, local_acc, local_real) in batch_outputs? {
+            if let (Some(acc), Some(local)) = (&mut real_accumulator, local_real) {
+                acc.merge(local);
+            }
             seed_results.extend(results);
             online_stats.merge(&stats);
             if let Some(acc) = local_acc {
@@ -988,8 +1024,8 @@ fn monte_carlo_core(
     let percentile_runs = if options.run_phase2 {
         percentile_seeds
             .iter()
-            .filter_map(|&(p, seed)| simulate(params, seed).ok().map(|result| (p, result)))
-            .collect()
+            .map(|&(p, seed)| simulate(params, seed).map(|result| (p, result)))
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         Vec::new()
     };
@@ -1016,6 +1052,7 @@ fn monte_carlo_core(
         stats,
         percentile_runs,
         mean_accumulators,
+        real_net_worth: real_accumulator.map(RealAccumulator::finish).transpose()?,
         percentile_seeds,
     })
 }
@@ -1025,7 +1062,7 @@ fn monte_carlo_core(
 /// Memory-efficient Monte Carlo simulation.
 ///
 /// Runs simulations in two phases:
-/// 1. First pass: Run all iterations, keeping only (seed, `final_net_worth`) and accumulating mean sums
+/// 1. First pass: Keep (seed, nominal terminal wealth), real annual vectors and optional mean sums
 /// 2. Second pass: Re-run only the specific seeds needed for percentile runs
 ///
 /// Supports convergence-based stopping via `config.convergence`.
@@ -1042,6 +1079,7 @@ pub fn monte_carlo_simulate_with_config(
         stats: result.stats,
         percentile_runs: result.percentile_runs,
         mean_accumulators: result.mean_accumulators,
+        real_net_worth: result.real_net_worth,
     })
 }
 
@@ -1080,6 +1118,7 @@ pub fn monte_carlo_simulate_with_progress(
         stats: result.stats,
         percentile_runs: result.percentile_runs,
         mean_accumulators: result.mean_accumulators,
+        real_net_worth: result.real_net_worth,
     })
 }
 

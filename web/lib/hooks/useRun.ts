@@ -12,7 +12,7 @@ import { toResultsData } from "@/lib/view/results";
 /** How often a queued or running job is re-checked. */
 const POLL_MS = 700;
 
-/** The percentiles the chart's fan needs; requested so the bands exist. */
+/** Representative nominal-terminal ranks offered by the path selector. */
 const PERCENTILES = [0.05, 0.5, 0.95];
 
 export interface RunState {
@@ -42,6 +42,7 @@ interface Loaded {
   scenarioId: number;
   run?: Run;
   raw?: Results;
+  rawSeries?: Percentile;
   error?: string;
   loading: boolean;
 }
@@ -58,7 +59,9 @@ export function useRun(
   // previous scenario's run is never briefly on screen under the new name.
   const current = loaded?.scenarioId === scenarioId ? loaded : undefined;
   const { run, raw, error } = current ?? {};
-  const loading = current?.loading ?? scenarioId != null;
+  const matchingRaw = raw?.run_id === run?.id && raw?.scenario_id === scenarioId ? raw : undefined;
+  const loading = (current?.loading ?? scenarioId != null) ||
+    (!error && matchingRaw != null && current?.rawSeries !== percentile);
 
   const update = useCallback(
     (id: number, patch: Partial<Loaded>) =>
@@ -99,12 +102,9 @@ export function useRun(
   /**
    * The finished run's results, along the selected path.
    *
-   * The payload carries the fan for every stored percentile, but the
-   * per-account series, the cash flows and the ledger describe one path only —
-   * so P5 / P50 / P95 is a different request rather than a different slice of
-   * one. `loading` is deliberately not raised on a switch: the results already
-   * on screen stay there until the new ones land, and a stale response is
-   * dropped by the cleanup below rather than overwriting a newer one.
+   * Keep the old payload AND its actual path label until the new payload lands.
+   * The independent envelope stays visible. Request/run/scenario tags and the
+   * effect cleanup prevent late responses from relabelling another path's detail.
    */
   useEffect(() => {
     if (scenarioId == null || runId == null || runStatus !== "succeeded") return;
@@ -112,7 +112,11 @@ export function useRun(
 
     api.runs
       .results(runId, SERIES[percentile])
-      .then((raw) => live && update(scenarioId, { raw, loading: false }))
+      .then((raw) => {
+        if (live && raw.run_id === runId && raw.scenario_id === scenarioId) {
+          update(scenarioId, { raw, rawSeries: percentile, loading: false, error: undefined });
+        }
+      })
       .catch((err: Error) => live && update(scenarioId, { error: err.message, loading: false }));
 
     return () => {
@@ -200,7 +204,7 @@ export function useRun(
   }, [run, scenarioId, update]);
 
   const results =
-    raw && scenario && axis ? toResultsData(raw, scenario, axis, percentile) : undefined;
+    matchingRaw && scenario && axis ? toResultsData(matchingRaw, scenario, axis) : undefined;
 
   return { run, results, active, loading, error, percentile, setPercentile, start, cancel };
 }

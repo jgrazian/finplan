@@ -4,7 +4,7 @@ import { type Scale, areaPath, bandPath, barColumn, linePath } from "./geometry"
 import type { AccountSeries } from "@/lib/types";
 import { stackSeries } from "./stack";
 
-/** P5–P95 band with a solid median and dashed edges. */
+/** Pointwise real P5–P95 envelope. Dashed median is NOT a coherent path. */
 export function FanSeries({
   p5,
   p50,
@@ -35,7 +35,9 @@ export function FanSeries({
         strokeWidth={1}
         strokeDasharray="4 3"
       />
-      <path d={linePath(p50, scale)} fill="none" stroke="#41617f" strokeWidth={2} />
+      <path d={linePath(p50, scale)} fill="none" stroke="#41617f" strokeWidth={2} strokeDasharray="6 4">
+        <title>Pointwise real P50 across all iterations (not a path)</title>
+      </path>
     </g>
   );
 }

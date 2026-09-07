@@ -62,6 +62,7 @@ pub async fn persist(
 
     // A re-run of the same id should replace, not append.
     for table in [
+        "run_real_stats",
         "run_stats",
         "run_percentile_values",
         "run_net_worth_points",
@@ -127,6 +128,34 @@ pub async fn persist(
         .bind(*value)
         .execute(&mut *tx)
         .await?;
+    }
+
+    if let Some(real) = &summary.real_net_worth {
+        sqlx::query(
+            "INSERT INTO run_real_stats (run_id, base_date, num_iterations, mean, std_dev, min, max)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .bind(run_id)
+        .bind(real.base_date.to_string())
+        .bind(real.num_iterations as i64)
+        .bind(real.terminal.mean)
+        .bind(real.terminal.std_dev)
+        .bind(real.terminal.min)
+        .bind(real.terminal.max)
+        .execute(&mut *tx).await?;
+        for point in &real.points {
+            sqlx::query(
+                "INSERT INTO run_real_quantiles (run_id, as_of_date, p5, p50, p95)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(run_id)
+            .bind(point.date.to_string())
+            .bind(point.p5)
+            .bind(point.p50)
+            .bind(point.p95)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
 
     for (percentile, result) in &summary.percentile_runs {

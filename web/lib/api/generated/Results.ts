@@ -4,6 +4,7 @@ import type { Band } from "./Band";
 import type { CashFlow } from "./CashFlow";
 import type { InflationPoint } from "./InflationPoint";
 import type { LedgerYear } from "./LedgerYear";
+import type { RealNetWorthSummary } from "./RealNetWorthSummary";
 import type { Stats } from "./Stats";
 import type { Warning } from "./Warning";
 
@@ -12,6 +13,14 @@ export type Results = {
   scenario_id: number;
   stats: Stats;
   bands: Array<Band>;
+  /**
+   * Null for historical runs; never inferred from stored representative paths.
+   */
+  real_net_worth: RealNetWorthSummary | null;
+  /**
+   * Actual run-local path ID shared by accounts, cash flows and ledger.
+   */
+  series_id: string;
   /**
    * Per-account decomposition of the path named by `series_percentile`.
    */
