@@ -7,4 +7,10 @@ export type Band = {
   percentile: number | null;
   dates: Array<string>;
   net_worth: Array<number>;
+  /**
+   * Cumulative inflation at each of `dates`, on this path's own realised
+   * inflation: `real = net_worth[i] / inflation[i]`. All ones for a run
+   * stored before inflation was recorded.
+   */
+  inflation: Array<number>;
 };

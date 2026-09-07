@@ -2,6 +2,8 @@
 import type { AccountSeries } from "./AccountSeries";
 import type { Band } from "./Band";
 import type { CashFlow } from "./CashFlow";
+import type { InflationPoint } from "./InflationPoint";
+import type { LedgerYear } from "./LedgerYear";
 import type { Stats } from "./Stats";
 import type { Warning } from "./Warning";
 
@@ -17,4 +19,13 @@ export type Results = {
   series_percentile: number | null;
   cash_flows: Array<CashFlow>;
   warnings: Array<Warning>;
+  /**
+   * Cumulative inflation on the same path as `cash_flows`, one point per
+   * plan year. Empty for a run stored before inflation was recorded.
+   */
+  inflation: Array<InflationPoint>;
+  /**
+   * Per-year ledger index, for the years the ledger covers.
+   */
+  ledger_years: Array<LedgerYear>;
 };

@@ -21,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/runs/{id}", get(fetch).delete(destroy))
         .route("/runs/{id}/cancel", post(cancel))
         .route("/runs/{id}/results", get(results))
+        .route("/runs/{id}/ledger", get(ledger))
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow, TS)]
@@ -277,6 +278,59 @@ pub struct Band {
     pub percentile: Option<f64>,
     pub dates: Vec<String>,
     pub net_worth: Vec<f64>,
+    /// Cumulative inflation at each of `dates`, on this path's own realised
+    /// inflation: `real = net_worth[i] / inflation[i]`. All ones for a run
+    /// stored before inflation was recorded.
+    pub inflation: Vec<f64>,
+}
+
+/// Cumulative inflation for one plan year. Factor 1.0 is the plan's first
+/// year, so dividing a nominal figure by it restates it in today's dollars.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct InflationPoint {
+    pub year: i64,
+    pub factor: f64,
+}
+
+/// What one year of the ledger holds, without the entries themselves — enough
+/// for the cash-flow table to say how much is behind each row before anyone
+/// expands it.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct LedgerYear {
+    pub year: i64,
+    /// Entry counts per filter bucket, and in total.
+    pub cash: i64,
+    pub asset: i64,
+    pub tax: i64,
+    pub event: i64,
+    pub total: i64,
+    /// The name of the event that fired this year — retiring, a pension
+    /// starting — or null for a year that only did the ordinary things.
+    pub tag: Option<String>,
+}
+
+/// One flattened ledger entry.
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
+#[ts(export)]
+pub struct LedgerEntry {
+    pub position: i64,
+    pub date: String,
+    pub year: i64,
+    /// `cash` | `asset` | `tax` | `event`.
+    pub category: String,
+    pub kind: String,
+    /// Prose naming the accounts and events involved. Deliberately free of
+    /// dollar figures, so the client can restate `amount` and `basis` in real
+    /// dollars without rewriting it.
+    pub detail: String,
+    /// Signed against the plan: money in is positive, money out negative.
+    pub amount: Option<f64>,
+    pub basis: Option<f64>,
+    pub basis_label: Option<String>,
+    pub account_id: Option<i64>,
+    pub event_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -321,6 +375,11 @@ pub struct Results {
     pub series_percentile: Option<f64>,
     pub cash_flows: Vec<CashFlow>,
     pub warnings: Vec<Warning>,
+    /// Cumulative inflation on the same path as `cash_flows`, one point per
+    /// plan year. Empty for a run stored before inflation was recorded.
+    pub inflation: Vec<InflationPoint>,
+    /// Per-year ledger index, for the years the ledger covers.
+    pub ledger_years: Vec<LedgerYear>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -406,27 +465,26 @@ async fn results(
         .fetch_all(&state.db)
         .await?;
 
+        // Each path inflates at its own realised rate, so a band is deflated by
+        // its own factors rather than by a shared index — which is what makes
+        // the real fan the spread of real outcomes, not of nominal ones.
+        let factors = inflation_by_year(&state, id, *percentile).await?;
+        let inflation = points
+            .iter()
+            .map(|(date, _)| factor_for(&factors, year_of(date)))
+            .collect();
+
         let (dates, net_worth) = points.into_iter().unzip();
         bands.push(Band {
             percentile: *percentile,
             dates,
             net_worth,
+            inflation,
         });
     }
 
     // Which path the per-account series and cash flows describe.
-    let series_percentile: Option<f64> = match query.series.as_deref() {
-        Some("mean") => None,
-        Some(other) => Some(other.parse::<f64>().map_err(|_| {
-            ApiError::bad_request("series must be 'mean' or a percentile such as 0.5")
-        })?),
-        None => path_percentiles.iter().flatten().copied().min_by(|a, b| {
-            (a - 0.5)
-                .abs()
-                .partial_cmp(&(b - 0.5).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
-    };
+    let series_percentile = resolve_series(query.series.as_deref(), &path_percentiles)?;
 
     let account_rows: Vec<(i64, String, f64)> = sqlx::query_as(
         "SELECT p.account_id, a.name, p.value
@@ -501,6 +559,12 @@ async fn results(
     .fetch_all(&state.db)
     .await?;
 
+    let inflation = inflation_by_year(&state, id, series_percentile)
+        .await?
+        .into_iter()
+        .map(|(year, factor)| InflationPoint { year, factor })
+        .collect();
+
     Ok(Json(Results {
         run_id: run.id,
         scenario_id: run.scenario_id,
@@ -518,5 +582,247 @@ async fn results(
                 message,
             })
             .collect(),
+        inflation,
+        ledger_years: ledger_years(&state, id, series_percentile).await?,
     }))
+}
+
+// ── path selection ──────────────────────────────────────────────────────────
+
+/// Which stored path a `series` query names: the mean, an explicit percentile,
+/// or — by default — whichever stored percentile sits closest to the median.
+fn resolve_series(series: Option<&str>, stored: &[Option<f64>]) -> ApiResult<Option<f64>> {
+    Ok(match series {
+        Some("mean") => None,
+        Some(other) => Some(other.parse::<f64>().map_err(|_| {
+            ApiError::bad_request("series must be 'mean' or a percentile such as 0.5")
+        })?),
+        None => stored.iter().flatten().copied().min_by(|a, b| {
+            (a - 0.5)
+                .abs()
+                .partial_cmp(&(b - 0.5).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+    })
+}
+
+/// `resolve_series` for a caller that has not already read the stored paths.
+async fn series_path(
+    state: &AppState,
+    run_id: i64,
+    series: Option<&str>,
+) -> ApiResult<Option<f64>> {
+    let stored: Vec<Option<f64>> = sqlx::query_scalar(
+        "SELECT DISTINCT percentile FROM run_net_worth_points WHERE run_id = ?1
+          ORDER BY percentile",
+    )
+    .bind(run_id)
+    .fetch_all(&state.db)
+    .await?;
+    resolve_series(series, &stored)
+}
+
+// ── inflation ───────────────────────────────────────────────────────────────
+
+fn year_of(date: &str) -> i64 {
+    date.get(..4).and_then(|y| y.parse().ok()).unwrap_or(0)
+}
+
+/// The path's cumulative inflation, ascending by year.
+async fn inflation_by_year(
+    state: &AppState,
+    run_id: i64,
+    percentile: Option<f64>,
+) -> ApiResult<Vec<(i64, f64)>> {
+    Ok(sqlx::query_as(
+        "SELECT year, factor FROM run_inflation
+          WHERE run_id = ?1 AND percentile IS ?2 ORDER BY year",
+    )
+    .bind(run_id)
+    .bind(percentile)
+    .fetch_all(&state.db)
+    .await?)
+}
+
+/// The factor for one year: the plan's first year before the table starts, the
+/// last recorded factor beyond its end, and 1.0 for a run that stored none.
+fn factor_for(factors: &[(i64, f64)], year: i64) -> f64 {
+    if factors.is_empty() {
+        return 1.0;
+    }
+    match factors.binary_search_by_key(&year, |(y, _)| *y) {
+        Ok(i) => factors[i].1,
+        Err(0) => 1.0,
+        Err(i) => factors[i - 1].1,
+    }
+}
+
+// ── ledger ──────────────────────────────────────────────────────────────────
+
+async fn ledger_years(
+    state: &AppState,
+    run_id: i64,
+    percentile: Option<f64>,
+) -> ApiResult<Vec<LedgerYear>> {
+    let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT year, category, COUNT(*) FROM run_ledger
+          WHERE run_id = ?1 AND percentile IS ?2
+          GROUP BY year, category ORDER BY year",
+    )
+    .bind(run_id)
+    .bind(percentile)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut years: Vec<LedgerYear> = Vec::new();
+    for (year, category, count) in rows {
+        if years.last().map(|y| y.year) != Some(year) {
+            years.push(LedgerYear {
+                year,
+                cash: 0,
+                asset: 0,
+                tax: 0,
+                event: 0,
+                total: 0,
+                tag: None,
+            });
+        }
+        let entry = years.last_mut().expect("just pushed");
+        match category.as_str() {
+            "cash" => entry.cash += count,
+            "asset" => entry.asset += count,
+            "tax" => entry.tax += count,
+            "event" => entry.event += count,
+            _ => {}
+        }
+        entry.total += count;
+    }
+
+    // What makes a year worth a second look is an event *starting* in it —
+    // retiring, a pension beginning, RMDs coming due. Two things it is not:
+    // ranking entry kinds would tag every year after retirement, since every
+    // one of them withdraws and sells, and a monthly event fires in all of
+    // them. So each event tags only the first year it triggered in.
+    //
+    // One row per event, at its earliest trigger: SQLite pairs a bare column
+    // with an aggregated `min()`, so `year` and `detail` come from that row.
+    // The name stands in for a deleted event, which has no id left to group by.
+    let firsts: Vec<(i64, String, i64)> = sqlx::query_as(
+        "SELECT year, detail, MIN(position) FROM run_ledger
+          WHERE run_id = ?1 AND percentile IS ?2 AND kind = 'Triggered'
+          GROUP BY COALESCE(event_id, -1), detail
+          ORDER BY MIN(position)",
+    )
+    .bind(run_id)
+    .bind(percentile)
+    .fetch_all(&state.db)
+    .await?;
+
+    // Ordered by position, so a year that starts two events reads as the first.
+    for (year, detail, _) in firsts {
+        if let Ok(i) = years.binary_search_by_key(&year, |y| y.year)
+            && years[i].tag.is_none()
+        {
+            years[i].tag = Some(detail);
+        }
+    }
+    Ok(years)
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
+pub struct LedgerQuery {
+    /// Which path to read, matching `ResultsQuery::series`.
+    #[serde(default)]
+    pub series: Option<String>,
+    /// Restrict to one calendar year — how the cash-flow table reads the
+    /// entries behind a row it has expanded.
+    #[serde(default)]
+    pub year: Option<i64>,
+    /// One of `cash`, `asset`, `tax`, `event`; omit for all four.
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct LedgerPage {
+    pub entries: Vec<LedgerEntry>,
+    /// Entries matching the filter, of which `entries` is one page.
+    pub total: i64,
+}
+
+/// The most entries one request will return. A year of a busy plan runs to a
+/// few hundred; the cap is what stops `year` being omitted by accident from
+/// serialising the whole run.
+const LEDGER_PAGE_MAX: i64 = 500;
+
+/// The itemised effects behind a year's cash-flow totals.
+///
+/// Separate from `results` rather than folded into it: the ledger is an order
+/// of magnitude larger than everything else a run stores, and the screen only
+/// ever reads one year of it at a time.
+async fn ledger(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Query(query): Query<LedgerQuery>,
+) -> ApiResult<Json<LedgerPage>> {
+    let run = owned_run(&state, id, &user.id).await?;
+    if run.status != "succeeded" {
+        return Err(ApiError::Conflict(format!(
+            "run is '{}'; the ledger is only available once it has succeeded",
+            run.status
+        )));
+    }
+
+    let percentile = series_path(&state, id, query.series.as_deref()).await?;
+
+    if let Some(category) = &query.category
+        && !["cash", "asset", "tax", "event"].contains(&category.as_str())
+    {
+        return Err(ApiError::bad_request(
+            "category must be one of cash, asset, tax, event",
+        ));
+    }
+
+    let limit = query
+        .limit
+        .unwrap_or(LEDGER_PAGE_MAX)
+        .clamp(1, LEDGER_PAGE_MAX);
+    let offset = query.offset.unwrap_or(0).max(0);
+
+    // `?3 IS NULL OR column = ?3` keeps one prepared statement for every
+    // combination of filters, rather than concatenating SQL per request.
+    const FILTER: &str = "run_id = ?1 AND percentile IS ?2
+          AND (?3 IS NULL OR year = ?3) AND (?4 IS NULL OR category = ?4)";
+
+    let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM run_ledger WHERE {FILTER}"))
+        .bind(id)
+        .bind(percentile)
+        .bind(query.year)
+        .bind(&query.category)
+        .fetch_one(&state.db)
+        .await?;
+
+    let entries: Vec<LedgerEntry> = sqlx::query_as(&format!(
+        "SELECT position, as_of_date AS date, year, category, kind, detail, amount, basis,
+                basis_label, account_id, event_id
+           FROM run_ledger WHERE {FILTER}
+          ORDER BY position LIMIT ?5 OFFSET ?6"
+    ))
+    .bind(id)
+    .bind(percentile)
+    .bind(query.year)
+    .bind(&query.category)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(LedgerPage { total, entries }))
 }

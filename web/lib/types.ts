@@ -99,6 +99,12 @@ export interface Account {
 // ── results ───────────────────────────────────────────────────────────────
 export type Percentile = "p5" | "p50" | "p95";
 
+/**
+ * Aggregate statistics, with every dollar figure restated in the plan's
+ * first-year dollars. The cross-iteration aggregates — mean, min, max, the
+ * spread — are deflated by the median path's final inflation, since they
+ * describe end-of-plan wealth and belong to no single path.
+ */
 export interface MonteCarloStats {
   numIterations: number;
   /** Fraction in [0,1] of runs ending with positive net worth. */
@@ -133,11 +139,64 @@ export interface AccountSeries {
   values: number[];
 }
 
+/**
+ * One year of the cash-flow table.
+ *
+ * Every figure is real — restated in the plan's first-year dollars — so a row
+ * 30 years out can be read against the one above it. `lib/view/results.ts` is
+ * where the deflation happens; nothing downstream of it is nominal.
+ */
 export interface YearlyCashFlow {
   year: number;
+  /** Age at that year, or the year again when the scenario has no birth date. */
+  age: number;
   income: number;
   expenses: number;
+  contributions: number;
+  withdrawals: number;
+  appreciation: number;
+  netCashFlow: number;
   taxes: number;
+  /** Net worth at the end of that year, on the same path. */
+  netWorth: number;
+  /**
+   * Cumulative inflation at this year, so the entries fetched when the row is
+   * expanded can be deflated to match the totals already on it.
+   */
+  inflationFactor: number;
+  /** What the ledger holds for the year, before anyone expands it. */
+  ledger: LedgerSummary;
+}
+
+/** Ledger entry counts for one year, per filter bucket. */
+export interface LedgerSummary {
+  total: number;
+  cash: number;
+  asset: number;
+  tax: number;
+  event: number;
+  /** The year's most notable entry kind — `Penalty`, `RMD`, `Sell` — if any. */
+  tag?: string;
+}
+
+/** The buckets the ledger filter chips offer, plus the unfiltered view. */
+export type LedgerCategory = "cash" | "asset" | "tax" | "event";
+export type LedgerFilter = "all" | LedgerCategory;
+
+/** One itemised effect behind a year's totals, in real dollars. */
+export interface LedgerEntry {
+  id: string;
+  date: string;
+  category: LedgerCategory;
+  /** Short label: `Income`, `Contribution`, `RMD`, `Sell`, `Penalty`… */
+  kind: string;
+  /** Prose naming the accounts and events involved; carries no figures. */
+  detail: string;
+  /** Signed against the plan: money in is positive, money out negative. */
+  amount?: number;
+  /** The gross a tax was charged on, the gain in a sale, an RMD's requirement. */
+  basis?: number;
+  basisLabel?: string;
 }
 
 export interface SimulationWarning {
@@ -156,6 +215,17 @@ export interface ResultsData {
   warnings: SimulationWarning[];
   /** End of the plan horizon, e.g. `age 81` or `2061` without a birth date. */
   horizonLabel: string;
+  /**
+   * The plan's first year — the one every figure on the screen is stated in.
+   * Named so the screen can say whose dollars these are.
+   */
+  baseYear: number;
+  /**
+   * Cumulative inflation over the whole horizon, e.g. 2.4 for a plan whose
+   * prices multiply by 2.4. 1 when the run recorded no inflation, which is
+   * also the case for a run stored before it was tracked.
+   */
+  totalInflation: number;
 }
 
 // ── scenario ──────────────────────────────────────────────────────────────

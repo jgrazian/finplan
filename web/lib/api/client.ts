@@ -21,6 +21,8 @@ import type {
   Event,
   EventBody,
   HistoryPreset,
+  LedgerPage,
+  LedgerQuery,
   PasswordChange,
   Position,
   Profile,
@@ -179,5 +181,18 @@ export const api = {
      */
     results: (id: number, series?: string) =>
       http.get<Results>(`/runs/${id}/results${series ? `?series=${series}` : ""}`),
+    /**
+     * The itemised effects behind one year of the cash-flow table. Kept out of
+     * `results` because the ledger dwarfs everything else a run stores and the
+     * screen reads one year of it at a time.
+     */
+    ledger: (id: number, query: LedgerQuery = {}) => {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value != null) params.set(key, String(value));
+      }
+      const search = params.toString();
+      return http.get<LedgerPage>(`/runs/${id}/ledger${search ? `?${search}` : ""}`);
+    },
   },
 };

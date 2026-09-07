@@ -9,6 +9,7 @@ use finplan_core::model::{MonteCarloSummary, SimulationResult, WarningKind, fina
 
 use crate::compile::CompiledScenario;
 use crate::db::Db;
+use crate::runner::ledger;
 
 pub async fn mark_failed(db: &Db, run_id: i64, message: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -67,6 +68,8 @@ pub async fn persist(
         "run_cash_flows",
         "run_taxes",
         "run_warnings",
+        "run_inflation",
+        "run_ledger",
     ] {
         sqlx::query(&format!("DELETE FROM {table} WHERE run_id = ?1"))
             .bind(run_id)
@@ -228,6 +231,57 @@ async fn write_path(
         .bind(tax.early_withdrawal_penalties)
         .execute(&mut **tx)
         .await?;
+    }
+
+    // The path's own realised inflation, keyed by calendar year so a client can
+    // deflate any figure it holds without knowing the plan's step cadence.
+    // Index 0 is the plan's first year, where the factor is 1.0 by definition.
+    if let Some(first) = result.wealth_snapshots.first() {
+        let start_year = i64::from(first.date.year());
+        for (offset, factor) in result.cumulative_inflation.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO run_inflation (run_id, percentile, year, factor)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )
+            .bind(run_id)
+            .bind(percentile)
+            .bind(start_year + offset as i64)
+            .bind(*factor)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+
+    // The ledger, flattened. Empty when the scenario has `collect_ledger` off,
+    // and for the synthetic mean path, which averages figures rather than
+    // replaying any one sequence of events.
+    let names = ledger::Names::new(compiled);
+    let mut position = 0i64;
+    for entry in &result.ledger {
+        let Some(flat) = ledger::flatten(entry, &names) else {
+            continue;
+        };
+        sqlx::query(
+            "INSERT INTO run_ledger (run_id, percentile, position, as_of_date, year, category,
+                                     kind, detail, amount, basis, basis_label, account_id, event_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        )
+        .bind(run_id)
+        .bind(percentile)
+        .bind(position)
+        .bind(entry.date.to_string())
+        .bind(i64::from(entry.date.year()))
+        .bind(flat.category)
+        .bind(&flat.kind)
+        .bind(&flat.detail)
+        .bind(flat.amount)
+        .bind(flat.basis)
+        .bind(flat.basis_label)
+        .bind(flat.account_id)
+        .bind(flat.event_id)
+        .execute(&mut **tx)
+        .await?;
+        position += 1;
     }
 
     for (position, warning) in result.warnings.iter().enumerate() {

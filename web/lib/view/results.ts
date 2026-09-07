@@ -1,16 +1,24 @@
 /**
  * `api::runs::Results` → the Results screen's `ResultsData`.
  *
- * Two shape changes happen here. The API returns one band per stored
+ * Three shape changes happen here. The API returns one band per stored
  * percentile; the chart wants three named series, so the nearest stored path to
- * 5 / 50 / 95 is chosen. And the engine snapshots wealth at the plan start and
+ * 5 / 50 / 95 is chosen. The engine snapshots wealth at the plan start and
  * again at every year end, which puts two points in the opening year — the
  * series is collapsed to one point per year so the chart's year ticks and the
  * yearly cash-flow table line up.
+ *
+ * And every dollar is deflated. The engine works in nominal dollars, so a
+ * balance at the end of a 35-year plan is quoted in dollars worth roughly half
+ * what today's are — which makes a rising net-worth line unreadable as a
+ * statement about whether the plan works. This module is the single place that
+ * divides by the path's own realised inflation, so everything downstream of it
+ * is in the plan's first-year dollars and can be compared with everything else.
  */
 import type { Band, Results, Scenario } from "@/lib/api/types";
 import type {
   AccountSeries,
+  LedgerSummary,
   MonteCarloStats,
   NetWorthBands,
   ResultsData,
@@ -38,6 +46,29 @@ const WARNING_TITLES: Record<string, string> = {
   IterationLimitHit: "Iteration limit hit",
 };
 
+/** Nominal → real. A missing or nonsensical factor leaves the figure alone. */
+export function deflate(nominal: number, factor: number | undefined): number {
+  return factor && factor > 0 ? nominal / factor : nominal;
+}
+
+/**
+ * Cumulative inflation by calendar year, for the path the cash flows describe.
+ * Years before the table starts are the base year; years past its end hold at
+ * the last factor recorded.
+ */
+export function inflationIndex(results: Results): (year: number) => number {
+  const byYear = new Map(results.inflation.map((p) => [p.year, p.factor]));
+  const years = results.inflation.map((p) => p.year);
+  const first = years[0];
+  const last = years[years.length - 1];
+
+  return (year) => {
+    if (first == null) return 1;
+    if (year <= first) return 1;
+    return byYear.get(year) ?? byYear.get(last) ?? 1;
+  };
+}
+
 export function toResultsData(
   results: Results,
   scenario: Scenario,
@@ -45,16 +76,23 @@ export function toResultsData(
 ): ResultsData {
   const paths = results.bands.filter((b) => b.percentile != null);
   const reference = nearest(paths, 0.5) ?? results.bands[0];
+  const factorFor = inflationIndex(results);
 
   if (!reference || reference.dates.length === 0) {
-    return emptyResults(results);
+    return emptyResults(results, factorFor);
   }
 
   // One index per calendar year, keeping that year's last snapshot.
   const keep = lastIndexPerYear(reference.dates);
   const dates = keep.map((i) => reference.dates[i]);
+
+  // Each path is deflated by its own realised inflation rather than by a shared
+  // index: the fan is then the spread of real outcomes, which is the question
+  // being asked of it, and not the spread of nominal ones.
   const at = (band: Band | undefined) =>
-    band ? keep.map((i) => band.net_worth[i] ?? 0) : keep.map(() => 0);
+    band
+      ? keep.map((i) => deflate(band.net_worth[i] ?? 0, band.inflation[i]))
+      : keep.map(() => 0);
 
   const p50 = at(reference);
   const bands: NetWorthBands = {
@@ -65,13 +103,18 @@ export function toResultsData(
     p95: at(nearest(paths, 0.95)),
   };
 
+  const cashFlows = toCashFlows(results, axis, factorFor, bands);
+  const baseYear = bands.years[0] ?? yearOf(scenario.start_date);
+
   return {
-    stats: toStats(results),
+    stats: toStats(results, cashFlows, finalFactor(reference)),
     bands,
-    accountSeries: toAccountSeries(results, keep),
-    cashFlows: toCashFlows(results),
+    accountSeries: toAccountSeries(results, keep, reference),
+    cashFlows,
     warnings: toWarnings(results),
     horizonLabel: axis.label(bands.ages[bands.ages.length - 1]),
+    baseYear,
+    totalInflation: finalFactor(reference),
   };
 }
 
@@ -89,45 +132,111 @@ function nearest(paths: Band[], target: number): Band | undefined {
   return best;
 }
 
+/** Cumulative inflation over the whole horizon of one path. */
+function finalFactor(band: Band | undefined): number {
+  const last = band?.inflation[band.inflation.length - 1];
+  return last && last > 0 ? last : 1;
+}
+
 function lastIndexPerYear(dates: string[]): number[] {
   const lastByYear = new Map<number, number>();
   dates.forEach((date, index) => lastByYear.set(yearOf(date), index));
   return [...lastByYear.values()].sort((a, b) => a - b);
 }
 
-function toStats(results: Results): MonteCarloStats {
+/**
+ * Aggregates over final net worth are deflated by the median path's total
+ * inflation: they describe wealth at one moment — the end of the plan — and
+ * belong to no single path, so no other factor is theirs to use.
+ *
+ * Lifetime taxes are the exception. A sum over 35 years cannot be restated by
+ * dividing the total, so it is re-summed from the per-year figures the cash
+ * flows already carry, each deflated at the year it was paid.
+ */
+function toStats(
+  results: Results,
+  cashFlows: YearlyCashFlow[],
+  final: number,
+): MonteCarloStats {
   const stats = results.stats;
+  const lifetimeTaxes = cashFlows.length
+    ? cashFlows.reduce((sum, flow) => sum + flow.taxes, 0)
+    : deflate(stats.lifetime_taxes, final);
+
   return {
     numIterations: stats.num_iterations,
     successRate: stats.success_rate,
-    meanFinalNetWorth: stats.mean_final_net_worth,
-    stdDevFinalNetWorth: stats.std_dev_final_net_worth,
-    minFinalNetWorth: stats.min_final_net_worth,
-    maxFinalNetWorth: stats.max_final_net_worth,
-    percentileValues: stats.percentile_values.map((p) => [p.percentile, p.final_net_worth]),
+    meanFinalNetWorth: deflate(stats.mean_final_net_worth, final),
+    stdDevFinalNetWorth: deflate(stats.std_dev_final_net_worth, final),
+    minFinalNetWorth: deflate(stats.min_final_net_worth, final),
+    maxFinalNetWorth: deflate(stats.max_final_net_worth, final),
+    percentileValues: stats.percentile_values.map((p) => [
+      p.percentile,
+      deflate(p.final_net_worth, final),
+    ]),
     converged: stats.converged ?? undefined,
     convergenceMetric: stats.convergence_metric ?? undefined,
     convergenceValue: stats.convergence_value ?? undefined,
-    lifetimeTaxes: stats.lifetime_taxes,
+    lifetimeTaxes,
   };
 }
 
-function toAccountSeries(results: Results, keep: number[]): AccountSeries[] {
+/**
+ * Account values share the reference path's snapshots, so they share its
+ * inflation too — which keeps the stacked areas summing to the net-worth line
+ * drawn over them.
+ */
+function toAccountSeries(
+  results: Results,
+  keep: number[],
+  reference: Band,
+): AccountSeries[] {
   return results.account_series.map((series, index) => ({
     accountId: String(series.account_id),
     label: series.label,
     color: SERIES_COLORS[index % SERIES_COLORS.length],
-    values: keep.map((i) => series.values[i] ?? 0),
+    values: keep.map((i) => deflate(series.values[i] ?? 0, reference.inflation[i])),
   }));
 }
 
-function toCashFlows(results: Results): YearlyCashFlow[] {
-  return results.cash_flows.map((flow) => ({
-    year: flow.year,
-    income: flow.income,
-    expenses: flow.expenses,
-    taxes: flow.taxes,
-  }));
+const NO_LEDGER: LedgerSummary = { total: 0, cash: 0, asset: 0, tax: 0, event: 0 };
+
+function toCashFlows(
+  results: Results,
+  axis: PlanAxis,
+  factorFor: (year: number) => number,
+  bands: NetWorthBands,
+): YearlyCashFlow[] {
+  const ledgers = new Map(results.ledger_years.map((y) => [y.year, y]));
+  const netWorth = new Map(bands.years.map((year, i) => [year, bands.p50[i]]));
+
+  return results.cash_flows.map((flow) => {
+    const factor = factorFor(flow.year);
+    const ledger = ledgers.get(flow.year);
+    return {
+      year: flow.year,
+      age: axis.at(`${flow.year}-12-31`),
+      income: deflate(flow.income, factor),
+      expenses: deflate(flow.expenses, factor),
+      contributions: deflate(flow.contributions, factor),
+      withdrawals: deflate(flow.withdrawals, factor),
+      appreciation: deflate(flow.appreciation, factor),
+      netCashFlow: deflate(flow.net_cash_flow, factor),
+      taxes: deflate(flow.taxes, factor),
+      netWorth: netWorth.get(flow.year) ?? 0,
+      inflationFactor: factor,
+      ledger: ledger
+        ? {
+            total: ledger.total,
+            cash: ledger.cash,
+            asset: ledger.asset,
+            tax: ledger.tax,
+            event: ledger.event,
+            tag: ledger.tag ?? undefined,
+          }
+        : NO_LEDGER,
+    };
+  });
 }
 
 function toWarnings(results: Results): SimulationWarning[] {
@@ -140,13 +249,29 @@ function toWarnings(results: Results): SimulationWarning[] {
 }
 
 /** A run that stored no wealth snapshots still has stats worth showing. */
-function emptyResults(results: Results): ResultsData {
+function emptyResults(
+  results: Results,
+  factorFor: (year: number) => number,
+): ResultsData {
+  const bands: NetWorthBands = { years: [], ages: [], p5: [], p50: [], p95: [] };
+  const final = results.inflation[results.inflation.length - 1]?.factor ?? 1;
+  const cashFlows = toCashFlows(results, YEAR_AXIS, factorFor, bands);
   return {
-    stats: toStats(results),
-    bands: { years: [], ages: [], p5: [], p50: [], p95: [] },
+    stats: toStats(results, cashFlows, final),
+    bands,
     accountSeries: [],
-    cashFlows: toCashFlows(results),
+    cashFlows,
     warnings: toWarnings(results),
     horizonLabel: "—",
+    baseYear: results.inflation[0]?.year ?? new Date().getFullYear(),
+    totalInflation: final,
   };
 }
+
+/** Stand-in for a run with no snapshots to derive a real axis from. */
+const YEAR_AXIS: PlanAxis = {
+  unit: "year",
+  range: [0, 0],
+  at: (isoDate) => yearOf(isoDate),
+  label: (position) => String(position),
+};

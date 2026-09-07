@@ -1322,3 +1322,120 @@ async fn a_reordered_list_survives_being_duplicated() {
         "the copy reads as the original did"
     );
 }
+
+/// The cash-flow table's drawer: a year index on `results`, and the entries
+/// behind one year on `/ledger`.
+#[tokio::test]
+async fn a_year_of_the_ledger_can_be_read_back_and_filtered() {
+    let mut app = TestApp::new().await;
+    app.login_as("ledger@example.com").await;
+    let (scenario_id, checking, _) = app.seed_scenario().await;
+
+    app.post(
+        &format!("/api/scenarios/{scenario_id}/events"),
+        json!({
+            "name": "Salary",
+            "trigger": {"kind": "Repeating", "interval": "Monthly"},
+            "effects": [{
+                "kind": "Income", "to_account_id": checking, "income_type": "Taxable",
+                "amount": {"kind": "Fixed", "value": 5000.0}
+            }]
+        }),
+    )
+    .await;
+
+    // Born 1985 and starting in 2026, so this fires in 2030 — the one year in
+    // the run that is not like the others.
+    app.post(
+        &format!("/api/scenarios/{scenario_id}/events"),
+        json!({
+            "name": "Buy the boat",
+            "fires_once": true,
+            "trigger": {"kind": "Age", "years": 45},
+            "effects": [{
+                "kind": "Expense", "from_account_id": checking,
+                "amount": {"kind": "Fixed", "value": 20_000.0}
+            }]
+        }),
+    )
+    .await;
+
+    let (status, run) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/runs"),
+            json!({"iterations": 20, "seed": 7, "percentiles": [0.5]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    let run_id = run["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(run_id).await, "succeeded");
+
+    let (status, results) = app.get(&format!("/api/runs/{run_id}/results")).await;
+    assert_eq!(status, StatusCode::OK, "{results}");
+
+    // Deflating anything needs the path's own inflation, which starts at 1.0
+    // in the plan's first year.
+    let inflation = results["inflation"].as_array().unwrap();
+    assert!(!inflation.is_empty(), "no inflation was recorded");
+    assert_eq!(inflation[0]["factor"], 1.0);
+
+    let years = results["ledger_years"].as_array().unwrap();
+    assert!(!years.is_empty(), "no ledger was recorded");
+    let counted: i64 = years.iter().map(|y| y["total"].as_i64().unwrap()).sum();
+    assert!(counted > 0, "the ledger index counted nothing");
+
+    // The tag marks the year an event *started*, so the monthly salary tags
+    // only its first year, not all ten. A tag on every year would mark nothing.
+    let tagged: Vec<(i64, &str)> = years
+        .iter()
+        .filter_map(|y| Some((y["year"].as_i64()?, y["tag"].as_str()?)))
+        .collect();
+    assert_eq!(
+        tagged,
+        vec![(2026, "Salary"), (2030, "Buy the boat")],
+        "got {tagged:?}"
+    );
+
+    // A year reads back exactly the entries the index counted for it.
+    let (status, page) = app
+        .get(&format!("/api/runs/{run_id}/ledger?year=2030"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let entries = page["entries"].as_array().unwrap();
+    let expected = years.iter().find(|y| y["year"] == 2030).unwrap()["total"]
+        .as_i64()
+        .unwrap();
+    assert_eq!(page["total"], expected);
+    assert_eq!(entries.len() as i64, expected);
+    assert!(
+        entries.iter().all(|e| e["year"] == 2030),
+        "the year filter leaked other years"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["kind"] == "Triggered" && e["detail"] == "Buy the boat"),
+        "the triggering event is missing from its own year"
+    );
+
+    // And the filter chips scope it to one bucket.
+    let (status, cash) = app
+        .get(&format!(
+            "/api/runs/{run_id}/ledger?year=2030&category=cash"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cash}");
+    assert!(
+        cash["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["category"] == "cash"),
+        "the category filter leaked other buckets"
+    );
+    assert_eq!(
+        cash["total"],
+        years.iter().find(|y| y["year"] == 2030).unwrap()["cash"],
+        "the page total disagrees with the index the table drew its count from"
+    );
+}

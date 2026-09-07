@@ -28,6 +28,8 @@ pub struct CompiledScenario {
     pub id_map: IdMap,
     /// Display names keyed by database account id, for labelling result series.
     pub account_names: HashMap<i64, String>,
+    /// Display names keyed by database event id, for labelling ledger entries.
+    pub event_names: HashMap<i64, String>,
 }
 
 fn parse_date(text: &str, field: &str) -> ApiResult<Date> {
@@ -255,7 +257,11 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
 
     // ── Events ──────────────────────────────────────────────────────────────
     let mut events = Vec::new();
+    // Names cover disabled events too: an earlier run's ledger can still be on
+    // screen after an event has been switched off.
+    let mut event_names = HashMap::new();
     for row in &graph.events {
+        event_names.insert(row.id, row.name.clone());
         if row.enabled == 0 {
             continue;
         }
@@ -361,6 +367,7 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
         config,
         id_map,
         account_names,
+        event_names,
     })
 }
 

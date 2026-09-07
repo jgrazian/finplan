@@ -1,5 +1,7 @@
-export { CashFlowTable } from "./CashFlowTable";
+export { CashFlowLedger } from "./CashFlowLedger";
 export { ChartReadout } from "./ChartReadout";
+export { ColumnPicker, useStoredColumns } from "./ColumnPicker";
+export type { ColumnOption } from "./ColumnPicker";
 export { ChartToolbar } from "./ChartToolbar";
 export { NetWorthChart } from "./NetWorthChart";
 export { RunSummary } from "./RunSummary";

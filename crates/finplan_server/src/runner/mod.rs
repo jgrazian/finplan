@@ -8,6 +8,7 @@
 //! Because run state lives in SQLite rather than in memory, a crash mid-run is
 //! recoverable: `requeue_orphans` re-queues anything left in `running` at boot.
 
+pub mod ledger;
 pub mod store;
 
 use std::collections::HashMap;

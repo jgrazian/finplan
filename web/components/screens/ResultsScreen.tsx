@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { SplitPane } from "@/components/layout";
 import {
-  CashFlowTable,
+  CashFlowLedger,
   type ChartView,
   ChartToolbar,
   NetWorthChart,
@@ -22,22 +22,27 @@ const NEXT_PERCENTILE: Record<Percentile, Percentile> = {
   p5: "p50",
 };
 
-function chartCopy(view: ChartView, percentile: Percentile, ages: string) {
+function chartCopy(
+  view: ChartView,
+  percentile: Percentile,
+  ages: string,
+  dollars: string,
+) {
   if (view === "stack") {
     return {
       title: "Net worth by account",
-      subtitle: `${percentile.toUpperCase()} representative run · ${ages}`,
+      subtitle: `${percentile.toUpperCase()} representative run · ${ages} · ${dollars}`,
     };
   }
   if (view === "bar") {
     return {
       title: "Net worth by year",
-      subtitle: `${percentile.toUpperCase()} representative run · ${ages}`,
+      subtitle: `${percentile.toUpperCase()} representative run · ${ages} · ${dollars}`,
     };
   }
   return {
     title: "Net worth — P5 / P50 / P95 band",
-    subtitle: "shaded band spans the 5th to 95th percentile run",
+    subtitle: `shaded band spans the 5th to 95th percentile run · ${dollars}`,
   };
 }
 
@@ -99,7 +104,10 @@ export function ResultsScreen({
     bands.ages.length > 0
       ? `${bands.ages[0]}–${bands.ages[bands.ages.length - 1]}`
       : "no horizon";
-  const copy = chartCopy(view, percentile, span);
+  // Every figure on this screen is real, so the chart says so once rather than
+  // every panel repeating it.
+  const dollars = `${results.baseYear} dollars`;
+  const copy = chartCopy(view, percentile, span, dollars);
 
   return (
     <SplitPane
@@ -129,16 +137,13 @@ export function ResultsScreen({
             percentile={percentile}
           />
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 28,
-              marginTop: 24,
-            }}
-          >
-            <CashFlowTable rows={results.cashFlows} percentile={percentile} />
-            <WarningList warnings={results.warnings} />
+          <div style={{ marginTop: 24 }}>
+            <CashFlowLedger
+              rows={results.cashFlows}
+              percentile={percentile}
+              runId={run?.id}
+              baseYear={results.baseYear}
+            />
           </div>
         </div>
       }
@@ -151,7 +156,14 @@ export function ResultsScreen({
             gap: 20,
           }}
         >
-          <RunSummary stats={stats} bands={bands} />
+          <RunSummary
+            stats={stats}
+            bands={bands}
+            baseYear={results.baseYear}
+            totalInflation={results.totalInflation}
+          />
+          <Hr flush />
+          <WarningList warnings={results.warnings} />
           <Hr flush />
           <Button block variant="primary" shortcut="r" onClick={onRun}>
             Re-run
