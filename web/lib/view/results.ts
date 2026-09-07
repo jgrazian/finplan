@@ -211,6 +211,57 @@ function toAccountSeries(
   }));
 }
 
+/** One account's standing in a single year, as the rail's breakdown reads it. */
+export interface AccountStanding {
+  accountId: AccountSeries["accountId"];
+  label: string;
+  color: string;
+  value: number;
+  /**
+   * The row's bar: |value| as a share of the year's largest position. Measured
+   * against the largest rather than against the total because a plan with a
+   * mortgage on it has positions on both sides of zero, and shares of a net
+   * total are meaningless once the parts do not all point the same way.
+   */
+  share: number;
+  /** Change from the prior year; undefined in the plan's first year. */
+  delta: number | undefined;
+}
+
+export interface AccountBreakdown {
+  standings: AccountStanding[];
+  /** What the standings add up to — the year's net worth, on this path. */
+  total: number;
+}
+
+/**
+ * One year of `accountSeries`, cut across the accounts instead of along time.
+ *
+ * The chart draws each account as a band through the whole horizon; this is the
+ * same numbers read at a single year, which is the question a reader has while
+ * pointing at one — what is the net worth on screen actually made of, and what
+ * moved since last year.
+ */
+export function accountBreakdown(
+  series: AccountSeries[],
+  index: number,
+): AccountBreakdown {
+  const values = series.map((s) => s.values[index] ?? 0);
+  const largest = Math.max(...values.map(Math.abs), 0) || 1;
+
+  return {
+    standings: series.map((s, i) => ({
+      accountId: s.accountId,
+      label: s.label,
+      color: s.color,
+      value: values[i],
+      share: Math.abs(values[i]) / largest,
+      delta: index > 0 ? values[i] - (s.values[index - 1] ?? 0) : undefined,
+    })),
+    total: values.reduce((sum, v) => sum + v, 0),
+  };
+}
+
 const NO_LEDGER: LedgerSummary = { total: 0, cash: 0, asset: 0, tax: 0, event: 0 };
 
 function toCashFlows(

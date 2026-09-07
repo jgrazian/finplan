@@ -1,3 +1,4 @@
+export { AccountBreakdown } from "./AccountBreakdown";
 export { CashFlowLedger } from "./CashFlowLedger";
 export { ChartReadout } from "./ChartReadout";
 export { ColumnPicker, useStoredColumns } from "./ColumnPicker";
@@ -10,3 +11,5 @@ export { WarningList } from "./WarningList";
 export { WhatIfPanel } from "./WhatIfPanel";
 export type { WhatIfOverrides } from "./WhatIfPanel";
 export type { ChartView } from "./types";
+export { useYearFocus } from "./useYearFocus";
+export type { YearFocus } from "./useYearFocus";

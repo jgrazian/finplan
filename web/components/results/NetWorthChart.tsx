@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   ChartCanvas,
   FanSeries,
@@ -14,11 +14,12 @@ import { fmtAxis } from "@/lib/format";
 import type { AccountSeries, NetWorthBands, Percentile } from "@/lib/types";
 import { ChartReadout } from "./ChartReadout";
 import type { ChartView } from "./types";
+import type { YearFocus } from "./useYearFocus";
 
 /**
  * The single chart frame, in whichever of the three treatments is selected.
- * Owns only its hover index; view, percentile and scale kind are lifted so the
- * toolbar and the rail can read them.
+ * Owns nothing: view, percentile, scale kind and the year under the pointer are
+ * all lifted, because the toolbar and the rail read them too.
  */
 export function NetWorthChart({
   bands,
@@ -26,14 +27,17 @@ export function NetWorthChart({
   view,
   percentile,
   scaleKind,
+  focus,
 }: {
   bands: NetWorthBands;
   accountSeries: AccountSeries[];
   view: ChartView;
   percentile: Percentile;
   scaleKind: ScaleKind;
+  /** The year the chart and the rail's breakdown are both pointed at. */
+  focus: YearFocus;
 }) {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const { hoverIndex, pinnedIndex } = focus;
 
   const active = bands[percentile];
   const totals = useMemo(
@@ -59,7 +63,7 @@ export function NetWorthChart({
     [bands.years.length, plotted, scaleKind, view],
   );
 
-  const index = hoverIndex ?? bands.years.length - 1;
+  const index = focus.index;
   const cursorValue = view === "fan" ? active[index] : (totals[index] ?? 0);
 
   return (
@@ -69,18 +73,22 @@ export function NetWorthChart({
         years={bands.years}
         format={fmtAxis}
         hoverIndex={hoverIndex}
-        onHoverChange={setHoverIndex}
+        onHoverChange={focus.setHover}
         hoverY={scale.y(cursorValue)}
+        pinnedIndex={pinnedIndex}
+        onSelect={focus.pin}
       >
         {view === "fan" && (
           <FanSeries p5={bands.p5} p50={bands.p50} p95={bands.p95} scale={scale} />
         )}
         {view === "stack" && <StackedSeries series={accountSeries} scale={scale} />}
         {view === "bar" && (
+          // Only a year the reader chose steps the others back; an unattended
+          // chart is left flat rather than emphasising its last column.
           <StackedBarSeries
             series={accountSeries}
             scale={scale}
-            highlight={hoverIndex}
+            highlight={hoverIndex ?? pinnedIndex}
           />
         )}
       </ChartCanvas>

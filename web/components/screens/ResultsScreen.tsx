@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { SplitPane } from "@/components/layout";
 import {
+  AccountBreakdown,
   CashFlowLedger,
   type ChartView,
   ChartToolbar,
@@ -10,11 +11,13 @@ import {
   RunSummary,
   SuccessRate,
   WarningList,
+  useYearFocus,
 } from "@/components/results";
 import type { ScaleKind } from "@/components/charts";
 import { Button, Hr } from "@/components/ui";
 import type { Percentile, ResultsData } from "@/lib/types";
 import type { Run } from "@/lib/api/types";
+import { accountBreakdown } from "@/lib/view/results";
 import { EmptyState } from "./EmptyState";
 
 const NEXT_PERCENTILE: Record<Percentile, Percentile> = {
@@ -77,6 +80,9 @@ export function ResultsScreen({
 }) {
   const [view, setView] = useState<ChartView>("fan");
   const [scaleKind, setScaleKind] = useState<ScaleKind>("linear");
+  // Hooks run before the early returns below, so the focus is taken against
+  // whatever horizon is loaded — zero while there is none.
+  const focus = useYearFocus(results?.bands.years.length ?? 0);
 
   if (error) {
     return <EmptyState title="The run did not finish" detail={error} />;
@@ -123,6 +129,7 @@ export function ResultsScreen({
       ? `${results.baseYear} dollars · log scale`
       : `${results.baseYear} dollars`;
   const copy = chartCopy(view, percentile, span, dollars);
+  const breakdown = accountBreakdown(results.accountSeries, focus.index);
 
   return (
     <SplitPane
@@ -153,6 +160,7 @@ export function ResultsScreen({
             view={view}
             percentile={percentile}
             scaleKind={scaleKind}
+            focus={focus}
           />
 
           <div style={{ marginTop: 24 }}>
@@ -174,6 +182,15 @@ export function ResultsScreen({
             gap: 20,
           }}
         >
+          <AccountBreakdown
+            breakdown={breakdown}
+            year={bands.years[focus.index]}
+            age={ageAt(bands, focus.index)}
+            hint={focus.hint}
+            pinned={focus.pinnedIndex != null}
+            onUnpin={focus.unpin}
+          />
+          <Hr flush />
           <RunSummary
             stats={stats}
             bands={bands}
@@ -218,4 +235,14 @@ function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => 
       <Button onClick={onCancel}>Cancel run</Button>
     </div>
   );
+}
+
+/**
+ * The plan's age at a year, or nothing when the scenario has no birth date to
+ * count from — the axis then holds calendar years, and "age 2041" is a lie the
+ * panel would otherwise print.
+ */
+function ageAt(bands: ResultsData["bands"], index: number): number | undefined {
+  const age = bands.ages[index];
+  return age == null || age === bands.years[index] ? undefined : age;
 }

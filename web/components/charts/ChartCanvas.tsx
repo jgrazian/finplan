@@ -31,6 +31,8 @@ export function ChartCanvas({
   onHoverChange,
   /** Y of the crosshair dot; omit to draw the rule alone. */
   hoverY,
+  pinnedIndex,
+  onSelect,
   children,
 }: {
   scale: Scale;
@@ -39,6 +41,10 @@ export function ChartCanvas({
   hoverIndex: number | null;
   onHoverChange: (index: number | null) => void;
   hoverY?: number;
+  /** The year held on screen after the pointer leaves; drawn as a dashed rule. */
+  pinnedIndex?: number | null;
+  /** Click a year to pin it. Omit to leave the plot read-only. */
+  onSelect?: (index: number) => void;
   children: ReactNode;
 }) {
   const geo = scale.geo ?? DEFAULT_GEOMETRY;
@@ -49,7 +55,15 @@ export function ChartCanvas({
     <Blueprint style={{ position: "relative", padding: "10px 12px 4px" }}>
       <svg
         viewBox={`0 0 ${geo.w} ${geo.h}`}
-        style={{ width: "100%", display: "block", overflow: "visible" }}
+        style={{
+          width: "100%",
+          display: "block",
+          overflow: "visible",
+          cursor: onSelect ? "crosshair" : undefined,
+        }}
+        onClick={() => {
+          if (hoverIndex != null) onSelect?.(hoverIndex);
+        }}
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const next = indexFromPointer(e.clientX, rect, scale);
@@ -90,6 +104,27 @@ export function ChartCanvas({
             {t.year}
           </text>
         ))}
+
+        {pinnedIndex != null && (
+          <g pointerEvents="none">
+            <line
+              x1={scale.x(pinnedIndex)}
+              x2={scale.x(pinnedIndex)}
+              y1={geo.top}
+              y2={scale.baseline}
+              stroke="#5980a6"
+              strokeWidth={1}
+              strokeDasharray="3 3"
+            />
+            <rect
+              x={scale.x(pinnedIndex) - 3}
+              y={scale.baseline - 3}
+              width={6}
+              height={6}
+              fill="#5980a6"
+            />
+          </g>
+        )}
 
         {hoverIndex != null && (
           <g pointerEvents="none">
