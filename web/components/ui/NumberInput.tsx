@@ -31,6 +31,12 @@ interface NumberInputBase {
   min?: number;
   max?: number;
   placeholder?: string;
+  /**
+   * Keep the affixes while a nullable field stands empty. Off by default —
+   * `$` in front of "none" says nothing true — and on where the placeholder
+   * is written to be read with them, as "unlimited" is before "times".
+   */
+  affixesWhenEmpty?: boolean;
   readOnly?: boolean;
   disabled?: boolean;
   id?: string;
@@ -137,6 +143,7 @@ export function NumberInput(props: NumberInputProps) {
     min,
     max,
     placeholder,
+    affixesWhenEmpty,
     readOnly,
     disabled,
     id,
@@ -198,8 +205,9 @@ export function NumberInput(props: NumberInputProps) {
   const empty = text === "";
   const shown = empty ? (placeholder ?? "0") : text;
   // A nullable field standing empty reads as its placeholder — "none" — and a
-  // `$` in front of that says nothing true.
-  const affixes = !empty || !nullable;
+  // `$` in front of that says nothing true, unless the placeholder was written
+  // to be read with the affixes.
+  const affixes = !empty || !nullable || !!affixesWhenEmpty;
 
   return (
     <div

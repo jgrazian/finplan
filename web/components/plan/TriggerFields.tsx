@@ -297,8 +297,9 @@ export function ScheduleFields({
             onValueChange={(maxOccurrences) => onChange({ ...trigger, maxOccurrences })}
             decimals={0}
             min={1}
-            suffix="times"
-            placeholder="no limit"
+            suffix={trigger.maxOccurrences === 1 ? "time" : "times"}
+            placeholder="unlimited"
+            affixesWhenEmpty
             aria-label="At most, occurrences"
           />
         </Field>
@@ -540,7 +541,7 @@ function ConditionFields({
                 decimals={0}
                 min={0}
                 max={120}
-                suffix="years"
+                suffix={condition.age === 1 ? "year" : "years"}
                 aria-label="Years"
               />
             </Field>
@@ -553,7 +554,9 @@ function ConditionFields({
                 decimals={0}
                 min={0}
                 max={11}
-                placeholder="birthday"
+                suffix={condition.ageMonths === 1 ? "month" : "months"}
+                placeholder="0"
+                affixesWhenEmpty
                 aria-label="Months"
               />
             </Field>

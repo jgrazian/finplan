@@ -188,10 +188,11 @@ export function DistributionTerms({
               value={draft.blockSize}
               decimals={0}
               min={1}
-              placeholder="engine default"
+              placeholder="1"
+              affixesWhenEmpty
               readOnly={readOnly}
               onValueChange={(v) => onChange({ blockSize: v })}
-              suffix="years"
+              suffix={(draft.blockSize ?? 1) === 1 ? "year" : "years"}
               aria-label="Block size"
             />
           </Field>
