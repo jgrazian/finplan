@@ -311,7 +311,6 @@ export interface ScenarioParams {
   durationYears: number;
   /** Empty when the scenario has none; `Age` triggers require one. */
   birthDate: string;
-  iterations: number;
   /** Name of the scenario's inflation profile, or `—`. */
   inflationProfile: string;
   /** Name of the scenario's tax configuration, or `—`. */

@@ -5,6 +5,7 @@ import { api } from "@/lib/api/client";
 import type { Results, Run, Scenario as ApiScenario } from "@/lib/api/types";
 import { SERIES, isTerminal } from "@/lib/api/types";
 import { serverMonitor } from "@/lib/status/monitor";
+import type { RunEffort } from "@/components/results";
 import type { Percentile, ResultsData } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 import { toResultsData } from "@/lib/view/results";
@@ -25,7 +26,7 @@ export interface RunState {
   /** Which stored path the per-account series, cash flows and ledger describe. */
   percentile: Percentile;
   setPercentile: (percentile: Percentile) => void;
-  start: (iterations: number) => Promise<void>;
+  start: (effort: RunEffort) => Promise<void>;
   cancel: () => Promise<void>;
 }
 
@@ -133,7 +134,9 @@ export function useRun(
     if (run?.status === "failed") {
       serverMonitor.runFailed({
         completed: run.completed_iterations,
-        total: run.iterations,
+        // A converging run's ceiling is the figure its progress was read
+        // against, so it is the one a stopped-at-N message has to name.
+        total: run.max_iterations ?? run.iterations,
         message: run.error_message,
         hasResults: raw != null,
       });
@@ -174,13 +177,14 @@ export function useRun(
   }, [run, scenarioId, update]);
 
   const start = useCallback(
-    async (iterations: number) => {
+    async (effort: RunEffort) => {
       if (scenarioId == null) return;
       try {
         // The server compiles the scenario synchronously, so a misconfigured
         // plan reports here rather than as a failed job seconds later.
         const queued = await api.runs.create(scenarioId, {
-          iterations,
+          iterations: effort.iterations,
+          converge: effort.converge,
           percentiles: PERCENTILES,
         });
         update(scenarioId, { run: queued, raw: undefined, error: undefined, loading: false });

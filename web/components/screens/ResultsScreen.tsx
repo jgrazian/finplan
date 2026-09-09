@@ -7,7 +7,9 @@ import {
   CashFlowLedger,
   type ChartView,
   ChartToolbar,
+  EffortPanel,
   NetWorthChart,
+  type RunEffort,
   RunSummary,
   SuccessRate,
   WarningList,
@@ -58,6 +60,9 @@ export function ResultsScreen({
   error,
   percentile,
   onPercentileChange,
+  effort,
+  onEffortChange,
+  offline,
   onRun,
   onCancel,
 }: {
@@ -73,6 +78,11 @@ export function ResultsScreen({
    */
   percentile: Percentile;
   onPercentileChange: (percentile: Percentile) => void;
+  /** How hard the next run should work; the rail's first section sets it. */
+  effort: RunEffort;
+  onEffortChange: (effort: RunEffort) => void;
+  /** No connection: nothing can be run, so the dial is read-only.  */
+  offline?: boolean;
   onRun: () => void;
   onCancel: () => void;
 }) {
@@ -186,6 +196,8 @@ export function ResultsScreen({
             gap: 20,
           }}
         >
+          <EffortPanel value={effort} onChange={onEffortChange} disabled={offline} />
+          <Hr flush />
           <p style={{ margin: 0, fontSize: 12 }}>{results.pathLabel} · {results.dollarLabel}</p>
           <AccountBreakdown
             breakdown={breakdown}
@@ -218,7 +230,11 @@ export function ResultsScreen({
 /** Live progress while the worker pool chews through the iterations. */
 function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => void }) {
   const done = run?.completed_iterations ?? 0;
-  const total = run?.iterations ?? 0;
+  // A converging run stops when its median settles, so the bar is filling
+  // towards a ceiling it is not expected to reach. Reading it against the
+  // minimum sample instead would sit at 100% for most of the run.
+  const converging = run?.converge === true;
+  const total = (converging ? run?.max_iterations : run?.iterations) ?? 0;
   const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
 
   return (
@@ -236,7 +252,9 @@ function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => 
           color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
         }}
       >
-        {done.toLocaleString("en-US")} of {total.toLocaleString("en-US")} iterations
+        {converging
+          ? `${done.toLocaleString("en-US")} iterations · sampling until the median settles, up to ${total.toLocaleString("en-US")}`
+          : `${done.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} iterations`}
       </p>
       <Button onClick={onCancel}>Cancel run</Button>
     </div>

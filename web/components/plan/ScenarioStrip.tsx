@@ -3,7 +3,6 @@
 import { type ReactNode, useState } from "react";
 import { UnsavedNote } from "@/components/status/UnsavedNote";
 import { Button, CompactInput, DateInput, Field, NumberInput } from "@/components/ui";
-import { fmtInt } from "@/lib/format";
 import type { ScenarioParams } from "@/lib/types";
 
 /** The fields this strip can save; the rest are read-only summaries. */
@@ -99,8 +98,6 @@ export function ScenarioStrip({
         <Bar />
         <span>{shown.birthDate ? `born ${shown.birthDate}` : "no birth date"}</span>
         <Bar />
-        <span>{fmtInt(params.iterations)} iterations</span>
-        <Bar />
         <span>{params.inflationProfile}</span>
         <Bar />
         <span>{params.taxConfig}</span>
@@ -138,7 +135,7 @@ export function ScenarioStrip({
           style={{
             padding: "0 20px 14px",
             display: "grid",
-            gridTemplateColumns: "repeat(6, 1fr)",
+            gridTemplateColumns: "repeat(5, 1fr)",
             gap: 12,
             alignItems: "start",
           }}
@@ -185,13 +182,6 @@ export function ScenarioStrip({
             {refused.birthDate && <UnsavedNote>{refused.birthDate}</UnsavedNote>}
           </Field>
 
-          <Field label="Iterations">
-            <CompactInput
-              style={{ minHeight: 30 }}
-              value={fmtInt(params.iterations)}
-              readOnly
-            />
-          </Field>
           <Field label="Inflation">
             <CompactInput
               style={{ minHeight: 30 }}

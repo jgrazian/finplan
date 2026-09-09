@@ -867,9 +867,20 @@ fn monte_carlo_core(
             return Err(SimulationError::Cancelled);
         }
 
-        // Dispatch all remaining work this round, one batch per core.
-        // Each core gets an equal share of iterations.
-        let remaining = max_iterations - current_count;
+        // Dispatch a round of work, one batch per core, each core taking an
+        // equal share of it. A fixed-count run has one round: everything.
+        //
+        // A converging run cannot, because the point of it is to stop early —
+        // dispatching the whole ceiling would run every iteration before the
+        // metric was ever looked at, which is the fixed run it was chosen
+        // instead of. So it takes the minimum sample first, then `batch_size`
+        // per core, and tests the metric between rounds.
+        let round = match convergence_tracker {
+            Some(_) if current_count < min_iterations => min_iterations - current_count,
+            Some(_) => config.batch_size.max(1) * parallel_batches,
+            None => usize::MAX,
+        };
+        let remaining = (max_iterations - current_count).min(round);
         let num_batches = parallel_batches.min(remaining);
         let per_batch = remaining / num_batches;
         let extra = remaining % num_batches;

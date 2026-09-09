@@ -7,4 +7,9 @@ export type CreateRun = {
   batch_size: number;
   parallel_batches: number;
   compute_mean: boolean;
+  /**
+   * Keep sampling until the median settles instead of stopping at
+   * `iterations`, which then reads as the minimum sample to take first.
+   */
+  converge: boolean;
 };

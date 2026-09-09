@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccountScreen } from "@/components/account";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { AppHeader, AppShell, type TabDef } from "@/components/layout";
+import { nearestStop, type RunEffort } from "@/components/results";
 import {
   EmptyState,
   PlaceholderScreen,
@@ -80,7 +81,13 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   // destination rather than a fifth tab: it is about the account, not the
   // scenario the tabs all describe, so it is a tab id the header does not list.
   const nav = useNav();
-  const iterations = user.default_iterations;
+
+  // How hard a run should work is a property of the question being asked, not
+  // of the plan, so it lives here for the session rather than on the scenario.
+  // The account preference seeds it; the Results slider moves it from there.
+  const [effort, setEffort] = useState<RunEffort>(() =>
+    nearestStop(user.default_iterations),
+  );
 
   const scenarios = useAsync(() => api.scenarios.list(), []);
   const libraries = useAsync(
@@ -107,14 +114,14 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     if (scenarioId != null) nav.adoptScenario(scenarioId);
   }, [nav, scenarioId]);
 
-  const workspace = useWorkspace(scenarioId, iterations);
+  const workspace = useWorkspace(scenarioId);
   const run = useRun(workspace.scenario, workspace.axis);
   const status = useServerStatus();
 
   const start = useCallback(() => {
     nav.setTab("results");
-    void run.start(iterations);
-  }, [nav, run, iterations]);
+    void run.start(effort);
+  }, [nav, run, effort]);
 
   const refresh = useCallback(() => {
     scenarios.reload();
@@ -143,9 +150,9 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     if (previous.id !== scenarioId || previous.at == null || previous.at === updatedAt) return;
     if (!autoRun) return;
 
-    const timer = setTimeout(() => void startQuietly.current(iterations), AUTO_RUN_SETTLE_MS);
+    const timer = setTimeout(() => void startQuietly.current(effort), AUTO_RUN_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [scenarioId, updatedAt, autoRun, iterations]);
+  }, [scenarioId, updatedAt, autoRun, effort]);
 
   // Keyboard parity with the TUI: `r` runs, as the header's keycap advertises.
   useEffect(() => {
@@ -231,6 +238,9 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 error={run.error}
                 percentile={run.percentile}
                 onPercentileChange={run.setPercentile}
+                effort={effort}
+                onEffortChange={setEffort}
+                offline={status.offline}
                 onRun={start}
                 onCancel={run.cancel}
               />

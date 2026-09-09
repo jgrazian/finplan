@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use finplan_core::model::{MonteCarloConfig, MonteCarloProgress};
+use finplan_core::model::{ConvergenceConfig, MonteCarloConfig, MonteCarloProgress};
 use finplan_core::simulation::monte_carlo_simulate_with_progress;
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
@@ -157,16 +157,36 @@ async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), Ru
         return Ok(());
     }
 
-    let params: (i64, String, i64, Option<i64>, i64, i64, i64) = sqlx::query_as(
-        "SELECT scenario_id, user_id, iterations, seed, batch_size, parallel_batches, compute_mean
+    let params: (
+        i64,
+        String,
+        i64,
+        Option<i64>,
+        i64,
+        i64,
+        i64,
+        i64,
+        Option<i64>,
+    ) = sqlx::query_as(
+        "SELECT scenario_id, user_id, iterations, seed, batch_size, parallel_batches, compute_mean,
+                converge, max_iterations
            FROM runs WHERE id = ?1",
     )
     .bind(run_id)
     .fetch_one(db)
     .await?;
 
-    let (scenario_id, user_id, iterations, seed, batch_size, parallel_batches, compute_mean) =
-        params;
+    let (
+        scenario_id,
+        user_id,
+        iterations,
+        seed,
+        batch_size,
+        parallel_batches,
+        compute_mean,
+        converge,
+        max_iterations,
+    ) = params;
 
     let percentiles: Vec<f64> = sqlx::query_scalar(
         "SELECT percentile FROM run_percentiles WHERE run_id = ?1 ORDER BY percentile",
@@ -180,6 +200,16 @@ async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), Ru
         .map_err(|e| RunError::Compile(e.to_string()))?;
     let compiled = compile::compile(&graph).map_err(|e| RunError::Compile(e.to_string()))?;
 
+    // On a converging run `iterations` is the minimum sample before the metric
+    // is tested, and `max_iterations` the ceiling. The row always carries a
+    // ceiling when `converge` is set; falling back to the minimum only makes
+    // such a run behave like the fixed one it would otherwise have been.
+    let convergence = (converge != 0).then(|| ConvergenceConfig {
+        max_iterations: max_iterations.unwrap_or(iterations) as usize,
+        relative_threshold: 0.01,
+        ..ConvergenceConfig::default()
+    });
+
     let mc_config = MonteCarloConfig {
         iterations: iterations as usize,
         percentiles: if percentiles.is_empty() {
@@ -188,7 +218,7 @@ async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), Ru
             percentiles
         },
         compute_mean: compute_mean != 0,
-        convergence: None,
+        convergence,
         batch_size: batch_size as usize,
         parallel_batches: parallel_batches as usize,
         seed: seed.map(|s| s as u64),

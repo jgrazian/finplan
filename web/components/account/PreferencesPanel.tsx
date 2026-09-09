@@ -89,8 +89,8 @@ export function PreferencesPanel({
       </label>
 
       <PanelNote>
-        Iterations are what the Run button asks for; the server still caps them
-        at its own <code style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>
+        Iterations seed the slider on the Results tab, which is where a run
+        gets its count; the server caps them either way at its own <code style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>
           --max-iterations
         </code>
         . The horizon seeds a new scenario. Auto re-run waits for an edit to

@@ -30,8 +30,14 @@ pub struct Run {
     pub id: i64,
     pub scenario_id: i64,
     pub status: String,
+    /// Fixed runs: the count. Converging runs: the minimum sample taken
+    /// before the metric is first tested.
     pub iterations: i64,
     pub completed_iterations: i64,
+    /// Set only on a converging run: the ceiling it may not pass, and the
+    /// denominator progress should be read against.
+    pub converge: bool,
+    pub max_iterations: Option<i64>,
     pub seed: Option<i64>,
     pub error_message: Option<String>,
     pub created_at: String,
@@ -39,8 +45,8 @@ pub struct Run {
     pub finished_at: Option<String>,
 }
 
-const RUN_COLUMNS: &str = "id, scenario_id, status, iterations, completed_iterations, seed,
-     error_message, created_at, started_at, finished_at";
+const RUN_COLUMNS: &str = "id, scenario_id, status, iterations, completed_iterations, converge,
+     max_iterations, seed, error_message, created_at, started_at, finished_at";
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
@@ -57,7 +63,18 @@ pub struct CreateRun {
     pub parallel_batches: i64,
     #[serde(default = "yes")]
     pub compute_mean: bool,
+    /// Keep sampling until the median settles instead of stopping at
+    /// `iterations`, which then reads as the minimum sample to take first.
+    #[serde(default)]
+    pub converge: bool,
 }
+
+/// Ceiling on a converging run, before `--max-iterations` is applied.
+///
+/// A converging run is asked for by someone who does not want to pick a count,
+/// so it needs an answer in the time a count would have taken. Ten thousand
+/// iterations is roughly twice the largest fixed size the UI offers.
+const CONVERGE_CEILING: i64 = 10_000;
 
 fn default_iterations() -> i64 {
     1000
@@ -124,6 +141,17 @@ async fn create(
         )));
     }
 
+    // A converging run's `iterations` is its minimum sample, so it is clamped
+    // to the ceiling rather than refused: asking to look at the metric later
+    // than the run is allowed to go just means looking at it once, at the end.
+    let ceiling = body
+        .converge
+        .then(|| CONVERGE_CEILING.min(state.config.max_iterations as i64));
+    let iterations = match ceiling {
+        Some(cap) => body.iterations.min(cap),
+        None => body.iterations,
+    };
+
     let mut percentiles = body.percentiles.clone();
     percentiles.retain(|p| (0.0..=1.0).contains(p));
     percentiles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -140,16 +168,19 @@ async fn create(
     let mut tx = state.db.begin().await?;
     let run_id: i64 = sqlx::query_scalar(
         "INSERT INTO runs
-            (scenario_id, user_id, iterations, seed, batch_size, parallel_batches, compute_mean)
-         VALUES (?1,?2,?3,?4,?5,?6,?7) RETURNING id",
+            (scenario_id, user_id, iterations, seed, batch_size, parallel_batches, compute_mean,
+             converge, max_iterations)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) RETURNING id",
     )
     .bind(scenario_id)
     .bind(&user.id)
-    .bind(body.iterations)
+    .bind(iterations)
     .bind(body.seed)
     .bind(body.batch_size.max(1))
     .bind(body.parallel_batches.max(1))
     .bind(i64::from(body.compute_mean))
+    .bind(i64::from(body.converge))
+    .bind(ceiling)
     .fetch_one(&mut *tx)
     .await?;
 

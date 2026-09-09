@@ -4,8 +4,18 @@ export type Run = {
   id: number;
   scenario_id: number;
   status: string;
+  /**
+   * Fixed runs: the count. Converging runs: the minimum sample taken
+   * before the metric is first tested.
+   */
   iterations: number;
   completed_iterations: number;
+  /**
+   * Set only on a converging run: the ceiling it may not pass, and the
+   * denominator progress should be read against.
+   */
+  converge: boolean;
+  max_iterations: number | null;
   seed: number | null;
   error_message: string | null;
   created_at: string;

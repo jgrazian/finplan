@@ -52,7 +52,7 @@ export interface Workspace {
 }
 
 /** Everything the Portfolio and Plan screens read, for one scenario. */
-export function useWorkspace(scenarioId: number | undefined, iterations: number): Workspace {
+export function useWorkspace(scenarioId: number | undefined): Workspace {
   const { data, error, loading, reload } = useAsync(async () => {
     if (scenarioId == null) return undefined;
     // Independent reads; one round trip's latency rather than seven.
@@ -109,7 +109,6 @@ export function useWorkspace(scenarioId: number | undefined, iterations: number)
         start: scenario.start_date,
         durationYears: scenario.duration_years,
         birthDate: scenario.birth_date ?? "",
-        iterations,
         inflationProfile: inflation?.name ?? "—",
         taxConfig: taxConfig?.name ?? "—",
       },
@@ -124,5 +123,5 @@ export function useWorkspace(scenarioId: number | undefined, iterations: number)
       error,
       reload,
     };
-  }, [data, iterations, loading, error, reload]);
+  }, [data, loading, error, reload]);
 }

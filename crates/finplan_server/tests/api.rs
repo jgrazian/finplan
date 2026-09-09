@@ -768,6 +768,52 @@ async fn a_monte_carlo_run_completes_and_stores_results() {
 }
 
 #[tokio::test]
+async fn a_converging_run_stops_short_of_its_ceiling() {
+    let mut app = TestApp::new().await;
+    app.login_as("converge@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+    let base = format!("/api/scenarios/{scenario_id}");
+    let (status, _) = app.patch(&base, json!({"duration_years": 1})).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Fixed returns settle the median immediately, so the run has to stop on
+    // the metric rather than by exhausting its ceiling.
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    for profile in profiles.as_array().unwrap() {
+        let (status, _) = app
+            .patch(
+                &format!("/api/return-profiles/{}", profile["id"]),
+                json!({"distribution": {"kind": "Fixed", "rate": 0.0}}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    let (status, run) = app
+        .post(
+            &format!("{base}/runs"),
+            json!({
+                "iterations": 20, "seed": 42, "percentiles": [0.5], "converge": true,
+                "batch_size": 10, "parallel_batches": 2
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    assert_eq!(run["converge"], true);
+    assert_eq!(run["iterations"], 20, "the minimum sample, not the count");
+    let ceiling = run["max_iterations"].as_i64().expect("a ceiling");
+    assert_eq!(ceiling, 10_000);
+
+    let run_id = run["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(run_id).await, "succeeded");
+
+    let (_, results) = app.get(&format!("/api/runs/{run_id}/results")).await;
+    let taken = results["stats"]["num_iterations"].as_i64().unwrap();
+    assert!(taken >= 20, "at least the minimum sample, took {taken}");
+    assert!(taken < ceiling, "stopped on the metric, took {taken}");
+}
+
+#[tokio::test]
 async fn the_same_seed_produces_the_same_answer() {
     let mut app = TestApp::new().await;
     app.login_as("determinism@example.com").await;
