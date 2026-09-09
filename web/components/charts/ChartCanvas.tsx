@@ -91,7 +91,7 @@ export function ChartCanvas({
 
         {children}
 
-        {scale.kind === "linear" && (
+        {scale.min < 0 && (
           <line
             x1={geo.left}
             x2={geo.w - geo.right}

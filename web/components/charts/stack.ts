@@ -30,16 +30,19 @@ export function stackSeries(series: AccountSeries[], count: number) {
   return { bands, positive, negative, total: positive.map((v, i) => v + negative[i]) };
 }
 
-/** Never use log for nonpositive outcomes or proportional account stacks. */
+/**
+ * Never use log for proportional account stacks: a stacked band's height would
+ * stop being its share of the total. The envelope has no such constraint — its
+ * log axis is symmetric about zero, so a plan that runs out of money or into
+ * debt still plots.
+ */
 export function resolveScaleKind(
   requested: ScaleKind,
   view: "fan" | "stack" | "bar",
-  paths: number[][],
 ): { kind: ScaleKind; reason?: string } {
-  const reason = view !== "fan"
-    ? "Account composition uses a linear scale: positive balances above zero, debt below; the line shows net worth."
-    : paths.some((values) => values.some((v) => v <= 0 || !Number.isFinite(v)))
-      ? "Log scale is unavailable because a plotted path includes zero, negative, or unavailable values. Linear scale preserves these outcomes."
+  const reason =
+    view !== "fan"
+      ? "Account composition uses a linear scale: positive balances above zero, debt below; the line shows net worth."
       : undefined;
   return { kind: reason ? "linear" : requested, reason };
 }

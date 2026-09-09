@@ -119,9 +119,7 @@ export function ResultsScreen({
       ? `${bands.ages[0]}–${bands.ages[bands.ages.length - 1]}`
       : "no horizon";
   // Label real base dates (or nominal legacy units) and the axis explicitly.
-  const chartScale = resolveScaleKind(scaleKind, view, [
-    bands.p5, bands.p50, bands.p95, results.pathValues,
-  ]);
+  const chartScale = resolveScaleKind(scaleKind, view);
   const dollars = `${results.dollarLabel}${chartScale.kind === "log" ? " · log scale" : ""}`;
   const copy = chartCopy(view, results.pathLabel, span, dollars, results.hasEnvelope);
   const breakdown = accountBreakdown(results.accountSeries, focus.index);

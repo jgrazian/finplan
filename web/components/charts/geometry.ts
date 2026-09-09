@@ -25,8 +25,32 @@ export const DEFAULT_GEOMETRY: ChartGeometry = {
  */
 export type ScaleMode = "point" | "band";
 
-/** Linear reads absolute dollars; log reads growth rate. */
+/** Linear reads absolute dollars; log reads growth rate, through zero into debt. */
 export type ScaleKind = "linear" | "log";
+
+/** Signed position on the log axis; finite for every finite dollar amount. */
+function symlog(v: number, unit: number): number {
+  return Math.sign(v) * Math.log10(1 + Math.abs(v) / unit);
+}
+
+/**
+ * The dollars either side of zero that a log axis spends on its linear segment.
+ * A plain log axis has no zero and no debt to stand on, so "log" here is the
+ * bi-symmetric log sign(v)·log10(1 + |v|/unit): decades above the unit, their
+ * mirror below −unit, and a real zero in between.
+ *
+ * A plan that crosses zero takes a thousandth of its own decade, which leaves
+ * three or four decades on each side: enough to read an early five-figure
+ * balance against a seven-figure peak, without spending half the frame on the
+ * dollars either side of zero. A plan that never reaches zero takes a unit far
+ * below its own floor, so it still reads as the one-sided log axis it was.
+ */
+function logUnit({ min, max }: Domain): number {
+  const reach = Math.max(Math.abs(min), Math.abs(max));
+  if (!(reach > 0)) return 1;
+  if (min > 0 || max < 0) return Math.min(Math.abs(min), Math.abs(max)) / 1e6;
+  return Math.max(1, decadeBelow(reach) / 1000);
+}
 
 /** The stretch of value plotted, including debt below zero on linear axes. */
 export interface Domain {
@@ -42,7 +66,7 @@ export interface Scale {
   x: (i: number) => number;
   /** Value → y, clamped to the plot. */
   y: (v: number) => number;
-  /** Bottom of the value domain; strictly positive on a log axis. */
+  /** Bottom of the value domain; negative when the plan carries net debt. */
   min: number;
   /** Top of the value domain. */
   max: number;
@@ -67,12 +91,14 @@ export function makeScale(
   const baseline = geo.h - geo.bottom;
   const slot = span / Math.max(count, 1);
   const { min, max } = domain;
-  const logSpan = kind === "log" ? Math.log(max / min) : 0;
+  const unit = kind === "log" ? logUnit(domain) : 1;
+  const logFloor = kind === "log" ? symlog(min, unit) : 0;
+  const logSpan = kind === "log" ? symlog(max, unit) - logFloor : 0;
 
   const fraction = (v: number) =>
     kind === "log"
       ? logSpan > 0
-        ? Math.log(v / min) / logSpan
+        ? (symlog(v, unit) - logFloor) / logSpan
         : 0
       : max > min
         ? (v - min) / (max - min)
@@ -108,16 +134,21 @@ export function linearDomain(...series: number[][]): Domain {
 }
 
 /**
- * A log axis has no zero to stand on. The floor is the decade at or below
- * the smallest positive value; small outcomes must not be clipped for aesthetics.
- * Callers must use a linear axis if any plotted value is zero or negative.
+ * The stretch of the symmetric log axis the plan occupies. An all-positive plan
+ * keeps the one-sided behaviour: the floor is the decade at or below the
+ * smallest outcome, so small outcomes are never clipped for aesthetics. A plan
+ * that reaches zero or runs into debt keeps its sign — zero is a position on
+ * this axis, so both extremes simply take headroom and the axis crosses
+ * between them.
  */
 export function logDomain(...series: number[][]): Domain {
-  const top = peak(series);
-  if (!(top > 0)) return { min: 1, max: 10 };
-  const smallest = smallestPositive(series);
-  const floor = smallest > 0 ? decadeBelow(smallest) : decadeBelow(top / 100);
-  return { min: floor, max: top * 1.05 };
+  const values = series.flatMap((s) => s.filter(Number.isFinite));
+  if (!values.length) return { min: 0, max: 1 };
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  if (lo > 0) return { min: decadeBelow(lo), max: hi * 1.05 };
+  if (hi < 0) return { min: lo * 1.05, max: -decadeBelow(-hi) };
+  return lo === 0 && hi === 0 ? { min: 0, max: 1 } : { min: lo * 1.05, max: hi * 1.05 };
 }
 
 /** The domain a kind of axis wants over the same numbers. */
@@ -131,11 +162,6 @@ function decadeBelow(v: number): number {
 
 function peak(series: number[][]): number {
   return Math.max(0, ...series.flatMap((s) => s.filter(Number.isFinite)));
-}
-
-function smallestPositive(series: number[][]): number {
-  const positives = series.flatMap((s) => s.filter((v) => v > 0));
-  return positives.length ? Math.min(...positives) : 0;
 }
 
 /** Polyline through every point of `values`. */
@@ -198,9 +224,20 @@ function niceStep(raw: number): number {
   return nice * decade;
 }
 
-/** Tick mantissas, finest first — the coarsest that fits is the one drawn. */
-const LOG_MANTISSAS = [[1, 1.5, 2, 3, 5, 7], [1, 2, 5], [1]];
-const MAX_LOG_TICKS = 7;
+/**
+ * Tick steps, finest first — the coarsest that fits is the one drawn. A domain
+ * that crosses zero spends its decades twice, once per sign, so the steps carry
+ * on past the mantissas into strides of whole decades.
+ */
+const LOG_TICK_STEPS: Array<{ mantissas: number[]; stride: number }> = [
+  { mantissas: [1, 1.5, 2, 3, 5, 7], stride: 1 },
+  { mantissas: [1, 2, 5], stride: 1 },
+  { mantissas: [1], stride: 1 },
+  { mantissas: [1], stride: 2 },
+  { mantissas: [1], stride: 3 },
+];
+// Two signs and a zero need more gridlines than a one-sided axis to stay round.
+const MAX_LOG_TICKS = 8;
 
 /**
  * Round numbers inside a log domain. A plan spanning several decades wants only
@@ -208,23 +245,42 @@ const MAX_LOG_TICKS = 7;
  * with a single gridline — so the finest set that still fits the frame wins.
  */
 function logTicks(scale: Scale): Array<{ value: number; y: number }> {
-  const first = Math.floor(Math.log10(scale.min) + 1e-9);
-  const last = Math.floor(Math.log10(scale.max) + 1e-9);
+  // Zero is a gridline of its own on this axis, and the decades run outwards
+  // from it in whichever directions the plan actually goes.
+  const zero = scale.min <= 0 && scale.max >= 0 ? [0] : [];
 
   let ticks: number[] = [];
-  for (const mantissas of LOG_MANTISSAS) {
-    ticks = [];
-    for (let e = first; e <= last; e += 1) {
-      for (const m of mantissas) {
-        const value = m * Math.pow(10, e);
-        if (value >= scale.min * (1 - 1e-9) && value <= scale.max) ticks.push(value);
-      }
-    }
+  for (const step of LOG_TICK_STEPS) {
+    ticks = [...zero, ...decadeTicks(scale, step.mantissas, step.stride)].sort((a, b) => a - b);
     if (ticks.length <= MAX_LOG_TICKS) break;
   }
 
   if (!ticks.length) ticks = [scale.min];
   return ticks.map((value) => ({ value, y: scale.y(value) }));
+}
+
+/** Every ±mantissa×10ⁿ inside the domain, exponents taken `stride` at a time. */
+function decadeTicks(scale: Scale, mantissas: number[], stride: number): number[] {
+  const reach = Math.max(Math.abs(scale.min), Math.abs(scale.max));
+  if (!(reach > 0)) return [];
+  // Relative slack: a domain floor is an exact decade, and a domain spanning
+  // ten of them must not let an absolute epsilon swallow the smallest of them.
+  const inside = (v: number) =>
+    v >= scale.min - Math.abs(scale.min) * 1e-9 && v <= scale.max + Math.abs(scale.max) * 1e-9;
+
+  // A one-sided domain starts at its own floor; one that crosses zero starts at
+  // the unit, below which the axis is linear and its gridlines pile up on zero.
+  const floor = scale.min > 0 ? scale.min : scale.max < 0 ? -scale.max : logUnit(scale);
+  const first = Math.floor(Math.log10(floor) + 1e-9);
+  const values: number[] = [];
+  for (let e = first; e <= Math.floor(Math.log10(reach) + 1e-9); e += stride) {
+    for (const m of mantissas) {
+      const magnitude = m * Math.pow(10, e);
+      if (inside(magnitude)) values.push(magnitude);
+      if (inside(-magnitude)) values.push(-magnitude);
+    }
+  }
+  return values;
 }
 
 /** Index ticks every `every` years, e.g. 2030, 2035, … */

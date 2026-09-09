@@ -56,7 +56,7 @@ export function NetWorthChart({
   );
 
   const scale = useMemo(() => {
-    const { kind } = resolveScaleKind(scaleKind, view, plotted);
+    const { kind } = resolveScaleKind(scaleKind, view);
     return makeScale(bands.years.length, domainFor(kind, plotted), {
       mode: view === "bar" ? "band" : "point",
       kind,

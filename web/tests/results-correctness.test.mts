@@ -78,18 +78,42 @@ test("sign-changing accounts, multiple debts and missing points reconcile", () =
   }
 });
 
-test("log cannot hide zero/debt or distort account composition", () => {
+test("log is symmetric about zero and never distorts account composition", () => {
+  // Zero, debt and unavailable values all plot on a symmetric log axis.
   for (const values of [[0, 100], [-10, 100], [NaN, 100]]) {
-    const resolved = resolveScaleKind("log", "fan", [values]);
-    assert.equal(resolved.kind, "linear");
-    assert.ok(resolved.reason);
+    const resolved = resolveScaleKind("log", "fan");
+    assert.equal(resolved.kind, "log");
+    assert.equal(resolved.reason, undefined);
+    assert.doesNotMatch(linePath(values, makeScale(2, logDomain(values), { kind: "log" })), /NaN|Infinity/);
   }
   for (const view of ["stack", "bar"] as const) {
-    assert.equal(resolveScaleKind("log", view, [[100, 200]]).kind, "linear");
+    assert.equal(resolveScaleKind("log", view).kind, "linear");
+    assert.ok(resolveScaleKind("log", view).reason);
   }
-  assert.equal(resolveScaleKind("log", "fan", [[10, 100]]).kind, "log");
   // A tiny positive outcome is still inside the domain, not clipped to a prettier floor.
-  const domain = logDomain([0.01, 100_000_000]);
-  assert.ok(domain.min <= 0.01);
-  assert.ok(domain.max >= 100_000_000);
+  const positive = logDomain([0.01, 100_000_000]);
+  assert.ok(positive.min <= 0.01);
+  assert.ok(positive.max >= 100_000_000);
+
+  // Debt runs below zero on the log axis, in order, with labelled gridlines.
+  const domain = logDomain([-52_000, 0, 2_000_000]);
+  assert.ok(domain.min <= -52_000);
+  assert.ok(domain.max >= 2_000_000);
+  const scale = makeScale(3, domain, { kind: "log" });
+  assert.ok(scale.y(-52_000) > scale.y(-1_000));
+  assert.ok(scale.y(-1_000) > scale.y(0));
+  assert.ok(scale.y(0) > scale.y(1_000));
+  assert.ok(scale.y(1_000) > scale.y(2_000_000));
+  assert.ok(scale.y(-52_000) <= scale.baseline);
+  const ticks = valueTicks(scale);
+  assert.ok(ticks.length <= 7);
+  assert.ok(ticks.some((t) => t.value < 0));
+  assert.ok(ticks.some((t) => t.value === 0));
+  assert.ok(ticks.some((t) => t.value > 0));
+  assert.deepEqual(ticks.map((t) => t.value), [...ticks.map((t) => t.value)].sort((a, b) => a - b));
+
+  // An all-positive plan still reads as a one-sided log axis: no wasted frame.
+  const grow = makeScale(2, logDomain([100_000, 5_000_000]), { kind: "log" });
+  assert.equal(grow.y(100_000), grow.baseline);
+  assert.ok(valueTicks(grow).every((t) => t.value > 0));
 });
