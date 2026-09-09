@@ -6,19 +6,13 @@ import {
   Button,
   CurrencyInput,
   DateInput,
+  Dropdown,
+  type DropdownOption,
   Field,
   NumberInput,
-  Select,
   Tag,
 } from "@/components/ui";
-import type {
-  Account,
-  Asset,
-  Comparison,
-  Event as ApiEvent,
-  Interval,
-  OffsetUnit,
-} from "@/lib/api/types";
+import type { Account, Asset, Event as ApiEvent } from "@/lib/api/types";
 import { addYears } from "@/lib/view/format";
 import { detailTrigger, namesOf } from "@/lib/view/events";
 import { eventRefs } from "@/lib/view/refs";
@@ -48,6 +42,34 @@ export interface TriggerContext {
   birthDate?: string;
   /** The event being edited, so it cannot anchor or be listed against itself. */
   selfId?: number;
+}
+
+/**
+ * The three menus that name a row of the plan.
+ *
+ * The secondary column carries what tells two similarly named rows apart — an
+ * account's flavour, an asset's description — which is the thing the native
+ * popup had no room for. Nothing stands in for "none": an id matching no row
+ * leaves the trigger on its placeholder, so an account deleted out from under a
+ * condition reads as unset rather than as a stale name.
+ */
+export function accountOptions(accounts: Account[]): DropdownOption<number>[] {
+  return accounts.map((a) => ({ value: a.id, label: a.name, detail: a.flavor }));
+}
+
+export function assetOptions(assets: Asset[]): DropdownOption<number>[] {
+  return assets.map((a) => ({
+    value: a.id,
+    label: a.name,
+    detail: a.description ?? undefined,
+  }));
+}
+
+/** Every event but the one being edited — nothing anchors to itself. */
+export function eventOptions(events: ApiEvent[], selfId?: number): DropdownOption<number>[] {
+  return events
+    .filter((e) => e.id !== selfId)
+    .map((e) => ({ value: e.id, label: e.name }));
 }
 
 /** A row of controls that wraps rather than squeezing — conditions run 1–4 wide. */
@@ -99,25 +121,34 @@ export function TriggerFormSelect({
   onChange: (next: TriggerDraft) => void;
   disabled?: boolean;
 }) {
+  const options: DropdownOption<string>[] = trigger.raw
+    ? [{ value: AS_SAVED, label: "As saved — advanced" }, ...TRIGGER_OPTIONS]
+    : TRIGGER_OPTIONS;
+
   return (
-    <Select
+    <Dropdown
+      className="dd-field"
+      options={options}
       value={trigger.raw ? AS_SAVED : trigger.form}
-      aria-label="Trigger"
+      ariaLabel="Trigger"
       disabled={disabled}
-      onChange={(e) => {
-        const picked = e.target.value;
+      maxMenuHeight={320}
+      onChange={(picked) => {
         if (picked !== AS_SAVED) onChange(withForm(trigger, picked as TriggerForm));
       }}
-    >
-      {trigger.raw && <option value={AS_SAVED}>As saved — advanced</option>}
-      {TRIGGER_FORMS.map((f) => (
-        <option key={f} value={f}>
-          {f}
-        </option>
-      ))}
-    </Select>
+    />
   );
 }
+
+/**
+ * The ten shapes under their family's band — the grouping the tag beside the
+ * field names, which the flat native list could only imply by its order.
+ */
+const TRIGGER_OPTIONS: DropdownOption<string>[] = TRIGGER_FORMS.map((f) => ({
+  value: f,
+  label: f,
+  group: FAMILY[f].label,
+}));
 
 /** What shape the trigger is, in one word, beside its name. */
 export function TriggerFamily({ trigger }: { trigger: TriggerDraft }) {
@@ -273,21 +304,19 @@ export function ScheduleFields({
     <>
       <Row>
         <Field label="Every">
-          <Select
-            value={trigger.interval}
-            aria-label="Every"
-            disabled={disabled}
-            onChange={(e) => onChange({ ...trigger, interval: e.target.value as Interval })}
-          >
-            {/* `Never` is a legal saved interval the picker does not offer;
-                without it the field would sit blank on an event that has one. */}
-            {(INTERVALS.includes(trigger.interval)
+          <Dropdown
+            className="dd-field"
+            /* `Never` is a legal saved interval the picker does not offer;
+               without it the field would sit blank on an event that has one. */
+            options={(INTERVALS.includes(trigger.interval)
               ? INTERVALS
               : [trigger.interval, ...INTERVALS]
-            ).map((i) => (
-              <option key={i}>{i}</option>
-            ))}
-          </Select>
+            ).map((i) => ({ value: i, label: i }))}
+            value={trigger.interval}
+            ariaLabel="Every"
+            disabled={disabled}
+            onChange={(interval) => onChange({ ...trigger, interval })}
+          />
         </Field>
         <Field label="At most">
           <NumberInput
@@ -370,20 +399,20 @@ function FormSelect({
   ariaLabel?: string;
   disabled?: boolean;
 }) {
+  const options: DropdownOption<ConditionForm | "none">[] = [
+    ...(fallback ? [{ value: "none" as const, label: fallback }] : []),
+    ...CONDITION_FORMS.map((f) => ({ value: f, label: f })),
+  ];
+
   return (
-    <Select
+    <Dropdown
+      className="dd-field"
+      options={options}
       value={value}
-      aria-label={ariaLabel}
+      ariaLabel={ariaLabel}
       disabled={disabled}
-      onChange={(e) => onChange(e.target.value as ConditionForm | "none")}
-    >
-      {fallback && <option value="none">{fallback}</option>}
-      {CONDITION_FORMS.map((f) => (
-        <option key={f} value={f}>
-          {f}
-        </option>
-      ))}
-    </Select>
+      onChange={onChange}
+    />
   );
 }
 
@@ -457,18 +486,14 @@ function ConditionFields({
   const threshold = (
     <>
       <Field label="Threshold">
-        <Select
+        <Dropdown
+          className="dd-field"
+          options={COMPARISONS}
           value={condition.comparison}
-          aria-label="Threshold direction"
+          ariaLabel="Threshold direction"
           disabled={disabled}
-          onChange={(e) => patch({ comparison: e.target.value as Comparison })}
-        >
-          {COMPARISONS.map((c) => (
-            <option key={c.value} value={c.value}>
-              {c.label}
-            </option>
-          ))}
-        </Select>
+          onChange={(comparison) => patch({ comparison })}
+        />
       </Field>
       <Field label="Amount">
         <CurrencyInput
@@ -495,19 +520,16 @@ function ConditionFields({
 
   const account = (
     <Field label="Account">
-      <Select
+      <Dropdown
+        className="dd-field"
+        options={accountOptions(accounts)}
         value={condition.accountId}
-        aria-label="Account"
+        placeholder={accounts.length === 0 ? "— no accounts —" : "— pick an account —"}
+        ariaLabel="Account"
         disabled={disabled}
-        onChange={(e) => patch({ accountId: Number(e.target.value) })}
-      >
-        {accounts.length === 0 && <option value={0}>— no accounts —</option>}
-        {accounts.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </Select>
+        maxMenuHeight={300}
+        onChange={(accountId) => patch({ accountId })}
+      />
     </Field>
   );
 
@@ -581,21 +603,16 @@ function ConditionFields({
         <>
           <Row>
             <Field label="Anchor event">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={eventOptions(events, context.selfId)}
                 value={condition.eventId}
-                aria-label="Anchor event"
+                placeholder="— pick an event —"
+                ariaLabel="Anchor event"
                 disabled={disabled}
-                onChange={(e) => patch({ eventId: Number(e.target.value) })}
-              >
-                <option value={0}>— pick an event —</option>
-                {events
-                  .filter((e) => e.id !== context.selfId)
-                  .map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {e.name}
-                    </option>
-                  ))}
-              </Select>
+                maxMenuHeight={300}
+                onChange={(eventId) => patch({ eventId })}
+              />
             </Field>
             <Field label="Offset">
               <NumberInput
@@ -608,16 +625,14 @@ function ConditionFields({
               />
             </Field>
             <Field label="Unit">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={OFFSET_UNITS.map((u) => ({ value: u, label: u }))}
                 value={condition.unit}
-                aria-label="Offset unit"
+                ariaLabel="Offset unit"
                 disabled={disabled}
-                onChange={(e) => patch({ unit: e.target.value as OffsetUnit })}
-              >
-                {OFFSET_UNITS.map((u) => (
-                  <option key={u}>{u}</option>
-                ))}
-              </Select>
+                onChange={(unit) => patch({ unit })}
+              />
             </Field>
           </Row>
           <Note>
@@ -643,19 +658,16 @@ function ConditionFields({
           <Row>
             {account}
             <Field label="Asset">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={assetOptions(assets)}
                 value={condition.assetId}
-                aria-label="Asset"
+                placeholder={assets.length === 0 ? "— no assets —" : "— pick an asset —"}
+                ariaLabel="Asset"
                 disabled={disabled}
-                onChange={(e) => patch({ assetId: Number(e.target.value) })}
-              >
-                {assets.length === 0 && <option value={0}>— no assets —</option>}
-                {assets.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-              </Select>
+                maxMenuHeight={300}
+                onChange={(assetId) => patch({ assetId })}
+              />
             </Field>
             {threshold}
           </Row>

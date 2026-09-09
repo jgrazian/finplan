@@ -8,17 +8,23 @@ import {
   CurrencyInput,
   DragHandle,
   DropLine,
+  Dropdown,
+  type DropdownOption,
   Field,
   NumberInput,
   SectionHeading,
-  Select,
   Tag,
 } from "@/components/ui";
-import type { AmountMode, LotMethod } from "@/lib/api/types";
 import { useReorder } from "@/lib/hooks/useReorder";
 import { describeEffect, namesOf } from "@/lib/view/events";
 import { AmountExpression } from "./AmountFields";
-import { Note, type TriggerContext } from "./TriggerFields";
+import {
+  Note,
+  type TriggerContext,
+  accountOptions,
+  assetOptions,
+  eventOptions,
+} from "./TriggerFields";
 import {
   AMOUNT_MODES,
   EFFECT_FORMS,
@@ -39,6 +45,27 @@ import {
 } from "./effectDraft";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
+
+/** Every kind, with what it is for beside it — the tag, in the menu. */
+const EFFECT_KIND_OPTIONS: DropdownOption<EffectForm>[] = EFFECT_FORMS.map((f) => ({
+  value: f,
+  label: f,
+  detail: FAMILY[f].label,
+}));
+
+/** `TriggerEvent` reads as "Trigger" here — the noun is the field beside it. */
+const VERB_OPTIONS: DropdownOption<Verb>[] = VERBS.map((v) => ({
+  value: v,
+  label: v.replace("Event", ""),
+}));
+
+const INCOME_TYPES: DropdownOption<string>[] = [
+  { value: "Taxable", label: "Taxable" },
+  { value: "TaxFree", label: "Tax-free" },
+];
+
+/** The sentinel row standing for "no particular holding" in the asset menu. */
+const ANY_ASSET = "any";
 
 /** A row of controls that wraps rather than squeezing — terms run 1–4 wide. */
 function Row({ children }: { children: ReactNode }) {
@@ -286,19 +313,16 @@ export function EffectTerms({
     label: string,
   ) => (
     <Field label={label}>
-      <Select
+      <Dropdown
+        className="dd-field"
+        options={accountOptions(accounts)}
         value={value}
-        aria-label={label}
+        placeholder={accounts.length === 0 ? "— no accounts —" : "— pick an account —"}
+        ariaLabel={label}
         disabled={disabled}
-        onChange={(e) => onChange({ [key]: Number(e.target.value) })}
-      >
-        {accounts.length === 0 && <option value={0}>— no accounts —</option>}
-        {accounts.map((a) => (
-          <option key={a.id} value={a.id}>
-            {a.name}
-          </option>
-        ))}
-      </Select>
+        maxMenuHeight={300}
+        onChange={(id) => onChange({ [key]: id })}
+      />
     </Field>
   );
 
@@ -322,18 +346,14 @@ export function EffectTerms({
    */
   const amountModeField = (
     <Field label="Amount is">
-      <Select
+      <Dropdown
+        className="dd-field"
+        options={AMOUNT_MODES}
         value={effect.amountMode}
-        aria-label="Amount is"
+        ariaLabel="Amount is"
         disabled={disabled}
-        onChange={(e) => onChange({ amountMode: e.target.value as AmountMode })}
-      >
-        {AMOUNT_MODES.map((m) => (
-          <option key={m.value} value={m.value}>
-            {m.label}
-          </option>
-        ))}
-      </Select>
+        onChange={(amountMode) => onChange({ amountMode })}
+      />
     </Field>
   );
 
@@ -341,16 +361,18 @@ export function EffectTerms({
     <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
       <Row>
         <Field label="Effect">
-          <Select
+          <Dropdown
+            className="dd-field"
+            // The family in the detail column rather than as a band: the list is
+            // ordered by what an effect *does*, so its four families do not fall
+            // into consecutive runs and grouping would split two of them in half.
+            options={EFFECT_KIND_OPTIONS}
             value={effect.form}
-            aria-label="Effect"
+            ariaLabel="Effect"
             disabled={disabled}
-            onChange={(e) => onChange({ form: e.target.value as EffectForm })}
-          >
-            {EFFECT_FORMS.map((f) => (
-              <option key={f}>{f}</option>
-            ))}
-          </Select>
+            maxMenuHeight={320}
+            onChange={(form) => onChange({ form })}
+          />
         </Field>
         <div style={{ alignSelf: "end", paddingBottom: 8 }}>
           <Tag tone={family.tone}>{family.label}</Tag>
@@ -364,18 +386,14 @@ export function EffectTerms({
         {fields.strategy &&
           (effect.rawSources ? null : (
             <Field label="Source order">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={STRATEGIES.map((s) => ({ value: s, label: s }))}
                 value={effect.strategy}
-                aria-label="Source order"
+                ariaLabel="Source order"
                 disabled={disabled}
-                onChange={(e) =>
-                  onChange({ strategy: e.target.value as EffectDraft["strategy"] })
-                }
-              >
-                {STRATEGIES.map((s) => (
-                  <option key={s}>{s}</option>
-                ))}
-              </Select>
+                onChange={(strategy) => onChange({ strategy })}
+              />
             </Field>
           ))}
         {fields.from && accountSelect(effect.fromAccountId, "fromAccountId", "From account")}
@@ -383,26 +401,25 @@ export function EffectTerms({
         {fields.account && accountSelect(effect.toAccountId, "toAccountId", "Account")}
         {fields.asset && (
           <Field label="Asset">
-            <Select
-              value={effect.anyAsset ? "any" : effect.assetId}
-              aria-label="Asset"
+            <Dropdown<string | number>
+              className="dd-field"
+              options={[
+                ...(fields.anyAsset ? [{ value: ANY_ASSET, label: "— any holding —" }] : []),
+                ...assetOptions(assets),
+              ]}
+              value={effect.anyAsset ? ANY_ASSET : effect.assetId}
+              placeholder={assets.length === 0 ? "— no assets —" : "— pick an asset —"}
+              ariaLabel="Asset"
               disabled={disabled}
-              onChange={(e) =>
+              maxMenuHeight={300}
+              onChange={(picked) =>
                 onChange(
-                  e.target.value === "any"
+                  picked === ANY_ASSET
                     ? { anyAsset: true }
-                    : { anyAsset: false, assetId: Number(e.target.value) },
+                    : { anyAsset: false, assetId: Number(picked) },
                 )
               }
-            >
-              {fields.anyAsset && <option value="any">— any holding —</option>}
-              {assets.length === 0 && <option value={0}>— no assets —</option>}
-              {assets.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </Select>
+            />
           </Field>
         )}
         {fields.units && (
@@ -488,29 +505,26 @@ export function EffectTerms({
         <Row>
           {fields.lots && (
             <Field label="Sell lots">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={LOT_METHODS.map((m) => ({ value: m, label: m }))}
                 value={effect.lotMethod}
-                aria-label="Sell lots"
+                ariaLabel="Sell lots"
                 disabled={disabled}
-                onChange={(e) => onChange({ lotMethod: e.target.value as LotMethod })}
-              >
-                {LOT_METHODS.map((m) => (
-                  <option key={m}>{m}</option>
-                ))}
-              </Select>
+                onChange={(lotMethod) => onChange({ lotMethod })}
+              />
             </Field>
           )}
           {fields.taxable && (
             <Field label="Income type">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={INCOME_TYPES}
                 value={effect.taxFree ? "TaxFree" : "Taxable"}
-                aria-label="Income type"
+                ariaLabel="Income type"
                 disabled={disabled}
-                onChange={(e) => onChange({ taxFree: e.target.value === "TaxFree" })}
-              >
-                <option value="Taxable">Taxable</option>
-                <option value="TaxFree">Tax-free</option>
-              </Select>
+                onChange={(picked) => onChange({ taxFree: picked === "TaxFree" })}
+              />
             </Field>
           )}
         </Row>
@@ -521,35 +535,26 @@ export function EffectTerms({
         <>
           <Row>
             <Field label="Verb">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={VERB_OPTIONS}
                 value={effect.verb}
-                aria-label="Verb"
+                ariaLabel="Verb"
                 disabled={disabled}
-                onChange={(e) => onChange({ verb: e.target.value as Verb })}
-              >
-                {VERBS.map((v) => (
-                  <option key={v} value={v}>
-                    {v.replace("Event", "")}
-                  </option>
-                ))}
-              </Select>
+                onChange={(verb) => onChange({ verb })}
+              />
             </Field>
             <Field label="Event">
-              <Select
+              <Dropdown
+                className="dd-field"
+                options={eventOptions(events, context.selfId)}
                 value={effect.targetEventId}
-                aria-label="Target event"
+                placeholder="— pick an event —"
+                ariaLabel="Target event"
                 disabled={disabled}
-                onChange={(e) => onChange({ targetEventId: Number(e.target.value) })}
-              >
-                <option value={0}>— pick an event —</option>
-                {events
-                  .filter((e) => e.id !== context.selfId)
-                  .map((e) => (
-                    <option key={e.id} value={e.id}>
-                      {e.name}
-                    </option>
-                  ))}
-              </Select>
+                maxMenuHeight={300}
+                onChange={(targetEventId) => onChange({ targetEventId })}
+              />
             </Field>
           </Row>
           <Note>
