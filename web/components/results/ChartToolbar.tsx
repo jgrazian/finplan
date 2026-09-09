@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, SegmentedControl } from "@/components/ui";
+import { SegmentedControl } from "@/components/ui";
 import type { ScaleKind } from "@/components/charts";
 import type { ChartView } from "./types";
 import type { Percentile } from "@/lib/types";
@@ -16,7 +16,15 @@ const SCALE_OPTIONS = [
   { value: "log" as const, label: "Log" },
 ];
 
-/** Title, subtitle, view and axis switches, and the `v` percentile cycle. */
+/* Ranked low to high, the way the envelope is drawn, rather than in the order
+   the old cycle button happened to visit them. */
+const PATH_OPTIONS = [
+  { value: "p5" as const, label: "P5" },
+  { value: "p50" as const, label: "P50" },
+  { value: "p95" as const, label: "P95" },
+];
+
+/** Title, subtitle, view and axis switches, and the selected-path picker. */
 export function ChartToolbar({
   title,
   subtitle,
@@ -26,7 +34,7 @@ export function ChartToolbar({
   onScaleKindChange,
   logDisabledReason,
   percentile,
-  onCyclePercentile,
+  onPercentileChange,
 }: {
   title: string;
   subtitle: string;
@@ -36,7 +44,7 @@ export function ChartToolbar({
   logDisabledReason?: string;
   onScaleKindChange: (kind: ScaleKind) => void;
   percentile: Percentile;
-  onCyclePercentile: () => void;
+  onPercentileChange: (percentile: Percentile) => void;
 }) {
   return (
     <div
@@ -85,9 +93,12 @@ export function ChartToolbar({
           value={scaleKind}
           onChange={onScaleKindChange}
         />
-        <Button shortcut="v" onClick={onCyclePercentile}>
-          Select {percentile.toUpperCase()} path
-        </Button>
+        <SegmentedControl
+          ariaLabel="Selected path"
+          options={PATH_OPTIONS}
+          value={percentile}
+          onChange={onPercentileChange}
+        />
       </div>
     </div>
   );

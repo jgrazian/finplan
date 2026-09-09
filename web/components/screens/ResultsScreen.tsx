@@ -21,12 +21,6 @@ import type { Run } from "@/lib/api/types";
 import { accountBreakdown } from "@/lib/view/results";
 import { EmptyState } from "./EmptyState";
 
-const NEXT_PERCENTILE: Record<Percentile, Percentile> = {
-  p50: "p95",
-  p95: "p5",
-  p5: "p50",
-};
-
 function chartCopy(
   view: ChartView,
   pathLabel: string,
@@ -157,7 +151,7 @@ export function ResultsScreen({
             logDisabledReason={chartScale.reason}
             onScaleKindChange={setScaleKind}
             percentile={percentile}
-            onCyclePercentile={() => onPercentileChange(NEXT_PERCENTILE[percentile])}
+            onPercentileChange={onPercentileChange}
           />
 
           {chartScale.reason && (

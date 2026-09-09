@@ -198,7 +198,7 @@ export function ColumnPicker<K extends string>({
   );
 
   return (
-    <div ref={root} className="dd" style={{ width: 170 }} data-open={open ? "true" : undefined}>
+    <div ref={root} className="dd dd-wide" style={{ width: 170 }} data-open={open ? "true" : undefined}>
       <button
         type="button"
         className="dd-trigger"

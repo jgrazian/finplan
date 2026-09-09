@@ -189,41 +189,64 @@ export function CashFlowLedger({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          gap: 16,
           marginBottom: 10,
           flexWrap: "wrap",
         }}
       >
-        <h6 style={{ margin: 0 }}>Cash flow — {pathLabel}</h6>
-        <span style={{ fontSize: 11, color: MUTED }}>
-          {rows.length} years · {dollarLabel} ·{" "}
-          {hasLedger
-            ? "expand a year to read the effects that produced its numbers"
-            : "this scenario is not collecting a ledger, so there is nothing to expand"}
-        </span>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 10,
+            flexWrap: "wrap",
+            minWidth: 0,
+            flex: "1 1 340px",
+          }}
+        >
+          <h6 style={{ margin: 0 }}>Cash flow — {pathLabel}</h6>
+          <span style={{ fontSize: 11, color: MUTED }}>
+            {rows.length} years · {dollarLabel} ·{" "}
+            {hasLedger
+              ? "expand a year to read the effects that produced its numbers"
+              : "this scenario is not collecting a ledger, so there is nothing to expand"}
+          </span>
+        </div>
 
-        {hasLedger && (
-          <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
-            {FILTERS.map((f) => (
-              <button
-                key={f.value}
-                type="button"
-                className="sbtn"
-                aria-pressed={filter === f.value}
-                onClick={() => setFilter(f.value)}
-                style={
-                  filter === f.value
-                    ? { background: "var(--color-accent)", color: "var(--color-bg)" }
-                    : { color: MUTED }
-                }
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        )}
+        {/* The two controls travel together, pinned to the right edge: they
+            wrap onto a line of their own rather than leaving the picker
+            stranded under the title. */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "flex-end",
+            gap: 8,
+            marginLeft: "auto",
+            flexWrap: "wrap",
+          }}
+        >
+          {hasLedger && (
+            <div style={{ display: "flex", gap: 4 }}>
+              {FILTERS.map((f) => (
+                <button
+                  key={f.value}
+                  type="button"
+                  className="sbtn"
+                  aria-pressed={filter === f.value}
+                  onClick={() => setFilter(f.value)}
+                  style={
+                    filter === f.value
+                      ? { background: "var(--color-accent)", color: "var(--color-bg)" }
+                      : { color: MUTED }
+                  }
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          )}
 
-        <div style={{ marginLeft: hasLedger ? 0 : "auto" }}>
           <ColumnPicker options={COLUMNS} visible={visible} onChange={setVisible} />
         </div>
       </div>

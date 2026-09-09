@@ -888,6 +888,27 @@ tr:hover > * > .grip,
   transform: rotate(225deg) translate(-2px, -2px);
 }
 
+/* A menu that names things the trigger has no room for — a column and what it
+   holds — sizes to its rows instead of to the trigger, and hangs from its
+   right edge so the extra width grows back into the panel rather than off it. */
+.dd-wide .dd-menu {
+  left: auto;
+  right: 0;
+  width: max-content;
+  min-width: 100%;
+  max-width: 340px;
+  /* The narrow menu borrows the trigger's bottom border as its top edge; this
+     one overhangs it, so it draws its own and sits that line on top of the
+     trigger's rather than leaving the overhang open or doubling the rule. */
+  border-top: 1px solid var(--color-accent);
+  margin-top: -1px;
+}
+
+.dd-wide .dd-opt .dd-label {
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .dd-menu {
   position: absolute;
   left: 0;
