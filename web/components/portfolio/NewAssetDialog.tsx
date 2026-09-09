@@ -1,14 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { CurrencyInput, Dialog, DialogRow, Field, Input, Select } from "@/components/ui";
+import { CurrencyInput, Dialog, DialogRow, Dropdown, Field, Input } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Profile } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { tickerDefaults } from "@/lib/tickers";
-
-/** The `<option>` standing in for "no profile"; `null` is not a value. */
-const UNMAPPED = -1;
+import { UNMAPPED, profileOptions } from "./profilePicker";
 
 /**
  * Creates an asset: a price series an investment account can hold lots of, or
@@ -92,20 +90,14 @@ export function NewAssetDialog({
         />
       </Field>
       <Field label="Return profile">
-        <Select
+        <Dropdown
+          className="dd-field"
+          options={profileOptions(profiles)}
           value={effectiveProfile ?? UNMAPPED}
-          onChange={(e) => {
-            const id = Number(e.target.value);
-            setProfileId(id === UNMAPPED ? null : id);
-          }}
-        >
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-          <option value={UNMAPPED}>Unmapped — held flat at 0%</option>
-        </Select>
+          maxMenuHeight={300}
+          ariaLabel="Return profile"
+          onChange={(id) => setProfileId(id === UNMAPPED ? null : id)}
+        />
       </Field>
       {known && (
         <p

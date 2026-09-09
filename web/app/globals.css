@@ -1035,6 +1035,15 @@ tr:hover > * > .grip,
   letter-spacing: .02em;
 }
 
+/* A dropdown in a selection bar, standing among .sbtn buttons rather than
+   among inputs, so it takes the bar's type rather than a field's. Worn over
+   `inline`, which is what gives it the compact box and lets the trigger shrink
+   to "Set profile…" while the menu still grows wide enough to read a profile
+   name out of. */
+.dd-bar .dd-trigger {
+  font-size: 12px;
+}
+
 /* Field state — an edit that has not been applied yet. The accent marks the
    input and its label together, so a field changed off screen in a scrolled
    drawer is still counted by the "n unsaved" line at the foot. */

@@ -18,3 +18,4 @@ export { ReferencedBy } from "./ReferencedBy";
 export { KINDS, KIND_LABEL, kindOf } from "./accountKind";
 export type { AccountKind } from "./accountKind";
 export { contributionLimitLabel, taxBadge } from "./taxStatus";
+export { UNMAPPED, profileOptions } from "./profilePicker";

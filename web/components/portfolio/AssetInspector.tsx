@@ -7,10 +7,10 @@ import {
   Button,
   CompactInput,
   CurrencyInput,
+  Dropdown,
   Field,
   Hr,
   SectionHeading,
-  Select,
   StatLabel,
   Table,
   Tag,
@@ -21,6 +21,7 @@ import { fmtCurrency, fmtUnits } from "@/lib/format";
 import { tickerDefaults } from "@/lib/tickers";
 import type { ReturnProfile } from "@/lib/types";
 import type { AssetRow } from "@/lib/view/assets";
+import { UNMAPPED, profileOptions } from "./profilePicker";
 
 /** The fields a PATCH can carry; `profileServerId` is what a remap changes. */
 export interface AssetDraft {
@@ -30,9 +31,6 @@ export interface AssetDraft {
   /** Null leaves the asset unmapped, which the engine holds flat at 0%. */
   profileServerId: number | null;
 }
-
-/** The `<option>` value standing in for "no profile"; `null` is not a value. */
-const UNMAPPED = -1;
 
 /** An unmapped asset is held flat, which is what a None profile draws. */
 const HELD_FLAT: DistributionSpec = { kind: "None" };
@@ -183,22 +181,15 @@ export function AssetInspector({
       )}
 
       <Field label="Return profile">
-        <Select
-          style={{ minHeight: 32 }}
+        <Dropdown
+          className="dd-field"
+          options={profileOptions(profiles)}
           value={draft.profileServerId ?? UNMAPPED}
           disabled={offline}
-          onChange={(e) => {
-            const id = Number(e.target.value);
-            set("profileServerId", id === UNMAPPED ? null : id);
-          }}
-        >
-          <option value={UNMAPPED}>Unmapped — held flat at 0%</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
+          maxMenuHeight={300}
+          ariaLabel="Return profile"
+          onChange={(id) => set("profileServerId", id === UNMAPPED ? null : id)}
+        />
       </Field>
 
       <Blueprint style={{ padding: "9px 11px" }}>

@@ -7,7 +7,9 @@ import {
   AssetMixCard,
   AssetsTable,
   NewAssetDialog,
+  UNMAPPED,
   type AssetDraft,
+  profileOptions,
 } from "@/components/portfolio";
 import {
   InflationProfilesTable,
@@ -15,7 +17,7 @@ import {
   ProfileInspector,
   ProfileLibraryTable,
 } from "@/components/profiles";
-import { Button, Select } from "@/components/ui";
+import { Button, Dropdown } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Profile, UpdateAsset, UpdateProfile } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
@@ -37,9 +39,6 @@ import {
 } from "@/lib/view/assets";
 import { withHistories } from "@/lib/view/profiles";
 import { EmptyState } from "./EmptyState";
-
-/** The `<option>` value standing in for "no profile"; `null` is not a value. */
-const UNMAPPED = -1;
 
 const NOTE = {
   fontSize: 12,
@@ -325,24 +324,19 @@ export function AssetsScreen({
                   {checked.size} asset{checked.size === 1 ? "" : "s"} selected
                 </span>
                 <div className="sact">
-                  <Select
-                    style={{ minHeight: 28, fontSize: 12 }}
-                    value=""
+                  {/* A command, not a field: it names no standing value, so it
+                      keeps its placeholder and the pick is the whole act. */}
+                  <Dropdown
+                    className="dd-bar"
+                    inline
+                    options={profileOptions(raw.returnProfiles)}
+                    value={null}
+                    placeholder={remapping.busy ? "Remapping…" : "Set profile…"}
                     disabled={remapping.busy || offline}
-                    aria-label="Set profile for the selected assets"
-                    onChange={(e) => {
-                      const id = Number(e.target.value);
-                      bulkRemap(id === UNMAPPED ? null : id);
-                    }}
-                  >
-                    <option value="">{remapping.busy ? "Remapping…" : "Set profile…"}</option>
-                    {raw.returnProfiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                    <option value={UNMAPPED}>Unmapped — held flat at 0%</option>
-                  </Select>
+                    maxMenuHeight={300}
+                    ariaLabel="Set profile for the selected assets"
+                    onChange={(id) => bulkRemap(id === UNMAPPED ? null : id)}
+                  />
                   <button type="button" className="sbtn" onClick={() => setChecked(new Set())}>
                     Clear
                   </button>
