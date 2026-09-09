@@ -86,7 +86,7 @@ export function toResultsData(
   const baseDate = real?.terminal.base_date ?? path?.dates[0] ?? scenario.start_date;
   const pathLabel = path == null ? "Path unavailable" : path.percentile == null
     ? "Synthetic nominal mean (not a path)"
-    : `P${Number((path.percentile * 100).toFixed(2))} nominal-terminal-ranked path`;
+    : `P${Number((path.percentile * 100).toFixed(2))} path`;
   return {
     runId: results.run_id,
     pathId: results.series_id,

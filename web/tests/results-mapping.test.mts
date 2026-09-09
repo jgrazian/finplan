@@ -47,7 +47,7 @@ test("pointwise envelope and real aggregates are never inferred from nominal-ran
   assert.deepEqual(data.stats.percentileValues, [[0.05, 55], [0.5, 100], [0.95, 145]]);
   assert.equal(data.baseDate, "2026-06-01");
   assert.equal(data.dollarLabel, "2026-06-01 dollars (annual inflation)");
-  assert.equal(data.pathLabel, "P50 nominal-terminal-ranked path");
+  assert.equal(data.pathLabel, "P50 path");
 });
 
 test("a loaded payload changes path identity, wealth, accounts, flows and ledger factors together, never the envelope", () => {
@@ -60,7 +60,7 @@ test("a loaded payload changes path identity, wealth, accounts, flows and ledger
   assert.deepEqual(after.bands, before.bands);
   assert.deepEqual(after.stats.percentileValues, before.stats.percentileValues);
   assert.equal(after.pathId, "0.1");
-  assert.equal(after.pathLabel, "P10 nominal-terminal-ranked path");
+  assert.equal(after.pathLabel, "P10 path");
   for (const data of [before, after]) {
     assert.equal(data.accountSeries[0].values[1], data.pathValues[1]);
     assert.equal(data.cashFlows[0].netWorth, data.pathValues[1]);

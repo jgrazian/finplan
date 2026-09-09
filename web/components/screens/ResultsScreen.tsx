@@ -141,14 +141,8 @@ export function ResultsScreen({
             successRate={stats.successRate}
             fundingSuccessRate={stats.fundingSuccessRate}
             iterations={stats.numIterations}
-            converged={stats.converged}
-            horizonLabel={results.horizonLabel}
           />
 
-          <p style={{ fontSize: 12 }}>
-            Representative paths are selected by terminal nominal net worth, not by real wealth
-            or their rank at earlier dates. The pointwise envelope has no single cash-flow ledger.
-          </p>
           {!results.hasEnvelope && (
             <p role="status">Real envelope unavailable for this result. Rerun to measure all-path real quantiles; only the selected path is shown.</p>
           )}

@@ -1,21 +1,17 @@
 import { StatLabel } from "@/components/ui";
-import { fmtInt, fmtPercent } from "@/lib/format";
+import { fmtInt } from "@/lib/format";
 
 /** Funding across the path and terminal wealth are different measurements. */
 export function SuccessRate({
   successRate,
   fundingSuccessRate,
   iterations,
-  converged,
-  horizonLabel,
 }: {
   /** The legacy metric: fraction with positive final net worth. */
   successRate: number;
   /** Absent on runs that predate checkpoint funding checks. */
   fundingSuccessRate?: number;
   iterations: number;
-  converged?: boolean;
-  horizonLabel: string;
 }) {
   const measured = fundingSuccessRate != null;
   const fraction = fundingSuccessRate ?? successRate;
@@ -77,22 +73,12 @@ export function SuccessRate({
           </div>
         </div>
       </div>
-      <p style={{ fontSize: 13, margin: "10px 0 0", maxWidth: 850 }}>
-        {measured
-          ? `Through ${horizonLabel}: no cash account below −$0.005 after same-date events settled, and no skipped effects, evaluation failures, or iteration-limit warnings. A later recovery does not erase a shortfall.`
-          : "This run only measured terminal net worth, not whether cash funded the plan along the way. Re-run to measure cash funding."}
-      </p>
-      {measured && (
-        <p style={{ fontSize: 13, margin: "6px 0 0" }}>
-          Positive ending net worth: <strong>{fmtPercent(successRate)}</strong>.
-          This is separate from the funding check; investments and property do not
-          automatically fund spending.
+      {!measured && (
+        <p style={{ fontSize: 13, margin: "10px 0 0", maxWidth: 850 }}>
+          This run only measured terminal net worth, not whether cash funded the plan
+          along the way. Re-run to measure cash funding.
         </p>
       )}
-      <p style={{ fontSize: 12, margin: "6px 0 0" }}>
-        These are outcomes under the modeled assumptions, not a guarantee or a check for missing expenses.
-        {converged ? " The configured convergence statistic converged." : ""}
-      </p>
     </section>
   );
 }
