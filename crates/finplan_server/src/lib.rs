@@ -7,6 +7,7 @@
 //!   domain/    cross-table operations (scenario cloning)
 //!   compile/   stored rows  ->  finplan_core::SimulationConfig
 //!   runner/    background Monte Carlo execution and result persistence
+//!   analysis/  sweeps, sensitivity and goal seeks, held in memory
 //! ```
 //!
 //! The database schema is normalized around the *domain*, not around the
@@ -14,6 +15,7 @@
 //! flavors, and self-referential tables for the recursive trigger, amount and
 //! effect trees. `compile` is the only module that bridges the two worlds.
 
+pub mod analysis;
 pub mod api;
 pub mod auth;
 pub mod compile;
@@ -51,10 +53,13 @@ pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn s
     let runs = runner::spawn(db.clone(), config.sim_workers);
     runner::requeue_orphans(&db, &runs).await?;
 
+    let analyses = analysis::AnalysisJobs::new(config.sim_workers);
+
     let state = AppState {
         db: db.clone(),
         config: Arc::new(config),
         runs,
+        analyses,
     };
 
     // Sessions accumulate; sweep them hourly rather than only at boot.

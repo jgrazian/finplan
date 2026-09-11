@@ -2,12 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccountScreen } from "@/components/account";
+import { AnalysisScreen } from "@/components/analysis";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { AppHeader, AppShell, type TabDef } from "@/components/layout";
 import { nearestStop, type RunEffort } from "@/components/results";
 import {
   EmptyState,
-  PlaceholderScreen,
   PlanScreen,
   PortfolioScreen,
   ResultsScreen,
@@ -270,7 +270,9 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onChanged={workspace.reload}
               />
             )}
-            {nav.tab === "analysis" && <PlaceholderScreen label="Analysis" />}
+            {nav.tab === "analysis" && (
+              <AnalysisScreen scenarioId={workspace.scenario.id} />
+            )}
           </>
         )}
       </AppShell>

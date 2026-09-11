@@ -1,6 +1,7 @@
 //! HTTP routing.
 
 pub mod accounts;
+pub mod analysis;
 pub mod assets;
 pub mod events;
 pub mod profiles;
@@ -31,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .merge(profiles::router())
         .merge(taxes::router())
         .merge(runs::router())
+        .merge(analysis::router())
 }
 
 async fn health() -> &'static str {

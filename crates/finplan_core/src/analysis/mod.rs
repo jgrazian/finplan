@@ -59,7 +59,9 @@
 mod config;
 mod evaluator;
 mod metrics;
+mod solve;
 
 pub use config::*;
 pub use evaluator::*;
 pub use metrics::*;
+pub use solve::*;

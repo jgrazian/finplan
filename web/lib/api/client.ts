@@ -7,9 +7,13 @@
 import { http } from "./http";
 import type {
   Account,
+  Analysis,
+  AnalysisOutcome,
+  AnalysisParameter,
   Asset,
   CompileReport,
   CreateAccount,
+  CreateAnalysis,
   CreateAsset,
   CreatePosition,
   CreateProfile,
@@ -166,6 +170,25 @@ export const api = {
     update: (id: number, body: UpdateTaxConfig) =>
       http.patch<TaxConfig>(`/tax-configs/${id}`, body),
     remove: (id: number) => http.delete(`/tax-configs/${id}`),
+  },
+
+  /**
+   * Sweeps, sensitivity rankings and goal seeks. One route family: POST to
+   * ask, GET to poll, GET results when it says `succeeded`.
+   *
+   * Unlike runs these are not persisted, so an id outlives only the server
+   * process that issued it. Nothing here should be bookmarked.
+   */
+  analysis: {
+    /** What this plan can vary, and the range each axis defaults to. */
+    parameters: (scenarioId: number) =>
+      http.get<AnalysisParameter[]>(`${scenario(scenarioId)}/parameters`),
+    start: (scenarioId: number, body: CreateAnalysis) =>
+      http.post<Analysis>(`${scenario(scenarioId)}/analyses`, body),
+    get: (id: number) => http.get<Analysis>(`/analyses/${id}`),
+    cancel: (id: number) => http.post<Analysis>(`/analyses/${id}/cancel`),
+    /** Refused until the job reaches `succeeded`. */
+    results: (id: number) => http.get<AnalysisOutcome>(`/analyses/${id}/results`),
   },
 
   runs: {

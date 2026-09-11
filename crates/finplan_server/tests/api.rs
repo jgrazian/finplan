@@ -1738,3 +1738,526 @@ async fn results_follow_the_percentile_the_caller_asks_for() {
     }
     pool.close().await;
 }
+
+// ───────────────────────────── analysis ─────────────────────────────
+//
+// Sweeps, sensitivity and solves are one route family over an in-memory job
+// registry, so these drive it the same way the screen does: read the plan's
+// parameters, POST a question, poll, read the answer.
+
+impl TestApp {
+    /// Poll a queued analysis until it settles, and report how it settled.
+    async fn await_analysis(&self, id: i64) -> String {
+        for _ in 0..200 {
+            let (_, current) = self.get(&format!("/api/analyses/{id}")).await;
+            let status = current["status"].as_str().unwrap_or_default().to_string();
+            if matches!(status.as_str(), "succeeded" | "failed" | "canceled") {
+                return status;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("analysis {id} never finished");
+    }
+
+    /// A plan with a retirement age and a monthly expense — one parameter of
+    /// each kind, which is what every mode below picks from.
+    async fn seed_analysable(&self) -> i64 {
+        let (scenario_id, checking, _) = self.seed_scenario().await;
+        // Fixed returns: a sweep cell then differs from its neighbour by the
+        // parameter alone, so the assertions are about the plan, not sampling.
+        let (_, profiles) = self.get("/api/return-profiles").await;
+        for profile in profiles.as_array().unwrap() {
+            self.patch(
+                &format!("/api/return-profiles/{}", profile["id"]),
+                json!({"distribution": {"kind": "Fixed", "rate": 0.0}}),
+            )
+            .await;
+        }
+        // Spending that starts at an age: one event carrying both an age and
+        // an amount, which is the shape the sweep axes are picked from.
+        let (status, _) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/events"),
+                json!({
+                    "name": "Retirement spending", "enabled": true,
+                    "trigger": {
+                        "kind": "Repeating", "interval": "Monthly",
+                        "start_condition": {"kind": "Age", "years": 45}
+                    },
+                    "effects": [{"kind": "Expense", "from_account_id": checking,
+                        "amount": {"kind": "Fixed", "value": 1_000.0}}]
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
+        scenario_id
+    }
+}
+
+#[tokio::test]
+async fn parameters_are_read_off_the_plan_rather_than_asked_for() {
+    let mut app = TestApp::new().await;
+    app.login_as("params@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+
+    let (status, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = params.as_array().unwrap();
+
+    // The one event offers both of its numbers, and nothing else does.
+    let ids: Vec<&str> = rows.iter().map(|p| p["id"].as_str().unwrap()).collect();
+    assert!(ids.iter().any(|id| id.ends_with(":start-age")), "{ids:?}");
+    assert!(ids.iter().any(|id| id.ends_with(":amount")), "{ids:?}");
+
+    let age = rows.iter().find(|p| p["kind"] == "age").unwrap();
+    assert_eq!(age["current"], 45.0);
+    assert_eq!(age["event_name"], "Retirement spending");
+    // The suggested range brackets the plan's own value.
+    assert!(age["min"].as_f64().unwrap() < 45.0);
+    assert!(age["max"].as_f64().unwrap() > 45.0);
+}
+
+#[tokio::test]
+async fn a_sweep_returns_a_grid_the_client_can_index() {
+    let mut app = TestApp::new().await;
+    app.login_as("sweep@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let age = params.as_array().unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let amount = params.as_array().unwrap()[1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({
+                "kind": "sweep",
+                "iterations": 25,
+                "axes": [
+                    {"parameter_id": age, "min": 40, "max": 50, "steps": 3},
+                    {"parameter_id": amount, "min": 500, "max": 2500, "steps": 4}
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(job["kind"], "sweep");
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+
+    let (status, results) = app.get(&format!("/api/analyses/{id}/results")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(results["kind"], "sweep");
+
+    let axes = results["axes"].as_array().unwrap();
+    assert_eq!(axes.len(), 2);
+    assert_eq!(axes[0]["values"].as_array().unwrap().len(), 3);
+    assert_eq!(axes[1]["values"].as_array().unwrap().len(), 4);
+
+    // Row-major over the axes, one cell per combination, indices in range.
+    let cells = results["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 12);
+    for (position, cell) in cells.iter().enumerate() {
+        let indices = cell["indices"].as_array().unwrap();
+        assert_eq!(
+            indices[0].as_u64().unwrap() * 4 + indices[1].as_u64().unwrap(),
+            position as u64
+        );
+        let rate = cell["success_rate"].as_f64().unwrap();
+        assert!((0.0..=1.0).contains(&rate), "{rate}");
+    }
+
+    // The plan sits at age 45 and $1,000, which is on both axes.
+    assert_eq!(results["plan_indices"], json!([1, 1]));
+    assert_eq!(results["iterations"], 25);
+}
+
+#[tokio::test]
+async fn spending_more_never_raises_the_success_rate() {
+    let mut app = TestApp::new().await;
+    app.login_as("monotone@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let amount = params
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "amount")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (_, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({
+                "kind": "sweep",
+                "iterations": 25,
+                "axes": [{"parameter_id": amount, "min": 200, "max": 6000, "steps": 6}]
+            }),
+        )
+        .await;
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+    let (_, results) = app.get(&format!("/api/analyses/{id}/results")).await;
+
+    let rates: Vec<f64> = results["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["success_rate"].as_f64().unwrap())
+        .collect();
+    assert_eq!(rates.len(), 6);
+    for pair in rates.windows(2) {
+        assert!(pair[1] <= pair[0], "success rose with spending: {rates:?}");
+    }
+    assert!(rates[0] > rates[5], "the sweep moved nothing: {rates:?}");
+}
+
+#[tokio::test]
+async fn a_solve_answers_with_the_boundary_and_shows_its_working() {
+    let mut app = TestApp::new().await;
+    app.login_as("solve@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let amount = params
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "amount")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({
+                "kind": "solve",
+                "iterations": 25,
+                "objective": "max-parameter",
+                "min_value": 0.95,
+                "vary": [{"parameter_id": amount, "min": 200, "max": 6000}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+
+    let (_, results) = app.get(&format!("/api/analyses/{id}/results")).await;
+    assert_eq!(results["kind"], "solve");
+    // One parameter and an objective that is that parameter: bisection.
+    assert_eq!(results["method"], "bisection");
+
+    let best = &results["best"];
+    assert!(!best.is_null(), "no answer found: {results}");
+    assert!(best["feasible"].as_bool().unwrap());
+    assert!(best["success_rate"].as_f64().unwrap() >= 0.95);
+
+    // Every probe is recorded, and the answer is the best feasible one.
+    let steps = results["steps"].as_array().unwrap();
+    assert!(steps.len() >= 3, "expected a bracket: {steps:?}");
+    let answer = best["values"][0].as_f64().unwrap();
+    for step in steps.iter().filter(|s| s["feasible"] == json!(true)) {
+        assert!(step["values"][0].as_f64().unwrap() <= answer + 1e-9);
+    }
+    // Brackets narrow rather than wander.
+    let widths: Vec<f64> = steps
+        .iter()
+        .filter_map(|s| Some(s["bracket_high"].as_f64()? - s["bracket_low"].as_f64()?))
+        .collect();
+    for pair in widths.windows(2) {
+        assert!(pair[1] <= pair[0] + 1e-9, "bracket widened: {widths:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_sensitivity_ranking_puts_the_biggest_mover_first() {
+    let mut app = TestApp::new().await;
+    app.login_as("sensitivity@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+
+    let (status, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "sensitivity", "iterations": 25, "fraction": 0.5}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+
+    let (_, results) = app.get(&format!("/api/analyses/{id}/results")).await;
+    assert_eq!(results["kind"], "sensitivity");
+    let rows = results["rows"].as_array().unwrap();
+    assert!(!rows.is_empty());
+    let spans: Vec<f64> = rows.iter().map(|r| r["span"].as_f64().unwrap()).collect();
+    for pair in spans.windows(2) {
+        assert!(pair[1] <= pair[0], "ranking is out of order: {spans:?}");
+    }
+    for row in rows {
+        assert!(row["low_value"].as_f64().unwrap() < row["high_value"].as_f64().unwrap());
+    }
+}
+
+#[tokio::test]
+async fn an_analysis_refuses_a_question_it_cannot_answer() {
+    let mut app = TestApp::new().await;
+    app.login_as("refuse@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let base = format!("/api/scenarios/{scenario_id}/analyses");
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let amount = params
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "amount")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A parameter this plan does not have.
+    let (status, _) = app
+        .post(
+            &base,
+            json!({"kind": "sweep", "axes": [{"parameter_id": "event:999:amount"}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // The same parameter on both axes would be a line, not a grid.
+    let (status, _) = app
+        .post(
+            &base,
+            json!({"kind": "sweep", "axes": [
+                {"parameter_id": amount}, {"parameter_id": amount}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // An inverted range, and a step count past the ceiling.
+    for axis in [
+        json!({"parameter_id": amount, "min": 5000, "max": 1000}),
+        json!({"parameter_id": amount, "steps": 50}),
+    ] {
+        let (status, _) = app
+            .post(&base, json!({"kind": "sweep", "axes": [axis]}))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    // Iterations outside what an analysis will spend.
+    let (status, _) = app
+        .post(
+            &base,
+            json!({"kind": "sweep", "iterations": 100_000,
+                   "axes": [{"parameter_id": amount}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A constraint that is not a fraction.
+    let (status, _) = app
+        .post(
+            &base,
+            json!({"kind": "solve", "objective": "max-parameter", "min_value": 95.0,
+                   "vary": [{"parameter_id": amount}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn an_analysis_belongs_to_the_user_who_started_it() {
+    let mut app = TestApp::new().await;
+    app.login_as("owner@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let amount = params.as_array().unwrap()[1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (_, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "sweep", "iterations": 25,
+                   "axes": [{"parameter_id": amount, "steps": 2}]}),
+        )
+        .await;
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+
+    app.login_as("intruder@example.com").await;
+    for path in [
+        format!("/api/analyses/{id}"),
+        format!("/api/analyses/{id}/results"),
+    ] {
+        assert_eq!(app.get(&path).await.0, StatusCode::NOT_FOUND);
+    }
+    assert_eq!(
+        app.post(&format!("/api/analyses/{id}/cancel"), json!({}))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // The scenario's own parameters are equally out of reach.
+    assert_eq!(
+        app.get(&format!("/api/scenarios/{scenario_id}/parameters"))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn results_are_only_available_once_the_analysis_has_finished() {
+    let mut app = TestApp::new().await;
+    app.login_as("pending@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let amount = params.as_array().unwrap()[1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (_, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "sweep", "iterations": 2000,
+                   "axes": [{"parameter_id": amount, "steps": 12}]}),
+        )
+        .await;
+    let id = job["id"].as_i64().unwrap();
+
+    // Reading results before it finishes is a refusal, not an empty grid.
+    let (status, _) = app.get(&format!("/api/analyses/{id}/results")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, canceled) = app
+        .post(&format!("/api/analyses/{id}/cancel"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(matches!(
+        canceled["status"].as_str().unwrap(),
+        "queued" | "running" | "canceled"
+    ));
+    assert_eq!(app.await_analysis(id).await, "canceled");
+    let (status, _) = app.get(&format!("/api/analyses/{id}/results")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_plan_whose_schedule_follows_the_market_runs_and_analyses() {
+    // An event triggered off net worth fires on a date that follows the market,
+    // which used to move the year's wealth snapshot with it and leave the
+    // iterations of one run disagreeing about what dates they had measured.
+    // Both halves are checked here: the run that reads the real envelope, and
+    // the analyses that do not.
+    let mut app = TestApp::new().await;
+    app.login_as("market-schedule@example.com").await;
+    let (scenario_id, checking, brokerage) = app.seed_scenario().await;
+    let base = format!("/api/scenarios/{scenario_id}");
+
+    let (status, _) = app
+        .post(
+            &format!("{base}/events"),
+            json!({
+                "name": "Retirement spending", "enabled": true,
+                "trigger": {
+                    "kind": "Repeating", "interval": "Monthly",
+                    "start_condition": {"kind": "Age", "years": 45}
+                },
+                "effects": [{"kind": "Expense", "from_account_id": checking,
+                    "amount": {"kind": "Fixed", "value": 1_000.0}}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, _) = app
+        .post(
+            &format!("{base}/events"),
+            json!({
+                "name": "Top up when rich", "enabled": true,
+                "trigger": {
+                    "kind": "Repeating", "interval": "Monthly",
+                    "start_condition": {
+                        "kind": "NetWorth",
+                        "comparison": "GreaterThanOrEqual", "threshold": 61_000.0
+                    }
+                },
+                "effects": [{"kind": "CashTransfer", "from_account_id": brokerage,
+                    "to_account_id": checking, "amount": {"kind": "Fixed", "value": 500.0}}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (_, run) = app
+        .post(&format!("{base}/runs"), json!({"iterations": 64}))
+        .await;
+    let run_id = run["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(run_id).await, "succeeded");
+
+    // The run measured a real envelope, which is the part that needs every
+    // iteration to agree on its dates.
+    let (status, results) = app.get(&format!("/api/runs/{run_id}/results")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !results["real_net_worth"].is_null(),
+        "the envelope is what the shared date grid is for"
+    );
+
+    // Every analysis finishes too, on the same plan.
+    let (_, params) = app.get(&format!("{base}/parameters")).await;
+    let amount = params
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["kind"] == "amount")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for body in [
+        json!({"kind": "sensitivity", "iterations": 25}),
+        json!({"kind": "sweep", "iterations": 25,
+               "axes": [{"parameter_id": amount, "steps": 3}]}),
+        json!({"kind": "solve", "iterations": 25, "objective": "max-parameter",
+               "min_value": 0.5, "vary": [{"parameter_id": amount}]}),
+    ] {
+        let kind = body["kind"].as_str().unwrap().to_string();
+        let (status, job) = app.post(&format!("{base}/analyses"), body).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{kind}");
+        let id = job["id"].as_i64().unwrap();
+        assert_eq!(app.await_analysis(id).await, "succeeded", "{kind}");
+        let (status, results) = app.get(&format!("/api/analyses/{id}/results")).await;
+        assert_eq!(status, StatusCode::OK, "{kind}");
+        assert_eq!(results["kind"], json!(kind));
+    }
+}
