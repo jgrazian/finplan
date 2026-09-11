@@ -509,12 +509,11 @@ fn capture_year_end_balances(state: &mut SimulationState, checkpoint: jiff::civi
 /// long-term (>365 days held) regardless of their month, so merging them
 /// preserves tax classification accuracy. Each group is replaced by a single
 /// lot dated Jul 1 of that year.
-fn consolidate_lots(state: &mut SimulationState) {
+fn consolidate_lots(state: &mut SimulationState, cutoff_year: i16) {
     if !state.portfolio.needs_lot_consolidation {
         return;
     }
 
-    let cutoff_year = state.timeline.current_date.year() - 2;
     let mut consolidated_any = false;
 
     for account in state.portfolio.accounts.values_mut() {
@@ -568,37 +567,43 @@ fn consolidate_lots(state: &mut SimulationState) {
 fn advance_time(state: &mut SimulationState) {
     state.maybe_rollover_year();
 
+    let previous = state.timeline.current_date;
     let next_checkpoint = find_next_checkpoint(state);
-    let days_passed =
-        crate::date_math::fast_days_between(state.timeline.current_date, next_checkpoint);
+    let days_passed = crate::date_math::fast_days_between(previous, next_checkpoint);
 
     if days_passed > 0 {
         compound_accounts(state, next_checkpoint, days_passed);
     }
 
+    // The clock moves before anything reads it.
+    //
+    // Cash has already been compounded to the checkpoint and asset prices are
+    // looked up by date, so anything measured while the clock still reads
+    // `previous` mixes two dates: December's balances at December the 1st's
+    // prices, filed under December the 1st. What made that more than untidy is
+    // that the preceding checkpoint moves with the event schedule, so on a plan
+    // whose events trigger off balances or net worth the year's snapshot landed
+    // on a different date in every iteration.
+    state.timeline.current_date = next_checkpoint;
+
     // Capture year-end balances for RMD calculations (December 31)
-    let dec_31 = jiff::civil::date(state.timeline.current_date.year(), 12, 31);
+    let dec_31 = jiff::civil::date(previous.year(), 12, 31);
     if next_checkpoint == dec_31 {
         capture_year_end_balances(state, next_checkpoint);
     }
 
     // Reset monthly contributions on month boundary
-    let prev_month = state.timeline.current_date.month();
-    let next_month = next_checkpoint.month();
-    let prev_year = state.timeline.current_date.year();
-    let next_year = next_checkpoint.year();
-
-    if prev_month != next_month || prev_year != next_year {
+    if previous.month() != next_checkpoint.month() || previous.year() != next_checkpoint.year() {
         state.reset_monthly_contributions();
     }
 
     // Reset yearly contributions and consolidate lots on year boundary
-    if prev_year != next_year {
+    if previous.year() != next_checkpoint.year() {
         state.portfolio.contributions_ytd.clear();
-        consolidate_lots(state);
+        // Counted from the year being left, so which lots are old enough to
+        // merge does not depend on whether the clock has already ticked over.
+        consolidate_lots(state, previous.year() - 2);
     }
-
-    state.timeline.current_date = next_checkpoint;
 }
 
 // ── Online statistics & convergence ──────────────────────────────────
