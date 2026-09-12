@@ -1882,6 +1882,109 @@ async fn a_sweep_returns_a_grid_the_client_can_index() {
 }
 
 #[tokio::test]
+async fn a_sweep_carries_more_variables_than_any_one_graph_draws() {
+    let mut app = TestApp::new().await;
+    app.login_as("workspace@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    // A second dated expense, so the plan offers four parameters and a sweep
+    // has something to hold while a graph draws two of them.
+    let (_, accounts) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+    let checking = accounts.as_array().unwrap()[0]["id"].as_i64().unwrap();
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/events"),
+            json!({
+                "name": "Travel", "enabled": true,
+                "trigger": {
+                    "kind": "Repeating", "interval": "Monthly",
+                    "start_condition": {"kind": "Age", "years": 50}
+                },
+                "effects": [{"kind": "Expense", "from_account_id": checking,
+                    "amount": {"kind": "Fixed", "value": 400.0}}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let ids: Vec<String> = params
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        ids.len() >= 3,
+        "expected at least three parameters, got {ids:?}"
+    );
+
+    let base = format!("/api/scenarios/{scenario_id}/analyses");
+    let (status, job) = app
+        .post(
+            &base,
+            json!({
+                "kind": "sweep",
+                "iterations": 25,
+                "axes": [
+                    {"parameter_id": ids[0], "steps": 3},
+                    {"parameter_id": ids[1], "steps": 3},
+                    {"parameter_id": ids[2], "steps": 2}
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+
+    let (_, results) = app.get(&format!("/api/analyses/{id}/results")).await;
+    let axes = results["axes"].as_array().unwrap();
+    assert_eq!(axes.len(), 3);
+
+    // Row-major over all three, so a client can index the grid by strides.
+    let cells = results["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 3 * 3 * 2);
+    for (position, cell) in cells.iter().enumerate() {
+        let at = cell["indices"].as_array().unwrap();
+        let flat =
+            at[0].as_u64().unwrap() * 6 + at[1].as_u64().unwrap() * 2 + at[2].as_u64().unwrap();
+        assert_eq!(flat, position as u64);
+    }
+    // One plan index per swept variable, or none at all.
+    if let Some(plan) = results["plan_indices"].as_array() {
+        assert_eq!(plan.len(), 3);
+    }
+
+    // The ceiling is the product, not the count: three axes at full resolution
+    // is more combinations than a sweep will evaluate.
+    let (status, body) = app
+        .post(
+            &base,
+            json!({
+                "kind": "sweep",
+                "axes": [
+                    {"parameter_id": ids[0], "steps": 12},
+                    {"parameter_id": ids[1], "steps": 12},
+                    {"parameter_id": ids[2], "steps": 12}
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("combinations"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
 async fn spending_more_never_raises_the_success_rate() {
     let mut app = TestApp::new().await;
     app.login_as("monotone@example.com").await;

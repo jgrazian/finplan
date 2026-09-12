@@ -19,17 +19,19 @@ const COLUMNS = "minmax(130px, 1fr) 130px minmax(120px, 1.4fr) 58px 74px";
 export function SensitivityPanel({
   results,
   parameters,
-  axes,
-  onPickAxis,
+  swept,
+  onToggle,
   onSweep,
+  canSweep,
   busy,
 }: {
   results: SensitivityResults;
   parameters: AnalysisParameter[];
-  /** The parameter ids currently on the x and y axes. */
-  axes: { x: string | undefined; y: string | undefined };
-  onPickAxis: (slot: "x" | "y", parameterId: string) => void;
+  /** Parameter ids the next sweep will step over. */
+  swept: Set<string>;
+  onToggle: (parameterId: string) => void;
   onSweep: () => void;
+  canSweep: boolean;
   busy?: boolean;
 }) {
   const { rows, low, high } = sensitivityView(results);
@@ -74,7 +76,7 @@ export function SensitivityPanel({
           success {fmtPercent(low, 0)} → {fmtPercent(high, 0)}
         </span>
         <span>span</span>
-        <span>axis</span>
+        <span>sweep</span>
       </div>
 
       {rows.map((row) => {
@@ -135,22 +137,27 @@ export function SensitivityPanel({
             >
               {row.span.toFixed(1)}
             </span>
+            {/* A sweep carries as many variables as you like, so this is a
+                set to be in or out of rather than two axis slots to compete
+                for — which of them a graph draws is decided afterwards. */}
             <span style={{ display: "flex", gap: 4 }}>
-              {(["x", "y"] as const).map((slot) =>
-                axes[slot] === row.parameterId ? (
-                  <Tag key={slot} tone="accent">
-                    {slot.toUpperCase()}
-                  </Tag>
-                ) : (
-                  <Button
-                    key={slot}
-                    variant="ghost"
-                    style={{ padding: "2px 7px", minHeight: 0 }}
-                    onClick={() => onPickAxis(slot, row.parameterId)}
-                  >
-                    {slot.toUpperCase()}
-                  </Button>
-                ),
+              {swept.has(row.parameterId) ? (
+                <Button
+                  variant="ghost"
+                  style={{ padding: 0, minHeight: 0, border: 0 }}
+                  title="Leave it out of the sweep"
+                  onClick={() => onToggle(row.parameterId)}
+                >
+                  <Tag tone="accent">SWEPT</Tag>
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  style={{ padding: "2px 7px", minHeight: 0 }}
+                  onClick={() => onToggle(row.parameterId)}
+                >
+                  ADD
+                </Button>
               )}
             </span>
           </div>
@@ -159,22 +166,21 @@ export function SensitivityPanel({
 
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 16 }}>
         <span style={{ flex: 1, fontSize: 12.5 }}>
-          {axes.x ? (
+          {swept.size > 0 ? (
             <>
               Sweep{" "}
-              <Mono>{label(byId, axes.x)}</Mono>
-              {axes.y && (
-                <>
-                  {" × "}
-                  <Mono>{label(byId, axes.y)}</Mono>
-                </>
-              )}
+              {[...swept].map((id, i) => (
+                <span key={id}>
+                  {i > 0 && " × "}
+                  <Mono>{label(byId, id)}</Mono>
+                </span>
+              ))}
             </>
           ) : (
-            "Pick an axis to sweep — the top of the list is where a grid will show you the most."
+            "Pick a variable to sweep — the top of the list is where a grid will show you the most."
           )}
         </span>
-        <Button variant="primary" onClick={onSweep} disabled={busy || !axes.x}>
+        <Button variant="primary" onClick={onSweep} disabled={busy || !canSweep}>
           Run sweep
         </Button>
       </div>
@@ -190,7 +196,7 @@ export function SensitivityPanel({
       >
         The ranking is two runs a parameter, so it answers what to sweep before
         the grid spends thousands of simulations doing it. A parameter that
-        moves success by less than a point or two is not worth an axis.
+        moves success by less than a point or two is not worth a variable.
       </p>
     </div>
   );

@@ -1165,3 +1165,43 @@ tr:hover > * > .grip,
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+
+/* ── A graph on the Analysis workspace ─────────────────────────────────────
+   Cards are pictures, and the selected one is the picture the inspector is
+   editing. The selection is drawn as an outline inside the frame rather than a
+   border, so nothing reflows by a pixel as the selection moves between them. */
+.graph-card:hover {
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+
+.graph-card.is-selected {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.graph-card:has(button:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The tile that adds one. A frame like the graphs beside it, so the layout
+   reads as a grid with a gap in it rather than as charts plus a button. */
+.add-graph {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: none;
+  cursor: pointer;
+  color: var(--color-accent-800);
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.add-graph:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}

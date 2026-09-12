@@ -113,7 +113,7 @@ pub struct SweepAxis {
 }
 
 /// One evaluated combination. `indices` positions it on the axes above, in the
-/// same order.
+/// same order, and carries one entry per swept variable.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct SweepCell {
@@ -127,7 +127,8 @@ pub struct SweepCell {
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct SweepResults {
-    /// One or two axes, in the order the cells' indices follow.
+    /// The swept variables, in the order the cells' indices follow. A graph
+    /// picks one or two of these for its own axes and holds the rest.
     pub axes: Vec<SweepAxis>,
     /// Row-major over the axes: the last axis varies fastest.
     pub cells: Vec<SweepCell>,

@@ -87,7 +87,11 @@ export function AnalysisScreen({ scenarioId }: { scenarioId: number }) {
           initialParameterId={seed}
         />
       ) : (
+        // Keyed on the scenario: the swept set and the graph layout are this
+        // plan's, and carrying them onto another plan's parameters would leave
+        // a workspace built over variables it does not have.
         <SweepPanel
+          key={scenarioId}
           scenarioId={scenarioId}
           parameters={parameters}
           onSolveFor={solveFor}

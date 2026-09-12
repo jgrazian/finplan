@@ -38,10 +38,19 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Bounds on what a single request may ask for, so one browser tab cannot
-/// queue an hour of CPU. A 2-axis sweep at the ceiling is 12 × 12 × 2,000.
+/// queue an hour of CPU.
 const MAX_STEPS: usize = 12;
-const MAX_AXES: usize = 2;
+const MAX_AXES: usize = 4;
 const MAX_VARIED: usize = 3;
+
+/// The real ceiling on a sweep: how many combinations it may evaluate.
+///
+/// Counting axes is the wrong limit once a sweep can carry more than two of
+/// them — four axes of three steps is 81 cells and finishes, two axes of twelve
+/// is 144 and is the grid the old two-axis ceiling allowed. What costs time is
+/// the product, so that is what is capped, and at the analysis default of 250
+/// iterations it holds a request to 128,000 simulations.
+const MAX_SWEEP_POINTS: usize = 512;
 const MAX_ANALYSIS_ITERATIONS: usize = 2_000;
 const MIN_ITERATIONS: usize = 25;
 
@@ -127,7 +136,9 @@ impl From<ConstraintRequest> for SolveConstraintMetric {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 #[ts(export, optional_fields = nullable)]
 pub enum CreateAnalysis {
-    /// A grid over one or two parameters.
+    /// A grid over one to four parameters, capped by the product of the steps
+    /// rather than by the count: the client lays graphs out over the result and
+    /// each picks its own one or two axes from it.
     Sweep {
         axes: Vec<AxisRequest>,
         #[serde(default)]
@@ -230,10 +241,26 @@ async fn create(
         CreateAnalysis::Sweep { axes, iterations } => {
             if axes.is_empty() || axes.len() > MAX_AXES {
                 return Err(ApiError::bad_request(format!(
-                    "a sweep takes one or {MAX_AXES} axes"
+                    "a sweep takes between one and {MAX_AXES} variables"
                 )));
             }
-            let (params, sweeps) = resolve(&available, &axes, DEFAULT_STEPS)?;
+            // More axes means fewer steps each: a fourth variable at the
+            // two-axis default would be 1,296 cells, which is an hour nobody
+            // asked for. The client sends its own step counts; this is only
+            // what an omitted one falls back to.
+            let default_steps = match axes.len() {
+                1 | 2 => DEFAULT_STEPS,
+                3 => 4,
+                _ => 3,
+            };
+            let (params, sweeps) = resolve(&available, &axes, default_steps)?;
+            let points = sweeps.iter().map(|s| s.step_count).product::<usize>();
+            if points > MAX_SWEEP_POINTS {
+                return Err(ApiError::bad_request(format!(
+                    "that is {points} combinations; a sweep evaluates at most \
+                     {MAX_SWEEP_POINTS}. Drop a variable or cut its steps."
+                )));
+            }
             JobSpec::Sweep {
                 params,
                 config: SweepConfig {

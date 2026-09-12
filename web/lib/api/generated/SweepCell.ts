@@ -2,7 +2,7 @@
 
 /**
  * One evaluated combination. `indices` positions it on the axes above, in the
- * same order.
+ * same order, and carries one entry per swept variable.
  */
 export type SweepCell = {
   indices: Array<number>;

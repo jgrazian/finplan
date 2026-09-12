@@ -2,43 +2,57 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { SplitPane } from "@/components/layout";
-import {
-  Blueprint,
-  Button,
-  Field,
-  InlineStat,
-  NumberInput,
-  StatLabel,
-  Table,
-  Td,
-  Th,
-} from "@/components/ui";
-import { fmtCompact, fmtInt, fmtPercent } from "@/lib/format";
+import { Button } from "@/components/ui";
+import { fmtClock, fmtInt } from "@/lib/format";
 import type { AnalysisParameter } from "@/lib/api/types";
 import { useAnalysis } from "@/lib/hooks/useAnalysis";
+import { paramId } from "@/lib/view/analysis";
 import {
-  frontierRows,
-  paramId,
-  paramValue,
-  sliceAlongX,
-  sliceAlongY,
-  sweepView,
-} from "@/lib/view/analysis";
-import { AxisPicker, axisFor, type Axis } from "./AxisPicker";
+  defaultGraphs,
+  graphView,
+  newGraph,
+  reconcile,
+  sweepCsv,
+  sweepSpace,
+  type GraphSpec,
+} from "@/lib/view/sweep";
+import { GraphCard, GraphGap } from "./GraphCard";
+import { GraphInspector } from "./GraphInspector";
 import { JobProgress } from "./JobProgress";
 import { SensitivityPanel } from "./SensitivityPanel";
-import { SliceChart } from "./SliceChart";
-import { SweepGrid, SweepLegend, type Focus } from "./SweepGrid";
+import {
+  MAX_ITERATIONS,
+  MIN_ITERATIONS,
+  VariableStrip,
+  combinations,
+  variableFor,
+  type SweptVariable,
+} from "./VariableStrip";
 
-/** Where a fresh threshold field starts, as a fraction. */
-const DEFAULT_THRESHOLD = 0.95;
+/** How many variables a plan's parameters are seeded into, and at what resolution. */
+const SEED_VARIABLES = 2;
+const SEED_STEPS = 6;
 
 /**
- * Sweep: the grid, the threshold drawn on it, and everything read off it.
+ * Iterations behind each combination, to start.
  *
- * Only a new range or a new axis costs a run. The threshold, the frontier, the
- * frontier table and both slice charts are derived from the finished grid, so
- * moving the safety bar is instant and the footer's "last run" stays honest.
+ * Deliberately lighter than a Results run: a sweep pays this over every cell,
+ * and the shape of a grid reads long before its individual cells are precise.
+ */
+const SEED_ITERATIONS = 250;
+
+/** The server's own ceiling on a grid, restated so the strip can warn before a 400. */
+const MAX_POINTS = 512;
+
+/**
+ * Sweep as a workspace.
+ *
+ * The sweep is one thing and the graphs are another. Every combination of every
+ * swept variable is evaluated once, and then any number of graphs read that one
+ * result — each picking its own kind, its own axes out of the swept set and its
+ * own dependent measure. Nothing in the layout costs a run; only the variables
+ * and their ranges do, which is why they are the one part of the screen folded
+ * away above everything else.
  */
 export function SweepPanel({
   scenarioId,
@@ -47,429 +61,352 @@ export function SweepPanel({
 }: {
   scenarioId: number;
   parameters: AnalysisParameter[];
-  /** Hand a parameter to Solve, which is where a grid usually points next. */
+  /** Hand a parameter to Solve, which is where a sweep usually points next. */
   onSolveFor: (parameterId: string) => void;
 }) {
   const sweep = useAnalysis(scenarioId, "sweep");
   const sensitivity = useAnalysis(scenarioId, "sensitivity");
 
-  // The axes are derived until they are touched, so the screen opens on the
-  // plan's first two parameters without an effect writing them into state.
-  // `null` is the third state a plain `undefined` cannot say: an axis the user
-  // took away, which must not spring back from the default.
-  const [xPick, setXAxis] = useState<Axis>();
-  const [yPick, setYAxis] = useState<Axis | null>();
-  const xAxis = xPick ?? (parameters[0] ? axisFor(parameters[0]) : undefined);
-  const yAxis =
-    yPick === undefined ? (parameters[1] ? axisFor(parameters[1]) : undefined) : (yPick ?? undefined);
+  const [variables, setVariables] = useState<SweptVariable[]>(() =>
+    parameters.slice(0, SEED_VARIABLES).map((p) => variableFor(p, SEED_STEPS)),
+  );
+  const [iterations, setIterations] = useState(SEED_ITERATIONS);
+  const [varsOpen, setVarsOpen] = useState(true);
+  const [ranWith, setRanWith] = useState<string>();
+  const [ranAt, setRanAt] = useState<number>();
 
-  const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD);
-  const [hover, setHover] = useState<Focus>();
-  const [pinned, setPinned] = useState<Focus>();
+  const [layout, setLayout] = useState<GraphSpec[]>([]);
+  const [selected, setSelected] = useState<string>();
+
+  const enabledCount = variables.filter((v) => v.enabled).length;
+  const points = combinations(variables);
+  const signature = [
+    String(iterations),
+    ...variables
+      .filter((v) => v.enabled)
+      .map((v) => `${v.parameterId}:${v.min}:${v.max}:${v.steps}`),
+  ].join("|");
+
+  const space = useMemo(
+    () => (sweep.results ? sweepSpace(sweep.results) : undefined),
+    [sweep.results],
+  );
+
+  // A finished sweep decides what the layout can draw, so the graphs on screen
+  // are the edited layout resolved against it rather than a second copy kept in
+  // step by an effect. Graphs are carried where their variables survived and
+  // moved where they did not, which is what lets adding a variable and
+  // re-running extend the screen instead of clearing it.
+  const graphs = useMemo(
+    () => (space ? reconcile(layout, space.axes) : []),
+    [space, layout],
+  );
 
   const run = useCallback(() => {
-    if (!xAxis) return;
-    setPinned(undefined);
-    setHover(undefined);
+    const enabled = variables.filter((v) => v.enabled);
+    if (enabled.length === 0) return;
+    setRanWith(signature);
+    setRanAt(Date.now());
+    setVarsOpen(false);
     void sweep.start({
       kind: "sweep",
-      axes: [xAxis, yAxis]
-        .filter((axis): axis is Axis => axis != null)
-        .map((axis) => ({
-          parameter_id: axis.parameterId,
-          min: axis.min,
-          max: axis.max,
-          steps: axis.steps,
-        })),
+      iterations,
+      axes: enabled.map((v) => ({
+        parameter_id: v.parameterId,
+        min: v.min,
+        max: v.max,
+        steps: v.steps,
+      })),
     });
-  }, [sweep, xAxis, yAxis]);
+  }, [variables, iterations, signature, sweep]);
 
   const rank = useCallback(() => {
     void sensitivity.start({ kind: "sensitivity", parameter_ids: [], fraction: 0.2 });
   }, [sensitivity]);
 
-  const view = useMemo(
-    () => (sweep.results ? sweepView(sweep.results, threshold) : undefined),
-    [sweep.results, threshold],
-  );
+  const editVariable = useCallback((parameterId: string, next: SweptVariable) => {
+    setVariables((current) =>
+      current.map((v) => (v.parameterId === parameterId ? next : v)),
+    );
+  }, []);
 
-  const pickAxis = useCallback(
-    (slot: "x" | "y", parameterId: string) => {
-      const parameter = parameters.find((p) => p.id === parameterId);
+  const addVariable = useCallback(() => {
+    setVariables((current) => {
+      const free = parameters.find((p) => !current.some((v) => v.parameterId === p.id));
+      return free ? [...current, variableFor(free, stepsFor(current.length + 1))] : current;
+    });
+  }, [parameters]);
+
+  const removeVariable = useCallback((parameterId: string) => {
+    setVariables((current) => current.filter((v) => v.parameterId !== parameterId));
+  }, []);
+
+  /**
+   * Point a row at a different parameter.
+   *
+   * The new parameter brings its own range: the old bounds are meaningless on
+   * a different quantity, and keeping them silently is how a sweep ends up
+   * over ages 3,000 to 12,000.
+   */
+  const retargetVariable = useCallback(
+    (parameterId: string, next: string) => {
+      const parameter = parameters.find((p) => p.id === next);
       if (!parameter) return;
-      const axis = axisFor(parameter);
-      if (slot === "x") {
-        setXAxis(axis);
-        // The same parameter cannot hold both axes; the one it just left is
-        // cleared rather than silently duplicated.
-        if (yAxis?.parameterId === parameterId) setYAxis(null);
-      } else {
-        setYAxis(axis);
-        if (xAxis?.parameterId === parameterId && parameters[0]) {
-          setXAxis(axisFor(parameters[0]));
-        }
-      }
+      setVariables((current) =>
+        current.map((v) =>
+          v.parameterId === parameterId
+            ? { ...variableFor(parameter, v.steps), enabled: v.enabled }
+            : v,
+        ),
+      );
     },
-    [parameters, xAxis, yAxis],
+    [parameters],
   );
 
+  /** Include or drop a parameter from the swept set, from the ranking's rows. */
+  const toggleVariable = useCallback(
+    (parameterId: string) => {
+      setVariables((current) => {
+        const held = current.find((v) => v.parameterId === parameterId);
+        if (held) return current.filter((v) => v.parameterId !== parameterId);
+        const parameter = parameters.find((p) => p.id === parameterId);
+        return parameter
+          ? [...current, variableFor(parameter, stepsFor(current.length + 1))]
+          : current;
+      });
+    },
+    [parameters],
+  );
+
+  const exportCsv = useCallback(() => {
+    if (!space) return;
+    const blob = new Blob([sweepCsv(space)], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `sweep-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }, [space]);
+
+  const over = points > MAX_POINTS;
   const toolbar = (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
+        gap: 14,
         padding: "10px 20px",
         borderBottom: "1px solid var(--color-divider)",
         flexWrap: "wrap",
       }}
     >
-      {xAxis && (
-        <AxisPicker
-          slot="x"
-          parameters={parameters}
-          value={xAxis}
-          onChange={setXAxis}
-          taken={yAxis ? [yAxis.parameterId] : []}
-          disabled={sweep.active}
-        />
-      )}
-      {yAxis ? (
-        <AxisPicker
-          slot="y"
-          parameters={parameters}
-          value={yAxis}
-          onChange={setYAxis}
-          taken={xAxis ? [xAxis.parameterId] : []}
-          disabled={sweep.active}
-        />
-      ) : (
-        parameters.length > 1 && (
-          <Button
-            variant="ghost"
-            disabled={sweep.active}
-            onClick={() => {
-              const free = parameters.find((p) => p.id !== xAxis?.parameterId);
-              if (free) setYAxis(axisFor(free));
-            }}
-          >
-            Add a second axis
-          </Button>
-        )
-      )}
-      {xAxis && yAxis && (
-        <Button
-          variant="ghost"
-          disabled={sweep.active}
-          onClick={() => {
-            setXAxis(yAxis);
-            setYAxis(xAxis ?? null);
-            setPinned(undefined);
-          }}
-        >
-          Swap axes
+      <span
+        style={{
+          fontSize: 12,
+          color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+        }}
+      >
+        {space
+          ? `Last run ${ranAt ? fmtClock(ranAt) : "—"} · ${fmtInt(space.points)} points × ` +
+            `${fmtInt(space.iterations)} iterations` +
+            (sweep.job?.elapsed_ms != null ? ` · ${(sweep.job.elapsed_ms / 1000).toFixed(1)}s` : "")
+          : "Every combination is simulated once; the graphs below read the result."}
+      </span>
+      <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+        {over && (
+          <span style={{ fontSize: 11.5 }} role="alert">
+            {fmtInt(points)} combinations is past the {fmtInt(MAX_POINTS)} a sweep will
+            evaluate — drop a variable or cut its steps.
+          </span>
+        )}
+        <Button variant="ghost" disabled={!space} onClick={exportCsv}>
+          Export CSV
         </Button>
-      )}
-
-      <div style={{ marginLeft: "auto", display: "flex", gap: 10, alignItems: "flex-end" }}>
-        <Field label="Safe when success ≥" style={{ width: 150 }}>
-          <NumberInput
-            aria-label="Safety threshold, in percent"
-            value={Math.round(threshold * 100)}
-            decimals={0}
-            min={0}
-            max={100}
-            suffix="%"
-            onCommit={(percent) => setThreshold(percent / 100)}
-            style={{ minHeight: 30 }}
-          />
-        </Field>
-        <Button variant="primary" onClick={run} disabled={sweep.active || !xAxis}>
-          Run analysis
+        <Button
+          variant="primary"
+          shortcut="r"
+          onClick={run}
+          disabled={sweep.active || enabledCount === 0 || over}
+        >
+          Run sweep
         </Button>
       </div>
     </div>
+  );
+
+  const strip = (
+    <VariableStrip
+      parameters={parameters}
+      variables={variables}
+      open={varsOpen}
+      onToggleOpen={() => setVarsOpen((open) => !open)}
+      onChange={editVariable}
+      onRetarget={retargetVariable}
+      onAdd={addVariable}
+      onRemove={removeVariable}
+      iterations={iterations}
+      onIterations={(next) =>
+        setIterations(Math.min(MAX_ITERATIONS, Math.max(MIN_ITERATIONS, next)))
+      }
+      dirty={ranWith != null && ranWith !== signature}
+      disabled={sweep.active}
+    />
   );
 
   if (sweep.active) {
     return (
       <>
         {toolbar}
+        {strip}
         <JobProgress job={sweep.job} onCancel={sweep.cancel} label="Sweeping" />
       </>
     );
   }
 
-  if (!view) {
-    // No grid yet. The ranking is the honest thing to offer first: it costs a
-    // fraction of a sweep and it says which axes are worth the sweep.
+  if (!space) {
     return (
       <>
         {toolbar}
+        {strip}
         {sweep.error && <Problem message={sweep.error} />}
         <Empty
           sensitivity={sensitivity}
           parameters={parameters}
-          axes={{ x: xAxis?.parameterId, y: yAxis?.parameterId }}
-          onPickAxis={pickAxis}
+          swept={new Set(variables.filter((v) => v.enabled).map((v) => v.parameterId))}
+          onToggle={toggleVariable}
           onRank={rank}
           onSweep={run}
+          canSweep={enabledCount > 0 && !over}
         />
       </>
     );
   }
 
-  const focus = hover ?? pinned ?? view.planCell ?? { x: 0, y: 0 };
-  const focused = view.at(focus.x, focus.y);
-  const rows = frontierRows(view);
-  const sliceX = sliceAlongX(view, focus.y);
-  const sliceY = sliceAlongY(view, focus.x);
-  const simulations = view.cells.length * view.iterations;
+  const current = graphs.find((g) => g.id === selected) ?? graphs[0];
+  const currentView = current ? graphView(space, current) : undefined;
+  const update = (next: GraphSpec) =>
+    setLayout(graphs.map((g) => (g.id === next.id ? next : g)));
 
   return (
     <>
       {toolbar}
+      {strip}
       <SplitPane
-        railWidth={320}
+        railWidth={272}
         main={
-          <div style={{ padding: "16px 18px 18px" }}>
+          <div style={{ padding: "14px 18px 20px" }}>
             <div
               style={{
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                marginBottom: 6,
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 14,
+                alignItems: "start",
               }}
             >
-              <h4 style={{ margin: 0 }}>
-                Success rate{" "}
-                <span className="text-muted" style={{ fontSize: 12, letterSpacing: 0 }}>
-                  {view.yAxis ? `${view.yAxis.label} × ${view.xAxis.label}` : view.xAxis.label}
-                </span>
-              </h4>
-              <span
-                style={{
-                  fontSize: 11,
-                  color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
+              {graphs.map((spec, index) => {
+                const view = graphView(space, spec);
+                return view ? (
+                  <GraphCard
+                    key={spec.id}
+                    view={view}
+                    position={index + 1}
+                    selected={spec.id === current?.id}
+                    onSelect={() => setSelected(spec.id)}
+                    onTurn={
+                      spec.kind === "surface"
+                        ? (azimuth, elevation) => update({ ...spec, azimuth, elevation })
+                        : undefined
+                    }
+                  />
+                ) : (
+                  <GraphGap key={spec.id} spec={spec} position={index + 1} />
+                );
+              })}
+              <button
+                type="button"
+                className="blueprint add-graph"
+                onClick={() => {
+                  const spec = newGraph(space.axes, graphs);
+                  if (!spec) return;
+                  setLayout([...graphs, spec]);
+                  setSelected(spec.id);
                 }}
               >
-                hover reads · click pins
-              </span>
+                <i className="corner tl" />
+                <i className="corner tr" />
+                <i className="corner bl" />
+                <i className="corner br" />
+                <span style={{ fontSize: 22, lineHeight: 1 }}>+</span> Add graph
+              </button>
             </div>
-
-            <SweepGrid
-              view={view}
-              hover={hover}
-              onHover={setHover}
-              pinned={pinned}
-              onPin={(next) =>
-                setPinned((current) =>
-                  current && current.x === next.x && current.y === next.y ? undefined : next,
-                )
-              }
-            />
-            <SweepLegend view={view} />
-
-            {view.yAxis && (
-              <>
-                <h6 style={{ margin: "18px 0 6px" }}>
-                  {view.fallsWithY ? "Highest" : "Lowest"} safe {view.yAxis.label}{" "}
-                  <span className="text-muted" style={{ letterSpacing: 0 }}>
-                    clearing {fmtPercent(threshold, 0)}, by {view.xAxis.label}
-                  </span>
-                </h6>
-                <Table compact>
-                  <thead>
-                    <tr>
-                      <Th>{view.xAxis.role}</Th>
-                      <Th align="right">Safe {view.yAxis.role}</Th>
-                      <Th align="right">Success</Th>
-                      <Th align="right">P50 terminal</Th>
-                      <Th align="right">vs plan</Th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.map((row) => (
-                      <tr key={row.x}>
-                        <Td style={{ fontFamily: "var(--font-heading)", fontWeight: 600 }}>
-                          {paramValue(view.xAxis.kind, row.xValue)}
-                        </Td>
-                        <Td align="right" style={{ fontWeight: 500 }}>
-                          {row.yValue == null
-                            ? "nothing clears it"
-                            : paramValue(view.yAxis!.kind, row.yValue)}
-                        </Td>
-                        <Td align="right">
-                          {row.point ? fmtPercent(row.point.success_rate) : "—"}
-                        </Td>
-                        <Td align="right">{row.point ? fmtCompact(row.point.p50) : "—"}</Td>
-                        <Td align="right" muted>
-                          {row.delta == null
-                            ? "—"
-                            : row.delta === 0
-                              ? "as planned"
-                              : (row.delta > 0 ? "+" : "−") +
-                                paramValue(view.yAxis!.kind, Math.abs(row.delta))}
-                        </Td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </Table>
-              </>
-            )}
           </div>
         }
         rail={
-          <div
-            style={{
-              padding: "16px 16px 18px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 16,
-            }}
-          >
-            <Blueprint style={{ padding: "12px 14px" }}>
-              <StatLabel>{hover ? "under the pointer" : pinned ? "pinned cell" : "the plan"}</StatLabel>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr",
-                  gap: "10px 14px",
-                  marginTop: 8,
-                }}
-              >
-                <InlineStat
-                  label={view.xAxis.role}
-                  value={paramValue(view.xAxis.kind, view.xAxis.values[focus.x])}
-                />
-                {view.yAxis && (
-                  <InlineStat
-                    label={view.yAxis.role}
-                    value={paramValue(view.yAxis.kind, view.yAxis.values[focus.y])}
-                  />
-                )}
-                <InlineStat
-                  label="success"
-                  emphasis
-                  value={focused ? fmtPercent(focused.point.success_rate) : "—"}
-                />
-                <InlineStat
-                  label="P50 terminal"
-                  value={focused ? fmtCompact(focused.point.p50) : "—"}
-                />
-              </div>
-              <p
-                style={{
-                  fontSize: 11.5,
-                  margin: "10px 0 0",
-                  color: "color-mix(in srgb, var(--color-text) 60%, transparent)",
-                  textWrap: "pretty",
-                }}
-              >
-                {focused
-                  ? describe(focused.point.success_rate, view.plan.success_rate, threshold)
-                  : "This combination was not measured."}
-              </p>
-              {view.yAxis && (
-                <Button
-                  block
-                  variant="secondary"
-                  className="mt-[10px]"
-                  title={`Goal seek ${view.yAxis.label}`}
-                  onClick={() => onSolveFor(view.yAxis!.parameter_id)}
-                >
-                  Solve this axis exactly
-                </Button>
-              )}
-            </Blueprint>
-
-            <div>
-              <h6 style={{ margin: "0 0 6px" }}>
-                Success vs {view.xAxis.role}{" "}
-                {view.yAxis && (
-                  <span className="text-muted" style={{ letterSpacing: 0 }}>
-                    at {paramValue(view.yAxis.kind, view.yAxis.values[focus.y])}
-                  </span>
-                )}
-              </h6>
-              <SliceChart slice={sliceX} threshold={threshold} marked={focus.x} />
-            </div>
-
-            {sliceY && view.yAxis && (
-              <div>
-                <h6 style={{ margin: "0 0 6px" }}>
-                  Success vs {view.yAxis.role}{" "}
-                  <span className="text-muted" style={{ letterSpacing: 0 }}>
-                    at {paramValue(view.xAxis.kind, view.xAxis.values[focus.x])}
-                  </span>
-                </h6>
-                <SliceChart slice={sliceY} threshold={threshold} marked={focus.y} />
-              </div>
-            )}
-
-            <p
-              style={{
-                fontSize: 11.5,
-                margin: "auto 0 0",
-                color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
-                textWrap: "pretty",
+          currentView && current ? (
+            <GraphInspector
+              space={space}
+              view={currentView}
+              position={graphs.indexOf(current) + 1}
+              count={graphs.length}
+              onChange={update}
+              onRemove={() => {
+                setLayout(graphs.filter((g) => g.id !== current.id));
+                setSelected(undefined);
               }}
-            >
-              The threshold and the axis swap re-read the finished sweep. Only a
-              new range or a new parameter needs another run.
-            </p>
-          </div>
+              onReset={() => {
+                setLayout(defaultGraphs(space.axes));
+                setSelected(undefined);
+              }}
+              onSolveFor={onSolveFor}
+            />
+          ) : (
+            <div style={{ padding: "14px 16px", fontSize: 12.5 }}>
+              <p style={{ margin: 0 }}>
+                Nothing selected. Click a graph to edit it, or add one.
+              </p>
+              <Button className="mt-[10px]" onClick={() => setLayout(defaultGraphs(space.axes))}>
+                Reset layout
+              </Button>
+            </div>
+          )
         }
       />
-      <div
-        style={{
-          padding: "8px 20px",
-          borderTop: "1px solid var(--color-divider)",
-          fontSize: 11,
-          color: "color-mix(in srgb, var(--color-text) 50%, transparent)",
-        }}
-      >
-        {view.cells.length} points × {fmtInt(view.iterations)} iterations ·{" "}
-        {fmtInt(simulations)} simulations
-        {sweep.job?.elapsed_ms != null && ` · ${(sweep.job.elapsed_ms / 1000).toFixed(1)}s`}
-      </div>
     </>
   );
 }
 
-/** What the focused cell means, relative to the plan and the threshold. */
-function describe(rate: number, plan: number, threshold: number): string {
-  const delta = Math.round((rate - plan) * 1000) / 10;
-  const move =
-    Math.abs(delta) < 0.1
-      ? "the same success as the plan"
-      : `${Math.abs(delta).toFixed(1)} points ${delta > 0 ? "above" : "below"} the plan`;
-  return `${rate >= threshold ? "Clears" : "Misses"} the threshold — ${move}.`;
+/** More variables, fewer steps each: the budget is the product, not the count. */
+function stepsFor(count: number): number {
+  if (count <= 2) return SEED_STEPS;
+  return count === 3 ? 4 : 3;
 }
 
 function Problem({ message }: { message: string }) {
   return (
     <p role="alert" style={{ padding: "10px 20px", margin: 0, fontSize: 12.5 }}>
-      The analysis did not finish: {message}
+      The sweep did not finish: {message}
     </p>
   );
 }
 
-/** No grid yet: offer the cheap ranking that says which axes deserve one. */
+/** No sweep yet: offer the cheap ranking that says which variables deserve one. */
 function Empty({
   sensitivity,
   parameters,
-  axes,
-  onPickAxis,
+  swept,
+  onToggle,
   onRank,
   onSweep,
+  canSweep,
 }: {
   sensitivity: ReturnType<typeof useAnalysis<"sensitivity">>;
   parameters: AnalysisParameter[];
-  axes: { x: string | undefined; y: string | undefined };
-  onPickAxis: (slot: "x" | "y", parameterId: string) => void;
+  swept: Set<string>;
+  onToggle: (parameterId: string) => void;
   onRank: () => void;
   onSweep: () => void;
+  canSweep: boolean;
 }) {
   if (sensitivity.active) {
     return <JobProgress job={sensitivity.job} onCancel={sensitivity.cancel} label="Ranking" />;
@@ -479,15 +416,16 @@ function Empty({
       <SensitivityPanel
         results={sensitivity.results}
         parameters={parameters}
-        axes={axes}
-        onPickAxis={onPickAxis}
+        swept={swept}
+        onToggle={onToggle}
         onSweep={onSweep}
+        canSweep={canSweep}
       />
     );
   }
 
   return (
-    <div style={{ padding: "34px 24px 40px", maxWidth: 560 }}>
+    <div style={{ padding: "34px 24px 40px", maxWidth: 600 }}>
       <h4 style={{ margin: "0 0 6px" }}>Nothing swept yet</h4>
       <p
         style={{
@@ -497,9 +435,10 @@ function Empty({
           color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
         }}
       >
-        A sweep runs the plan once for every combination of the axes above and
-        colours the grid by how often it survives. Ranking first is cheaper: two
-        runs a parameter, and it says which two are worth the axes.
+        A sweep runs the plan once for every combination of the variables above,
+        and then any number of graphs read that one result. Ranking first is
+        cheaper: two runs a parameter, and it says which variables are worth
+        sweeping at all.
       </p>
       {sensitivity.error && (
         <p role="alert" style={{ fontSize: 12.5 }}>
@@ -510,16 +449,15 @@ function Empty({
         <Button variant="primary" onClick={onRank}>
           Rank the parameters
         </Button>
-        <Button onClick={onSweep} disabled={axes.x == null}>
-          Sweep {axes.x ? paramIdOf(parameters, axes.x) : ""}
-          {axes.y ? ` × ${paramIdOf(parameters, axes.y)}` : ""}
+        <Button onClick={onSweep} disabled={!canSweep}>
+          Sweep {[...swept].map((id) => idOf(parameters, id)).join(" × ") || "nothing"}
         </Button>
       </div>
     </div>
   );
 }
 
-function paramIdOf(parameters: AnalysisParameter[], id: string): string {
+function idOf(parameters: AnalysisParameter[], id: string): string {
   const parameter = parameters.find((p) => p.id === id);
   return parameter ? paramId(parameter) : id;
 }

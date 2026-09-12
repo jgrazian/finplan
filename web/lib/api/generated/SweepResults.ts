@@ -8,7 +8,8 @@ import type { SweepCell } from "./SweepCell";
  */
 export type SweepResults = {
   /**
-   * One or two axes, in the order the cells' indices follow.
+   * The swept variables, in the order the cells' indices follow. A graph
+   * picks one or two of these for its own axes and holds the rest.
    */
   axes: Array<SweepAxis>;
   /**
