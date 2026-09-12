@@ -619,6 +619,80 @@ function freshId(): string {
   return `g${counter}`;
 }
 
+/**
+ * A stored layout, checked before anything is drawn from it.
+ *
+ * The server keeps the workspace as the JSON the client sent and never reads
+ * into it, so this is the boundary where it becomes graphs again: anything
+ * whose kind, metric or X axis is not one this build knows is dropped rather
+ * than drawn, and a layout with nothing left in it reads as no layout, which
+ * opens on the defaults. Graphs pointing at variables that are no longer swept
+ * are kept — `reconcile` moves those, and losing a card because the sweep
+ * changed is exactly what it exists to prevent.
+ *
+ * Ids come back with the layout, so the generator is advanced past them: a
+ * restored `g2` and a freshly added `g2` would be one card as far as React and
+ * the selection are concerned.
+ */
+export function parseLayout(value: unknown): GraphSpec[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const specs: GraphSpec[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    const spec = parseGraph(raw);
+    if (!spec || seen.has(spec.id)) continue;
+    seen.add(spec.id);
+    specs.push(spec);
+  }
+  if (specs.length === 0) return undefined;
+
+  for (const id of seen) {
+    const suffix = /^g(\d+)$/.exec(id);
+    if (suffix) counter = Math.max(counter, Number(suffix[1]));
+  }
+  return specs;
+}
+
+const KINDS: readonly GraphKind[] = ["line", "heatmap", "surface"];
+
+function parseGraph(raw: unknown): GraphSpec | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const graph = raw as Record<string, unknown>;
+
+  const id = typeof graph.id === "string" && graph.id.length > 0 ? graph.id : undefined;
+  const kind = KINDS.find((k) => k === graph.kind);
+  const chosen = METRICS.find((m) => m.id === graph.metric)?.id;
+  const x = typeof graph.x === "string" ? graph.x : undefined;
+  if (!id || !kind || !chosen || !x) return undefined;
+
+  const held: Record<string, number> = {};
+  if (typeof graph.held === "object" && graph.held !== null) {
+    for (const [parameterId, at] of Object.entries(graph.held)) {
+      if (typeof at === "number" && Number.isFinite(at)) held[parameterId] = Math.trunc(at);
+    }
+  }
+
+  const y = typeof graph.y === "string" ? graph.y : undefined;
+  return {
+    id,
+    kind,
+    metric: chosen,
+    colour: METRICS.find((m) => m.id === graph.colour)?.id,
+    azimuth: angle(graph.azimuth),
+    elevation: angle(graph.elevation),
+    x,
+    y: needsY(kind) ? y : undefined,
+    held,
+    wide: graph.wide === true,
+  };
+}
+
+/** A camera angle, or nothing — a stored `null` means "wherever the default is". */
+function angle(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 // ──────────────────────────── the export ────────────────────────────
 
 /** Every evaluated combination as CSV: the variables, then what they produced. */

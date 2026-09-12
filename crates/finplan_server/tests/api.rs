@@ -814,6 +814,53 @@ async fn a_converging_run_stops_short_of_its_ceiling() {
 }
 
 #[tokio::test]
+async fn a_scenario_keeps_only_its_newest_run() {
+    let mut app = TestApp::new().await;
+    app.login_as("one-run@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+
+    let path = format!("/api/scenarios/{scenario_id}/runs");
+    let body = |iterations: i64| json!({"iterations": iterations, "seed": 7, "percentiles": [0.5]});
+
+    let (_, first) = app.post(&path, body(30)).await;
+    let first_id = first["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(first_id).await, "succeeded");
+
+    let (status, second) = app.post(&path, body(40)).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{second}");
+    let second_id = second["id"].as_i64().unwrap();
+    assert_eq!(app.await_run(second_id).await, "succeeded");
+
+    // The scenario holds the second run and nothing else.
+    let (_, runs) = app.get(&format!("/api/scenarios/{scenario_id}/runs")).await;
+    let rows = runs.as_array().unwrap();
+    assert_eq!(rows.len(), 1, "a scenario holds one run: {runs}");
+    assert_eq!(rows[0]["id"].as_i64().unwrap(), second_id);
+    assert_eq!(rows[0]["iterations"], 40);
+
+    // SQLite hands the replacement the row id the deleted run had, so the
+    // first run's id is either gone or is now the second run's — never the
+    // first run's results.
+    let (status, results) = app.get(&format!("/api/runs/{first_id}/results")).await;
+    if first_id == second_id {
+        assert_eq!(
+            results["stats"]["num_iterations"], 40,
+            "stale results survived"
+        );
+    } else {
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "the previous run must be replaced"
+        );
+    }
+
+    let (status, results) = app.get(&format!("/api/runs/{second_id}/results")).await;
+    assert_eq!(status, StatusCode::OK, "{results}");
+    assert_eq!(results["stats"]["num_iterations"], 40);
+}
+
+#[tokio::test]
 async fn the_same_seed_produces_the_same_answer() {
     let mut app = TestApp::new().await;
     app.login_as("determinism@example.com").await;
@@ -1879,6 +1926,166 @@ async fn a_sweep_returns_a_grid_the_client_can_index() {
     // The plan sits at age 45 and $1,000, which is on both axes.
     assert_eq!(results["plan_indices"], json!([1, 1]));
     assert_eq!(results["iterations"], 25);
+}
+
+#[tokio::test]
+async fn the_newest_sweep_is_kept_so_a_reload_finds_it() {
+    let mut app = TestApp::new().await;
+    app.login_as("sweep-cache@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let cached = format!("/api/scenarios/{scenario_id}/analyses/sweep");
+
+    // Nothing swept yet is an ordinary answer, not a 404.
+    let (status, empty) = app.get(&cached).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(empty.is_null(), "{empty}");
+
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let age = params.as_array().unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let amount = params.as_array().unwrap()[1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (_, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "sweep", "iterations": 25, "axes": [
+                {"parameter_id": age, "min": 40, "max": 50, "steps": 3}
+            ]}),
+        )
+        .await;
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+
+    // The grid the job returned, readable without the job's id — which is what
+    // a reloaded page has lost.
+    let (_, live) = app.get(&format!("/api/analyses/{id}/results")).await;
+    let (status, restored) = app.get(&cached).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(restored["scenario_id"].as_i64().unwrap(), scenario_id);
+    assert!(!restored["created_at"].as_str().unwrap().is_empty());
+    assert_eq!(restored["results"]["axes"], live["axes"]);
+    assert_eq!(restored["results"]["cells"], live["cells"]);
+    assert_eq!(restored["results"]["iterations"], 25);
+
+    // A second sweep replaces it rather than joining it.
+    let (_, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "sweep", "iterations": 25, "axes": [
+                {"parameter_id": amount, "min": 500, "max": 2500, "steps": 4}
+            ]}),
+        )
+        .await;
+    assert_eq!(
+        app.await_analysis(job["id"].as_i64().unwrap()).await,
+        "succeeded"
+    );
+
+    let (_, restored) = app.get(&cached).await;
+    let axes = restored["results"]["axes"].as_array().unwrap();
+    assert_eq!(axes.len(), 1);
+    assert_eq!(axes[0]["parameter_id"].as_str().unwrap(), amount);
+    assert_eq!(restored["results"]["cells"].as_array().unwrap().len(), 4);
+
+    // It belongs to its owner: another account sweeping the same ids sees none.
+    app.login_as("sweep-cache-other@example.com").await;
+    let (status, _) = app.get(&cached).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "another user's scenario");
+}
+
+#[tokio::test]
+async fn the_graphs_arranged_over_a_sweep_are_kept_with_it() {
+    let mut app = TestApp::new().await;
+    app.login_as("sweep-layout@example.com").await;
+    let scenario_id = app.seed_analysable().await;
+    let cached = format!("/api/scenarios/{scenario_id}/analyses/sweep");
+    let layout = format!("{cached}/layout");
+
+    let (_, params) = app
+        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .await;
+    let age = params.as_array().unwrap()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (_, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "sweep", "iterations": 25, "axes": [
+                {"parameter_id": age, "min": 40, "max": 50, "steps": 3}
+            ]}),
+        )
+        .await;
+    assert_eq!(
+        app.await_analysis(job["id"].as_i64().unwrap()).await,
+        "succeeded"
+    );
+
+    // A fresh sweep carries no arrangement: the client opens on its defaults.
+    let (_, restored) = app.get(&cached).await;
+    assert!(restored["layout"].is_null(), "{restored}");
+
+    // The graphs are the client's own shapes, stored as sent.
+    let graphs = json!([
+        {"id": "g1", "kind": "line", "metric": "success", "x": age, "held": {}, "wide": true},
+        {"id": "g2", "kind": "surface", "metric": "p50", "x": age, "y": null,
+         "held": {}, "wide": false, "azimuth": 62, "elevation": 24}
+    ]);
+    let (status, _) = app.put(&layout, graphs.clone()).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, restored) = app.get(&cached).await;
+    assert_eq!(
+        restored["layout"], graphs,
+        "the layout must come back as it went in"
+    );
+
+    // Editing it replaces rather than appends, and re-running the sweep leaves
+    // the arrangement alone — it is reconciled onto the new axes, not lost.
+    let edited = json!([
+        {"id": "g1", "kind": "heatmap", "metric": "funding", "x": age, "held": {}, "wide": false}
+    ]);
+    let (status, _) = app.put(&layout, edited.clone()).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "sweep", "iterations": 25, "axes": [
+                {"parameter_id": age, "min": 42, "max": 48, "steps": 4}
+            ]}),
+        )
+        .await;
+    assert_eq!(
+        app.await_analysis(job["id"].as_i64().unwrap()).await,
+        "succeeded"
+    );
+
+    let (_, restored) = app.get(&cached).await;
+    assert_eq!(restored["layout"], edited);
+    assert_eq!(
+        restored["results"]["axes"][0]["values"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+
+    // Only an array is a layout, and only the owner may store one.
+    let (status, _) = app.put(&layout, json!({"graphs": []})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    app.login_as("sweep-layout-other@example.com").await;
+    let (status, _) = app.put(&layout, json!([])).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

@@ -11,6 +11,7 @@ import type {
   AnalysisOutcome,
   AnalysisParameter,
   Asset,
+  CachedSweep,
   CompileReport,
   CreateAccount,
   CreateAnalysis,
@@ -189,6 +190,20 @@ export const api = {
     cancel: (id: number) => http.post<Analysis>(`/analyses/${id}/cancel`),
     /** Refused until the job reaches `succeeded`. */
     results: (id: number) => http.get<AnalysisOutcome>(`/analyses/${id}/results`),
+    /**
+     * The scenario's most recent sweep, kept server-side so a reload finds the
+     * grid again. `null` before anything has been swept. Keyed by scenario
+     * rather than by job id, which is what a reloaded page no longer holds.
+     */
+    cachedSweep: (scenarioId: number) =>
+      http.get<CachedSweep | null>(`${scenario(scenarioId)}/analyses/sweep`),
+    /**
+     * Store how the sweep's graphs are arranged. The server keeps the array as
+     * sent and never reads into it, so the shape of a graph stays a client
+     * decision; `parseLayout` is where it is checked on the way back.
+     */
+    saveSweepLayout: (scenarioId: number, graphs: unknown[]) =>
+      http.put<void>(`${scenario(scenarioId)}/analyses/sweep/layout`, graphs),
   },
 
   runs: {

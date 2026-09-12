@@ -12,7 +12,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use finplan_core::analysis::{
     SolveConfig, SolveConstraint, SolveConstraintMetric, SolveObjective, SweepConfig,
@@ -20,9 +20,10 @@ use finplan_core::analysis::{
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::analysis::cache;
 use crate::analysis::jobs::JobSpec;
 use crate::analysis::params::{PlanParameter, parameters};
-use crate::analysis::results::{AnalysisOutcome, AnalysisParameter};
+use crate::analysis::results::{AnalysisOutcome, AnalysisParameter, CachedSweep};
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult};
@@ -32,6 +33,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/scenarios/{scenario_id}/parameters", get(list_parameters))
         .route("/scenarios/{scenario_id}/analyses", post(create))
+        .route("/scenarios/{scenario_id}/analyses/sweep", get(cached_sweep))
+        .route(
+            "/scenarios/{scenario_id}/analyses/sweep/layout",
+            put(save_layout),
+        )
         .route("/analyses/{id}", get(fetch))
         .route("/analyses/{id}/cancel", post(cancel))
         .route("/analyses/{id}/results", get(results))
@@ -346,6 +352,53 @@ async fn create(
         .start(scenario_id, &user.id, compiled.config, spec);
     let view = state.analyses.view(handle.id, &user.id)?;
     Ok((StatusCode::ACCEPTED, Json(view.into())))
+}
+
+/// The scenario's most recent sweep, or `null` if it has never been swept.
+///
+/// Jobs are held in memory and their ids do not survive a restart, so this is
+/// keyed by scenario rather than by job: the client asks what the plan was last
+/// swept over, not what some id it used to hold produced.
+async fn cached_sweep(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(scenario_id): Path<i64>,
+) -> ApiResult<Json<Option<CachedSweep>>> {
+    crate::api::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    Ok(Json(cache::load(&state.db, scenario_id, &user.id).await?))
+}
+
+/// The biggest layout the server will hold.
+///
+/// A workspace is a handful of cards and each is a few hundred bytes; a
+/// megabyte of it is a client gone wrong, not a screen anyone arranged.
+const MAX_LAYOUT_BYTES: usize = 64 * 1024;
+
+/// Store how the Analysis screen's graphs are arranged over this scenario's
+/// sweep.
+///
+/// The body is the client's own graph specs, kept opaque: what a card draws and
+/// how is the client's business from end to end, and a typed contract here
+/// would mean a server deploy to add a chart kind. The only checks are the ones
+/// storage genuinely needs — it must be an array, and it must be small.
+async fn save_layout(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(scenario_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<StatusCode> {
+    crate::api::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    if !body.is_array() {
+        return Err(ApiError::bad_request("a layout is an array of graphs"));
+    }
+    if body.to_string().len() > MAX_LAYOUT_BYTES {
+        return Err(ApiError::bad_request(format!(
+            "a layout must be under {} KB",
+            MAX_LAYOUT_BYTES / 1024
+        )));
+    }
+    cache::save_layout(&state.db, scenario_id, &user.id, &body).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn fetch(

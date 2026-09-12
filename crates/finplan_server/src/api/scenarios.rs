@@ -41,8 +41,9 @@ pub struct Scenario {
     pub last_success_rate: Option<f64>,
 }
 
-/// The trailing two columns are the last *succeeded* run, so a failed attempt
-/// never overwrites the figure a scenario is still fairly described by.
+/// The trailing two columns describe the scenario's run, and only a succeeded
+/// one: a scenario holds a single run (see `0008_one_run_per_scenario.sql`), so
+/// where that run failed the card shows no figure rather than a stale one.
 const SCENARIO_COLUMNS: &str = "id, name, description, start_date, birth_date, duration_years,
      inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at,
      (SELECT r.finished_at FROM runs r

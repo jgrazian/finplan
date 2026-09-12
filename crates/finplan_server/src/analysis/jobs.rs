@@ -17,11 +17,13 @@ use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, MonteCarloStats}
 use finplan_core::simulation::monte_carlo_stats_only;
 use tokio::sync::Semaphore;
 
+use super::cache;
 use super::params::PlanParameter;
 use super::results::{
     AnalysisOutcome, AnalysisParameter, AnalysisPoint, SensitivityResults, SensitivityRow,
     SolveOutcome, SweepAxis, SweepCell, SweepResults,
 };
+use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 
 /// Terminal net worth percentiles every analysis asks for, so a cell, a probe
@@ -169,6 +171,8 @@ struct Registry {
 #[derive(Clone)]
 pub struct AnalysisJobs {
     inner: Arc<Mutex<Registry>>,
+    /// Only a finished sweep touches it — see [`cache`].
+    db: Db,
     /// Caps concurrent analyses the same way the run pool caps runs: each one
     /// is already rayon-parallel inside.
     permits: Arc<Semaphore>,
@@ -179,9 +183,10 @@ pub type Outcome = AnalysisOutcome;
 
 impl AnalysisJobs {
     #[must_use]
-    pub fn new(workers: usize) -> Self {
+    pub fn new(db: Db, workers: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Registry::default())),
+            db,
             permits: Arc::new(Semaphore::new(workers.max(1))),
         }
     }
@@ -238,6 +243,7 @@ impl AnalysisJobs {
         let jobs = self.clone();
         let permits = self.permits.clone();
         let handle_progress = progress.clone();
+        let owner = user_id.to_string();
         tokio::spawn(async move {
             let Ok(_permit) = permits.acquire_owned().await else {
                 return;
@@ -253,7 +259,17 @@ impl AnalysisJobs {
                 tokio::task::spawn_blocking(move || run(&base, &spec, &handle_progress)).await;
 
             match outcome {
-                Ok(Ok(result)) => jobs.finish(id, JobStatus::Succeeded, Some(result), None),
+                Ok(Ok(result)) => {
+                    // A sweep outlives its job: the screen it draws is restored
+                    // from here after a reload. A write that fails costs the
+                    // restore and nothing else, so it is logged, not raised.
+                    if let AnalysisOutcome::Sweep(sweep) = &result
+                        && let Err(err) = cache::save(&jobs.db, scenario_id, &owner, sweep).await
+                    {
+                        tracing::warn!(scenario_id, error = %err, "failed to cache sweep");
+                    }
+                    jobs.finish(id, JobStatus::Succeeded, Some(result), None);
+                }
                 Ok(Err(err)) if err.is_cancel() => {
                     jobs.finish(id, JobStatus::Canceled, None, None);
                 }

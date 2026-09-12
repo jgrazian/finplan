@@ -12,7 +12,8 @@ pub struct AppState {
     pub db: Db,
     pub config: Arc<ServerConfig>,
     pub runs: RunQueue,
-    /// Sweeps, sensitivity rankings and goal seeks. Unlike runs these are not
-    /// persisted — see `analysis`.
+    /// Sweeps, sensitivity rankings and goal seeks. Unlike runs these are held
+    /// in memory; only the newest sweep of each scenario is written back, so
+    /// the Analysis screen survives a reload. See `analysis`.
     pub analyses: AnalysisJobs,
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
 import type { Analysis, AnalysisOutcome, CreateAnalysis } from "@/lib/api/types";
 import { isTerminal } from "@/lib/api/types";
+import type { GraphSpec } from "@/lib/view/sweep";
 import { useAsync } from "./useAsync";
 
 /** How often a queued or running analysis is re-checked. */
@@ -154,6 +155,95 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
     cancel,
     clear,
   };
+}
+
+/**
+ * The scenario's most recent sweep, as the server kept it.
+ *
+ * A sweep is minutes of CPU and the whole Analysis screen is drawn from it, so
+ * unlike the other two analyses its answer outlives the job that produced it:
+ * the server stores the newest grid per scenario and this reads it back, which
+ * is what makes a page reload land on the graphs rather than on the empty
+ * state. `at` is when it was run — the one thing on that screen that may be
+ * older than the plan it describes.
+ *
+ * Held apart from `useAnalysis` rather than folded into it: a restored grid is
+ * not a job — it has no id to poll, no progress and nothing to cancel — and the
+ * screen chooses between the two, preferring whatever this session has run.
+ */
+export function useCachedSweep(scenarioId: number | undefined) {
+  const { data, loading } = useAsync(
+    async () => (scenarioId == null ? null : api.analysis.cachedSweep(scenarioId)),
+    [scenarioId],
+  );
+  const cached = data ?? undefined;
+
+  return {
+    results: cached?.results,
+    /** When the restored sweep was run, as epoch milliseconds. */
+    at: cached ? Date.parse(`${cached.created_at.replace(" ", "T")}Z`) : undefined,
+    /** The stored graph layout, unchecked — hand it to `parseLayout`. */
+    layout: cached?.layout,
+    loading,
+  };
+}
+
+/**
+ * How long an edit waits before it is stored.
+ *
+ * Most edits are one click and could be written immediately, but turning a
+ * surface is a drag that fires on every frame, and a request per frame is a
+ * request per frame however small the body is. Short enough that an arrangement
+ * is safe by the time anyone reaches for the tab bar.
+ */
+const LAYOUT_SAVE_MS = 500;
+
+/**
+ * The sweep's graph layout: the arrangement on screen, and its storage.
+ *
+ * Held the same way the swept variables are — the stored layout until someone
+ * edits it, the edit after that — so a reload opens on the workspace it closed
+ * on. Writes are coalesced, and a pending one is flushed when the screen goes
+ * away rather than dropped with it.
+ *
+ * A failed write costs the arrangement and nothing else: the grid it describes
+ * is already stored, and every graph can be put back in a couple of clicks. So
+ * it stays quiet rather than interrupting the screen with it.
+ */
+export function useSweepLayout(
+  scenarioId: number | undefined,
+  stored: GraphSpec[] | undefined,
+) {
+  const [edited, setEdited] = useState<GraphSpec[]>();
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const queued = useRef<GraphSpec[]>(undefined);
+
+  const flush = useCallback(() => {
+    const graphs = queued.current;
+    queued.current = undefined;
+    if (scenarioId == null || graphs == null) return;
+    void api.analysis.saveSweepLayout(scenarioId, graphs).catch(() => {});
+  }, [scenarioId]);
+
+  const setLayout = useCallback(
+    (graphs: GraphSpec[]) => {
+      setEdited(graphs);
+      queued.current = graphs;
+      clearTimeout(timer.current);
+      timer.current = setTimeout(flush, LAYOUT_SAVE_MS);
+    },
+    [flush],
+  );
+
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      flush();
+    },
+    [flush],
+  );
+
+  return { layout: edited ?? stored, setLayout };
 }
 
 /** The plan's varyable parameters, loaded once per scenario. */

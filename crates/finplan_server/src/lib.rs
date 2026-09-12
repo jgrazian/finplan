@@ -53,7 +53,7 @@ pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn s
     let runs = runner::spawn(db.clone(), config.sim_workers);
     runner::requeue_orphans(&db, &runs).await?;
 
-    let analyses = analysis::AnalysisJobs::new(config.sim_workers);
+    let analyses = analysis::AnalysisJobs::new(db.clone(), config.sim_workers);
 
     let state = AppState {
         db: db.clone(),

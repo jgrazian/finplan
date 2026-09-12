@@ -9,7 +9,7 @@
 
 use finplan_core::analysis::{SolveMethod, SolveProbe, SolveResults};
 use finplan_core::model::MonteCarloStats;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::params::{ParamKind, PlanParameter};
@@ -53,7 +53,7 @@ impl From<&PlanParameter> for AnalysisParameter {
 }
 
 /// One outcome, wherever it was measured — a grid cell, a probe, a baseline.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct AnalysisPoint {
     /// Fraction of runs ending solvent, 0–1.
@@ -99,7 +99,7 @@ fn point_from_probe(probe: &SolveProbe) -> AnalysisPoint {
 }
 
 /// One axis of a sweep: which parameter, and the values it was stepped over.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SweepAxis {
     pub parameter_id: String,
@@ -114,7 +114,7 @@ pub struct SweepAxis {
 
 /// One evaluated combination. `indices` positions it on the axes above, in the
 /// same order, and carries one entry per swept variable.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SweepCell {
     pub indices: Vec<u32>,
@@ -124,7 +124,7 @@ pub struct SweepCell {
 }
 
 /// A finished sweep.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SweepResults {
     /// The swept variables, in the order the cells' indices follow. A graph
@@ -140,6 +140,26 @@ pub struct SweepResults {
     pub plan_indices: Option<Vec<u32>>,
     /// Monte Carlo iterations behind each cell.
     pub iterations: u32,
+}
+
+/// A sweep read back from the cache rather than from the job that ran it.
+///
+/// Carries when it was run, because a restored grid is the one thing on the
+/// Analysis screen that may be older than the plan it describes: the screen
+/// says so in its footer instead of passing it off as this session's answer.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct CachedSweep {
+    pub scenario_id: i64,
+    /// When the sweep finished, UTC, `YYYY-MM-DD HH:MM:SS`.
+    pub created_at: String,
+    pub results: SweepResults,
+    /// The graphs arranged over this grid, exactly as the client stored them,
+    /// or `null` where nobody has arranged any. Opaque here: what a graph is
+    /// drawn as, against what, and sliced where are the client's choices, and
+    /// typing them server-side would mean a deploy to add a chart kind.
+    #[ts(type = "unknown")]
+    pub layout: Option<serde_json::Value>,
 }
 
 /// One parameter's ±band and what moving it did.

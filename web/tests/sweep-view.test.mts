@@ -18,6 +18,7 @@ import {
   metric,
   needsY,
   newGraph,
+  parseLayout,
   reconcile,
   shade,
   sweepCsv,
@@ -392,4 +393,70 @@ test("the metric menu offers every measure a cell carries", () => {
   assert.equal(metric("success").format(0.912), "91.2%");
   assert.equal(metric("p50").format(1_250_000), "$1,250,000");
   assert.equal(metric("p50").tick(1_250_000), "$1.25M");
+});
+
+test("a stored layout comes back as graphs, and junk in it does not", () => {
+  const stored = [
+    { id: "g7", kind: "surface", metric: "p50", colour: "success", x: "event:1:age",
+      y: "event:2:amount", held: { "event:3:amount": 1 }, wide: true,
+      azimuth: 62, elevation: 24 },
+    // Written by a newer build, or by hand: not a kind this one can draw.
+    { id: "g8", kind: "contour", metric: "success", x: "event:1:age", held: {}, wide: false },
+    // A measure that no longer exists, and an axis that was never a string.
+    { id: "g9", kind: "line", metric: "sharpe", x: "event:1:age", held: {}, wide: false },
+    { id: "g10", kind: "line", metric: "success", x: 3, held: {}, wide: false },
+    // The same card twice: the second is the one to drop.
+    { id: "g7", kind: "line", metric: "success", x: "event:1:age", held: {}, wide: false },
+    "not a graph at all",
+  ];
+
+  const layout = parseLayout(stored);
+  assert.ok(layout);
+  assert.deepEqual(
+    layout.map((g) => g.id),
+    ["g7"],
+  );
+  const [surface] = layout;
+  assert.equal(surface.kind, "surface");
+  assert.equal(surface.metric, "p50");
+  assert.equal(surface.colour, "success");
+  assert.equal(surface.y, "event:2:amount");
+  assert.deepEqual(surface.held, { "event:3:amount": 1 });
+  assert.equal(surface.wide, true);
+  assert.equal(surface.azimuth, 62);
+  assert.equal(surface.elevation, 24);
+
+  // Nothing readable is no layout, which is what opens on the defaults.
+  assert.equal(parseLayout([{ id: "g1", kind: "pie" }]), undefined);
+  assert.equal(parseLayout(null), undefined);
+  assert.equal(parseLayout({ graphs: [] }), undefined);
+
+  // Ids are reserved, so a graph added after a restore is not the restored one.
+  const added = newGraph(AXES, layout);
+  assert.ok(added);
+  assert.notEqual(added.id, "g7");
+  assert.equal(
+    layout.some((g) => g.id === added.id),
+    false,
+  );
+});
+
+test("a restored layout survives the sweep it was drawn over being re-run", () => {
+  const layout = parseLayout([
+    { id: "g4", kind: "heatmap", metric: "funding", x: "event:1:age",
+      y: "event:2:amount", held: { "event:3:amount": 1 }, wide: false },
+  ]);
+  assert.ok(layout);
+
+  // Re-run over one of its two variables and a new one: the card keeps its kind
+  // and its metric, and is moved onto axes that are actually there.
+  const carried = reconcile(layout, [AXES[0], AXES[2]]);
+  assert.equal(carried.length, 1);
+  assert.equal(carried[0].id, "g4");
+  assert.equal(carried[0].kind, "heatmap");
+  assert.equal(carried[0].metric, "funding");
+  assert.equal(carried[0].x, "event:1:age");
+  assert.equal(carried[0].y, "event:3:amount");
+  // The hold named a variable that is on an axis now, so it is no longer a hold.
+  assert.deepEqual(carried[0].held, {});
 });

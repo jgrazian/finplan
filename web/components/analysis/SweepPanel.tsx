@@ -5,12 +5,13 @@ import { SplitPane } from "@/components/layout";
 import { Button } from "@/components/ui";
 import { fmtClock, fmtInt } from "@/lib/format";
 import type { AnalysisParameter } from "@/lib/api/types";
-import { useAnalysis } from "@/lib/hooks/useAnalysis";
+import { useAnalysis, useCachedSweep, useSweepLayout } from "@/lib/hooks/useAnalysis";
 import { paramId } from "@/lib/view/analysis";
 import {
   defaultGraphs,
   graphView,
   newGraph,
+  parseLayout,
   reconcile,
   sweepCsv,
   sweepSpace,
@@ -66,16 +67,56 @@ export function SweepPanel({
 }) {
   const sweep = useAnalysis(scenarioId, "sweep");
   const sensitivity = useAnalysis(scenarioId, "sensitivity");
+  // The last sweep the server kept, which is what a reloaded page opens on.
+  const restored = useCachedSweep(scenarioId);
 
-  const [variables, setVariables] = useState<SweptVariable[]>(() =>
-    parameters.slice(0, SEED_VARIABLES).map((p) => variableFor(p, SEED_STEPS)),
-  );
-  const [iterations, setIterations] = useState(SEED_ITERATIONS);
-  const [varsOpen, setVarsOpen] = useState(true);
+  /**
+   * What the strip offers before anyone touches it.
+   *
+   * The restored grid where there is one, so a reload lands on the variables
+   * that produced the graphs on screen rather than on the plan's first two —
+   * pressing Run on a strip that disagrees with the graphs below it would
+   * silently answer a different question. Ranges and resolution come off the
+   * axes themselves, which carry every value they were stepped over.
+   */
+  const seeded = useMemo<SweptVariable[]>(() => {
+    const axes = (restored.results?.axes ?? []).filter((axis) =>
+      parameters.some((p) => p.id === axis.parameter_id),
+    );
+    if (axes.length > 0) {
+      return axes.map((axis) => ({
+        parameterId: axis.parameter_id,
+        min: axis.values[0],
+        max: axis.values[axis.values.length - 1],
+        steps: axis.values.length,
+        enabled: true,
+      }));
+    }
+    return parameters.slice(0, SEED_VARIABLES).map((p) => variableFor(p, SEED_STEPS));
+  }, [restored.results, parameters]);
+
+  // Edits win over the seed; before there are any, the seed is the strip. Held
+  // this way rather than copied into state by an effect, which would race the
+  // restore and flash the default over it.
+  const [edited, setEdited] = useState<SweptVariable[]>();
+  const variables = edited ?? seeded;
+
+  const [chosenIterations, setChosenIterations] = useState<number>();
+  const iterations = chosenIterations ?? restored.results?.iterations ?? SEED_ITERATIONS;
+
+  // Open until a sweep has run, and a restored one counts: the ranges are what
+  // the strip is for, and there is nothing to decide once a grid is on screen.
+  const [openedStrip, setOpenedStrip] = useState<boolean>();
+  const varsOpen = openedStrip ?? restored.results == null;
+
   const [ranWith, setRanWith] = useState<string>();
   const [ranAt, setRanAt] = useState<number>();
 
-  const [layout, setLayout] = useState<GraphSpec[]>([]);
+  // The arrangement of graphs over the grid, restored with it and stored as it
+  // is edited: a workspace built card by card is work, and reopening the tab on
+  // a default layout would throw it away as surely as losing the sweep did.
+  const storedLayout = useMemo(() => parseLayout(restored.layout), [restored.layout]);
+  const { layout, setLayout } = useSweepLayout(scenarioId, storedLayout);
   const [selected, setSelected] = useState<string>();
 
   const enabledCount = variables.filter((v) => v.enabled).length;
@@ -87,10 +128,11 @@ export function SweepPanel({
       .map((v) => `${v.parameterId}:${v.min}:${v.max}:${v.steps}`),
   ].join("|");
 
-  const space = useMemo(
-    () => (sweep.results ? sweepSpace(sweep.results) : undefined),
-    [sweep.results],
-  );
+  // This session's answer where there is one, and the stored one otherwise. A
+  // job that exists but has produced nothing — running, failed, canceled —
+  // speaks for itself: the restored grid would read as its result.
+  const results = sweep.job ? sweep.results : restored.results;
+  const space = useMemo(() => (results ? sweepSpace(results) : undefined), [results]);
 
   // A finished sweep decides what the layout can draw, so the graphs on screen
   // are the edited layout resolved against it rather than a second copy kept in
@@ -98,7 +140,7 @@ export function SweepPanel({
   // moved where they did not, which is what lets adding a variable and
   // re-running extend the screen instead of clearing it.
   const graphs = useMemo(
-    () => (space ? reconcile(layout, space.axes) : []),
+    () => (space ? reconcile(layout ?? [], space.axes) : []),
     [space, layout],
   );
 
@@ -107,7 +149,7 @@ export function SweepPanel({
     if (enabled.length === 0) return;
     setRanWith(signature);
     setRanAt(Date.now());
-    setVarsOpen(false);
+    setOpenedStrip(false);
     void sweep.start({
       kind: "sweep",
       iterations,
@@ -124,22 +166,22 @@ export function SweepPanel({
     void sensitivity.start({ kind: "sensitivity", parameter_ids: [], fraction: 0.2 });
   }, [sensitivity]);
 
-  const editVariable = useCallback((parameterId: string, next: SweptVariable) => {
-    setVariables((current) =>
-      current.map((v) => (v.parameterId === parameterId ? next : v)),
-    );
-  }, []);
+  const editVariable = useCallback(
+    (parameterId: string, next: SweptVariable) => {
+      setEdited(variables.map((v) => (v.parameterId === parameterId ? next : v)));
+    },
+    [variables],
+  );
 
   const addVariable = useCallback(() => {
-    setVariables((current) => {
-      const free = parameters.find((p) => !current.some((v) => v.parameterId === p.id));
-      return free ? [...current, variableFor(free, stepsFor(current.length + 1))] : current;
-    });
-  }, [parameters]);
+    const free = parameters.find((p) => !variables.some((v) => v.parameterId === p.id));
+    if (free) setEdited([...variables, variableFor(free, stepsFor(variables.length + 1))]);
+  }, [parameters, variables]);
 
-  const removeVariable = useCallback((parameterId: string) => {
-    setVariables((current) => current.filter((v) => v.parameterId !== parameterId));
-  }, []);
+  const removeVariable = useCallback(
+    (parameterId: string) => setEdited(variables.filter((v) => v.parameterId !== parameterId)),
+    [variables],
+  );
 
   /**
    * Point a row at a different parameter.
@@ -152,30 +194,30 @@ export function SweepPanel({
     (parameterId: string, next: string) => {
       const parameter = parameters.find((p) => p.id === next);
       if (!parameter) return;
-      setVariables((current) =>
-        current.map((v) =>
+      setEdited(
+        variables.map((v) =>
           v.parameterId === parameterId
             ? { ...variableFor(parameter, v.steps), enabled: v.enabled }
             : v,
         ),
       );
     },
-    [parameters],
+    [parameters, variables],
   );
 
   /** Include or drop a parameter from the swept set, from the ranking's rows. */
   const toggleVariable = useCallback(
     (parameterId: string) => {
-      setVariables((current) => {
-        const held = current.find((v) => v.parameterId === parameterId);
-        if (held) return current.filter((v) => v.parameterId !== parameterId);
-        const parameter = parameters.find((p) => p.id === parameterId);
-        return parameter
-          ? [...current, variableFor(parameter, stepsFor(current.length + 1))]
-          : current;
-      });
+      if (variables.some((v) => v.parameterId === parameterId)) {
+        setEdited(variables.filter((v) => v.parameterId !== parameterId));
+        return;
+      }
+      const parameter = parameters.find((p) => p.id === parameterId);
+      if (parameter) {
+        setEdited([...variables, variableFor(parameter, stepsFor(variables.length + 1))]);
+      }
     },
-    [parameters],
+    [parameters, variables],
   );
 
   const exportCsv = useCallback(() => {
@@ -190,6 +232,9 @@ export function SweepPanel({
   }, [space]);
 
   const over = points > MAX_POINTS;
+  // A restored grid keeps the clock of the sweep that produced it, so the
+  // footer never dates someone else's answer to this session.
+  const lastRunAt = ranAt ?? restored.at;
   const toolbar = (
     <div
       style={{
@@ -208,7 +253,7 @@ export function SweepPanel({
         }}
       >
         {space
-          ? `Last run ${ranAt ? fmtClock(ranAt) : "—"} · ${fmtInt(space.points)} points × ` +
+          ? `Last run ${lastRunAt ? fmtWhen(lastRunAt) : "—"} · ${fmtInt(space.points)} points × ` +
             `${fmtInt(space.iterations)} iterations` +
             (sweep.job?.elapsed_ms != null ? ` · ${(sweep.job.elapsed_ms / 1000).toFixed(1)}s` : "")
           : "Every combination is simulated once; the graphs below read the result."}
@@ -240,14 +285,14 @@ export function SweepPanel({
       parameters={parameters}
       variables={variables}
       open={varsOpen}
-      onToggleOpen={() => setVarsOpen((open) => !open)}
+      onToggleOpen={() => setOpenedStrip(!varsOpen)}
       onChange={editVariable}
       onRetarget={retargetVariable}
       onAdd={addVariable}
       onRemove={removeVariable}
       iterations={iterations}
       onIterations={(next) =>
-        setIterations(Math.min(MAX_ITERATIONS, Math.max(MIN_ITERATIONS, next)))
+        setChosenIterations(Math.min(MAX_ITERATIONS, Math.max(MIN_ITERATIONS, next)))
       }
       dirty={ranWith != null && ranWith !== signature}
       disabled={sweep.active}
@@ -270,15 +315,21 @@ export function SweepPanel({
         {toolbar}
         {strip}
         {sweep.error && <Problem message={sweep.error} />}
-        <Empty
-          sensitivity={sensitivity}
-          parameters={parameters}
-          swept={new Set(variables.filter((v) => v.enabled).map((v) => v.parameterId))}
-          onToggle={toggleVariable}
-          onRank={rank}
-          onSweep={run}
-          canSweep={enabledCount > 0 && !over}
-        />
+        {restored.loading ? (
+          // The stored grid is one request away; offering to run a sweep before
+          // it lands would flash the empty state over an answer that exists.
+          <p style={{ padding: "10px 20px", margin: 0, fontSize: 12.5 }}>Loading the last sweep…</p>
+        ) : (
+          <Empty
+            sensitivity={sensitivity}
+            parameters={parameters}
+            swept={new Set(variables.filter((v) => v.enabled).map((v) => v.parameterId))}
+            onToggle={toggleVariable}
+            onRank={rank}
+            onSweep={run}
+            canSweep={enabledCount > 0 && !over}
+          />
+        )}
       </>
     );
   }
@@ -374,6 +425,20 @@ export function SweepPanel({
       />
     </>
   );
+}
+
+/**
+ * When a sweep was run.
+ *
+ * The clock alone for one run in this session, and the date as well for a grid
+ * restored from the server — which may be days old, and would otherwise read as
+ * having been run this afternoon.
+ */
+function fmtWhen(at: number): string {
+  const then = new Date(at);
+  if (then.toDateString() === new Date().toDateString()) return fmtClock(at);
+  const day = then.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${day} ${fmtClock(at)}`;
 }
 
 /** More variables, fewer steps each: the budget is the product, not the count. */

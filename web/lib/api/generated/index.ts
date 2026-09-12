@@ -14,6 +14,7 @@ export type { AssetRef } from "./AssetRef";
 export type { AxisRequest } from "./AxisRequest";
 export type { Band } from "./Band";
 export type { Bracket } from "./Bracket";
+export type { CachedSweep } from "./CachedSweep";
 export type { CashFlow } from "./CashFlow";
 export type { Comparison } from "./Comparison";
 export type { CompileReport } from "./CompileReport";

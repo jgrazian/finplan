@@ -107,6 +107,9 @@ async fn owned_run(state: &AppState, id: i64, user_id: &str) -> ApiResult<Run> {
     row.ok_or(ApiError::NotFound("run"))
 }
 
+/// The scenario's run: a list of one, or an empty one before anything has been
+/// run. Kept a collection rather than a bare object so "no run yet" stays an
+/// ordinary response and not a 404 every client has to special-case.
 async fn list_for_scenario(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -114,7 +117,7 @@ async fn list_for_scenario(
 ) -> ApiResult<Json<Vec<Run>>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let rows: Vec<Run> = sqlx::query_as(&format!(
-        "SELECT {RUN_COLUMNS} FROM runs WHERE scenario_id = ?1 ORDER BY created_at DESC LIMIT 50"
+        "SELECT {RUN_COLUMNS} FROM runs WHERE scenario_id = ?1 ORDER BY created_at DESC"
     ))
     .bind(scenario_id)
     .fetch_all(&state.db)
@@ -125,6 +128,9 @@ async fn list_for_scenario(
 /// Queue a run. The scenario is compiled synchronously first so a misconfigured
 /// plan fails immediately with a useful message instead of surfacing as a failed
 /// job seconds later.
+///
+/// A scenario holds one run at a time: the previous one is stopped and deleted
+/// here, which takes its results with it. See `0008_one_run_per_scenario.sql`.
 async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -165,7 +171,23 @@ async fn create(
     let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
     compile::compile(&graph)?;
 
+    // Make room for the new run. Anything still executing is asked to stop
+    // first: the worker checks the flag between batches and abandons the run
+    // rather than persisting results into rows that are about to disappear.
+    let previous: Vec<i64> = sqlx::query_scalar("SELECT id FROM runs WHERE scenario_id = ?1")
+        .bind(scenario_id)
+        .fetch_all(&state.db)
+        .await?;
+    for id in &previous {
+        state.runs.cancel(*id).await;
+    }
+
     let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM runs WHERE scenario_id = ?1")
+        .bind(scenario_id)
+        .execute(&mut *tx)
+        .await?;
+
     let run_id: i64 = sqlx::query_scalar(
         "INSERT INTO runs
             (scenario_id, user_id, iterations, seed, batch_size, parallel_batches, compute_mean,
