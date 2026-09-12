@@ -91,7 +91,7 @@ export function NetWorthChart({
             highlight={hoverIndex ?? pinnedIndex}
           />
         )}
-        <path d={linePath(pathValues, scale)} fill="none" stroke="#1d1f20" strokeWidth={2}>
+        <path d={linePath(pathValues, scale)} fill="none" stroke="var(--color-text)" strokeWidth={2}>
           <title>{pathLabel}: net worth, positive balances less debt</title>
         </path>
       </ChartCanvas>

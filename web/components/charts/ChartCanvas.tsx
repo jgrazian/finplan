@@ -13,7 +13,7 @@ import {
 const TICK_TEXT = {
   fontSize: 10,
   fontFamily: "Barlow, sans-serif",
-  fill: "#1d1f20",
+  fill: "var(--color-text)",
   fillOpacity: 0.5,
 } as const;
 
@@ -78,7 +78,7 @@ export function ChartCanvas({
             x2={geo.w - geo.right}
             y1={t.y}
             y2={t.y}
-            stroke="#1d1f20"
+            stroke="var(--color-text)"
             strokeOpacity={0.1}
             strokeWidth={1}
           />
@@ -97,7 +97,7 @@ export function ChartCanvas({
             x2={geo.w - geo.right}
             y1={scale.y(0)}
             y2={scale.y(0)}
-            stroke="#1d1f20"
+            stroke="var(--color-text)"
             strokeOpacity={0.6}
           >
             <title>Zero balance</title>
@@ -108,7 +108,7 @@ export function ChartCanvas({
           x2={geo.w - geo.right}
           y1={scale.baseline}
           y2={scale.baseline}
-          stroke="#1d1f20"
+          stroke="var(--color-text)"
           strokeOpacity={0.3}
         />
         {xTicks.map((t) => (
@@ -124,7 +124,7 @@ export function ChartCanvas({
               x2={scale.x(pinnedIndex)}
               y1={geo.top}
               y2={scale.baseline}
-              stroke="#5980a6"
+              stroke="var(--color-accent)"
               strokeWidth={1}
               strokeDasharray="3 3"
             />
@@ -133,7 +133,7 @@ export function ChartCanvas({
               y={scale.baseline - 3}
               width={6}
               height={6}
-              fill="#5980a6"
+              fill="var(--color-accent)"
             />
           </g>
         )}
@@ -145,11 +145,11 @@ export function ChartCanvas({
               x2={scale.x(hoverIndex)}
               y1={geo.top}
               y2={scale.baseline}
-              stroke="#1d2d3d"
+              stroke="var(--color-accent-900)"
               strokeWidth={1}
             />
             {hoverY != null && (
-              <circle cx={scale.x(hoverIndex)} cy={hoverY} r={3.5} fill="#1d2d3d" />
+              <circle cx={scale.x(hoverIndex)} cy={hoverY} r={3.5} fill="var(--color-accent-900)" />
             )}
           </g>
         )}

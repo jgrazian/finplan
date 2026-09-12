@@ -10,7 +10,7 @@ const TRACK = "color-mix(in srgb, var(--color-text) 8%, transparent)";
  * as a hole in the portfolio at a glance, where a solid bar of the same length
  * would read as another position holding it up.
  */
-const HATCH = "repeating-linear-gradient(135deg, transparent 0 3px, #41617f 3px 4px)";
+const HATCH = "repeating-linear-gradient(135deg, transparent 0 3px, var(--color-accent-700) 3px 4px)";
 
 /**
  * The rail's account breakdown: the chart's year cut across the accounts.
@@ -125,7 +125,7 @@ function StandingRow({ standing }: { standing: AccountStanding }) {
             height: 9,
             flex: "none",
             background: fill,
-            border: negative ? "1px solid #41617f" : undefined,
+            border: negative ? "1px solid var(--color-accent-700)" : undefined,
           }}
         />
         <span

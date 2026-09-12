@@ -14,7 +14,7 @@ const SECTIONS: ReadonlyArray<{ id: SectionId; label: string; note: string }> = 
   { id: "profile", label: "Profile", note: "Name, email, birth date" },
   { id: "security", label: "Security", note: "Password and devices" },
   { id: "data", label: "Data", note: "Scenarios, export, deletion" },
-  { id: "preferences", label: "Preferences", note: "Run and scenario defaults" },
+  { id: "preferences", label: "Preferences", note: "Defaults and appearance" },
 ];
 
 /**

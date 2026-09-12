@@ -18,11 +18,11 @@ export function FanSeries({
 }) {
   return (
     <g>
-      <path d={bandPath(p95, p5, scale)} fill="#5980a6" fillOpacity={0.16} />
+      <path d={bandPath(p95, p5, scale)} fill="var(--color-accent)" fillOpacity={0.16} />
       <path
         d={linePath(p95, scale)}
         fill="none"
-        stroke="#5980a6"
+        stroke="var(--color-accent)"
         strokeOpacity={0.55}
         strokeWidth={1}
         strokeDasharray="4 3"
@@ -30,12 +30,12 @@ export function FanSeries({
       <path
         d={linePath(p5, scale)}
         fill="none"
-        stroke="#5980a6"
+        stroke="var(--color-accent)"
         strokeOpacity={0.55}
         strokeWidth={1}
         strokeDasharray="4 3"
       />
-      <path d={linePath(p50, scale)} fill="none" stroke="#41617f" strokeWidth={2} strokeDasharray="6 4">
+      <path d={linePath(p50, scale)} fill="none" stroke="var(--color-accent-700)" strokeWidth={2} strokeDasharray="6 4">
         <title>Pointwise real P50 across all iterations (not a path)</title>
       </path>
     </g>

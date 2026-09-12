@@ -16,9 +16,9 @@ export interface Scale {
   hi: number;
 }
 
-const INK = "#1d1f20";
-const CURVE = "#41617f";
-const WASH = "#5980a6";
+const INK = "var(--color-text)";
+const CURVE = "var(--color-accent-700)";
+const WASH = "var(--color-accent)";
 
 /** Room under the baseline for the quantile figures, in viewBox units. */
 const LABEL_BAND = 14;

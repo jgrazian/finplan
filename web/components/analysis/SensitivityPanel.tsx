@@ -111,13 +111,13 @@ export function SensitivityPanel({
               role="img"
               aria-label={`${fmtPercent(row.lowSuccess)} at the low end, ${fmtPercent(row.highSuccess)} at the high end`}
             >
-              <rect x={0} y={0} width={200} height={14} fill="#1d1f20" fillOpacity={0.05} />
+              <rect x={0} y={0} width={200} height={14} fill="var(--color-text)" fillOpacity={0.05} />
               <rect
                 x={row.barStart * 200}
                 y={0}
                 width={Math.max(1.5, row.barWidth * 200)}
                 height={14}
-                fill="#5980a6"
+                fill="var(--color-accent)"
                 fillOpacity={0.75}
               />
               {/* Where the plan itself sits, so a band is read as a move from
@@ -127,7 +127,7 @@ export function SensitivityPanel({
                 x2={planAt}
                 y1={0}
                 y2={14}
-                stroke="#1d1f20"
+                stroke="var(--color-text)"
                 strokeDasharray="2 2"
               />
             </svg>

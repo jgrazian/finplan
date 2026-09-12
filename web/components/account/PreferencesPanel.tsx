@@ -1,26 +1,31 @@
 "use client";
 
 import { useState } from "react";
-import { Field, NumberInput } from "@/components/ui";
+import { Field, Hr, NumberInput, SectionHeading } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import type { Appearance } from "@/lib/theme";
+import { AppearanceFields } from "./AppearanceFields";
 import { PanelNote, SaveRow } from "./chrome";
 
 interface Draft {
   iterations: number;
   years: number;
   autoRun: boolean;
+  appearance: Appearance;
 }
 
 const toDraft = (user: UserResponse): Draft => ({
   iterations: user.default_iterations,
   years: user.default_duration_years,
   autoRun: user.auto_run,
+  appearance: { mode: user.theme_mode, accent: user.accent },
 });
 
 /**
- * The defaults a new run and a new scenario start from.
+ * The defaults a new run and a new scenario start from, and how the app is
+ * drawn while it does it.
  *
  * Deliberately short: every field here is one the app actually reads. A
  * preference that is stored and never consulted is worse than an absent one,
@@ -48,7 +53,9 @@ export function PreferencesPanel({
   const dirty =
     draft.iterations !== saved.iterations ||
     draft.years !== saved.years ||
-    draft.autoRun !== saved.autoRun;
+    draft.autoRun !== saved.autoRun ||
+    draft.appearance.mode !== saved.appearance.mode ||
+    draft.appearance.accent !== saved.appearance.accent;
 
   return (
     <div>
@@ -97,6 +104,19 @@ export function PreferencesPanel({
         settle before starting, and never while the server is unreachable.
       </PanelNote>
 
+      <Hr />
+      <div style={{ marginBottom: 10 }}>
+        <SectionHeading>Appearance</SectionHeading>
+      </div>
+      {/* Unsaved until Save, like every other field in the panel — the page
+          itself only turns once the server has the choice, so a palette tried
+          and abandoned leaves nothing behind. */}
+      <AppearanceFields
+        value={draft.appearance}
+        readOnly={readOnly}
+        onChange={(appearance) => setDraft((held) => ({ ...held, appearance }))}
+      />
+
       <SaveRow
         label="Save defaults"
         dirty={dirty}
@@ -112,6 +132,8 @@ export function PreferencesPanel({
                   default_iterations: draft.iterations,
                   default_duration_years: draft.years,
                   auto_run: draft.autoRun,
+                  theme_mode: draft.appearance.mode,
+                  accent: draft.appearance.accent,
                 }),
               ),
             () => {},

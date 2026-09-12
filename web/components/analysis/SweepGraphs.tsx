@@ -14,15 +14,15 @@ import { paramTick } from "@/lib/view/analysis";
 const AXIS_TEXT = {
   fontSize: 10,
   fontFamily: "Barlow, sans-serif",
-  fill: "#1d1f20",
+  fill: "var(--color-text)",
   fillOpacity: 0.55,
 } as const;
 
 /** The plot's own ink, matched to the ramp's middle so a line sits in the family. */
-const INK = "#41617f";
-const DOT = "#1d2d3d";
+const INK = "var(--color-accent-700)";
+const DOT = "var(--color-accent-900)";
 /** The page's ground, for haloing a mark drawn over the dark end of the ramp. */
-const GROUND = "#f2f2f3";
+const GROUND = "var(--color-bg)";
 
 /**
  * Why every chart here has two geometries.
@@ -87,7 +87,7 @@ export function LineGraph({ view }: { view: GraphView }) {
             x2={geo.w - geo.right}
             y1={y(tick)}
             y2={y(tick)}
-            stroke="#1d1f20"
+            stroke="var(--color-text)"
             strokeOpacity={n === 0 ? 0.3 : 0.09}
           />
           <text {...AXIS_TEXT} x={geo.left - 7} y={y(tick) + 3.5} textAnchor="end">
@@ -103,7 +103,7 @@ export function LineGraph({ view }: { view: GraphView }) {
           x2={x(view.planX)}
           y1={geo.top}
           y2={baseline}
-          stroke="#1d1f20"
+          stroke="var(--color-text)"
           strokeOpacity={0.4}
           strokeDasharray="3 3"
         />
@@ -273,7 +273,7 @@ function Marker({
         y={y}
         width={width}
         height={height}
-        stroke="#1d1f20"
+        stroke="var(--color-text)"
         strokeWidth={1.5}
         strokeDasharray="3 2"
       />
@@ -478,9 +478,9 @@ export function SurfaceGraph({ view }: { view: GraphView }) {
     >
       <path
         d={floorPath}
-        fill="#1d1f20"
+        fill="var(--color-text)"
         fillOpacity={0.04}
-        stroke="#1d1f20"
+        stroke="var(--color-text)"
         strokeOpacity={0.25}
         strokeDasharray="2 2"
       />
@@ -503,7 +503,7 @@ export function SurfaceGraph({ view }: { view: GraphView }) {
             x2={planFloor.px}
             y1={planTop.py}
             y2={planFloor.py}
-            stroke="#1d1f20"
+            stroke="var(--color-text)"
             strokeOpacity={0.5}
             strokeDasharray="2 2"
           />
@@ -512,7 +512,7 @@ export function SurfaceGraph({ view }: { view: GraphView }) {
             cy={planTop.py}
             r={4}
             fill={GROUND}
-            stroke="#1d1f20"
+            stroke="var(--color-text)"
             strokeWidth={1.5}
           />
         </g>

@@ -1,17 +1,53 @@
 /* Industry — design-system tokens and component classes.
-   Vendored verbatim from the Claude Design project
-   (_ds/industry-a6926af7-71b9-4c72-b3db-95b778871b44/styles.css).
-   This file is the source of truth for the system's look; retune it here. */
+   Vendored from the Claude Design project
+   (_ds/industry-a6926af7-71b9-4c72-b3db-95b778871b44/styles.css), with the
+   single-palette `:root` block replaced by the six token sets the canvas's
+   Palettes artboard compares. Everything below the palettes is the system's
+   own; this file is the source of truth for its look, so retune it here. */
 /* The Barlow @import is hoisted to the top of globals.css: a CSS @import
    must precede all other rules, and Tailwind's output lands above this file. */
 
-:root {
+/* ── Palettes ──────────────────────────────────────────────────────────────
+   Six token sets: a light or dark ground × a blue, green or purple accent.
+   `data-theme` and `data-accent` carry the choice, and they travel as a pair —
+   an accent alone would name a ramp without saying which ground it is for.
+
+   They are matched on any element, not just `:root`, so a preview can hold a
+   palette the page is not wearing. That is also why the ramps are written out
+   rather than pointed at through a shared `--accent-*` indirection: `var()` is
+   substituted at computed-value time, so a descendant inherits the resolved
+   colour and re-pointing the source below the root would change nothing.
+
+   Green and purple are the blue ramp rotated in OKLCH — the same lightness and
+   chroma at each step, hue moved to 152° and 300° — so step 500 of any hue
+   carries the same visual weight.
+
+   The dark ramps are not a straight reverse. `-100` becomes the darkest tint
+   and `-800` the text on it, then the scale is re-spaced so the base accent
+   falls between 500 and 600, which leaves `-600` free as the hover step
+   `.btn-primary:hover` already reaches for. Two mid steps drop out, a new
+   lightest tint enters at 900, and the light `-400` step becomes the base
+   accent — that last move is what lifts it clear of the dark ground.
+
+   `data-theme` is always present on `<html>`, resolved before first paint by
+   the script in app/layout.tsx: "system" is answered there with matchMedia
+   rather than here with a media query, so the dark ground is written once
+   instead of twice. Bare `:root` is what stands until that script runs. ── */
+
+/* ── Grounds ── */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
   --color-bg: #f2f2f3;
   --color-surface: #e9e9ea;
   --color-text: #1d1f20;
-  --color-accent: #5980a6;
-  --color-accent-2: #728fab;
   --color-divider: color-mix(in srgb, #1d1f20 16%, transparent);
+  /* The scrim behind a dialog. Its own token rather than a neutral step,
+     because the neutral ramp reverses with the ground and a scrim must not:
+     it darkens the page in both themes. */
+  --color-scrim: color-mix(in srgb, #1d1f20 38%, transparent);
 
   /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
      same step of any role matches the others in visual value. */
@@ -25,16 +61,9 @@
   --color-neutral-800: #424244;
   --color-neutral-900: #2b2b2d;
 
-  --color-accent-100: #eef6ff;
-  --color-accent-200: #d6ebff;
-  --color-accent-300: #b5d9fd;
-  --color-accent-400: #94bce3;
-  --color-accent-500: #749dc4;
-  --color-accent-600: #597ea3;
-  --color-accent-700: #416180;
-  --color-accent-800: #2c455d;
-  --color-accent-900: #1d2d3d;
-
+  /* The secondary accent does not follow `data-accent`: it is the system's
+     own supporting blue, and stays put while the primary hue turns. */
+  --color-accent-2: #728fab;
   --color-accent-2-100: #eef6ff;
   --color-accent-2-200: #d6ebff;
   --color-accent-2-300: #bdd8f2;
@@ -45,6 +74,137 @@
   --color-accent-2-800: #314457;
   --color-accent-2-900: #1f2d3a;
 
+  /* Elevation — derived from the ground: soft ink-tinted shadows on a
+     light theme, a hairline edge + ambient darkness on a dark one. */
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #2b2b2d 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #2b2b2d 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #2b2b2d 22%, transparent);
+}
+
+/* The neutral ramp reverses with the ground, so `.tag-neutral` keeps reading
+   as a quiet chip rather than inverting into a white slab. */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-bg: #191b1c;
+  --color-surface: #232527;
+  --color-text: #ececed;
+  --color-divider: color-mix(in srgb, #ececed 20%, transparent);
+  --color-scrim: color-mix(in srgb, #000 62%, transparent);
+
+  --color-neutral-100: #2b2b2d;
+  --color-neutral-200: #424244;
+  --color-neutral-300: #5d5d60;
+  --color-neutral-400: #7a7a7d;
+  --color-neutral-500: #98989b;
+  --color-neutral-600: #b7b7ba;
+  --color-neutral-700: #d4d4d7;
+  --color-neutral-800: #e7e7ea;
+  --color-neutral-900: #f5f5f8;
+
+  --color-accent-2: #9ebbd8;
+  --color-accent-2-100: #1f2d3a;
+  --color-accent-2-200: #314457;
+  --color-accent-2-300: #486077;
+  --color-accent-2-400: #728fab;
+  --color-accent-2-500: #7e9cb8;
+  --color-accent-2-600: #bdd8f2;
+  --color-accent-2-700: #d6ebff;
+  --color-accent-2-800: #eef6ff;
+  --color-accent-2-900: #f7fbff;
+
+  /* On a dark ground the ink tint disappears; what reads as elevation is
+     ambient darkness under the box. */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-md: 0 3px 12px rgb(0 0 0 / 0.55);
+  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.62);
+}
+
+/* ── Accent ramps, one per ground × hue ── */
+
+
+:root,
+[data-theme="light"][data-accent="blue"] {
+  --color-accent: #5980a6;
+  --color-accent-100: #eef6ff;
+  --color-accent-200: #d6ebff;
+  --color-accent-300: #b5d9fd;
+  --color-accent-400: #94bce3;
+  --color-accent-500: #749dc4;
+  --color-accent-600: #597ea3;
+  --color-accent-700: #416180;
+  --color-accent-800: #2c455d;
+  --color-accent-900: #1d2d3d;
+}
+
+[data-theme="light"][data-accent="green"] {
+  --color-accent: #5a8967;
+  --color-accent-100: #eef8f0;
+  --color-accent-200: #d8efdd;
+  --color-accent-300: #b7e1c1;
+  --color-accent-400: #96c5a1;
+  --color-accent-500: #76a682;
+  --color-accent-600: #5a8766;
+  --color-accent-700: #42684c;
+  --color-accent-800: #2d4b35;
+  --color-accent-900: #1d3122;
+}
+
+[data-theme="light"][data-accent="purple"] {
+  --color-accent: #8372a2;
+  --color-accent-100: #f6f3fe;
+  --color-accent-200: #ebe3fd;
+  --color-accent-300: #dbccf9;
+  --color-accent-400: #beaedf;
+  --color-accent-500: #9f8fc0;
+  --color-accent-600: #81719f;
+  --color-accent-700: #63567c;
+  --color-accent-800: #473c5a;
+  --color-accent-900: #2e273b;
+}
+
+[data-theme="dark"][data-accent="blue"] {
+  --color-accent: #94bce3;
+  --color-accent-100: #1d2d3d;
+  --color-accent-200: #2c455d;
+  --color-accent-300: #416180;
+  --color-accent-400: #5980a6;
+  --color-accent-500: #749dc4;
+  --color-accent-600: #b5d9fd;
+  --color-accent-700: #d6ebff;
+  --color-accent-800: #eef6ff;
+  --color-accent-900: #f7fbff;
+}
+
+[data-theme="dark"][data-accent="green"] {
+  --color-accent: #96c5a1;
+  --color-accent-100: #1d3122;
+  --color-accent-200: #2d4b35;
+  --color-accent-300: #42684c;
+  --color-accent-400: #5a8967;
+  --color-accent-500: #76a682;
+  --color-accent-600: #b7e1c1;
+  --color-accent-700: #d8efdd;
+  --color-accent-800: #eef8f0;
+  --color-accent-900: #f7fcf8;
+}
+
+[data-theme="dark"][data-accent="purple"] {
+  --color-accent: #beaedf;
+  --color-accent-100: #2e273b;
+  --color-accent-200: #473c5a;
+  --color-accent-300: #63567c;
+  --color-accent-400: #8372a2;
+  --color-accent-500: #9f8fc0;
+  --color-accent-600: #dbccf9;
+  --color-accent-700: #ebe3fd;
+  --color-accent-800: #f6f3fe;
+  --color-accent-900: #fbf9ff;
+}
+
+/* ── Type, measure and shape — unchanged by the palette ── */
+
+:root {
   --font-heading: "Barlow Condensed", system-ui, sans-serif;
   --font-heading-weight: 600;
   --font-body: "Barlow", system-ui, sans-serif;
@@ -59,12 +219,6 @@
   --radius-sm: 2px;
   --radius-md: 4px;
   --radius-lg: 7px;
-
-  /* Elevation — derived from the ground: soft ink-tinted shadows on a
-     light theme, a hairline edge + ambient darkness on a dark one. */
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #2b2b2d 14%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2b2b2d 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2b2b2d 22%, transparent);
 }
 
 body {
@@ -595,7 +749,7 @@ textarea.input {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
+  background: var(--color-scrim);
 }
 
 .dialog {

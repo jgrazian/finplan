@@ -16,16 +16,19 @@ import type {
 import type { PlanAxis } from "./axis";
 import { yearOf } from "./format.ts";
 
-/** Stack colours, darkest first, matching the Results artboard. */
+/**
+ * Stack colours, heaviest step first, matching the Results artboard. Named by
+ * ramp step rather than by colour so they turn with the account's palette.
+ */
 const SERIES_COLORS = [
-  "#1d2d3d",
-  "#41617f",
-  "#749dc4",
-  "#b5d9fd",
-  "#5980a6",
-  "#8fb4d6",
-  "#2f4a63",
-  "#cfe4f7",
+  "var(--color-accent-900)",
+  "var(--color-accent-700)",
+  "var(--color-accent-500)",
+  "var(--color-accent-300)",
+  "var(--color-accent)",
+  "var(--color-accent-400)",
+  "var(--color-accent-800)",
+  "var(--color-accent-200)",
 ];
 
 const WARNING_TITLES: Record<string, string> = {

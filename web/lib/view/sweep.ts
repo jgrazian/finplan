@@ -118,18 +118,22 @@ function widen(span: Span, minSpan: number, clampLow?: number, clampHigh?: numbe
 
 /**
  * The heatmap and surface ramp: one hue, the design system's accent scale from
- * its darkest step to its lightest. Dark reads as low, which puts the weight of
- * the image on the corner of the grid where the plan fails.
+ * its `-900` step to its `-100`. The heaviest step reads as low, which puts the
+ * weight of the image on the corner of the grid where the plan fails.
+ *
+ * Steps rather than colours, so the ramp follows the account's palette. On a
+ * dark ground the scale reverses with it, and `-900` becomes the lightest tint
+ * — still the heaviest mark against that ground, so the reading is unchanged.
  */
 export const RAMP = [
-  "#1d2d3d",
-  "#2c455d",
-  "#41617f",
-  "#597ea3",
-  "#749dc4",
-  "#94bce3",
-  "#b5d9fd",
-  "#eef6ff",
+  "var(--color-accent-900)",
+  "var(--color-accent-800)",
+  "var(--color-accent-700)",
+  "var(--color-accent-600)",
+  "var(--color-accent-500)",
+  "var(--color-accent-400)",
+  "var(--color-accent-300)",
+  "var(--color-accent-100)",
 ] as const;
 
 /** Where a value lands on the ramp, over a span already decided. */

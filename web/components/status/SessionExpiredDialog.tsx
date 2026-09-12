@@ -22,7 +22,7 @@ export function SessionExpiredDialog({ onSignIn }: { onSignIn: () => void }) {
         alignItems: "flex-start",
         justifyContent: "center",
         padding: "12vh 16px 16px",
-        background: "color-mix(in srgb, #1d1f20 38%, transparent)",
+        background: "var(--color-scrim)",
       }}
     >
       <div

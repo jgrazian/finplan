@@ -37,6 +37,36 @@ pub struct Credentials {
     pub display_name: Option<String>,
 }
 
+/// Which ground the interface is drawn on.
+///
+/// `System` is not a third palette: it is the absence of a choice, which the
+/// stylesheet answers with `prefers-color-scheme`. Storing it as a value
+/// rather than a null keeps "follow the machine" a decision the user made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, TS)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase")]
+#[ts(export)]
+pub enum ThemeMode {
+    Light,
+    Dark,
+    System,
+}
+
+/// Which accent ramp the palette is built from.
+///
+/// Ground, ink and dividers are shared; only this ramp turns, so one value
+/// names the whole set. The three are the same ramp rotated in OKLCH, which is
+/// why a step means the same weight whichever hue is chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, TS)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase")]
+#[ts(export)]
+pub enum Accent {
+    Blue,
+    Green,
+    Purple,
+}
+
 /// The signed-in user: who they are, plus the defaults that seed new work.
 #[derive(Serialize, sqlx::FromRow, TS)]
 #[ts(export)]
@@ -50,11 +80,15 @@ pub struct UserResponse {
     pub default_duration_years: i64,
     /// Re-run the active scenario by itself once an edit has settled.
     pub auto_run: bool,
+    /// Appearance is the account's, not the scenario's: the same plan looks
+    /// the same wherever it is opened.
+    pub theme_mode: ThemeMode,
+    pub accent: Accent,
     pub created_at: String,
 }
 
 const USER_COLUMNS: &str = "id, email, display_name, birth_date, default_iterations,
-     default_duration_years, auto_run, created_at";
+     default_duration_years, auto_run, theme_mode, accent, created_at";
 
 async fn load_user(state: &AppState, id: &str) -> ApiResult<Json<UserResponse>> {
     let row: Option<UserResponse> =
@@ -217,6 +251,8 @@ pub struct UpdatePreferences {
     pub default_iterations: i64,
     pub default_duration_years: i64,
     pub auto_run: bool,
+    pub theme_mode: ThemeMode,
+    pub accent: Accent,
 }
 
 async fn update_preferences(
@@ -240,12 +276,15 @@ async fn update_preferences(
     sqlx::query(
         "UPDATE users
             SET default_iterations = ?1, default_duration_years = ?2, auto_run = ?3,
+                theme_mode = ?4, accent = ?5,
                 updated_at = datetime('now')
-          WHERE id = ?4",
+          WHERE id = ?6",
     )
     .bind(body.default_iterations)
     .bind(body.default_duration_years)
     .bind(body.auto_run)
+    .bind(body.theme_mode)
+    .bind(body.accent)
     .bind(&user.id)
     .execute(&state.db)
     .await?;

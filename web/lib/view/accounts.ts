@@ -294,14 +294,14 @@ export function accountShares(accounts: Account[]): Map<string, number | null> {
  * the share column — so a colour means the same account wherever it appears.
  */
 const ACCOUNT_COLORS = [
-  "#1d2d3d",
-  "#41617f",
-  "#5980a6",
-  "#749dc4",
-  "#a8c0d6",
-  "#2c455d",
-  "#94bce3",
-  "#c8d8e6",
+  "var(--color-accent-900)",
+  "var(--color-accent-700)",
+  "var(--color-accent)",
+  "var(--color-accent-500)",
+  "var(--color-accent-300)",
+  "var(--color-accent-800)",
+  "var(--color-accent-400)",
+  "var(--color-accent-200)",
 ];
 
 /** account id → its swatch, assigned by position in the list. */
@@ -341,9 +341,9 @@ export interface PortfolioSummary {
 }
 
 const TAX_BANDS: ReadonlyArray<{ label: string; status: TaxStatus; color: string }> = [
-  { label: "Deferred", status: "TaxDeferred", color: "#1d2d3d" },
-  { label: "Taxable", status: "Taxable", color: "#41617f" },
-  { label: "Tax-free", status: "TaxFree", color: "#749dc4" },
+  { label: "Deferred", status: "TaxDeferred", color: "var(--color-accent-900)" },
+  { label: "Taxable", status: "Taxable", color: "var(--color-accent-700)" },
+  { label: "Tax-free", status: "TaxFree", color: "var(--color-accent-500)" },
 ];
 
 /**

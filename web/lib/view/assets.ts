@@ -115,14 +115,14 @@ function assetsTotal(rows: AssetRow[]): number {
  * table's share column — so a colour means the same profile wherever it appears.
  */
 const PROFILE_COLORS = [
-  "#1d2d3d",
-  "#2d4459",
-  "#41617f",
-  "#5980a6",
-  "#749dc4",
-  "#8fb0cc",
-  "#a8c0d6",
-  "#c2d3e1",
+  "var(--color-accent-900)",
+  "var(--color-accent-800)",
+  "var(--color-accent-700)",
+  "var(--color-accent)",
+  "var(--color-accent-500)",
+  "var(--color-accent-400)",
+  "var(--color-accent-300)",
+  "var(--color-accent-200)",
 ];
 
 /**

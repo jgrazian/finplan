@@ -10,7 +10,7 @@ const GEO = { w: 360, h: 124, left: 46, top: 10, right: 10, bottom: 24 } as cons
 const TICK = {
   fontSize: 9.5,
   fontFamily: "Barlow, sans-serif",
-  fill: "#1d1f20",
+  fill: "var(--color-text)",
   fillOpacity: 0.55,
 } as const;
 
@@ -76,7 +76,7 @@ export function ConvergenceChart({
                 x2={GEO.w - GEO.right}
                 y1={y(value)}
                 y2={y(value)}
-                stroke="#1d1f20"
+                stroke="var(--color-text)"
                 strokeOpacity={0.12}
               />
               <text {...TICK} x={GEO.left - 6} y={y(value) + 3} textAnchor="end">
@@ -85,8 +85,8 @@ export function ConvergenceChart({
             </g>
           ))}
 
-          {high && <path d={high} fill="none" stroke="#1d1f20" strokeOpacity={0.35} />}
-          {low && <path d={low} fill="none" stroke="#1d1f20" strokeOpacity={0.35} />}
+          {high && <path d={high} fill="none" stroke="var(--color-text)" strokeOpacity={0.35} />}
+          {low && <path d={low} fill="none" stroke="var(--color-text)" strokeOpacity={0.35} />}
 
           {probes.map((step, i) => (
             <circle
@@ -94,8 +94,8 @@ export function ConvergenceChart({
               cx={x(i)}
               cy={y(step.values[0])}
               r={4}
-              fill={step.feasible ? "#41617f" : "#f2f2f3"}
-              stroke="#41617f"
+              fill={step.feasible ? "var(--color-accent-700)" : "var(--color-bg)"}
+              stroke="var(--color-accent-700)"
               strokeWidth={1.5}
             >
               <title>
@@ -140,8 +140,8 @@ function Key({ filled, children }: { filled?: boolean; children: React.ReactNode
           width: 9,
           height: 9,
           borderRadius: "50%",
-          border: "1.5px solid #41617f",
-          background: filled ? "#41617f" : "transparent",
+          border: "1.5px solid var(--color-accent-700)",
+          background: filled ? "var(--color-accent-700)" : "transparent",
         }}
       />
       {children}
