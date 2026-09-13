@@ -23,6 +23,9 @@ export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): AsyncState
 
   useEffect(() => {
     let current = true;
+    // Loading mirrors the start of this external request, including dependency
+    // changes; retaining the previous data while it loads is intentional.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     load().then(
       (data) => {

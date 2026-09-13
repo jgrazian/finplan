@@ -9,11 +9,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { DEFAULT_SECTION, type NavState, type TabId, parseNav, toHref } from "./url";
+import { DEFAULT_SECTION, type NavState, type TabId, parseNav, toHref, scenarioDestination } from "./url";
 
 export interface Nav extends NavState {
   /** Opens a different scenario, dropping a row pick its ids no longer name. */
   setScenario: (id: number) => void;
+  openScenario: (id: number, tab: TabId) => void;
   /** Records the scenario actually opened, without a history entry. */
   adoptScenario: (id: number) => void;
   setTab: (tab: TabId) => void;
@@ -61,6 +62,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
   const nav = useMemo<Nav>(
     () => ({
       ...state,
+      openScenario: (scenario, tab) => go(scenarioDestination(scenario, tab), true),
       setScenario: (scenario) => go({ ...state, scenario, selection: undefined }, true),
       adoptScenario: (scenario) => {
         if (state.scenario === scenario) return;

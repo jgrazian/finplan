@@ -25,8 +25,10 @@ const TICK = {
 export function ConvergenceChart({
   steps,
   parameter,
+  constraint,
 }: {
   steps: SolveStep[];
+  constraint?: string;
   /** The varied parameter, for the value axis. Absent under a grid search. */
   parameter: AnalysisParameter | undefined;
 }) {
@@ -100,8 +102,8 @@ export function ConvergenceChart({
             >
               <title>
                 {`${paramValue(parameter.kind, step.values[0])} — ${fmtPercent(
-                  step.success_rate,
-                )} success, ${step.feasible ? "clears" : "misses"} the constraint`}
+                  (constraint === "funding-success-rate" ? step.funding_success_rate : step.success_rate) ?? NaN,
+                )} ${constraint === "funding-success-rate" ? "cash funding" : "positive ending net worth"}, ${step.feasible ? "clears" : "misses"} the constraint`}
               </title>
             </circle>
           ))}

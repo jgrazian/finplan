@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import { Dropdown } from "@/components/ui";
 import { Button, Tag } from "@/components/ui";
 import { fmtPercent } from "@/lib/format";
 import type { AnalysisParameter, SensitivityResults } from "@/lib/api/types";
@@ -9,7 +11,7 @@ import { paramId, paramValue, sensitivityView } from "@/lib/view/analysis";
 const COLUMNS = "minmax(130px, 1fr) 130px minmax(120px, 1.4fr) 58px 74px";
 
 /**
- * What moves success, ranked — Sweep's entry point.
+ * What changes the outcome, ranked — Sweep's entry point.
  *
  * Two runs a parameter, which is cheap enough to answer "what should I even
  * sweep" before committing to a grid. The bar spans the success rate at the two
@@ -34,23 +36,27 @@ export function SensitivityPanel({
   canSweep: boolean;
   busy?: boolean;
 }) {
-  const { rows, low, high } = sensitivityView(results);
+  const [metric, setMetric] = useState<"funding" | "success">("funding");
+  const { rows, low, high } = sensitivityView(results, metric);
+  const planRate = metric === "funding" ? results.plan.funding_success_rate : results.plan.success_rate;
   // Every bar shares one axis, so the plan's mark sits at the same place on each.
-  const planAt = (high === low ? 0.5 : (results.plan.success_rate - low) / (high - low)) * 200;
+  const planAt = (high === low ? 0.5 : ((planRate ?? low) - low) / (high - low)) * 200;
   const byId = new Map(parameters.map((p) => [p.id, p]));
   const band = Math.round(results.fraction * 100);
 
   return (
     <div style={{ padding: "18px 20px 22px" }}>
+      <Dropdown ariaLabel="Sensitivity outcome" value={metric} onChange={setMetric} options={[{ value: "funding", label: "Cash funding check" }, { value: "success", label: "Positive ending net worth" }]} />
+      {rows.length < results.rows.length && <p>Not measured — rerun to rank all parameters by this outcome.</p>}
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-        <h4 style={{ margin: 0 }}>What moves success</h4>
+        <h4 style={{ margin: 0 }}>What changes the outcome</h4>
         <span
           style={{
             fontSize: 11.5,
             color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
           }}
         >
-          each parameter ±{band}% · the plan runs at {fmtPercent(results.plan.success_rate)} ·{" "}
+          each parameter ±{band}% · the plan runs at {planRate == null ? "Not measured — rerun" : fmtPercent(planRate)} ·{" "}
           {rows.length} × 2 × {results.iterations.toLocaleString("en-US")} simulations
         </span>
       </div>
@@ -73,7 +79,7 @@ export function SensitivityPanel({
         <span>parameter</span>
         <span>range</span>
         <span>
-          success {fmtPercent(low, 0)} → {fmtPercent(high, 0)}
+          {metric === "funding" ? "Cash funding" : "Positive ending net worth"} {fmtPercent(low, 0)} → {fmtPercent(high, 0)}
         </span>
         <span>span</span>
         <span>sweep</span>
@@ -196,7 +202,7 @@ export function SensitivityPanel({
       >
         The ranking is two runs a parameter, so it answers what to sweep before
         the grid spends thousands of simulations doing it. A parameter that
-        moves success by less than a point or two is not worth a variable.
+        has a small measured effect may still matter; sampling uncertainty and interactions are not assessed by this ranking.
       </p>
     </div>
   );

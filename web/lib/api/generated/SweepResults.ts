@@ -8,6 +8,10 @@ import type { SweepCell } from "./SweepCell";
  */
 export type SweepResults = {
   /**
+   * New graphs use this metric; absent legacy caches used terminal wealth.
+   */
+  default_metric: string | null;
+  /**
    * The swept variables, in the order the cells' indices follow. A graph
    * picks one or two of these for its own axes and holds the rest.
    */

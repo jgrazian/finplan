@@ -14,11 +14,11 @@ export function SuccessRate({
   iterations: number;
 }) {
   const measured = fundingSuccessRate != null;
-  const fraction = fundingSuccessRate ?? successRate;
+  const fraction = fundingSuccessRate ?? 0;
   const pct = fraction * 100;
   const passed = Math.round(iterations * fraction);
   const other = iterations - passed;
-  const label = measured ? "Cash funding check" : "Positive ending net worth";
+  const label = "Cash funding check";
 
   return (
     <section aria-label="Simulation outcome definitions" style={{ marginBottom: 20 }}>
@@ -34,17 +34,17 @@ export function SuccessRate({
                 lineHeight: 1,
               }}
             >
-              {pct.toFixed(1)}
+              {measured ? pct.toFixed(1) : "—"}
             </span>
             <span style={{ fontSize: 24 }}>%</span>
           </div>
           <div style={{ fontSize: 12 }}>{fmtInt(iterations)} Monte Carlo iterations</div>
         </div>
-        <div style={{ flex: 1, minWidth: 200, paddingBottom: 6 }}>
+        {measured && <div style={{ flex: 1, minWidth: 200, paddingBottom: 6 }}>
           <div
             style={{ display: "flex", height: 10, border: "1px solid var(--color-divider)" }}
             role="img"
-            aria-label={`${label}: ${pct.toFixed(1)}%`}
+            aria-label={`${label}: ${measured ? pct.toFixed(1) : "—"}%`}
           >
             <div style={{ width: `${pct}%`, background: "var(--color-accent)" }} />
             <div
@@ -71,12 +71,12 @@ export function SuccessRate({
               {fmtInt(other)} {measured ? "had a shortfall or event warning" : "ended at or below zero"}
             </span>
           </div>
-        </div>
+        </div>}
       </div>
+      <p style={{ fontSize: 13 }}>Positive ending net worth: {(successRate * 100).toFixed(1)}%. Cash funding checks modeled cash balances and event-processing warnings. It does not detect omitted spending or guarantee future outcomes.</p>
       {!measured && (
         <p style={{ fontSize: 13, margin: "10px 0 0", maxWidth: 850 }}>
-          This run only measured terminal net worth, not whether cash funded the plan
-          along the way. Re-run to measure cash funding.
+          Not measured — rerun to measure cash funding.
         </p>
       )}
     </section>

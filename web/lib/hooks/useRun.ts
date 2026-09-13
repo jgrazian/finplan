@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
 import type { Results, Run, Scenario as ApiScenario } from "@/lib/api/types";
 import { SERIES, isTerminal } from "@/lib/api/types";
+import { preferredRun, resultsAreStale, rememberRunContext } from "@/lib/run/freshness";
 import { serverMonitor } from "@/lib/status/monitor";
 import type { RunEffort } from "@/components/results";
 import type { Percentile, ResultsData } from "@/lib/types";
@@ -21,6 +22,8 @@ export interface RunState {
   results: ResultsData | undefined;
   /** True while a run is queued or executing. */
   active: boolean;
+  stale: boolean;
+  markInputsChanged: () => void;
   loading: boolean;
   error: string | undefined;
   /** Which stored path the per-account series, cash flows and ledger describe. */
@@ -44,6 +47,9 @@ interface Loaded {
   run?: Run;
   raw?: Results;
   rawSeries?: Percentile;
+  rawScenario?: ApiScenario;
+  rawAxis?: PlanAxis;
+  invalidated?: boolean;
   error?: string;
   loading: boolean;
 }
@@ -55,18 +61,26 @@ export function useRun(
   const [loaded, setLoaded] = useState<Loaded>();
   const [percentile, setPercentile] = useState<Percentile>("p50");
   const scenarioId = scenario?.id;
+  const editVersions = useRef(new Map<number, number>());
+  const contexts = useRef(new Map<string, { rawScenario: ApiScenario | undefined; rawAxis: PlanAxis | undefined }>());
+  const [invalidatedPlans, setInvalidatedPlans] = useState<ReadonlyMap<number, boolean>>(new Map());
+  const activeScenarioId = useRef(scenarioId);
+  useLayoutEffect(() => {
+    activeScenarioId.current = scenarioId;
+  }, [scenarioId]);
 
   // State is keyed by scenario rather than cleared when one changes, so the
   // previous scenario's run is never briefly on screen under the new name.
   const current = loaded?.scenarioId === scenarioId ? loaded : undefined;
   const { run, raw, error } = current ?? {};
-  const matchingRaw = raw?.run_id === run?.id && raw?.scenario_id === scenarioId ? raw : undefined;
+  const matchingRaw = raw?.scenario_id === scenarioId ? raw : undefined;
   const loading = (current?.loading ?? scenarioId != null) ||
     (!error && matchingRaw != null && current?.rawSeries !== percentile);
 
   const update = useCallback(
     (id: number, patch: Partial<Loaded>) =>
       setLoaded((prev) =>
+        activeScenarioId.current !== id ? prev :
         prev?.scenarioId === id
           ? { ...prev, ...patch }
           : { scenarioId: id, loading: false, ...patch },
@@ -84,11 +98,11 @@ export function useRun(
     api.runs
       .list(scenarioId)
       .then((runs) => {
-        const latest = runs.find((r) => r.status === "succeeded");
+        const latest = preferredRun(runs);
         if (!live) return;
         // Still loading if there is a run to read: the effect below has to
         // fetch its results before the screen has anything to draw.
-        update(scenarioId, latest ? { run: latest, loading: true } : { loading: false });
+        update(scenarioId, latest ? { run: latest, loading: latest.status === "succeeded" } : { loading: false });
       })
       .catch((err: Error) => live && update(scenarioId, { error: err.message, loading: false }));
 
@@ -110,12 +124,13 @@ export function useRun(
   useEffect(() => {
     if (scenarioId == null || runId == null || runStatus !== "succeeded") return;
     let live = true;
+    const context = rememberRunContext(contexts.current, run!, { rawScenario: scenario, rawAxis: axis });
 
     api.runs
       .results(runId, SERIES[percentile])
       .then((raw) => {
         if (live && raw.run_id === runId && raw.scenario_id === scenarioId) {
-          update(scenarioId, { raw, rawSeries: percentile, loading: false, error: undefined });
+          update(scenarioId, { raw, rawSeries: percentile, ...context, loading: false, error: undefined });
         }
       })
       .catch((err: Error) => live && update(scenarioId, { error: err.message, loading: false }));
@@ -123,6 +138,8 @@ export function useRun(
     return () => {
       live = false;
     };
+    // Capture display context with this payload, rather than relabeling old results after edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenarioId, runId, runStatus, percentile, update]);
 
   const active = run != null && !isTerminal(run.status);
@@ -179,6 +196,7 @@ export function useRun(
   const start = useCallback(
     async (effort: RunEffort) => {
       if (scenarioId == null) return;
+      const editVersion = editVersions.current.get(scenarioId) ?? 0;
       try {
         // The server compiles the scenario synchronously, so a misconfigured
         // plan reports here rather than as a failed job seconds later.
@@ -187,7 +205,10 @@ export function useRun(
           converge: effort.converge,
           percentiles: PERCENTILES,
         });
-        update(scenarioId, { run: queued, raw: undefined, error: undefined, loading: false });
+        const invalidated = (editVersions.current.get(scenarioId) ?? 0) !== editVersion;
+        setInvalidatedPlans((plans) => new Map(plans).set(scenarioId, invalidated));
+        rememberRunContext(contexts.current, queued, { rawScenario: scenario, rawAxis: axis }, true);
+        update(scenarioId, { run: queued, invalidated, error: undefined, loading: false });
       } catch (err) {
         update(scenarioId, {
           error: err instanceof Error ? err.message : String(err),
@@ -195,7 +216,7 @@ export function useRun(
         });
       }
     },
-    [scenarioId, update],
+    [scenarioId, scenario, axis, update],
   );
 
   const cancel = useCallback(async () => {
@@ -207,8 +228,16 @@ export function useRun(
     }
   }, [run, scenarioId, update]);
 
-  const results =
-    matchingRaw && scenario && axis ? toResultsData(matchingRaw, scenario, axis) : undefined;
+  const markInputsChanged = useCallback(() => {
+    if (scenarioId != null) {
+      editVersions.current.set(scenarioId, (editVersions.current.get(scenarioId) ?? 0) + 1);
+      setInvalidatedPlans((plans) => new Map(plans).set(scenarioId, true));
+      update(scenarioId, { invalidated: true });
+    }
+  }, [scenarioId, update]);
+  const stale = resultsAreStale(scenario, run, scenarioId != null && invalidatedPlans.get(scenarioId) === true);
+  const results = matchingRaw && current?.rawScenario && current.rawAxis
+    ? toResultsData(matchingRaw, current.rawScenario, current.rawAxis) : undefined;
 
-  return { run, results, active, loading, error, percentile, setPercentile, start, cancel };
+  return { run, results, active, stale, markInputsChanged, loading, error, percentile, setPercentile, start, cancel };
 }

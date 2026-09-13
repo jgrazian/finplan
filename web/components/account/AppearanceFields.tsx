@@ -102,10 +102,7 @@ export function AppearanceFields({
 
       <PanelNote>
         {value.mode === "system" && `Following the operating system — ${resolved} right now. `}
-        Ground, ink and dividers are shared by all six sets; only the accent
-        ramp turns, and every step of it keeps the same visual weight whichever
-        hue is chosen. The palette belongs to the account, not to a scenario,
-        so every plan is drawn in it.
+        Your appearance settings apply to all your scenarios after you save.
       </PanelNote>
     </>
   );

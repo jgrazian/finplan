@@ -12,7 +12,7 @@ import {
   Th,
 } from "@/components/ui";
 import { fmtInt, fmtPercent } from "@/lib/format";
-import type { AnalysisParameter, ObjectiveRequest, SolveOutcome } from "@/lib/api/types";
+import type { AnalysisParameter, ConstraintRequest, ObjectiveRequest, SolveOutcome } from "@/lib/api/types";
 import { useAnalysis } from "@/lib/hooks/useAnalysis";
 import {
   paramId,
@@ -75,6 +75,7 @@ export function SolvePanel({
     return seed ? [axisFor(seed)] : [];
   });
   const [objective, setObjective] = useState<ObjectiveRequest>("max-parameter");
+  const [constraint, setConstraint] = useState<ConstraintRequest>("funding-success-rate");
   const [minValue, setMinValue] = useState(0.95);
   const [iterations, setIterations] = useState(250);
 
@@ -95,6 +96,7 @@ export function SolvePanel({
     void solve.start({
       kind: "solve",
       objective,
+      constraint,
       min_value: minValue,
       iterations,
       vary: vary.map((axis) => ({
@@ -104,7 +106,7 @@ export function SolvePanel({
         steps: axis.steps,
       })),
     });
-  }, [solve, vary, objective, minValue, iterations]);
+  }, [solve, vary, objective, constraint, minValue, iterations]);
 
   const sidebar = (
     <aside
@@ -130,11 +132,18 @@ export function SolvePanel({
         />
       </Field>
 
+      <Field label="Outcome to constrain">
+        <Dropdown ariaLabel="Outcome to constrain" value={constraint} onChange={setConstraint}
+          disabled={solve.active} options={[
+            { value: "funding-success-rate", label: "Cash funding check" },
+            { value: "success-rate", label: "Positive ending net worth" },
+          ]} />
+      </Field>
       <Field label="Subject to">
         <div style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13 }}>
-          success ≥
+          rate ≥
           <NumberInput
-            aria-label="Minimum success rate, in percent"
+            aria-label="Minimum selected outcome rate, in percent"
             value={Math.round(minValue * 1000) / 10}
             decimals={1}
             min={0}
@@ -200,7 +209,7 @@ export function SolvePanel({
           }}
         >
           {bisects
-            ? "One parameter, and the answer is that parameter: the search brackets the constraint and halves it. A dozen probes, exact to the dollar."
+            ? "Bisection assumes the selected outcome changes monotonically across this range. The search stops at one thousandth of the range or after 16 probes; simulation uncertainty remains. Use a sweep to check for multiple feasible regions."
             : "More than one parameter, or an objective read off the simulation: the search evaluates the grid and keeps the best point that clears the constraint. The method follows the selection; you never pick it."}
         </p>
       </div>
@@ -250,7 +259,7 @@ export function SolvePanel({
               }}
             >
               A sweep reads an answer off a grid, to the nearest cell. Solving
-              finds it exactly: pick what to optimise, the bar it has to clear,
+              searches for a feasible value: pick what to optimise, the bar it has to clear,
               and what is allowed to move.
             </p>
             {solve.error && (
@@ -314,7 +323,7 @@ function Answer({
         </div>
         {!outcome.best && (
           <p style={{ fontSize: 12.5, margin: "6px 0 0", maxWidth: 560 }}>
-            Nothing in the range you gave clears the constraint. Widen the range,
+            No tested point clears the constraint. Bisection assumes one monotone boundary; a sweep can check the interior. Widen the range,
             lower the bar, or let another parameter move.
           </p>
         )}
@@ -361,7 +370,7 @@ function Answer({
               the bracket, one probe at a time
             </span>
           </h6>
-          <ConvergenceChart steps={outcome.steps} parameter={parameter} />
+          <ConvergenceChart steps={outcome.steps} parameter={parameter} constraint={outcome.constraint} />
         </div>
       )}
 
@@ -370,11 +379,11 @@ function Answer({
           style={{ padding: "10px 12px", display: "flex", gap: 12, alignItems: "center", fontSize: 12 }}
         >
           <span style={{ textWrap: "pretty" }}>
-            At {fmtInt(outcome.iterations)} iterations a probe, the success rate
-            at the answer is {fmtPercent(outcome.best.success_rate)} ± {(error * 100).toFixed(1)}.
+            At {fmtInt(outcome.iterations)} iterations per probe, {outcome.constraint === "funding-success-rate" ? "cash funding" : "positive ending net worth"}
+            at the answer is {fmtPercent((outcome.constraint === "funding-success-rate" ? outcome.best.funding_success_rate : outcome.best.success_rate) ?? NaN)}. The estimated standard error is {(error * 100).toFixed(1)} percentage points (one standard error, not a confidence guarantee).
             {error > 0.02
               ? " That is wider than the last digit of the answer — raise the iterations before trusting it."
-              : " A bisection is only as exact as the measurement it brackets on."}
+              : " Search resolution does not remove simulation uncertainty."}
           </span>
         </Blueprint>
       )}
@@ -387,7 +396,7 @@ function Answer({
         }}
       >
         {outcome.steps.length} probes × {fmtInt(outcome.iterations)} iterations ·{" "}
-        {fmtInt(simulations)} simulations
+        {fmtInt(simulations + outcome.iterations)} simulations including baseline · fixed seed 24301 reused across probes
         {elapsedMs != null && ` · ${(elapsedMs / 1000).toFixed(1)}s`}
         {parameter && searched && ` · searched ${searched}`}
       </p>

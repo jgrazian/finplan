@@ -109,12 +109,9 @@ export function DataPanel({
       </div>
 
       <PanelNote>
-        An export is assembled in the browser from the same endpoints the
-        screens read, so what lands in the file is what you have been looking
-        at — accounts, lots, assets and events, whole. It is JSON rather than
-        the CLI&apos;s YAML: the server does not speak YAML, and a file whose
-        name promised one format while holding another would be worse than an
-        honest one.
+        Download your scenarios, accounts, positions, assets, and events as JSON.
+        This export does not include return profiles, inflation profiles, tax
+        definitions, or simulation results. It is not a complete restorable backup.
       </PanelNote>
 
       <Hr />

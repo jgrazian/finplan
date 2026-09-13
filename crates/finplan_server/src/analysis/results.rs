@@ -7,7 +7,7 @@
 //! the frontier and the slices are all derived from the same cells on the
 //! client, which is why changing the threshold does not need another run.
 
-use finplan_core::analysis::{SolveMethod, SolveProbe, SolveResults};
+use finplan_core::analysis::{SolveConstraintMetric, SolveMethod, SolveProbe, SolveResults};
 use finplan_core::model::MonteCarloStats;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -127,6 +127,9 @@ pub struct SweepCell {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SweepResults {
+    /// New graphs use this metric; absent legacy caches used terminal wealth.
+    #[serde(default)]
+    pub default_metric: Option<String>,
     /// The swept variables, in the order the cells' indices follow. A graph
     /// picks one or two of these for its own axes and holds the rest.
     pub axes: Vec<SweepAxis>,
@@ -208,6 +211,8 @@ pub struct SolveStep {
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct SolveOutcome {
+    /// Metric actually used by the solver.
+    pub constraint: String,
     /// `"bisection"` or `"grid-search"` — the method the selection implied.
     pub method: String,
     /// The varied parameters, in the order every `values` array follows.
@@ -218,7 +223,7 @@ pub struct SolveOutcome {
     pub steps: Vec<SolveStep>,
     /// The answer, or `null` when nothing in range clears the constraint.
     pub best: Option<SolveStep>,
-    /// Standard error of the success rate at the answer, as a fraction. Says
+    /// Standard error of the selected constraint at the answer, as a fraction. Says
     /// whether the last digit of the answer means anything.
     pub std_error: Option<f64>,
     pub iterations: u32,
@@ -236,6 +241,11 @@ impl SolveOutcome {
             point: point_from_probe(probe),
         };
         Self {
+            constraint: match results.constraint_metric {
+                SolveConstraintMetric::SuccessRate => "success-rate",
+                SolveConstraintMetric::FundingSuccessRate => "funding-success-rate",
+            }
+            .to_string(),
             method: match results.method {
                 SolveMethod::Bisection => "bisection",
                 SolveMethod::GridSearch => "grid-search",
@@ -260,4 +270,36 @@ pub enum AnalysisOutcome {
     Sweep(SweepResults),
     Sensitivity(SensitivityResults),
     Solve(SolveOutcome),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn historical_sweep_preserves_its_default_and_missing_funding() {
+        let restored: SweepResults = serde_json::from_value(serde_json::json!({
+            "axes": [], "cells": [], "plan_indices": null, "iterations": 100,
+            "plan": { "success_rate": 1.0, "funding_success_rate": null, "p5": 0, "p50": 0, "p95": 0 }
+        })).unwrap();
+        assert!(restored.default_metric.is_none());
+        assert!(restored.plan.funding_success_rate.is_none());
+    }
+
+    #[test]
+    fn historical_solver_uncertainty_keeps_terminal_wealth_semantics() {
+        let probe = serde_json::json!({ "values": [], "success_rate": 1.0,
+            "funding_success_rate": 0.5, "final_percentiles": [], "feasible": true,
+            "objective_value": 0, "bracket": null });
+        let restored: SolveResults = serde_json::from_value(serde_json::json!({
+            "method": "Bisection", "param_labels": [], "baseline": probe,
+            "probes": [], "best": probe, "mc_iterations": 100
+        }))
+        .unwrap();
+        assert_eq!(
+            restored.constraint_metric,
+            SolveConstraintMetric::SuccessRate
+        );
+        assert_eq!(restored.constraint_std_error(), Some(0.0));
+    }
 }

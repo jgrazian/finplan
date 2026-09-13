@@ -84,9 +84,7 @@ export function SecurityPanel({ readOnly }: { readOnly?: boolean }) {
       </div>
 
       <PanelNote>
-        Changing the password ends every other session — a password change is
-        usually an attempt to revoke someone, and leaving their door open would
-        defeat it. This device stays signed in.
+        Changing your password signs out every other device. This device stays signed in.
       </PanelNote>
 
       <PanelHeading>Sessions</PanelHeading>

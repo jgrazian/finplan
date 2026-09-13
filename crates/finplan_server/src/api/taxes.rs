@@ -272,6 +272,8 @@ async fn update(
         }
     }
 
+    sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE tax_config_id = ?1 AND user_id = ?2")
+        .bind(id).bind(&user.id).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Json(load(&state, id, &user.id).await?))
 }
@@ -281,15 +283,19 @@ async fn destroy(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
+    let mut tx = state.db.begin().await?;
+    sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE tax_config_id = ?1 AND user_id = ?2")
+        .bind(id).bind(&user.id).execute(&mut *tx).await?;
     let affected = sqlx::query("DELETE FROM tax_configs WHERE id = ?1 AND user_id = ?2")
         .bind(id)
         .bind(&user.id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
 
     if affected == 0 {
         return Err(ApiError::NotFound("tax config"));
     }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -96,12 +96,9 @@ export function PreferencesPanel({
       </label>
 
       <PanelNote>
-        Iterations seed the slider on the Results tab, which is where a run
-        gets its count; the server caps them either way at its own <code style={{ fontFamily: "ui-monospace, Menlo, monospace" }}>
-          --max-iterations
-        </code>
-        . The horizon seeds a new scenario. Auto re-run waits for an edit to
-        settle before starting, and never while the server is unreachable.
+        These defaults set the simulation count and length of new plans.
+        You can adjust the simulation count on Results, within the service limit.
+        Auto re-run starts after saved edits and pauses while you are offline.
       </PanelNote>
 
       <Hr />

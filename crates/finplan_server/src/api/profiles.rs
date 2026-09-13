@@ -605,6 +605,21 @@ async fn update_return(
             .await;
     }
 
+    // Invalidate every plan using the shared assumption in the same transaction.
+    sqlx::query(
+        "UPDATE scenarios SET updated_at = datetime('now')
+         WHERE user_id = ?2 AND id IN (
+           SELECT scenario_id FROM assets WHERE return_profile_id = ?1
+           UNION SELECT a.scenario_id FROM accounts a JOIN account_bank b ON b.account_id = a.id
+             WHERE b.return_profile_id = ?1
+           UNION SELECT a.scenario_id FROM accounts a JOIN account_investment i ON i.account_id = a.id
+             WHERE i.cash_return_profile_id = ?1)",
+    )
+    .bind(id)
+    .bind(&user.id)
+    .execute(&mut *tx)
+    .await?;
+
     tx.commit().await?;
     fetch_return(State(state), user, Path(id)).await
 }
@@ -740,16 +755,20 @@ async fn delete_inflation(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
+    let mut tx = state.db.begin().await?;
+    sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE inflation_profile_id = ?1 AND user_id = ?2")
+        .bind(id).bind(&user.id).execute(&mut *tx).await?;
     let affected = sqlx::query("DELETE FROM inflation_profiles WHERE id = ?1 AND user_id = ?2")
         .bind(id)
         .bind(&user.id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
 
     if affected == 0 {
         return Err(ApiError::NotFound("inflation profile"));
     }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Blueprint, Button, CompactInput, CurrencyInput, Field } from "@/components/ui";
+import { useRef, useState } from "react";
+import { Blueprint, Button, CompactInput, CurrencyInput, Field, Select } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Asset, Profile } from "@/lib/api/types";
 import { tickerDefaults } from "@/lib/tickers";
@@ -16,12 +16,8 @@ const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
  * none that fit. Sending you to Assets & returns to make one loses the account
  * or lot you were halfway through describing, so the asset is made here.
  *
- * It stays two fields. An asset's other two — its name and the profile that
- * makes it move — are read off the ticker where the ticker is one the bundled
- * table knows, which is most of what a plan is built out of. What was inferred
- * is shown under the field before anything is created, and an unrecognised
- * ticker is created exactly as it always was: named only by its symbol, and
- * unmapped, which compiles at flat zero growth rather than refusing to run.
+ * Recognised tickers suggest a return profile. Users can override it here;
+ * an unknown ticker requires a choice, including explicit no-growth modeling.
  *
  * Renders as a block rather than a dialog because one of its callers is already
  * inside a dialog and the other is inside a drawer; a second modal over either
@@ -48,15 +44,26 @@ export function NewAssetInline({
   const [price, setPrice] = useState(100);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [profileChoice, setProfileChoice] = useState<number | null | undefined>();
+  const submitting = useRef(false);
 
   const known = tickerDefaults(name, profiles);
+  const profileId = profileChoice === undefined ? known?.profile?.id : profileChoice;
 
   const create = () => {
+    if (submitting.current) return;
     const ticker = name.trim();
     if (ticker === "") return setError("An asset needs a ticker.");
     if (!Number.isFinite(price) || price <= 0) {
       return setError("Opening price must be positive.");
     }
+    if (profileId === undefined) {
+      return setError("Choose a return profile, or explicitly choose no price growth.");
+    }
+    if (profileId !== null && !profiles.some((profile) => profile.id === profileId)) {
+      return setError("That return profile is no longer available. Choose another.");
+    }
+    submitting.current = true;
     setBusy(true);
     setError(undefined);
     api.assets
@@ -64,12 +71,15 @@ export function NewAssetInline({
         name: ticker,
         description: known?.name ?? null,
         initial_price: price,
-        return_profile_id: known?.profile?.id ?? null,
+        return_profile_id: profileId,
         sort_order: 0,
       })
       .then(onCreated)
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setBusy(false));
+      .finally(() => {
+        submitting.current = false;
+        setBusy(false);
+      });
   };
 
   return (
@@ -92,7 +102,7 @@ export function NewAssetInline({
           if (e.key === "Escape") {
             e.preventDefault();
             e.stopPropagation();
-            onCancel();
+            if (!submitting.current) onCancel();
           }
         }}
       >
@@ -103,47 +113,62 @@ export function NewAssetInline({
             <CompactInput
               autoFocus
               value={name}
+              aria-label="Ticker"
+              disabled={busy}
               placeholder="VTI"
-              onChange={(e) => setName(e.target.value)}
+              onChange={(e) => {
+                setName(e.target.value);
+                setProfileChoice(undefined);
+                setError(undefined);
+              }}
             />
           </Field>
           <Field label="Opening price">
             <CurrencyInput
               style={{ minHeight: 32 }}
               value={price}
+              disabled={busy}
               onValueChange={setPrice}
               aria-label="Opening price"
             />
           </Field>
         </div>
 
+        <Field label="Return profile" style={{ marginTop: 8 }}>
+          <Select
+            aria-label="New asset return profile"
+            value={profileId === undefined ? "" : profileId === null ? "flat" : String(profileId)}
+            disabled={busy}
+            onChange={(e) => {
+              setProfileChoice(e.target.value === "flat" ? null : Number(e.target.value));
+              setError(undefined);
+            }}
+          >
+            <option value="" disabled>Choose a return assumption</option>
+            {profiles.map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.name}</option>
+            ))}
+            <option value="flat">No price growth — keep the opening price</option>
+          </Select>
+        </Field>
+
         <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: MUTED }}>
-          {known == null ? (
-            <>
-              Created unmapped: it holds this price for the whole simulation
-              until you give it a return profile on Assets &amp; returns.
-            </>
-          ) : (
-            <>
-              <strong style={{ fontWeight: 500, color: "var(--color-text)" }}>
-                {known.name}
-              </strong>{" "}
-              · {known.classLabel} ·{" "}
-              {known.profile
-                ? `grows by ${known.profile.name}`
-                : "no matching profile — held flat at 0%"}
-            </>
-          )}
+          {known && `${known.name} · ${known.classLabel}. `}
+          {profileId === undefined
+            ? "Choose how this asset's price changes in the simulation."
+            : profileId === null
+              ? "The nominal price stays fixed. Its purchasing power falls when inflation is positive."
+              : "The selected profile models returns; it is an assumption, not a price forecast."}
         </p>
 
         {error && (
-          <p style={{ margin: "8px 0 0", fontSize: 12, color: "var(--color-accent-700)" }}>
+          <p role="alert" style={{ margin: "8px 0 0", fontSize: 12, color: "var(--color-accent-700)" }}>
             {error}
           </p>
         )}
 
         <div style={{ display: "flex", gap: 8, marginTop: 11, justifyContent: "flex-end" }}>
-          <Button onClick={onCancel}>Cancel</Button>
+          <Button disabled={busy} onClick={onCancel}>Cancel</Button>
           <Button variant="primary" disabled={busy} onClick={create}>
             {busy ? "…" : "Create asset"}
           </Button>

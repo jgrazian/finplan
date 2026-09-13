@@ -335,7 +335,9 @@ async fn create(
                     parameters: sweeps,
                     objective: objective.into(),
                     constraint: SolveConstraint {
-                        metric: constraint.unwrap_or(ConstraintRequest::SuccessRate).into(),
+                        metric: constraint
+                            .unwrap_or(ConstraintRequest::FundingSuccessRate)
+                            .into(),
                         min_value,
                     },
                     mc_iterations: iterations_or_default(iterations, 250)?,

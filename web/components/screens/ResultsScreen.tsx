@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { PlanDiagnostics } from "@/components/results/PlanDiagnostics";
 import { SplitPane } from "@/components/layout";
 import {
   AccountBreakdown,
@@ -56,6 +57,7 @@ export function ResultsScreen({
   results,
   run,
   active,
+  stale,
   loading,
   error,
   percentile,
@@ -65,11 +67,13 @@ export function ResultsScreen({
   offline,
   onRun,
   onCancel,
+  onReviewPlan,
 }: {
   results: ResultsData | undefined;
   run: Run | undefined;
   /** A run is queued or executing right now. */
   active: boolean;
+  stale?: boolean;
   loading: boolean;
   error: string | undefined;
   /**
@@ -85,6 +89,7 @@ export function ResultsScreen({
   offline?: boolean;
   onRun: () => void;
   onCancel: () => void;
+  onReviewPlan?: () => void;
 }) {
   const [view, setView] = useState<ChartView>("fan");
   const [scaleKind, setScaleKind] = useState<ScaleKind>("linear");
@@ -95,7 +100,7 @@ export function ResultsScreen({
   if (error && !results) {
     return <EmptyState title="The run did not finish" detail={error} />;
   }
-  if (active) {
+  if (active && !results) {
     return <RunProgress run={run} onCancel={onCancel} />;
   }
   if (loading && !results) {
@@ -139,12 +144,22 @@ export function ResultsScreen({
       railWidth={296}
       main={
         <div style={{ padding: "22px 24px" }}>
+          {active && <RunProgress run={run} onCancel={onCancel} />}
+          {(stale || (run != null && (results.runId !== run.id || run.status !== "succeeded"))) && (
+            <div role="status" style={{ padding: 14, marginBottom: 18, border: "1px solid var(--color-divider)" }}>
+              <strong>Showing earlier results</strong>
+              <p>{stale ? `Run #${results.runId} predates saved changes to this plan or its assumptions. Rerun to include them.` : `Showing the last completed result while its replacement is prepared.`}</p>
+              {active ? <p>A replacement is running. Edits saved after it started will still need another run.</p> :
+                <Button variant="primary" onClick={onRun} disabled={offline}>Rerun with saved inputs</Button>}
+            </div>
+          )}
           <SuccessRate
             successRate={stats.successRate}
             fundingSuccessRate={stats.fundingSuccessRate}
             iterations={stats.numIterations}
           />
 
+          <PlanDiagnostics warnings={results.warnings} pathLabel={results.pathLabel} onReviewPlan={onReviewPlan} />
           {!results.hasEnvelope && (
             <p role="status">Real envelope unavailable for this result. Rerun to measure all-path real quantiles; only the selected path is shown.</p>
           )}
@@ -176,14 +191,16 @@ export function ResultsScreen({
           />
 
           <div style={{ marginTop: 24 }}>
-            <CashFlowLedger
+            {run != null && (results.runId !== run.id || run.status !== "succeeded") ? (
+              <p>The previous chart remains visible while the replacement runs. Its detailed ledger is no longer stored.</p>
+            ) : <CashFlowLedger
               rows={results.cashFlows}
               key={`${results.runId}:${results.pathId}`}
               series={results.pathId}
               pathLabel={results.pathLabel}
               runId={results.runId}
               dollarLabel={results.dollarLabel}
-            />
+            />}
           </div>
         </div>
       }

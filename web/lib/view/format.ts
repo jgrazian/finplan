@@ -27,9 +27,11 @@ export function yearsBetween(fromIso: string, toIso: string): number {
   return tm < fm || (tm === fm && td < fd) ? years - 1 : years;
 }
 
-/** ISO date `n` years after `isoDate`, clamping Feb 29 onto Feb 28. */
+/** ISO date `n` years later, clamping Feb 29 only in a non-leap target year. */
 export function addYears(isoDate: string, years: number): string {
   const [y, m, d] = isoDate.split("-").map(Number);
-  const day = m === 2 && d === 29 ? 28 : d;
-  return `${y + years}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const targetYear = y + years;
+  const leap = targetYear % 4 === 0 && (targetYear % 100 !== 0 || targetYear % 400 === 0);
+  const day = m === 2 && d === 29 && !leap ? 28 : d;
+  return `${targetYear}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }

@@ -86,3 +86,8 @@ export function toHref(state: NavState): string {
   const text = query.toString();
   return text === "" ? `/${state.tab}` : `/${state.tab}?${text}`;
 }
+
+/** One navigation for scenario creation: no intermediate old-scenario tab move. */
+export function scenarioDestination(scenario: number, tab: TabId): NavState {
+  return { scenario, tab, section: DEFAULT_SECTION[tab] };
+}

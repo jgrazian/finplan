@@ -3,13 +3,13 @@
 //!
 //! A sweep answers "what happens across this grid". Solving answers the
 //! question the grid is usually a proxy for — "how much can I spend and still
-//! clear 95%?" — exactly, rather than to the nearest cell.
+//! clear 95%?" — at a chosen search resolution.
 //!
 //! The search follows the selection rather than being chosen:
 //!
 //! * One parameter, and the objective *is* that parameter (largest spend,
-//!   earliest retirement): [`SolveMethod::Bisection`]. The constraint is
-//!   monotone in the parameter for every objective of this shape, so the
+//!   earliest retirement): [`SolveMethod::Bisection`]. The method assumes the constraint is
+//!   monotone in the parameter, so the
 //!   boundary can be bracketed and halved — a dozen probes rather than a grid.
 //! * Anything else — several parameters, or an objective read off the
 //!   simulation instead of the parameter: [`SolveMethod::GridSearch`]. Every
@@ -132,6 +132,9 @@ impl SolveProbe {
 /// and the path taken to it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolveResults {
+    /// Constraint used for feasibility and sampling uncertainty. Legacy results used terminal wealth.
+    #[serde(default = "legacy_constraint_metric")]
+    pub constraint_metric: SolveConstraintMetric,
     pub method: SolveMethod,
     pub param_labels: Vec<String>,
     /// The unmodified plan, evaluated once so every figure has a baseline.
@@ -146,6 +149,10 @@ pub struct SolveResults {
     pub mc_iterations: usize,
 }
 
+fn legacy_constraint_metric() -> SolveConstraintMetric {
+    SolveConstraintMetric::SuccessRate
+}
+
 impl SolveResults {
     /// Standard error of the constraint metric at the optimum, as a fraction.
     ///
@@ -154,7 +161,10 @@ impl SolveResults {
     #[must_use]
     pub fn constraint_std_error(&self) -> Option<f64> {
         let best = self.best.as_ref()?;
-        let p = best.success_rate;
+        let p = match self.constraint_metric {
+            SolveConstraintMetric::SuccessRate => best.success_rate,
+            SolveConstraintMetric::FundingSuccessRate => best.funding_success_rate?,
+        };
         if self.mc_iterations == 0 {
             return None;
         }
@@ -378,10 +388,8 @@ fn better(objective: SolveObjective, a: f64, b: f64) -> bool {
 /// Halve the bracket between the end of the range the objective wants and the
 /// nearest point that still clears the constraint.
 ///
-/// The constraint is monotone in the parameter here — more spending never
-/// raises success, a later retirement never lowers it — so a single crossing
-/// separates the feasible half of the range from the infeasible one, and that
-/// crossing is what this walks in on.
+/// This method assumes a monotone constraint with a single crossing. Arbitrary
+/// event rules can violate that assumption; use a grid to inspect such plans.
 fn bisect(
     base_config: &SimulationConfig,
     config: &SolveConfig,
@@ -510,6 +518,7 @@ fn finish(
     config: &SolveConfig,
 ) -> SolveResults {
     SolveResults {
+        constraint_metric: config.constraint.metric,
         method,
         param_labels: Vec::new(),
         baseline: SolveProbe {

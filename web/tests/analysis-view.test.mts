@@ -9,7 +9,7 @@ import {
   solveRows,
 } from "../lib/view/analysis.ts";
 
-test("parameters read as monospace identifiers, and values in their own units", () => {
+test("parameters read as event names, and values in their own units", () => {
   const parameter: AnalysisParameter = {
     id: "event:3:amount",
     event_id: 3,
@@ -20,7 +20,7 @@ test("parameters read as monospace identifiers, and values in their own units", 
     min: 52,
     max: 72,
   };
-  assert.equal(paramId(parameter), "retirement-spending.starts-at-age");
+  assert.equal(paramId(parameter), "Retirement spending · starts at age");
   assert.equal(paramValue("age", 62.4), "62");
   assert.equal(paramValue("amount", 7_000), "$7,000");
 });
@@ -52,7 +52,7 @@ test("the sensitivity bars are drawn against the range the parameters cover", ()
         span: 10,
       },
     ],
-  });
+  }, "success");
   const [rising, falling] = rows;
   // The axis covers 0.6 to 0.99 — the range the rows and the plan occupy —
   // rather than 0 to 1, where every band would be a sliver at the right edge.
@@ -89,7 +89,7 @@ test("a ranking where nothing moves still draws readable bars", () => {
         span: 0.5,
       },
     ],
-  });
+  }, "success");
   assert.ok(high - low > 0.049, "the axis should widen rather than amplify");
   assert.ok(high <= 1 && low >= 0);
   // Half a point of movement stays a tenth of the chart, not the whole of it.
@@ -108,6 +108,7 @@ function solve(best: SolveOutcome["best"]): SolveOutcome {
     max: 18_000,
   };
   return {
+    constraint: "success-rate",
     method: "bisection",
     parameters: [parameter],
     plan: { success_rate: 0.87, funding_success_rate: null, p5: 100, p50: 1_000, p95: 5_000 },
@@ -133,16 +134,17 @@ test("the solve comparison quotes the parameter, then what moved with it", () =>
     }),
   );
   assert.deepEqual(rows[0], {
-    label: "retirement-spending.amount",
+    label: "Retirement spending · amount",
     mono: true,
     plan: "$9,000",
     best: "$12,000",
     delta: "+$3,000",
   });
-  assert.equal(rows[1].label, "Success");
-  assert.equal(rows[1].best, "95.0%");
+  assert.equal(rows[1].best, "Not measured — rerun");
+  assert.equal(rows[2].label, "Positive ending net worth");
+  assert.equal(rows[2].best, "95.0%");
   // A worse terminal figure at the answer is still reported, not hidden.
-  assert.equal(rows[2].delta.startsWith("−"), true);
+  assert.equal(rows[3].delta.startsWith("−"), true);
 });
 
 test("no feasible answer reads as one, rather than as a zero", () => {
@@ -150,6 +152,19 @@ test("no feasible answer reads as one, rather than as a zero", () => {
   assert.equal(solveHeadline(outcome), "no answer");
   assert.deepEqual(
     solveRows(outcome).map((r) => r.best),
-    ["—", "—", "—", "—"],
+    ["—", "—", "—", "—", "—"],
   );
+});
+
+test("funding ranking uses funding differences and omits unmeasured rows", () => {
+  const point = (success_rate: number, funding_success_rate: number | null) => ({ success_rate, funding_success_rate, p5: 0, p50: 0, p95: 0 });
+  const row = (id: string, low: ReturnType<typeof point>, high: ReturnType<typeof point>) => ({ parameter_id: id, label: id, kind: "amount", low_value: 1, high_value: 2, low, high, span: 99 });
+  const results = { fraction: 0.2, iterations: 100, plan: point(1, 0), rows: [
+    row("wealth", point(0, 0), point(1, 0)),
+    row("funding", point(1, 0), point(1, 0.8)),
+    row("legacy", point(0, null), point(1, null)),
+  ] };
+  assert.deepEqual(sensitivityView(results).rows.map(r => r.parameterId), ["funding", "wealth"]);
+  assert.equal(sensitivityView(results).rows[0].span, 80);
+  assert.equal(sensitivityView(results, "success").rows[0].parameterId, "wealth");
 });

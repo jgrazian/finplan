@@ -140,8 +140,8 @@ export function SweepPanel({
   // moved where they did not, which is what lets adding a variable and
   // re-running extend the screen instead of clearing it.
   const graphs = useMemo(
-    () => (space ? reconcile(layout ?? [], space.axes) : []),
-    [space, layout],
+    () => (space ? reconcile(layout ?? (results?.default_metric == null && !sweep.job ? defaultGraphs(space.axes).map((g) => ({ ...g, metric: "success" as const })) : []), space.axes) : []),
+    [space, layout, results, sweep.job],
   );
 
   const run = useCallback(() => {
@@ -343,6 +343,8 @@ export function SweepPanel({
     <>
       {toolbar}
       {strip}
+      <p style={{ padding: "0 18px", fontSize: 12 }}>Cash funding checks modeled cash balances and event-processing warnings; it does not detect omitted spending or guarantee future outcomes. Positive ending net worth measures only the final balance.</p>
+      {space.plan.funding_success_rate == null && <p role="status" style={{ padding: "0 18px" }}>Cash funding: Not measured — rerun.</p>}
       <SplitPane
         railWidth={272}
         main={

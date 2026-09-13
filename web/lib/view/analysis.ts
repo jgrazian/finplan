@@ -16,16 +16,7 @@ import { fmtCompact, fmtCurrency, fmtPercent } from "../format.ts";
 
 /** A parameter as a monospace identifier: `retirement-spending.amount`. */
 export function paramId(parameter: { event_name: string; role: string }): string {
-  return `${slug(parameter.event_name)}.${slug(parameter.role)}`;
-}
-
-function slug(text: string): string {
-  return (
-    text
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "unnamed"
-  );
+  return `${parameter.event_name} · ${parameter.role}`;
 }
 
 /** A value in the parameter's own units — an age is a number, money is money. */
@@ -84,13 +75,16 @@ const MIN_SENSITIVITY_SPAN = 0.05;
  * axis renders the whole ranking as identical slivers at the right edge —
  * destroying exactly the comparison the screen exists to make.
  */
-export function sensitivityView(results: SensitivityResults): SensitivityChart {
-  const ends = results.rows.flatMap((row) => [
-    clamp01(row.low.success_rate),
-    clamp01(row.high.success_rate),
+export function sensitivityView(results: SensitivityResults, metric: "funding" | "success" = "funding"): SensitivityChart {
+  const read = (point: { success_rate: number; funding_success_rate: number | null }) => metric === "funding" ? point.funding_success_rate : point.success_rate;
+  const measured = results.rows.filter((row) => read(row.low) != null && read(row.high) != null);
+  const ends = measured.flatMap((row) => [
+    clamp01(read(row.low)!),
+    clamp01(read(row.high)!),
   ]);
   // The plan's own rate is marked on every bar, so the axis has to reach it.
-  ends.push(clamp01(results.plan.success_rate));
+  if (read(results.plan) != null) ends.push(clamp01(read(results.plan)!));
+  if (ends.length === 0) ends.push(0, 1);
 
   let low = Math.min(...ends);
   let high = Math.max(...ends);
@@ -103,9 +97,9 @@ export function sensitivityView(results: SensitivityResults): SensitivityChart {
   const span = high - low || 1;
   const at = (rate: number) => clamp01((clamp01(rate) - low) / span);
 
-  const rows = results.rows.map((row) => {
-    const lowSuccess = clamp01(row.low.success_rate);
-    const highSuccess = clamp01(row.high.success_rate);
+  const rows = measured.map((row) => {
+    const lowSuccess = clamp01(read(row.low)!);
+    const highSuccess = clamp01(read(row.high)!);
     return {
       parameterId: row.parameter_id,
       label: row.label,
@@ -114,12 +108,13 @@ export function sensitivityView(results: SensitivityResults): SensitivityChart {
       highValue: row.high_value,
       lowSuccess,
       highSuccess,
-      span: row.span,
+      span: Math.abs(highSuccess - lowSuccess) * 100,
       barStart: Math.min(at(lowSuccess), at(highSuccess)),
       barWidth: Math.abs(at(highSuccess) - at(lowSuccess)),
     };
   });
 
+  rows.sort((a, b) => b.span - a.span);
   return { rows, low, high };
 }
 
@@ -152,12 +147,16 @@ export function solveRows(outcome: SolveOutcome): SolveRow[] {
     };
   });
 
-  rows.push({
-    label: "Success",
-    plan: fmtPercent(outcome.plan.success_rate),
-    best: best ? fmtPercent(best.success_rate) : "—",
-    delta: best ? "meets the constraint" : "—",
-  });
+  for (const [key, label, constraint] of [
+    ["funding_success_rate", "Cash funding check", "funding-success-rate"],
+    ["success_rate", "Positive ending net worth", "success-rate"],
+  ] as const) {
+    const from = outcome.plan[key];
+    const to = best?.[key];
+    rows.push({ label, plan: from == null ? "Not measured — rerun" : fmtPercent(from),
+      best: !best ? "—" : to == null ? "Not measured — rerun" : fmtPercent(to),
+      delta: best && (outcome.constraint ?? "success-rate") === constraint ? "meets the constraint" : "—" });
+  }
   rows.push({
     label: "P50 terminal",
     plan: fmtCompact(outcome.plan.p50),

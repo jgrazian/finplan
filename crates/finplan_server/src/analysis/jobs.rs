@@ -555,6 +555,7 @@ fn run_sweep(
     }
 
     Ok(SweepResults {
+        default_metric: Some("funding".to_string()),
         axes,
         cells,
         plan,

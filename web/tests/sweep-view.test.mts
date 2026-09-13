@@ -84,6 +84,7 @@ function results(axes: SweepAxis[] = AXES, planIndices: number[] | null = [1, 0,
   return {
     axes,
     cells,
+    default_metric: null,
     plan: { success_rate: 0.8, funding_success_rate: null, p5: 1_000, p50: 8_000, p95: 90_000 },
     plan_indices: planIndices,
     iterations: 250,
@@ -354,7 +355,7 @@ test("a graph is named by what it shows and what it shows it against", () => {
     sub: "Spending · amount × age",
   });
   assert.deepEqual(graphTitle(graphView(space, lineOver("event:1:age"))!), {
-    title: "Success rate",
+    title: "Positive ending net worth",
     sub: "by age",
   });
 });
@@ -376,7 +377,7 @@ test("the CSV carries one row per combination, in the order the server sent them
   assert.equal(lines.length, 13);
   assert.equal(
     lines[0],
-    "Retire · age,Spending · amount,Windfall · amount,success_rate,funding_success_rate,p5,p50,p95",
+    "Retire · age,Spending · amount,Windfall · amount,positive_ending_net_worth_rate,cash_funding_check_rate,p5,p50,p95",
   );
   // The last axis varies fastest, and the variables are written as values.
   assert.equal(lines[1].startsWith("60,5000,0,"), true, lines[1]);
@@ -388,7 +389,7 @@ test("the CSV carries one row per combination, in the order the server sent them
 test("the metric menu offers every measure a cell carries", () => {
   assert.deepEqual(
     METRICS.map((m) => m.id),
-    ["success", "funding", "p50", "p5", "p95"],
+    ["funding", "success", "p50", "p5", "p95"],
   );
   assert.equal(metric("success").format(0.912), "91.2%");
   assert.equal(metric("p50").format(1_250_000), "$1,250,000");
@@ -459,4 +460,12 @@ test("a restored layout survives the sweep it was drawn over being re-run", () =
   assert.equal(carried[0].y, "event:3:amount");
   // The hold named a variable that is on an axis now, so it is no longer a hold.
   assert.deepEqual(carried[0].held, {});
+});
+
+
+test("new graphs default to funding while saved terminal-wealth graphs keep their metric", () => {
+  assert.ok(defaultGraphs(AXES).every(g => g.metric === "funding"));
+  const old = lineOver("event:1:age");
+  assert.equal(reconcile([old], AXES)[0].metric, "success");
+  assert.equal(metric("funding").of({ success_rate: 1, funding_success_rate: null, p5: 0, p50: 0, p95: 0 }), undefined);
 });

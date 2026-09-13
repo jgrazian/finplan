@@ -103,7 +103,16 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   );
   const [inflationProfiles = [], taxConfigs = []] = libraries.data ?? [];
   const [creating, setCreating] = useState(false);
-  const list = useMemo(() => scenarios.data ?? [], [scenarios.data]);
+  const [recentlyCreated, setRecentlyCreated] = useState<ApiScenario>();
+  // Bridge the list refresh without resurrecting this row after later deletion.
+  if (recentlyCreated && scenarios.data?.some((row) => row.id === recentlyCreated.id)) {
+    setRecentlyCreated(undefined);
+  }
+  const list = useMemo(() => {
+    const rows = scenarios.data ?? [];
+    return recentlyCreated && !rows.some((row) => row.id === recentlyCreated.id)
+      ? [recentlyCreated, ...rows] : rows;
+  }, [scenarios.data, recentlyCreated]);
 
   // The list is sorted most-recently-updated first, so that is the default
   // until the query names something else. Derived, so a scenario deleted
@@ -133,6 +142,12 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     scenarios.reload();
     workspace.reload();
   }, [scenarios, workspace]);
+
+  const saved = useCallback(() => {
+    run.markInputsChanged();
+    refresh();
+    libraries.reload();
+  }, [run, refresh, libraries]);
 
   // Auto re-run, when the preference asks for it.
   //
@@ -172,17 +187,20 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   }, [start]);
 
   const headerScenarios = useMemo(
-    () => list.map((s) => toHeaderScenario(s, run.run?.finished_at)),
-    [list, run.run?.finished_at],
+    () => list.map((s) => ({
+      ...toHeaderScenario(s),
+      ...(s.id === scenarioId ? { dirty: run.stale } : {}),
+    })),
+    [list, scenarioId, run.stale],
   );
 
   const activateInflation = useCallback(
     async (profile: InflationProfile) => {
       if (scenarioId == null) return;
       await api.scenarios.update(scenarioId, { inflation_profile_id: profile.serverId });
-      workspace.reload();
+      saved();
     },
-    [scenarioId, workspace],
+    [scenarioId, saved],
   );
 
   return (
@@ -240,6 +258,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 results={run.results}
                 run={run.run}
                 active={run.active}
+                stale={run.stale}
                 loading={run.loading}
                 error={run.error}
                 percentile={run.percentile}
@@ -249,6 +268,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 offline={status.offline}
                 onRun={start}
                 onCancel={run.cancel}
+                onReviewPlan={() => nav.setTab("plan")}
               />
             )}
             {nav.tab === "portfolio" && (
@@ -257,7 +277,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 scenarioId={workspace.scenario.id}
                 accounts={workspace.accounts}
                 raw={workspace.raw}
-                onChanged={workspace.reload}
+                onChanged={saved}
                 returnProfiles={workspace.returnProfiles}
                 inflationProfiles={workspace.inflationProfiles}
                 activeInflationProfile={workspace.activeInflationProfile}
@@ -273,7 +293,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 axis={workspace.axis}
                 events={workspace.events}
                 raw={workspace.raw}
-                onChanged={workspace.reload}
+                onChanged={saved}
               />
             )}
             {nav.tab === "analysis" && (
@@ -294,7 +314,8 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           taxConfigs={taxConfigs}
           onClose={() => setCreating(false)}
           onCreated={(created) => {
-            nav.setScenario(created.id);
+            setRecentlyCreated(created);
+            nav.openScenario(created.id, "portfolio");
             scenarios.reload();
           }}
         />
@@ -307,12 +328,12 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
  * `dirty` marks results that no longer describe the plan: the scenario was
  * edited after the run that produced them finished.
  */
-function toHeaderScenario(scenario: ApiScenario, lastRunAt: string | null | undefined): Scenario {
+function toHeaderScenario(scenario: ApiScenario): Scenario {
   return {
     id: String(scenario.id),
     serverId: scenario.id,
     name: scenario.name,
-    dirty: lastRunAt != null && scenario.updated_at > lastRunAt,
+    dirty: scenario.last_run_at != null && scenario.updated_at > scenario.last_run_at,
   };
 }
 

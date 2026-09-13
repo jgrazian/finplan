@@ -70,7 +70,7 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
   }, [scenarioId]);
 
   return useMemo(() => {
-    if (!data) {
+    if (!data || data.scenario.id !== scenarioId) {
       return {
         scenario: undefined,
         params: undefined,
@@ -123,5 +123,5 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
       error,
       reload,
     };
-  }, [data, loading, error, reload]);
+  }, [data, loading, error, reload, scenarioId]);
 }

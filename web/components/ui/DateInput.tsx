@@ -288,7 +288,7 @@ export function DateInput({
       setOpen(true);
       if (focusPanel) requestAnimationFrame(() => panel.current?.focus());
     },
-    [locked, value],
+    [locked, value, setCursor, setView],
   );
 
   /** Sends what the segments spell, once they spell something whole. */
@@ -316,7 +316,7 @@ export function DateInput({
       onValueChange(toIso(d));
       close();
     },
-    [close, onValueChange],
+    [close, onValueChange, setParts],
   );
 
   useEffect(() => {

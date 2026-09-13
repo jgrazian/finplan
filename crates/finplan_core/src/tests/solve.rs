@@ -285,3 +285,51 @@ fn a_plan_whose_schedule_follows_the_market_can_be_solved() {
             .all(|p| !p.final_percentiles.is_empty())
     );
 }
+
+#[test]
+fn selected_constraint_changes_feasibility_when_cash_is_stranded() {
+    let (plan, _) = SimulationBuilder::new()
+        .start(2020, 1, 1)
+        .years(1)
+        .inflation(0.0)
+        .bank("Spending", 100.0)
+        .bank("Untouched", 1_000_000.0)
+        .event(
+            EventBuilder::expense("Expense")
+                .from_account("Spending")
+                .amount(1_000.0)
+                .monthly(),
+        )
+        .build();
+    let mut config = config_for(
+        SolveObjective::MaxParameter,
+        vec![spend_parameter(500.0, 2_000.0, 3)],
+    );
+    let wealth = solve(&plan, &config, None).unwrap();
+    assert_eq!(wealth.best.as_ref().unwrap().success_rate, 1.0);
+    assert_eq!(
+        wealth.best.as_ref().unwrap().funding_success_rate,
+        Some(0.0)
+    );
+    config.constraint.metric = SolveConstraintMetric::FundingSuccessRate;
+    let funding = solve(&plan, &config, None).unwrap();
+    assert!(funding.best.is_none());
+    assert_eq!(funding.constraint_std_error(), None);
+}
+
+#[test]
+fn constraint_uncertainty_uses_selected_proportion_and_preserves_legacy_meaning() {
+    let config = config_for(
+        SolveObjective::MaxParameter,
+        vec![spend_parameter(2_000.0, 20_000.0, 6)],
+    );
+    let mut results = solve(&drawdown_plan(6_000.0), &config, None).unwrap();
+    results.mc_iterations = 100;
+    results.best.as_mut().unwrap().success_rate = 1.0;
+    results.best.as_mut().unwrap().funding_success_rate = Some(0.5);
+    assert_eq!(results.constraint_std_error(), Some(0.0));
+    results.constraint_metric = SolveConstraintMetric::FundingSuccessRate;
+    assert_eq!(results.constraint_std_error(), Some(0.05));
+    results.best.as_mut().unwrap().funding_success_rate = None;
+    assert_eq!(results.constraint_std_error(), None);
+}

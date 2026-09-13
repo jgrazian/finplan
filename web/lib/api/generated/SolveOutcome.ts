@@ -8,6 +8,10 @@ import type { SolveStep } from "./SolveStep";
  */
 export type SolveOutcome = {
   /**
+   * Metric actually used by the solver.
+   */
+  constraint: string;
+  /**
    * `"bisection"` or `"grid-search"` — the method the selection implied.
    */
   method: string;
@@ -28,7 +32,7 @@ export type SolveOutcome = {
    */
   best: SolveStep | null;
   /**
-   * Standard error of the success rate at the answer, as a fraction. Says
+   * Standard error of the selected constraint at the answer, as a fraction. Says
    * whether the last digit of the answer means anything.
    */
   std_error: number | null;

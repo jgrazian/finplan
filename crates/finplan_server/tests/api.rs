@@ -2289,6 +2289,7 @@ async fn a_solve_answers_with_the_boundary_and_shows_its_working() {
             &format!("/api/scenarios/{scenario_id}/analyses"),
             json!({
                 "kind": "solve",
+                "constraint": "success-rate",
                 "iterations": 25,
                 "objective": "max-parameter",
                 "min_value": 0.95,
@@ -2325,6 +2326,30 @@ async fn a_solve_answers_with_the_boundary_and_shows_its_working() {
     for pair in widths.windows(2) {
         assert!(pair[1] <= pair[0] + 1e-9, "bracket widened: {widths:?}");
     }
+    assert_eq!(results["constraint"], "success-rate");
+    // The same plan can end above zero despite event warnings. Omitting a
+    // constraint now uses funding, which must not borrow terminal success.
+    let (status, job) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/analyses"),
+            json!({"kind": "solve", "iterations": 25, "objective": "max-parameter",
+            "min_value": 0.95, "vary": [{"parameter_id": amount, "min": 200, "max": 6000}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = job["id"].as_i64().unwrap();
+    assert_eq!(app.await_analysis(id).await, "succeeded");
+    let (_, funding) = app.get(&format!("/api/analyses/{id}/results")).await;
+    assert_eq!(funding["constraint"], "funding-success-rate");
+    assert!(funding["best"].is_null());
+    assert!(funding["std_error"].is_null());
+    assert!(
+        funding["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["success_rate"] == 1.0 && step["funding_success_rate"] == 0.0)
+    );
 }
 
 #[tokio::test]
@@ -2599,5 +2624,103 @@ async fn a_plan_whose_schedule_follows_the_market_runs_and_analyses() {
         let (status, results) = app.get(&format!("/api/analyses/{id}/results")).await;
         assert_eq!(status, StatusCode::OK, "{kind}");
         assert_eq!(results["kind"], json!(kind));
+    }
+}
+
+#[tokio::test]
+async fn shared_return_edit_invalidates_dependents_only_and_failed_save_does_not() {
+    let mut app = TestApp::new().await;
+    app.login_as("freshness@example.com").await;
+    let (sid, _, _) = app.seed_scenario().await;
+    let (_, other) = app
+        .post(
+            "/api/scenarios",
+            json!({"name":"Untouched", "start_date":"2026-01-01", "duration_years":10}),
+        )
+        .await;
+    let other_id = other["id"].as_i64().unwrap();
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let profile = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "US Total Market")
+        .unwrap();
+    let pid = profile["id"].as_i64().unwrap();
+    let db = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        app._dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query("UPDATE scenarios SET updated_at = '2000-01-01 00:00:00'")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let (status, _) = app
+        .patch(
+            &format!("/api/return-profiles/{pid}"),
+            json!({"distribution":{"kind":"Fixed","rate":0.04}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, changed) = app.get(&format!("/api/scenarios/{sid}")).await;
+    let (_, unchanged) = app.get(&format!("/api/scenarios/{other_id}")).await;
+    assert_ne!(changed["updated_at"], "2000-01-01 00:00:00");
+    assert_eq!(unchanged["updated_at"], "2000-01-01 00:00:00");
+
+    sqlx::query("UPDATE scenarios SET updated_at = '2000-01-01 00:00:00'")
+        .execute(&db)
+        .await
+        .unwrap();
+    let (status, _) = app
+        .patch(
+            &format!("/api/return-profiles/{pid}"),
+            json!({"name":"Savings Account"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, unchanged) = app.get(&format!("/api/scenarios/{sid}")).await;
+    assert_eq!(unchanged["updated_at"], "2000-01-01 00:00:00");
+}
+
+#[tokio::test]
+async fn shared_tax_edits_and_inflation_deletion_invalidate_dependents() {
+    let mut app = TestApp::new().await;
+    app.login_as("assumption-freshness@example.com").await;
+    let (_, taxes) = app.get("/api/tax-configs").await;
+    let tax = taxes[0]["id"].as_i64().unwrap();
+    let (_, inflation) = app.get("/api/inflation-profiles").await;
+    let inflation_id = inflation[0]["id"].as_i64().unwrap();
+    let (_, scenario) = app.post("/api/scenarios", json!({"name":"Assumptions", "start_date":"2026-01-01", "duration_years":10, "tax_config_id":tax, "inflation_profile_id":inflation_id})).await;
+    let sid = scenario["id"].as_i64().unwrap();
+    let db = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        app._dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    for (method, path, body) in [
+        (
+            "PATCH",
+            format!("/api/tax-configs/{tax}"),
+            Some(json!({"state_rate":0.05})),
+        ),
+        (
+            "DELETE",
+            format!("/api/inflation-profiles/{inflation_id}"),
+            None,
+        ),
+        ("DELETE", format!("/api/tax-configs/{tax}"), None),
+    ] {
+        sqlx::query("UPDATE scenarios SET updated_at = '2000-01-01 00:00:00'")
+            .execute(&db)
+            .await
+            .unwrap();
+        let (status, _) = app.send(method, &path, body).await;
+        assert!(status.is_success(), "{method} {path}: {status}");
+        let (_, changed) = app.get(&format!("/api/scenarios/{sid}")).await;
+        assert_ne!(changed["updated_at"], "2000-01-01 00:00:00");
     }
 }

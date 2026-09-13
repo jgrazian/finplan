@@ -121,12 +121,12 @@ export function NewAccountDialog({
     >
       <DialogRow>
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} required />
+          <Input aria-label="Account name" value={name} onChange={(e) => setName(e.target.value)} required />
         </Field>
-        <Field label="Flavor">
-          <Select value={flavor} onChange={(e) => setFlavor(e.target.value as Flavor)}>
+        <Field label="Account type">
+          <Select aria-label="Account type" value={flavor} onChange={(e) => setFlavor(e.target.value as Flavor)}>
             {FLAVORS.map((f) => (
-              <option key={f}>{f}</option>
+              <option key={f} value={f}>{f === "Bank" ? "Cash / bank" : f === "Liability" ? "Debt / loan" : f}</option>
             ))}
           </Select>
         </Field>
@@ -144,10 +144,10 @@ export function NewAccountDialog({
       {flavor === "Investment" && (
         <>
           <DialogRow>
-            <Field label="Tax status">
-              <Select value={taxStatus} onChange={(e) => setTaxStatus(e.target.value as TaxStatus)}>
+            <Field label="Tax treatment">
+              <Select aria-label="Tax treatment" value={taxStatus} onChange={(e) => setTaxStatus(e.target.value as TaxStatus)}>
                 {TAX_STATUSES.map((t) => (
-                  <option key={t}>{t}</option>
+                  <option key={t} value={t}>{t === "TaxDeferred" ? "Tax-deferred" : t === "TaxFree" ? "Tax-free" : "Taxable"}</option>
                 ))}
               </Select>
             </Field>
@@ -155,6 +155,10 @@ export function NewAccountDialog({
               <CurrencyInput value={cash} onValueChange={setCash} aria-label="Opening cash" />
             </Field>
           </DialogRow>
+          <p style={{ margin: 0, fontSize: 12 }}>
+            Opening cash is the uninvested portion of this account. Add investments
+            as positions after creating it; do not include their value in cash.
+          </p>
           <ProfileField
             value={profileId}
             onChange={setProfileId}
@@ -261,7 +265,7 @@ function ProfileField({
 }) {
   return (
     <Field label={label}>
-      <Select value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      <Select aria-label={label} value={value} onChange={(e) => onChange(Number(e.target.value))}>
         {profiles.map((p) => (
           <option key={p.id} value={p.id}>
             {p.name}

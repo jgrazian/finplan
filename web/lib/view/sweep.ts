@@ -79,8 +79,8 @@ const money = (id: MetricId, label: string, short: string, of: (p: AnalysisPoint
 
 /** Everything a sweep measures, in the order the menu offers it. */
 export const METRICS: readonly Metric[] = [
-  rate("success", "Success rate", "success", (p) => p.success_rate),
-  rate("funding", "Funding success", "funding success", (p) => p.funding_success_rate),
+  rate("funding", "Cash funding check", "cash funding", (p) => p.funding_success_rate),
+  rate("success", "Positive ending net worth", "positive ending net worth", (p) => p.success_rate),
   money("p50", "P50 terminal net worth", "P50 terminal", (p) => p.p50),
   money("p5", "P5 terminal net worth", "P5 terminal", (p) => p.p5),
   money("p95", "P95 terminal net worth", "P95 terminal", (p) => p.p95),
@@ -527,7 +527,7 @@ export function defaultGraphs(axes: SweepAxis[]): GraphSpec[] {
   const line: GraphSpec = {
     id: freshId(),
     kind: "line",
-    metric: "success",
+    metric: "funding",
     x: first.parameter_id,
     y: undefined,
     held: {},
@@ -538,7 +538,7 @@ export function defaultGraphs(axes: SweepAxis[]): GraphSpec[] {
     {
       id: freshId(),
       kind: "heatmap",
-      metric: "success",
+      metric: "funding",
       x: first.parameter_id,
       y: second.parameter_id,
       held: {},
@@ -571,7 +571,7 @@ export function newGraph(axes: SweepAxis[], existing: GraphSpec[]): GraphSpec | 
   return {
     id: freshId(),
     kind: kinds[0],
-    metric: "success",
+    metric: "funding",
     x: axes[0].parameter_id,
     y: needsY(kinds[0]) ? axes[1]?.parameter_id : undefined,
     held: {},
@@ -703,8 +703,8 @@ function angle(value: unknown): number | undefined {
 export function sweepCsv(space: SweepSpace): string {
   const header = [
     ...space.axes.map((axis) => axis.label),
-    "success_rate",
-    "funding_success_rate",
+    "positive_ending_net_worth_rate",
+    "cash_funding_check_rate",
     "p5",
     "p50",
     "p95",

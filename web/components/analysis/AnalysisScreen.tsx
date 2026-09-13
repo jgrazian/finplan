@@ -9,30 +9,17 @@ import { useNav } from "@/lib/nav";
 import { SolvePanel } from "./SolvePanel";
 import { SweepPanel } from "./SweepPanel";
 
-type Mode = "whatif" | "sweep" | "solve";
+type Mode = "sweep" | "solve";
 
-/**
- * Analysis is three jobs, not one screen: What-if asks what happens if, Sweep
- * asks what happens across a range, Solve asks for the value that just works.
- * What-if is not built yet, and is disabled rather than dropped — the mode
- * switch is the shape of the tab, and a missing third makes the other two read
- * as the whole of it.
- */
+/** Offer only implemented analysis workflows. */
 const MODES: ReadonlyArray<SegmentOption<Mode>> = [
-  {
-    value: "whatif",
-    label: "What-if",
-    disabled: true,
-    title: "Not built yet — overrides on sliders, against the plan ghosted behind them",
-  },
   { value: "sweep", label: "Sweep" },
   { value: "solve", label: "Solve" },
 ];
 
 const CAPTIONS: Record<Mode, string> = {
-  whatif: "",
-  sweep: "One question across a range: run the plan over a grid and colour it by what survived.",
-  solve: "One question exactly: the value that just clears a bar you set.",
+  sweep: "Compare simulated outcomes across a range of plan inputs.",
+  solve: "Search for a value that meets your chosen outcome threshold.",
 };
 
 /** Analysis tab: the sweep grid, and the goal seek that reads exactly. */

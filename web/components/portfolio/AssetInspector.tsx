@@ -197,9 +197,9 @@ export function AssetInspector({
           <>
             <StatLabel>no profile</StatLabel>
             <p style={{ margin: "5px 0 0", fontSize: 12, lineHeight: 1.5 }}>
-              A run still compiles: the asset holds its opening price for the
-              whole simulation. Anything held in it is therefore flat in real
-              terms, which is almost never what you mean for long.
+              This asset keeps its opening price throughout the simulation.
+              Its purchasing power falls when inflation is positive. Choose a
+              return profile to model changes in its price.
             </p>
           </>
         ) : (
