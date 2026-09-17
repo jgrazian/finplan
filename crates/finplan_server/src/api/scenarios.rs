@@ -131,6 +131,13 @@ async fn create(
     user: CurrentUser,
     Json(body): Json<CreateScenario>,
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
+    owned_assumptions(
+        &state,
+        &user.id,
+        body.inflation_profile_id,
+        body.tax_config_id,
+    )
+    .await?;
     let start_date = validate_date(&body.start_date, "start_date")?;
     let birth_date = body
         .birth_date
@@ -142,6 +149,8 @@ async fn create(
         return Err(ApiError::bad_request("scenario name cannot be empty"));
     }
 
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO scenarios
             (user_id, name, description, start_date, birth_date, duration_years,
@@ -156,10 +165,11 @@ async fn create(
     .bind(body.duration_years)
     .bind(body.inflation_profile_id)
     .bind(body.tax_config_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
 
+    tx.commit().await?;
     let row: Scenario = sqlx::query_as(&format!(
         "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
     ))
@@ -177,6 +187,13 @@ async fn update(
     Json(body): Json<UpdateScenario>,
 ) -> ApiResult<Json<Scenario>> {
     super::owned_scenario(&state.db, id, &user.id).await?;
+    owned_assumptions(
+        &state,
+        &user.id,
+        body.inflation_profile_id,
+        body.tax_config_id,
+    )
+    .await?;
 
     let start_date = body
         .start_date
@@ -262,7 +279,10 @@ async fn duplicate(
     Json(body): Json<DuplicateRequest>,
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
     let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
-    let new_id = crate::domain::clone_scenario(&state.db, &graph, body.name.trim()).await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
+    let new_id = crate::domain::clone_into(&mut tx, &graph, body.name.trim()).await?;
+    tx.commit().await?;
 
     let row: Scenario = sqlx::query_as(&format!(
         "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
@@ -303,4 +323,29 @@ async fn compile_check(
         return_profiles: compiled.config.return_profiles.len(),
         duration_years: compiled.config.duration_years,
     }))
+}
+
+async fn owned_assumptions(
+    state: &AppState,
+    user: &str,
+    inflation: Option<i64>,
+    tax: Option<i64>,
+) -> ApiResult<()> {
+    for (table, id) in [("inflation_profiles", inflation), ("tax_configs", tax)] {
+        if let Some(id) = id {
+            let found: bool = sqlx::query_scalar(&format!(
+                "SELECT EXISTS(SELECT 1 FROM {table} WHERE id=? AND user_id=?)"
+            ))
+            .bind(id)
+            .bind(user)
+            .fetch_one(&state.db)
+            .await?;
+            if !found {
+                return Err(ApiError::bad_request(
+                    "assumption must belong to your account",
+                ));
+            }
+        }
+    }
+    Ok(())
 }

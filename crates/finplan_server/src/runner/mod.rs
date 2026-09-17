@@ -8,6 +8,7 @@
 //! Because run state lives in SQLite rather than in memory, a crash mid-run is
 //! recoverable: `requeue_orphans` re-queues anything left in `running` at boot.
 
+pub mod inputs;
 pub mod ledger;
 pub mod store;
 
@@ -26,18 +27,30 @@ use crate::db::Db;
 /// Handle used by request handlers to enqueue work and cancel in-flight runs.
 #[derive(Clone)]
 pub struct RunQueue {
-    tx: mpsc::UnboundedSender<i64>,
+    tx: mpsc::Sender<(i64, crate::billing::ComputePermit)>,
+    db: Db,
     /// Cancellation flags for runs currently executing, keyed by run id.
     in_flight: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>,
 }
 
 impl RunQueue {
-    pub fn enqueue(&self, run_id: i64) {
-        // The receiver lives for the process lifetime; a send failure only
-        // happens during shutdown, where dropping the work is correct.
-        if self.tx.send(run_id).is_err() {
-            tracing::warn!(run_id, "run queue closed; run will stay queued");
-        }
+    pub async fn enqueue(&self, run_id: i64) -> crate::error::ApiResult<()> {
+        let user: String = sqlx::query_scalar("SELECT user_id FROM runs WHERE id=?")
+            .bind(run_id)
+            .fetch_one(&self.db)
+            .await?;
+        let admission = crate::billing::admit_compute(&user)?;
+        self.enqueue_admitted(run_id, admission)
+    }
+
+    pub fn enqueue_admitted(
+        &self,
+        run_id: i64,
+        admission: crate::billing::ComputePermit,
+    ) -> crate::error::ApiResult<()> {
+        self.tx.try_send((run_id, admission)).map_err(|_| {
+            crate::error::ApiError::Conflict("Run queue unavailable. Retry shortly.".into())
+        })
     }
 
     /// Signal a running simulation to stop. Returns false if the run is not
@@ -56,11 +69,12 @@ impl RunQueue {
 
 /// Spawn the worker pool and return the queue handle.
 pub fn spawn(db: Db, workers: usize) -> RunQueue {
-    let (tx, rx) = mpsc::unbounded_channel::<i64>();
+    let (tx, rx) = mpsc::channel::<(i64, crate::billing::ComputePermit)>(16);
     let in_flight: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>> = Arc::new(Mutex::new(HashMap::new()));
 
     let queue = RunQueue {
         tx,
+        db: db.clone(),
         in_flight: in_flight.clone(),
     };
 
@@ -69,7 +83,7 @@ pub fn spawn(db: Db, workers: usize) -> RunQueue {
 
     tokio::spawn(async move {
         loop {
-            let run_id = {
+            let (run_id, admission) = {
                 let mut guard = rx.lock().await;
                 match guard.recv().await {
                     Some(id) => id,
@@ -86,6 +100,7 @@ pub fn spawn(db: Db, workers: usize) -> RunQueue {
             let db = db.clone();
             let in_flight = in_flight.clone();
             tokio::spawn(async move {
+                let _admission = admission;
                 let cancel = Arc::new(AtomicBool::new(false));
                 in_flight.lock().await.insert(run_id, cancel.clone());
 
@@ -114,17 +129,38 @@ pub async fn requeue_orphans(db: &Db, queue: &RunQueue) -> Result<(), sqlx::Erro
     .execute(db)
     .await?;
 
-    let ids: Vec<i64> =
-        sqlx::query_scalar("SELECT id FROM runs WHERE status = 'queued' ORDER BY created_at")
-            .fetch_all(db)
-            .await?;
-
-    for id in &ids {
-        queue.enqueue(*id);
-    }
-    if !ids.is_empty() {
-        tracing::info!(count = ids.len(), "requeued pending runs");
-    }
+    // Replay admission in the background so a large persisted backlog neither
+    // allocates an unbounded queue nor prevents the health endpoint starting.
+    let upper: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(id),0) FROM runs")
+        .fetch_one(db)
+        .await?;
+    let db = db.clone();
+    let queue = queue.clone();
+    tokio::spawn(async move {
+        let mut after = 0_i64;
+        loop {
+            let next: Result<Option<i64>, _> = sqlx::query_scalar(
+                "SELECT id FROM runs WHERE status='queued' AND id>? AND id<=? ORDER BY id LIMIT 1",
+            )
+            .bind(after)
+            .bind(upper)
+            .fetch_optional(&db)
+            .await;
+            let Ok(Some(id)) = next else {
+                break;
+            };
+            loop {
+                match queue.enqueue(id).await {
+                    Ok(()) => break,
+                    Err(crate::error::ApiError::Conflict(_)) => {
+                        tokio::time::sleep(Duration::from_millis(250)).await
+                    }
+                    Err(_) => break,
+                }
+            }
+            after = id;
+        }
+    });
     Ok(())
 }
 
@@ -177,8 +213,8 @@ async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), Ru
     .await?;
 
     let (
-        scenario_id,
-        user_id,
+        _scenario_id,
+        _user_id,
         iterations,
         seed,
         batch_size,
@@ -195,9 +231,20 @@ async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), Ru
     .fetch_all(db)
     .await?;
 
-    let graph = ScenarioGraph::load(db, scenario_id, &user_id)
-        .await
-        .map_err(|e| RunError::Compile(e.to_string()))?;
+    let (snapshot, version): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT snapshot_json, model_version FROM runs WHERE id = ?1")
+            .bind(run_id)
+            .fetch_one(db)
+            .await?;
+    if version.as_deref() != Some(inputs::MODEL_VERSION) {
+        return Err(RunError::Compile(
+            "Run inputs are unavailable or use a different model version; create a new run".into(),
+        ));
+    }
+    let graph: ScenarioGraph = serde_json::from_str(snapshot.as_deref().ok_or_else(|| {
+        RunError::Compile("Historical run has no input snapshot; create a new run".into())
+    })?)
+    .map_err(|e| RunError::Compile(e.to_string()))?;
     let compiled = compile::compile(&graph).map_err(|e| RunError::Compile(e.to_string()))?;
 
     // On a converging run `iterations` is the minimum sample before the metric

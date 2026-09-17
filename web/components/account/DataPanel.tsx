@@ -1,5 +1,8 @@
 "use client";
 
+import { http } from "@/lib/api/http";
+import type { PlanArchive } from "@/lib/api/generated/PlanArchive";
+import { ImportPanel } from "./ImportPanel";
 import { useState } from "react";
 import { Blueprint, Button, Hr, Table, Td, Th } from "@/components/ui";
 import type { Scenario, UserResponse } from "@/lib/api/types";
@@ -47,13 +50,7 @@ export function DataPanel({
     setExporting("all");
     exportJob.run(
       async () =>
-        download(`finplan-${new Date().toISOString().slice(0, 10)}.json`, {
-          format: "finplan.archive",
-          version: 1,
-          exported_at: new Date().toISOString(),
-          account: { email: user.email, display_name: user.display_name },
-          scenarios: await Promise.all(scenarios.map(collectScenario)),
-        }),
+        download(`finplan-${new Date().toISOString().slice(0, 10)}.json`, await http.get<PlanArchive>("/archives")),
       () => setExporting(undefined),
     );
   };
@@ -109,11 +106,10 @@ export function DataPanel({
       </div>
 
       <PanelNote>
-        Download your scenarios, accounts, positions, assets, and events as JSON.
-        This export does not include return profiles, inflation profiles, tax
-        definitions, or simulation results. It is not a complete restorable backup.
+        Download complete plan inputs, including positions, events, return and inflation profiles, and tax definitions. Import restores independent copies. These archives exclude run results, login credentials, and billing records.
       </PanelNote>
 
+      <ImportPanel disabled={readOnly} />
       <Hr />
 
       <Blueprint style={{ padding: "12px 14px", maxWidth: 600 }}>

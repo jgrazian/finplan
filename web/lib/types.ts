@@ -149,8 +149,8 @@ export interface AccountSeries {
  */
 export interface YearlyCashFlow {
   year: number;
-  /** Age at that year, or the year again when the scenario has no birth date. */
-  age: number;
+  /** Age at that year, or null when no historical birth date is available. */
+  age: number | null;
   income: number;
   expenses: number;
   contributions: number;

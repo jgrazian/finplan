@@ -42,7 +42,7 @@ const COLUMNS: readonly Column[] = [
     width: 58,
     render: (r) => String(r.year),
   },
-  { key: "age", label: "Age", align: "right", width: 48, render: (r) => String(r.age) },
+  { key: "age", label: "Age", align: "right", width: 48, render: (r) => r.age == null ? "—" : String(r.age) },
   {
     key: "income",
     label: "Income",

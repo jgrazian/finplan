@@ -239,7 +239,7 @@ function toCashFlows(
     const ledger = ledgers.get(flow.year);
     return {
       year: flow.year,
-      age: axis.at(`${flow.year}-12-31`),
+      age: axis.unit === "age" ? axis.at(`${flow.year}-12-31`) : null,
       income: deflate(flow.income, factor),
       expenses: deflate(flow.expenses, factor),
       contributions: deflate(flow.contributions, factor),

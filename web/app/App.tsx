@@ -130,7 +130,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   }, [nav, scenarioId]);
 
   const workspace = useWorkspace(scenarioId);
-  const run = useRun(workspace.scenario, workspace.axis);
+  const run = useRun(workspace.scenario);
   const status = useServerStatus();
 
   const start = useCallback(() => {
@@ -159,10 +159,10 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   const autoRun = user.auto_run && !status.offline;
   const updatedAt = workspace.scenario?.updated_at;
   const seen = useRef<{ id?: number; at?: string }>({});
-  const startQuietly = useRef(run.start);
+  const startQuietly = useRef(() => run.start(effort));
   useEffect(() => {
-    startQuietly.current = run.start;
-  }, [run.start]);
+    startQuietly.current = () => run.start(effort);
+  }, [run, effort]);
 
   useEffect(() => {
     if (scenarioId == null || updatedAt == null) return;
@@ -171,7 +171,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     if (previous.id !== scenarioId || previous.at == null || previous.at === updatedAt) return;
     if (!autoRun) return;
 
-    const timer = setTimeout(() => void startQuietly.current(effort), AUTO_RUN_SETTLE_MS);
+    const timer = setTimeout(() => void startQuietly.current(), AUTO_RUN_SETTLE_MS);
     return () => clearTimeout(timer);
   }, [scenarioId, updatedAt, autoRun, effort]);
 
@@ -258,7 +258,6 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 results={run.results}
                 run={run.run}
                 active={run.active}
-                stale={run.stale}
                 loading={run.loading}
                 error={run.error}
                 percentile={run.percentile}
@@ -315,7 +314,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           onClose={() => setCreating(false)}
           onCreated={(created) => {
             setRecentlyCreated(created);
-            nav.openScenario(created.id, "portfolio");
+            nav.openScenario(created.id, "plan");
             scenarios.reload();
           }}
         />

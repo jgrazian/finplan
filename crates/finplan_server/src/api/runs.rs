@@ -21,6 +21,8 @@ pub fn router() -> Router<AppState> {
         .route("/runs/{id}", get(fetch).delete(destroy))
         .route("/runs/{id}/cancel", post(cancel))
         .route("/runs/{id}/results", get(results))
+        .route("/runs/{id}/inputs", get(inputs))
+        .route("/scenarios/{scenario_id}/input-hash", get(input_hash))
         .route("/runs/{id}/ledger", get(ledger))
 }
 
@@ -39,6 +41,8 @@ pub struct Run {
     pub converge: bool,
     pub max_iterations: Option<i64>,
     pub seed: Option<i64>,
+    pub input_hash: Option<String>,
+    pub model_version: Option<String>,
     pub error_message: Option<String>,
     pub created_at: String,
     pub started_at: Option<String>,
@@ -46,7 +50,7 @@ pub struct Run {
 }
 
 const RUN_COLUMNS: &str = "id, scenario_id, status, iterations, completed_iterations, converge,
-     max_iterations, seed, error_message, created_at, started_at, finished_at";
+     max_iterations, seed, error_message, created_at, started_at, finished_at, input_hash, model_version";
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
@@ -107,9 +111,7 @@ async fn owned_run(state: &AppState, id: i64, user_id: &str) -> ApiResult<Run> {
     row.ok_or(ApiError::NotFound("run"))
 }
 
-/// The scenario's run: a list of one, or an empty one before anything has been
-/// run. Kept a collection rather than a bare object so "no run yet" stays an
-/// ordinary response and not a 404 every client has to special-case.
+/// All retained runs, newest first, including queued and failed attempts.
 async fn list_for_scenario(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -117,7 +119,7 @@ async fn list_for_scenario(
 ) -> ApiResult<Json<Vec<Run>>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let rows: Vec<Run> = sqlx::query_as(&format!(
-        "SELECT {RUN_COLUMNS} FROM runs WHERE scenario_id = ?1 ORDER BY created_at DESC"
+        "SELECT {RUN_COLUMNS} FROM runs WHERE scenario_id = ?1 ORDER BY id DESC"
     ))
     .bind(scenario_id)
     .fetch_all(&state.db)
@@ -129,21 +131,30 @@ async fn list_for_scenario(
 /// plan fails immediately with a useful message instead of surfacing as a failed
 /// job seconds later.
 ///
-/// A scenario holds one run at a time: the previous one is stopped and deleted
-/// here, which takes its results with it. See `0008_one_run_per_scenario.sql`.
+/// Inputs and labels are captured transactionally; all earlier runs are retained.
 async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(scenario_id): Path<i64>,
     Json(body): Json<CreateRun>,
 ) -> ApiResult<(StatusCode, Json<Run>)> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    crate::billing::require_editable(&state.db, &user.id, scenario_id, state.config.hosted).await?;
+    let entitled_max = if state.config.hosted {
+        crate::billing::entitlements(&state.db, &user.id, true)
+            .await?
+            .max_iterations
+            .min(state.config.max_iterations)
+    } else {
+        state.config.max_iterations
+    };
     if body.iterations < 1 {
         return Err(ApiError::bad_request("iterations must be at least 1"));
     }
-    if body.iterations as usize > state.config.max_iterations {
+    if body.iterations as usize > entitled_max {
         return Err(ApiError::bad_request(format!(
             "iterations must not exceed {}",
-            state.config.max_iterations
+            entitled_max
         )));
     }
 
@@ -152,12 +163,21 @@ async fn create(
     // than the run is allowed to go just means looking at it once, at the end.
     let ceiling = body
         .converge
-        .then(|| CONVERGE_CEILING.min(state.config.max_iterations as i64));
+        .then(|| CONVERGE_CEILING.min(entitled_max as i64));
     let iterations = match ceiling {
         Some(cap) => body.iterations.min(cap),
         None => body.iterations,
     };
 
+    if body.percentiles.len() > 21
+        || !(1..=10_000).contains(&body.batch_size)
+        || !(1..=16).contains(&body.parallel_batches)
+    {
+        return Err(ApiError::bad_request(
+            "Use at most 21 percentiles, batch size 1–10000, and parallel batches 1–16.",
+        ));
+    }
+    let admission = crate::billing::admit_compute(&user.id)?;
     let mut percentiles = body.percentiles.clone();
     percentiles.retain(|p| (0.0..=1.0).contains(p));
     percentiles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -168,41 +188,45 @@ async fn create(
         ));
     }
 
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let mut tx = state.db.begin().await?;
+    let graph = ScenarioGraph::load_connection(&mut tx, scenario_id, &user.id).await?;
     compile::compile(&graph)?;
-
-    // Make room for the new run. Anything still executing is asked to stop
-    // first: the worker checks the flag between batches and abandons the run
-    // rather than persisting results into rows that are about to disappear.
-    let previous: Vec<i64> = sqlx::query_scalar("SELECT id FROM runs WHERE scenario_id = ?1")
-        .bind(scenario_id)
-        .fetch_all(&state.db)
-        .await?;
-    for id in &previous {
-        state.runs.cancel(*id).await;
+    let cost = ceiling
+        .unwrap_or(iterations)
+        .saturating_mul(graph.scenario.duration_years)
+        .saturating_mul(
+            (graph.accounts.len() + graph.assets.len() + graph.events.len()).max(1) as i64,
+        );
+    if cost > 100_000_000 {
+        return Err(ApiError::bad_request(
+            "Run is too large. Reduce iterations, duration, or plan complexity.",
+        ));
     }
 
-    let mut tx = state.db.begin().await?;
-    sqlx::query("DELETE FROM runs WHERE scenario_id = ?1")
-        .bind(scenario_id)
-        .execute(&mut *tx)
-        .await?;
+    let (snapshot, input_hash) = crate::runner::inputs::snapshot(&graph)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let effective_seed = body
+        .seed
+        .unwrap_or_else(|| i64::from(rand::random::<u32>()));
 
     let run_id: i64 = sqlx::query_scalar(
         "INSERT INTO runs
             (scenario_id, user_id, iterations, seed, batch_size, parallel_batches, compute_mean,
-             converge, max_iterations)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) RETURNING id",
+             converge, max_iterations, snapshot_json, input_hash, model_version)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) RETURNING id",
     )
     .bind(scenario_id)
     .bind(&user.id)
     .bind(iterations)
-    .bind(body.seed)
+    .bind(effective_seed)
     .bind(body.batch_size.max(1))
     .bind(body.parallel_batches.max(1))
     .bind(i64::from(body.compute_mean))
     .bind(i64::from(body.converge))
     .bind(ceiling)
+    .bind(snapshot)
+    .bind(input_hash)
+    .bind(crate::runner::inputs::MODEL_VERSION)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -213,9 +237,14 @@ async fn create(
             .execute(&mut *tx)
             .await?;
     }
+    for account in &graph.accounts {
+        sqlx::query("INSERT INTO run_account_labels(run_id, account_id, name, sort_order) VALUES (?1,?2,?3,?4)")
+            .bind(run_id).bind(account.id).bind(&account.name).bind(account.sort_order)
+            .execute(&mut *tx).await?;
+    }
     tx.commit().await?;
 
-    state.runs.enqueue(run_id);
+    state.runs.enqueue_admitted(run_id, admission)?;
 
     let row: Run = sqlx::query_as(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE id = ?1"))
         .bind(run_id)
@@ -492,7 +521,7 @@ pub struct ResultsQuery {
     pub series: Option<String>,
 }
 
-async fn results(
+pub(crate) async fn results(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
@@ -590,7 +619,7 @@ async fn results(
 
     let account_rows: Vec<(i64, String, f64)> = sqlx::query_as(
         "SELECT p.account_id, a.name, p.value
-           FROM run_account_points p JOIN accounts a ON a.id = p.account_id
+           FROM run_account_points p JOIN run_account_labels a ON a.account_id = p.account_id AND a.run_id = p.run_id
           WHERE p.run_id = ?1 AND p.percentile IS ?2
           ORDER BY a.sort_order, p.account_id, p.step",
     )
@@ -970,4 +999,80 @@ async fn ledger(
         total,
         entries,
     }))
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct RunInputs {
+    pub run_id: i64,
+    pub seed: Option<i64>,
+    pub iterations: i64,
+    pub converge: bool,
+    pub max_iterations: Option<i64>,
+    pub batch_size: i64,
+    pub parallel_batches: i64,
+    pub compute_mean: bool,
+    pub percentiles: Vec<f64>,
+    pub input_hash: Option<String>,
+    pub model_version: Option<String>,
+    /// Null means historical inputs were not captured; never reconstructed from live state.
+    #[ts(type = "unknown | null")]
+    pub snapshot: Option<serde_json::Value>,
+}
+
+pub(crate) async fn inputs(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<RunInputs>> {
+    let run = owned_run(&state, id, &user.id).await?;
+    let (batch_size, parallel_batches, compute_mean): (i64, i64, bool) =
+        sqlx::query_as("SELECT batch_size, parallel_batches, compute_mean FROM runs WHERE id = ?1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
+    let percentiles = sqlx::query_scalar(
+        "SELECT percentile FROM run_percentiles WHERE run_id = ?1 ORDER BY percentile",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    let json: Option<String> = sqlx::query_scalar("SELECT snapshot_json FROM runs WHERE id = ?1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    let snapshot = json
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(RunInputs {
+        run_id: id,
+        seed: run.seed,
+        iterations: run.iterations,
+        converge: run.converge,
+        max_iterations: run.max_iterations,
+        batch_size,
+        parallel_batches,
+        compute_mean,
+        percentiles,
+        input_hash: run.input_hash,
+        model_version: run.model_version,
+        snapshot,
+    }))
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct InputHash {
+    pub input_hash: String,
+}
+async fn input_hash(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<InputHash>> {
+    let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let (_, input_hash) = crate::runner::inputs::snapshot(&graph)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(Json(InputHash { input_hash }))
 }

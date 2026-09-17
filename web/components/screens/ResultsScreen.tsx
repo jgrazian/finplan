@@ -57,7 +57,6 @@ export function ResultsScreen({
   results,
   run,
   active,
-  stale,
   loading,
   error,
   percentile,
@@ -73,7 +72,6 @@ export function ResultsScreen({
   run: Run | undefined;
   /** A run is queued or executing right now. */
   active: boolean;
-  stale?: boolean;
   loading: boolean;
   error: string | undefined;
   /**
@@ -145,14 +143,6 @@ export function ResultsScreen({
       main={
         <div style={{ padding: "22px 24px" }}>
           {active && <RunProgress run={run} onCancel={onCancel} />}
-          {(stale || (run != null && (results.runId !== run.id || run.status !== "succeeded"))) && (
-            <div role="status" style={{ padding: 14, marginBottom: 18, border: "1px solid var(--color-divider)" }}>
-              <strong>Showing earlier results</strong>
-              <p>{stale ? `Run #${results.runId} predates saved changes to this plan or its assumptions. Rerun to include them.` : `Showing the last completed result while its replacement is prepared.`}</p>
-              {active ? <p>A replacement is running. Edits saved after it started will still need another run.</p> :
-                <Button variant="primary" onClick={onRun} disabled={offline}>Rerun with saved inputs</Button>}
-            </div>
-          )}
           <SuccessRate
             successRate={stats.successRate}
             fundingSuccessRate={stats.fundingSuccessRate}
@@ -163,7 +153,7 @@ export function ResultsScreen({
           {!results.hasEnvelope && (
             <p role="status">Real envelope unavailable for this result. Rerun to measure all-path real quantiles; only the selected path is shown.</p>
           )}
-          {loading && <p role="status">Loading selected path… Showing {results.pathLabel} until its replacement arrives.</p>}
+          {loading && <p role="status">Loading selected result… Showing run #{results.runId}, {results.pathLabel}, until the selection arrives.</p>}
           {error && <p role="alert">Could not load results: {error}. Showing the last loaded path.</p>}
           <ChartToolbar
             title={copy.title}
@@ -191,16 +181,14 @@ export function ResultsScreen({
           />
 
           <div style={{ marginTop: 24 }}>
-            {run != null && (results.runId !== run.id || run.status !== "succeeded") ? (
-              <p>The previous chart remains visible while the replacement runs. Its detailed ledger is no longer stored.</p>
-            ) : <CashFlowLedger
+            <CashFlowLedger
               rows={results.cashFlows}
               key={`${results.runId}:${results.pathId}`}
               series={results.pathId}
               pathLabel={results.pathLabel}
               runId={results.runId}
               dollarLabel={results.dollarLabel}
-            />}
+            />
           </div>
         </div>
       }
@@ -255,16 +243,19 @@ function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => 
   const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
 
   return (
-    <div style={{ padding: "40px 24px", maxWidth: 520 }}>
-      <h4 style={{ margin: "0 0 8px" }}>
+    <div style={{ padding: "12px 24px", maxWidth: 520 }}>
+      <h4 style={{ margin: "0 0 4px" }}>
         {run?.status === "queued" ? "Queued…" : "Simulating…"}
       </h4>
-      <div style={{ display: "flex", height: 10, border: "1px solid var(--color-divider)" }}>
-        <div style={{ width: `${pct}%`, background: "var(--color-accent)" }} />
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "flex", flex: 1, minWidth: 0, height: 10, border: "1px solid var(--color-divider)" }}>
+          <div style={{ width: `${pct}%`, background: "var(--color-accent)" }} />
+        </div>
+        <Button onClick={onCancel}>Cancel run</Button>
       </div>
       <p
         style={{
-          margin: "8px 0 14px",
+          margin: "4px 0 0",
           fontSize: 12,
           color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
         }}
@@ -273,7 +264,6 @@ function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => 
           ? `${done.toLocaleString("en-US")} iterations · sampling until the median settles, up to ${total.toLocaleString("en-US")}`
           : `${done.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} iterations`}
       </p>
-      <Button onClick={onCancel}>Cancel run</Button>
     </div>
   );
 }

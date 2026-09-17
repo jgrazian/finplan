@@ -17,6 +17,8 @@ export type Run = {
   converge: boolean;
   max_iterations: number | null;
   seed: number | null;
+  input_hash: string | null;
+  model_version: string | null;
   error_message: string | null;
   created_at: string;
   started_at: string | null;

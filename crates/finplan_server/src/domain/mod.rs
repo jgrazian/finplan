@@ -18,11 +18,22 @@ type Fut<'a, T> = Pin<Box<dyn Future<Output = ApiResult<T>> + Send + 'a>>;
 /// rewritten through the appropriate remap, so the clone is fully independent
 /// of the original.
 pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiResult<i64> {
+    let mut tx = db.begin().await?;
+    let id = clone_into(&mut tx, graph, name).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+/// Copy graph records inside an existing import/setup transaction.
+pub(crate) async fn clone_into(
+    tx: &mut Transaction<'_, Sqlite>,
+    graph: &ScenarioGraph,
+    name: &str,
+) -> ApiResult<i64> {
     if name.is_empty() {
         return Err(ApiError::bad_request("scenario name cannot be empty"));
     }
 
-    let mut tx = db.begin().await?;
     let src = &graph.scenario;
 
     let new_id: i64 = sqlx::query_scalar(
@@ -40,7 +51,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
     .bind(src.inflation_profile_id)
     .bind(src.tax_config_id)
     .bind(src.collect_ledger)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
 
@@ -60,7 +71,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
         .bind(asset.return_profile_id) // profiles are user-scoped, shared as-is
         .bind(asset.tracking_error)
         .bind(asset.sort_order)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
         assets.insert(asset.id, id);
     }
@@ -77,7 +88,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
         .bind(&account.description)
         .bind(&account.flavor)
         .bind(account.sort_order)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
         accounts.insert(account.id, id);
 
@@ -89,7 +100,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
             .bind(id)
             .bind(bank.cash_value)
             .bind(bank.return_profile_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         }
         if let Some(inv) = graph.investment.get(&account.id) {
@@ -105,7 +116,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
             .bind(inv.cash_return_profile_id)
             .bind(inv.contribution_limit)
             .bind(&inv.contribution_period)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         }
         if let Some(prop) = graph.property.get(&account.id) {
@@ -116,7 +127,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
             .bind(id)
             .bind(asset_id)
             .bind(prop.value)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         }
         if let Some(loan) = graph.liability.get(&account.id) {
@@ -127,7 +138,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
             .bind(id)
             .bind(loan.principal)
             .bind(loan.interest_rate)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         }
 
@@ -152,7 +163,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
             .bind(lot.units)
             .bind(lot.cost_basis)
             .bind(rank as i64)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         }
     }
@@ -170,7 +181,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
         .bind(event.fires_once)
         .bind(event.enabled)
         .bind(event.sort_order)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
         events.insert(event.id, id);
     }
@@ -181,7 +192,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
     for event in &graph.events {
         if let Some(root) = graph.event_trigger.get(&event.id) {
             copy_trigger(
-                &mut tx,
+                tx,
                 graph,
                 new_id,
                 *root,
@@ -194,7 +205,7 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
         }
         for effect_id in graph.event_effects.get(&event.id).into_iter().flatten() {
             copy_effect(
-                &mut tx,
+                tx,
                 graph,
                 new_id,
                 *effect_id,
@@ -207,7 +218,6 @@ pub async fn clone_scenario(db: &Db, graph: &ScenarioGraph, name: &str) -> ApiRe
         }
     }
 
-    tx.commit().await?;
     Ok(new_id)
 }
 

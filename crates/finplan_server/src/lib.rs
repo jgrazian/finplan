@@ -18,6 +18,7 @@
 pub mod analysis;
 pub mod api;
 pub mod auth;
+pub mod billing;
 pub mod compile;
 pub mod config;
 pub mod db;
@@ -42,6 +43,7 @@ use state::AppState;
 /// Build the application state and router, run migrations, and recover any run
 /// left in flight by a previous process.
 pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn std::error::Error>> {
+    config.validate()?;
     let db = db::connect(&config.database_url, config.db_pool_size).await?;
 
     match auth::session::purge_expired(&db).await {
@@ -81,6 +83,18 @@ pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn s
 
     let router = Router::new()
         .nest("/api", api::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            billing::mutation_entitlements,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::protection::auth_throttle,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::protection::mutation_origin,
+        ))
         .layer(cors)
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())

@@ -3,14 +3,17 @@
 import { Button, rowStyle } from "@/components/ui";
 import type { Scenario, UserResponse } from "@/lib/api/types";
 import { useNav } from "@/lib/nav";
+import { BillingPanel } from "./BillingPanel";
+import { VerificationPanel } from "./VerificationPanel";
 import { DataPanel } from "./DataPanel";
 import { PreferencesPanel } from "./PreferencesPanel";
 import { ProfilePanel } from "./ProfilePanel";
 import { SecurityPanel } from "./SecurityPanel";
 
-type SectionId = "profile" | "security" | "data" | "preferences";
+type SectionId = "billing" | "profile" | "security" | "data" | "preferences";
 
 const SECTIONS: ReadonlyArray<{ id: SectionId; label: string; note: string }> = [
+  { id: "billing", label: "Plan and billing", note: "Access, usage, editable plan" },
   { id: "profile", label: "Profile", note: "Name, email, birth date" },
   { id: "security", label: "Security", note: "Password and devices" },
   { id: "data", label: "Data", note: "Scenarios, export, deletion" },
@@ -88,9 +91,11 @@ export function AccountScreen({
       <div style={{ padding: "20px 24px 24px" }}>
         <h3 style={{ margin: "0 0 16px" }}>{active.label}</h3>
 
-        {active.id === "profile" && (
+        {active.id === "billing" && <BillingPanel scenarios={scenarios} readOnly={offline} />}
+        {active.id === "profile" && (<>
           <ProfilePanel user={user} onSaved={onUserChange} readOnly={offline} />
-        )}
+          <VerificationPanel user={user} onSaved={onUserChange} readOnly={offline} />
+        </>)}
         {active.id === "security" && <SecurityPanel readOnly={offline} />}
         {active.id === "data" && (
           <DataPanel

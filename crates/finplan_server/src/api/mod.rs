@@ -2,9 +2,12 @@
 
 pub mod accounts;
 pub mod analysis;
+pub mod archives;
 pub mod assets;
 pub mod events;
+pub mod onboarding;
 pub mod profiles;
+pub mod reports;
 pub mod runs;
 pub mod scenarios;
 pub mod specs;
@@ -32,7 +35,11 @@ pub fn router() -> Router<AppState> {
         .merge(profiles::router())
         .merge(taxes::router())
         .merge(runs::router())
+        .merge(reports::router())
         .merge(analysis::router())
+        .merge(archives::router())
+        .merge(onboarding::router())
+        .nest("/billing", crate::billing::router())
 }
 
 async fn health() -> &'static str {

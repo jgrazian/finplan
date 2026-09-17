@@ -1,5 +1,6 @@
 "use client";
 
+import { RecoveryForm } from "./RecoveryForm";
 import { useState } from "react";
 import { Button, CompactInput, Field } from "@/components/ui";
 import type { Session } from "@/lib/hooks/useSession";
@@ -9,12 +10,15 @@ import type { Session } from "@/lib/hooks/useSession";
  * of return profiles and a tax table, so registering is enough to start.
  */
 export function LoginForm({ session }: { session: Session }) {
+  const [recovering, setRecovering] = useState(false);
   const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
 
   const registering = mode === "signUp";
+
+  if (recovering) return <RecoveryForm onBack={() => setRecovering(false)} />;
 
   return (
     <form
@@ -81,6 +85,7 @@ export function LoginForm({ session }: { session: Session }) {
       >
         {registering ? "I already have an account" : "Create an account"}
       </Button>
+      {!registering && <Button type="button" variant="ghost" onClick={() => setRecovering(true)}>Forgot password?</Button>}
     </form>
   );
 }

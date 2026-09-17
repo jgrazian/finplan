@@ -1,243 +1,110 @@
 "use client";
-
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
-import type { Results, Run, Scenario as ApiScenario } from "@/lib/api/types";
+import { historyApi } from "@/lib/api/history";
+import type { Results, Run, Scenario } from "@/lib/api/types";
+import type { RunInputs } from "@/lib/api/generated/RunInputs";
 import { SERIES, isTerminal } from "@/lib/api/types";
-import { preferredRun, resultsAreStale, rememberRunContext } from "@/lib/run/freshness";
+import { preferredRun } from "@/lib/run/freshness";
 import { serverMonitor } from "@/lib/status/monitor";
 import type { RunEffort } from "@/components/results";
 import type { Percentile, ResultsData } from "@/lib/types";
-import type { PlanAxis } from "@/lib/view/axis";
+import { planAxis } from "@/lib/view/axis";
+import { snapshotScenario } from "@/lib/view/history";
 import { toResultsData } from "@/lib/view/results";
 
-/** How often a queued or running job is re-checked. */
-const POLL_MS = 700;
-
-/** Representative nominal-terminal ranks offered by the path selector. */
-const PERCENTILES = [0.05, 0.5, 0.95];
-
 export interface RunState {
-  run: Run | undefined;
-  results: ResultsData | undefined;
-  /** True while a run is queued or executing. */
-  active: boolean;
-  stale: boolean;
-  markInputsChanged: () => void;
-  loading: boolean;
-  error: string | undefined;
-  /** Which stored path the per-account series, cash flows and ledger describe. */
-  percentile: Percentile;
-  setPercentile: (percentile: Percentile) => void;
-  start: (effort: RunEffort) => Promise<void>;
-  cancel: () => Promise<void>;
+  run: Run | undefined; results: ResultsData | undefined; active: boolean; stale: boolean;
+  history: Run[]; selectedRunId: number | undefined; selectRun: (id:number) => void;
+  inputs: RunInputs | undefined;
+  markInputsChanged: () => void; loading: boolean; error: string | undefined;
+  percentile: Percentile; setPercentile: (percentile: Percentile) => void;
+  start: (effort: RunEffort) => Promise<void>; cancel: () => Promise<void>;
 }
-
-/**
- * The scenario's latest run, and the results behind it.
- *
- * On mount the most recent successful run is adopted, so the Results screen has
- * something to show without the user pressing Run again. Starting a run polls
- * until it reaches a terminal status — the API has no push channel — and only
- * then fetches results, which are large.
- */
-/** Everything loaded for one scenario, tagged so a stale load is ignorable. */
 interface Loaded {
-  scenarioId: number;
-  run?: Run;
-  raw?: Results;
-  rawSeries?: Percentile;
-  rawScenario?: ApiScenario;
-  rawAxis?: PlanAxis;
-  invalidated?: boolean;
-  error?: string;
-  loading: boolean;
+  scenarioId: number; history: Run[]; selected?: number; raw?: Results; inputs?: RunInputs;
+  rawSeries?: Percentile; hash?: string; hashPending?: boolean; error?: string; loading: boolean;
 }
-
-export function useRun(
-  scenario: ApiScenario | undefined,
-  axis: PlanAxis | undefined,
-): RunState {
+export function useRun(scenario: Scenario | undefined): RunState {
+  const id = scenario?.id;
+  const activeId = useRef(id);
+  useLayoutEffect(() => { activeId.current = id; }, [id]);
   const [loaded, setLoaded] = useState<Loaded>();
+  const [revision, setRevision] = useState(0);
   const [percentile, setPercentile] = useState<Percentile>("p50");
-  const scenarioId = scenario?.id;
-  const editVersions = useRef(new Map<number, number>());
-  const contexts = useRef(new Map<string, { rawScenario: ApiScenario | undefined; rawAxis: PlanAxis | undefined }>());
-  const [invalidatedPlans, setInvalidatedPlans] = useState<ReadonlyMap<number, boolean>>(new Map());
-  const activeScenarioId = useRef(scenarioId);
-  useLayoutEffect(() => {
-    activeScenarioId.current = scenarioId;
-  }, [scenarioId]);
-
-  // State is keyed by scenario rather than cleared when one changes, so the
-  // previous scenario's run is never briefly on screen under the new name.
-  const current = loaded?.scenarioId === scenarioId ? loaded : undefined;
-  const { run, raw, error } = current ?? {};
-  const matchingRaw = raw?.scenario_id === scenarioId ? raw : undefined;
-  const loading = (current?.loading ?? scenarioId != null) ||
-    (!error && matchingRaw != null && current?.rawSeries !== percentile);
-
-  const update = useCallback(
-    (id: number, patch: Partial<Loaded>) =>
-      setLoaded((prev) =>
-        activeScenarioId.current !== id ? prev :
-        prev?.scenarioId === id
-          ? { ...prev, ...patch }
-          : { scenarioId: id, loading: false, ...patch },
-      ),
-    [],
-  );
-
-  // Adopt the newest successful run for this scenario. Its results are left to
-  // the effect below, which is also the one that reads them again when the
-  // percentile changes.
-  useEffect(() => {
-    if (scenarioId == null) return;
-    let live = true;
-
-    api.runs
-      .list(scenarioId)
-      .then((runs) => {
-        const latest = preferredRun(runs);
-        if (!live) return;
-        // Still loading if there is a run to read: the effect below has to
-        // fetch its results before the screen has anything to draw.
-        update(scenarioId, latest ? { run: latest, loading: latest.status === "succeeded" } : { loading: false });
-      })
-      .catch((err: Error) => live && update(scenarioId, { error: err.message, loading: false }));
-
-    return () => {
-      live = false;
-    };
-  }, [scenarioId, update]);
-
-  const runId = run?.id;
-  const runStatus = run?.status;
-
-  /**
-   * The finished run's results, along the selected path.
-   *
-   * Keep the old payload AND its actual path label until the new payload lands.
-   * The independent envelope stays visible. Request/run/scenario tags and the
-   * effect cleanup prevent late responses from relabelling another path's detail.
-   */
-  useEffect(() => {
-    if (scenarioId == null || runId == null || runStatus !== "succeeded") return;
-    let live = true;
-    const context = rememberRunContext(contexts.current, run!, { rawScenario: scenario, rawAxis: axis });
-
-    api.runs
-      .results(runId, SERIES[percentile])
-      .then((raw) => {
-        if (live && raw.run_id === runId && raw.scenario_id === scenarioId) {
-          update(scenarioId, { raw, rawSeries: percentile, ...context, loading: false, error: undefined });
-        }
-      })
-      .catch((err: Error) => live && update(scenarioId, { error: err.message, loading: false }));
-
-    return () => {
-      live = false;
-    };
-    // Capture display context with this payload, rather than relabeling old results after edits.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenarioId, runId, runStatus, percentile, update]);
-
+  const current = loaded?.scenarioId === id ? loaded : undefined;
+  const history = current?.history ?? [];
+  const run = preferredRun(history);
   const active = run != null && !isTerminal(run.status);
-
-  // A failed run is server state, so it belongs in the status bar rather than
-  // only in the screen it happened to be started from. Synced rather than
-  // pushed at the moment of failure, so switching scenarios clears it too.
+  const chosen = history.find(r => r.id === current?.selected && r.status === "succeeded") ?? history.find(r => r.status === "succeeded");
+  const selectedRunId = chosen?.id;
+  const update = useCallback((scenarioId:number, change: (value:Loaded)=>Loaded) => {
+    setLoaded(previous => activeId.current !== scenarioId ? previous : change(previous?.scenarioId === scenarioId ? previous : {scenarioId,history:[],loading:true}));
+  }, []);
   useEffect(() => {
-    if (run?.status === "failed") {
-      serverMonitor.runFailed({
-        completed: run.completed_iterations,
-        // A converging run's ceiling is the figure its progress was read
-        // against, so it is the one a stopped-at-N message has to name.
-        total: run.max_iterations ?? run.iterations,
-        message: run.error_message,
-        hasResults: raw != null,
-      });
-    } else {
-      serverMonitor.runCleared();
-    }
-  }, [run, raw]);
-
-  // Poll while the job is in flight; the API has no push channel.
-  useEffect(() => {
-    if (scenarioId == null || !run || isTerminal(run.status)) return;
+    if (id == null) return;
     let live = true;
-
-    const timer = setInterval(async () => {
+    api.runs.list(id).then(history => {
+      if (live) update(id, value => ({...value, history, loading: history.some(r=>r.status === "succeeded")}));
+    }).catch((e:Error)=>live && update(id,value=>({...value,error:e.message,loading:false})));
+    return ()=>{live=false;};
+  },[id,update]);
+  // Re-read actual dependencies after every successful mutation, including edits
+  // made in the same second and shared library changes. Never clear staleness on completion.
+  useEffect(()=>{
+    if (id == null) return;
+    let live=true;
+    historyApi.hash(id).then(({input_hash})=>live && update(id,v=>({...v,hash:input_hash,hashPending:false})))
+      .catch((e:Error)=>live && update(id,v=>({...v,hashPending:true,error:e.message})));
+    return ()=>{live=false;};
+  },[id,scenario?.updated_at,revision,run?.status,update]);
+  useEffect(()=>{
+    if (id == null || selectedRunId == null) return;
+    let live=true;
+    Promise.all([api.runs.results(selectedRunId,SERIES[percentile]),historyApi.inputs(selectedRunId)])
+      .then(([raw,inputs])=>{
+        if (live && raw.scenario_id === id && raw.run_id === selectedRunId) update(id,v=>({...v,raw,inputs,rawSeries:percentile,loading:false,error:undefined}));
+      }).catch((e:Error)=>live && update(id,v=>({...v,error:e.message,loading:false})));
+    return ()=>{live=false;};
+  },[id,selectedRunId,percentile,update]);
+  useEffect(()=>{
+    if (id == null || !run || isTerminal(run.status)) return;
+    let live=true;
+    const timer=setInterval(async()=>{
       try {
-        const next = await api.runs.get(run.id);
-        if (!live) return;
-        if (next.status === "succeeded") {
-          // Results are large, so they are fetched once the job is done — by
-          // the effect that owns them, which this only has to wait for.
-          update(scenarioId, { run: next, loading: true });
-        } else if (next.status === "failed") {
-          update(scenarioId, { run: next, error: next.error_message ?? "the run failed" });
-        } else {
-          update(scenarioId, { run: next });
-        }
-      } catch (err) {
-        if (live) {
-          update(scenarioId, { error: err instanceof Error ? err.message : String(err) });
-        }
-      }
-    }, POLL_MS);
-
-    return () => {
-      live = false;
-      clearInterval(timer);
-    };
-  }, [run, scenarioId, update]);
-
-  const start = useCallback(
-    async (effort: RunEffort) => {
-      if (scenarioId == null) return;
-      const editVersion = editVersions.current.get(scenarioId) ?? 0;
-      try {
-        // The server compiles the scenario synchronously, so a misconfigured
-        // plan reports here rather than as a failed job seconds later.
-        const queued = await api.runs.create(scenarioId, {
-          iterations: effort.iterations,
-          converge: effort.converge,
-          percentiles: PERCENTILES,
-        });
-        const invalidated = (editVersions.current.get(scenarioId) ?? 0) !== editVersion;
-        setInvalidatedPlans((plans) => new Map(plans).set(scenarioId, invalidated));
-        rememberRunContext(contexts.current, queued, { rawScenario: scenario, rawAxis: axis }, true);
-        update(scenarioId, { run: queued, invalidated, error: undefined, loading: false });
-      } catch (err) {
-        update(scenarioId, {
-          error: err instanceof Error ? err.message : String(err),
-          loading: false,
-        });
-      }
-    },
-    [scenarioId, scenario, axis, update],
-  );
-
-  const cancel = useCallback(async () => {
-    if (scenarioId == null || !run) return;
+        const next=await api.runs.get(run.id);
+        if(live) update(id,v=>({...v,history:v.history.map(r=>r.id === next.id ? next : r),error:next.status === "failed" ? next.error_message ?? "Run failed" : v.error}));
+      } catch(e) {if(live) update(id,v=>({...v,error:e instanceof Error ? e.message : String(e)}));}
+    },700);
+    return ()=>{live=false;clearInterval(timer);};
+  },[id,run,update]);
+  useEffect(()=>{
+    if(run?.status === "failed") serverMonitor.runFailed({completed:run.completed_iterations,total:run.max_iterations ?? run.iterations,message:run.error_message,hasResults:current?.raw != null});
+    else serverMonitor.runCleared();
+  },[run,current?.raw]);
+  const start=useCallback(async(effort:RunEffort)=>{
+    if(id == null) return;
     try {
-      update(scenarioId, { run: await api.runs.cancel(run.id) });
-    } catch (err) {
-      update(scenarioId, { error: err instanceof Error ? err.message : String(err) });
-    }
-  }, [run, scenarioId, update]);
-
-  const markInputsChanged = useCallback(() => {
-    if (scenarioId != null) {
-      editVersions.current.set(scenarioId, (editVersions.current.get(scenarioId) ?? 0) + 1);
-      setInvalidatedPlans((plans) => new Map(plans).set(scenarioId, true));
-      update(scenarioId, { invalidated: true });
-    }
-  }, [scenarioId, update]);
-  const stale = resultsAreStale(scenario, run, scenarioId != null && invalidatedPlans.get(scenarioId) === true);
-  const results = matchingRaw && current?.rawScenario && current.rawAxis
-    ? toResultsData(matchingRaw, current.rawScenario, current.rawAxis) : undefined;
-
-  return { run, results, active, stale, markInputsChanged, loading, error, percentile, setPercentile, start, cancel };
+      const queued=await api.runs.create(id,{iterations:effort.iterations,converge:effort.converge,percentiles:[0.05,0.5,0.95]});
+      update(id,v=>({...v,history:[queued,...v.history],selected:undefined,error:undefined,loading:false}));
+      setRevision(v=>v+1);
+    }catch(e){update(id,v=>({...v,error:e instanceof Error ? e.message : String(e),loading:false}));}
+  },[id,update]);
+  const cancel=useCallback(async()=>{
+    if(id == null || !run) return;
+    try{const next=await api.runs.cancel(run.id);update(id,v=>({...v,history:v.history.map(r=>r.id === next.id ? next:r)}));}
+    catch(e){update(id,v=>({...v,error:e instanceof Error ? e.message:String(e)}));}
+  },[id,run,update]);
+  const selectRun=useCallback((selected:number)=>{if(id != null) update(id,v=>({...v,selected,error:undefined}));},[id,update]);
+  const markInputsChanged=useCallback(()=>{
+    if(id != null) update(id,v=>({...v,hashPending:true}));
+    setRevision(v=>v+1);
+  },[id,update]);
+  const raw=current?.raw;
+  const inputs=current?.inputs;
+  const source=raw && inputs ? snapshotScenario(inputs,raw) : undefined;
+  const results=raw && source ? toResultsData(raw,source,planAxis(source)) : undefined;
+  const stale=raw != null && (current?.hashPending === true || !inputs?.input_hash || inputs.input_hash !== current?.hash);
+  const loading=(current?.loading ?? id != null) || (!current?.error && selectedRunId != null && (raw?.run_id !== selectedRunId || current?.rawSeries !== percentile));
+  return {run,results,history,selectedRunId,selectRun,inputs,active,stale,markInputsChanged,loading,error:current?.error,percentile,setPercentile,start,cancel};
 }

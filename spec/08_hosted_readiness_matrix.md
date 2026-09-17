@@ -1,5 +1,7 @@
 # Hosted paid-pilot readiness matrix
 
+> Historical inventory: implementation status has advanced. See [the implementation record](10_release_implementation_record.md) and [operations runbook](09_operations_runbook.md) for delivered changes and remaining provider/deployment gates.
+
 Inventory date: September 13, 2026. Scope: workstream G in
 [the agent handoff](07_webui_paid_launch_agent_handoff.md), following roadmap H/I
 in [the product roadmap](06_web_product_roadmap.md). Mobile work is deferred.
@@ -98,3 +100,52 @@ journeys in handoff H and the final `cargo fmt`, `cargo clippy`, Rust/frontend
 checks; this documentation-only inventory introduces no runtime/API/schema change.
 Paid hosting remains gated on unresolved authentication, portability, isolation,
 compute, recovery and operational controls even if desktop usability fixes pass.
+
+## September 13 implementation: hosted policy and local billing foundation
+
+Implemented and exercised locally (these are not production deployment claims):
+
+- `FINPLAN_HOSTED=true` requires secure cookies and explicit HTTPS origins; unsafe
+  browser mutations reject missing, null, or untrusted origins. Non-cookie bearer
+  clients may omit Origin. Socket-peer throttling does not trust forwarding headers.
+- Hosted authentication attempts are bounded per peer and normalized account;
+  password hashes/verifications run in a bounded blocking pool. This process-local
+  limiter assumes one FinPlan process per SQLite deployment. A gateway-wide abuse
+  policy is still required for a future multi-instance deployment.
+- Recovery and verification use random, SHA-256-stored, 30-minute single-use tokens.
+  Reset consumption/password replacement/session revocation is transactional.
+  `FINPLAN_LOCAL_MAIL_SINK=/private/tmp/finplan-mail` explicitly enables protected
+  local message files; it is forbidden in hosted mode. No tokens are returned by
+  HTTP or written to application logs. The local sink contains secrets and is a
+  development delivery adapter, not an operational email provider. Hosted email
+  changes and recovery delivery explicitly report unavailable until verified
+  delivery is integrated. Login recovery and Account verification forms expose
+  those capabilities and truthful unavailable responses.
+- Provider-neutral subscription reconciliation pins subscription ownership, records
+  durable event receipts, ignores duplicate/outdated revisions, and honors active,
+  cancellation-at-period-end, past-due access windows and expiry. Only trusted Rust
+  adapters may invoke reconciliation; no browser endpoint sets paid status. Tests
+  use a fake provider. Signature verification, checkout, portal/cancel management,
+  deployed webhook reconciliation and actual email delivery remain provider gates.
+- Initial accepted policy: Free includes the full model, one editable saved plan,
+  1,000 run iterations and one accepted goal seek per calendar month (UTC). Pro
+  includes unlimited saved plans, 50,000 run iterations, advanced analysis,
+  history, comparisons and reports, subject to compute bounds. Pricing metadata
+  is $80/year or $10/month. No payments are collected. Self-hosted mode does not
+  enforce subscription restrictions. Existing data, reading, export and deletion
+  stay available after downgrade, and Account allows selecting the editable plan.
+- All plan creation paths check limits under a SQLite write transaction. Goal-seek
+  usage increments atomically after validation/admission; accepted failed/canceled
+  jobs count. Quota periods expire by UTC month; retries that fail validation or
+  compute admission do not consume usage.
+- Queued and running runs/analyses share a global 16-job and per-user 2-job admission
+  bound. The run channel is bounded and restart recovery re-admits persisted jobs
+  incrementally. Per-request cost, percentiles, batching and parallelism are bounded.
+  These are conservative engineering limits, not a benchmarked capacity promise.
+
+Local evidence: `cargo test -p finplan_server --test hosted`,
+`cargo test -p finplan_server --lib billing::tests`,
+`cargo test -p finplan_server --lib auth::recovery::tests`, and the full API integration
+suite. The hosted tests exercise Origin rules, configuration refusal, retry headers,
+concurrent Free creation, edit/duplicate bypasses, downgrade selection/data retention,
+and compute permit release. Provider/operator acceptance remains explicitly open.

@@ -113,7 +113,7 @@ impl JobSpec {
     /// Simulations the job will run, for the progress denominator. An upper
     /// bound where the search may stop early, which is what a progress bar
     /// wants anyway.
-    fn budget(&self) -> usize {
+    pub(crate) fn budget(&self) -> usize {
         match self {
             Self::Sweep { config, .. } => (config.total_points() + 1) * config.mc_iterations,
             Self::Sensitivity {
@@ -202,6 +202,7 @@ impl AnalysisJobs {
         user_id: &str,
         base: SimulationConfig,
         spec: JobSpec,
+        admission: crate::billing::ComputePermit,
     ) -> JobHandle {
         let total = spec.budget();
         let completed = Arc::new(AtomicUsize::new(0));
@@ -245,6 +246,7 @@ impl AnalysisJobs {
         let handle_progress = progress.clone();
         let owner = user_id.to_string();
         tokio::spawn(async move {
+            let _admission = admission;
             let Ok(_permit) = permits.acquire_owned().await else {
                 return;
             };

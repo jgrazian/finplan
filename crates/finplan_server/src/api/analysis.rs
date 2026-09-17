@@ -235,6 +235,24 @@ async fn create(
     Path(scenario_id): Path<i64>,
     Json(body): Json<CreateAnalysis>,
 ) -> ApiResult<(StatusCode, Json<Analysis>)> {
+    let entitlements =
+        crate::billing::entitlements(&state.db, &user.id, state.config.hosted).await?;
+    let is_solve = matches!(&body, CreateAnalysis::Solve { .. });
+    if !is_solve {
+        crate::billing::require_pro(&state.db, &user.id, state.config.hosted).await?;
+    }
+    let requested_iterations = match &body {
+        CreateAnalysis::Sweep { iterations, .. }
+        | CreateAnalysis::Sensitivity { iterations, .. }
+        | CreateAnalysis::Solve { iterations, .. } => *iterations,
+    };
+    if state.config.hosted && requested_iterations.is_some_and(|n| n > entitlements.max_iterations)
+    {
+        return Err(ApiError::Forbidden(format!(
+            "Your plan allows at most {} iterations.",
+            entitlements.max_iterations
+        )));
+    }
     let (compiled, available) = plan(&state, scenario_id, &user.id).await?;
     if available.is_empty() {
         return Err(ApiError::unprocessable(
@@ -349,9 +367,19 @@ async fn create(
         }
     };
 
+    // Cost includes all probes/cells and the full horizon; reject before quota use.
+    if spec.budget().saturating_mul(compiled.config.duration_years) > 20_000_000 {
+        return Err(ApiError::bad_request(
+            "Analysis is too large. Reduce iterations, years, or varied parameters.",
+        ));
+    }
+    let admission = crate::billing::admit_compute(&user.id)?;
+    if is_solve {
+        crate::billing::reserve_goal_seek(&state.db, &user.id, state.config.hosted).await?;
+    }
     let handle = state
         .analyses
-        .start(scenario_id, &user.id, compiled.config, spec);
+        .start(scenario_id, &user.id, compiled.config, spec, admission);
     let view = state.analyses.view(handle.id, &user.id)?;
     Ok((StatusCode::ACCEPTED, Json(view.into())))
 }

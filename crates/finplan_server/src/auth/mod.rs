@@ -1,5 +1,7 @@
 //! Authentication: Argon2id password hashing and opaque session tokens.
 
+pub mod protection;
+pub mod recovery;
 pub mod routes;
 pub mod session;
 
@@ -14,6 +16,9 @@ use crate::error::{ApiError, ApiResult};
 pub const MIN_PASSWORD_LEN: usize = 10;
 
 pub fn hash_password(password: &str) -> ApiResult<String> {
+    if password.len() > 1024 {
+        return Err(ApiError::bad_request("password must be at most 1024 bytes"));
+    }
     if password.chars().count() < MIN_PASSWORD_LEN {
         return Err(ApiError::bad_request(format!(
             "password must be at least {MIN_PASSWORD_LEN} characters"
@@ -33,6 +38,9 @@ pub fn hash_password(password: &str) -> ApiResult<String> {
 /// error, so a corrupt row cannot be distinguished from a wrong password.
 #[must_use]
 pub fn verify_password(password: &str, stored: &str) -> bool {
+    if password.len() > 1024 {
+        return false;
+    }
     let Ok(parsed) = PasswordHash::new(stored) else {
         tracing::error!("stored password hash is not a valid PHC string");
         return false;
@@ -46,6 +54,7 @@ pub fn normalize_email(email: &str) -> ApiResult<String> {
     let email = email.trim().to_lowercase();
     // Deliberately minimal: a syntactic check here only rejects obvious typos.
     let valid = email.len() >= 3
+        && email.len() <= 254
         && email.matches('@').count() == 1
         && !email.starts_with('@')
         && !email.ends_with('@')
@@ -55,4 +64,36 @@ pub fn normalize_email(email: &str) -> ApiResult<String> {
         return Err(ApiError::bad_request("invalid email address"));
     }
     Ok(email)
+}
+
+/// Hash work runs off executor threads, with a process-wide memory/concurrency cap.
+static PASSWORD_WORK: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+pub async fn hash_password_async(password: String) -> ApiResult<String> {
+    let permit = PASSWORD_WORK
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::Conflict("Authentication busy. Retry shortly.".into()))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        hash_password(&password)
+    })
+    .await
+    .map_err(|_| ApiError::internal("password worker failed"))?
+}
+pub async fn verify_password_async(password: String, stored: String) -> ApiResult<bool> {
+    let permit = PASSWORD_WORK
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| ApiError::Conflict("Authentication busy. Retry shortly.".into()))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        verify_password(&password, &stored)
+    })
+    .await
+    .map_err(|_| ApiError::internal("password worker failed"))
 }

@@ -7,12 +7,13 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ScenarioRow {
     pub id: i64,
     pub user_id: String,
@@ -28,7 +29,7 @@ pub struct ScenarioRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct DistributionRow {
     pub id: i64,
     pub kind: String,
@@ -45,15 +46,17 @@ pub struct DistributionRow {
     pub block_size: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ReturnProfileRow {
+    #[serde(default)]
+    pub asset_class: Option<String>,
     pub id: i64,
     pub name: String,
     pub description: Option<String>,
     pub distribution_id: i64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct AssetRow {
     pub id: i64,
     pub name: String,
@@ -65,7 +68,7 @@ pub struct AssetRow {
     pub sort_order: i64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct AccountRow {
     pub id: i64,
     pub name: String,
@@ -74,14 +77,14 @@ pub struct AccountRow {
     pub sort_order: i64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct BankRow {
     pub account_id: i64,
     pub cash_value: f64,
     pub return_profile_id: i64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct InvestmentRow {
     pub account_id: i64,
     pub tax_status: String,
@@ -91,21 +94,21 @@ pub struct InvestmentRow {
     pub contribution_period: Option<String>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct PropertyRow {
     pub account_id: i64,
     pub asset_id: i64,
     pub value: f64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct LiabilityRow {
     pub account_id: i64,
     pub principal: f64,
     pub interest_rate: f64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct PositionRow {
     pub id: i64,
     pub account_id: i64,
@@ -115,7 +118,7 @@ pub struct PositionRow {
     pub cost_basis: f64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TransferAmountRow {
     pub id: i64,
     pub kind: String,
@@ -126,7 +129,7 @@ pub struct TransferAmountRow {
     pub right_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct EventRow {
     pub id: i64,
     pub name: String,
@@ -136,7 +139,7 @@ pub struct EventRow {
     pub sort_order: i64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TriggerRow {
     pub id: i64,
     pub event_id: Option<i64>,
@@ -159,7 +162,7 @@ pub struct TriggerRow {
     pub position: i64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct EffectRow {
     pub id: i64,
     pub event_id: Option<i64>,
@@ -180,7 +183,7 @@ pub struct EffectRow {
     pub sell_to_cover: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct WithdrawalSourceRow {
     pub effect_id: i64,
     pub mode: String,
@@ -189,7 +192,7 @@ pub struct WithdrawalSourceRow {
     pub strategy: Option<String>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct WithdrawalItemRow {
     pub effect_id: i64,
     pub role: String,
@@ -198,7 +201,7 @@ pub struct WithdrawalItemRow {
     pub asset_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TaxConfigRow {
     pub id: i64,
     pub name: String,
@@ -207,14 +210,14 @@ pub struct TaxConfigRow {
     pub early_withdrawal_penalty_rate: f64,
 }
 
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct TaxBracketRow {
     pub threshold: f64,
     pub rate: f64,
 }
 
 /// Every row backing one scenario, indexed for in-memory tree assembly.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioGraph {
     pub scenario: ScenarioRow,
 
@@ -229,6 +232,8 @@ pub struct ScenarioGraph {
 
     pub return_profiles: HashMap<i64, ReturnProfileRow>,
     pub distributions: HashMap<i64, DistributionRow>,
+    #[serde(default)]
+    pub inflation_profile_name: Option<String>,
     pub inflation_distribution_id: Option<i64>,
 
     pub tax_config: Option<TaxConfigRow>,
@@ -247,6 +252,7 @@ pub struct ScenarioGraph {
     /// event id -> ordered top-level effect ids
     pub event_effects: HashMap<i64, Vec<i64>>,
     /// (parent effect id, slot) -> child effect id
+    #[serde(with = "effect_child_pairs")]
     pub effect_children: HashMap<(i64, String), i64>,
     pub withdrawal_sources: HashMap<i64, WithdrawalSourceRow>,
     pub withdrawal_items: HashMap<i64, Vec<WithdrawalItemRow>>,
@@ -255,6 +261,17 @@ pub struct ScenarioGraph {
 impl ScenarioGraph {
     /// Load every row belonging to `scenario_id`, verifying it belongs to `user_id`.
     pub async fn load(db: &Db, scenario_id: i64, user_id: &str) -> ApiResult<Self> {
+        let mut tx = db.begin().await?;
+        let graph = Self::load_connection(&mut tx, scenario_id, user_id).await?;
+        tx.commit().await?;
+        Ok(graph)
+    }
+
+    pub async fn load_connection(
+        db: &mut sqlx::SqliteConnection,
+        scenario_id: i64,
+        user_id: &str,
+    ) -> ApiResult<Self> {
         let scenario: ScenarioRow = sqlx::query_as(
             "SELECT id, user_id, name, description, start_date, birth_date, duration_years,
                     inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at
@@ -262,7 +279,7 @@ impl ScenarioGraph {
         )
         .bind(scenario_id)
         .bind(user_id)
-        .fetch_optional(db)
+        .fetch_optional(&mut *db)
         .await?
         .ok_or(ApiError::NotFound("scenario"))?;
 
@@ -271,7 +288,7 @@ impl ScenarioGraph {
                FROM assets WHERE scenario_id = ?1 ORDER BY sort_order, id",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let accounts: Vec<AccountRow> = sqlx::query_as(
@@ -279,7 +296,7 @@ impl ScenarioGraph {
                FROM accounts WHERE scenario_id = ?1 ORDER BY sort_order, id",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let bank: Vec<BankRow> = sqlx::query_as(
@@ -288,7 +305,7 @@ impl ScenarioGraph {
               WHERE a.scenario_id = ?1",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let investment: Vec<InvestmentRow> = sqlx::query_as(
@@ -298,7 +315,7 @@ impl ScenarioGraph {
               WHERE a.scenario_id = ?1",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let property: Vec<PropertyRow> = sqlx::query_as(
@@ -307,7 +324,7 @@ impl ScenarioGraph {
               WHERE a.scenario_id = ?1",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let liability: Vec<LiabilityRow> = sqlx::query_as(
@@ -316,7 +333,7 @@ impl ScenarioGraph {
               WHERE a.scenario_id = ?1",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let position_rows: Vec<PositionRow> = sqlx::query_as(
@@ -325,17 +342,17 @@ impl ScenarioGraph {
               WHERE a.scenario_id = ?1 ORDER BY p.sort_order, p.purchase_date, p.id",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         // Return profiles live in the user's library; pull the whole library so
         // any row the scenario references is present.
         let profile_rows: Vec<ReturnProfileRow> = sqlx::query_as(
-            "SELECT id, name, description, distribution_id
+            "SELECT id, name, description, distribution_id, asset_class
                FROM return_profiles WHERE user_id = ?1",
         )
         .bind(user_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let distribution_rows: Vec<DistributionRow> = sqlx::query_as(
@@ -344,7 +361,7 @@ impl ScenarioGraph {
                FROM distributions WHERE user_id = ?1",
         )
         .bind(user_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let inflation_distribution_id: Option<i64> =
@@ -354,10 +371,23 @@ impl ScenarioGraph {
                 )
                 .bind(id)
                 .bind(user_id)
-                .fetch_optional(db)
+                .fetch_optional(&mut *db)
                 .await?,
                 None => None,
             };
+
+        let inflation_profile_name: Option<String> = match scenario.inflation_profile_id {
+            Some(id) => {
+                sqlx::query_scalar(
+                    "SELECT name FROM inflation_profiles WHERE id = ?1 AND user_id = ?2",
+                )
+                .bind(id)
+                .bind(user_id)
+                .fetch_optional(&mut *db)
+                .await?
+            }
+            None => None,
+        };
 
         let (tax_config, tax_brackets) = match scenario.tax_config_id {
             Some(id) => {
@@ -367,7 +397,7 @@ impl ScenarioGraph {
                 )
                 .bind(id)
                 .bind(user_id)
-                .fetch_optional(db)
+                .fetch_optional(&mut *db)
                 .await?;
 
                 let brackets: Vec<TaxBracketRow> = sqlx::query_as(
@@ -375,7 +405,7 @@ impl ScenarioGraph {
                       WHERE tax_config_id = ?1 ORDER BY threshold ASC",
                 )
                 .bind(id)
-                .fetch_all(db)
+                .fetch_all(&mut *db)
                 .await?;
 
                 (cfg, brackets)
@@ -388,7 +418,7 @@ impl ScenarioGraph {
                FROM events WHERE scenario_id = ?1 ORDER BY sort_order, id",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let trigger_rows: Vec<TriggerRow> = sqlx::query_as(
@@ -398,7 +428,7 @@ impl ScenarioGraph {
                FROM triggers WHERE scenario_id = ?1 ORDER BY parent_id, position, id",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let amount_rows: Vec<TransferAmountRow> = sqlx::query_as(
@@ -406,7 +436,7 @@ impl ScenarioGraph {
                FROM transfer_amounts WHERE scenario_id = ?1",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let effect_rows: Vec<EffectRow> = sqlx::query_as(
@@ -416,7 +446,7 @@ impl ScenarioGraph {
                FROM effects WHERE scenario_id = ?1 ORDER BY event_id, position, id",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let ws_rows: Vec<WithdrawalSourceRow> = sqlx::query_as(
@@ -425,7 +455,7 @@ impl ScenarioGraph {
               WHERE e.scenario_id = ?1",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         let wi_rows: Vec<WithdrawalItemRow> = sqlx::query_as(
@@ -434,7 +464,7 @@ impl ScenarioGraph {
               WHERE e.scenario_id = ?1 ORDER BY i.position, i.id",
         )
         .bind(scenario_id)
-        .fetch_all(db)
+        .fetch_all(&mut *db)
         .await?;
 
         // ── index everything ────────────────────────────────────────────────
@@ -486,6 +516,7 @@ impl ScenarioGraph {
             return_profiles: profile_rows.into_iter().map(|r| (r.id, r)).collect(),
             distributions: distribution_rows.into_iter().map(|r| (r.id, r)).collect(),
             inflation_distribution_id,
+            inflation_profile_name,
             tax_config,
             tax_brackets,
             events,
@@ -499,5 +530,24 @@ impl ScenarioGraph {
             withdrawal_sources: ws_rows.into_iter().map(|r| (r.effect_id, r)).collect(),
             withdrawal_items,
         })
+    }
+}
+
+mod effect_child_pairs {
+    use super::*;
+    pub fn serialize<S: serde::Serializer>(
+        value: &HashMap<(i64, String), i64>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mut pairs: Vec<_> = value.iter().collect();
+        pairs.sort_by_key(|(key, _)| *key);
+        pairs.serialize(serializer)
+    }
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<HashMap<(i64, String), i64>, D::Error> {
+        Ok(Vec::<((i64, String), i64)>::deserialize(deserializer)?
+            .into_iter()
+            .collect())
     }
 }

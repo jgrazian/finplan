@@ -4,6 +4,14 @@ use clap::Args;
 
 #[derive(Debug, Clone, Args)]
 pub struct ServerConfig {
+    /// Enable strict hosted origin and cookie protections.
+    #[arg(long, env = "FINPLAN_HOSTED", default_value_t = false)]
+    pub hosted: bool,
+
+    /// Explicit local development mail sink directory; never available in hosted mode.
+    #[arg(long, env = "FINPLAN_LOCAL_MAIL_SINK")]
+    pub local_mail_sink: Option<String>,
+
     /// Address to bind the HTTP listener to.
     #[arg(long, env = "FINPLAN_BIND", default_value = "127.0.0.1:8080")]
     pub bind: String,
@@ -38,4 +46,34 @@ pub struct ServerConfig {
         default_value = "http://localhost:3000"
     )]
     pub cors_origins: Vec<String>,
+}
+
+impl ServerConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.hosted
+            && (!self.secure_cookies
+                || self.local_mail_sink.is_some()
+                || self.cors_origins.is_empty()
+                || self.cors_origins.iter().any(|o| {
+                    let Ok(uri) = o.parse::<axum::http::Uri>() else {
+                        return true;
+                    };
+                    uri.scheme_str() != Some("https")
+                        || uri.authority().is_none()
+                        || uri
+                            .authority()
+                            .is_some_and(|a| a.as_str().contains('@') || a.as_str().contains('*'))
+                        || uri.path() != "/"
+                        || uri.query().is_some()
+                        || o.ends_with('/')
+                        || o.trim() != o
+                }))
+        {
+            return Err("hosted mode requires secure cookies, explicit HTTPS origins, and no local mail sink".into());
+        }
+        if self.sim_workers == 0 {
+            return Err("simulation workers must be positive".into());
+        }
+        Ok(())
+    }
 }

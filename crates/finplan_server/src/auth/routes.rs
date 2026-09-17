@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use super::session::{self, CurrentUser};
-use super::{hash_password, normalize_email, verify_password};
+use super::{hash_password_async, normalize_email, verify_password_async};
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::seed;
 use crate::state::AppState;
@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/password", post(change_password))
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}", delete(revoke_session))
+        .merge(super::recovery::router())
 }
 
 #[derive(Deserialize, TS)]
@@ -73,6 +74,7 @@ pub enum Accent {
 pub struct UserResponse {
     pub id: String,
     pub email: String,
+    pub email_verified_at: Option<String>,
     pub display_name: Option<String>,
     /// Seeds a new scenario's birth date; an existing scenario keeps its own.
     pub birth_date: Option<String>,
@@ -87,7 +89,8 @@ pub struct UserResponse {
     pub created_at: String,
 }
 
-const USER_COLUMNS: &str = "id, email, display_name, birth_date, default_iterations,
+const USER_COLUMNS: &str =
+    "id, email, email_verified_at, display_name, birth_date, default_iterations,
      default_duration_years, auto_run, theme_mode, accent, created_at";
 
 async fn load_user(state: &AppState, id: &str) -> ApiResult<Json<UserResponse>> {
@@ -105,7 +108,10 @@ async fn register(
     Json(body): Json<Credentials>,
 ) -> ApiResult<impl IntoResponse> {
     let email = normalize_email(&body.email)?;
-    let password_hash = hash_password(&body.password)?;
+    if state.config.hosted {
+        super::protection::account_attempt(&email)?;
+    }
+    let password_hash = hash_password_async(body.password.clone()).await?;
     let id = uuid::Uuid::new_v4().to_string();
 
     sqlx::query(
@@ -136,6 +142,9 @@ async fn login(
     Json(body): Json<Credentials>,
 ) -> ApiResult<impl IntoResponse> {
     let email = normalize_email(&body.email)?;
+    if state.config.hosted {
+        super::protection::account_attempt(&email)?;
+    }
 
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT id, password_hash FROM users WHERE email = ?1")
@@ -146,11 +155,11 @@ async fn login(
     // Verify against a dummy hash when the user is missing so that a wrong email
     // and a wrong password take comparable time.
     let Some((id, password_hash)) = row else {
-        let _ = verify_password(&body.password, DUMMY_HASH);
+        let _ = verify_password_async(body.password.clone(), DUMMY_HASH.to_owned()).await?;
         return Err(ApiError::Forbidden("invalid email or password".into()));
     };
 
-    if !verify_password(&body.password, &password_hash) {
+    if !verify_password_async(body.password.clone(), password_hash).await? {
         return Err(ApiError::Forbidden("invalid email or password".into()));
     }
 
@@ -223,6 +232,21 @@ async fn update_profile(
     Json(body): Json<UpdateUserProfile>,
 ) -> ApiResult<Json<UserResponse>> {
     let email = normalize_email(&body.email)?;
+    if state.config.hosted {
+        super::protection::account_attempt(&email)?;
+    }
+    if state.config.hosted {
+        let current: String = sqlx::query_scalar("SELECT email FROM users WHERE id = ?")
+            .bind(&user.id)
+            .fetch_one(&state.db)
+            .await?;
+        if current != email {
+            return Err(ApiError::Conflict(
+                "Email changes require verified delivery, which is not configured on this service."
+                    .into(),
+            ));
+        }
+    }
     let display_name = blank_to_none(body.display_name);
     let birth_date = match blank_to_none(body.birth_date) {
         Some(date) => Some(validate_date(&date)?),
@@ -231,7 +255,7 @@ async fn update_profile(
 
     sqlx::query(
         "UPDATE users
-            SET email = ?1, display_name = ?2, birth_date = ?3, updated_at = datetime('now')
+            SET email_verified_at = CASE WHEN email = ?1 THEN email_verified_at ELSE NULL END, email = ?1, display_name = ?2, birth_date = ?3, updated_at = datetime('now')
           WHERE id = ?4",
     )
     .bind(&email)
@@ -318,11 +342,11 @@ async fn change_password(
         .fetch_one(&state.db)
         .await?;
 
-    if !verify_password(&body.current_password, &stored) {
+    if !verify_password_async(body.current_password, stored).await? {
         return Err(ApiError::Forbidden("current password is incorrect".into()));
     }
 
-    let password_hash = hash_password(&body.new_password)?;
+    let password_hash = hash_password_async(body.new_password).await?;
     sqlx::query("UPDATE users SET password_hash = ?1, updated_at = datetime('now') WHERE id = ?2")
         .bind(&password_hash)
         .bind(&user.id)
@@ -415,7 +439,7 @@ async fn destroy_account(
         .fetch_one(&state.db)
         .await?;
 
-    if !verify_password(&body.password, &stored) {
+    if !verify_password_async(body.password, stored).await? {
         return Err(ApiError::Forbidden("password is incorrect".into()));
     }
 

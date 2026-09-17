@@ -8,6 +8,7 @@ import type { ThemeMode } from "./ThemeMode";
 export type UserResponse = {
   id: string;
   email: string;
+  email_verified_at: string | null;
   display_name: string | null;
   /**
    * Seeds a new scenario's birth date; an existing scenario keeps its own.

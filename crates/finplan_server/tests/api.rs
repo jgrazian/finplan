@@ -28,6 +28,8 @@ impl TestApp {
             sim_workers: 1,
             max_iterations: 50_000,
             secure_cookies: false,
+            hosted: false,
+            local_mail_sink: None,
             cors_origins: vec!["http://localhost:3000".into()],
         };
 
@@ -814,7 +816,7 @@ async fn a_converging_run_stops_short_of_its_ceiling() {
 }
 
 #[tokio::test]
-async fn a_scenario_keeps_only_its_newest_run() {
+async fn a_scenario_retains_its_prior_runs() {
     let mut app = TestApp::new().await;
     app.login_as("one-run@example.com").await;
     let (scenario_id, _, _) = app.seed_scenario().await;
@@ -831,29 +833,17 @@ async fn a_scenario_keeps_only_its_newest_run() {
     let second_id = second["id"].as_i64().unwrap();
     assert_eq!(app.await_run(second_id).await, "succeeded");
 
-    // The scenario holds the second run and nothing else.
+    // Both runs remain, newest first.
     let (_, runs) = app.get(&format!("/api/scenarios/{scenario_id}/runs")).await;
     let rows = runs.as_array().unwrap();
-    assert_eq!(rows.len(), 1, "a scenario holds one run: {runs}");
+    assert_eq!(rows.len(), 2, "a scenario retains history: {runs}");
     assert_eq!(rows[0]["id"].as_i64().unwrap(), second_id);
     assert_eq!(rows[0]["iterations"], 40);
 
-    // SQLite hands the replacement the row id the deleted run had, so the
-    // first run's id is either gone or is now the second run's — never the
-    // first run's results.
+    assert_ne!(first_id, second_id);
     let (status, results) = app.get(&format!("/api/runs/{first_id}/results")).await;
-    if first_id == second_id {
-        assert_eq!(
-            results["stats"]["num_iterations"], 40,
-            "stale results survived"
-        );
-    } else {
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "the previous run must be replaced"
-        );
-    }
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(results["stats"]["num_iterations"], 30);
 
     let (status, results) = app.get(&format!("/api/runs/{second_id}/results")).await;
     assert_eq!(status, StatusCode::OK, "{results}");
@@ -2724,3 +2714,12 @@ async fn shared_tax_edits_and_inflation_deletion_invalidate_dependents() {
         assert_ne!(changed["updated_at"], "2000-01-01 00:00:00");
     }
 }
+
+#[path = "cases/history.rs"]
+mod history_cases;
+
+#[path = "cases/onboarding.rs"]
+mod onboarding_cases;
+
+#[path = "cases/archives.rs"]
+mod archives_cases;
