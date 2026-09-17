@@ -289,6 +289,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 scenarioId={workspace.scenario.id}
                 scenarioName={workspace.scenario.name}
                 params={workspace.params}
+                assumptions={workspace.assumptions}
                 axis={workspace.axis}
                 events={workspace.events}
                 raw={workspace.raw}

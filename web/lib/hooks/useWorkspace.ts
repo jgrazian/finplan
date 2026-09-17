@@ -11,6 +11,7 @@ import type {
 } from "@/lib/api/types";
 import type {
   Account,
+  AssumptionChoices,
   InflationProfile,
   PlanEvent,
   ReturnProfile,
@@ -18,6 +19,7 @@ import type {
 } from "@/lib/types";
 import { type PlanAxis, planAxis } from "@/lib/view/axis";
 import { toViewAccounts } from "@/lib/view/accounts";
+import { toInflationChoices, toTaxChoices } from "@/lib/view/assumptions";
 import { toViewEvents } from "@/lib/view/events";
 import { toViewInflationProfiles, toViewReturnProfiles } from "@/lib/view/profiles";
 import { useAsync } from "./useAsync";
@@ -43,6 +45,8 @@ export interface Workspace {
   events: PlanEvent[];
   returnProfiles: ReturnProfile[];
   inflationProfiles: InflationProfile[];
+  /** What the Plan strip's inflation and tax pickers can be set to. */
+  assumptions: AssumptionChoices;
   /** Name of the scenario's inflation profile, for the Profiles screen. */
   activeInflationProfile: string | undefined;
   raw: RawWorkspace;
@@ -79,6 +83,7 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
         events: [],
         returnProfiles: [],
         inflationProfiles: [],
+        assumptions: { inflation: [], tax: [] },
         activeInflationProfile: undefined,
         raw: { accounts: [], assets: [], events: [], returnProfiles: [] },
         loading,
@@ -102,6 +107,7 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
 
     const inflation = inflationProfiles.find((p) => p.id === scenario.inflation_profile_id);
     const taxConfig = taxConfigs.find((t) => t.id === scenario.tax_config_id);
+    const viewInflation = toViewInflationProfiles(inflationProfiles);
 
     return {
       scenario,
@@ -110,13 +116,19 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
         durationYears: scenario.duration_years,
         birthDate: scenario.birth_date ?? "",
         inflationProfile: inflation?.name ?? "—",
+        inflationProfileId: scenario.inflation_profile_id,
         taxConfig: taxConfig?.name ?? "—",
+        taxConfigId: scenario.tax_config_id,
       },
       axis,
       accounts: toViewAccounts(accounts, { assets, profiles: returnProfiles, events }),
       events: toViewEvents(events, scenario, axis, names),
       returnProfiles: toViewReturnProfiles(returnProfiles),
-      inflationProfiles: toViewInflationProfiles(inflationProfiles),
+      inflationProfiles: viewInflation,
+      assumptions: {
+        inflation: toInflationChoices(viewInflation),
+        tax: toTaxChoices(taxConfigs),
+      },
       activeInflationProfile: inflation?.name,
       raw: { accounts, assets, events, returnProfiles },
       loading,

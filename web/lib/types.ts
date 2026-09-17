@@ -313,8 +313,33 @@ export interface ScenarioParams {
   birthDate: string;
   /** Name of the scenario's inflation profile, or `—`. */
   inflationProfile: string;
+  /** Which profile that name belongs to; null when the scenario has none. */
+  inflationProfileId: number | null;
   /** Name of the scenario's tax configuration, or `—`. */
   taxConfig: string;
+  /** Which configuration that name belongs to; null when the scenario has none. */
+  taxConfigId: number | null;
+}
+
+/**
+ * One row in an assumption picker: the profile or tax configuration a plan can
+ * be pointed at.
+ *
+ * `detail` is the figure that makes two choices comparable at a glance — the
+ * rate a name does not carry — and `note` is the longer sentence shown under
+ * the field once the choice is the plan's.
+ */
+export interface AssumptionChoice {
+  id: number;
+  name: string;
+  detail: string;
+  note: string;
+}
+
+/** What the plan strip's two assumption pickers offer. */
+export interface AssumptionChoices {
+  inflation: AssumptionChoice[];
+  tax: AssumptionChoice[];
 }
 
 // ── return / inflation profiles ───────────────────────────────────────────

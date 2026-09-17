@@ -17,7 +17,7 @@ import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
-import type { PlanEvent, ScenarioParams } from "@/lib/types";
+import type { AssumptionChoices, PlanEvent, ScenarioParams } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 
 /**
@@ -63,6 +63,7 @@ export function PlanScreen({
   scenarioId,
   scenarioName,
   params,
+  assumptions,
   axis,
   events,
   raw,
@@ -72,6 +73,7 @@ export function PlanScreen({
   scenarioId: number;
   scenarioName: string;
   params: ScenarioParams;
+  assumptions: AssumptionChoices;
   axis: PlanAxis;
   events: PlanEvent[];
   raw: RawWorkspace;
@@ -111,6 +113,10 @@ export function PlanScreen({
     if (patch.start != null) body.start_date = patch.start;
     if (patch.birthDate) body.birth_date = patch.birthDate;
     if (patch.durationYears != null) body.duration_years = patch.durationYears;
+    if (patch.inflationProfileId != null) {
+      body.inflation_profile_id = patch.inflationProfileId;
+    }
+    if (patch.taxConfigId != null) body.tax_config_id = patch.taxConfigId;
     await api.scenarios.update(scenarioId, body);
     onChanged();
   };
@@ -196,6 +202,7 @@ export function PlanScreen({
       <ScenarioStrip
         scenarioName={scenarioName}
         params={params}
+        assumptions={assumptions}
         onChange={saveParams}
         offline={offline}
       />

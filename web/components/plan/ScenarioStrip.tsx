@@ -2,11 +2,16 @@
 
 import { type ReactNode, useState } from "react";
 import { UnsavedNote } from "@/components/status/UnsavedNote";
-import { Button, CompactInput, DateInput, Field, NumberInput } from "@/components/ui";
-import type { ScenarioParams } from "@/lib/types";
+import { Button, DateInput, Dropdown, Field, NumberInput } from "@/components/ui";
+import type { AssumptionChoice, AssumptionChoices, ScenarioParams } from "@/lib/types";
 
-/** The fields this strip can save; the rest are read-only summaries. */
-type Editable = "start" | "durationYears" | "birthDate";
+/** Everything this strip can save. */
+type Editable =
+  | "start"
+  | "durationYears"
+  | "birthDate"
+  | "inflationProfileId"
+  | "taxConfigId";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 
@@ -29,11 +34,14 @@ const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 export function ScenarioStrip({
   scenarioName,
   params,
+  assumptions,
   onChange,
   offline,
 }: {
   scenarioName: string;
   params: ScenarioParams;
+  /** What the inflation and tax pickers can be set to. */
+  assumptions: AssumptionChoices;
   /** Saves one field. Rejecting leaves the value in the field, unsaved. */
   onChange?: (patch: Partial<ScenarioParams>) => Promise<void>;
   /** No connection: the fields are read-only rather than held for later. */
@@ -55,6 +63,10 @@ export function ScenarioStrip({
   // Anything unresolved holds the fields open: closing them would hide the one
   // place that says a value was not saved, and where the value still is.
   const expanded = open || unsaved > 0;
+  // The choice the pickers are standing on, which is the one just made rather
+  // than the one `params` carries until the reload lands.
+  const inflation = pick(assumptions.inflation, shown.inflationProfileId);
+  const tax = pick(assumptions.tax, shown.taxConfigId);
 
   const save = async (patch: Partial<ScenarioParams>) => {
     if (!onChange || offline) return;
@@ -98,9 +110,9 @@ export function ScenarioStrip({
         <Bar />
         <span>{shown.birthDate ? `born ${shown.birthDate}` : "no birth date"}</span>
         <Bar />
-        <span>{params.inflationProfile}</span>
+        <span>{inflation?.name ?? params.inflationProfile}</span>
         <Bar />
-        <span>{params.taxConfig}</span>
+        <span>{tax?.name ?? params.taxConfig}</span>
 
         <div
           style={{
@@ -135,7 +147,9 @@ export function ScenarioStrip({
           style={{
             padding: "0 20px 14px",
             display: "grid",
-            gridTemplateColumns: "repeat(5, 1fr)",
+            // The three dates are short and the two assumption names are not,
+            // so the pickers get the room rather than an even fifth each.
+            gridTemplateColumns: "0.85fr 0.7fr 0.85fr 1.3fr 1.3fr",
             gap: 12,
             alignItems: "start",
           }}
@@ -182,15 +196,46 @@ export function ScenarioStrip({
             {refused.birthDate && <UnsavedNote>{refused.birthDate}</UnsavedNote>}
           </Field>
 
-          <Field label="Inflation">
-            <CompactInput
-              style={{ minHeight: 30 }}
-              value={params.inflationProfile}
-              readOnly
+          <Field
+            label="Inflation"
+            className={refused.inflationProfileId ? "field-unsaved" : undefined}
+          >
+            <Dropdown
+              className="dd-field"
+              options={options(assumptions.inflation)}
+              value={shown.inflationProfileId}
+              placeholder={
+                assumptions.inflation.length === 0 ? "— none defined —" : "— not set —"
+              }
+              ariaLabel="Inflation profile"
+              disabled={readOnly}
+              maxMenuHeight={300}
+              onChange={(id) => void save({ inflationProfileId: id })}
             />
+            {refused.inflationProfileId && (
+              <UnsavedNote>{refused.inflationProfileId}</UnsavedNote>
+            )}
+            {inflation && <Note>{inflation.note}</Note>}
           </Field>
-          <Field label="Tax config">
-            <CompactInput style={{ minHeight: 30 }} value={params.taxConfig} readOnly />
+
+          <Field
+            label="Tax config"
+            className={refused.taxConfigId ? "field-unsaved" : undefined}
+          >
+            <Dropdown
+              className="dd-field"
+              options={options(assumptions.tax)}
+              value={shown.taxConfigId}
+              placeholder={
+                assumptions.tax.length === 0 ? "— none defined —" : "— not set —"
+              }
+              ariaLabel="Tax configuration"
+              disabled={readOnly}
+              maxMenuHeight={300}
+              onChange={(id) => void save({ taxConfigId: id })}
+            />
+            {refused.taxConfigId && <UnsavedNote>{refused.taxConfigId}</UnsavedNote>}
+            {tax && <Note>{tax.note}</Note>}
           </Field>
 
           {unsaved > 0 && (
@@ -229,6 +274,28 @@ export function ScenarioStrip({
       )}
     </div>
   );
+}
+
+/** What a chosen assumption assumes, under the picker that chose it. */
+function Note({ children }: { children: ReactNode }) {
+  return (
+    <p style={{ margin: "4px 0 0", fontSize: 11, lineHeight: 1.45, color: MUTED }}>
+      {children}
+    </p>
+  );
+}
+
+/** The choice a stored id names, or undefined while the plan has none. */
+function pick(
+  choices: AssumptionChoice[],
+  id: number | null | undefined,
+): AssumptionChoice | undefined {
+  return id == null ? undefined : choices.find((c) => c.id === id);
+}
+
+/** The rate behind each name, in the menu's right-hand column. */
+function options(choices: AssumptionChoice[]) {
+  return choices.map((c) => ({ value: c.id, label: c.name, detail: c.detail }));
 }
 
 function Bar(): ReactNode {
