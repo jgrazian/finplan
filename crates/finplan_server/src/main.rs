@@ -1,5 +1,7 @@
 //! `finplan-server` entry point.
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use finplan_server::config::ServerConfig;
 use tracing_subscriber::EnvFilter;
@@ -24,6 +26,15 @@ enum Command {
     Serve,
     /// Apply pending migrations and exit.
     Migrate,
+    /// Copy a legacy database into the current consolidated schema.
+    RebuildDatabase {
+        /// Existing database to read without modifying.
+        #[arg(long)]
+        source: PathBuf,
+        /// New database to create. Must not already exist.
+        #[arg(long)]
+        destination: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -37,11 +48,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cli = Cli::parse();
 
-    if let Some(Command::Migrate) = cli.command {
-        let db = finplan_server::db::connect(&cli.config.database_url, 1).await?;
-        db.close().await;
-        tracing::info!("migrations applied");
-        return Ok(());
+    match &cli.command {
+        Some(Command::Migrate) => {
+            let db = finplan_server::db::connect(&cli.config.database_url, 1).await?;
+            db.close().await;
+            tracing::info!("migrations applied");
+            return Ok(());
+        }
+        Some(Command::RebuildDatabase {
+            source,
+            destination,
+        }) => {
+            let report = finplan_server::db::rebuild(source, destination).await?;
+            tracing::info!(
+                source = %source.display(),
+                destination = %destination.display(),
+                tables = report.tables,
+                rows = report.rows,
+                "database rebuilt and verified"
+            );
+            return Ok(());
+        }
+        _ => {}
     }
 
     let bind = cli.config.bind.clone();

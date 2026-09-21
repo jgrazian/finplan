@@ -1,4 +1,8 @@
--- FinPlan server schema.
+-- FinPlan v0 server schema.
+--
+-- The pre-release migration chain was consolidated into this baseline. Once a
+-- v0 database has shipped, keep this file immutable and add a new numbered
+-- migration for every subsequent schema or data change.
 --
 -- Design notes:
 --   * Every entity carries a stable INTEGER (or TEXT uuid) primary key. The dense
@@ -22,6 +26,7 @@ PRAGMA foreign_keys = ON;
 CREATE TABLE users (
     id                     TEXT    PRIMARY KEY,
     email                  TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    email_verified_at      TEXT,
     password_hash          TEXT    NOT NULL,
     display_name           TEXT,
     birth_date             TEXT,                       -- seeds a new scenario
@@ -29,6 +34,10 @@ CREATE TABLE users (
     default_duration_years INTEGER NOT NULL DEFAULT 30
                                CHECK (default_duration_years BETWEEN 1 AND 120),
     auto_run               INTEGER NOT NULL DEFAULT 0 CHECK (auto_run IN (0,1)),
+    theme_mode             TEXT    NOT NULL DEFAULT 'system'
+                                CHECK (theme_mode IN ('light', 'dark', 'system')),
+    accent                 TEXT    NOT NULL DEFAULT 'blue'
+                                CHECK (accent IN ('blue', 'green', 'purple')),
     created_at             TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at             TEXT    NOT NULL DEFAULT (datetime('now'))
 );
@@ -95,7 +104,9 @@ CREATE TABLE return_profiles (
     user_id         TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name            TEXT    NOT NULL,
     description     TEXT,
+    asset_class     TEXT,
     distribution_id INTEGER NOT NULL REFERENCES distributions(id),
+    sort_order      INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, name)
@@ -110,6 +121,7 @@ CREATE TABLE inflation_profiles (
     name            TEXT    NOT NULL,
     description     TEXT,
     distribution_id INTEGER NOT NULL REFERENCES distributions(id),
+    sort_order      INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
     UNIQUE (user_id, name)
@@ -238,7 +250,8 @@ CREATE TABLE positions (
     asset_id      INTEGER NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
     purchase_date TEXT    NOT NULL,
     units         REAL    NOT NULL CHECK (units >= 0),
-    cost_basis    REAL    NOT NULL CHECK (cost_basis >= 0)
+    cost_basis    REAL    NOT NULL CHECK (cost_basis >= 0),
+    sort_order    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_positions_account ON positions(account_id);
 CREATE INDEX idx_positions_asset ON positions(asset_id);
@@ -425,13 +438,18 @@ CREATE TABLE runs (
     batch_size            INTEGER NOT NULL DEFAULT 100 CHECK (batch_size > 0),
     parallel_batches      INTEGER NOT NULL DEFAULT 4 CHECK (parallel_batches > 0),
     compute_mean          INTEGER NOT NULL DEFAULT 1 CHECK (compute_mean IN (0,1)),
+    converge              INTEGER NOT NULL DEFAULT 0 CHECK (converge IN (0,1)),
+    max_iterations        INTEGER CHECK (max_iterations IS NULL OR max_iterations > 0),
     completed_iterations  INTEGER NOT NULL DEFAULT 0,
     error_message         TEXT,
+    input_hash            TEXT,
+    model_version         TEXT,
+    snapshot_json         TEXT,
     created_at            TEXT NOT NULL DEFAULT (datetime('now')),
     started_at            TEXT,
     finished_at           TEXT
 );
-CREATE INDEX idx_runs_scenario ON runs(scenario_id, created_at DESC);
+CREATE INDEX idx_runs_scenario ON runs(scenario_id, id DESC);
 CREATE INDEX idx_runs_status ON runs(status);
 
 CREATE TABLE run_percentiles (
@@ -451,7 +469,9 @@ CREATE TABLE run_stats (
     lifetime_taxes          REAL    NOT NULL DEFAULT 0.0,
     converged               INTEGER CHECK (converged IS NULL OR converged IN (0,1)),
     convergence_metric      TEXT,
-    convergence_value       REAL
+    convergence_value       REAL,
+    funding_success_rate    REAL
+        CHECK (funding_success_rate IS NULL OR funding_success_rate BETWEEN 0.0 AND 1.0)
 );
 
 CREATE TABLE run_percentile_values (
@@ -478,7 +498,7 @@ CREATE TABLE run_account_points (
     id         INTEGER PRIMARY KEY,
     run_id     INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
     percentile REAL,
-    account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL,
     step       INTEGER NOT NULL,
     value      REAL    NOT NULL
 );
@@ -520,7 +540,140 @@ CREATE TABLE run_warnings (
     position   INTEGER NOT NULL DEFAULT 0,
     kind       TEXT    NOT NULL,
     as_of_date TEXT,
-    event_id   INTEGER REFERENCES events(id) ON DELETE SET NULL,
+    event_id   INTEGER,
     message    TEXT    NOT NULL
 );
 CREATE INDEX idx_run_warnings ON run_warnings(run_id);
+
+-- Frozen labels keep historical account series readable after live accounts
+-- are renamed or deleted.
+CREATE TABLE run_account_labels (
+    run_id    INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    account_id INTEGER NOT NULL,
+    name       TEXT    NOT NULL,
+    sort_order INTEGER NOT NULL,
+    PRIMARY KEY(run_id, account_id)
+);
+
+-- Cumulative inflation factor per plan year, per stored representative path.
+CREATE TABLE run_inflation (
+    id         INTEGER PRIMARY KEY,
+    run_id     INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    percentile REAL,
+    year       INTEGER NOT NULL,
+    factor     REAL    NOT NULL DEFAULT 1.0
+);
+CREATE INDEX idx_run_inflation ON run_inflation(run_id, percentile, year);
+
+-- Itemized effects are retained only for the latest successful run in a
+-- scenario. Account and event ids are run-local provenance, not live FKs.
+CREATE TABLE run_ledger (
+    id          INTEGER PRIMARY KEY,
+    run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    percentile  REAL,
+    position    INTEGER NOT NULL,
+    as_of_date  TEXT    NOT NULL,
+    year        INTEGER NOT NULL,
+    category    TEXT    NOT NULL,
+    kind        TEXT    NOT NULL,
+    detail      TEXT    NOT NULL,
+    amount      REAL,
+    basis       REAL,
+    basis_label TEXT,
+    account_id  INTEGER,
+    event_id    INTEGER
+);
+CREATE INDEX idx_run_ledger ON run_ledger(run_id, percentile, year, position);
+
+-- Independent all-path real-dollar statistics. Representative nominal paths
+-- cannot be used to reconstruct these honestly.
+CREATE TABLE run_real_stats (
+    run_id        INTEGER PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    base_date     TEXT    NOT NULL,
+    num_iterations INTEGER NOT NULL,
+    mean          REAL    NOT NULL,
+    std_dev       REAL    NOT NULL,
+    min           REAL    NOT NULL,
+    max           REAL    NOT NULL
+);
+
+CREATE TABLE run_real_quantiles (
+    run_id     INTEGER NOT NULL REFERENCES run_real_stats(run_id) ON DELETE CASCADE,
+    as_of_date TEXT    NOT NULL,
+    p5         REAL    NOT NULL,
+    p50        REAL    NOT NULL,
+    p95        REAL    NOT NULL,
+    PRIMARY KEY (run_id, as_of_date),
+    CHECK (p5 <= p50 AND p50 <= p95)
+);
+
+-- The newest sweep and its client-owned layout survive page reloads.
+CREATE TABLE sweep_cache (
+    scenario_id INTEGER PRIMARY KEY REFERENCES scenarios(id) ON DELETE CASCADE,
+    user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    results     TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE sweep_layout (
+    scenario_id INTEGER PRIMARY KEY REFERENCES scenarios(id) ON DELETE CASCADE,
+    user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    graphs      TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Idempotency receipts for guided setup and archive imports.
+CREATE TABLE setup_receipts (
+    user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    request_id   TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    scenario_id  INTEGER NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    PRIMARY KEY(user_id, request_id)
+);
+
+CREATE TABLE archive_imports (
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    request_id  TEXT NOT NULL,
+    input_hash  TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    PRIMARY KEY (user_id, request_id)
+);
+
+-- Hosted authentication and billing state.
+CREATE TABLE auth_action_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    purpose    TEXT NOT NULL CHECK(purpose IN ('reset','verify')),
+    email      TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+);
+CREATE INDEX auth_action_user ON auth_action_tokens(user_id, purpose);
+
+CREATE TABLE subscriptions (
+    user_id         TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    provider        TEXT NOT NULL,
+    subscription_id TEXT NOT NULL,
+    state           TEXT NOT NULL CHECK(state IN ('active','canceling','past_due','expired')),
+    access_until    INTEGER NOT NULL,
+    revision        INTEGER NOT NULL,
+    UNIQUE(provider, subscription_id)
+);
+
+CREATE TABLE billing_receipts (
+    provider    TEXT NOT NULL,
+    event_id    TEXT NOT NULL,
+    received_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY(provider, event_id)
+);
+
+CREATE TABLE monthly_goal_seeks (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    month   TEXT NOT NULL,
+    used    INTEGER NOT NULL,
+    PRIMARY KEY(user_id, month)
+);
+
+CREATE TABLE editable_plans (
+    user_id     TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    scenario_id INTEGER NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE
+);

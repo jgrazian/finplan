@@ -9,6 +9,26 @@ cargo run --bin finplan-server -- migrate   # apply migrations and exit
 cargo test -p finplan_server                # integration tests
 ```
 
+## Rebuilding a pre-v0 database
+
+The v0 schema is a consolidated baseline. A database carrying the development
+migration chain must be rebuilt before it is opened by a build containing that
+baseline. Stop every server using the source database, then create a separate
+verified database:
+
+```bash
+cargo run --bin finplan-server -- rebuild-database \
+  --source finplan.db --destination finplan-v0.db
+```
+
+The command never alters the source or overwrites an existing destination. It
+creates the new schema, copies application tables by column name, retains cash
+flows and ledger rows only for each scenario's newest successful run, and runs
+row-count, foreign-key, and SQLite integrity checks before publishing the
+destination. After inspecting the result, keep the original as a backup and
+move `finplan-v0.db` into its place. The rebuilt database records only the
+consolidated baseline in `_sqlx_migrations`.
+
 Configuration comes from flags or environment variables:
 
 | Variable | Default | Purpose |
