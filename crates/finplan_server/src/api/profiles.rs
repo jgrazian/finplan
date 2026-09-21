@@ -8,9 +8,11 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, Transaction};
 
 use super::ReorderRequest;
+use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::compile::HISTORY_PRESETS;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
@@ -478,7 +480,20 @@ async fn reorder_return(
     .fetch_all(&state.db)
     .await?;
 
-    super::apply_order(&state.db, "return_profiles", &current, &body.ids).await?;
+    let affected = super::apply_order(&state.db, "return_profiles", &current, &body.ids).await?;
+
+    if affected > 0 {
+        state.telemetry.mutation(
+            Resource::ReturnProfile,
+            Operation::Reordered,
+            &EventFields {
+                user_id: Some(&user.id),
+                fields: &["ids"],
+                count: Some(affected),
+                ..Default::default()
+            },
+        );
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -511,7 +526,7 @@ async fn fetch_return(
 async fn create_return(
     State(state): State<AppState>,
     user: CurrentUser,
-    Json(body): Json<CreateProfile>,
+    Json(Submitted { body, fields }): Json<Submitted<CreateProfile>>,
 ) -> ApiResult<(StatusCode, Json<Profile>)> {
     let mut tx = state.db.begin().await?;
     let distribution_id = body.distribution.insert(&mut tx, &user.id, 0).await?;
@@ -535,6 +550,17 @@ async fn create_return(
 
     tx.commit().await?;
 
+    state.telemetry.mutation(
+        Resource::ReturnProfile,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+
     Ok((
         StatusCode::CREATED,
         Json(Profile {
@@ -552,7 +578,7 @@ async fn update_return(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
-    Json(body): Json<UpdateProfile>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdateProfile>>,
 ) -> ApiResult<Json<Profile>> {
     let existing: Option<i64> = sqlx::query_scalar(
         "SELECT distribution_id FROM return_profiles WHERE id = ?1 AND user_id = ?2",
@@ -576,7 +602,7 @@ async fn update_return(
     let reclassify = body.asset_class.is_some();
     let asset_class = body.asset_class.flatten().map(AssetClass::as_str);
 
-    sqlx::query(
+    let affected = sqlx::query(
         "UPDATE return_profiles SET
             name            = COALESCE(?3, name),
             description     = COALESCE(?4, description),
@@ -594,8 +620,12 @@ async fn update_return(
     .bind(reclassify)
     .execute(&mut *tx)
     .await
-    .map_err(|e| on_unique_violation(e, "a return profile with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, "a return profile with that name already exists"))?
+    .rows_affected();
 
+    if affected == 0 {
+        return Err(ApiError::NotFound("return profile"));
+    }
     if distribution_id != old_distribution {
         // Safe now that nothing points at it; a shared row would be blocked by
         // the foreign key, which is the desired outcome.
@@ -621,6 +651,18 @@ async fn update_return(
     .await?;
 
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::ReturnProfile,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+
     fetch_return(State(state), user, Path(id)).await
 }
 
@@ -647,6 +689,16 @@ async fn delete_return(
     if affected == 0 {
         return Err(ApiError::NotFound("return profile"));
     }
+
+    state.telemetry.mutation(
+        Resource::ReturnProfile,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            ..Default::default()
+        },
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -706,14 +758,27 @@ async fn reorder_inflation(
     .fetch_all(&state.db)
     .await?;
 
-    super::apply_order(&state.db, "inflation_profiles", &current, &body.ids).await?;
+    let affected = super::apply_order(&state.db, "inflation_profiles", &current, &body.ids).await?;
+
+    if affected > 0 {
+        state.telemetry.mutation(
+            Resource::InflationProfile,
+            Operation::Reordered,
+            &EventFields {
+                user_id: Some(&user.id),
+                fields: &["ids"],
+                count: Some(affected),
+                ..Default::default()
+            },
+        );
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn create_inflation(
     State(state): State<AppState>,
     user: CurrentUser,
-    Json(body): Json<CreateProfile>,
+    Json(Submitted { body, fields }): Json<Submitted<CreateProfile>>,
 ) -> ApiResult<(StatusCode, Json<Profile>)> {
     check_inflation_kind(&body.distribution)?;
 
@@ -736,6 +801,17 @@ async fn create_inflation(
     .map_err(|e| on_unique_violation(e, "an inflation profile with that name already exists"))?;
 
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::InflationProfile,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -769,6 +845,17 @@ async fn delete_inflation(
         return Err(ApiError::NotFound("inflation profile"));
     }
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::InflationProfile,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            ..Default::default()
+        },
+    );
+
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -809,4 +896,12 @@ async fn list_presets() -> Json<Vec<HistoryPreset>> {
             })
             .collect(),
     )
+}
+
+impl ActivityFields for CreateProfile {
+    const FIELDS: &'static [&'static str] = &["name", "description", "asset_class", "distribution"];
+}
+
+impl ActivityFields for UpdateProfile {
+    const FIELDS: &'static [&'static str] = &["name", "description", "asset_class", "distribution"];
 }

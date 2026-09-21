@@ -7,8 +7,10 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use super::ReorderRequest;
+use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
@@ -133,7 +135,7 @@ async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(scenario_id): Path<i64>,
-    Json(body): Json<CreateAsset>,
+    Json(Submitted { body, fields }): Json<Submitted<CreateAsset>>,
 ) -> ApiResult<(StatusCode, Json<Asset>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     if let Some(profile_id) = body.return_profile_id {
@@ -164,6 +166,17 @@ async fn create(
     .await
     .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?;
 
+    state.telemetry.mutation(
+        Resource::Asset,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
 
     let row: Asset = sqlx::query_as(&format!("SELECT {COLUMNS} FROM assets WHERE id = ?1"))
@@ -188,7 +201,21 @@ async fn reorder(
             .fetch_all(&state.db)
             .await?;
 
-    super::apply_order(&state.db, "assets", &current, &body.ids).await?;
+    let affected = super::apply_order(&state.db, "assets", &current, &body.ids).await?;
+
+    if affected > 0 {
+        state.telemetry.mutation(
+            Resource::Asset,
+            Operation::Reordered,
+            &EventFields {
+                user_id: Some(&user.id),
+                scenario_id: Some(scenario_id),
+                fields: &["ids"],
+                count: Some(affected),
+                ..Default::default()
+            },
+        );
+    }
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -197,7 +224,7 @@ async fn update(
     State(state): State<AppState>,
     user: CurrentUser,
     Path((scenario_id, id)): Path<(i64, i64)>,
-    Json(body): Json<UpdateAsset>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdateAsset>>,
 ) -> ApiResult<Json<Asset>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     // `Some(None)` is a deliberate unmap, `None` is silence about the mapping.
@@ -235,6 +262,18 @@ async fn update(
     if affected == 0 {
         return Err(ApiError::NotFound("asset"));
     }
+
+    state.telemetry.mutation(
+        Resource::Asset,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
 
     let row: Asset = sqlx::query_as(&format!("SELECT {COLUMNS} FROM assets WHERE id = ?1"))
@@ -277,6 +316,39 @@ async fn destroy(
     if affected == 0 {
         return Err(ApiError::NotFound("asset"));
     }
+
+    state.telemetry.mutation(
+        Resource::Asset,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl ActivityFields for CreateAsset {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "initial_price",
+        "return_profile_id",
+        "tracking_error",
+        "sort_order",
+    ];
+}
+
+impl ActivityFields for UpdateAsset {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "initial_price",
+        "return_profile_id",
+        "tracking_error",
+        "sort_order",
+    ];
 }

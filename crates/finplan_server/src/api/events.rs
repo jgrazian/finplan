@@ -12,9 +12,11 @@ use super::specs::{
     AmountSpec, Comparison, EffectParent, EffectSpec, Interval, OffsetUnit, TriggerParent,
     TriggerSpec,
 };
+use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::compile::rows::ScenarioGraph;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
@@ -447,7 +449,21 @@ async fn reorder(
             .fetch_all(&state.db)
             .await?;
 
-    super::apply_order(&state.db, "events", &current, &body.ids).await?;
+    let affected = super::apply_order(&state.db, "events", &current, &body.ids).await?;
+
+    if affected > 0 {
+        state.telemetry.mutation(
+            Resource::Event,
+            Operation::Reordered,
+            &EventFields {
+                user_id: Some(&user.id),
+                scenario_id: Some(scenario_id),
+                fields: &["ids"],
+                count: Some(affected),
+                ..Default::default()
+            },
+        );
+    }
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -465,7 +481,7 @@ async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(scenario_id): Path<i64>,
-    Json(body): Json<EventBody>,
+    Json(Submitted { body, fields }): Json<Submitted<EventBody>>,
 ) -> ApiResult<(StatusCode, Json<Event>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
@@ -489,6 +505,18 @@ async fn create(
 
     write_tree(&mut tx, scenario_id, id, &body).await?;
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Event,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
 
     let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
@@ -504,7 +532,7 @@ async fn replace(
     State(state): State<AppState>,
     user: CurrentUser,
     Path((scenario_id, id)): Path<(i64, i64)>,
-    Json(body): Json<EventBody>,
+    Json(Submitted { body, fields }): Json<Submitted<EventBody>>,
 ) -> ApiResult<Json<Event>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
@@ -518,7 +546,7 @@ async fn replace(
 
     let mut tx = state.db.begin().await?;
 
-    sqlx::query(
+    let affected = sqlx::query(
         "UPDATE events SET name = ?3, description = ?4, fires_once = ?5, enabled = ?6,
                            sort_order = COALESCE(?7, sort_order),
                            updated_at = datetime('now')
@@ -533,8 +561,12 @@ async fn replace(
     .bind(body.sort_order)
     .execute(&mut *tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?
+    .rows_affected();
 
+    if affected == 0 {
+        return Err(ApiError::NotFound("event"));
+    }
     // Child triggers cascade from the root; effects cascade from the event and
     // take their `Random` branches and withdrawal-source rows with them.
     sqlx::query("DELETE FROM triggers WHERE event_id = ?1")
@@ -549,6 +581,18 @@ async fn replace(
     write_tree(&mut tx, scenario_id, id, &body).await?;
     collect_orphans(&mut tx, scenario_id).await?;
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Event,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
 
     let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
@@ -682,6 +726,28 @@ async fn destroy(
     collect_orphans(&mut tx, scenario_id).await?;
     tx.commit().await?;
 
+    state.telemetry.mutation(
+        Resource::Event,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl ActivityFields for EventBody {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "fires_once",
+        "enabled",
+        "sort_order",
+        "trigger",
+        "effects",
+    ];
 }

@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult};
+use crate::observability::{JobContext, JobKind, Origin};
+use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 use ts_rs::TS;
 
@@ -138,6 +140,19 @@ async fn create(
     Path(scenario_id): Path<i64>,
     Json(body): Json<CreateRun>,
 ) -> ApiResult<(StatusCode, Json<Run>)> {
+    let mut decision = Submission::new(&state.telemetry, JobKind::Run);
+    let result = create_run(&state, &user, scenario_id, body, &mut decision).await;
+    decision.result(&result);
+    result
+}
+
+async fn create_run(
+    state: &AppState,
+    user: &CurrentUser,
+    scenario_id: i64,
+    body: CreateRun,
+    decision: &mut Submission,
+) -> ApiResult<(StatusCode, Json<Run>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     crate::billing::require_editable(&state.db, &user.id, scenario_id, state.config.hosted).await?;
     let entitled_max = if state.config.hosted {
@@ -177,7 +192,7 @@ async fn create(
             "Use at most 21 percentiles, batch size 1–10000, and parallel batches 1–16.",
         ));
     }
-    let admission = crate::billing::admit_compute(&user.id)?;
+
     let mut percentiles = body.percentiles.clone();
     percentiles.retain(|p| (0.0..=1.0).contains(p));
     percentiles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -188,6 +203,10 @@ async fn create(
         ));
     }
 
+    let admission =
+        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    let reserved = state.runs.reserve(admission, Origin::Request)?;
+    let dispatch_guard = state.runs.submission_guard().await;
     let mut tx = state.db.begin().await?;
     let graph = ScenarioGraph::load_connection(&mut tx, scenario_id, &user.id).await?;
     compile::compile(&graph)?;
@@ -244,7 +263,18 @@ async fn create(
     }
     tx.commit().await?;
 
-    state.runs.enqueue_admitted(run_id, admission)?;
+    decision.accepted();
+    let context = JobContext::new(JobKind::Run, Origin::Request, &user.id, scenario_id, run_id);
+    context.event("run.submitted");
+    tracing::info!(
+        event = "run.submission_parameters",
+        run_id,
+        requested_iterations = body.iterations,
+        effective_iterations = iterations,
+        max_iterations = ceiling
+    );
+    reserved.send(run_id, context);
+    drop(dispatch_guard);
 
     let row: Run = sqlx::query_as(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE id = ?1"))
         .bind(run_id)
@@ -269,27 +299,18 @@ async fn cancel(
 ) -> ApiResult<Json<Run>> {
     let run = owned_run(&state, id, &user.id).await?;
 
-    match run.status.as_str() {
-        "running" => {
-            state.runs.cancel(id).await;
-        }
-        "queued" => {
-            // Not yet claimed: mark it canceled so the worker skips it when the
-            // id comes up.
-            sqlx::query(
-                "UPDATE runs SET status = 'canceled', finished_at = datetime('now')
-                  WHERE id = ?1 AND status = 'queued'",
-            )
-            .bind(id)
-            .execute(&state.db)
-            .await?;
-        }
-        other => {
-            return Err(ApiError::Conflict(format!(
-                "run has already finished with status '{other}'"
-            )));
-        }
+    if !matches!(run.status.as_str(), "queued" | "running") {
+        return Err(ApiError::Conflict(format!(
+            "run has already finished with status '{}'",
+            run.status
+        )));
     }
+    JobContext::new(JobKind::Run, Origin::Request, &user.id, run.scenario_id, id)
+        .event("run.cancel_requested");
+    state
+        .runs
+        .cancel_owned(id, &user.id, run.scenario_id)
+        .await?;
 
     Ok(Json(owned_run(&state, id, &user.id).await?))
 }
@@ -306,11 +327,26 @@ async fn destroy(
         ));
     }
 
-    sqlx::query("DELETE FROM runs WHERE id = ?1 AND user_id = ?2")
-        .bind(id)
-        .bind(&user.id)
-        .execute(&state.db)
-        .await?;
+    let _dispatch_guard = state.runs.submission_guard().await;
+    let deleted: Option<(String,f64)> = sqlx::query_as("DELETE FROM runs WHERE id=?1 AND user_id=?2 AND status<>'running' RETURNING status, CAST(unixepoch()-unixepoch(created_at) AS REAL)")
+        .bind(id).bind(&user.id).fetch_optional(&state.db).await?;
+    let Some((status, age)) = deleted else {
+        return Err(ApiError::Conflict(
+            "run started before deletion; cancel it first".into(),
+        ));
+    };
+    state.runs.deleted(id, (status == "queued").then_some(age));
+    state.telemetry.mutation(
+        crate::observability::Resource::Run,
+        crate::observability::Operation::Deleted,
+        &crate::observability::EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(run.scenario_id),
+            resource_id: Some(id),
+            count: Some(1),
+            ..Default::default()
+        },
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -9,6 +9,11 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::observability::{
+    Component, ErrorClass, JobContext, JobKind as MetricKind, Origin, Outcome as MetricOutcome,
+    Phase, QueueExit, QueueSnapshot, Telemetry,
+};
+use crate::runner::telemetry::{Attempt, PhaseTimer, Submitted};
 use finplan_core::analysis::{
     SolveConfig, SweepConfig, SweepParameter, SweepProgress, solve, sweep_simulate_lazy,
 };
@@ -16,6 +21,7 @@ use finplan_core::config::SimulationConfig;
 use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, MonteCarloStats};
 use finplan_core::simulation::monte_carlo_stats_only;
 use tokio::sync::Semaphore;
+use tracing::{Instrument, instrument::WithSubscriber};
 
 use super::cache;
 use super::params::PlanParameter;
@@ -44,6 +50,15 @@ pub enum JobKind {
     Solve,
 }
 
+impl From<JobKind> for MetricKind {
+    fn from(kind: JobKind) -> Self {
+        match kind {
+            JobKind::Sweep => Self::Sweep,
+            JobKind::Sensitivity => Self::Sensitivity,
+            JobKind::Solve => Self::Solve,
+        }
+    }
+}
 impl JobKind {
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -148,6 +163,8 @@ struct Job {
     total: usize,
     cancel: Arc<AtomicBool>,
     started: Instant,
+    submitted: Submitted,
+    context: JobContext,
     elapsed_ms: Option<u64>,
     error: Option<String>,
     outcome: Option<AnalysisOutcome>,
@@ -171,11 +188,36 @@ struct Registry {
 #[derive(Clone)]
 pub struct AnalysisJobs {
     inner: Arc<Mutex<Registry>>,
+    telemetry: Telemetry,
+    cache_failures: Arc<AtomicUsize>,
     /// Only a finished sweep touches it — see [`cache`].
     db: Db,
     /// Caps concurrent analyses the same way the run pool caps runs: each one
     /// is already rayon-parallel inside.
     permits: Arc<Semaphore>,
+}
+
+/// Keep the registry and cooperative cancellation flag consistent if an async
+/// owner is aborted or unwinds while waiting for a worker or engine completion.
+struct JobCleanup {
+    jobs: AnalysisJobs,
+    id: i64,
+}
+impl Drop for JobCleanup {
+    fn drop(&mut self) {
+        let mut reg = self.jobs.lock();
+        if let Some(job) = reg.jobs.get_mut(&self.id)
+            && !job.status.is_terminal()
+        {
+            job.cancel.store(true, Ordering::Relaxed);
+            if job.status == JobStatus::Queued {
+                job.context.event("analysis.interrupted");
+            }
+            job.status = JobStatus::Failed;
+            job.error = Some("Analysis interrupted".into());
+            job.elapsed_ms = Some(job.started.elapsed().as_millis() as u64);
+        }
+    }
 }
 
 /// The convenience alias the outcome enum is returned as.
@@ -184,7 +226,14 @@ pub type Outcome = AnalysisOutcome;
 impl AnalysisJobs {
     #[must_use]
     pub fn new(db: Db, workers: usize) -> Self {
+        Self::new_with_telemetry(db, workers, Telemetry::new(workers))
+    }
+
+    #[must_use]
+    pub fn new_with_telemetry(db: Db, workers: usize, telemetry: Telemetry) -> Self {
         Self {
+            telemetry,
+            cache_failures: Arc::new(AtomicUsize::new(0)),
             inner: Arc::new(Mutex::new(Registry::default())),
             db,
             permits: Arc::new(Semaphore::new(workers.max(1))),
@@ -231,6 +280,14 @@ impl AnalysisJobs {
                     total,
                     cancel,
                     started: Instant::now(),
+                    submitted: Submitted::now(),
+                    context: JobContext::new(
+                        spec.kind().into(),
+                        Origin::Request,
+                        user_id,
+                        scenario_id,
+                        id,
+                    ),
                     elapsed_ms: None,
                     error: None,
                     outcome: None,
@@ -245,45 +302,153 @@ impl AnalysisJobs {
         let permits = self.permits.clone();
         let handle_progress = progress.clone();
         let owner = user_id.to_string();
-        tokio::spawn(async move {
-            let _admission = admission;
-            let Ok(_permit) = permits.acquire_owned().await else {
-                return;
-            };
-            // A job canceled while it waited for a permit never starts.
-            if handle_progress.is_cancelled() {
-                jobs.finish(id, JobStatus::Canceled, None, None);
-                return;
-            }
-            jobs.mark_running(id);
-
-            let outcome =
-                tokio::task::spawn_blocking(move || run(&base, &spec, &handle_progress)).await;
-
-            match outcome {
-                Ok(Ok(result)) => {
-                    // A sweep outlives its job: the screen it draws is restored
-                    // from here after a reload. A write that fails costs the
-                    // restore and nothing else, so it is logged, not raised.
-                    if let AnalysisOutcome::Sweep(sweep) = &result
-                        && let Err(err) = cache::save(&jobs.db, scenario_id, &owner, sweep).await
-                    {
-                        tracing::warn!(scenario_id, error = %err, "failed to cache sweep");
-                    }
-                    jobs.finish(id, JobStatus::Succeeded, Some(result), None);
-                }
-                Ok(Err(err)) if err.is_cancel() => {
-                    jobs.finish(id, JobStatus::Canceled, None, None);
-                }
-                Ok(Err(err)) => jobs.finish(id, JobStatus::Failed, None, Some(err.message)),
-                Err(join) => jobs.finish(
+        let (context, submitted) = {
+            let reg = self.lock();
+            let job = &reg.jobs[&id];
+            (job.context.clone(), job.submitted.clone())
+        };
+        context.event("analysis.submitted");
+        let span = context.span();
+        tokio::spawn(
+            async move {
+                let _admission = admission;
+                let _cleanup = JobCleanup {
+                    jobs: jobs.clone(),
                     id,
-                    JobStatus::Failed,
-                    None,
-                    Some(format!("analysis worker panicked: {join}")),
-                ),
+                };
+                let Ok(_permit) = permits.acquire_owned().await else {
+                    jobs.telemetry
+                        .count_error(Component::Analysis, ErrorClass::QueueClosed);
+                    tracing::error!(
+                        event = "analysis.queue_closed",
+                        error_class = "queue_closed"
+                    );
+                    jobs.finish(
+                        id,
+                        JobStatus::Failed,
+                        None,
+                        Some("Analysis queue unavailable".into()),
+                    );
+                    return;
+                };
+                // A queued plan may have been removed while this job waited.
+                let exists = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM scenarios WHERE id=? AND user_id=?)",
+                )
+                .bind(scenario_id)
+                .bind(&owner)
+                .fetch_one(&jobs.db)
+                .await;
+                match exists {
+                    Ok(false) => {
+                        jobs.deleted_before_start(id);
+                        return;
+                    }
+                    Err(_) => {
+                        jobs.telemetry
+                            .count_error(Component::Analysis, ErrorClass::Database);
+                        tracing::error!(
+                            event = "analysis.prepare_failed",
+                            error_class = "database"
+                        );
+                        jobs.finish(
+                            id,
+                            JobStatus::Failed,
+                            None,
+                            Some("Unable to prepare analysis".into()),
+                        );
+                        return;
+                    }
+                    Ok(true) => {}
+                }
+                if !jobs.mark_running(id) {
+                    jobs.finish(id, JobStatus::Canceled, None, None);
+                    return;
+                }
+                context.event("analysis.started");
+                let _running = jobs.telemetry.job_started(context.kind);
+                let mut attempt = Attempt::new(&jobs.telemetry, &context, submitted);
+                let prepare = PhaseTimer::new(&jobs.telemetry, context.kind, Phase::Prepare);
+                let blocking_queued = Instant::now();
+                let dispatch = tracing::dispatcher::get_default(Clone::clone);
+                let span = tracing::Span::current();
+                let worker_telemetry = jobs.telemetry.clone();
+                let kind = context.kind;
+                drop(prepare);
+                let outcome = tokio::task::spawn_blocking(move || {
+                    tracing::dispatcher::with_default(&dispatch, || {
+                        span.in_scope(|| {
+                            worker_telemetry.phase(
+                                kind,
+                                Phase::BlockingWait,
+                                blocking_queued.elapsed().as_secs_f64(),
+                            );
+                            let _engine = PhaseTimer::new(&worker_telemetry, kind, Phase::Engine);
+                            run(&base, &spec, &handle_progress)
+                        })
+                    })
+                })
+                .await;
+                let (status, result, error) = match outcome {
+                    Ok(Ok(result)) => {
+                        if let AnalysisOutcome::Sweep(sweep) = &result {
+                            let _persist = PhaseTimer::new(&jobs.telemetry, kind, Phase::Persist);
+                            match cache::save(&jobs.db, scenario_id, &owner, sweep).await {
+                                Ok(()) => {
+                                    let failures = jobs.cache_failures.swap(0, Ordering::Relaxed);
+                                    if failures > 0 {
+                                        tracing::info!(
+                                            event = "analysis.cache_recovered",
+                                            failures
+                                        );
+                                    }
+                                }
+                                Err(_) => {
+                                    jobs.telemetry
+                                        .count_error(Component::Analysis, ErrorClass::Persistence);
+                                    let failures =
+                                        jobs.cache_failures.fetch_add(1, Ordering::Relaxed) + 1;
+                                    if failures == 1 || failures.is_multiple_of(60) {
+                                        tracing::warn!(
+                                            event = "analysis.cache_failed",
+                                            error_class = "persistence",
+                                            failures
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        (JobStatus::Succeeded, Some(result), None)
+                    }
+                    Ok(Err(err)) if err.is_cancel() => (JobStatus::Canceled, None, None),
+                    Ok(Err(_)) => {
+                        jobs.telemetry
+                            .count_error(Component::Analysis, ErrorClass::Engine);
+                        attempt.failure(ErrorClass::Engine);
+                        (JobStatus::Failed, None, Some("Analysis failed".into()))
+                    }
+                    Err(_) => {
+                        jobs.telemetry
+                            .count_error(Component::Analysis, ErrorClass::EnginePanic);
+                        attempt.failure(ErrorClass::EnginePanic);
+                        (
+                            JobStatus::Failed,
+                            None,
+                            Some("Analysis worker failed".into()),
+                        )
+                    }
+                };
+                if let Some(actual) = jobs.finish(id, status, result, error) {
+                    attempt.finish(match actual {
+                        JobStatus::Succeeded => MetricOutcome::Succeeded,
+                        JobStatus::Canceled => MetricOutcome::Canceled,
+                        _ => MetricOutcome::Failed,
+                    });
+                }
             }
-        });
+            .instrument(span)
+            .with_current_subscriber(),
+        );
 
         JobHandle { id, progress }
     }
@@ -328,21 +493,39 @@ impl AnalysisJobs {
         {
             let reg = self.lock();
             let job = reg.owned(id, user_id)?;
-            if !job.status.is_terminal() {
-                job.cancel.store(true, Ordering::Relaxed);
+            if !job.status.is_terminal() && !job.cancel.swap(true, Ordering::Relaxed) {
+                job.context.event("analysis.cancel_requested");
             }
         }
         self.view(id, user_id)
     }
 
-    fn mark_running(&self, id: i64) {
+    fn deleted_before_start(&self, id: i64) {
         let mut reg = self.lock();
         if let Some(job) = reg.jobs.get_mut(&id)
             && job.status == JobStatus::Queued
         {
+            self.telemetry
+                .queue_wait(job.kind.into(), QueueExit::Deleted, job.submitted.elapsed());
+            job.context.event("analysis.deleted_before_start");
+            job.status = JobStatus::Canceled;
+            job.elapsed_ms = Some(job.started.elapsed().as_millis() as u64);
+        }
+    }
+
+    fn mark_running(&self, id: i64) -> bool {
+        let mut reg = self.lock();
+        if let Some(job) = reg.jobs.get_mut(&id)
+            && job.status == JobStatus::Queued
+            && !job.cancel.load(Ordering::Relaxed)
+        {
+            self.telemetry
+                .queue_wait(job.kind.into(), QueueExit::Started, job.submitted.elapsed());
             job.status = JobStatus::Running;
             job.started = Instant::now();
+            return true;
         }
+        false
     }
 
     fn finish(
@@ -351,14 +534,65 @@ impl AnalysisJobs {
         status: JobStatus,
         outcome: Option<AnalysisOutcome>,
         error: Option<String>,
-    ) {
+    ) -> Option<JobStatus> {
         let mut reg = self.lock();
-        if let Some(job) = reg.jobs.get_mut(&id) {
-            job.status = status;
-            job.elapsed_ms = Some(job.started.elapsed().as_millis() as u64);
-            job.outcome = outcome;
-            job.error = error;
+        let job = reg.jobs.get_mut(&id)?;
+        if job.status.is_terminal() {
+            return None;
         }
+        let status = if job.cancel.load(Ordering::Relaxed) {
+            JobStatus::Canceled
+        } else {
+            status
+        };
+        if job.status == JobStatus::Queued && status == JobStatus::Canceled {
+            self.telemetry.queue_wait(
+                job.kind.into(),
+                QueueExit::Canceled,
+                job.submitted.elapsed(),
+            );
+            self.telemetry.canceled_before_start(job.kind.into());
+            job.context.event("analysis.canceled");
+        }
+        job.status = status;
+        job.elapsed_ms = Some(job.started.elapsed().as_millis() as u64);
+        job.outcome = if status == JobStatus::Succeeded {
+            outcome
+        } else {
+            None
+        };
+        job.error = if status == JobStatus::Failed {
+            error
+        } else {
+            None
+        };
+        Some(status)
+    }
+
+    /// Queued age uses insertion time; the existing API elapsed timer resets on
+    /// worker claim and retains its established meaning.
+    pub fn queue_snapshot(&self) -> Vec<QueueSnapshot> {
+        let reg = self.lock();
+        [JobKind::Sweep, JobKind::Sensitivity, JobKind::Solve]
+            .into_iter()
+            .map(|kind| {
+                let mut queued = 0;
+                let mut oldest_age_seconds: f64 = 0.0;
+                for job in reg
+                    .jobs
+                    .values()
+                    .filter(|job| job.kind == kind && job.status == JobStatus::Queued)
+                {
+                    queued += 1;
+                    oldest_age_seconds = oldest_age_seconds.max(job.submitted.elapsed());
+                }
+                QueueSnapshot {
+                    kind: kind.into(),
+                    queued,
+                    oldest_age_seconds,
+                }
+            })
+            .collect()
     }
 
     /// A poisoned registry means a handler panicked while holding the lock.
@@ -409,7 +643,6 @@ impl Registry {
 /// A failure from inside the worker, with cancellation kept apart: a canceled
 /// analysis is not an error to report, it is the state the caller asked for.
 struct WorkerError {
-    message: String,
     cancel: bool,
 }
 
@@ -422,10 +655,7 @@ impl WorkerError {
 impl From<finplan_core::error::SimulationError> for WorkerError {
     fn from(err: finplan_core::error::SimulationError) -> Self {
         let cancel = matches!(err, finplan_core::error::SimulationError::Cancelled);
-        Self {
-            message: err.to_string(),
-            cancel,
-        }
+        Self { cancel }
     }
 }
 
@@ -652,4 +882,234 @@ fn run_sensitivity(
         fraction,
         iterations: iterations as u32,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    async fn fixture() -> (AnalysisJobs, String, SimulationConfig) {
+        let db = crate::db::connect("sqlite::memory:", 1).await.unwrap();
+        let user = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO users(id,email,password_hash) VALUES (?,?,'unused')")
+            .bind(&user)
+            .bind(format!("{user}@example.test"))
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO scenarios(id,user_id,name,start_date,duration_years) VALUES (1,?,'Test','2026-01-01',1)")
+            .bind(&user).execute(&db).await.unwrap();
+        let graph = crate::compile::rows::ScenarioGraph::load(&db, 1, &user)
+            .await
+            .unwrap();
+        let config = crate::compile::compile(&graph).unwrap().config;
+        (AnalysisJobs::new(db, 1), user, config)
+    }
+    fn spec() -> JobSpec {
+        JobSpec::Sensitivity {
+            params: vec![],
+            fraction: 0.2,
+            iterations: 3,
+            parallel_batches: 1,
+            seed: Some(42),
+        }
+    }
+    async fn idle(jobs: &AnalysisJobs, id: i64, user: &str) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if jobs.view(id, user).unwrap().status.is_terminal()
+                    && jobs.permits.available_permits() == 1
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    fn metric(jobs: &AnalysisJobs, line: &str) -> bool {
+        jobs.telemetry.encode().unwrap().lines().any(|l| l == line)
+    }
+
+    #[tokio::test]
+    async fn canceled_analysis_retains_queue_age_and_records_terminal_once() {
+        let (jobs, user, config) = fixture().await;
+        let permit = jobs.permits.clone().acquire_owned().await.unwrap();
+        let handle = jobs.start(
+            1,
+            &user,
+            config,
+            spec(),
+            crate::billing::admit_compute(&user).unwrap(),
+        );
+        let before = jobs.queue_snapshot();
+        assert_eq!(
+            before
+                .iter()
+                .find(|s| s.kind == MetricKind::Sensitivity)
+                .unwrap()
+                .queued,
+            1
+        );
+        jobs.cancel(handle.id, &user).unwrap();
+        drop(permit);
+        idle(&jobs, handle.id, &user).await;
+        assert_eq!(
+            jobs.view(handle.id, &user).unwrap().status,
+            JobStatus::Canceled
+        );
+        assert!(
+            jobs.finish(handle.id, JobStatus::Failed, None, Some("duplicate".into()))
+                .is_none()
+        );
+        assert!(metric(
+            &jobs,
+            "finplan_jobs_canceled_before_start_total{kind=\"sensitivity\"} 1"
+        ));
+        assert!(
+            jobs.telemetry
+                .encode()
+                .unwrap()
+                .lines()
+                .filter(|l| l.starts_with("finplan_job_attempts_total{"))
+                .all(|l| l.ends_with(" 0"))
+        );
+        assert!(
+            jobs.queue_snapshot()
+                .iter()
+                .all(|s| s.queued == 0 && s.oldest_age_seconds == 0.0)
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_analysis_has_one_attempt_and_separate_monotonic_clocks() {
+        let (jobs, user, config) = fixture().await;
+        let permit = jobs.permits.clone().acquire_owned().await.unwrap();
+        let handle = jobs.start(
+            1,
+            &user,
+            config,
+            spec(),
+            crate::billing::admit_compute(&user).unwrap(),
+        );
+        let created = jobs.lock().jobs[&handle.id].started;
+        drop(permit);
+        idle(&jobs, handle.id, &user).await;
+        assert_eq!(
+            jobs.view(handle.id, &user).unwrap().status,
+            JobStatus::Succeeded
+        );
+        assert!(jobs.lock().jobs[&handle.id].started >= created);
+        assert!(!jobs.mark_running(handle.id));
+        assert!(
+            jobs.finish(handle.id, JobStatus::Succeeded, None, None)
+                .is_none()
+        );
+        assert!(metric(
+            &jobs,
+            "finplan_job_attempts_total{kind=\"sensitivity\",outcome=\"succeeded\"} 1"
+        ));
+        assert!(metric(
+            &jobs,
+            "finplan_jobs_running{kind=\"sensitivity\"} 0"
+        ));
+        assert!(
+            !jobs
+                .telemetry
+                .encode()
+                .unwrap()
+                .contains("finplan_run_iterations_completed_total 3")
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_analysis_of_deleted_scenario_never_starts() {
+        let (jobs, user, config) = fixture().await;
+        let permit = jobs.permits.clone().acquire_owned().await.unwrap();
+        let handle = jobs.start(
+            1,
+            &user,
+            config,
+            spec(),
+            crate::billing::admit_compute(&user).unwrap(),
+        );
+        sqlx::query("DELETE FROM scenarios WHERE id=1")
+            .execute(&jobs.db)
+            .await
+            .unwrap();
+        drop(permit);
+        idle(&jobs, handle.id, &user).await;
+        assert_eq!(
+            jobs.view(handle.id, &user).unwrap().status,
+            JobStatus::Canceled
+        );
+        assert!(metric(
+            &jobs,
+            "finplan_job_queue_wait_seconds_count{kind=\"sensitivity\",exit=\"deleted\"} 1"
+        ));
+        assert!(
+            jobs.telemetry
+                .encode()
+                .unwrap()
+                .lines()
+                .filter(|l| l.starts_with("finplan_job_attempts_total{"))
+                .all(|l| l.ends_with(" 0"))
+        );
+    }
+
+    #[tokio::test]
+    async fn sweep_cache_failure_does_not_turn_successful_computation_into_failure() {
+        let (jobs, user, mut config) = fixture().await;
+        sqlx::query("CREATE TRIGGER fail_cache BEFORE INSERT ON sweep_cache BEGIN SELECT RAISE(ABORT,'synthetic private cache value'); END")
+            .execute(&jobs.db).await.unwrap();
+        config.birth_date = Some("1960-01-01".parse().unwrap());
+        config.events.push(finplan_core::model::Event {
+            event_id: finplan_core::model::EventId(0),
+            trigger: finplan_core::model::EventTrigger::Age {
+                years: 66,
+                months: None,
+            },
+            effects: vec![],
+            once: true,
+        });
+        let spec = JobSpec::Sweep {
+            params: vec![],
+            config: SweepConfig {
+                parameters: vec![SweepParameter::age(
+                    finplan_core::model::EventId(0),
+                    65,
+                    67,
+                    2,
+                )],
+                mc_iterations: 3,
+                parallel_batches: 1,
+                seed: Some(42),
+                ..Default::default()
+            },
+        };
+        let handle = jobs.start(
+            1,
+            &user,
+            config,
+            spec,
+            crate::billing::admit_compute(&user).unwrap(),
+        );
+        idle(&jobs, handle.id, &user).await;
+        assert_eq!(
+            jobs.view(handle.id, &user).unwrap().status,
+            JobStatus::Succeeded
+        );
+        assert!(jobs.outcome(handle.id, &user).is_ok());
+        assert!(metric(
+            &jobs,
+            "finplan_job_attempts_total{kind=\"sweep\",outcome=\"succeeded\"} 1"
+        ));
+        assert!(metric(
+            &jobs,
+            "finplan_server_errors_total{component=\"analysis\",class=\"persistence\"} 1"
+        ));
+        assert!(!jobs.telemetry.encode().unwrap().contains("private"));
+    }
 }

@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
+use crate::observability::{Component, ErrorClass, RequestContext};
 use crate::state::AppState;
 
 pub const COOKIE_NAME: &str = "finplan_session";
@@ -71,12 +72,14 @@ pub fn user_agent_of(headers: &HeaderMap) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-pub async fn revoke(db: &Db, token: &str) -> ApiResult<()> {
-    sqlx::query("DELETE FROM sessions WHERE token_hash = ?1")
-        .bind(hash_token(token))
-        .execute(db)
-        .await?;
-    Ok(())
+/// Return the internal owner only when a persisted session was revoked.
+pub async fn revoke(db: &Db, token: &str) -> ApiResult<Option<String>> {
+    let user_id =
+        sqlx::query_scalar("DELETE FROM sessions WHERE token_hash = ?1 RETURNING user_id")
+            .bind(hash_token(token))
+            .fetch_optional(db)
+            .await?;
+    Ok(user_id)
 }
 
 /// Delete every session whose expiry has passed. Called at startup and by the
@@ -170,12 +173,21 @@ impl FromRequestParts<AppState> for CurrentUser {
 
         let (id, email, session_id) = row.ok_or(ApiError::Unauthorized)?;
 
+        RequestContext::authenticate(&id);
+
         // Touch the session so idle-time can be reasoned about later.
-        let _ =
-            sqlx::query("UPDATE sessions SET last_seen = datetime('now') WHERE token_hash = ?1")
-                .bind(&token_hash)
-                .execute(&state.db)
-                .await;
+        match sqlx::query("UPDATE sessions SET last_seen = datetime('now') WHERE token_hash = ?1")
+            .bind(&token_hash)
+            .execute(&state.db)
+            .await
+        {
+            Ok(_) => state
+                .telemetry
+                .recovered_error(Component::Session, ErrorClass::Database),
+            Err(_) => state
+                .telemetry
+                .recoverable_error(Component::Session, ErrorClass::Database),
+        }
 
         Ok(CurrentUser {
             id,

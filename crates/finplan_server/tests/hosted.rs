@@ -7,6 +7,8 @@ use finplan_server::config::ServerConfig;
 use tower::ServiceExt;
 fn config() -> ServerConfig {
     ServerConfig {
+        log_format: Default::default(),
+        metrics_bind: None,
         hosted: true,
         local_mail_sink: None,
         bind: "127.0.0.1:0".into(),

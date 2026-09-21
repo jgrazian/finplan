@@ -8,9 +8,13 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use super::activity::{ActivityFields, Submitted};
 use super::session::{self, CurrentUser};
 use super::{hash_password_async, normalize_email, verify_password_async};
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::observability::{
+    AuthAction, AuthOutcome, EventFields, Operation, RequestContext, Resource,
+};
 use crate::seed;
 use crate::state::AppState;
 use ts_rs::TS;
@@ -124,7 +128,7 @@ async fn register(
     }
     let email = normalize_email(&body.email)?;
     if state.config.hosted {
-        super::protection::account_attempt(&email)?;
+        super::protection::account_attempt(&state, &email)?;
     }
     let password_hash = hash_password_async(body.password.clone()).await?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -140,6 +144,15 @@ async fn register(
     .await
     .map_err(|e| on_unique_violation(e, "an account with that email already exists"))?;
 
+    RequestContext::authenticate(&id);
+    state.telemetry.auth(
+        AuthAction::Register,
+        AuthOutcome::Succeeded,
+        &EventFields {
+            user_id: Some(&id),
+            ..Default::default()
+        },
+    );
     // Give the new account the shared profile/tax library so their first
     // scenario has something to reference.
     seed::seed_user_library(&state.db, &id).await?;
@@ -156,9 +169,15 @@ async fn login(
     headers: HeaderMap,
     Json(body): Json<Credentials>,
 ) -> ApiResult<impl IntoResponse> {
-    let email = normalize_email(&body.email)?;
+    let email = normalize_email(&body.email).inspect_err(|_| {
+        state.telemetry.auth(
+            AuthAction::Login,
+            AuthOutcome::Failed,
+            &EventFields::default(),
+        );
+    })?;
     if state.config.hosted {
-        super::protection::account_attempt(&email)?;
+        super::protection::account_attempt(&state, &email)?;
     }
 
     let row: Option<(String, String)> =
@@ -170,15 +189,41 @@ async fn login(
     // Verify against a dummy hash when the user is missing so that a wrong email
     // and a wrong password take comparable time.
     let Some((id, password_hash)) = row else {
-        let _ = verify_password_async(body.password.clone(), DUMMY_HASH.to_owned()).await?;
+        let _ = verify_password_async(
+            body.password.clone(),
+            DUMMY_HASH.to_owned(),
+            &state.telemetry,
+        )
+        .await?;
+
+        state.telemetry.auth(
+            AuthAction::Login,
+            AuthOutcome::Failed,
+            &EventFields::default(),
+        );
         return Err(ApiError::Forbidden("invalid email or password".into()));
     };
 
-    if !verify_password_async(body.password.clone(), password_hash).await? {
+    if !verify_password_async(body.password.clone(), password_hash, &state.telemetry).await? {
+        state.telemetry.auth(
+            AuthAction::Login,
+            AuthOutcome::Failed,
+            &EventFields::default(),
+        );
         return Err(ApiError::Forbidden("invalid email or password".into()));
     }
 
+    RequestContext::authenticate(&id);
     let token = session::issue(&state.db, &id, session::user_agent_of(&headers).as_deref()).await?;
+
+    state.telemetry.auth(
+        AuthAction::Login,
+        AuthOutcome::Succeeded,
+        &EventFields {
+            user_id: Some(&id),
+            ..Default::default()
+        },
+    );
     let cookie = session::set_cookie_header(&token, state.config.secure_cookies);
     let user = load_user(&state, &id).await?;
 
@@ -194,6 +239,7 @@ async fn logout(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
+    let mut revoked = 0;
     if let Some(cookies) = headers
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -204,12 +250,30 @@ async fn logout(
                 .strip_prefix(session::COOKIE_NAME)
                 .and_then(|r| r.strip_prefix('='))
                 && !token.is_empty()
+                && let Some(user_id) = session::revoke(&state.db, token).await?
             {
-                session::revoke(&state.db, token).await?;
+                RequestContext::authenticate(&user_id);
+                state.telemetry.auth(
+                    AuthAction::Logout,
+                    AuthOutcome::Succeeded,
+                    &EventFields {
+                        user_id: Some(&user_id),
+                        count: Some(1),
+                        ..Default::default()
+                    },
+                );
+                revoked += 1;
             }
         }
     }
 
+    if revoked == 0 {
+        state.telemetry.auth(
+            AuthAction::Logout,
+            AuthOutcome::Replay,
+            &EventFields::default(),
+        );
+    }
     let mut out = axum::http::HeaderMap::new();
     out.insert(
         axum::http::header::SET_COOKIE,
@@ -244,7 +308,7 @@ pub struct UpdateUserProfile {
 async fn update_profile(
     State(state): State<AppState>,
     user: CurrentUser,
-    Json(body): Json<UpdateUserProfile>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdateUserProfile>>,
 ) -> ApiResult<Json<UserResponse>> {
     let display_name = blank_to_none(body.display_name);
     let birth_date = match blank_to_none(body.birth_date) {
@@ -252,7 +316,7 @@ async fn update_profile(
         None => None,
     };
 
-    sqlx::query(
+    let changed = sqlx::query(
         "UPDATE users
             SET display_name = ?1, birth_date = ?2, updated_at = datetime('now')
           WHERE id = ?3",
@@ -261,8 +325,21 @@ async fn update_profile(
     .bind(&birth_date)
     .bind(&user.id)
     .execute(&state.db)
-    .await?;
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        return Err(ApiError::NotFound("user"));
+    }
 
+    state.telemetry.mutation(
+        Resource::User,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     load_user(&state, &user.id).await
 }
 
@@ -279,7 +356,7 @@ pub struct UpdatePreferences {
 async fn update_preferences(
     State(state): State<AppState>,
     user: CurrentUser,
-    Json(body): Json<UpdatePreferences>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdatePreferences>>,
 ) -> ApiResult<Json<UserResponse>> {
     if body.default_iterations < 1 || body.default_iterations as usize > state.config.max_iterations
     {
@@ -294,7 +371,7 @@ async fn update_preferences(
         ));
     }
 
-    sqlx::query(
+    let changed = sqlx::query(
         "UPDATE users
             SET default_iterations = ?1, default_duration_years = ?2, auto_run = ?3,
                 theme_mode = ?4, accent = ?5,
@@ -308,8 +385,21 @@ async fn update_preferences(
     .bind(body.accent)
     .bind(&user.id)
     .execute(&state.db)
-    .await?;
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        return Err(ApiError::NotFound("user"));
+    }
 
+    state.telemetry.mutation(
+        Resource::User,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     load_user(&state, &user.id).await
 }
 
@@ -344,22 +434,48 @@ async fn change_password(
         .fetch_one(&state.db)
         .await?;
 
-    if !verify_password_async(body.current_password, stored).await? {
+    if !verify_password_async(body.current_password, stored, &state.telemetry).await? {
+        state.telemetry.auth(
+            AuthAction::PasswordChanged,
+            AuthOutcome::Failed,
+            &EventFields {
+                user_id: Some(&user.id),
+                ..Default::default()
+            },
+        );
         return Err(ApiError::Forbidden("current password is incorrect".into()));
     }
 
     let password_hash = hash_password_async(body.new_password).await?;
-    sqlx::query("UPDATE users SET password_hash = ?1, updated_at = datetime('now') WHERE id = ?2")
-        .bind(&password_hash)
-        .bind(&user.id)
-        .execute(&state.db)
-        .await?;
+    let mut tx = state.db.begin().await?;
+    let changed = sqlx::query(
+        "UPDATE users SET password_hash = ?1, updated_at = datetime('now') WHERE id = ?2",
+    )
+    .bind(&password_hash)
+    .bind(&user.id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if changed == 0 {
+        return Err(ApiError::NotFound("user"));
+    }
 
-    sqlx::query("DELETE FROM sessions WHERE user_id = ?1 AND public_id <> ?2")
+    let revoked = sqlx::query("DELETE FROM sessions WHERE user_id = ?1 AND public_id <> ?2")
         .bind(&user.id)
         .bind(&user.session_id)
-        .execute(&state.db)
-        .await?;
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    state.telemetry.auth(
+        AuthAction::PasswordChanged,
+        AuthOutcome::Succeeded,
+        &EventFields {
+            user_id: Some(&user.id),
+            count: Some(revoked),
+            ..Default::default()
+        },
+    );
 
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
@@ -417,6 +533,16 @@ async fn revoke_session(
     if deleted == 0 {
         return Err(ApiError::NotFound("session"));
     }
+
+    state.telemetry.auth(
+        AuthAction::SessionRevoked,
+        AuthOutcome::Succeeded,
+        &EventFields {
+            user_id: Some(&user.id),
+            count: Some(deleted),
+            ..Default::default()
+        },
+    );
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -441,16 +567,29 @@ async fn destroy_account(
         .fetch_one(&state.db)
         .await?;
 
-    if !verify_password_async(body.password, stored).await? {
+    if !verify_password_async(body.password, stored, &state.telemetry).await? {
         return Err(ApiError::Forbidden("password is incorrect".into()));
     }
 
     // Every scenario, run, profile and session hangs off `users` with
     // ON DELETE CASCADE, so this one statement takes the whole account.
-    sqlx::query("DELETE FROM users WHERE id = ?1")
+    let deleted = sqlx::query("DELETE FROM users WHERE id = ?1")
         .bind(&user.id)
         .execute(&state.db)
-        .await?;
+        .await?
+        .rows_affected();
+    if deleted == 0 {
+        return Err(ApiError::NotFound("user"));
+    }
+    state.telemetry.mutation(
+        Resource::User,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            count: Some(deleted),
+            ..Default::default()
+        },
+    );
 
     let mut out = axum::http::HeaderMap::new();
     out.insert(
@@ -470,4 +609,18 @@ fn validate_date(text: &str) -> ApiResult<String> {
     text.parse::<jiff::civil::Date>()
         .map(|d| d.to_string())
         .map_err(|e| ApiError::bad_request(format!("invalid birth_date '{text}': {e}")))
+}
+
+impl ActivityFields for UpdateUserProfile {
+    const FIELDS: &'static [&'static str] = &["display_name", "birth_date"];
+}
+
+impl ActivityFields for UpdatePreferences {
+    const FIELDS: &'static [&'static str] = &[
+        "default_iterations",
+        "default_duration_years",
+        "auto_run",
+        "theme_mode",
+        "accent",
+    ];
 }

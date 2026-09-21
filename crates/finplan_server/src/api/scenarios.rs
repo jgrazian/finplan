@@ -6,9 +6,11 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
@@ -129,7 +131,7 @@ async fn fetch(
 async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
-    Json(body): Json<CreateScenario>,
+    Json(Submitted { body, fields }): Json<Submitted<CreateScenario>>,
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
     owned_assumptions(
         &state,
@@ -170,6 +172,19 @@ async fn create(
     .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
 
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Scenario,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+
     let row: Scenario = sqlx::query_as(&format!(
         "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
     ))
@@ -184,7 +199,7 @@ async fn update(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
-    Json(body): Json<UpdateScenario>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdateScenario>>,
 ) -> ApiResult<Json<Scenario>> {
     super::owned_scenario(&state.db, id, &user.id).await?;
     if body
@@ -214,7 +229,7 @@ async fn update(
         .transpose()?;
 
     // COALESCE leaves any field the caller omitted untouched.
-    sqlx::query(
+    let affected = sqlx::query(
         "UPDATE scenarios SET
             name                 = COALESCE(?2, name),
             description          = COALESCE(?3, description),
@@ -238,8 +253,24 @@ async fn update(
     .bind(body.collect_ledger.map(i64::from))
     .execute(&state.db)
     .await
-    .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?
+    .rows_affected();
 
+    if affected == 0 {
+        return Err(ApiError::NotFound("scenario"));
+    }
+
+    state.telemetry.mutation(
+        Resource::Scenario,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     let row: Scenario = sqlx::query_as(&format!(
         "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
     ))
@@ -264,6 +295,17 @@ async fn destroy(
     if affected == 0 {
         return Err(ApiError::NotFound("scenario"));
     }
+
+    state.telemetry.mutation(
+        Resource::Scenario,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(id),
+            resource_id: Some(id),
+            ..Default::default()
+        },
+    );
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -283,13 +325,28 @@ async fn duplicate(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
-    Json(body): Json<DuplicateRequest>,
+    Json(Submitted { body, fields }): Json<Submitted<DuplicateRequest>>,
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
     let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
     let new_id = crate::domain::clone_into(&mut tx, &graph, body.name.trim()).await?;
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Scenario,
+        Operation::Duplicated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(new_id),
+            resource_id: Some(new_id),
+            fields: &fields,
+            count: Some(
+                (1 + graph.accounts.len() + graph.assets.len() + graph.events.len()) as u64,
+            ),
+            ..Default::default()
+        },
+    );
 
     let row: Scenario = sqlx::query_as(&format!(
         "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
@@ -355,4 +412,33 @@ async fn owned_assumptions(
         }
     }
     Ok(())
+}
+
+impl ActivityFields for CreateScenario {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "start_date",
+        "birth_date",
+        "duration_years",
+        "inflation_profile_id",
+        "tax_config_id",
+    ];
+}
+
+impl ActivityFields for UpdateScenario {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "start_date",
+        "birth_date",
+        "duration_years",
+        "inflation_profile_id",
+        "tax_config_id",
+        "collect_ledger",
+    ];
+}
+
+impl ActivityFields for DuplicateRequest {
+    const FIELDS: &'static [&'static str] = &["name"];
 }

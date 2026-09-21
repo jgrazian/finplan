@@ -16,6 +16,7 @@
 
 use crate::db::Db;
 use crate::error::ApiResult;
+use crate::observability::{Component, ErrorClass, Telemetry};
 
 use super::results::{CachedSweep, SweepResults};
 
@@ -48,7 +49,12 @@ pub async fn save(
 /// A grid stored by a previous version of the server may no longer parse into
 /// the current [`SweepResults`]. That is a cache miss and not an error: the
 /// screen offers to run a sweep, which is what it would have done anyway.
-pub async fn load(db: &Db, scenario_id: i64, user_id: &str) -> ApiResult<Option<CachedSweep>> {
+pub async fn load(
+    db: &Db,
+    scenario_id: i64,
+    user_id: &str,
+    telemetry: &Telemetry,
+) -> ApiResult<Option<CachedSweep>> {
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT results, created_at FROM sweep_cache WHERE scenario_id = ?1 AND user_id = ?2",
     )
@@ -65,10 +71,14 @@ pub async fn load(db: &Db, scenario_id: i64, user_id: &str) -> ApiResult<Option<
             scenario_id,
             created_at,
             results,
-            layout: load_layout(db, scenario_id, user_id).await?,
+            layout: load_layout(db, scenario_id, user_id, telemetry).await?,
         })),
-        Err(err) => {
-            tracing::warn!(scenario_id, error = %err, "discarding unreadable cached sweep");
+        Err(_) => {
+            telemetry.recoverable_error_event(
+                Component::Analysis,
+                ErrorClass::Preparation,
+                "analysis.cache_failed",
+            );
             Ok(None)
         }
     }
@@ -83,6 +93,7 @@ pub async fn load_layout(
     db: &Db,
     scenario_id: i64,
     user_id: &str,
+    telemetry: &Telemetry,
 ) -> Result<Option<serde_json::Value>, sqlx::Error> {
     let row: Option<String> = sqlx::query_scalar(
         "SELECT graphs FROM sweep_layout WHERE scenario_id = ?1 AND user_id = ?2",
@@ -94,8 +105,12 @@ pub async fn load_layout(
 
     Ok(row.and_then(|json| match serde_json::from_str(&json) {
         Ok(value) => Some(value),
-        Err(err) => {
-            tracing::warn!(scenario_id, error = %err, "discarding unreadable sweep layout");
+        Err(_) => {
+            telemetry.recoverable_error_event(
+                Component::Analysis,
+                ErrorClass::Preparation,
+                "analysis.cache_failed",
+            );
             None
         }
     }))

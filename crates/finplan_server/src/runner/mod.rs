@@ -1,198 +1,500 @@
-//! Background execution of Monte Carlo runs.
-//!
-//! `POST /runs` inserts a `queued` row and hands the id to `RunQueue`. A pool of
-//! workers picks runs up, compiles the scenario, executes the simulation on a
-//! blocking thread (it is CPU-bound and internally rayon-parallel), mirrors
-//! progress into the `runs` row and finally persists results.
-//!
-//! Because run state lives in SQLite rather than in memory, a crash mid-run is
-//! recoverable: `requeue_orphans` re-queues anything left in `running` at boot.
-
+//! Bounded background Monte Carlo execution with persisted restart recovery.
 pub mod inputs;
 pub mod ledger;
 pub mod store;
-
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
-
-use finplan_core::model::{ConvergenceConfig, MonteCarloConfig, MonteCarloProgress};
-use finplan_core::simulation::monte_carlo_simulate_with_progress;
-use tokio::sync::{Mutex, Semaphore, mpsc};
+pub(crate) mod telemetry;
+#[cfg(test)]
+mod tests;
 
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::db::Db;
+use crate::error::{ApiError, ApiResult};
+use crate::observability::{
+    Component, ErrorClass, JobContext, JobKind, Origin, Outcome, Phase, QueueExit, RejectionReason,
+    Telemetry,
+};
+use finplan_core::model::{ConvergenceConfig, MonteCarloConfig, MonteCarloProgress};
+use finplan_core::simulation::monte_carlo_simulate_with_progress;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
+use telemetry::{AbortTask, Attempt, PhaseTimer, Submitted};
+use tokio::sync::{Mutex, Semaphore, mpsc};
+use tracing::{Instrument, instrument::WithSubscriber};
 
-/// Handle used by request handlers to enqueue work and cancel in-flight runs.
+struct Waiting {
+    context: JobContext,
+    submitted: Submitted,
+    resolved: AtomicBool,
+}
+impl Waiting {
+    fn exit(&self, telemetry: &Telemetry, exit: QueueExit) {
+        if !self.resolved.swap(true, Ordering::Relaxed) {
+            telemetry.queue_wait(JobKind::Run, exit, self.submitted.elapsed());
+            if matches!(exit, QueueExit::Canceled) {
+                telemetry.canceled_before_start(JobKind::Run);
+                self.context.event("run.canceled");
+            }
+        }
+    }
+}
+struct Work {
+    run_id: i64,
+    admission: crate::billing::ComputePermit,
+    waiting: Arc<Waiting>,
+}
+
 #[derive(Clone)]
 pub struct RunQueue {
-    tx: mpsc::Sender<(i64, crate::billing::ComputePermit)>,
+    tx: mpsc::Sender<Work>,
+    #[cfg(test)]
+    hooks: Arc<StdMutex<HashMap<i64, Arc<tests::Hook>>>>,
+    #[cfg(test)]
+    worker_permits: Arc<Semaphore>,
     db: Db,
-    /// Cancellation flags for runs currently executing, keyed by run id.
-    in_flight: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>,
+    telemetry: Telemetry,
+    // Held across claim and flag registration, and across cancel's transition.
+    in_flight: Arc<StdMutex<HashMap<i64, Arc<AtomicBool>>>>,
+    transitions: Arc<Mutex<()>>,
+    waiting: Arc<StdMutex<HashMap<i64, Arc<Waiting>>>>,
 }
 
-impl RunQueue {
-    pub async fn enqueue(&self, run_id: i64) -> crate::error::ApiResult<()> {
-        let user: String = sqlx::query_scalar("SELECT user_id FROM runs WHERE id=?")
-            .bind(run_id)
-            .fetch_one(&self.db)
-            .await?;
-        let admission = crate::billing::admit_compute(&user)?;
-        self.enqueue_admitted(run_id, admission)
+/// Synchronous cleanup also runs when an async worker is aborted or unwinds.
+struct RunningRegistration {
+    run_id: i64,
+    flags: Arc<StdMutex<HashMap<i64, Arc<AtomicBool>>>>,
+    cancel: Arc<AtomicBool>,
+}
+impl Drop for RunningRegistration {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        let mut flags = self.flags.lock().unwrap_or_else(|e| e.into_inner());
+        if flags
+            .get(&self.run_id)
+            .is_some_and(|flag| Arc::ptr_eq(flag, &self.cancel))
+        {
+            flags.remove(&self.run_id);
+        }
     }
+}
+struct PendingCleanup {
+    run_id: i64,
+    waiting: Arc<StdMutex<HashMap<i64, Arc<Waiting>>>>,
+    item: Arc<Waiting>,
+}
+impl Drop for PendingCleanup {
+    fn drop(&mut self) {
+        let mut pending = self.waiting.lock().unwrap_or_else(|e| e.into_inner());
+        if pending
+            .get(&self.run_id)
+            .is_some_and(|item| Arc::ptr_eq(item, &self.item))
+        {
+            pending.remove(&self.run_id);
+        }
+    }
+}
 
-    pub fn enqueue_admitted(
+/// A run id alone is not an execution lease: SQLite can reuse it after a
+/// cascade. Check the current attempt generation and stored ownership while
+/// holding the same lock as submission dispatch and worker claims.
+#[derive(Clone)]
+struct ExecutionLease {
+    db: Db,
+    context: JobContext,
+    flags: Arc<StdMutex<HashMap<i64, Arc<AtomicBool>>>>,
+    cancel: Arc<AtomicBool>,
+    transitions: Arc<Mutex<()>>,
+}
+impl ExecutionLease {
+    async fn lock(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, RunError> {
+        let guard = self.transitions.lock().await;
+        let current = self
+            .flags
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&self.context.job_id)
+            .is_some_and(|flag| Arc::ptr_eq(flag, &self.cancel));
+        if !current {
+            return Err(RunError::Deleted);
+        }
+        let present: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM runs WHERE id=? AND user_id=? AND scenario_id=? AND status='running')")
+            .bind(self.context.job_id).bind(&self.context.user_id).bind(self.context.scenario_id).fetch_one(&self.db).await?;
+        if !present {
+            return Err(RunError::Deleted);
+        }
+        Ok(guard)
+    }
+}
+
+/// Owned channel capacity, reserved before the run's database transaction.
+/// Dropping on validation/commit failure releases both channel and admission.
+pub struct ReservedRun {
+    permit: mpsc::OwnedPermit<Work>,
+    queue: RunQueue,
+    admission: crate::billing::ComputePermit,
+}
+impl ReservedRun {
+    pub fn send(self, run_id: i64, context: JobContext) {
+        self.send_with_clock(run_id, context, Submitted::now());
+    }
+    fn send_with_clock(self, run_id: i64, context: JobContext, submitted: Submitted) {
+        let item = Arc::new(Waiting {
+            context,
+            submitted,
+            resolved: AtomicBool::new(false),
+        });
+        let waiting = {
+            let mut pending = self.queue.waiting.lock().unwrap_or_else(|e| e.into_inner());
+            if item.context.origin == Origin::Request {
+                if let Some(previous) = pending.insert(run_id, item.clone()) {
+                    previous.exit(&self.queue.telemetry, QueueExit::Deleted);
+                }
+                item
+            } else {
+                pending.entry(run_id).or_insert(item).clone()
+            }
+        };
+        self.permit.send(Work {
+            run_id,
+            admission: self.admission,
+            waiting,
+        });
+    }
+}
+impl RunQueue {
+    /// Serialize a submission transaction and dispatch with worker claims. Take
+    /// this before BEGIN so a worker never waits on its write while holding it.
+    pub async fn submission_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.transitions.lock().await
+    }
+    pub fn reserve(
         &self,
-        run_id: i64,
         admission: crate::billing::ComputePermit,
-    ) -> crate::error::ApiResult<()> {
-        self.tx.try_send((run_id, admission)).map_err(|_| {
-            crate::error::ApiError::Conflict("Run queue unavailable. Retry shortly.".into())
+        origin: Origin,
+    ) -> ApiResult<ReservedRun> {
+        let permit = self.tx.clone().try_reserve_owned().map_err(|err| {
+            let reason = match err {
+                mpsc::error::TrySendError::Full(_) => RejectionReason::QueueFull,
+                mpsc::error::TrySendError::Closed(_) => RejectionReason::QueueClosed,
+            };
+            self.telemetry.rejection(reason, origin);
+            ApiError::Conflict("Run queue unavailable. Retry shortly.".into())
+        })?;
+        Ok(ReservedRun {
+            permit,
+            queue: self.clone(),
+            admission,
         })
     }
-
-    /// Signal a running simulation to stop. Returns false if the run is not
-    /// currently executing (it may be queued, or already finished).
-    pub async fn cancel(&self, run_id: i64) -> bool {
-        let in_flight = self.in_flight.lock().await;
-        match in_flight.get(&run_id) {
-            Some(flag) => {
-                flag.store(true, Ordering::Relaxed);
-                true
+    pub async fn enqueue(&self, run_id: i64) -> ApiResult<()> {
+        let (user, scenario, age): (String, i64, f64) = sqlx::query_as(
+            "SELECT user_id, scenario_id, CAST(unixepoch() - unixepoch(created_at) AS REAL) FROM runs WHERE id=? AND status='queued'")
+            .bind(run_id).fetch_optional(&self.db).await?.ok_or(ApiError::NotFound("queued run"))?;
+        let admission =
+            crate::billing::admit_compute_observed(&user, &self.telemetry, Origin::Recovery)?;
+        let reservation = self.reserve(admission, Origin::Recovery)?;
+        let context = JobContext::new(JobKind::Run, Origin::Recovery, &user, scenario, run_id);
+        context.event("run.recovered");
+        self.telemetry.recovered();
+        reservation.send_with_clock(run_id, context, Submitted::recovered(age, &self.telemetry));
+        Ok(())
+    }
+    /// Resolve against the real transition, not a stale status read in a handler.
+    pub async fn cancel(&self, run_id: i64) -> ApiResult<bool> {
+        self.cancel_matching(run_id, None).await
+    }
+    pub async fn cancel_owned(
+        &self,
+        run_id: i64,
+        user_id: &str,
+        scenario_id: i64,
+    ) -> ApiResult<bool> {
+        self.cancel_matching(run_id, Some((user_id, scenario_id)))
+            .await
+    }
+    async fn cancel_matching(&self, run_id: i64, owner: Option<(&str, i64)>) -> ApiResult<bool> {
+        let _transition = self.transitions.lock().await;
+        if let Some((user_id, scenario_id)) = owner {
+            let owned: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM runs WHERE id=? AND user_id=? AND scenario_id=?)",
+            )
+            .bind(run_id)
+            .bind(user_id)
+            .bind(scenario_id)
+            .fetch_one(&self.db)
+            .await?;
+            if !owned {
+                return Err(ApiError::NotFound("run"));
             }
-            None => false,
+        }
+        let changed = sqlx::query("UPDATE runs SET status='canceled', finished_at=datetime('now') WHERE id=? AND status='queued'")
+            .bind(run_id).execute(&self.db).await?.rows_affected();
+        if changed == 1 {
+            let pending = self
+                .waiting
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&run_id);
+            if let Some(waiting) = pending {
+                waiting.exit(&self.telemetry, QueueExit::Canceled);
+            } else {
+                let (user, scenario, age): (String,i64,f64) = sqlx::query_as("SELECT user_id,scenario_id,CAST(unixepoch()-unixepoch(created_at) AS REAL) FROM runs WHERE id=?")
+                    .bind(run_id).fetch_one(&self.db).await?;
+                self.telemetry
+                    .queue_wait(JobKind::Run, QueueExit::Canceled, age.max(0.0));
+                self.telemetry.canceled_before_start(JobKind::Run);
+                JobContext::new(JobKind::Run, Origin::Recovery, &user, scenario, run_id)
+                    .event("run.canceled");
+            }
+            return Ok(true);
+        }
+        if let Some(flag) = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&run_id)
+        {
+            flag.store(true, Ordering::Relaxed);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    pub fn deleted(&self, run_id: i64, queued_age: Option<f64>) {
+        if let Some(waiting) = self
+            .waiting
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&run_id)
+        {
+            waiting.exit(&self.telemetry, QueueExit::Deleted);
+        } else if let Some(age) = queued_age {
+            self.telemetry
+                .queue_wait(JobKind::Run, QueueExit::Deleted, age.max(0.0));
         }
     }
 }
 
-/// Spawn the worker pool and return the queue handle.
 pub fn spawn(db: Db, workers: usize) -> RunQueue {
-    let (tx, rx) = mpsc::channel::<(i64, crate::billing::ComputePermit)>(16);
-    let in_flight: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>> = Arc::new(Mutex::new(HashMap::new()));
-
+    spawn_with_telemetry(db, workers, Telemetry::new(workers))
+}
+pub fn spawn_with_telemetry(db: Db, workers: usize, telemetry: Telemetry) -> RunQueue {
+    let (tx, mut rx) = mpsc::channel::<Work>(16);
+    let in_flight = Arc::new(StdMutex::new(HashMap::new()));
+    let transitions = Arc::new(Mutex::new(()));
+    let waiting = Arc::new(StdMutex::new(HashMap::new()));
+    let permits = Arc::new(Semaphore::new(workers.max(1)));
+    #[cfg(test)]
+    let hooks = Arc::new(StdMutex::new(HashMap::<i64, Arc<tests::Hook>>::new()));
     let queue = RunQueue {
+        #[cfg(test)]
+        hooks: hooks.clone(),
+        #[cfg(test)]
+        worker_permits: permits.clone(),
         tx,
         db: db.clone(),
+        telemetry: telemetry.clone(),
         in_flight: in_flight.clone(),
+        transitions: transitions.clone(),
+        waiting: waiting.clone(),
     };
-
-    let permits = Arc::new(Semaphore::new(workers.max(1)));
-    let rx = Arc::new(Mutex::new(rx));
-
     tokio::spawn(async move {
-        loop {
-            let (run_id, admission) = {
-                let mut guard = rx.lock().await;
-                match guard.recv().await {
-                    Some(id) => id,
-                    None => break,
-                }
-            };
-
-            // Acquire before spawning so at most `workers` runs execute at once.
-            let permit = match permits.clone().acquire_owned().await {
-                Ok(p) => p,
-                Err(_) => break,
-            };
-
+        while let Some(work) = rx.recv().await {
+            let Ok(permit) = permits.clone().acquire_owned().await else { break; };
             let db = db.clone();
             let in_flight = in_flight.clone();
+            let transitions = transitions.clone();
+            let waiting = waiting.clone();
+            let telemetry = telemetry.clone();
+            #[cfg(test)] let hooks = hooks.clone();
+            let span = work.waiting.context.span();
             tokio::spawn(async move {
-                let _admission = admission;
+                let _permit = permit;
+                let _admission = work.admission;
+                let run_id = work.run_id;
+                let _pending_cleanup = PendingCleanup {run_id, waiting: waiting.clone(), item: work.waiting.clone()};
+                // A direct cancellation/deletion can resolve this queued item
+                // before dispatch. SQLite can reuse deleted INTEGER ids, so a
+                // superseded delivery must never claim a later submission.
+                let current = waiting.lock().unwrap_or_else(|e| e.into_inner()).get(&run_id)
+                    .is_some_and(|item| Arc::ptr_eq(item, &work.waiting));
+                if work.waiting.resolved.load(Ordering::Relaxed) || !current { return; }
                 let cancel = Arc::new(AtomicBool::new(false));
-                in_flight.lock().await.insert(run_id, cancel.clone());
-
-                if let Err(err) = execute(&db, run_id, cancel).await {
-                    tracing::error!(run_id, error = %err, "run failed");
-                    let _ = store::mark_failed(&db, run_id, &err.to_string()).await;
+                let claim = {
+                    let _transition = transitions.lock().await;
+                    let current = waiting.lock().unwrap_or_else(|e| e.into_inner()).get(&run_id)
+                        .is_some_and(|item| Arc::ptr_eq(item, &work.waiting));
+                    if work.waiting.resolved.load(Ordering::Relaxed) || !current { return; }
+                    let claimed = sqlx::query("UPDATE runs SET status='running', started_at=datetime('now') WHERE id=? AND user_id=? AND scenario_id=? AND status='queued'")
+                        .bind(run_id).bind(&work.waiting.context.user_id).bind(work.waiting.context.scenario_id).execute(&db).await;
+                    if claimed.as_ref().is_ok_and(|r| r.rows_affected() == 1) { in_flight.lock().unwrap_or_else(|e| e.into_inner()).insert(run_id, cancel.clone()); }
+                    claimed
+                };
+                let claimed = match claim {
+                    Ok(result) => result.rows_affected() == 1,
+                    Err(_) => {
+                        telemetry.count_error(Component::Run, ErrorClass::Database);
+                        tracing::error!(event="run.claim_failed", error_class="database");
+                        return;
+                    }
+                };
+                if !claimed {
+                    // A deleted queued item can disappear through a cascading
+                    // scenario/user delete. Direct cancel/delete already resolved it.
+                    match sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM runs WHERE id=?)").bind(run_id).fetch_one(&db).await {
+                        Ok(false) => work.waiting.exit(&telemetry, QueueExit::Deleted),
+                        Ok(true) => {},
+                        Err(_) => { telemetry.count_error(Component::Run, ErrorClass::Database); tracing::warn!(event="run.queue_resolution_failed", error_class="database"); }
+                    }
+                    return;
                 }
-
-                in_flight.lock().await.remove(&run_id);
-                drop(permit);
-            });
+                let _registration = RunningRegistration {run_id, flags: in_flight.clone(), cancel: cancel.clone()};
+                {
+                    let mut pending = waiting.lock().unwrap_or_else(|e| e.into_inner());
+                    if pending.get(&run_id).is_some_and(|item| Arc::ptr_eq(item, &work.waiting)) {
+                        pending.remove(&run_id);
+                    }
+                }
+                work.waiting.exit(&telemetry, QueueExit::Started);
+                work.waiting.context.event("run.started");
+                let _running = telemetry.job_started(JobKind::Run);
+                let mut attempt = Attempt::new(&telemetry, &work.waiting.context, work.waiting.submitted.clone());
+                #[cfg(test)] let hook = hooks.lock().unwrap().remove(&run_id);
+                #[cfg(test)] if let Some(hook) = &hook { hook.claimed.notify_one(); hook.proceed.notified().await; }
+                let lease = ExecutionLease {db:db.clone(),context:work.waiting.context.clone(),flags:in_flight.clone(),cancel:cancel.clone(),transitions:transitions.clone()};
+                let result = execute(&db, run_id, cancel, &telemetry, &lease,
+                    #[cfg(test)] hook,
+                ).await;
+                let outcome = match result {
+                    Ok(()) => Outcome::Succeeded,
+                    Err(RunError::Canceled) => Outcome::Canceled,
+                    Err(RunError::Deleted) => Outcome::Interrupted,
+                    Err(err) => {
+                        telemetry.count_error(Component::Run, err.class());
+                        attempt.failure(err.class());
+                        let _phase = PhaseTimer::new(&telemetry, JobKind::Run, Phase::Persist);
+                        let persisted = async {
+                            let _lease = lease.lock().await?;
+                            store::mark_failed(&db, run_id, err.public_message()).await.map_err(|_| RunError::Persistence)
+                        }.await;
+                        match persisted {
+                            Ok(true) => Outcome::Failed,
+                            Ok(false) | Err(RunError::Deleted) => Outcome::Interrupted,
+                            Err(_) => {
+                                telemetry.count_error(Component::Run, ErrorClass::Persistence);
+                                tracing::error!(event="run.terminal_persistence_failed", error_class="persistence");
+                                Outcome::Interrupted
+                            }
+                        }
+                    }
+                };
+                attempt.finish(outcome);
+            }.instrument(span).with_current_subscriber());
         }
-    });
-
+    }.with_current_subscriber());
     queue
 }
 
-/// Anything a queued run may need to be re-driven after a restart.
 pub async fn requeue_orphans(db: &Db, queue: &RunQueue) -> Result<(), sqlx::Error> {
-    // A run marked `running` with no worker behind it is an orphan from a
-    // previous process; put it back in the queue from the start.
-    sqlx::query(
-        "UPDATE runs SET status = 'queued', completed_iterations = 0, started_at = NULL
-          WHERE status = 'running'",
-    )
-    .execute(db)
-    .await?;
-
-    // Replay admission in the background so a large persisted backlog neither
-    // allocates an unbounded queue nor prevents the health endpoint starting.
-    let upper: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(id),0) FROM runs")
-        .fetch_one(db)
-        .await?;
+    tracing::info!(event = "recovery.started");
+    let initialization = async {
+        sqlx::query("UPDATE runs SET status='queued', completed_iterations=0, started_at=NULL WHERE status='running'").execute(db).await?;
+        sqlx::query_scalar::<_,i64>("SELECT COALESCE(MAX(id),0) FROM runs").fetch_one(db).await
+    }.await;
+    let upper = match initialization {
+        Ok(upper) => upper,
+        Err(err) => {
+            queue
+                .telemetry
+                .count_error(Component::Recovery, ErrorClass::Database);
+            tracing::error!(event = "recovery.failed", error_class = "database");
+            return Err(err);
+        }
+    };
     let db = db.clone();
     let queue = queue.clone();
     tokio::spawn(async move {
-        let mut after = 0_i64;
+        let mut after = 0;
+        let mut recovered = 0_u64;
         loop {
-            let next: Result<Option<i64>, _> = sqlx::query_scalar(
-                "SELECT id FROM runs WHERE status='queued' AND id>? AND id<=? ORDER BY id LIMIT 1",
-            )
-            .bind(after)
-            .bind(upper)
-            .fetch_optional(&db)
-            .await;
-            let Ok(Some(id)) = next else {
-                break;
+            let next = sqlx::query_scalar::<_,i64>("SELECT id FROM runs WHERE status='queued' AND id>? AND id<=? ORDER BY id LIMIT 1")
+                .bind(after).bind(upper).fetch_optional(&db).await;
+            let id = match next {
+                Ok(Some(id)) => id,
+                Ok(None) => break,
+                Err(_) => { queue.telemetry.count_error(Component::Recovery, ErrorClass::Database); tracing::error!(event="recovery.failed", error_class="database"); return; }
             };
+            let mut failures = 0_u64;
             loop {
                 match queue.enqueue(id).await {
-                    Ok(()) => break,
-                    Err(crate::error::ApiError::Conflict(_)) => {
-                        tokio::time::sleep(Duration::from_millis(250)).await
+                    Ok(()) => { recovered += 1; break; },
+                    Err(ApiError::Conflict(_)) => tokio::time::sleep(Duration::from_millis(250)).await,
+                    Err(ApiError::NotFound(_)) => break,
+                    Err(_) => {
+                        failures += 1;
+                        queue.telemetry.count_error(Component::Recovery, ErrorClass::Database);
+                        if failures == 1 || failures.is_multiple_of(60) { tracing::warn!(event="recovery.admission_failed", error_class="database", failures); }
+                        tokio::time::sleep(Duration::from_secs(1)).await;
                     }
-                    Err(_) => break,
                 }
             }
             after = id;
         }
-    });
+        tracing::info!(event="recovery.completed", recovered);
+    }.with_current_subscriber());
     Ok(())
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 enum RunError {
-    #[error(transparent)]
-    Db(#[from] sqlx::Error),
-    #[error("{0}")]
-    Compile(String),
-    #[error("simulation failed: {0}")]
-    Engine(String),
-    #[error("canceled")]
+    Db,
+    Preparation,
+    Engine,
+    EnginePanic,
+    Persistence,
     Canceled,
+    Deleted,
 }
-
-async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), RunError> {
-    // Claim the run. The status guard makes this idempotent if the same id is
-    // ever delivered twice.
-    let claimed = sqlx::query(
-        "UPDATE runs SET status = 'running', started_at = datetime('now')
-          WHERE id = ?1 AND status = 'queued'",
-    )
-    .bind(run_id)
-    .execute(db)
-    .await?
-    .rows_affected();
-
-    if claimed == 0 {
-        tracing::debug!(run_id, "run was already claimed or canceled");
-        return Ok(());
+impl From<sqlx::Error> for RunError {
+    fn from(error: sqlx::Error) -> Self {
+        if matches!(error, sqlx::Error::RowNotFound) {
+            Self::Deleted
+        } else {
+            Self::Db
+        }
     }
-
+}
+impl RunError {
+    fn class(&self) -> ErrorClass {
+        match self {
+            Self::Db => ErrorClass::Database,
+            Self::Preparation => ErrorClass::Preparation,
+            Self::Engine => ErrorClass::Engine,
+            Self::EnginePanic => ErrorClass::EnginePanic,
+            Self::Persistence => ErrorClass::Persistence,
+            _ => ErrorClass::Internal,
+        }
+    }
+    fn public_message(&self) -> &'static str {
+        match self {
+            Self::Preparation => "Run inputs are unavailable or invalid; create a new run",
+            Self::Engine => "Simulation failed",
+            Self::EnginePanic => "Simulation worker failed",
+            Self::Persistence => "Unable to save run results",
+            _ => "Run processing failed",
+        }
+    }
+}
+async fn execute(
+    db: &Db,
+    run_id: i64,
+    cancel: Arc<AtomicBool>,
+    telemetry: &Telemetry,
+    lease: &ExecutionLease,
+    #[cfg(test)] hook: Option<Arc<tests::Hook>>,
+) -> Result<(), RunError> {
+    let prepare = PhaseTimer::new(telemetry, JobKind::Run, Phase::Prepare);
+    let preparation_lease = lease.lock().await?;
     let params: (
         i64,
         String,
@@ -237,15 +539,12 @@ async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), Ru
             .fetch_one(db)
             .await?;
     if version.as_deref() != Some(inputs::MODEL_VERSION) {
-        return Err(RunError::Compile(
-            "Run inputs are unavailable or use a different model version; create a new run".into(),
-        ));
+        return Err(RunError::Preparation);
     }
-    let graph: ScenarioGraph = serde_json::from_str(snapshot.as_deref().ok_or_else(|| {
-        RunError::Compile("Historical run has no input snapshot; create a new run".into())
-    })?)
-    .map_err(|e| RunError::Compile(e.to_string()))?;
-    let compiled = compile::compile(&graph).map_err(|e| RunError::Compile(e.to_string()))?;
+    let graph: ScenarioGraph =
+        serde_json::from_str(snapshot.as_deref().ok_or(RunError::Preparation)?)
+            .map_err(|_| RunError::Preparation)?;
+    let compiled = compile::compile(&graph).map_err(|_| RunError::Preparation)?;
 
     // On a converging run `iterations` is the minimum sample before the metric
     // is tested, and `max_iterations` the ceiling. The row always carries a
@@ -271,59 +570,144 @@ async fn execute(db: &Db, run_id: i64, cancel: Arc<AtomicBool>) -> Result<(), Ru
         seed: seed.map(|s| s as u64),
     };
 
+    drop(prepare);
+    drop(preparation_lease);
     let completed = Arc::new(AtomicUsize::new(0));
-    let progress = MonteCarloProgress::from_atomics(completed.clone(), cancel.clone());
-
-    // Mirror the atomic counter into the runs row so pollers see live progress.
+    let progress = MonteCarloProgress::from_atomics_accumulating(completed.clone(), cancel.clone());
     let reporter = {
         let db = db.clone();
-        let completed = completed.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_millis(400));
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut last = 0usize;
-            loop {
-                ticker.tick().await;
-                let current = completed.load(Ordering::Relaxed);
-                if current != last {
-                    last = current;
-                    let _ = sqlx::query(
-                        "UPDATE runs SET completed_iterations = ?2 WHERE id = ?1 AND status = 'running'",
+        let telemetry = telemetry.clone();
+        let lease = lease.clone();
+        let span = tracing::Span::current();
+        AbortTask(tokio::spawn(
+            async move {
+                let mut ticker = tokio::time::interval(Duration::from_millis(400));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut last = 0;
+                let mut failures = 0_u64;
+                loop {
+                    ticker.tick().await;
+                    let current = completed.load(Ordering::Relaxed);
+                    if current == last {
+                        continue;
+                    }
+                    let _lease = match lease.lock().await {
+                        Ok(guard) => guard,
+                        Err(RunError::Deleted) => {
+                            lease.cancel.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        Err(_) => {
+                            failures += 1;
+                            telemetry.recoverable_error_event(
+                                Component::Run,
+                                ErrorClass::Database,
+                                "run.progress_failed",
+                            );
+                            continue;
+                        }
+                    };
+                    match sqlx::query(
+                        "UPDATE runs SET completed_iterations=?2 WHERE id=?1 AND status='running'",
                     )
                     .bind(run_id)
                     .bind(current as i64)
                     .execute(&db)
-                    .await;
+                    .await
+                    {
+                        Ok(_) => {
+                            last = current;
+                            if failures != 0 {
+                                tracing::info!(event = "run.progress_recovered", failures);
+                                failures = 0;
+                            }
+                        }
+                        Err(_) => {
+                            failures += 1;
+                            telemetry.count_error(Component::Run, ErrorClass::Database);
+                            if failures == 1 || failures.is_multiple_of(60) {
+                                tracing::warn!(
+                                    event = "run.progress_failed",
+                                    error_class = "database",
+                                    failures
+                                );
+                            }
+                        }
+                    }
                 }
             }
-        })
+            .instrument(span)
+            .with_current_subscriber(),
+        ))
     };
-
     let config = compiled.config.clone();
+    let blocking_queued = Instant::now();
+    let span = tracing::Span::current();
+    let dispatch = tracing::dispatcher::get_default(Clone::clone);
+    let worker_telemetry = telemetry.clone();
+    #[cfg(test)]
+    let panic = hook.as_ref().is_some_and(|hook| hook.panic);
     let outcome = tokio::task::spawn_blocking(move || {
-        monte_carlo_simulate_with_progress(&config, &mc_config, &progress)
+        tracing::dispatcher::with_default(&dispatch, || {
+            span.in_scope(|| {
+                worker_telemetry.phase(
+                    JobKind::Run,
+                    Phase::BlockingWait,
+                    blocking_queued.elapsed().as_secs_f64(),
+                );
+                let engine_started = Instant::now();
+                let _engine = PhaseTimer::new(&worker_telemetry, JobKind::Run, Phase::Engine);
+                #[cfg(test)]
+                if panic {
+                    panic!("synthetic engine panic");
+                }
+                (
+                    monte_carlo_simulate_with_progress(&config, &mc_config, &progress),
+                    engine_started.elapsed().as_secs_f64(),
+                )
+            })
+        })
     })
     .await;
-
-    reporter.abort();
-
-    // A cancel flag set during the run makes the engine return early with a
-    // partial result, so check the flag before interpreting the outcome.
-    if cancel.load(Ordering::Relaxed) {
-        store::mark_canceled(db, run_id).await?;
-        return Err(RunError::Canceled);
+    #[cfg(test)]
+    if let Some(hook) = hook
+        && hook.pause_after_engine
+    {
+        hook.engine_finished.notify_one();
+        hook.finish_allowed.notified().await;
     }
-
-    let summary = match outcome {
-        Ok(Ok(summary)) => summary,
-        Ok(Err(err)) => return Err(RunError::Engine(err.to_string())),
-        Err(join_err) => {
-            return Err(RunError::Engine(format!(
-                "simulation worker panicked: {join_err}"
-            )));
-        }
+    drop(reporter);
+    if cancel.load(Ordering::Relaxed) {
+        let _persist = PhaseTimer::new(telemetry, JobKind::Run, Phase::Persist);
+        let _lease = lease.lock().await?;
+        return if store::mark_canceled(db, run_id)
+            .await
+            .map_err(|_| RunError::Persistence)?
+        {
+            Err(RunError::Canceled)
+        } else {
+            Err(RunError::Deleted)
+        };
+    }
+    let (summary, engine_seconds) = match outcome {
+        Ok((Ok(summary), seconds)) => (summary, seconds),
+        Ok((Err(_), _)) => return Err(RunError::Engine),
+        Err(_) => return Err(RunError::EnginePanic),
     };
-
-    store::persist(db, run_id, &compiled, &summary).await?;
+    let _persist = PhaseTimer::new(telemetry, JobKind::Run, Phase::Persist);
+    let _lease = lease.lock().await?;
+    match store::persist(db, run_id, &compiled, &summary).await {
+        Ok(()) => {}
+        Err(sqlx::Error::RowNotFound) => return Err(RunError::Deleted),
+        Err(_) => return Err(RunError::Persistence),
+    }
+    telemetry.iterations_completed(summary.stats.num_iterations as u64, engine_seconds);
+    tracing::info!(
+        event = "run.samples_persisted",
+        actual_iterations = summary.stats.num_iterations,
+        engine_seconds,
+        iterations_per_second =
+            summary.stats.num_iterations as f64 / engine_seconds.max(f64::MIN_POSITIVE)
+    );
     Ok(())
 }

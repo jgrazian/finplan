@@ -6,8 +6,10 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
@@ -183,7 +185,7 @@ async fn fetch(
 async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
-    Json(body): Json<CreateTaxConfig>,
+    Json(Submitted { body, fields }): Json<Submitted<CreateTaxConfig>>,
 ) -> ApiResult<(StatusCode, Json<TaxConfig>)> {
     let brackets = validate_brackets(&body.federal_brackets)?;
 
@@ -214,6 +216,18 @@ async fn create(
     }
 
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::TaxConfig,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+
     Ok((StatusCode::CREATED, Json(load(&state, id, &user.id).await?)))
 }
 
@@ -221,7 +235,7 @@ async fn update(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
-    Json(body): Json<UpdateTaxConfig>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdateTaxConfig>>,
 ) -> ApiResult<Json<TaxConfig>> {
     // Confirm ownership up front so a miss is a 404, not a silent no-op.
     load(&state, id, &user.id).await?;
@@ -234,7 +248,7 @@ async fn update(
 
     let mut tx = state.db.begin().await?;
 
-    sqlx::query(
+    let affected = sqlx::query(
         "UPDATE tax_configs SET
             name                          = COALESCE(?3, name),
             description                   = COALESCE(?4, description),
@@ -253,8 +267,12 @@ async fn update(
     .bind(body.early_withdrawal_penalty_rate)
     .execute(&mut *tx)
     .await
-    .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?
+    .rows_affected();
 
+    if affected == 0 {
+        return Err(ApiError::NotFound("tax config"));
+    }
     if let Some(brackets) = brackets {
         sqlx::query("DELETE FROM tax_brackets WHERE tax_config_id = ?1")
             .bind(id)
@@ -275,6 +293,18 @@ async fn update(
     sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE tax_config_id = ?1 AND user_id = ?2")
         .bind(id).bind(&user.id).execute(&mut *tx).await?;
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::TaxConfig,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+
     Ok(Json(load(&state, id, &user.id).await?))
 }
 
@@ -297,5 +327,38 @@ async fn destroy(
         return Err(ApiError::NotFound("tax config"));
     }
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::TaxConfig,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            ..Default::default()
+        },
+    );
+
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl ActivityFields for CreateTaxConfig {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "state_rate",
+        "capital_gains_rate",
+        "early_withdrawal_penalty_rate",
+        "federal_brackets",
+    ];
+}
+
+impl ActivityFields for UpdateTaxConfig {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "state_rate",
+        "capital_gains_rate",
+        "early_withdrawal_penalty_rate",
+        "federal_brackets",
+    ];
 }

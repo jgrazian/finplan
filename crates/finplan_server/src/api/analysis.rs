@@ -27,6 +27,8 @@ use crate::analysis::results::{AnalysisOutcome, AnalysisParameter, CachedSweep};
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult};
+use crate::observability::{JobKind as MetricKind, Origin};
+use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -235,6 +237,24 @@ async fn create(
     Path(scenario_id): Path<i64>,
     Json(body): Json<CreateAnalysis>,
 ) -> ApiResult<(StatusCode, Json<Analysis>)> {
+    let kind = match &body {
+        CreateAnalysis::Sweep { .. } => MetricKind::Sweep,
+        CreateAnalysis::Sensitivity { .. } => MetricKind::Sensitivity,
+        CreateAnalysis::Solve { .. } => MetricKind::Solve,
+    };
+    let mut decision = Submission::new(&state.telemetry, kind);
+    let result = create_analysis(&state, &user, scenario_id, body, &mut decision).await;
+    decision.result(&result);
+    result
+}
+
+async fn create_analysis(
+    state: &AppState,
+    user: &CurrentUser,
+    scenario_id: i64,
+    body: CreateAnalysis,
+    decision: &mut Submission,
+) -> ApiResult<(StatusCode, Json<Analysis>)> {
     let entitlements =
         crate::billing::entitlements(&state.db, &user.id, state.config.hosted).await?;
     let is_solve = matches!(&body, CreateAnalysis::Solve { .. });
@@ -253,7 +273,7 @@ async fn create(
             entitlements.max_iterations
         )));
     }
-    let (compiled, available) = plan(&state, scenario_id, &user.id).await?;
+    let (compiled, available) = plan(state, scenario_id, &user.id).await?;
     if available.is_empty() {
         return Err(ApiError::unprocessable(
             "this plan has no parameters to analyse — an analysable event needs an age trigger or a fixed amount",
@@ -373,13 +393,15 @@ async fn create(
             "Analysis is too large. Reduce iterations, years, or varied parameters.",
         ));
     }
-    let admission = crate::billing::admit_compute(&user.id)?;
+    let admission =
+        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
     if is_solve {
         crate::billing::reserve_goal_seek(&state.db, &user.id, state.config.hosted).await?;
     }
     let handle = state
         .analyses
         .start(scenario_id, &user.id, compiled.config, spec, admission);
+    decision.accepted();
     let view = state.analyses.view(handle.id, &user.id)?;
     Ok((StatusCode::ACCEPTED, Json(view.into())))
 }
@@ -395,7 +417,9 @@ async fn cached_sweep(
     Path(scenario_id): Path<i64>,
 ) -> ApiResult<Json<Option<CachedSweep>>> {
     crate::api::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    Ok(Json(cache::load(&state.db, scenario_id, &user.id).await?))
+    Ok(Json(
+        cache::load(&state.db, scenario_id, &user.id, &state.telemetry).await?,
+    ))
 }
 
 /// The biggest layout the server will hold.

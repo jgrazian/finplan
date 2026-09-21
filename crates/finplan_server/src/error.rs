@@ -103,10 +103,10 @@ impl IntoResponse for ApiError {
         let status = self.status();
         let code = self.code();
 
-        // Database and internal failures may carry implementation detail, so log
-        // the real cause and return a generic message to the client.
+        // Never render raw SQL errors or internal strings to logs: they can
+        // include SQL parameters, financial data, or user-authored text. The
+        // outer HTTP middleware records one classified failure for this response.
         if self.is_dangling_reference() {
-            tracing::debug!(error = %self, "request referenced a row that does not exist");
             return (
                 status,
                 Json(ErrorBody {
@@ -120,24 +120,28 @@ impl IntoResponse for ApiError {
         }
 
         let message = match &self {
-            ApiError::Database(err) => {
-                tracing::error!(error = %err, "database error");
-                "internal server error".to_string()
-            }
-            ApiError::Internal(err) => {
-                tracing::error!(error = %err, "internal error");
-                "internal server error".to_string()
-            }
+            ApiError::Database(_) | ApiError::Internal(_) => "internal server error".to_string(),
             other => other.to_string(),
         };
 
-        (
+        let mut response = (
             status,
             Json(ErrorBody {
                 error: ErrorDetail { code, message },
             }),
         )
-            .into_response()
+            .into_response();
+        let class = match self {
+            ApiError::Database(_) => Some(crate::observability::ErrorClass::Database),
+            ApiError::Internal(_) => Some(crate::observability::ErrorClass::Internal),
+            _ => None,
+        };
+        if let Some(class) = class {
+            response
+                .extensions_mut()
+                .insert(crate::observability::HttpFailure(class));
+        }
+        response
     }
 }
 

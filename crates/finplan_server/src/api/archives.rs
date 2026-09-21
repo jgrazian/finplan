@@ -1,6 +1,7 @@
 //! Versioned, transactionally exported plan inputs and independent restoration.
 use std::collections::{HashMap, HashSet};
 
+use crate::observability::{EventFields, Operation, Resource};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -69,7 +70,19 @@ async fn export_one(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<PlanArchive>> {
     let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
-    Ok(Json(pack(vec![graph])?))
+    let archive = pack(vec![graph])?;
+    state.telemetry.mutation(
+        Resource::Archive,
+        Operation::Exported,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(id),
+            resource_id: Some(id),
+            count: Some(1),
+            ..Default::default()
+        },
+    );
+    Ok(Json(archive))
 }
 
 async fn export_run(
@@ -88,7 +101,20 @@ async fn export_run(
         .ok_or_else(|| ApiError::Conflict("This legacy run has no restorable inputs.".into()))?;
     let graph: ScenarioGraph =
         serde_json::from_str(&snapshot).map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(pack(vec![graph])?))
+    let scenario_id = graph.scenario.id;
+    let archive = pack(vec![graph])?;
+    state.telemetry.mutation(
+        Resource::Archive,
+        Operation::Exported,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            count: Some(1),
+            ..Default::default()
+        },
+    );
+    Ok(Json(archive))
 }
 
 async fn export_all(
@@ -105,7 +131,18 @@ async fn export_all(
         graphs.push(ScenarioGraph::load_connection(&mut tx, id, &user.id).await?);
     }
     tx.commit().await?;
-    Ok(Json(pack(graphs)?))
+    let count = graphs.len() as u64;
+    let archive = pack(graphs)?;
+    state.telemetry.mutation(
+        Resource::Archive,
+        Operation::Exported,
+        &EventFields {
+            user_id: Some(&user.id),
+            count: Some(count),
+            ..Default::default()
+        },
+    );
+    Ok(Json(archive))
 }
 
 pub(crate) fn pack(graphs: Vec<ScenarioGraph>) -> ApiResult<PlanArchive> {
@@ -405,9 +442,19 @@ async fn import(
                 "This request key was used for a different import.".into(),
             ));
         }
-        return Ok(Json(
-            serde_json::from_str(&result).map_err(|e| ApiError::internal(e.to_string()))?,
-        ));
+        let result: ArchiveImported =
+            serde_json::from_str(&result).map_err(|e| ApiError::internal(e.to_string()))?;
+        state.telemetry.mutation(
+            Resource::Archive,
+            Operation::Imported,
+            &EventFields {
+                user_id: Some(&user.id),
+                count: Some(result.scenario_ids.len() as u64),
+                replay: true,
+                ..Default::default()
+            },
+        );
+        return Ok(Json(result));
     }
     if let Some(limit) = access.saved_plan_limit {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scenarios WHERE user_id=?")
@@ -434,6 +481,17 @@ async fn import(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Archive,
+        Operation::Imported,
+        &EventFields {
+            user_id: Some(&user.id),
+            count: Some(result.scenario_ids.len() as u64),
+            ..Default::default()
+        },
+    );
+
     Ok(Json(result))
 }
 

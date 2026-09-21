@@ -1,5 +1,6 @@
 //! Single-use credential actions. Delivery is explicitly a local development sink.
 use super::{normalize_email, session};
+use crate::observability::{AuthAction, AuthOutcome, EventFields, RequestContext};
 use crate::{
     db::Db,
     error::{ApiError, ApiResult},
@@ -92,6 +93,12 @@ async fn request_reset(
     Json(body): Json<RecoveryEmail>,
 ) -> ApiResult<StatusCode> {
     issue(&state, &body.email, "reset").await?;
+    state.telemetry.auth(
+        AuthAction::ResetRequested,
+        AuthOutcome::Succeeded,
+        &EventFields::default(),
+    );
+
     Ok(StatusCode::ACCEPTED)
 }
 async fn request_verify(
@@ -99,20 +106,28 @@ async fn request_verify(
     Json(body): Json<RecoveryEmail>,
 ) -> ApiResult<StatusCode> {
     issue(&state, &body.email, "verify").await?;
+    state.telemetry.auth(
+        AuthAction::VerificationRequested,
+        AuthOutcome::Succeeded,
+        &EventFields::default(),
+    );
+
     Ok(StatusCode::ACCEPTED)
 }
 /// Consumption and protected action share one write transaction; rollback leaves
 /// a token usable after an operational failure, and racing consumption loses.
+/// Returns the internal user ID and number of revoked sessions after commit.
 pub async fn consume(
     db: &Db,
     token: &str,
     purpose: &str,
     password_hash: Option<&str>,
-) -> ApiResult<()> {
+) -> ApiResult<(String, u64)> {
     let mut tx = db.begin().await?;
     let row: Option<(String, String)> = sqlx::query_as("DELETE FROM auth_action_tokens WHERE token_hash = ? AND purpose = ? AND expires_at > unixepoch() RETURNING user_id, email")
         .bind(session::hash_token(token)).bind(purpose).fetch_optional(&mut *tx).await?;
     let (user, email) = row.ok_or_else(|| ApiError::bad_request("invalid or expired token"))?;
+    let mut revoked = 0;
     if purpose == "reset" {
         let hash = password_hash.ok_or_else(|| ApiError::bad_request("password is required"))?;
         let updated = sqlx::query("UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ? AND email = ?")
@@ -120,10 +135,11 @@ pub async fn consume(
         if updated.rows_affected() != 1 {
             return Err(ApiError::bad_request("invalid or expired token"));
         }
-        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+        revoked = sqlx::query("DELETE FROM sessions WHERE user_id = ?")
             .bind(&user)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
         sqlx::query("DELETE FROM auth_action_tokens WHERE user_id = ?")
             .bind(&user)
             .execute(&mut *tx)
@@ -141,21 +157,42 @@ pub async fn consume(
         }
     }
     tx.commit().await?;
-    Ok(())
+    Ok((user, revoked))
 }
 async fn reset(
     State(state): State<AppState>,
     Json(body): Json<ResetPassword>,
 ) -> ApiResult<StatusCode> {
     let hash = super::hash_password_async(body.new_password).await?;
-    consume(&state.db, &body.token, "reset", Some(&hash)).await?;
+    let (user_id, revoked) = consume(&state.db, &body.token, "reset", Some(&hash)).await?;
+    RequestContext::authenticate(&user_id);
+    state.telemetry.auth(
+        AuthAction::ResetCompleted,
+        AuthOutcome::Succeeded,
+        &EventFields {
+            user_id: Some(&user_id),
+            count: Some(revoked),
+            ..Default::default()
+        },
+    );
+
     Ok(StatusCode::NO_CONTENT)
 }
 async fn verify(
     State(state): State<AppState>,
     Json(body): Json<VerificationToken>,
 ) -> ApiResult<StatusCode> {
-    consume(&state.db, &body.token, "verify", None).await?;
+    let (user_id, _) = consume(&state.db, &body.token, "verify", None).await?;
+    RequestContext::authenticate(&user_id);
+    state.telemetry.auth(
+        AuthAction::EmailVerified,
+        AuthOutcome::Succeeded,
+        &EventFields {
+            user_id: Some(&user_id),
+            ..Default::default()
+        },
+    );
+
     Ok(StatusCode::NO_CONTENT)
 }
 

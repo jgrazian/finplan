@@ -111,6 +111,8 @@ fn reconcile(current: &[i64], requested: &[i64]) -> Vec<i64> {
 /// to what the caller owns — this writes by primary key, so that query is the
 /// only thing standing between a request and someone else's rows.
 ///
+/// Returns the number of existing rows updated, or zero when no reorder commits.
+///
 /// One transaction: a half-applied renumbering is a list with two rows claiming
 /// the same place, which sorts by id and looks like the drag simply misfired.
 pub async fn apply_order(
@@ -118,24 +120,26 @@ pub async fn apply_order(
     table: &'static str,
     current: &[i64],
     requested: &[i64],
-) -> ApiResult<()> {
+) -> ApiResult<u64> {
     let order = reconcile(current, requested);
     if order == current {
-        return Ok(());
+        return Ok(0);
     }
 
     // `table` is a literal from this crate's own call sites, never request data.
     let sql = format!("UPDATE {table} SET sort_order = ?1 WHERE id = ?2");
     let mut tx = db.begin().await?;
+    let mut affected = 0;
     for (rank, id) in order.iter().enumerate() {
-        sqlx::query(&sql)
+        affected += sqlx::query(&sql)
             .bind(rank as i64)
             .bind(id)
             .execute(&mut *tx)
-            .await?;
+            .await?
+            .rows_affected();
     }
     tx.commit().await?;
-    Ok(())
+    Ok(affected)
 }
 
 /// Bump a scenario's `updated_at`, so clients can tell when cached results have

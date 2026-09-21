@@ -40,6 +40,44 @@ Configuration comes from flags or environment variables:
 | `FINPLAN_MAX_ITERATIONS` | `50000` | Per-run iteration cap |
 | `FINPLAN_SECURE_COOKIES` | `false` | Set `Secure` on session cookies (enable behind TLS) |
 | `FINPLAN_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
+| `FINPLAN_LOG_FORMAT` | `auto` | `json`, `text`, or `auto` (JSON when hosted, text locally) |
+| `FINPLAN_METRICS_BIND` | unset | Optional private metrics listener, e.g. `127.0.0.1:9090` |
+| `RUST_LOG` | application INFO, dependencies WARN | Logging filter |
+
+## Logs and metrics
+
+To enable JSON logs and a local Prometheus scrape endpoint:
+
+```bash
+FINPLAN_LOG_FORMAT=json FINPLAN_METRICS_BIND=127.0.0.1:9090 cargo run --bin finplan-server
+curl http://127.0.0.1:9090/metrics
+```
+
+`/metrics` uses a separate listener and is absent from the public API router.
+It does not use browser authentication. Keep the listener on a private network
+or behind an authenticated proxy when binding beyond loopback. Leaving the
+setting unset disables the listener; application logging remains enabled.
+
+Activity logs record committed account/scenario changes, authentication actions,
+and run/analysis lifecycle events using internal IDs. The server generates an
+`X-Request-ID` for each response and carries that ID into background job logs.
+Logs omit financial values, names, credentials, request bodies, and query
+strings. Collect process output with the deployment's log collector. These are
+operational logs, not a transactional audit journal.
+
+Metrics cover HTTP requests, errors, admission limits, queued/running jobs,
+queue wait, engine and persistence time, processing duration, and run throughput.
+Queue depth includes persisted recovery backlog and refreshes every five
+seconds; `finplan_queue_snapshot_timestamp_seconds` exposes sampler freshness.
+Histograms support averages and estimated p99. Processing-duration and run-speed
+minimum/maximum gauges use a five-minute window at one-second resolution and
+report NaN when that window has no observations. Iteration throughput counts
+actual samples from successfully persisted runs at completion, so long runs
+produce completion-sized bursts. Counters reset when the process restarts.
+
+The [observability plan](../../spec/11_server_observability_plan.md) documents
+metric names, timing boundaries, and example PromQL queries. Dashboard and alert
+deployment are separate from the server instrumentation.
 
 ## Layering
 

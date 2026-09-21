@@ -10,8 +10,10 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use super::ReorderRequest;
+use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
@@ -403,7 +405,21 @@ async fn reorder(
     .fetch_all(&state.db)
     .await?;
 
-    super::apply_order(&state.db, "accounts", &current, &body.ids).await?;
+    let affected = super::apply_order(&state.db, "accounts", &current, &body.ids).await?;
+
+    if affected > 0 {
+        state.telemetry.mutation(
+            Resource::Account,
+            Operation::Reordered,
+            &EventFields {
+                user_id: Some(&user.id),
+                scenario_id: Some(scenario_id),
+                fields: &["ids"],
+                count: Some(affected),
+                ..Default::default()
+            },
+        );
+    }
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -421,7 +437,7 @@ async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(scenario_id): Path<i64>,
-    Json(body): Json<CreateAccount>,
+    Json(Submitted { body, fields }): Json<Submitted<CreateAccount>>,
 ) -> ApiResult<(StatusCode, Json<Account>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     body.flavor.validate()?;
@@ -446,6 +462,17 @@ async fn create(
     insert_detail(&mut tx, id, &body.flavor).await?;
     tx.commit().await?;
 
+    state.telemetry.mutation(
+        Resource::Account,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok((
         StatusCode::CREATED,
@@ -457,7 +484,7 @@ async fn update(
     State(state): State<AppState>,
     user: CurrentUser,
     Path((scenario_id, id)): Path<(i64, i64)>,
-    Json(body): Json<UpdateAccount>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdateAccount>>,
 ) -> ApiResult<Json<Account>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
@@ -488,7 +515,7 @@ async fn update(
 
     let mut tx = state.db.begin().await?;
 
-    sqlx::query(
+    let affected = sqlx::query(
         "UPDATE accounts SET
             name        = COALESCE(?3, name),
             description = COALESCE(?4, description),
@@ -503,8 +530,12 @@ async fn update(
     .bind(body.sort_order)
     .execute(&mut *tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an account with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, "an account with that name already exists"))?
+    .rows_affected();
 
+    if affected == 0 {
+        return Err(ApiError::NotFound("account"));
+    }
     if let Some(flavor) = &body.flavor {
         let table = match flavor {
             FlavorSpec::Bank { .. } => "account_bank",
@@ -520,6 +551,18 @@ async fn update(
     }
 
     tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Account,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(Json(load_account(&state, scenario_id, id).await?))
 }
@@ -541,6 +584,17 @@ async fn destroy(
     if affected == 0 {
         return Err(ApiError::NotFound("account"));
     }
+
+    state.telemetry.mutation(
+        Resource::Account,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -613,7 +667,22 @@ async fn reorder_positions(
     .fetch_all(&state.db)
     .await?;
 
-    super::apply_order(&state.db, "positions", &current, &body.ids).await?;
+    let affected = super::apply_order(&state.db, "positions", &current, &body.ids).await?;
+
+    if affected > 0 {
+        state.telemetry.mutation(
+            Resource::Position,
+            Operation::Reordered,
+            &EventFields {
+                user_id: Some(&user.id),
+                scenario_id: Some(scenario_id),
+                resource_id: Some(id),
+                fields: &["ids"],
+                count: Some(affected),
+                ..Default::default()
+            },
+        );
+    }
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -622,7 +691,7 @@ async fn add_position(
     State(state): State<AppState>,
     user: CurrentUser,
     Path((scenario_id, id)): Path<(i64, i64)>,
-    Json(body): Json<CreatePosition>,
+    Json(Submitted { body, fields }): Json<Submitted<CreatePosition>>,
 ) -> ApiResult<(StatusCode, Json<Position>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
@@ -678,6 +747,17 @@ async fn add_position(
     .fetch_one(&state.db)
     .await?;
 
+    state.telemetry.mutation(
+        Resource::Position,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(position_id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
 
     Ok((
@@ -696,7 +776,7 @@ async fn update_position(
     State(state): State<AppState>,
     user: CurrentUser,
     Path((scenario_id, id, position_id)): Path<(i64, i64, i64)>,
-    Json(body): Json<UpdatePosition>,
+    Json(Submitted { body, fields }): Json<Submitted<UpdatePosition>>,
 ) -> ApiResult<Json<Position>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
@@ -741,6 +821,18 @@ async fn update_position(
     if affected == 0 {
         return Err(ApiError::NotFound("position"));
     }
+
+    state.telemetry.mutation(
+        Resource::Position,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(position_id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
 
     let row: Position = sqlx::query_as(
@@ -775,6 +867,63 @@ async fn delete_position(
     if affected == 0 {
         return Err(ApiError::NotFound("position"));
     }
+
+    state.telemetry.mutation(
+        Resource::Position,
+        Operation::Deleted,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(position_id),
+            ..Default::default()
+        },
+    );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+impl ActivityFields for CreateAccount {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "sort_order",
+        "flavor",
+        "cash_value",
+        "return_profile_id",
+        "tax_status",
+        "cash_return_profile_id",
+        "contribution_limit",
+        "contribution_period",
+        "asset_id",
+        "value",
+        "principal",
+        "interest_rate",
+    ];
+}
+
+impl ActivityFields for UpdateAccount {
+    const FIELDS: &'static [&'static str] = &[
+        "name",
+        "description",
+        "sort_order",
+        "flavor",
+        "cash_value",
+        "return_profile_id",
+        "tax_status",
+        "cash_return_profile_id",
+        "contribution_limit",
+        "contribution_period",
+        "asset_id",
+        "value",
+        "principal",
+        "interest_rate",
+    ];
+}
+
+impl ActivityFields for CreatePosition {
+    const FIELDS: &'static [&'static str] = &["asset_id", "purchase_date", "units", "cost_basis"];
+}
+
+impl ActivityFields for UpdatePosition {
+    const FIELDS: &'static [&'static str] = &["asset_id", "purchase_date", "units", "cost_basis"];
 }

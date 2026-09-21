@@ -1,5 +1,6 @@
 //! Authentication: Argon2id password hashing and opaque session tokens.
 
+pub(crate) mod activity;
 pub mod protection;
 pub mod recovery;
 pub mod routes;
@@ -42,7 +43,6 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
         return false;
     }
     let Ok(parsed) = PasswordHash::new(stored) else {
-        tracing::error!("stored password hash is not a valid PHC string");
         return false;
     };
     Argon2::default()
@@ -83,7 +83,17 @@ pub async fn hash_password_async(password: String) -> ApiResult<String> {
     .await
     .map_err(|_| ApiError::internal("password worker failed"))?
 }
-pub async fn verify_password_async(password: String, stored: String) -> ApiResult<bool> {
+pub async fn verify_password_async(
+    password: String,
+    stored: String,
+    telemetry: &crate::observability::Telemetry,
+) -> ApiResult<bool> {
+    if PasswordHash::new(&stored).is_err() {
+        telemetry.error(
+            crate::observability::Component::Auth,
+            crate::observability::ErrorClass::Internal,
+        );
+    }
     let permit = PASSWORD_WORK
         .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)))
         .clone()

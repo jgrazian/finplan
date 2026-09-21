@@ -69,6 +69,7 @@ pub async fn auth_throttle(State(state): State<AppState>, req: Request, next: Ne
         }
     };
     if limited {
+        state.telemetry.auth_throttled();
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [("retry-after", "60")],
@@ -78,6 +79,7 @@ pub async fn auth_throttle(State(state): State<AppState>, req: Request, next: Ne
     }
     let slots = HASH_SLOTS.get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
     let Ok(_permit) = slots.clone().try_acquire_owned() else {
+        state.telemetry.auth_throttled();
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [("retry-after", "2")],
@@ -88,12 +90,13 @@ pub async fn auth_throttle(State(state): State<AppState>, req: Request, next: Ne
     next.run(req).await
 }
 
-pub fn account_attempt(email: &str) -> crate::error::ApiResult<()> {
+pub fn account_attempt(state: &AppState, email: &str) -> crate::error::ApiResult<()> {
     let key = format!("account:{}", super::session::hash_token(email));
     let mut windows = WINDOWS.get_or_init(Default::default).lock().unwrap();
     let now = Instant::now();
     windows.retain(|_, w| now.duration_since(w.started) < Duration::from_secs(60));
     if windows.len() >= 4096 && !windows.contains_key(&key) {
+        state.telemetry.auth_throttled();
         return Err(crate::error::ApiError::Conflict(
             "Too many attempts. Retry in one minute.".into(),
         ));
@@ -104,6 +107,7 @@ pub fn account_attempt(email: &str) -> crate::error::ApiResult<()> {
     });
     w.attempts += 1;
     if w.attempts > 10 {
+        state.telemetry.auth_throttled();
         return Err(crate::error::ApiError::Conflict(
             "Too many attempts. Retry in one minute.".into(),
         ));

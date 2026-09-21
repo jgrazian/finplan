@@ -22,6 +22,8 @@ impl TestApp {
         let db_path = dir.path().join("test.db");
 
         let config = ServerConfig {
+            log_format: Default::default(),
+            metrics_bind: None,
             bind: "127.0.0.1:0".into(),
             database_url: format!("sqlite://{}", db_path.display()),
             db_pool_size: 4,

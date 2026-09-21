@@ -24,60 +24,61 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod observability;
 pub mod runner;
 pub mod seed;
 pub mod state;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Router;
 use axum::http::{HeaderValue, Method, header};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 
 use config::ServerConfig;
 use state::AppState;
 
 /// Build the application state and router, run migrations, and recover any run
 /// left in flight by a previous process.
+///
+/// This takes an initial queue snapshot but opens no network listeners. The
+/// executable owns an `ObservabilityRuntime` for sampling and session maintenance.
 pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn std::error::Error>> {
-    config.validate()?;
-    let db = db::connect(&config.database_url, config.db_pool_size).await?;
+    config.validate().inspect_err(|reason| {
+        // validate() returns only application-owned static explanations.
+        tracing::error!(event = "server.configuration_invalid", reason);
+    })?;
+    let telemetry = observability::Telemetry::new(config.sim_workers);
+    let db = db::connect(&config.database_url, config.db_pool_size)
+        .await
+        .inspect_err(|_| {
+            tracing::error!(
+                event = "server.initialization_failed",
+                phase = "database",
+                class = "database"
+            );
+        })?;
+    observability::purge_sessions(&db, &telemetry).await;
 
-    match auth::session::purge_expired(&db).await {
-        Ok(n) if n > 0 => tracing::info!(count = n, "purged expired sessions"),
-        Ok(_) => {}
-        Err(err) => tracing::warn!(error = %err, "failed to purge expired sessions"),
-    }
-
-    let runs = runner::spawn(db.clone(), config.sim_workers);
+    let runs = runner::spawn_with_telemetry(db.clone(), config.sim_workers, telemetry.clone());
     runner::requeue_orphans(&db, &runs).await?;
 
-    let analyses = analysis::AnalysisJobs::new(db.clone(), config.sim_workers);
+    let analyses = analysis::AnalysisJobs::new_with_telemetry(
+        db.clone(),
+        config.sim_workers,
+        telemetry.clone(),
+    );
 
     let state = AppState {
+        telemetry,
         db: db.clone(),
         config: Arc::new(config),
         runs,
         analyses,
     };
 
-    // Sessions accumulate; sweep them hourly rather than only at boot.
-    tokio::spawn({
-        let db = db.clone();
-        async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(3600));
-            ticker.tick().await; // the first tick fires immediately
-            loop {
-                ticker.tick().await;
-                if let Err(err) = auth::session::purge_expired(&db).await {
-                    tracing::warn!(error = %err, "session sweep failed");
-                }
-            }
-        }
-    });
+    observability::sample(&state).await;
 
     let cors = build_cors(&state.config.cors_origins);
 
@@ -97,7 +98,10 @@ pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn s
         ))
         .layer(cors)
         .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn_with_state(
+            state.telemetry.clone(),
+            observability::request_telemetry,
+        ))
         .with_state(state.clone());
 
     Ok((router, state))
@@ -112,7 +116,10 @@ fn build_cors(origins: &[String]) -> CorsLayer {
         .filter_map(|origin| match origin.trim().parse::<HeaderValue>() {
             Ok(value) => Some(value),
             Err(_) => {
-                tracing::warn!(origin, "ignoring unparseable CORS origin");
+                tracing::warn!(
+                    event = "server.configuration_warning",
+                    reason = "invalid_cors_origin"
+                );
                 None
             }
         })
@@ -130,4 +137,5 @@ fn build_cors(origins: &[String]) -> CorsLayer {
             Method::OPTIONS,
         ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        .expose_headers([axum::http::HeaderName::from_static("x-request-id")])
 }

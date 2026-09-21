@@ -11,27 +11,29 @@ use crate::compile::CompiledScenario;
 use crate::db::Db;
 use crate::runner::ledger;
 
-pub async fn mark_failed(db: &Db, run_id: i64, message: &str) -> Result<(), sqlx::Error> {
-    sqlx::query(
+pub async fn mark_failed(db: &Db, run_id: i64, message: &str) -> Result<bool, sqlx::Error> {
+    let changed = sqlx::query(
         "UPDATE runs SET status = 'failed', error_message = ?2, finished_at = datetime('now')
           WHERE id = ?1 AND status IN ('queued','running')",
     )
     .bind(run_id)
     .bind(message)
     .execute(db)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
 }
 
-pub async fn mark_canceled(db: &Db, run_id: i64) -> Result<(), sqlx::Error> {
-    sqlx::query(
+pub async fn mark_canceled(db: &Db, run_id: i64) -> Result<bool, sqlx::Error> {
+    let changed = sqlx::query(
         "UPDATE runs SET status = 'canceled', finished_at = datetime('now')
           WHERE id = ?1 AND status IN ('queued','running')",
     )
     .bind(run_id)
     .execute(db)
-    .await?;
-    Ok(())
+    .await?
+    .rows_affected();
+    Ok(changed == 1)
 }
 
 fn warning_kind_name(kind: WarningKind) -> &'static str {
@@ -59,6 +61,17 @@ pub async fn persist(
     summary: &MonteCarloSummary,
 ) -> Result<(), sqlx::Error> {
     let mut tx = db.begin().await?;
+    // Lock and claim the terminal transition in the same transaction as result
+    // writes. Cascading deletion cannot produce a fictitious success.
+    let claimed =
+        sqlx::query("UPDATE runs SET status = 'succeeded' WHERE id = ? AND status = 'running'")
+            .bind(run_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    if claimed == 0 {
+        return Err(sqlx::Error::RowNotFound);
+    }
 
     // A re-run of the same id should replace, not append.
     for table in [

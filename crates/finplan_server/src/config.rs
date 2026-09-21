@@ -1,9 +1,26 @@
 //! Server configuration, sourced from CLI flags and environment variables.
 
-use clap::Args;
+use clap::{Args, ValueEnum};
+
+#[derive(Debug, Default, Clone, Copy, ValueEnum)]
+pub enum LogFormat {
+    #[default]
+    Auto,
+    Json,
+    Text,
+}
 
 #[derive(Debug, Clone, Args)]
 pub struct ServerConfig {
+    /// Structured JSON in hosted mode, readable text locally when set to auto.
+    #[arg(long, env = "FINPLAN_LOG_FORMAT", value_enum, default_value = "auto")]
+    pub log_format: LogFormat,
+
+    /// Optional separate metrics listener, e.g. 127.0.0.1:9090. Unset disables it.
+    /// Non-loopback listeners must be protected by the deployment network.
+    #[arg(long, env = "FINPLAN_METRICS_BIND")]
+    pub metrics_bind: Option<std::net::SocketAddr>,
+
     /// Enable strict hosted origin and cookie protections.
     #[arg(long, env = "FINPLAN_HOSTED", default_value_t = false)]
     pub hosted: bool,

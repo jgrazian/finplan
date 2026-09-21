@@ -1,5 +1,6 @@
 //! Guided setup writes the same account, position and event records as advanced editing.
 use super::specs::*;
+use crate::observability::{EventFields, Operation, Resource};
 use crate::{
     auth::session::CurrentUser,
     compile::rows::ScenarioGraph,
@@ -134,6 +135,19 @@ async fn create(
                 "This setup was already saved with different inputs; start a new setup",
             ));
         }
+
+        state.telemetry.mutation(
+            Resource::Onboarding,
+            Operation::Completed,
+            &EventFields {
+                user_id: Some(&user.id),
+                scenario_id: Some(scenario_id),
+                resource_id: Some(scenario_id),
+                count: Some(0),
+                replay: true,
+                ..Default::default()
+            },
+        );
         return Ok(Json(SetupCreated { scenario_id }));
     }
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -155,6 +169,19 @@ async fn create(
                 "This setup was already saved with different inputs; start a new setup",
             ));
         }
+
+        state.telemetry.mutation(
+            Resource::Onboarding,
+            Operation::Completed,
+            &EventFields {
+                user_id: Some(&user.id),
+                scenario_id: Some(id),
+                resource_id: Some(id),
+                count: Some(0),
+                replay: true,
+                ..Default::default()
+            },
+        );
         return Ok(Json(SetupCreated { scenario_id: id }));
     }
     crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
@@ -356,7 +383,21 @@ async fn create(
     .bind(id)
     .execute(&mut *tx)
     .await?;
+    let count: i64 = sqlx::query_scalar("SELECT 1 + (SELECT count(*) FROM accounts WHERE scenario_id = ?1) + (SELECT count(*) FROM assets WHERE scenario_id = ?1) + (SELECT count(*) FROM events WHERE scenario_id = ?1) + (SELECT count(*) FROM positions WHERE account_id IN (SELECT id FROM accounts WHERE scenario_id = ?1))")
+        .bind(id).fetch_one(&mut *tx).await?;
     tx.commit().await?;
+    state.telemetry.mutation(
+        Resource::Onboarding,
+        Operation::Completed,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(id),
+            resource_id: Some(id),
+            count: Some(count as u64),
+            ..Default::default()
+        },
+    );
+
     Ok(Json(SetupCreated { scenario_id: id }))
 }
 #[derive(Debug, Serialize, TS)]

@@ -155,11 +155,17 @@ pub async fn reconcile(db: &Db, event: &ProviderSnapshot) -> ApiResult<bool> {
             .await?
             .rows_affected();
     if inserted == 0 {
+        tracing::debug!(event = "billing.reconciled", user_id = %event.user_id, replay = true);
         return Ok(false);
     }
     let changed = sqlx::query("INSERT INTO subscriptions(user_id,provider,subscription_id,state,access_until,revision) VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET state=excluded.state, access_until=excluded.access_until, revision=excluded.revision WHERE subscriptions.provider=excluded.provider AND subscriptions.subscription_id=excluded.subscription_id AND subscriptions.revision < excluded.revision")
         .bind(&event.user_id).bind(&event.provider).bind(&event.subscription_id).bind(event.state.as_str()).bind(event.access_until).bind(event.revision).execute(&mut *tx).await?.rows_affected();
     tx.commit().await?;
+    if changed == 1 {
+        tracing::info!(event = "billing.reconciled", user_id = %event.user_id, state = event.state.as_str(), replay = false);
+    } else {
+        tracing::debug!(event = "billing.reconciled", user_id = %event.user_id, replay = true);
+    }
     Ok(changed == 1)
 }
 
@@ -324,10 +330,47 @@ static COMPUTE: std::sync::OnceLock<std::sync::Mutex<ComputeCounts>> = std::sync
 pub struct ComputePermit {
     user: String,
 }
+pub const COMPUTE_LIMIT: usize = 16;
+
+/// Snapshot the existing process-wide admission gate; no shadow permit count.
+pub fn compute_admitted() -> usize {
+    COMPUTE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .total
+}
+
 pub fn admit_compute(user: &str) -> ApiResult<ComputePermit> {
-    let mut counts = COMPUTE.get_or_init(Default::default).lock().unwrap();
-    if counts.total >= 16 || counts.users.get(user).copied().unwrap_or(0) >= 2 {
-        return Err(ApiError::Conflict("Compute capacity is busy. Wait for an existing run or analysis to finish, or cancel it, then retry.".into()));
+    admit_compute_inner(user).map_err(|_| capacity_error())
+}
+
+pub fn admit_compute_observed(
+    user: &str,
+    telemetry: &crate::observability::Telemetry,
+    origin: crate::observability::Origin,
+) -> ApiResult<ComputePermit> {
+    admit_compute_inner(user).map_err(|reason| {
+        telemetry.rejection(reason, origin);
+        capacity_error()
+    })
+}
+
+fn capacity_error() -> ApiError {
+    ApiError::Conflict("Compute capacity is busy. Wait for an existing run or analysis to finish, or cancel it, then retry.".into())
+}
+
+fn admit_compute_inner(user: &str) -> Result<ComputePermit, crate::observability::RejectionReason> {
+    use crate::observability::RejectionReason;
+    let mut counts = COMPUTE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if counts.total >= COMPUTE_LIMIT {
+        return Err(RejectionReason::GlobalLimit);
+    }
+    if counts.users.get(user).copied().unwrap_or(0) >= 2 {
+        return Err(RejectionReason::UserLimit);
     }
     counts.total += 1;
     *counts.users.entry(user.to_string()).or_default() += 1;
@@ -337,7 +380,10 @@ pub fn admit_compute(user: &str) -> ApiResult<ComputePermit> {
 }
 impl Drop for ComputePermit {
     fn drop(&mut self) {
-        let mut counts = COMPUTE.get_or_init(Default::default).lock().unwrap();
+        let mut counts = COMPUTE
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         counts.total -= 1;
         if let Some(n) = counts.users.get_mut(&self.user) {
             *n -= 1;

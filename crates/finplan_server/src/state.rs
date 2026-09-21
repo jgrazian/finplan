@@ -5,10 +5,12 @@ use std::sync::Arc;
 use crate::analysis::AnalysisJobs;
 use crate::config::ServerConfig;
 use crate::db::Db;
+use crate::observability::Telemetry;
 use crate::runner::RunQueue;
 
 #[derive(Clone)]
 pub struct AppState {
+    pub telemetry: Telemetry,
     pub db: Db,
     pub config: Arc<ServerConfig>,
     pub runs: RunQueue,
