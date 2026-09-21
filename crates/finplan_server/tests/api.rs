@@ -843,7 +843,22 @@ async fn a_converging_run_stops_short_of_its_ceiling() {
 async fn a_scenario_retains_its_prior_runs() {
     let mut app = TestApp::new().await;
     app.login_as("one-run@example.com").await;
-    let (scenario_id, _, _) = app.seed_scenario().await;
+    let (scenario_id, checking, _) = app.seed_scenario().await;
+
+    // Guarantee both retained-detail tables have rows to exercise. The
+    // scenario records a monthly ledger entry and an annual cash-flow summary.
+    app.post(
+        &format!("/api/scenarios/{scenario_id}/events"),
+        json!({
+            "name": "Salary",
+            "trigger": {"kind": "Repeating", "interval": "Monthly"},
+            "effects": [{
+                "kind": "Income", "to_account_id": checking, "income_type": "Taxable",
+                "amount": {"kind": "Fixed", "value": 5000.0}
+            }]
+        }),
+    )
+    .await;
 
     let path = format!("/api/scenarios/{scenario_id}/runs");
     let body = |iterations: i64| json!({"iterations": iterations, "seed": 7, "percentiles": [0.5]});
@@ -851,6 +866,9 @@ async fn a_scenario_retains_its_prior_runs() {
     let (_, first) = app.post(&path, body(30)).await;
     let first_id = first["id"].as_i64().unwrap();
     assert_eq!(app.await_run(first_id).await, "succeeded");
+    let (_, first_results) = app.get(&format!("/api/runs/{first_id}/results")).await;
+    assert!(!first_results["cash_flows"].as_array().unwrap().is_empty());
+    assert!(!first_results["ledger_years"].as_array().unwrap().is_empty());
 
     let (status, second) = app.post(&path, body(40)).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{second}");
@@ -868,10 +886,14 @@ async fn a_scenario_retains_its_prior_runs() {
     let (status, results) = app.get(&format!("/api/runs/{first_id}/results")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(results["stats"]["num_iterations"], 30);
+    assert_eq!(results["cash_flows"], json!([]));
+    assert_eq!(results["ledger_years"], json!([]));
 
     let (status, results) = app.get(&format!("/api/runs/{second_id}/results")).await;
     assert_eq!(status, StatusCode::OK, "{results}");
     assert_eq!(results["stats"]["num_iterations"], 40);
+    assert!(!results["cash_flows"].as_array().unwrap().is_empty());
+    assert!(!results["ledger_years"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

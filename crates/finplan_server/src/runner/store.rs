@@ -176,6 +176,33 @@ pub async fn persist(
     .execute(&mut *tx)
     .await?;
 
+    // Cash flows and the itemised ledger are high-volume path details that the
+    // UI only needs for the current result. Keep them only for the newest
+    // successful run in this scenario; the rest of each historical result
+    // remains available. Pruning at success rather than enqueue leaves the
+    // prior details intact if a replacement is canceled or fails. Selecting by
+    // id also makes an older concurrent run discard its own details if a newer
+    // run has already succeeded.
+    for table in ["run_cash_flows", "run_ledger"] {
+        sqlx::query(&format!(
+            "DELETE FROM {table}
+              WHERE run_id IN (
+                    SELECT candidate.id
+                      FROM runs AS candidate
+                     WHERE candidate.scenario_id = (SELECT scenario_id FROM runs WHERE id = ?1)
+                       AND candidate.id <> (
+                            SELECT MAX(latest.id)
+                              FROM runs AS latest
+                             WHERE latest.scenario_id = candidate.scenario_id
+                               AND latest.status = 'succeeded'
+                       )
+              )"
+        ))
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
     tx.commit().await
 }
 
