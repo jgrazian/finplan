@@ -15,7 +15,7 @@ The initial hosted split approved September 13, 2026 is Free: full modeling, one
 
 Live billing and production transactional email are unconfigured: select providers, connect authenticated provider adapters, and pass their sandbox delivery/webhook tests. The trusted subscription reconciliation interface is tested locally; no browser route grants Pro and no live payment is charged. Run the documented deployment/restore drill on the actual host and set backup retention, delivery monitoring and operational ownership. This implementation does not constitute a completed production deployment.
 
-The guided starter supports one person, checking, a tax-deferred 401(k), and one other investment account; additional household members, benefits, liabilities, accounts and contributions use the advanced editors. Household/estate model extensions, AI review, sharing and mobile layout are later work. Past input restoration creates an independent plan rather than overwriting a live plan. Deleting a whole plan intentionally deletes its run history.
+The guided starter supports one person, checking, a tax-deferred 401(k) with a capped salary-deferral contribution, and one other investment account; additional household members, benefits, liabilities, accounts and contribution types use the advanced editors. Household/estate model extensions, AI review, sharing and mobile layout are later work. Past input restoration creates an independent plan rather than overwriting a live plan. Deleting a whole plan intentionally deletes its run history.
 
 See `09_operations_runbook.md` for operations; `08_hosted_readiness_matrix.md` is the original inventory and should be read with this implementation record.
 

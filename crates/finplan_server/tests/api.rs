@@ -232,6 +232,29 @@ impl TestApp {
 }
 
 #[tokio::test]
+async fn a_scenario_can_be_renamed_but_not_to_nothing() {
+    let mut app = TestApp::new().await;
+    app.login_as("scenario-rename@example.com").await;
+    let (status, scenario) = app
+        .post(
+            "/api/scenarios",
+            json!({"name":"Original", "start_date":"2026-01-01"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{scenario}");
+    let id = scenario["id"].as_i64().unwrap();
+    let path = format!("/api/scenarios/{id}");
+
+    let (status, renamed) = app.patch(&path, json!({"name":"  Renamed  "})).await;
+    assert_eq!(status, StatusCode::OK, "{renamed}");
+    assert_eq!(renamed["name"], "Renamed");
+
+    let (status, error) = app.patch(&path, json!({"name":"   "})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert_eq!(app.get(&path).await.1["name"], "Renamed");
+}
+
+#[tokio::test]
 async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() {
     let mut app = TestApp::new().await;
     app.login_as("funding@example.com").await;

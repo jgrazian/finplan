@@ -187,6 +187,13 @@ async fn update(
     Json(body): Json<UpdateScenario>,
 ) -> ApiResult<Json<Scenario>> {
     super::owned_scenario(&state.db, id, &user.id).await?;
+    if body
+        .name
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Err(ApiError::bad_request("scenario name cannot be empty"));
+    }
     owned_assumptions(
         &state,
         &user.id,

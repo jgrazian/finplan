@@ -287,7 +287,6 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
               <PlanScreen
                 offline={status.offline}
                 scenarioId={workspace.scenario.id}
-                scenarioName={workspace.scenario.name}
                 params={workspace.params}
                 assumptions={workspace.assumptions}
                 axis={workspace.axis}

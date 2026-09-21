@@ -307,6 +307,7 @@ export interface PlanEvent {
 
 /** Scenario-level parameters, shown above the event list. */
 export interface ScenarioParams {
+  name: string;
   start: string;
   durationYears: number;
   /** Empty when the scenario has none; `Age` triggers require one. */

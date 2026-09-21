@@ -14,6 +14,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+const EMPLOYEE_401K_DEFERRAL_LIMIT_2026: f64 = 24_500.;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/scenarios/setup", post(create))
@@ -37,6 +39,7 @@ pub struct SetupPlan {
     pub bond_profile_id: i64,
     pub investment_tax_status: String,
     pub annual_income: f64,
+    pub retirement_401k_contribution_percent: f64,
     pub annual_spending: f64,
     pub retirement_spending: f64,
     pub inflation_profile_id: Option<i64>,
@@ -74,6 +77,7 @@ fn validate(p: &SetupPlan) -> ApiResult<()> {
         p.retirement_401k,
         p.investments,
         p.annual_income,
+        p.retirement_401k_contribution_percent,
         p.annual_spending,
         p.retirement_spending,
     ]
@@ -81,12 +85,21 @@ fn validate(p: &SetupPlan) -> ApiResult<()> {
     .any(|n| !n.is_finite() || *n < 0.)
         || !p.stock_percent.is_finite()
         || !(0. ..=100.).contains(&p.stock_percent)
+        || !(0. ..=100.).contains(&p.retirement_401k_contribution_percent)
     {
         return Err(ApiError::bad_request(
-            "Amounts must be finite and nonnegative; stock allocation must be 0–100%",
+            "Amounts must be finite and nonnegative; percentage fields must be 0–100%",
         ));
     }
-    if p.fund_from_investments && p.retirement_401k + p.investments == 0. {
+    if p.retirement_401k_contribution_percent > 0. && p.annual_income == 0. {
+        return Err(ApiError::bad_request(
+            "A 401(k) contribution requires positive annual salary",
+        ));
+    }
+    if p.fund_from_investments
+        && p.retirement_401k + p.investments == 0.
+        && p.retirement_401k_contribution_percent == 0.
+    {
         return Err(ApiError::bad_request(
             "Investment funding requires a 401(k) or another investment account",
         ));
@@ -146,15 +159,19 @@ async fn create(
     }
     crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
     let invested = p.retirement_401k + p.investments;
+    let annual_401k_contribution = (p.annual_income * p.retirement_401k_contribution_percent
+        / 100.)
+        .min(EMPLOYEE_401K_DEFERRAL_LIMIT_2026);
+    let has_investments = invested > 0. || annual_401k_contribution > 0.;
     for (table, id) in [
         ("return_profiles", Some(p.cash_profile_id)),
         (
             "return_profiles",
-            (invested > 0.).then_some(p.stock_profile_id),
+            has_investments.then_some(p.stock_profile_id),
         ),
         (
             "return_profiles",
-            (invested > 0.).then_some(p.bond_profile_id),
+            has_investments.then_some(p.bond_profile_id),
         ),
         ("inflation_profiles", p.inflation_profile_id),
         ("tax_configs", p.tax_config_id),
@@ -190,9 +207,11 @@ async fn create(
         .execute(&mut *tx)
         .await?;
     let mut investment_accounts = Vec::new();
-    if p.retirement_401k > 0. {
+    let mut retirement_account = None;
+    if p.retirement_401k > 0. || annual_401k_contribution > 0. {
         let account: i64 = sqlx::query_scalar("INSERT INTO accounts(scenario_id,name,flavor,sort_order) VALUES(?,'401(k)','Investment',1) RETURNING id").bind(id).fetch_one(&mut *tx).await?;
         sqlx::query("INSERT INTO account_investment(account_id,tax_status,cash_value,cash_return_profile_id) VALUES(?,'TaxDeferred',0,?)").bind(account).bind(p.cash_profile_id).execute(&mut *tx).await?;
+        retirement_account = Some(account);
         investment_accounts.push((account, p.retirement_401k));
     }
     if p.investments > 0. {
@@ -200,6 +219,7 @@ async fn create(
         sqlx::query("INSERT INTO account_investment(account_id,tax_status,cash_value,cash_return_profile_id) VALUES(?,?,0,?)").bind(account).bind(&p.investment_tax_status).bind(p.cash_profile_id).execute(&mut *tx).await?;
         investment_accounts.push((account, p.investments));
     }
+    let mut allocation_assets = Vec::new();
     for (name, profile, fraction) in [
         (
             "Stock allocation",
@@ -216,8 +236,11 @@ async fn create(
             break;
         }
         let asset: i64 = sqlx::query_scalar("INSERT INTO assets(scenario_id,name,initial_price,return_profile_id) VALUES(?,?,1,?) RETURNING id").bind(id).bind(name).bind(profile).fetch_one(&mut *tx).await?;
+        allocation_assets.push((asset, fraction));
         for (account, value) in &investment_accounts {
-            sqlx::query("INSERT INTO positions(account_id,asset_id,purchase_date,units,cost_basis) VALUES(?,?,?,?,?)").bind(account).bind(asset).bind(&p.start_date).bind(value*fraction).bind(value*fraction).execute(&mut *tx).await?;
+            if *value > 0. {
+                sqlx::query("INSERT INTO positions(account_id,asset_id,purchase_date,units,cost_basis) VALUES(?,?,?,?,?)").bind(account).bind(asset).bind(&p.start_date).bind(value*fraction).bind(value*fraction).execute(&mut *tx).await?;
+            }
         }
     }
     let adjusted = |value| AmountSpec::InflationAdjusted {
@@ -254,12 +277,35 @@ async fn create(
         .await?;
         let mut effects = vec![];
         if income {
-            effects.push(EffectSpec::Income {
-                to_account_id: checking,
-                amount: adjusted(value),
-                amount_mode: AmountMode::Gross,
-                income_type: IncomeType::Taxable,
-            });
+            let taxable_salary = value - annual_401k_contribution;
+            if taxable_salary > 0. {
+                effects.push(EffectSpec::Income {
+                    to_account_id: checking,
+                    amount: adjusted(taxable_salary),
+                    amount_mode: AmountMode::Gross,
+                    income_type: IncomeType::Taxable,
+                });
+            }
+            if let Some(retirement_account) = retirement_account
+                && annual_401k_contribution > 0.
+            {
+                effects.push(EffectSpec::Income {
+                    to_account_id: retirement_account,
+                    amount: adjusted(annual_401k_contribution),
+                    amount_mode: AmountMode::Gross,
+                    income_type: IncomeType::TaxFree,
+                });
+                for (asset_id, fraction) in &allocation_assets {
+                    if *fraction > 0. {
+                        effects.push(EffectSpec::AssetPurchase {
+                            from_account_id: retirement_account,
+                            to_account_id: retirement_account,
+                            asset_id: *asset_id,
+                            amount: adjusted(annual_401k_contribution * fraction),
+                        });
+                    }
+                }
+            }
         } else {
             if p.fund_from_investments {
                 effects.push(EffectSpec::Sweep {

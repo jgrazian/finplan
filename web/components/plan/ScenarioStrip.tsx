@@ -2,11 +2,12 @@
 
 import { type ReactNode, useState } from "react";
 import { UnsavedNote } from "@/components/status/UnsavedNote";
-import { Button, DateInput, Dropdown, Field, NumberInput } from "@/components/ui";
+import { Button, DateInput, Dropdown, Field, Input, NumberInput } from "@/components/ui";
 import type { AssumptionChoice, AssumptionChoices, ScenarioParams } from "@/lib/types";
 
 /** Everything this strip can save. */
 type Editable =
+  | "name"
   | "start"
   | "durationYears"
   | "birthDate"
@@ -32,13 +33,11 @@ const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
  * later, so nothing can be silently lost.
  */
 export function ScenarioStrip({
-  scenarioName,
   params,
   assumptions,
   onChange,
   offline,
 }: {
-  scenarioName: string;
   params: ScenarioParams;
   /** What the inflation and tax pickers can be set to. */
   assumptions: AssumptionChoices;
@@ -89,6 +88,26 @@ export function ScenarioStrip({
     }
   };
 
+  const editName = (name: string) => {
+    setPending((held) =>
+      name === params.name ? without(held, ["name"]) : { ...held, name },
+    );
+    setRefused((held) => without(held, ["name"]));
+  };
+  const commitName = () => {
+    const name = shown.name.trim();
+    if (!name) {
+      setRefused((held) => ({ ...held, name: "Not saved — enter a scenario name." }));
+      return;
+    }
+    if (name === params.name) {
+      setPending((held) => without(held, ["name"]));
+      setRefused((held) => without(held, ["name"]));
+      return;
+    }
+    void save({ name });
+  };
+
   return (
     <div style={{ borderBottom: "1px solid var(--color-divider)" }}>
       <div
@@ -102,7 +121,7 @@ export function ScenarioStrip({
         }}
       >
         <span className="stat-l" style={{ color: "var(--color-text)" }}>
-          Scenario — {scenarioName}
+          Scenario — {shown.name}
         </span>
         <span>
           {shown.start} · {shown.durationYears} yrs
@@ -154,6 +173,27 @@ export function ScenarioStrip({
             alignItems: "start",
           }}
         >
+          <Field
+            label="Name"
+            className={refused.name ? "field-unsaved" : undefined}
+            style={{ gridColumn: "1 / -1" }}
+          >
+            <Input
+              style={{ minHeight: 30 }}
+              value={shown.name}
+              readOnly={readOnly}
+              aria-label="Scenario name"
+              onChange={(event) => editName(event.target.value)}
+              onBlur={commitName}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                commitName();
+              }}
+            />
+            {refused.name && <UnsavedNote>{refused.name}</UnsavedNote>}
+          </Field>
+
           {/* A date field empties itself mid-pick, so only a real date is a change. */}
           <Field label="Start" className={refused.start ? "field-unsaved" : undefined}>
             <DateInput

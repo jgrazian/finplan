@@ -10,6 +10,7 @@ import {
   Field,
   Input,
   NumberInput,
+  RangeField,
   SegmentedControl,
 } from "@/components/ui";
 import { api } from "@/lib/api/client";
@@ -25,9 +26,12 @@ const steps = [
   "401(k)",
   "Other investments",
   "Income and retirement",
+  "401(k) contributions",
   "Assumptions",
   "Review",
 ] as const;
+
+const EMPLOYEE_401K_DEFERRAL_LIMIT_2026 = 24_500;
 
 const defaultReturnProfileIds = (profiles: Profile[]) => ({
   cash: profiles.find((profile) => profile.name === "Cash / T-Bills")?.id ?? 0,
@@ -39,6 +43,7 @@ type SetupDraft = SetupPlan & {
   has_cash: boolean | null;
   has_401k: boolean | null;
   has_other_investments: boolean | null;
+  contribute_401k: boolean;
   monthly_spending: number;
   monthly_retirement_spending: number;
 };
@@ -51,6 +56,7 @@ type AmountField =
   | "investments"
   | "stock_percent"
   | "annual_income"
+  | "retirement_401k_contribution_percent"
   | "monthly_spending"
   | "monthly_retirement_spending";
 
@@ -88,8 +94,12 @@ function setupPlanOf(draft: SetupDraft): SetupPlan {
   delete answers.has_cash;
   delete answers.has_401k;
   delete answers.has_other_investments;
+  delete answers.contribute_401k;
   delete answers.monthly_spending;
   delete answers.monthly_retirement_spending;
+  plan.retirement_401k_contribution_percent = draft.contribute_401k
+    ? draft.retirement_401k_contribution_percent
+    : 0;
   plan.annual_spending = draft.monthly_spending * 12;
   plan.retirement_spending = draft.monthly_retirement_spending * 12;
   return plan;
@@ -125,17 +135,19 @@ export function NewScenarioDialog(props: {
       bond_profile_id: profileIds.bonds,
       investment_tax_status: "Taxable",
       annual_income: 0,
+      retirement_401k_contribution_percent: 0,
       annual_spending: 0,
       retirement_spending: 0,
       monthly_spending: 0,
       monthly_retirement_spending: 0,
       inflation_profile_id: props.inflationProfiles[0]?.id ?? null,
       tax_config_id: props.taxConfigs[0]?.id ?? null,
-      fund_from_investments: false,
+      fund_from_investments: true,
       assumptions_confirmed: false,
       has_cash: null,
       has_401k: null,
       has_other_investments: null,
+      contribute_401k: false,
     };
     try {
       const value = localStorage.getItem(key);
@@ -145,6 +157,12 @@ export function NewScenarioDialog(props: {
         ...empty,
         ...saved,
         retirement_401k: saved.retirement_401k ?? 0,
+        retirement_401k_contribution_percent:
+          saved.retirement_401k_contribution_percent ?? 0,
+        contribute_401k:
+          typeof saved.contribute_401k === "boolean"
+            ? saved.contribute_401k
+            : (saved.retirement_401k_contribution_percent ?? 0) > 0,
         monthly_spending: saved.monthly_spending ?? (saved.annual_spending ?? 0) / 12,
         monthly_retirement_spending:
           saved.monthly_retirement_spending ?? (saved.retirement_spending ?? 0) / 12,
@@ -231,6 +249,16 @@ export function NewScenarioDialog(props: {
   const retirement401k = draft.has_401k ? draft.retirement_401k : 0;
   const otherInvestments = draft.has_other_investments ? draft.investments : 0;
   const invested = retirement401k + otherInvestments;
+  const contributionPercent = draft.contribute_401k
+    ? draft.retirement_401k_contribution_percent
+    : 0;
+  const uncapped401kContribution = draft.annual_income * contributionPercent / 100;
+  const annual401kContribution = Math.min(
+    uncapped401kContribution,
+    EMPLOYEE_401K_DEFERRAL_LIMIT_2026,
+  );
+  const contributionIsCapped = uncapped401kContribution > annual401kContribution;
+  const hasInvestments = invested > 0 || annual401kContribution > 0;
   const wealth = cash + invested;
   const end =
     draft.start_date && draft.duration_years > 0 && draft.duration_years <= 120
@@ -250,9 +278,17 @@ export function NewScenarioDialog(props: {
       return "Choose Yes or No to continue.";
     if (index === 3 && draft.has_other_investments && draft.investments <= 0)
       return "Enter the current value of your other investments.";
-    if (index === 5 && !draft.cash_profile_id)
+    if (index === 5 && draft.contribute_401k && draft.annual_income <= 0)
+      return "Enter a positive annual gross salary before adding a 401(k) contribution.";
+    if (
+      index === 5 &&
+      draft.contribute_401k &&
+      draft.retirement_401k_contribution_percent <= 0
+    )
+      return "Choose a positive 401(k) contribution percentage.";
+    if (index === 6 && !draft.cash_profile_id)
       return "Choose a cash return assumption.";
-    if (index === 5 && invested > 0 && (!draft.stock_profile_id || !draft.bond_profile_id))
+    if (index === 6 && hasInvestments && (!draft.stock_profile_id || !draft.bond_profile_id))
       return "Choose stock and bond return assumptions.";
     return undefined;
   };
@@ -285,7 +321,7 @@ export function NewScenarioDialog(props: {
     }, props.onClose);
   };
   const finish = () => {
-    const problem = stepProblem(0) ?? stepProblem(5);
+    const problem = stepProblem(0) ?? stepProblem(5) ?? stepProblem(6);
     if (problem) {
       setStepError(problem);
       return;
@@ -301,7 +337,7 @@ export function NewScenarioDialog(props: {
         cash,
         retirement_401k: retirement401k,
         investments: otherInvestments,
-        fund_from_investments: invested > 0 && draft.fund_from_investments,
+        fund_from_investments: hasInvestments && draft.fund_from_investments,
       });
       const scenario = await api.scenarios.get(result.scenario_id);
       localStorage.removeItem(key);
@@ -313,24 +349,24 @@ export function NewScenarioDialog(props: {
     <div
       style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 4 }}
     >
-      {step > 0 && (
-        <Button
-          type="button"
-          onClick={() => {
-            setStepError(undefined);
-            setStep((current) => current - 1);
-          }}
-        >
-          Back
-        </Button>
-      )}
+      <Button type="button" onClick={props.onClose}>
+        Cancel
+      </Button>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginLeft: "auto" }}>
-        <Button type="button" onClick={props.onClose}>
-          Cancel
-        </Button>
         {step === 0 && (
           <Button type="button" disabled={submit.busy} onClick={createBlank}>
             Create blank scenario
+          </Button>
+        )}
+        {step > 0 && (
+          <Button
+            type="button"
+            onClick={() => {
+              setStepError(undefined);
+              setStep((current) => current - 1);
+            }}
+          >
+            Back
           </Button>
         )}
         <Button type="submit" variant="primary" disabled={submit.busy}>
@@ -482,9 +518,51 @@ export function NewScenarioDialog(props: {
 
       {step === 5 && (
         <>
+          <Question>Would you like to contribute part of your salary to a 401(k)?</Question>
+          <YesNo
+            name="contribute-401k"
+            value={draft.contribute_401k}
+            onChange={(contribute_401k) =>
+              patch({
+                contribute_401k,
+                retirement_401k_contribution_percent:
+                  contribute_401k && draft.retirement_401k_contribution_percent === 0
+                    ? 6
+                    : draft.retirement_401k_contribution_percent,
+              })
+            }
+          />
+          {draft.contribute_401k && (
+            <>
+              <RangeField
+                label={`Contribution — ${draft.retirement_401k_contribution_percent}% of gross salary`}
+                min={0}
+                max={100}
+                step={1}
+                value={draft.retirement_401k_contribution_percent}
+                onValueChange={(retirement_401k_contribution_percent) =>
+                  patch({ retirement_401k_contribution_percent })
+                }
+              />
+              <p style={{ margin: 0 }}>
+                <strong>${annual401kContribution.toLocaleString()}</strong> will be contributed
+                each year until retirement and invested at your selected stock/bond mix.
+                {contributionIsCapped && " Your selected percentage exceeds the annual cap."}
+              </p>
+              <p style={{ margin: 0 }}>
+                Capped at $24,500, the 2026 basic employee-deferral limit. This starter does
+                not add employer matching or age-based catch-up contributions.
+              </p>
+            </>
+          )}
+        </>
+      )}
+
+      {step === 6 && (
+        <>
           <Question>Which assumptions should this plan use?</Question>
           {choice("Cash return assumption", "cash_profile_id")}
-          {invested > 0 && (
+          {hasInvestments && (
             <>
               {number("Stock allocation percent", "stock_percent", 100)}
               <DialogRow>
@@ -492,10 +570,10 @@ export function NewScenarioDialog(props: {
                 {choice("Bond return assumption", "bond_profile_id")}
               </DialogRow>
               <p style={{ margin: 0 }}>
-                Invested: ${(invested * draft.stock_percent / 100).toLocaleString()} stocks + ${
+                Opening investments: ${(invested * draft.stock_percent / 100).toLocaleString()} stocks + ${
                   (invested * (1 - draft.stock_percent / 100)).toLocaleString()
                 } bonds = ${invested.toLocaleString()}. The same starter allocation is applied
-                to each investment account.
+                to each investment account and new 401(k) contributions.
               </p>
               <Field label="Spending funding">
                 <Dropdown
@@ -505,7 +583,7 @@ export function NewScenarioDialog(props: {
                     { value: "checking", label: "Checking only — no investment withdrawals" },
                     {
                       value: "investments",
-                      label: "Checking, then withdraw from investment accounts",
+                      label: "Checking, then withdraw from savings",
                     },
                   ]}
                   value={draft.fund_from_investments ? "investments" : "checking"}
@@ -561,7 +639,7 @@ export function NewScenarioDialog(props: {
         </>
       )}
 
-      {step === 6 && (
+      {step === 7 && (
         <>
           <Question>Review your starter plan</Question>
           <p style={{ margin: 0 }}>
@@ -572,7 +650,7 @@ export function NewScenarioDialog(props: {
             {" + "}other investments ${otherInvestments.toLocaleString()} = ${wealth.toLocaleString()}
             {" opening wealth."}
           </p>
-          {invested > 0 && (
+          {hasInvestments && (
             <p style={{ margin: 0 }}>
               Investments start at {draft.stock_percent}% stocks and {100 - draft.stock_percent}% bonds.
             </p>
@@ -580,9 +658,14 @@ export function NewScenarioDialog(props: {
           <p style={{ margin: 0 }}>
             Annual gross salary ${draft.annual_income.toLocaleString()}; monthly spending ${draft.monthly_spending.toLocaleString()} before retirement and ${draft.monthly_retirement_spending.toLocaleString()} after.
           </p>
+          {annual401kContribution > 0 && (
+            <p style={{ margin: 0 }}>
+              401(k) contribution: {contributionPercent}% of gross salary, ${annual401kContribution.toLocaleString()} per year at the starting salary.
+            </p>
+          )}
           <p style={{ margin: 0 }}>
-            Funding: {invested > 0 && draft.fund_from_investments
-              ? "Checking, then investment accounts via tax-aware shortfall withdrawals"
+            Funding: {hasInvestments && draft.fund_from_investments
+              ? "Checking, then withdraw from savings for both working and retirement spending"
               : "Checking only; investments do not automatically fund spending"}.
           </p>
           {(!draft.monthly_spending || !draft.monthly_retirement_spending) && (

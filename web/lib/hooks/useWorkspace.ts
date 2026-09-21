@@ -112,6 +112,7 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
     return {
       scenario,
       params: {
+        name: scenario.name,
         start: scenario.start_date,
         durationYears: scenario.duration_years,
         birthDate: scenario.birth_date ?? "",

@@ -16,6 +16,7 @@ export type SetupPlan = {
   bond_profile_id: number;
   investment_tax_status: string;
   annual_income: number;
+  retirement_401k_contribution_percent: number;
   annual_spending: number;
   retirement_spending: number;
   inflation_profile_id: number | null;

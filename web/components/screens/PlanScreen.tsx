@@ -61,7 +61,6 @@ function blankEvent(name: string): EventBody {
  */
 export function PlanScreen({
   scenarioId,
-  scenarioName,
   params,
   assumptions,
   axis,
@@ -71,7 +70,6 @@ export function PlanScreen({
   offline,
 }: {
   scenarioId: number;
-  scenarioName: string;
   params: ScenarioParams;
   assumptions: AssumptionChoices;
   axis: PlanAxis;
@@ -110,6 +108,11 @@ export function PlanScreen({
    */
   const saveParams = async (patch: Partial<ScenarioParams>) => {
     const body: UpdateScenario = {};
+    if (patch.name != null) {
+      const name = patch.name.trim();
+      if (!name) throw new Error("Enter a scenario name.");
+      body.name = name;
+    }
     if (patch.start != null) body.start_date = patch.start;
     if (patch.birthDate) body.birth_date = patch.birthDate;
     if (patch.durationYears != null) body.duration_years = patch.durationYears;
@@ -200,7 +203,6 @@ export function PlanScreen({
   return (
     <>
       <ScenarioStrip
-        scenarioName={scenarioName}
         params={params}
         assumptions={assumptions}
         onChange={saveParams}
