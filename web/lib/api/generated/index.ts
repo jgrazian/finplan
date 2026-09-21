@@ -68,6 +68,7 @@ export type { RealNetWorthSummary } from "./RealNetWorthSummary";
 export type { RealQuantilePoint } from "./RealQuantilePoint";
 export type { RealTerminalStats } from "./RealTerminalStats";
 export type { RecoveryEmail } from "./RecoveryEmail";
+export type { RegisterCredentials } from "./RegisterCredentials";
 export type { ReorderRequest } from "./ReorderRequest";
 export type { ResetPassword } from "./ResetPassword";
 export type { Results } from "./Results";

@@ -29,6 +29,7 @@ pub struct SetupPlan {
     pub duration_years: i64,
     pub retirement_age: u8,
     pub cash: f64,
+    pub retirement_401k: f64,
     pub investments: f64,
     pub stock_percent: f64,
     pub cash_profile_id: i64,
@@ -70,6 +71,7 @@ fn validate(p: &SetupPlan) -> ApiResult<()> {
     }
     if [
         p.cash,
+        p.retirement_401k,
         p.investments,
         p.annual_income,
         p.annual_spending,
@@ -82,6 +84,11 @@ fn validate(p: &SetupPlan) -> ApiResult<()> {
     {
         return Err(ApiError::bad_request(
             "Amounts must be finite and nonnegative; stock allocation must be 0–100%",
+        ));
+    }
+    if p.fund_from_investments && p.retirement_401k + p.investments == 0. {
+        return Err(ApiError::bad_request(
+            "Investment funding requires a 401(k) or another investment account",
         ));
     }
     if !p.assumptions_confirmed
@@ -138,10 +145,17 @@ async fn create(
         return Ok(Json(SetupCreated { scenario_id: id }));
     }
     crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
+    let invested = p.retirement_401k + p.investments;
     for (table, id) in [
         ("return_profiles", Some(p.cash_profile_id)),
-        ("return_profiles", Some(p.stock_profile_id)),
-        ("return_profiles", Some(p.bond_profile_id)),
+        (
+            "return_profiles",
+            (invested > 0.).then_some(p.stock_profile_id),
+        ),
+        (
+            "return_profiles",
+            (invested > 0.).then_some(p.bond_profile_id),
+        ),
         ("inflation_profiles", p.inflation_profile_id),
         ("tax_configs", p.tax_config_id),
     ] {
@@ -175,8 +189,17 @@ async fn create(
         .bind(p.cash_profile_id)
         .execute(&mut *tx)
         .await?;
-    let investment: i64 = sqlx::query_scalar("INSERT INTO accounts(scenario_id,name,flavor,sort_order) VALUES(?,'Investments','Investment',1) RETURNING id").bind(id).fetch_one(&mut *tx).await?;
-    sqlx::query("INSERT INTO account_investment(account_id,tax_status,cash_value,cash_return_profile_id) VALUES(?,?,0,?)").bind(investment).bind(&p.investment_tax_status).bind(p.cash_profile_id).execute(&mut *tx).await?;
+    let mut investment_accounts = Vec::new();
+    if p.retirement_401k > 0. {
+        let account: i64 = sqlx::query_scalar("INSERT INTO accounts(scenario_id,name,flavor,sort_order) VALUES(?,'401(k)','Investment',1) RETURNING id").bind(id).fetch_one(&mut *tx).await?;
+        sqlx::query("INSERT INTO account_investment(account_id,tax_status,cash_value,cash_return_profile_id) VALUES(?,'TaxDeferred',0,?)").bind(account).bind(p.cash_profile_id).execute(&mut *tx).await?;
+        investment_accounts.push((account, p.retirement_401k));
+    }
+    if p.investments > 0. {
+        let account: i64 = sqlx::query_scalar("INSERT INTO accounts(scenario_id,name,flavor,sort_order) VALUES(?,'Other investments','Investment',2) RETURNING id").bind(id).fetch_one(&mut *tx).await?;
+        sqlx::query("INSERT INTO account_investment(account_id,tax_status,cash_value,cash_return_profile_id) VALUES(?,?,0,?)").bind(account).bind(&p.investment_tax_status).bind(p.cash_profile_id).execute(&mut *tx).await?;
+        investment_accounts.push((account, p.investments));
+    }
     for (name, profile, fraction) in [
         (
             "Stock allocation",
@@ -189,8 +212,13 @@ async fn create(
             1. - p.stock_percent / 100.,
         ),
     ] {
+        if investment_accounts.is_empty() {
+            break;
+        }
         let asset: i64 = sqlx::query_scalar("INSERT INTO assets(scenario_id,name,initial_price,return_profile_id) VALUES(?,?,1,?) RETURNING id").bind(id).bind(name).bind(profile).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO positions(account_id,asset_id,purchase_date,units,cost_basis) VALUES(?,?,?,?,?)").bind(investment).bind(asset).bind(&p.start_date).bind(p.investments*fraction).bind(p.investments*fraction).execute(&mut *tx).await?;
+        for (account, value) in &investment_accounts {
+            sqlx::query("INSERT INTO positions(account_id,asset_id,purchase_date,units,cost_basis) VALUES(?,?,?,?,?)").bind(account).bind(asset).bind(&p.start_date).bind(value*fraction).bind(value*fraction).execute(&mut *tx).await?;
+        }
     }
     let adjusted = |value| AmountSpec::InflationAdjusted {
         inner: Box::new(AmountSpec::Fixed { value }),
@@ -245,8 +273,9 @@ async fn create(
                             }),
                         }),
                     },
-                    sources: Some(WithdrawalSourcesSpec::SingleAccount {
-                        account_id: investment,
+                    sources: Some(WithdrawalSourcesSpec::Strategy {
+                        strategy: WithdrawalStrategy::TaxEfficientEarly,
+                        exclude_accounts: vec![],
                     }),
                     amount_mode: AmountMode::Net,
                     lot_method: LotMethod::Fifo,

@@ -122,6 +122,7 @@ impl TestApp {
                 serde_json::to_vec(&json!({
                     "email": email,
                     "password": "correct-horse-battery-staple",
+                    "password_confirmation": "correct-horse-battery-staple",
                 }))
                 .unwrap(),
             ))
@@ -1108,7 +1109,6 @@ async fn the_profile_form_can_clear_a_field_it_previously_set() {
         .put(
             "/api/auth/profile",
             json!({
-                "email": "profile@example.com",
                 "display_name": "Dana A.",
                 "birth_date": "1981-04-12"
             }),
@@ -1123,7 +1123,7 @@ async fn the_profile_form_can_clear_a_field_it_previously_set() {
     let (status, user) = app
         .put(
             "/api/auth/profile",
-            json!({"email": "profile@example.com", "display_name": "", "birth_date": null}),
+            json!({"display_name": "", "birth_date": null}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
@@ -1132,6 +1132,27 @@ async fn the_profile_form_can_clear_a_field_it_previously_set() {
 
     let (_, me) = app.get("/api/auth/me").await;
     assert_eq!(me["birth_date"], Value::Null);
+}
+
+#[tokio::test]
+async fn profile_email_is_not_an_editable_field() {
+    let mut app = TestApp::new().await;
+    app.login_as("fixed-email@example.com").await;
+
+    let (status, _) = app
+        .put(
+            "/api/auth/profile",
+            json!({
+                "email": "other@example.com",
+                "display_name": "Dana A.",
+                "birth_date": "1981-04-12"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let (_, me) = app.get("/api/auth/me").await;
+    assert_eq!(me["email"], "fixed-email@example.com");
 }
 
 #[tokio::test]
@@ -1231,7 +1252,11 @@ async fn changing_the_password_ends_every_other_session() {
     let (status, body) = app
         .post(
             "/api/auth/password",
-            json!({"current_password": "wrong-one-entirely", "new_password": "a-much-longer-one"}),
+            json!({
+                "current_password": "wrong-one-entirely",
+                "new_password": "a-much-longer-one",
+                "new_password_confirmation": "a-much-longer-one"
+            }),
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
@@ -1241,7 +1266,8 @@ async fn changing_the_password_ends_every_other_session() {
             "/api/auth/password",
             json!({
                 "current_password": "correct-horse-battery-staple",
-                "new_password": "a-much-longer-one"
+                "new_password": "a-much-longer-one",
+                "new_password_confirmation": "a-much-longer-one"
             }),
         )
         .await;
@@ -1253,6 +1279,46 @@ async fn changing_the_password_ends_every_other_session() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(sessions.as_array().unwrap().len(), 1);
     assert_eq!(sessions[0]["current"], true);
+}
+
+#[tokio::test]
+async fn registration_and_password_change_require_matching_confirmation() {
+    let mut app = TestApp::new().await;
+
+    let (status, _) = app
+        .post(
+            "/api/auth/register",
+            json!({"email": "match@example.com", "password": "a-long-enough-password"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let (status, body) = app
+        .post(
+            "/api/auth/register",
+            json!({
+                "email": "match@example.com",
+                "password": "a-long-enough-password",
+                "password_confirmation": "a-different-password"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["message"], "passwords do not match");
+
+    app.login_as("match@example.com").await;
+    let (status, body) = app
+        .post(
+            "/api/auth/password",
+            json!({
+                "current_password": "correct-horse-battery-staple",
+                "new_password": "a-different-long-password",
+                "new_password_confirmation": "a-third-long-password"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"]["message"], "passwords do not match");
 }
 
 #[tokio::test]
@@ -1314,7 +1380,11 @@ async fn deleting_an_account_takes_its_scenarios_with_it() {
     let (status, _) = app
         .post(
             "/api/auth/register",
-            json!({"email": "goodbye@example.com", "password": "correct-horse-battery-staple"}),
+            json!({
+                "email": "goodbye@example.com",
+                "password": "correct-horse-battery-staple",
+                "password_confirmation": "correct-horse-battery-staple"
+            }),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);

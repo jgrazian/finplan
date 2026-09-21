@@ -21,12 +21,14 @@ const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 export function SecurityPanel({ readOnly }: { readOnly?: boolean }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [changed, setChanged] = useState(false);
   const password = useSubmit();
   const revoking = useSubmit();
   const sessions = useAsync(() => api.account.sessions(), []);
 
   const rows = sessions.data ?? [];
+  const passwordsMatch = next === confirmation;
 
   return (
     <div>
@@ -56,18 +58,43 @@ export function SecurityPanel({ readOnly }: { readOnly?: boolean }) {
             }}
           />
         </Field>
+        <Field label="Confirm new password">
+          <Input
+            type="password"
+            autoComplete="new-password"
+            placeholder="Type it again"
+            value={confirmation}
+            readOnly={readOnly}
+            onChange={(e) => {
+              setConfirmation(e.target.value);
+              setChanged(false);
+            }}
+          />
+        </Field>
       </div>
+
+      {confirmation && !passwordsMatch && (
+        <p role="alert" style={{ margin: "8px 0 0", fontSize: 12, color: "var(--color-accent-700)" }}>
+          New passwords do not match.
+        </p>
+      )}
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
         <Button
-          disabled={!current || !next || password.busy || readOnly}
+          disabled={!current || !next || !confirmation || !passwordsMatch || password.busy || readOnly}
           title={readOnly ? "No connection to the server." : undefined}
           onClick={() =>
             password.run(
-              () => api.account.changePassword({ current_password: current, new_password: next }),
+              () =>
+                api.account.changePassword({
+                  current_password: current,
+                  new_password: next,
+                  new_password_confirmation: confirmation,
+                }),
               () => {
                 setCurrent("");
                 setNext("");
+                setConfirmation("");
                 setChanged(true);
                 // Every other session was just ended, so the list is stale.
                 sessions.reload();

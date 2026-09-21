@@ -21,7 +21,8 @@ export function SegmentedControl<T extends string>({
   ariaLabel,
 }: {
   options: ReadonlyArray<SegmentOption<T>>;
-  value: T;
+  /** `null` leaves every option unselected, useful for an unanswered question. */
+  value: T | null;
   onChange: (value: T) => void;
   /** Defaults to a generated id; set it when two controls share a form. */
   name?: string;

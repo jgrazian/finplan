@@ -14,9 +14,11 @@ export function LoginForm({ session }: { session: Session }) {
   const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
   const [displayName, setDisplayName] = useState("");
 
   const registering = mode === "signUp";
+  const passwordsMatch = password === passwordConfirmation;
 
   if (recovering) return <RecoveryForm onBack={() => setRecovering(false)} />;
 
@@ -24,7 +26,10 @@ export function LoginForm({ session }: { session: Session }) {
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (registering) session.signUp(email, password, displayName || undefined);
+        if (registering) {
+          if (!passwordsMatch) return;
+          session.signUp(email, password, passwordConfirmation, displayName || undefined);
+        }
         else session.signIn(email, password);
       }}
       style={{
@@ -58,14 +63,32 @@ export function LoginForm({ session }: { session: Session }) {
           autoComplete={registering ? "new-password" : "current-password"}
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          minLength={registering ? 10 : undefined}
           required
         />
       </Field>
 
       {registering && (
-        <Field label="Display name (optional)">
-          <CompactInput value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-        </Field>
+        <>
+          <Field label="Confirm password">
+            <CompactInput
+              type="password"
+              autoComplete="new-password"
+              value={passwordConfirmation}
+              onChange={(e) => setPasswordConfirmation(e.target.value)}
+              minLength={10}
+              required
+            />
+          </Field>
+          {passwordConfirmation && !passwordsMatch && (
+            <p role="alert" style={{ margin: 0, fontSize: 12, color: "var(--color-accent-700)" }}>
+              Passwords do not match.
+            </p>
+          )}
+          <Field label="Display name (optional)">
+            <CompactInput value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          </Field>
+        </>
       )}
 
       {session.error && (
@@ -74,14 +97,22 @@ export function LoginForm({ session }: { session: Session }) {
         </p>
       )}
 
-      <Button type="submit" variant="primary" block disabled={session.busy}>
+      <Button
+        type="submit"
+        variant="primary"
+        block
+        disabled={session.busy || (registering && (!passwordConfirmation || !passwordsMatch))}
+      >
         {session.busy ? "…" : registering ? "Register" : "Sign in"}
       </Button>
       <Button
         type="button"
         variant="ghost"
         block
-        onClick={() => setMode(registering ? "signIn" : "signUp")}
+        onClick={() => {
+          setMode(registering ? "signIn" : "signUp");
+          setPasswordConfirmation("");
+        }}
       >
         {registering ? "I already have an account" : "Create an account"}
       </Button>

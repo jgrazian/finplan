@@ -31,6 +31,7 @@ import type {
   PasswordChange,
   Position,
   Profile,
+  RegisterCredentials,
   ReorderRequest,
   Results,
   Run,
@@ -54,7 +55,7 @@ export const api = {
   auth: {
     me: () => http.get<UserResponse>("/auth/me"),
     login: (body: Credentials) => http.post<UserResponse>("/auth/login", body),
-    register: (body: Credentials) => http.post<UserResponse>("/auth/register", body),
+    register: (body: RegisterCredentials) => http.post<UserResponse>("/auth/register", body),
     logout: () => http.post<void>("/auth/logout"),
   },
 

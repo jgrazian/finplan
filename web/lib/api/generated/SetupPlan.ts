@@ -8,6 +8,7 @@ export type SetupPlan = {
   duration_years: number;
   retirement_age: number;
   cash: number;
+  retirement_401k: number;
   investments: number;
   stock_percent: number;
   cash_profile_id: number;

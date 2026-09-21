@@ -34,6 +34,18 @@ pub fn router() -> Router<AppState> {
 pub struct Credentials {
     pub email: String,
     pub password: String,
+}
+
+/// The credentials needed to create an account.
+///
+/// Keeping this separate from `Credentials` makes confirmation mandatory for
+/// registration without imposing an irrelevant field on sign-in requests.
+#[derive(Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
+pub struct RegisterCredentials {
+    pub email: String,
+    pub password: String,
+    pub password_confirmation: String,
     #[serde(default)]
     pub display_name: Option<String>,
 }
@@ -105,8 +117,11 @@ async fn load_user(state: &AppState, id: &str) -> ApiResult<Json<UserResponse>> 
 async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Credentials>,
+    Json(body): Json<RegisterCredentials>,
 ) -> ApiResult<impl IntoResponse> {
+    if body.password != body.password_confirmation {
+        return Err(ApiError::bad_request("passwords do not match"));
+    }
     let email = normalize_email(&body.email)?;
     if state.config.hosted {
         super::protection::account_attempt(&email)?;
@@ -211,15 +226,15 @@ async fn me(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<
 // Profile and preferences
 // ===========================================================================
 
-/// A full replacement of the identity block, not a merge.
+/// A full replacement of the editable identity block, not a merge.
 ///
 /// The account form is a Save/Discard pair over every field at once, so an
 /// absent value means "clear this" rather than "leave it alone" — which is the
 /// only way an emptied birth date or display name can ever be sent.
 #[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 #[ts(export, optional_fields = nullable)]
 pub struct UpdateUserProfile {
-    pub email: String,
     #[serde(default)]
     pub display_name: Option<String>,
     #[serde(default)]
@@ -231,22 +246,6 @@ async fn update_profile(
     user: CurrentUser,
     Json(body): Json<UpdateUserProfile>,
 ) -> ApiResult<Json<UserResponse>> {
-    let email = normalize_email(&body.email)?;
-    if state.config.hosted {
-        super::protection::account_attempt(&email)?;
-    }
-    if state.config.hosted {
-        let current: String = sqlx::query_scalar("SELECT email FROM users WHERE id = ?")
-            .bind(&user.id)
-            .fetch_one(&state.db)
-            .await?;
-        if current != email {
-            return Err(ApiError::Conflict(
-                "Email changes require verified delivery, which is not configured on this service."
-                    .into(),
-            ));
-        }
-    }
     let display_name = blank_to_none(body.display_name);
     let birth_date = match blank_to_none(body.birth_date) {
         Some(date) => Some(validate_date(&date)?),
@@ -255,16 +254,14 @@ async fn update_profile(
 
     sqlx::query(
         "UPDATE users
-            SET email_verified_at = CASE WHEN email = ?1 THEN email_verified_at ELSE NULL END, email = ?1, display_name = ?2, birth_date = ?3, updated_at = datetime('now')
-          WHERE id = ?4",
+            SET display_name = ?1, birth_date = ?2, updated_at = datetime('now')
+          WHERE id = ?3",
     )
-    .bind(&email)
     .bind(&display_name)
     .bind(&birth_date)
     .bind(&user.id)
     .execute(&state.db)
-    .await
-    .map_err(|e| on_unique_violation(e, "an account with that email already exists"))?;
+    .await?;
 
     load_user(&state, &user.id).await
 }
@@ -325,6 +322,7 @@ async fn update_preferences(
 pub struct PasswordChange {
     pub current_password: String,
     pub new_password: String,
+    pub new_password_confirmation: String,
 }
 
 /// Change the password, and end every other session while doing it.
@@ -337,6 +335,10 @@ async fn change_password(
     user: CurrentUser,
     Json(body): Json<PasswordChange>,
 ) -> ApiResult<impl IntoResponse> {
+    if body.new_password != body.new_password_confirmation {
+        return Err(ApiError::bad_request("passwords do not match"));
+    }
+
     let stored: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?1")
         .bind(&user.id)
         .fetch_one(&state.db)

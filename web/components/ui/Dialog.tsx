@@ -15,6 +15,7 @@ export function Dialog({
   onClose,
   onSubmit,
   submitLabel,
+  footer,
   busy,
   error,
   children,
@@ -22,7 +23,9 @@ export function Dialog({
   title: string;
   onClose: () => void;
   onSubmit: () => void;
-  submitLabel: string;
+  submitLabel?: string;
+  /** Replaces the standard Cancel/submit controls for flows with multiple paths. */
+  footer?: ReactNode;
   busy?: boolean;
   error?: string;
   children: ReactNode;
@@ -83,14 +86,16 @@ export function Dialog({
           <p style={{ margin: 0, fontSize: 12, color: "var(--color-accent-700)" }}>{error}</p>
         )}
 
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
-          <Button type="button" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? "…" : submitLabel}
-          </Button>
-        </div>
+        {footer ?? (
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+            <Button type="button" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={busy}>
+              {busy ? "…" : submitLabel}
+            </Button>
+          </div>
+        )}
       </form>
     </div>
   );

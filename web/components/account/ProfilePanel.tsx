@@ -9,13 +9,11 @@ import { PanelNote, SaveRow } from "./chrome";
 
 interface Draft {
   displayName: string;
-  email: string;
   birthDate: string;
 }
 
 const toDraft = (user: UserResponse): Draft => ({
   displayName: user.display_name ?? "",
-  email: user.email,
   birthDate: user.birth_date ?? "",
 });
 
@@ -23,10 +21,10 @@ const toDraft = (user: UserResponse): Draft => ({
  * Who the account belongs to, and what a new scenario inherits from them.
  *
  * One Save over the whole block rather than a field at a time: unlike the Plan
- * strip, nothing here is being iterated on with a chart watching, and a
- * save-per-keystroke on an email address would lock you out mid-word. That is
- * also why the route is a PUT — Discard is only meaningful against a form that
- * holds every field.
+ * strip, nothing here is being iterated on with a chart watching. The email
+ * address is shown here but deliberately not part of the editable profile.
+ * The route is a PUT so Discard is meaningful against a form that holds every
+ * editable field.
  */
 export function ProfilePanel({
   user,
@@ -49,10 +47,7 @@ export function ProfilePanel({
   }
 
   const saved = toDraft(user);
-  const dirty =
-    draft.displayName !== saved.displayName ||
-    draft.email !== saved.email ||
-    draft.birthDate !== saved.birthDate;
+  const dirty = draft.displayName !== saved.displayName || draft.birthDate !== saved.birthDate;
 
   const set = (patch: Partial<Draft>) => setDraft((held) => ({ ...held, ...patch }));
 
@@ -75,12 +70,7 @@ export function ProfilePanel({
           />
         </Field>
         <Field label="Email">
-          <Input
-            type="email"
-            value={draft.email}
-            readOnly={readOnly}
-            onChange={(e) => set({ email: e.target.value })}
-          />
+          <Input type="email" value={user.email} readOnly />
         </Field>
         <Field label="Birth date">
           <DateInput
@@ -109,7 +99,6 @@ export function ProfilePanel({
             async () =>
               onSaved(
                 await api.account.updateProfile({
-                  email: draft.email.trim(),
                   display_name: draft.displayName.trim() || null,
                   birth_date: draft.birthDate || null,
                 }),

@@ -12,7 +12,12 @@ export interface Session {
   error: string | undefined;
   busy: boolean;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string, displayName?: string) => Promise<void>;
+  signUp: (
+    email: string,
+    password: string,
+    passwordConfirmation: string,
+    displayName?: string,
+  ) => Promise<void>;
   signOut: () => Promise<void>;
   /** Replace the cached user after the account screen saves a change. */
   update: (user: UserResponse) => void;
@@ -72,9 +77,14 @@ export function useSession(): Session {
     error,
     busy,
     signIn: (email, password) => attempt(() => api.auth.login({ email, password })),
-    signUp: (email, password, displayName) =>
+    signUp: (email, password, passwordConfirmation, displayName) =>
       attempt(() =>
-        api.auth.register({ email, password, display_name: displayName }),
+        api.auth.register({
+          email,
+          password,
+          password_confirmation: passwordConfirmation,
+          display_name: displayName,
+        }),
       ),
     signOut: async () => {
       try {
