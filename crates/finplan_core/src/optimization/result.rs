@@ -130,6 +130,7 @@ impl OptimizationResult {
             optimal_stats: MonteCarloStats {
                 num_iterations: 0,
                 success_rate: 0.0,
+                funding_success_rate: None,
                 mean_final_net_worth: 0.0,
                 std_dev_final_net_worth: 0.0,
                 min_final_net_worth: 0.0,

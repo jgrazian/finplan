@@ -185,6 +185,23 @@ pub struct Market {
     asset_overrides: Vec<Option<AssetOverrideRates>>,
 }
 
+/// The floor a period rate is held to before it is compounded.
+///
+/// An unbounded distribution — `Normal` with a wide standard deviation, say —
+/// can draw a return below -100%. Losing more than everything is meaningless
+/// for an unlevered holding, and the growth factor `1 + rate` would go
+/// negative, so `(1 + rate).powf(1.0 / 365.0)` (the daily factor) would be NaN
+/// and quietly poison every value derived from it. Clamping here keeps the
+/// yearly, cumulative and daily views of a rate consistent with each other.
+const MIN_RATE: f64 = -1.0;
+
+/// Clamp a rate to [`MIN_RATE`]. A NaN rate also lands on the floor, since
+/// `f64::max` returns the non-NaN operand.
+#[inline]
+fn compoundable(rate: f64) -> f64 {
+    rate.max(MIN_RATE)
+}
+
 /// Build contiguous cumulative and daily arrays from a flat rates slice.
 /// For simple (non-strided) arrays like inflation or asset overrides.
 fn build_cumulative_daily(rates: &[f64]) -> (Vec<f64>, Vec<f64>) {
@@ -193,6 +210,7 @@ fn build_cumulative_daily(rates: &[f64]) -> (Vec<f64>, Vec<f64>) {
     let mut daily = Vec::with_capacity(n);
     let mut cum = 1.0;
     for &r in rates {
+        let r = compoundable(r);
         cumulative.push(cum);
         daily.push((1.0 + r).powf(1.0 / 365.0));
         cum *= 1.0 + r;
@@ -225,6 +243,7 @@ impl Market {
             let pidx = rp_id.0 as usize;
             let mut cum = 1.0;
             for (year, &rate) in rp_values.iter().enumerate() {
+                let rate = compoundable(rate);
                 let idx = year * num_profiles + pidx;
                 profile_rates[idx] = rate;
                 profile_cumulative[idx] = cum;
@@ -321,7 +340,7 @@ impl Market {
             for year in 0..num_years {
                 let base_rate = market.profile_rates[year * market.num_profiles + pidx];
                 let noise: f64 = noise_dist.sample(rng);
-                let perturbed = (base_rate + noise).max(-1.0);
+                let perturbed = compoundable(base_rate + noise);
                 override_rates.push(perturbed);
             }
 
@@ -1792,6 +1811,43 @@ mod tests {
             return_profile_id,
             tracking_error: None,
         }
+    }
+
+    /// A wide `Normal` profile can draw a return below -100%. Compounding
+    /// `1 + rate` from a negative base used to make the daily growth factor
+    /// NaN, which spread into every asset value and net-worth figure derived
+    /// from it (and, past the API, into a NOT NULL violation on `run_stats`).
+    #[test]
+    fn returns_below_total_loss_are_floored_not_nan() {
+        let asset_id = AssetId(1);
+        let rp_id = ReturnProfileId(1);
+
+        let assets = FxHashMap::from_iter([(asset_id, asset_info(1000.0, rp_id))]);
+        let returns = FxHashMap::from_iter([(rp_id, vec![-1.5, 0.10])]);
+        let market = Market::new(&[0.02, 0.02], returns, assets);
+
+        let start_date = date(2024, 1, 1);
+        // Mid-year, so the daily factor is exercised as well as the yearly one.
+        for eval in [date(2024, 7, 1), date(2025, 1, 1), date(2025, 7, 1)] {
+            let val = market.get_asset_value(start_date, eval, asset_id).unwrap();
+            assert!(val.is_finite(), "asset value at {eval} was {val}");
+            assert!(val >= 0.0, "asset value at {eval} was {val}");
+        }
+
+        // A -100% year is a total loss, and nothing grows back out of zero.
+        let val = market
+            .get_asset_value(start_date, date(2025, 1, 1), asset_id)
+            .unwrap();
+        assert!(val.abs() < 1e-9, "expected a wipeout, got {val}");
+    }
+
+    /// The same floor applies to inflation, which feeds the non-strided
+    /// cumulative/daily builder rather than the profile one.
+    #[test]
+    fn inflation_below_total_deflation_is_floored_not_nan() {
+        let (cumulative, daily) = build_cumulative_daily(&[-2.0, 0.03]);
+        assert!(cumulative.iter().all(|v| v.is_finite()));
+        assert!(daily.iter().all(|v| v.is_finite()));
     }
 
     #[test]

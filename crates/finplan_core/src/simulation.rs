@@ -1,5 +1,8 @@
 use rustc_hash::FxHashMap;
 
+mod quantiles;
+use quantiles::RealAccumulator;
+
 use crate::apply::{SimulationScratch, process_events_with_scratch};
 use crate::config::SimulationConfig;
 use crate::error::SimulationError;
@@ -207,6 +210,7 @@ fn simulate_inner(
 
     let mut state = SimulationState::from_parameters(params, seed)?;
     state.snapshot_wealth();
+    let mut cash_shortfall_recorded = false;
 
     while state.timeline.current_date < state.timeline.end_date {
         let mut something_happened = true;
@@ -259,13 +263,48 @@ fn simulate_inner(
             metrics.record_time_step();
         }
 
+        // Expense and funding events may fire in separate same-date passes.
+        // Test only once they have all settled, not between individual effects.
+        record_cash_shortfall(&mut state, &mut cash_shortfall_recorded);
         advance_time(&mut state);
     }
 
+    // The final advance can change balances even when there are no more events.
+    record_cash_shortfall(&mut state, &mut cash_shortfall_recorded);
     state.snapshot_wealth();
     state.finalize_year_taxes();
 
     Ok(build_simulation_result(&mut state))
+}
+
+/// Record the first settled cash deficit, independently of ledger collection.
+/// Keep one warning per path so an unfunded monthly expense cannot flood results.
+fn record_cash_shortfall(state: &mut SimulationState, recorded: &mut bool) {
+    if *recorded {
+        return;
+    }
+    let lowest = state
+        .portfolio
+        .accounts
+        .values()
+        .filter_map(crate::model::Account::cash_balance)
+        .min_by(f64::total_cmp);
+    if let Some(balance) = lowest
+        && balance < -0.005
+    {
+        *recorded = true;
+        state.warnings.push(SimulationWarning {
+            date: state.timeline.current_date,
+            event_id: None,
+            message: format!(
+                "A cash account is overdrawn by ${:.2} in nominal dollars after this date's events settle. \
+                 Other assets do not automatically fund spending; add a withdrawal or transfer \
+                 rule, or reduce spending. Later recovery does not erase this shortfall.",
+                -balance
+            ),
+            kind: WarningKind::CashShortfall,
+        });
+    }
 }
 
 // ── Time advancement ─────────────────────────────────────────────────
@@ -470,12 +509,11 @@ fn capture_year_end_balances(state: &mut SimulationState, checkpoint: jiff::civi
 /// long-term (>365 days held) regardless of their month, so merging them
 /// preserves tax classification accuracy. Each group is replaced by a single
 /// lot dated Jul 1 of that year.
-fn consolidate_lots(state: &mut SimulationState) {
+fn consolidate_lots(state: &mut SimulationState, cutoff_year: i16) {
     if !state.portfolio.needs_lot_consolidation {
         return;
     }
 
-    let cutoff_year = state.timeline.current_date.year() - 2;
     let mut consolidated_any = false;
 
     for account in state.portfolio.accounts.values_mut() {
@@ -529,43 +567,50 @@ fn consolidate_lots(state: &mut SimulationState) {
 fn advance_time(state: &mut SimulationState) {
     state.maybe_rollover_year();
 
+    let previous = state.timeline.current_date;
     let next_checkpoint = find_next_checkpoint(state);
-    let days_passed =
-        crate::date_math::fast_days_between(state.timeline.current_date, next_checkpoint);
+    let days_passed = crate::date_math::fast_days_between(previous, next_checkpoint);
 
     if days_passed > 0 {
         compound_accounts(state, next_checkpoint, days_passed);
     }
 
+    // The clock moves before anything reads it.
+    //
+    // Cash has already been compounded to the checkpoint and asset prices are
+    // looked up by date, so anything measured while the clock still reads
+    // `previous` mixes two dates: December's balances at December the 1st's
+    // prices, filed under December the 1st. What made that more than untidy is
+    // that the preceding checkpoint moves with the event schedule, so on a plan
+    // whose events trigger off balances or net worth the year's snapshot landed
+    // on a different date in every iteration.
+    state.timeline.current_date = next_checkpoint;
+
     // Capture year-end balances for RMD calculations (December 31)
-    let dec_31 = jiff::civil::date(state.timeline.current_date.year(), 12, 31);
+    let dec_31 = jiff::civil::date(previous.year(), 12, 31);
     if next_checkpoint == dec_31 {
         capture_year_end_balances(state, next_checkpoint);
     }
 
     // Reset monthly contributions on month boundary
-    let prev_month = state.timeline.current_date.month();
-    let next_month = next_checkpoint.month();
-    let prev_year = state.timeline.current_date.year();
-    let next_year = next_checkpoint.year();
-
-    if prev_month != next_month || prev_year != next_year {
+    if previous.month() != next_checkpoint.month() || previous.year() != next_checkpoint.year() {
         state.reset_monthly_contributions();
     }
 
     // Reset yearly contributions and consolidate lots on year boundary
-    if prev_year != next_year {
+    if previous.year() != next_checkpoint.year() {
         state.portfolio.contributions_ytd.clear();
-        consolidate_lots(state);
+        // Counted from the year being left, so which lots are old enough to
+        // merge does not depend on whether the clock has already ticked over.
+        consolidate_lots(state, previous.year() - 2);
     }
-
-    state.timeline.current_date = next_checkpoint;
 }
 
 // ── Online statistics & convergence ──────────────────────────────────
 
 struct OnlineStats {
     count: usize,
+    funded_count: usize,
     sum: f64,
     sum_sq: f64,
 }
@@ -574,19 +619,22 @@ impl OnlineStats {
     fn new() -> Self {
         Self {
             count: 0,
+            funded_count: 0,
             sum: 0.0,
             sum_sq: 0.0,
         }
     }
 
-    fn add(&mut self, value: f64) {
+    fn add(&mut self, value: f64, funded: bool) {
         self.count += 1;
+        self.funded_count += usize::from(funded);
         self.sum += value;
         self.sum_sq += value * value;
     }
 
     fn merge(&mut self, other: &OnlineStats) {
         self.count += other.count;
+        self.funded_count += other.funded_count;
         self.sum += other.sum;
         self.sum_sq += other.sum_sq;
     }
@@ -744,6 +792,7 @@ struct MonteCarloInternalResult {
     stats: MonteCarloStats,
     percentile_runs: Vec<(f64, SimulationResult)>,
     mean_accumulators: Option<MeanAccumulators>,
+    real_net_worth: Option<crate::model::RealNetWorthSummary>,
     percentile_seeds: Vec<(f64, u64)>,
 }
 
@@ -753,6 +802,11 @@ fn monte_carlo_core(
     config: &MonteCarloConfig,
     options: &MonteCarloOptions<'_>,
 ) -> Result<MonteCarloInternalResult, SimulationError> {
+    if config.iterations == 0 || config.parallel_batches == 0 {
+        return Err(SimulationError::Config(
+            "iterations and parallel_batches must be positive".into(),
+        ));
+    }
     let parallel_batches = config.parallel_batches;
 
     // Reset and check progress if tracking
@@ -764,7 +818,8 @@ fn monte_carlo_core(
     }
 
     // Validate by running one simulation
-    let _ = simulate(params, 0)?;
+    let template = simulate(params, 0)?;
+    let mut real_accumulator = options.run_phase2.then(|| RealAccumulator::new(&template));
 
     if let Some(progress) = options.progress
         && progress.is_cancelled()
@@ -772,7 +827,7 @@ fn monte_carlo_core(
         return Err(SimulationError::Cancelled);
     }
 
-    // Disable ledger for batch iterations (only need final_net_worth)
+    // Funding checks and warnings still run without the ledger.
     let mut batch_params = params.clone();
     batch_params.collect_ledger = false;
 
@@ -781,6 +836,12 @@ fn monte_carlo_core(
         .convergence
         .as_ref()
         .map_or(config.iterations, |c| c.max_iterations);
+
+    if max_iterations < min_iterations {
+        return Err(SimulationError::Config(
+            "max_iterations must be at least iterations".into(),
+        ));
+    }
 
     let mut convergence_tracker = config
         .convergence
@@ -811,21 +872,37 @@ fn monte_carlo_core(
             return Err(SimulationError::Cancelled);
         }
 
-        // Dispatch all remaining work this round, one batch per core.
-        // Each core gets an equal share of iterations.
-        let remaining = max_iterations - current_count;
+        // Dispatch a round of work, one batch per core, each core taking an
+        // equal share of it. A fixed-count run has one round: everything.
+        //
+        // A converging run cannot, because the point of it is to stop early —
+        // dispatching the whole ceiling would run every iteration before the
+        // metric was ever looked at, which is the fixed run it was chosen
+        // instead of. So it takes the minimum sample first, then `batch_size`
+        // per core, and tests the metric between rounds.
+        let round = match convergence_tracker {
+            Some(_) if current_count < min_iterations => min_iterations - current_count,
+            Some(_) => config.batch_size.max(1) * parallel_batches,
+            None => usize::MAX,
+        };
+        let remaining = (max_iterations - current_count).min(round);
         let num_batches = parallel_batches.min(remaining);
         let per_batch = remaining / num_batches;
         let extra = remaining % num_batches;
 
         // Each batch returns its results, stats, and optional local mean accumulator.
         // No shared Mutex — each thread accumulates independently, merge after.
-        type BatchOutput = (Vec<(u64, f64)>, OnlineStats, Option<MeanAccumulators>);
-        let batch_outputs: Vec<BatchOutput> = (0..num_batches)
+        type BatchOutput = (
+            Vec<(u64, f64)>,
+            OnlineStats,
+            Option<MeanAccumulators>,
+            Option<RealAccumulator>,
+        );
+        let batch_outputs: Result<Vec<BatchOutput>, SimulationError> = (0..num_batches)
             .into_par_iter()
             .map(|local_batch_idx| {
                 if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                    return (Vec::new(), OnlineStats::new(), None);
+                    return Err(SimulationError::Cancelled);
                 }
 
                 let mut rng =
@@ -833,6 +910,7 @@ fn monte_carlo_core(
                 let mut scratch = SimulationScratch::new();
                 let mut local_stats = OnlineStats::new();
                 let mut local_acc: Option<MeanAccumulators> = None;
+                let mut local_real = options.run_phase2.then(|| RealAccumulator::new(&template));
 
                 // Distribute remainder across first `extra` batches
                 let this_batch_size = per_batch + if local_batch_idx < extra { 1 } else { 0 };
@@ -847,9 +925,21 @@ fn monte_carlo_core(
                     }
 
                     let seed = rng.next_u64();
-                    if let Ok(result) = simulate_with_scratch(&batch_params, seed, &mut scratch) {
+                    {
+                        // Never silently discard/retry failed iterations: doing so biases
+                        // both distributions and success rates toward survivors.
+                        let result = simulate_with_scratch(&batch_params, seed, &mut scratch)?;
                         let fnw = final_net_worth(&result);
-                        local_stats.add(fnw);
+                        if !fnw.is_finite() {
+                            return Err(SimulationError::Config(
+                                "nonfinite terminal net worth".into(),
+                            ));
+                        }
+                        if let Some(acc) = &mut local_real {
+                            acc.accumulate(&result)?;
+                        }
+                        // A skipped/failed effect is not evidence that the plan was funded.
+                        local_stats.add(fnw, result.warnings.is_empty());
                         local_results.push((seed, fnw));
 
                         if compute_means {
@@ -868,12 +958,15 @@ fn monte_carlo_core(
                     }
                 }
 
-                (local_results, local_stats, local_acc)
+                Ok((local_results, local_stats, local_acc, local_real))
             })
             .collect();
 
         // Merge results from all batches (single-threaded, fast)
-        for (results, stats, local_acc) in batch_outputs {
+        for (results, stats, local_acc, local_real) in batch_outputs? {
+            if let (Some(acc), Some(local)) = (&mut real_accumulator, local_real) {
+                acc.merge(local);
+            }
             seed_results.extend(results);
             online_stats.merge(&stats);
             if let Some(acc) = local_acc {
@@ -947,8 +1040,8 @@ fn monte_carlo_core(
     let percentile_runs = if options.run_phase2 {
         percentile_seeds
             .iter()
-            .filter_map(|&(p, seed)| simulate(params, seed).ok().map(|result| (p, result)))
-            .collect()
+            .map(|&(p, seed)| simulate(params, seed).map(|result| (p, result)))
+            .collect::<Result<Vec<_>, _>>()?
     } else {
         Vec::new()
     };
@@ -956,6 +1049,11 @@ fn monte_carlo_core(
     let stats = MonteCarloStats {
         num_iterations: actual_iterations,
         success_rate,
+        funding_success_rate: Some(if actual_iterations > 0 {
+            online_stats.funded_count as f64 / actual_iterations as f64
+        } else {
+            0.0
+        }),
         mean_final_net_worth,
         std_dev_final_net_worth,
         min_final_net_worth,
@@ -970,6 +1068,7 @@ fn monte_carlo_core(
         stats,
         percentile_runs,
         mean_accumulators,
+        real_net_worth: real_accumulator.map(RealAccumulator::finish).transpose()?,
         percentile_seeds,
     })
 }
@@ -979,7 +1078,7 @@ fn monte_carlo_core(
 /// Memory-efficient Monte Carlo simulation.
 ///
 /// Runs simulations in two phases:
-/// 1. First pass: Run all iterations, keeping only (seed, `final_net_worth`) and accumulating mean sums
+/// 1. First pass: Keep (seed, nominal terminal wealth), real annual vectors and optional mean sums
 /// 2. Second pass: Re-run only the specific seeds needed for percentile runs
 ///
 /// Supports convergence-based stopping via `config.convergence`.
@@ -996,6 +1095,7 @@ pub fn monte_carlo_simulate_with_config(
         stats: result.stats,
         percentile_runs: result.percentile_runs,
         mean_accumulators: result.mean_accumulators,
+        real_net_worth: result.real_net_worth,
     })
 }
 
@@ -1034,6 +1134,7 @@ pub fn monte_carlo_simulate_with_progress(
         stats: result.stats,
         percentile_runs: result.percentile_runs,
         mean_accumulators: result.mean_accumulators,
+        real_net_worth: result.real_net_worth,
     })
 }
 

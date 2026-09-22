@@ -1,0 +1,21 @@
+FROM rust:1-bookworm AS build
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
+COPY crates crates
+RUN cargo build --locked --release --bin finplan-server
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl python3 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --create-home finplan \
+    && mkdir /data && chown finplan:finplan /data
+COPY --from=build /build/target/release/finplan-server /usr/local/bin/finplan-server
+COPY scripts/sqlite-backup.py /usr/local/bin/sqlite-backup.py
+USER finplan
+WORKDIR /data
+ENV FINPLAN_BIND=0.0.0.0:8080 DATABASE_URL=sqlite:///data/finplan.db
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
+    CMD curl --fail --silent http://127.0.0.1:8080/api/health || exit 1
+ENTRYPOINT ["finplan-server"]

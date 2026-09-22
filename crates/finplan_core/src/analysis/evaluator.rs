@@ -606,6 +606,7 @@ pub fn sweep_simulate_lazy(
     let default_stats = MonteCarloStats {
         num_iterations: 0,
         success_rate: 0.0,
+        funding_success_rate: None,
         mean_final_net_worth: 0.0,
         std_dev_final_net_worth: 0.0,
         min_final_net_worth: 0.0,
@@ -660,22 +661,23 @@ pub fn sweep_simulate_lazy(
     })
 }
 
-/// Apply a parameter value to a simulation config
-fn apply_parameter(
+/// Apply a parameter value to a simulation config.
+///
+/// The event is located by its own `event_id` rather than by position: callers
+/// number events from zero (the builder, the server's id map) or from one (the
+/// TUI's converter), and only the field says which.
+pub fn apply_parameter(
     config: &SimulationConfig,
     param: &SweepParameter,
     value: f64,
 ) -> Result<SimulationConfig, SimulationError> {
     let mut modified = config.clone();
 
-    // Find the event
-    let event_idx = (param.event_id.0 as usize).saturating_sub(1);
-    if event_idx >= modified.events.len() {
-        return Err(SimulationError::Config(format!(
-            "Event {} not found",
-            param.event_id.0
-        )));
-    }
+    let event_idx = modified
+        .events
+        .iter()
+        .position(|e| e.event_id == param.event_id)
+        .ok_or_else(|| SimulationError::Config(format!("Event {} not found", param.event_id.0)))?;
 
     match &param.target {
         SweepTarget::Trigger(trigger_param) => {

@@ -37,6 +37,8 @@ pub enum WarningKind {
     EvaluationFailed,
     /// Iteration limit was hit, indicating a possible infinite loop
     IterationLimitHit,
+    /// A cash account remained overdrawn after all events at a checkpoint settled.
+    CashShortfall,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -371,8 +373,14 @@ impl Default for MonteCarloConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloStats {
     pub num_iterations: usize,
-    /// Fraction of runs with positive final net worth
+    /// Fraction of runs with positive final net worth. This does not measure funding.
     pub success_rate: f64,
+    /// Fraction of runs with no cash shortfalls at settled checkpoints and no
+    /// event-processing warnings. Cash deficits smaller than half a cent are
+    /// ignored. Same-date funding is allowed; later recovery does not erase a
+    /// shortfall. None for statistics produced before this check was recorded.
+    #[serde(default)]
+    pub funding_success_rate: Option<f64>,
     pub mean_final_net_worth: f64,
     pub std_dev_final_net_worth: f64,
     pub min_final_net_worth: f64,
@@ -750,14 +758,52 @@ impl MeanAccumulators {
     }
 }
 
+/// Pointwise real net-worth quantiles. No single path or ledger owns a point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealQuantilePoint {
+    pub date: jiff::civil::Date,
+    pub p5: f64,
+    pub p50: f64,
+    pub p95: f64,
+}
+
+/// Aggregates of each iteration's own deflated terminal net worth.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealTerminalStats {
+    pub mean: f64,
+    /// Population standard deviation (denominator N).
+    pub std_dev: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+/// Exact, pointwise real-dollar distribution over all completed iterations,
+/// including paths with funding or event-processing warnings. Hard simulation
+/// errors/nonfinite wealth/invalid deflators fail the whole MC run, never drop
+/// observations. Quantiles use linear interpolation at (N - 1) * p (type 7).
+/// Grid: plan start, each Dec 31, and terminal date (unique dates, last snapshot).
+/// Inflation follows the engine's annual convention: factor[date.year - base.year].
+/// No within-year inflation interpolation is implied.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealNetWorthSummary {
+    pub base_date: jiff::civil::Date,
+    pub num_iterations: usize,
+    pub points: Vec<RealQuantilePoint>,
+    pub terminal: RealTerminalStats,
+}
+
 /// Memory-efficient Monte Carlo results
-/// Contains only the requested percentile runs and mean accumulators
+/// Contains representative paths, independent quantiles and mean accumulators
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloSummary {
     /// Aggregate statistics
     pub stats: MonteCarloStats,
-    /// Selected percentile runs: (percentile, result)
+    /// Representative paths ranked by terminal NOMINAL net worth, using
+    /// floor(N * p), capped at N - 1. Not pointwise or real-wealth quantiles.
     pub percentile_runs: Vec<(f64, SimulationResult)>,
+    /// Absent on summaries produced before real quantiles were measured.
+    #[serde(default)]
+    pub real_net_worth: Option<RealNetWorthSummary>,
     /// Accumulators for computing mean (if requested)
     pub mean_accumulators: Option<MeanAccumulators>,
 }

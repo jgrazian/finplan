@@ -1,0 +1,1323 @@
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&display=swap');
+@import "tailwindcss";
+@import "./design-system.css";
+
+/* Expose the Industry tokens to Tailwind utilities, so `text-accent-700`,
+   `border-divider`, `font-heading` etc. resolve to the same values the
+   design-system classes use. Tokens stay defined in design-system.css. */
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-ink: var(--color-text);
+  --color-divider: var(--color-divider);
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+}
+
+/* ── App chrome ────────────────────────────────────────────────────────────
+   Lifted verbatim from the canvas document's own <style> block, where the
+   artboards define the shell they all share. */
+
+.app {
+  background: var(--color-bg);
+  border: 1px solid var(--color-divider);
+  box-shadow: var(--shadow-md);
+}
+
+/* ── Project footer ─────────────────────────────────────────────────────── */
+
+.app-footer {
+  display: grid;
+  grid-template-columns: minmax(520px, 1fr) auto;
+  gap: 24px 40px;
+  align-items: center;
+  width: 100%;
+  max-width: 1440px;
+  margin: 28px auto 0;
+  padding: 20px 0 4px;
+  border-top: 1px solid var(--color-divider);
+  font-size: 12px;
+}
+
+.app-footer-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+}
+
+.app-footer-summary strong {
+  flex: none;
+  color: var(--color-text);
+  font-family: var(--font-heading);
+  font-size: 14px;
+  letter-spacing: .08em;
+}
+
+.app-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 20px;
+}
+
+.app-footer-links a,
+.app-footer-links button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.app-footer-links a:hover,
+.app-footer-links button:hover {
+  color: var(--color-accent-800);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.app-footer-links span {
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  font-size: 10px;
+}
+
+.app-footer-note {
+  margin: 3px 0 0;
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.contact-intro,
+.contact-privacy {
+  margin: 0;
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.contact-message {
+  min-height: 130px;
+  resize: vertical;
+}
+
+.contact-privacy {
+  padding-left: 9px;
+  border-left: 2px solid var(--color-accent);
+  font-size: 11px;
+}
+
+@media (max-width: 1080px) {
+  .app-footer {
+    grid-template-columns: minmax(280px, 1fr) auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-footer {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .app-footer-links {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-footer-summary {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+.tabbar {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--color-divider);
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.tabbar a,
+.tabbar button,
+.tabbar span {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 9px 18px;
+  text-decoration: none;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+  border-right: 1px solid var(--color-divider);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tabbar a:hover,
+.tabbar button:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+  color: var(--color-accent-800);
+}
+
+.tabbar .on {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.kb {
+  font: 500 10px ui-monospace, Menlo, monospace;
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  opacity: .6;
+}
+
+.stat-l {
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+.stat-v {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 26px;
+  line-height: 1.05;
+}
+
+.rowsel {
+  cursor: pointer;
+}
+
+.rowsel:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+/* — the grip every reorderable list is dragged by — */
+
+/* Faint rather than hidden: a list nobody can tell is draggable is a list
+   nobody drags. It sharpens under the pointer and takes the accent under its
+   own, so the row it belongs to is never in doubt. */
+.grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 22%, transparent);
+  cursor: grab;
+  /* Otherwise a touch drag scrolls the page out from under the row. */
+  touch-action: none;
+}
+
+tr:hover > * > .grip,
+.rowsel:hover .grip,
+.griprow:hover .grip {
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+}
+
+.grip:hover,
+.grip:focus-visible,
+.grip[data-dragging] {
+  color: var(--color-accent);
+}
+
+.grip:active,
+.grip[data-dragging] {
+  cursor: grabbing;
+}
+
+.grip:disabled {
+  cursor: default;
+  color: color-mix(in srgb, var(--color-text) 12%, transparent);
+}
+
+/* The row being carried stays in place and goes quiet; the accent line is what
+   says where it is going. Moving it would reflow the rows it is measured
+   against, which is how a drop lands one row off. */
+.dragging {
+  opacity: 0.42;
+}
+
+/* Inline tabs for the 6b header grammar. */
+.tab-inline {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 15px 12px;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+.tab-inline:hover {
+  color: var(--color-accent-800);
+}
+
+.tab-inline[aria-current="page"] {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+/* Range inputs in the What-if panel sit on the ground, not in an input well. */
+.range {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  accent-color: var(--color-accent);
+  min-height: 0;
+}
+/* ── Affixed number fields ─────────────────────────────────────────────────
+   A `$` or a trailing `years` reads as part of the figure but is not text
+   anyone should type or step over, so static spans flank a bare input inside
+   one shared `.input` well. The input sizes itself to its own text through a
+   hidden mirror, which keeps the suffix against the number rather than at the
+   far edge of the field. */
+
+.numfield {
+  display: flex;
+  align-items: center;
+  cursor: text;
+}
+
+.numfield:focus-within {
+  border-color: var(--color-accent);
+}
+
+.numfield[data-disabled="true"] {
+  cursor: default;
+  opacity: .6;
+}
+
+.numfield-grow {
+  display: inline-grid;
+  min-width: 0;
+}
+
+.numfield-grow > * {
+  grid-area: 1 / 1;
+}
+
+.numfield-mirror {
+  visibility: hidden;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.numfield input {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+/* The affixes are furniture, not content: they hold their width and never
+   wrap, so a narrow field squeezes the digits — which can scroll — rather than
+   breaking "/ yr" over two lines. */
+.numfield-prefix,
+.numfield-suffix {
+  flex: none;
+  white-space: nowrap;
+}
+
+.numfield-prefix {
+  margin-right: 1px;
+}
+
+.numfield-suffix {
+  margin-left: 5px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+/* ── Date picker ───────────────────────────────────────────────────────────
+   Neither the well nor the popup is the platform's any more. No engine lets
+   its date popup be themed, its month/year list scrolls a decade a notch with
+   no way back to the days, and Gecko opens that popup on a click anywhere in
+   the field — so the well is a text field and the panel below is the picker.
+   It borrows the Dropdown's grammar: flush to the field, no radius, one accent
+   edge, elevation from the shadow alone. */
+
+.dp {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  font-family: var(--font-body);
+}
+
+/* The well is three digit segments in one `.input`, with the slashes as
+   furniture between them — the grammar `.numfield` set for `$` and thousands
+   separators. Nothing here is the platform's, so there is no native glyph to
+   fight: the mark simply sits in room the well reserves for it. */
+
+.dp-well {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-right: 30px;
+  cursor: text;
+}
+
+.dp-well:focus-within {
+  border-color: var(--color-accent);
+}
+
+.dp-well[data-disabled="true"] {
+  cursor: default;
+  opacity: .6;
+}
+
+.dp-seg {
+  width: 2.4ch;
+  min-width: 0;
+  margin: 0;
+  padding: 1px 0;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.dp-seg.y {
+  width: 4.4ch;
+}
+
+.dp-seg::placeholder {
+  color: color-mix(in srgb, var(--color-text) 38%, transparent);
+}
+
+/* The segment the caret is in, named the way the native control names it. */
+.dp-seg:focus {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.dp-sep {
+  padding: 0 3px;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* A well standing empty can say what the blank itself means — "plan start" —
+   which the three hints would only crowd out. Typing brings them back. */
+.dp-ghost {
+  position: absolute;
+  left: 10px;
+  right: 30px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: color-mix(in srgb, var(--color-text) 42%, transparent);
+  pointer-events: none;
+}
+
+/* The ghost is drawn over the well, so the segments have to go quiet under
+   it — the hints and the slashes both, or the furniture shows through the
+   words as `plan/ start`. */
+.dp-ghosted .dp-seg::placeholder {
+  color: transparent;
+}
+
+.dp-ghosted .dp-sep {
+  visibility: hidden;
+}
+
+.dp-ghosted:focus-within .dp-ghost {
+  display: none;
+}
+
+.dp-ghosted:focus-within .dp-seg::placeholder {
+  color: color-mix(in srgb, var(--color-text) 38%, transparent);
+}
+
+.dp-ghosted:focus-within .dp-sep {
+  visibility: visible;
+}
+
+/* Carries `required` for the form around the well; never seen, never tabbed
+   to, but focusable enough for the browser to hang its bubble on. */
+.dp-mirror {
+  position: absolute;
+  left: 10px;
+  bottom: 2px;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dp-glyph {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  width: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--color-text) 50%, transparent);
+  cursor: pointer;
+}
+
+.dp-glyph:hover:not(:disabled) {
+  color: var(--color-accent-700);
+}
+
+/* Dims the mark, not the cover — the button underneath must stay hidden. */
+.dp-glyph:disabled {
+  cursor: default;
+}
+
+.dp-glyph:disabled svg {
+  opacity: .4;
+}
+
+.dp[data-open="true"] .dp-well {
+  border-color: var(--color-accent);
+}
+
+.dp[data-open="true"] .dp-glyph {
+  color: var(--color-accent-700);
+}
+
+.dp-panel {
+  position: absolute;
+  left: 0;
+  z-index: 40;
+  width: 252px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-accent);
+  box-shadow: var(--shadow-lg);
+  outline: none;
+}
+
+.dp-panel[data-drop="down"] {
+  top: 100%;
+  margin-top: -1px;
+}
+
+.dp-panel[data-drop="up"] {
+  bottom: 100%;
+  margin-bottom: -1px;
+}
+
+.dp-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.dp-step {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent-700);
+  cursor: pointer;
+}
+
+.dp-step:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.dp-cap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.dp-cap:hover {
+  color: var(--color-accent-800);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.dp-cap-static {
+  cursor: default;
+  justify-content: flex-end;
+  padding-right: 10px;
+}
+
+.dp-cap-static:hover {
+  background: transparent;
+  color: var(--color-text);
+}
+
+.dp-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-accent-700);
+  cursor: pointer;
+}
+
+.dp-back:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+/* One chevron, four directions — the Dropdown's `.cv`, sized for the panel. */
+.dp-chev {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+}
+
+.dp-chev.left {
+  transform: rotate(135deg) translate(-1px, -1px);
+}
+
+.dp-chev.right {
+  transform: rotate(-45deg) translate(-1px, -1px);
+}
+
+.dp-chev.down {
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+
+.dp-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  border-bottom: 1px solid var(--color-divider);
+  font: 600 10px ui-monospace, Menlo, monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  text-align: center;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.dp-grid {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 1px;
+}
+
+.dp-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+}
+
+.dp-day {
+  height: 28px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.dp-day.out {
+  color: color-mix(in srgb, var(--color-text) 32%, transparent);
+}
+
+.dp-day:hover {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+/* Today is named by a rule under the numeral; the selection is a fill; the
+   keyboard's cursor is the outline. All three can land on one cell. */
+.dp-day[data-today="true"] {
+  box-shadow: inset 0 -2px 0 var(--color-accent-400);
+}
+
+.dp-day[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.dp-day[data-cursor="true"] {
+  outline: 1px solid var(--color-accent-700);
+  outline-offset: -1px;
+}
+
+.dp-foot {
+  display: flex;
+  gap: 0;
+  border-top: 1px solid var(--color-divider);
+}
+
+.dp-link {
+  flex: 1;
+  padding: 7px 10px;
+  border: 0;
+  border-right: 1px solid var(--color-divider);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--color-accent-700);
+  cursor: pointer;
+}
+
+.dp-link:last-child {
+  border-right: 0;
+}
+
+.dp-link:hover {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+/* Month/year: the years scroll in their own column (damped — see
+   useDampedWheel), the months are a fixed grid beside them. */
+.dp-my {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  height: 216px;
+}
+
+.dp-years {
+  overflow-y: auto;
+  border-right: 1px solid var(--color-divider);
+  scrollbar-width: thin;
+}
+
+.dp-year {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.dp-year:hover {
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.dp-year[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.dp-months {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-auto-rows: 1fr;
+  padding: 6px;
+  gap: 2px;
+}
+
+.dp-month {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 12.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.dp-month:hover {
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.dp-month[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+/* ── Status bar ────────────────────────────────────────────────────────────
+   Server state, in one bar under the nav. Four tiers, and severity is carried
+   by field weight rather than hue: a notice is an accent tint, an error is
+   paper type on an ink field, and the blocking tier is that field again with a
+   dialog over the screen. Lifted from the canvas document's own .sbar/.sbtn. */
+
+.sbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 20px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.sbar .sact {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sbar-note {
+  font-size: 11.5px;
+  opacity: .75;
+}
+
+.sbar-notice {
+  background: color-mix(in srgb, var(--color-accent) 13%, transparent);
+  border-top: 1px solid var(--color-divider);
+}
+
+/* The notice keeps ink type on the tint; only its glyph takes the accent. */
+.sbar-notice > svg {
+  color: var(--color-accent-800);
+}
+
+.sbar-notice .sbar-note {
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  opacity: 1;
+}
+
+.sbar-error {
+  background: var(--color-accent-900);
+  color: var(--color-bg);
+}
+
+.sbar-blocking {
+  background: var(--color-accent-900);
+  color: var(--color-bg);
+  border-bottom-color: var(--color-accent-700);
+}
+
+.sbtn {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  border: 1px solid currentColor;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sbtn:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* Everything the bar could not fit, once Details is open. */
+.sbar-stack {
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--color-divider);
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.sbar-stack p {
+  margin: 0 0 4px;
+}
+
+.sbar-stack p:last-child {
+  margin-bottom: 0;
+}
+
+/* Field state — a save the server refused — lives under its own input, never
+   in the bar, and the field keeps the value that was typed. */
+.field-unsaved .input,
+.input.field-unsaved,
+.field-unsaved .dd-trigger {
+  border-color: var(--color-accent-900);
+  box-shadow: inset 0 0 0 1px var(--color-accent-900);
+}
+
+.field-note {
+  display: flex;
+  gap: 5px;
+  align-items: flex-start;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text);
+}
+
+.field-note > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--color-accent-900);
+}
+
+/* ── Account settings ──────────────────────────────────────────────────────
+   The section list is the Portfolio outline's row, turned into a button so
+   navigation reaches the keyboard without reimplementing it. */
+
+.acct-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 9px 16px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+}
+
+.acct-section:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+/* A checkbox that cannot be changed has to look like one: the dot carries the
+   whole control, so `disabled` on the hidden input is otherwise invisible. */
+.radio:has(input:disabled) {
+  cursor: default;
+  opacity: .55;
+}
+
+.radio:has(input:disabled):hover .dot {
+  border-color: var(--color-divider);
+}
+
+/* ── Dropdown ──────────────────────────────────────────────────────────────
+   A native <select>'s popup cannot be styled at all, so the control is rebuilt
+   from a button and a listbox (11a/11b). The trigger is the text field with a
+   chevron rather than a new object, and the menu is flush to it: no gap, no
+   radius, no border-top, elevation carried by the shadow alone. */
+
+.dd {
+  position: relative;
+  font-family: var(--font-body);
+}
+
+.dd-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-divider);
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.dd-trigger:hover,
+.dd-trigger:focus-visible {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+.dd-trigger:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+.dd-trigger:disabled:hover {
+  border-color: var(--color-divider);
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+}
+
+/* The value is the one part that can outrun the well — a scenario name is
+   arbitrary text — so it clips and the chevron holds its place. */
+.dd-value {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dd-value.dd-empty {
+  color: color-mix(in srgb, var(--color-text) 42%, transparent);
+}
+
+.dd-trigger .cv {
+  flex: none;
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid var(--color-accent-700);
+  border-bottom: 1.5px solid var(--color-accent-700);
+  transform: rotate(45deg) translate(-2px, -2px);
+}
+
+.dd[data-open="true"] .dd-trigger {
+  border-color: var(--color-accent);
+  background: var(--color-bg);
+}
+
+.dd[data-open="true"] .dd-trigger .cv {
+  transform: rotate(225deg) translate(-2px, -2px);
+}
+
+/* A menu that names things the trigger has no room for — a column and what it
+   holds — sizes to its rows instead of to the trigger, and hangs from its
+   right edge so the extra width grows back into the panel rather than off it. */
+.dd-wide .dd-menu {
+  left: auto;
+  right: 0;
+  width: max-content;
+  min-width: 100%;
+  max-width: 340px;
+  /* The narrow menu borrows the trigger's bottom border as its top edge; this
+     one overhangs it, so it draws its own and sits that line on top of the
+     trigger's rather than leaving the overhang open or doubling the rule. */
+  border-top: 1px solid var(--color-accent);
+  margin-top: -1px;
+}
+
+.dd-wide .dd-opt .dd-label {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.dd-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  border: 1px solid var(--color-accent);
+  border-top: 0;
+  box-shadow: var(--shadow-lg);
+}
+
+/* Rows read as a table: label left, secondary value right, hairlines between. */
+.dd-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--color-divider);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.dd-menu > .dd-opt:first-child {
+  border-top: 0;
+}
+
+/* Hover and the keyboard's active row are one state — the pointer moves it too,
+   so the list never highlights two rows at once. */
+.dd-opt:hover,
+.dd-opt.act {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.dd-opt[aria-selected="true"] {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.dd-opt[aria-disabled="true"] {
+  opacity: .45;
+  cursor: default;
+  background: none;
+}
+
+.dd-opt .mk {
+  flex: none;
+  width: 12px;
+  color: var(--color-accent-700);
+}
+
+.dd-opt[aria-selected="true"] .mk {
+  color: currentColor;
+}
+
+.dd-opt .dd-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dd-opt .sub {
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 11px;
+  opacity: .6;
+}
+
+/* A row that runs a command rather than naming a value — "New scenario…" at
+   the foot of the switcher. It takes the accent the way a ghost button does,
+   and pins to the bottom so a scrolling list cannot carry it off. Its ground
+   is opaque for that reason: rows pass underneath it. */
+.dd-opt.dd-action {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--color-bg);
+  color: var(--color-accent-700);
+}
+
+.dd-opt.dd-action:hover,
+.dd-opt.dd-action.act {
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg));
+}
+
+/* Groups (11b). The header is a band, not a row, so it takes the mono label
+   type the rest of the app uses for column headings. */
+.dd-head {
+  padding: 5px 10px;
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  font: 600 10px ui-monospace, Menlo, monospace;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.dd-menu > .dd-group:not(:first-child) > .dd-head {
+  border-top: 1px solid var(--color-divider);
+}
+
+/* Inline (11b): the control sits inside a sentence, so it shrinks to its value
+   and the menu grows to its content instead of to the paragraph. */
+.dd-inline {
+  display: inline-block;
+  width: auto;
+  vertical-align: middle;
+}
+
+.dd-inline .dd-trigger {
+  min-height: 26px;
+  padding: 2px 9px;
+  font-size: 14px;
+}
+
+.dd-inline .dd-trigger .cv {
+  margin-left: 10px;
+}
+
+.dd-inline .dd-menu {
+  right: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: 280px;
+}
+
+/* A dropdown standing in a field beside text inputs takes the input's box, not
+   the trigger's own compact one. `.input` gets its line box from `font:
+   inherit` — which copies the parent's *computed* line-height rather than
+   re-resolving 1.55 against a smaller font-size — so the modifier has to
+   inherit the same way or the pair drifts apart by several pixels. */
+.dd-field .dd-trigger {
+  min-height: 36px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 14px;
+}
+
+/* The "of" half of the add-position sentence. A ticker is named at the same
+   scale as the amount beside it, in the mono an asset name takes elsewhere. */
+.dd-figure .dd-trigger {
+  font-size: 15px;
+  font-family: ui-monospace, Menlo, monospace;
+  letter-spacing: .02em;
+}
+
+/* A dropdown in a selection bar, standing among .sbtn buttons rather than
+   among inputs, so it takes the bar's type rather than a field's. Worn over
+   `inline`, which is what gives it the compact box and lets the trigger shrink
+   to "Set profile…" while the menu still grows wide enough to read a profile
+   name out of. */
+.dd-bar .dd-trigger {
+  font-size: 12px;
+}
+
+/* Field state — an edit that has not been applied yet. The accent marks the
+   input and its label together, so a field changed off screen in a scrolled
+   drawer is still counted by the "n unsaved" line at the foot. */
+.field-dirty > label {
+  color: var(--color-text);
+}
+
+.field-dirty .input,
+.input.field-dirty,
+.field-dirty .numfield,
+.field-dirty .dd-trigger {
+  border-color: var(--color-accent);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+}
+
+.field-was {
+  margin-top: 4px;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+/* A unit that is also a switch — "$23,000 / yr" where the period is a choice,
+   not a caption. It lives in the field's suffix slot, so it stays part of the
+   figure rather than becoming a second control beside it. */
+.numfield-unit {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.numfield-unit:hover:not(:disabled) {
+  color: var(--color-accent-700);
+}
+
+.numfield-unit:disabled {
+  cursor: default;
+  text-decoration: none;
+}
+
+/* Opening the other end of a property/debt pair. A .btn would be a 14px
+   heading control inside a 12.5px card; this is the same jump a link makes. */
+.linkbtn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-weight: 500;
+  color: var(--color-accent-700);
+  cursor: pointer;
+  text-align: left;
+}
+
+.linkbtn:hover {
+  color: var(--color-accent-800);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ── Multi-select box ──────────────────────────────────────────────────────
+   Square where .radio's dot is round, because it is a different act: a dot
+   picks one of a set, a box gathers rows for one action over all of them. */
+.check {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.check input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.check .box {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 1px solid var(--color-accent);
+}
+
+.check:hover .box {
+  background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+
+.check input:checked + .box {
+  background: var(--color-accent);
+  box-shadow: inset 0 0 0 2px var(--color-bg);
+}
+
+.check input:focus-visible + .box {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ── A graph on the Analysis workspace ─────────────────────────────────────
+   Cards are pictures, and the selected one is the picture the inspector is
+   editing. The selection is drawn as an outline inside the frame rather than a
+   border, so nothing reflows by a pixel as the selection moves between them. */
+.graph-card:hover {
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
+}
+
+.graph-card.is-selected {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.graph-card:has(button:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* The tile that adds one. A frame like the graphs beside it, so the layout
+   reads as a grid with a gap in it rather than as charts plus a button. */
+.add-graph {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: none;
+  cursor: pointer;
+  color: var(--color-accent-800);
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.add-graph:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}

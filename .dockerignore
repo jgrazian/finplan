@@ -1,0 +1,16 @@
+.git
+target
+**/node_modules
+**/.next
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+**/server.env
+**/backups
+**/*.db
+**/*.db.*
+**/*.db-*
+.memory
+fixtures/*.json
+**/bindings
+finplan.gif

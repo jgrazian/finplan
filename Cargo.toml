@@ -2,7 +2,8 @@
 resolver = "2"
 members = [
     "crates/finplan",
-    "crates/finplan_core"
+    "crates/finplan_core",
+    "crates/finplan_server"
 ]
 
 [workspace.dependencies]

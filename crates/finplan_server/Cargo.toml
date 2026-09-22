@@ -1,0 +1,43 @@
+[package]
+name = "finplan_server"
+version = "0.8.0"
+edition = "2024"
+
+[[bin]]
+name = "finplan-server"
+path = "src/main.rs"
+
+[dependencies]
+finplan_core = { path = "../finplan_core" }
+
+jiff = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "compression-gzip"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+argon2 = "0.5"
+password-hash = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
+uuid = { version = "1", features = ["v4"] }
+serde_json = "1"
+clap = { version = "4.5", features = ["derive", "env"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+prometheus-client = "0.24"
+base64ct = { version = "1", features = ["alloc"] }
+sha2 = "0.10"
+ts-rs = "12.0.1"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+
+[features]
+# Pretty-prints the generated TypeScript. Only wanted while regenerating the
+# bindings, so it stays off the default build: `format` drags in dprint.
+ts-format = ["ts-rs/format"]
+
+[dev-dependencies]
+tempfile = "3"

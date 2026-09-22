@@ -561,7 +561,15 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             };
             match evaluate_trigger(&event_id, trigger, state) {
                 Ok(result) => result,
-                Err(_) => continue, // Skip events that fail to evaluate
+                Err(error) => {
+                    state.warnings.push(SimulationWarning {
+                        date: current_date,
+                        event_id: Some(event_id),
+                        message: format!("failed to evaluate trigger: {error}"),
+                        kind: WarningKind::EvaluationFailed,
+                    });
+                    continue;
+                }
             }
         };
 
@@ -708,6 +716,12 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
         for event_id in triggers {
             // Check if event exists and get `once` flag without cloning
             let Some(event) = state.event_state.get_event(event_id) else {
+                state.warnings.push(SimulationWarning {
+                    date: current_date,
+                    event_id: Some(event_id),
+                    message: "cannot trigger an event that does not exist".into(),
+                    kind: WarningKind::EvaluationFailed,
+                });
                 continue;
             };
             let is_once = event.once;
@@ -738,7 +752,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
             for effect_idx in 0..effects_len {
                 // Phase 1: Evaluate with immutable borrows (no clone needed)
                 scratch.eval_events.clear();
-                let eval_ok = {
+                let eval_result = {
                     // Borrow effect without cloning
                     let Some(effect) = state
                         .event_state
@@ -747,14 +761,32 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                     else {
                         break;
                     };
-                    evaluate_effect_into(effect, state, &mut scratch.eval_events).is_ok()
+                    evaluate_effect_into(effect, state, &mut scratch.eval_events)
                 }; // effect borrow ends here
 
-                // Phase 2: Apply with mutable borrow
-                if eval_ok {
-                    for ee in scratch.eval_events.drain(..) {
-                        let _ = apply_eval_event_with_source(state, &ee, Some(event_id));
+                // Chained effects must report the same failures as scheduled effects;
+                // silently ignoring one would falsely pass the funding check.
+                match eval_result {
+                    Ok(()) => {
+                        for ee in scratch.eval_events.drain(..) {
+                            if let Err(error) =
+                                apply_eval_event_with_source(state, &ee, Some(event_id))
+                            {
+                                state.warnings.push(SimulationWarning {
+                                    date: current_date,
+                                    event_id: Some(event_id),
+                                    message: format!("failed to apply effect: {error}"),
+                                    kind: WarningKind::EffectSkipped,
+                                });
+                            }
+                        }
                     }
+                    Err(error) => state.warnings.push(SimulationWarning {
+                        date: current_date,
+                        event_id: Some(event_id),
+                        message: format!("failed to evaluate effect: {error}"),
+                        kind: WarningKind::EvaluationFailed,
+                    }),
                 }
             }
         }

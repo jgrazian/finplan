@@ -1,0 +1,10 @@
+# ts-rs reads these when the `export_bindings_*` tests run, so `just`-less
+# invocations (`cargo test -p finplan_server --lib export_bindings`) land the
+# TypeScript in the web app rather than in a stray `bindings/` directory.
+#
+# `TS_RS_LARGE_INT = number` matters: serde emits `i64` as a JSON number and
+# `JSON.parse` hands back a `number`, so the default `bigint` binding would be
+# a lie for every row id in the API.
+[env]
+TS_RS_EXPORT_DIR = { value = "web/lib/api/generated", relative = true }
+TS_RS_LARGE_INT = "number"

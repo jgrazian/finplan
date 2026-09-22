@@ -5,11 +5,11 @@
 use std::collections::HashMap;
 
 use crate::config::SimulationConfig;
-use crate::model::MonteCarloConfig;
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, InflationProfile,
     InvestmentContainer, ReturnProfile, ReturnProfileId, TaxStatus,
 };
+use crate::model::{ConvergenceConfig, MonteCarloConfig};
 use crate::simulation::{monte_carlo_simulate_with_config, simulate};
 
 #[test]
@@ -58,6 +58,58 @@ fn test_monte_carlo_simulation() {
         result.stats.mean_final_net_worth,
         result2.stats.mean_final_net_worth
     );
+}
+
+#[test]
+fn convergence_stops_before_the_ceiling() {
+    // Fixed returns, so every iteration lands on the same terminal net worth
+    // and the median is settled from the first round it is measured over.
+    let params = SimulationConfig {
+        start_date: Some(jiff::civil::date(2020, 2, 5)),
+        duration_years: 10,
+        birth_date: None,
+        inflation_profile: InflationProfile::Fixed(0.02),
+        return_profiles: HashMap::from([(ReturnProfileId(0), ReturnProfile::Fixed(0.05))]),
+        asset_returns: HashMap::from([(AssetId(1), ReturnProfileId(0))]),
+        events: vec![],
+        accounts: vec![Account {
+            account_id: AccountId(1),
+            flavor: AccountFlavor::Investment(InvestmentContainer {
+                tax_status: TaxStatus::Taxable,
+                cash: Cash {
+                    value: 0.0,
+                    return_profile_id: ReturnProfileId(0),
+                },
+                positions: vec![AssetLot {
+                    asset_id: AssetId(1),
+                    purchase_date: jiff::civil::date(2020, 2, 5),
+                    units: 10_000.0,
+                    cost_basis: 10_000.0,
+                }],
+                contribution_limit: None,
+            }),
+        }],
+        ..Default::default()
+    };
+
+    let mc_config = MonteCarloConfig {
+        iterations: 100,
+        seed: Some(42),
+        batch_size: 25,
+        parallel_batches: 2,
+        convergence: Some(ConvergenceConfig {
+            max_iterations: 5_000,
+            ..ConvergenceConfig::default()
+        }),
+        ..Default::default()
+    };
+
+    let result = monte_carlo_simulate_with_config(&params, &mc_config).unwrap();
+
+    assert_eq!(result.stats.converged, Some(true));
+    // The minimum sample, then one round of `batch_size` per core: the second
+    // measurement is what the first has to be compared against.
+    assert_eq!(result.stats.num_iterations, 150);
 }
 
 #[test]
