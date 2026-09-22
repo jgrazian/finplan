@@ -43,3 +43,5 @@ perf.data*
 
 # Local test scenario exports (rebuilt with scripts/import-scenario.py)
 fixtures/*.json
+
+.pnpm-store/
