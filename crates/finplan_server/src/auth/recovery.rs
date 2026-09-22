@@ -1,4 +1,4 @@
-//! Single-use credential actions. Delivery is explicitly a local development sink.
+//! Single-use credential actions with SMTP or an explicit local development sink.
 use super::{normalize_email, session};
 use crate::observability::{AuthAction, AuthOutcome, EventFields, RequestContext};
 use crate::{
@@ -34,16 +34,16 @@ struct VerificationToken {
 }
 
 async fn issue(state: &AppState, raw_email: &str, purpose: &str) -> ApiResult<()> {
-    let Some(directory) = state
+    let local_sink = state
         .config
         .local_mail_sink
-        .as_ref()
-        .filter(|_| !state.config.hosted)
-    else {
+        .as_deref()
+        .filter(|_| !state.config.hosted);
+    if local_sink.is_none() && !state.config.mail.available() {
         return Err(ApiError::Conflict(
             "Email delivery is not configured. Contact the service operator.".into(),
         ));
-    };
+    }
     let Ok(email) = normalize_email(raw_email) else {
         return Ok(());
     };
@@ -68,24 +68,21 @@ async fn issue(state: &AppState, raw_email: &str, purpose: &str) -> ApiResult<()
         .bind(&email)
         .execute(&mut *tx)
         .await?;
-    // Separate protected files avoid interleaved mail and do not expose tokens in logs/API.
-    use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    std::fs::create_dir_all(directory)
-        .map_err(|_| ApiError::internal("local mail sink unavailable"))?;
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-        .map_err(|_| ApiError::internal("local mail sink unavailable"))?;
-    let path = std::path::Path::new(directory).join(format!("{}.json", uuid::Uuid::new_v4()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-        .map_err(|_| ApiError::internal("local mail sink unavailable"))?;
-    let message = serde_json::json!({"to": email, "purpose": purpose, "token": token.token, "expires_in_seconds": 1800});
-    file.write_all(message.to_string().as_bytes())
-        .map_err(|_| ApiError::internal("local mail sink unavailable"))?;
+    // Never hold SQLite's writer lock while waiting on an external mail server.
     tx.commit().await?;
+    if let Err(error) = state
+        .config
+        .mail
+        .deliver(local_sink, &email, purpose, &token.token)
+        .await
+    {
+        // Remove only this issuance: another request may already have replaced it.
+        sqlx::query("DELETE FROM auth_action_tokens WHERE token_hash = ?")
+            .bind(&token.token_hash)
+            .execute(&state.db)
+            .await?;
+        return Err(error);
+    }
     Ok(())
 }
 async fn request_reset(
@@ -199,6 +196,93 @@ async fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    async fn test_state(sink: Option<String>) -> AppState {
+        #[derive(clap::Parser)]
+        struct Args {
+            #[command(flatten)]
+            config: crate::config::ServerConfig,
+        }
+        let mut config = <Args as clap::Parser>::parse_from(["recovery-test"]).config;
+        config.database_url = "sqlite::memory:".into();
+        config.db_pool_size = 1;
+        config.local_mail_sink = sink;
+        config.mail = Default::default();
+        config.hosted = false;
+        let (_, state) = crate::build(config).await.unwrap();
+        sqlx::query("INSERT INTO users(id,email,password_hash) VALUES ('u','u@example.com','old')")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        state
+    }
+
+    #[tokio::test]
+    async fn delivery_issues_hashed_tokens_and_reissuance_revokes_previous_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = dir.path().join("mail");
+        let state = test_state(Some(sink.display().to_string())).await;
+        issue(&state, "missing@example.com", "reset").await.unwrap();
+        assert!(!sink.exists());
+        issue(&state, " U@example.com ", "reset").await.unwrap();
+        let first_path = std::fs::read_dir(&sink)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let message: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&first_path).unwrap()).unwrap();
+        let token = message["token"].as_str().unwrap();
+        let (hash, expires): (String, i64) =
+            sqlx::query_as("SELECT token_hash, expires_at - unixepoch() FROM auth_action_tokens")
+                .fetch_one(&state.db)
+                .await
+                .unwrap();
+        assert_eq!(hash, session::hash_token(token));
+        assert_ne!(hash, token);
+        assert!((1790..=1800).contains(&expires));
+        issue(&state, "u@example.com", "reset").await.unwrap();
+        assert!(
+            consume(&state.db, token, "reset", Some("new"))
+                .await
+                .is_err()
+        );
+        let second_path = std::fs::read_dir(&sink)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path != &first_path)
+            .unwrap();
+        let message: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(second_path).unwrap()).unwrap();
+        consume(
+            &state.db,
+            message["token"].as_str().unwrap(),
+            "reset",
+            Some("new"),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn delivery_failure_removes_issued_token_and_unconfigured_mail_is_explicit() {
+        let dir = tempfile::tempdir().unwrap();
+        let sink = dir.path().join("not-a-directory");
+        std::fs::write(&sink, "occupied").unwrap();
+        let state = test_state(Some(sink.display().to_string())).await;
+        assert!(issue(&state, "u@example.com", "verify").await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_action_tokens")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        let state = test_state(None).await;
+        assert!(matches!(
+            issue(&state, "u@example.com", "reset").await,
+            Err(ApiError::Conflict(_))
+        ));
+    }
+
     #[tokio::test]
     async fn tokens_are_hashed_expiring_single_use_and_reset_ends_sessions() {
         let db = crate::db::connect("sqlite::memory:", 1).await.unwrap();

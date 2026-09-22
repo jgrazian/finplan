@@ -2,6 +2,7 @@
   "name": "finplan-web",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@12.3.4",
   "type": "module",
   "scripts": {
     "dev": "next dev",

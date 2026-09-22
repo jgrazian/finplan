@@ -2,6 +2,7 @@
 //! subscriptions: there is intentionally no browser endpoint granting paid access.
 use crate::{
     auth::session::CurrentUser,
+    config::{HostedAccessMode, ServerConfig},
     db::Db,
     error::{ApiError, ApiResult},
     state::AppState,
@@ -13,10 +14,33 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AccessMode {
+    SelfHosted,
+    Beta,
+    Subscription,
+}
+
+impl AccessMode {
+    fn from_config(config: &ServerConfig) -> Self {
+        if !config.hosted {
+            Self::SelfHosted
+        } else if config.access_mode == HostedAccessMode::Beta {
+            Self::Beta
+        } else {
+            Self::Subscription
+        }
+    }
+}
+
 #[derive(Debug, Serialize, ts_rs::TS)]
 #[ts(export)]
 pub struct Entitlements {
+    /// Full planning capabilities, including beta and self-hosted access.
     pub pro: bool,
+    pub access_mode: AccessMode,
     pub hosted: bool,
     pub goal_seeks_used_this_month: i64,
     pub max_iterations: usize,
@@ -36,11 +60,12 @@ async fn get_entitlements(
     user: CurrentUser,
 ) -> ApiResult<Json<Entitlements>> {
     Ok(Json(
-        entitlements(&state.db, &user.id, state.config.hosted).await?,
+        entitlements(&state.db, &user.id, &state.config).await?,
     ))
 }
-pub async fn entitlements(db: &Db, user: &str, hosted: bool) -> ApiResult<Entitlements> {
-    let pro = !hosted || sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id = ? AND state IN ('active','canceling','past_due') AND access_until > unixepoch())").bind(user).fetch_one(db).await?;
+pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<Entitlements> {
+    let access_mode = AccessMode::from_config(config);
+    let pro = access_mode != AccessMode::Subscription || sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id = ? AND state IN ('active','canceling','past_due') AND access_until > unixepoch())").bind(user).fetch_one(db).await?;
     let editable = if pro {
         None
     } else {
@@ -49,9 +74,14 @@ pub async fn entitlements(db: &Db, user: &str, hosted: bool) -> ApiResult<Entitl
     let used:i64=sqlx::query_scalar("SELECT COALESCE((SELECT used FROM monthly_goal_seeks WHERE user_id=? AND month=strftime('%Y-%m','now')),0)").bind(user).fetch_one(db).await?;
     Ok(Entitlements {
         pro,
-        hosted,
+        hosted: config.hosted,
+        access_mode,
         goal_seeks_used_this_month: used,
-        max_iterations: if pro { 50_000 } else { 1_000 },
+        max_iterations: if !config.hosted {
+            config.max_iterations
+        } else {
+            config.max_iterations.min(if pro { 50_000 } else { 1_000 })
+        },
         saved_plan_limit: if pro { None } else { Some(1) },
         goal_seeks_per_month: if pro { None } else { Some(1) },
         editable_scenario_id: editable,
@@ -59,8 +89,8 @@ pub async fn entitlements(db: &Db, user: &str, hosted: bool) -> ApiResult<Entitl
         monthly_price_usd: 10,
     })
 }
-pub async fn require_pro(db: &Db, user: &str, hosted: bool) -> ApiResult<()> {
-    if entitlements(db, user, hosted).await?.pro {
+pub async fn require_pro(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<()> {
+    if entitlements(db, user, config).await?.pro {
         Ok(())
     } else {
         Err(ApiError::Forbidden(
@@ -68,8 +98,13 @@ pub async fn require_pro(db: &Db, user: &str, hosted: bool) -> ApiResult<()> {
         ))
     }
 }
-pub async fn require_editable(db: &Db, user: &str, scenario: i64, hosted: bool) -> ApiResult<()> {
-    let e = entitlements(db, user, hosted).await?;
+pub async fn require_editable(
+    db: &Db,
+    user: &str,
+    scenario: i64,
+    config: &ServerConfig,
+) -> ApiResult<()> {
+    let e = entitlements(db, user, config).await?;
     if e.pro || e.editable_scenario_id == Some(scenario) {
         Ok(())
     } else {
@@ -81,8 +116,8 @@ pub async fn require_editable(db: &Db, user: &str, scenario: i64, hosted: bool) 
 }
 /// Call once after request validation, before accepting a goal seek. Invalid
 /// requests must never consume usage. A failed accepted job still counts.
-pub async fn reserve_goal_seek(db: &Db, user: &str, hosted: bool) -> ApiResult<()> {
-    if entitlements(db, user, hosted).await?.pro {
+pub async fn reserve_goal_seek(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<()> {
+    if entitlements(db, user, config).await?.pro {
         return Ok(());
     }
     let accepted = sqlx::query("INSERT INTO monthly_goal_seeks(user_id,month,used) VALUES (?,strftime('%Y-%m','now'),1) ON CONFLICT(user_id,month) DO UPDATE SET used=used+1 WHERE used < 1")
@@ -172,6 +207,17 @@ pub async fn reconcile(db: &Db, event: &ProviderSnapshot) -> ApiResult<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn config(hosted: bool) -> ServerConfig {
+        use clap::Parser;
+        #[derive(Parser)]
+        struct Cli {
+            #[command(flatten)]
+            config: ServerConfig,
+        }
+        let mut config = Cli::parse_from(["test"]).config;
+        config.hosted = hosted;
+        config
+    }
     async fn fixture() -> Db {
         let db = crate::db::connect("sqlite::memory:", 1).await.unwrap();
         sqlx::query("INSERT INTO users(id,email,password_hash) VALUES ('u','u@example.com','unused'),('v','v@example.com','unused')").execute(&db).await.unwrap();
@@ -191,12 +237,12 @@ mod tests {
         };
         assert!(reconcile(&db, &e).await.unwrap());
         assert!(!reconcile(&db, &e).await.unwrap());
-        assert!(entitlements(&db, "u", true).await.unwrap().pro);
+        assert!(entitlements(&db, "u", &config(true)).await.unwrap().pro);
         e.event_id = "cancel".into();
         e.revision = 2;
         e.state = SubscriptionState::Canceling;
         assert!(reconcile(&db, &e).await.unwrap());
-        assert!(entitlements(&db, "u", true).await.unwrap().pro);
+        assert!(entitlements(&db, "u", &config(true)).await.unwrap().pro);
         e.event_id = "late".into();
         e.revision = 1;
         assert!(!reconcile(&db, &e).await.unwrap());
@@ -209,22 +255,50 @@ mod tests {
         e.access_until = 0;
         e.state = SubscriptionState::Expired;
         assert!(reconcile(&db, &e).await.unwrap());
-        assert!(!entitlements(&db, "u", true).await.unwrap().pro);
+        assert!(!entitlements(&db, "u", &config(true)).await.unwrap().pro);
         e.user_id = "v".into();
         e.event_id = "steal".into();
         e.revision = 5;
         assert!(reconcile(&db, &e).await.is_err());
-        assert!(entitlements(&db, "u", false).await.unwrap().pro);
+        assert!(entitlements(&db, "u", &config(false)).await.unwrap().pro);
     }
+    #[tokio::test]
+    async fn access_modes_do_not_create_subscription_state() {
+        let db = fixture().await;
+        let mut config = config(true);
+        let free = entitlements(&db, "u", &config).await.unwrap();
+        assert_eq!(free.access_mode, AccessMode::Subscription);
+        assert!(!free.pro);
+        assert_eq!(free.saved_plan_limit, Some(1));
+        assert_eq!(free.goal_seeks_per_month, Some(1));
+        assert_eq!(free.max_iterations, 1_000);
+        config.access_mode = HostedAccessMode::Beta;
+        let beta = entitlements(&db, "u", &config).await.unwrap();
+        assert_eq!(beta.access_mode, AccessMode::Beta);
+        assert!(beta.pro);
+        config.hosted = false;
+        config.max_iterations = 100_000;
+        let local = entitlements(&db, "u", &config).await.unwrap();
+        assert_eq!(local.access_mode, AccessMode::SelfHosted);
+        assert!(local.pro);
+        assert_eq!(local.max_iterations, 100_000);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM subscriptions")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
     #[tokio::test]
     async fn monthly_goal_seek_reservation_is_atomic() {
         let db = fixture().await;
+        let hosted = config(true);
         let (a, b) = tokio::join!(
-            reserve_goal_seek(&db, "u", true),
-            reserve_goal_seek(&db, "u", true)
+            reserve_goal_seek(&db, "u", &hosted),
+            reserve_goal_seek(&db, "u", &hosted)
         );
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
-        assert!(reserve_goal_seek(&db, "u", false).await.is_ok());
+        assert!(reserve_goal_seek(&db, "u", &config(false)).await.is_ok());
     }
 }
 
@@ -296,9 +370,9 @@ pub async fn mutation_entitlements(
         if scenario {
             let id=segments[1].parse::<i64>().unwrap();
             crate::api::owned_scenario(&state.db,id,&user.id).await?;
-            require_editable(&state.db,&user.id,id,true).await?;
+            require_editable(&state.db,&user.id,id,&state.config).await?;
         } else {
-            let e=entitlements(&state.db,&user.id,true).await?;
+            let e=entitlements(&state.db,&user.id,&state.config).await?;
             if !e.pro {
                 let id=segments[1].parse::<i64>().unwrap();
                 let sql=match segments[0] {
@@ -399,10 +473,10 @@ impl Drop for ComputePermit {
 pub async fn check_plan_slot(
     connection: &mut sqlx::SqliteConnection,
     user: &str,
-    hosted: bool,
+    config: &ServerConfig,
     additional: i64,
 ) -> ApiResult<()> {
-    if !hosted {
+    if AccessMode::from_config(config) != AccessMode::Subscription {
         return Ok(());
     }
     let pro:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id=? AND state IN ('active','canceling','past_due') AND access_until>unixepoch())").bind(user).fetch_one(&mut *connection).await?;

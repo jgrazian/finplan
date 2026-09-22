@@ -184,7 +184,7 @@ async fn create(
         );
         return Ok(Json(SetupCreated { scenario_id: id }));
     }
-    crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
+    crate::billing::check_plan_slot(&mut tx, &user.id, &state.config, 1).await?;
     let invested = p.retirement_401k + p.investments;
     let annual_401k_contribution = (p.annual_income * p.retirement_401k_contribution_percent
         / 100.)

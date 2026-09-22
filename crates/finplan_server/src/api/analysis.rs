@@ -255,19 +255,24 @@ async fn create_analysis(
     body: CreateAnalysis,
     decision: &mut Submission,
 ) -> ApiResult<(StatusCode, Json<Analysis>)> {
-    let entitlements =
-        crate::billing::entitlements(&state.db, &user.id, state.config.hosted).await?;
+    let entitlements = crate::billing::entitlements(&state.db, &user.id, &state.config).await?;
     let is_solve = matches!(&body, CreateAnalysis::Solve { .. });
     if !is_solve {
-        crate::billing::require_pro(&state.db, &user.id, state.config.hosted).await?;
+        crate::billing::require_pro(&state.db, &user.id, &state.config).await?;
     }
     let requested_iterations = match &body {
         CreateAnalysis::Sweep { iterations, .. }
         | CreateAnalysis::Sensitivity { iterations, .. }
         | CreateAnalysis::Solve { iterations, .. } => *iterations,
     };
-    if state.config.hosted && requested_iterations.is_some_and(|n| n > entitlements.max_iterations)
-    {
+    // A deployment resource ceiling is request validation, independent of paid access.
+    if requested_iterations.is_some_and(|n| n > state.config.max_iterations) {
+        return Err(ApiError::bad_request(format!(
+            "iterations must not exceed {}",
+            state.config.max_iterations
+        )));
+    }
+    if requested_iterations.is_some_and(|n| n > entitlements.max_iterations) {
         return Err(ApiError::Forbidden(format!(
             "Your plan allows at most {} iterations.",
             entitlements.max_iterations
@@ -310,7 +315,11 @@ async fn create_analysis(
                 config: SweepConfig {
                     parameters: sweeps,
                     metrics: Vec::new(),
-                    mc_iterations: iterations_or_default(iterations, 250)?,
+                    mc_iterations: iterations_or_default(
+                        iterations,
+                        250,
+                        entitlements.max_iterations,
+                    )?,
                     parallel_batches,
                     seed: Some(ANALYSIS_SEED),
                 },
@@ -341,7 +350,7 @@ async fn create_analysis(
                 fraction,
                 // A ranking is two runs a parameter and is meant to be cheap,
                 // so it defaults lighter than a sweep cell does.
-                iterations: iterations_or_default(iterations, 200)?,
+                iterations: iterations_or_default(iterations, 200, entitlements.max_iterations)?,
                 parallel_batches,
                 seed: Some(ANALYSIS_SEED),
             }
@@ -378,7 +387,11 @@ async fn create_analysis(
                             .into(),
                         min_value,
                     },
-                    mc_iterations: iterations_or_default(iterations, 250)?,
+                    mc_iterations: iterations_or_default(
+                        iterations,
+                        250,
+                        entitlements.max_iterations,
+                    )?,
                     parallel_batches,
                     seed: Some(ANALYSIS_SEED),
                     ..SolveConfig::default()
@@ -396,7 +409,7 @@ async fn create_analysis(
     let admission =
         crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
     if is_solve {
-        crate::billing::reserve_goal_seek(&state.db, &user.id, state.config.hosted).await?;
+        crate::billing::reserve_goal_seek(&state.db, &user.id, &state.config).await?;
     }
     let handle = state
         .analyses
@@ -533,12 +546,32 @@ fn find<'a>(available: &'a [PlanParameter], id: &str) -> ApiResult<&'a PlanParam
         .ok_or(ApiError::NotFound("parameter"))
 }
 
-fn iterations_or_default(requested: Option<usize>, fallback: usize) -> ApiResult<usize> {
-    let iterations = requested.unwrap_or(fallback);
-    if !(MIN_ITERATIONS..=MAX_ANALYSIS_ITERATIONS).contains(&iterations) {
+fn iterations_or_default(
+    requested: Option<usize>,
+    fallback: usize,
+    deployment_max: usize,
+) -> ApiResult<usize> {
+    let ceiling = deployment_max.min(MAX_ANALYSIS_ITERATIONS);
+    let iterations = requested.unwrap_or(fallback.min(ceiling));
+    if !(MIN_ITERATIONS..=ceiling).contains(&iterations) {
         return Err(ApiError::bad_request(format!(
-            "iterations must be between {MIN_ITERATIONS} and {MAX_ANALYSIS_ITERATIONS}"
+            "iterations must be between {MIN_ITERATIONS} and {ceiling}"
         )));
     }
     Ok(iterations)
+}
+
+#[cfg(test)]
+mod iteration_limit_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_and_default_analysis_iterations_respect_deployment_ceiling() {
+        assert_eq!(iterations_or_default(None, 250, 100).unwrap(), 100);
+        assert_eq!(iterations_or_default(None, 200, 100).unwrap(), 100);
+        assert_eq!(iterations_or_default(Some(75), 250, 100).unwrap(), 75);
+        assert!(iterations_or_default(Some(101), 250, 100).is_err());
+        assert!(iterations_or_default(None, 250, 24).is_err());
+        assert!(iterations_or_default(Some(2001), 250, 50_000).is_err());
+    }
 }

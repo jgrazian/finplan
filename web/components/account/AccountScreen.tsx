@@ -13,7 +13,7 @@ import { SecurityPanel } from "./SecurityPanel";
 type SectionId = "billing" | "profile" | "security" | "data" | "preferences";
 
 const SECTIONS: ReadonlyArray<{ id: SectionId; label: string; note: string }> = [
-  { id: "billing", label: "Plan and billing", note: "Access, usage, editable plan" },
+  { id: "billing", label: "Plan access", note: "Features, usage, editable plan" },
   { id: "profile", label: "Profile", note: "Name, email, birth date" },
   { id: "security", label: "Security", note: "Password and devices" },
   { id: "data", label: "Data", note: "Scenarios, export, deletion" },

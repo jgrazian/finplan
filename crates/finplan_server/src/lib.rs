@@ -24,6 +24,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod error;
+pub mod mail;
 pub mod observability;
 pub mod runner;
 pub mod seed;

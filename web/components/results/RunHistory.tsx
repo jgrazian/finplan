@@ -5,20 +5,22 @@ import { api } from "@/lib/api/client";
 import { historyApi } from "@/lib/api/history";
 import type { Results, Run } from "@/lib/api/types";
 import type { RunInputs } from "@/lib/api/generated/RunInputs";
+import type { Entitlements } from "@/lib/api/generated/Entitlements";
 import { comparisonWarnings, changedInputSections } from "@/lib/view/history";
 import { reportHtml } from "@/lib/view/report";
 import { Button } from "@/components/ui";
 const money=(v:number)=>v.toLocaleString("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const rate=(v:number|null)=>v == null ? "Not measured — rerun" : `${(v*100).toFixed(1)}%`;
 export function RunHistory({history,selectedRunId,onSelectRun,inputs}:{history:Run[];selectedRunId?:number;onSelectRun:(id:number)=>void;inputs?:RunInputs}) {
-  const [pro,setPro]=useState(false);
+  const [access,setAccess]=useState<Entitlements>();
+  const pro=access?.pro ?? false;
   const [plans,setPlans]=useState<{id:number;name:string}[]>([]);
   const [compareScenario,setCompareScenario]=useState<number>();
   const [otherRuns,setOtherRuns]=useState<{scenarioId:number;runs:Run[]}>();
   const [error,setError]=useState<string>();
   const [compare,setCompare]=useState<number>();
   const [comparison,setComparison]=useState<{left:Results;right:Results;inputs:RunInputs;leftId:number;rightId:number}>();
-  useEffect(()=>{let live=true;historyApi.entitlements().then(e=>live && setPro(e.pro)).catch(()=>{});return()=>{live=false;};},[]);
+  useEffect(()=>{let live=true;historyApi.entitlements().then(e=>live && setAccess(e)).catch(()=>{if(live)setError("Could not load access to comparisons and reports. Reload to try again.");});return()=>{live=false;};},[]);
   useEffect(()=>{let live=true;api.scenarios.list().then(plans=>live && setPlans(plans)).catch(()=>{});return()=>{live=false;};},[]);
   useEffect(()=>{
     if(compareScenario == null) return;
@@ -70,7 +72,7 @@ export function RunHistory({history,selectedRunId,onSelectRun,inputs}:{history:R
       <label>Compare with <select aria-label="Compare with saved run" value={compare ?? ""} onChange={e=>setCompare(e.target.value ? Number(e.target.value):undefined)}>
         <option value="">Choose another run</option>{available.filter(r=>r.status === "succeeded" && r.id !== selectedRunId).map(r=><option key={r.id} value={r.id}>Run #{r.id} · {r.created_at}</option>)}
       </select></label><Button onClick={()=>void printReport()} disabled={!inputs}>Print / Save PDF report</Button>
-    </div>:<p>Pro includes saved-run comparisons and printable reports.</p>}
+    </div>:access?.access_mode === "subscription" ? <p>Pro includes saved-run comparisons and printable reports.</p>:null}
     {compare && compare !== selectedRunId && !displayed && <p role="status">Loading comparison…</p>}
     {displayed && inputs && <div>
       <p>Changed input sections: {!inputs.snapshot || !displayed.inputs.snapshot ? "Unavailable for runs without captured inputs" : changedInputSections(inputs,displayed.inputs).join(", ") || "None detected in captured definitions"}.</p>

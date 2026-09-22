@@ -22,6 +22,7 @@ impl TestApp {
         let db_path = dir.path().join("test.db");
 
         let config = ServerConfig {
+            mail: Default::default(),
             log_format: Default::default(),
             metrics_bind: None,
             bind: "127.0.0.1:0".into(),
@@ -31,6 +32,8 @@ impl TestApp {
             max_iterations: 50_000,
             secure_cookies: false,
             hosted: false,
+            access_mode: Default::default(),
+            registration_open: true,
             local_mail_sink: None,
             cors_origins: vec!["http://localhost:3000".into()],
         };

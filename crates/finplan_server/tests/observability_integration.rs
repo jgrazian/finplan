@@ -43,7 +43,10 @@ struct Fixture {
 impl Fixture {
     async fn new() -> Self {
         let config = ServerConfig {
+            mail: Default::default(),
             hosted: false,
+            access_mode: Default::default(),
+            registration_open: true,
             local_mail_sink: None,
             bind: "127.0.0.1:0".into(),
             database_url: "sqlite::memory:".into(),

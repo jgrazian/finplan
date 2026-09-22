@@ -1,5 +1,9 @@
 # Hosted WebUI operational handoff
 
+For the free feedback beta, start with [the beta deployment recipe](../ops/beta/README.md)
+and [its readiness inventory](12_feedback_beta_readiness.md). Payment verification
+below applies when enabling paid subscriptions, not to free beta access.
+
 Repository tooling is available; production recovery objectives, storage policy,
 provider secrets and support ownership must be supplied by the operator before a
 paid launch. Nothing here records a production restore or payment verification.

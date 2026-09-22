@@ -152,7 +152,7 @@ async fn create(
     }
 
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-    crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
+    crate::billing::check_plan_slot(&mut tx, &user.id, &state.config, 1).await?;
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO scenarios
             (user_id, name, description, start_date, birth_date, duration_years,
@@ -329,7 +329,7 @@ async fn duplicate(
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
     let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-    crate::billing::check_plan_slot(&mut tx, &user.id, state.config.hosted, 1).await?;
+    crate::billing::check_plan_slot(&mut tx, &user.id, &state.config, 1).await?;
     let new_id = crate::domain::clone_into(&mut tx, &graph, body.name.trim()).await?;
     tx.commit().await?;
 

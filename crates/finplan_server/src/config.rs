@@ -10,8 +10,18 @@ pub enum LogFormat {
     Text,
 }
 
+/// Commercial access policy is independent of hosted security protections.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum HostedAccessMode {
+    #[default]
+    Subscription,
+    Beta,
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct ServerConfig {
+    #[command(flatten)]
+    pub mail: crate::mail::MailConfig,
     /// Structured JSON in hosted mode, readable text locally when set to auto.
     #[arg(long, env = "FINPLAN_LOG_FORMAT", value_enum, default_value = "auto")]
     pub log_format: LogFormat,
@@ -24,6 +34,20 @@ pub struct ServerConfig {
     /// Enable strict hosted origin and cookie protections.
     #[arg(long, env = "FINPLAN_HOSTED", default_value_t = false)]
     pub hosted: bool,
+
+    /// Hosted access policy. Beta enables all planning features without a subscription.
+    /// Ignored for self-hosted deployments; never disables hosted security checks.
+    #[arg(
+        long,
+        env = "FINPLAN_ACCESS_MODE",
+        value_enum,
+        default_value = "subscription"
+    )]
+    pub access_mode: HostedAccessMode,
+
+    /// Allow new accounts. Closing enrollment does not disable existing account sign-in.
+    #[arg(long, env = "FINPLAN_REGISTRATION_OPEN", default_value_t = true, action = clap::ArgAction::Set)]
+    pub registration_open: bool,
 
     /// Explicit local development mail sink directory; never available in hosted mode.
     #[arg(long, env = "FINPLAN_LOCAL_MAIL_SINK")]
@@ -67,6 +91,8 @@ pub struct ServerConfig {
 
 impl ServerConfig {
     pub fn validate(&self) -> Result<(), String> {
+        self.mail
+            .validate(self.hosted, self.local_mail_sink.as_deref())?;
         if self.hosted
             && (!self.secure_cookies
                 || self.local_mail_sink.is_some()
@@ -90,6 +116,9 @@ impl ServerConfig {
         }
         if self.sim_workers == 0 {
             return Err("simulation workers must be positive".into());
+        }
+        if self.max_iterations == 0 {
+            return Err("maximum iterations must be positive".into());
         }
         Ok(())
     }

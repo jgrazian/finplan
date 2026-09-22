@@ -1,0 +1,55 @@
+name: finplan-beta
+services:
+  server:
+    build:
+      context: ../..
+      dockerfile: ops/beta/Dockerfile.server
+    env_file: server.env
+    environment:
+      FINPLAN_HOSTED: "true"
+      FINPLAN_ACCESS_MODE: beta
+      FINPLAN_SECURE_COOKIES: "true"
+      FINPLAN_CORS_ORIGINS: https://${FINPLAN_DOMAIN:?Set FINPLAN_DOMAIN in .env}
+      FINPLAN_BIND: 0.0.0.0:8080
+      DATABASE_URL: sqlite:///data/finplan.db
+      FINPLAN_LOG_FORMAT: json
+      FINPLAN_SIM_WORKERS: "1"
+      FINPLAN_MAX_ITERATIONS: "10000"
+    volumes:
+      - plan_data:/data
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  web:
+    build:
+      context: ../..
+      dockerfile: ops/beta/Dockerfile.web
+    depends_on:
+      server: {condition: service_healthy}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+  proxy:
+    image: caddy:2
+    environment:
+      FINPLAN_DOMAIN: ${FINPLAN_DOMAIN:?Set FINPLAN_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - certificates:/data
+      - proxy_config:/config
+    depends_on:
+      web: {condition: service_healthy}
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+volumes:
+  plan_data:
+  certificates:
+  proxy_config:

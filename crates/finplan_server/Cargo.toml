@@ -32,6 +32,7 @@ prometheus-client = "0.24"
 base64ct = { version = "1", features = ["alloc"] }
 sha2 = "0.10"
 ts-rs = "12.0.1"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 
 [features]
 # Pretty-prints the generated TypeScript. Only wanted while regenerating the

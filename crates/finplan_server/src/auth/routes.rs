@@ -123,6 +123,11 @@ async fn register(
     headers: HeaderMap,
     Json(body): Json<RegisterCredentials>,
 ) -> ApiResult<impl IntoResponse> {
+    if !state.config.registration_open {
+        return Err(ApiError::Forbidden(
+            "New registrations are currently closed. Existing users can still sign in.".into(),
+        ));
+    }
     if body.password != body.password_confirmation {
         return Err(ApiError::bad_request("passwords do not match"));
     }

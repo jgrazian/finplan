@@ -12,11 +12,11 @@ export function VerificationPanel({ user, onSaved, readOnly }: { user: UserRespo
     setBusy(true); setMessage("");
     try {
       if (verify) {
-        await http.post<void>("/auth/verify-email", { token });
+        await http.post<void>("/auth/verify-email", { token: token.trim() });
         onSaved(await http.get<UserResponse>("/auth/me")); setToken(""); setMessage("Email verified.");
       } else {
         await http.post<void>("/auth/request-verification", { email: user.email });
-        setMessage("If this account exists, verification instructions have been sent. Tokens expire in 30 minutes.");
+        setMessage("If this account exists, verification instructions have been sent. Paste the token from your email below. Tokens expire in 30 minutes.");
       }
     } catch (error) { setMessage(error instanceof Error ? error.message : "Verification failed."); }
     finally { setBusy(false); }
@@ -26,7 +26,7 @@ export function VerificationPanel({ user, onSaved, readOnly }: { user: UserRespo
     {user.email_verified_at ? <p>{user.email} is verified.</p> : <>
       <p>Verify ownership of {user.email}.</p>
       <Button disabled={busy || readOnly} onClick={() => run(false)}>Request verification</Button>
-      <Field label="Verification token"><CompactInput value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" /></Field>
+      <Field label="Verification token from your email"><CompactInput value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false} autoCapitalize="none" /></Field>
       <Button disabled={busy || readOnly || !token.trim()} onClick={() => run(true)}>Verify email</Button>
     </>}
     {message && <p role="status">{message}</p>}

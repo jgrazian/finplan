@@ -154,9 +154,9 @@ async fn create_run(
     decision: &mut Submission,
 ) -> ApiResult<(StatusCode, Json<Run>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    crate::billing::require_editable(&state.db, &user.id, scenario_id, state.config.hosted).await?;
+    crate::billing::require_editable(&state.db, &user.id, scenario_id, &state.config).await?;
     let entitled_max = if state.config.hosted {
-        crate::billing::entitlements(&state.db, &user.id, true)
+        crate::billing::entitlements(&state.db, &user.id, &state.config)
             .await?
             .max_iterations
             .min(state.config.max_iterations)

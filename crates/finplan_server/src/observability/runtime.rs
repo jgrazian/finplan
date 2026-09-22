@@ -188,9 +188,12 @@ mod tests {
 
     fn config(metrics_bind: Option<SocketAddr>) -> ServerConfig {
         ServerConfig {
+            mail: Default::default(),
             log_format: Default::default(),
             metrics_bind,
             hosted: false,
+            access_mode: Default::default(),
+            registration_open: true,
             local_mail_sink: None,
             bind: "127.0.0.1:0".into(),
             database_url: "sqlite::memory:".into(),

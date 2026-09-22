@@ -427,7 +427,7 @@ async fn import(
             .map_err(|e| ApiError::internal(e.to_string()))?
         )
     );
-    let access = crate::billing::entitlements(&state.db, &user.id, state.config.hosted).await?;
+    let access = crate::billing::entitlements(&state.db, &user.id, &state.config).await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     if let Some((stored, result)) = sqlx::query_as::<_, (String, String)>(
         "SELECT input_hash,result_json FROM archive_imports WHERE user_id=? AND request_id=?",

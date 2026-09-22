@@ -7,9 +7,12 @@ use finplan_server::config::ServerConfig;
 use tower::ServiceExt;
 fn config() -> ServerConfig {
     ServerConfig {
+        mail: Default::default(),
         log_format: Default::default(),
         metrics_bind: None,
         hosted: true,
+        access_mode: Default::default(),
+        registration_open: true,
         local_mail_sink: None,
         bind: "127.0.0.1:0".into(),
         database_url: "sqlite::memory:".into(),
@@ -93,7 +96,12 @@ async fn hosted_auth_abuse_returns_retry_after() {
 }
 
 async fn hosted_fixture() -> (axum::Router, finplan_server::state::AppState, String) {
-    let (router, state) = finplan_server::build(config()).await.unwrap();
+    fixture_with_config(config()).await
+}
+async fn fixture_with_config(
+    config: ServerConfig,
+) -> (axum::Router, finplan_server::state::AppState, String) {
+    let (router, state) = finplan_server::build(config).await.unwrap();
     sqlx::query("INSERT INTO users(id,email,password_hash) VALUES ('owner','owner@example.com','unused'),('other','other@example.com','unused')").execute(&state.db).await.unwrap();
     let token = finplan_server::auth::session::issue(&state.db, "owner", None)
         .await
@@ -274,4 +282,198 @@ async fn direct_compute_requests_cannot_bypass_free_tier() {
             .await
             .unwrap();
     assert_eq!(usage, 0);
+}
+
+fn beta_config() -> ServerConfig {
+    let mut config = config();
+    config.access_mode = finplan_server::config::HostedAccessMode::Beta;
+    config.max_iterations = 100;
+    config
+}
+
+#[test]
+fn beta_does_not_relax_hosted_configuration() {
+    let mut config = beta_config();
+    assert!(config.validate().is_ok());
+    config.secure_cookies = false;
+    assert!(config.validate().is_err());
+    config.secure_cookies = true;
+    config.cors_origins = vec!["http://localhost:3000".into()];
+    assert!(config.validate().is_err());
+    config = beta_config();
+    config.max_iterations = 0;
+    assert!(config.validate().is_err());
+}
+
+#[tokio::test]
+async fn beta_unlocks_planning_without_subscriptions_and_preserves_ownership() {
+    let (router, state, cookie) = fixture_with_config(beta_config()).await;
+    for name in ["First beta plan", "Second beta plan"] {
+        assert_eq!(
+            send(
+                router.clone(),
+                &cookie,
+                "POST",
+                "/api/scenarios",
+                serde_json::json!({"name":name,"start_date":"2026-01-01"})
+            )
+            .await,
+            StatusCode::CREATED
+        );
+    }
+    let second: i64 = sqlx::query_scalar("SELECT MAX(id) FROM scenarios WHERE user_id='owner'")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        send(
+            router.clone(),
+            &cookie,
+            "PATCH",
+            &format!("/api/scenarios/{second}"),
+            serde_json::json!({"name":"Edited beta plan"})
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(
+            router.clone(),
+            &cookie,
+            "POST",
+            &format!("/api/scenarios/{second}/duplicate"),
+            serde_json::json!({"name":"Beta clone"})
+        )
+        .await,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        send(
+            router.clone(),
+            &cookie,
+            "POST",
+            &format!("/api/scenarios/{second}/assets"),
+            serde_json::json!({"name":"Beta asset","initial_price":100})
+        )
+        .await,
+        StatusCode::CREATED
+    );
+    let other: i64 = sqlx::query_scalar("INSERT INTO scenarios(user_id,name,start_date) VALUES ('other','Private plan','2026-01-01') RETURNING id")
+        .fetch_one(&state.db).await.unwrap();
+    assert_eq!(
+        send(
+            router.clone(),
+            &cookie,
+            "PATCH",
+            &format!("/api/scenarios/{other}"),
+            serde_json::json!({"name":"Forbidden edit"})
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            router.clone(),
+            "",
+            "GET",
+            "/api/billing/entitlements",
+            serde_json::Value::Null
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/billing/entitlements")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 4096)
+        .await
+        .unwrap();
+    let access: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(access["access_mode"], "beta");
+    assert_eq!(access["pro"], true);
+    assert_eq!(access["hosted"], true);
+    assert_eq!(access["max_iterations"], 100);
+    assert!(access["saved_plan_limit"].is_null());
+    assert!(access["goal_seeks_per_month"].is_null());
+    for _ in 0..2 {
+        finplan_server::billing::reserve_goal_seek(&state.db, "owner", &state.config)
+            .await
+            .unwrap();
+    }
+    finplan_server::billing::require_pro(&state.db, "owner", &state.config)
+        .await
+        .unwrap();
+    let subscriptions: i64 = sqlx::query_scalar("SELECT count(*) FROM subscriptions")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(subscriptions, 0);
+    let usage: i64 = sqlx::query_scalar("SELECT count(*) FROM monthly_goal_seeks")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(usage, 0);
+    // Browser mutations still need a trusted origin even with full beta access.
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/scenarios/{second}"))
+                .header("cookie", &cookie)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"No origin"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn beta_direct_requests_cannot_bypass_compute_limits() {
+    let (router, state, cookie) = fixture_with_config(beta_config()).await;
+    let id: i64 = sqlx::query_scalar("INSERT INTO scenarios(user_id,name,start_date) VALUES ('owner','Beta','2026-01-01') RETURNING id")
+        .fetch_one(&state.db).await.unwrap();
+    assert_eq!(
+        send(
+            router.clone(),
+            &cookie,
+            "POST",
+            &format!("/api/scenarios/{id}/runs"),
+            serde_json::json!({"iterations":101})
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    for request in [
+        serde_json::json!({"kind":"sweep","axes":[],"iterations":101}),
+        serde_json::json!({"kind":"sensitivity","iterations":101}),
+        serde_json::json!({"kind":"solve","vary":[],"objective":"max-parameter","min_value":0.9,"iterations":101}),
+    ] {
+        assert_eq!(
+            send(
+                router.clone(),
+                &cookie,
+                "POST",
+                &format!("/api/scenarios/{id}/analyses"),
+                request
+            )
+            .await,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM runs")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
 }

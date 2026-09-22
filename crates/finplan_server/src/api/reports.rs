@@ -47,7 +47,7 @@ async fn report(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<RunReport>> {
-    crate::billing::require_pro(&state.db, &user.id, state.config.hosted).await?;
+    crate::billing::require_pro(&state.db, &user.id, &state.config).await?;
     Ok(Json(bundle(state, user, id).await?))
 }
 async fn compare(
@@ -55,7 +55,7 @@ async fn compare(
     user: CurrentUser,
     Json(request): Json<CompareRuns>,
 ) -> ApiResult<Json<RunComparison>> {
-    crate::billing::require_pro(&state.db, &user.id, state.config.hosted).await?;
+    crate::billing::require_pro(&state.db, &user.id, &state.config).await?;
     let left = bundle(state.clone(), user.clone(), request.left_run_id).await?;
     let right = bundle(state, user, request.right_run_id).await?;
     Ok(Json(RunComparison { left, right }))

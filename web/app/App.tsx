@@ -16,6 +16,7 @@ import { NewScenarioDialog } from "@/components/scenario/NewScenarioDialog";
 import { SessionExpiredDialog, StatusBar } from "@/components/status";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
+import { historyApi } from "@/lib/api/history";
 import type { Scenario as ApiScenario, UserResponse } from "@/lib/api/types";
 import { useAsync } from "@/lib/hooks/useAsync";
 import { useRun } from "@/lib/hooks/useRun";
@@ -25,6 +26,7 @@ import { NavProvider, type TabId, useNav } from "@/lib/nav";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import { useAppearance } from "@/lib/theme";
 import type { InflationProfile, Scenario } from "@/lib/types";
+import { BETA_ACCESS_NOTICE } from "@/lib/view/access";
 
 /** The four tabs that describe the scenario; account settings is not one. */
 type ScreenTab = Exclude<TabId, "account">;
@@ -96,6 +98,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   );
 
   const scenarios = useAsync(() => api.scenarios.list(), []);
+  const access = useAsync(() => historyApi.entitlements(), []);
   const libraries = useAsync(
     async () =>
       Promise.all([api.inflationProfiles.list(), api.taxConfigs.list()]),
@@ -233,6 +236,12 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           onRunAgain={start}
           onSignIn={() => void session.signOut()}
         />
+
+        {access.data?.access_mode === "beta" && (
+          <p style={{ margin: 0, padding: "10px 16px", fontSize: 12, borderBottom: "1px solid var(--color-divider)" }}>
+            {BETA_ACCESS_NOTICE} Share feedback through Contact below.
+          </p>
+        )}
 
         {nav.tab === "account" ? (
           <AccountScreen
