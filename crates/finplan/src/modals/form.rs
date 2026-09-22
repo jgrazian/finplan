@@ -663,11 +663,11 @@ fn handle_navigation_key(
     if matches!(current_field_type, FieldType::Select) {
         if KeybindingsConfig::matches(&key, &keybindings.navigation.left) {
             modal.fields[modal.focused_field].select_prev();
-            return ModalResult::Continue;
+            return ModalResult::FieldChanged(modal.focused_field);
         }
         if KeybindingsConfig::matches(&key, &keybindings.navigation.right) {
             modal.fields[modal.focused_field].select_next();
-            return ModalResult::Continue;
+            return ModalResult::FieldChanged(modal.focused_field);
         }
     }
 

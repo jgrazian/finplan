@@ -138,6 +138,14 @@ pub fn handle_modal_key(key: KeyEvent, state: &mut AppState) -> ModalResult {
 
 /// Update dependent fields when a form field value changes
 fn update_dependent_fields(state: &mut AppState, field_idx: usize) {
+    if let ModalState::Form(form) = &state.modal
+        && let FormKind::ValueInput { source, kind } = form.kind
+        && field_idx == source
+    {
+        crate::actions::value_input::refresh(state, source, kind);
+        return;
+    }
+
     // First, check if we need to update and get necessary data (immutable borrow)
     let update_info = {
         let ModalState::Form(modal) = &state.modal else {

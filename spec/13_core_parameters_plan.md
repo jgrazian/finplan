@@ -3,7 +3,7 @@
 ## Objective and scope
 
 Introduce named, typed inputs that amount expressions and event schedules can
-reference. Numeric inputs can also be optimized explicitly. Keep financial
+reference. All four parameter types can also be optimized explicitly. Keep financial
 operations represented by `EventEffect` and the existing ledger pipeline.
 
 Parameters are fixed during each simulation run. This version supports Money,
@@ -31,12 +31,11 @@ and UI editors are outside its scope.
    structure outside those resolved references. Keep inflation and balance-based
    expressions evaluated at their existing times. Parameter binding must consume
    no random numbers and introduce no per-event lookup overhead.
-4. **Target parameters in optimization.** Add an explicit Money/Rate parameter
-   optimization target with bounds and ID-based updates. Date/Age are overridden
-   as typed values but are not numeric optimization targets. Preserve legacy targets
-   for compatibility; document the explicit target as the preferred path for new
-   amount/rate optimization. A parameter update must not rewrite other literals
-   or unrelated parameters and must reject missing IDs and non-finite values.
+4. **Target parameters in optimization.** Use registry IDs with typed lower and
+   upper bounds for Money, Rate, Date, and Age. Replace legacy event/account
+   targets entirely. A parameter update must not rewrite literals, triggers,
+   allocations, or unrelated parameters. Reject missing or duplicate IDs, invalid
+   bounds, type mismatches, and non-finite or out-of-range candidates.
 5. **Integrate and document.** Update affected configuration constructors and
    exhaustive matches across the workspace. Add a usable example covering named
    parameters, nested amount expressions, and explicit optimization. Do not add
@@ -101,13 +100,14 @@ documented below.
   checkpoint scheduling, so a recurring condition takes effect on its date.
 - `SimulationConfig::with_parameter_value(id, value)` returns an independent
   configuration with the same typed parameter replaced. It returns `None` for
-  missing IDs, invalid values, or a type change. Numeric optimization preserves
-  Money or Rate variants and rejects Date/Age parameters.
+  missing IDs, invalid values, or a type change. Optimization also preserves
+  types and supports all four variants; see the migration notes below.
 - Run `cargo run -p finplan_core --example named_parameters` for all four types
   in a savings and optimization scenario.
 
-The server's scenario compiler currently constructs an empty registry. Server,
-TUI, and web authoring are separate work.
+The server's scenario compiler currently constructs an empty registry. Server
+and web authoring remain separate work. The TUI now authors named parameters in
+the Events tab; see [TUI architecture](04_tui_application.md#events-screen).
 
 ## Historical verification of the initial numeric-only baseline (2026-09-22)
 
@@ -140,3 +140,52 @@ fixes, documentation, and regression tests. Parent review is complete.
   `ts-rs` attribute-parser notices remain; there are no Clippy lints.
 - The named-parameters example runs with all four types.
 - Generated TypeScript bindings have no drift, and `git diff --check` passes.
+
+## Parameter-only optimization migration
+
+`OptimizableParameter` is now a struct with `parameter_id`, `min_value`, and
+`max_value`. Both bounds are `ParameterValue` and must match the registry entry:
+
+```rust
+OptimizableParameter {
+    parameter_id: retirement_age_id,
+    min_value: ParameterValue::Age(CalendarAge::years(60)),
+    max_value: ParameterValue::Age(CalendarAge::new(70, 6)),
+}
+```
+
+This is a breaking core API and serialized optimization-config change. Replace
+`RetirementAge`, `ContributionRate`, `WithdrawalAmount`, `AssetAllocation`, and
+`NumericParameter` targets with explicit parameter IDs and typed bounds. Amounts
+must reference those IDs with `TransferAmount::Parameter`; schedules use
+`DateParameter` or `AgeParameter`. Automatic account-allocation rewriting is
+removed; only values represented in the registry and consumed by the scenario
+can be optimized. No event/effect/account mutation occurs during optimization.
+
+- Money and Rate use continuous numeric coordinates. Rates are fractions (0.05
+  for 5%), with no arbitrary 0..1 restriction.
+- Date coordinates count days from the lower bound; Age coordinates are total
+  months. Calendar candidates round to whole days/months. Grid search removes
+  duplicate rounded candidates, and binary search stops at adjacent values.
+- Auto selects grid search whenever any Date/Age target is present; otherwise
+  existing algorithm selection applies. Grid resolution controls sampling, so
+  a coarse grid does not necessarily evaluate every day or month.
+- Explicit binary search supports a single target, including Date/Age, under
+  its existing monotonic/feasibility assumptions. Nelder–Mead accepts only
+  continuous Money/Rate targets.
+- `OptimizationResult::optimal_parameters` is now
+  `HashMap<ParameterId, ParameterValue>`. Values can be passed directly to
+  `with_parameter_value`. History records contain the actual typed values in
+  target order. Binary-search callbacks still report scalar search coordinates.
+- Grid search now propagates configuration/simulation errors instead of silently
+  reporting failed candidate simulations as infeasible solutions.
+
+### Parameter-only verification (2026-09-22)
+
+- All 491 workspace tests pass, including 187 core tests; 21 existing doc tests
+  remain ignored. Regression coverage includes typed result serialization,
+  mixed Money/Rate/Date/Age optimization, calendar rounding and deduplication,
+  configuration preservation, invalid bounds/targets, and simulation errors.
+- `cargo fmt` and `cargo clippy --workspace --all-targets -- -D warnings` pass;
+  existing ts-rs attribute-parser notices remain.
+- The named-parameters example runs; generated TypeScript bindings have no drift.

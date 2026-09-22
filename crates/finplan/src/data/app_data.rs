@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::{
     analysis_data::AnalysisConfigData,
     events_data::EventData,
+    named_parameters::NamedParameterData,
     parameters_data::ParametersData,
     portfolio_data::{AssetTag, PortfolioData},
     profiles_data::{ProfileData, ReturnProfileTag},
@@ -52,6 +53,10 @@ pub struct SimulationData {
     #[serde(default)]
     pub events: Vec<EventData>,
 
+    /// Named typed inputs shared by event amounts and schedules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub named_parameters: Vec<NamedParameterData>,
+
     /// Simulation parameters (dates, duration, inflation, taxes)
     #[serde(default)]
     pub parameters: ParametersData,
@@ -75,6 +80,7 @@ impl Default for SimulationData {
             asset_prices: HashMap::new(),
             asset_tracking_errors: HashMap::new(),
             events: vec![],
+            named_parameters: vec![],
             parameters: ParametersData::default(),
             analysis: AnalysisConfigData::default(),
         }
@@ -219,6 +225,7 @@ mod tests {
                     enabled: true,
                 },
             ],
+            named_parameters: vec![],
             parameters: ParametersData {
                 birth_date: "1985-06-15".to_string(),
                 start_date: "2025-01-01".to_string(),

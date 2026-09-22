@@ -10,12 +10,9 @@ use rayon::prelude::*;
 
 use crate::config::SimulationConfig;
 use crate::error::SimulationError;
-use crate::model::MonteCarloConfig;
-use crate::optimization::OptimizableParameter;
-use crate::simulation::monte_carlo_simulate_with_config;
 
 use super::config::OptimizationConfig;
-use super::evaluator::{apply_parameters, calculate_objective, check_constraints};
+use super::evaluator::evaluate;
 use super::result::{ConvergenceHistory, EvaluationRecord, OptimizationResult, TerminationReason};
 
 /// Generate all grid points for the parameter space
@@ -27,34 +24,47 @@ fn generate_grid_points(
         return vec![vec![]];
     }
 
-    let bounds: Vec<(f64, f64)> = parameters
+    let axes: Vec<Vec<f64>> = parameters
         .iter()
-        .map(OptimizableParameter::bounds)
+        .map(|parameter| {
+            let (min, max) = parameter.bounds();
+            let mut axis: Vec<f64> = (0..grid_size.max(1))
+                .map(|index| {
+                    let coordinate = if grid_size <= 1 {
+                        f64::midpoint(min, max)
+                    } else {
+                        (min + (max - min) * (index as f64 / (grid_size - 1) as f64))
+                            .clamp(min, max)
+                    };
+                    if parameter.is_discrete() {
+                        coordinate.round()
+                    } else {
+                        coordinate
+                    }
+                })
+                .collect();
+            axis.dedup();
+            axis
+        })
         .collect();
     let mut points = Vec::new();
     let mut indices = vec![0usize; parameters.len()];
 
     loop {
-        // Generate point for current indices
-        let point: Vec<f64> = indices
-            .iter()
-            .zip(bounds.iter())
-            .map(|(&idx, &(min, max))| {
-                if grid_size <= 1 {
-                    f64::midpoint(min, max)
-                } else {
-                    min + (max - min) * (idx as f64) / (grid_size - 1) as f64
-                }
-            })
-            .collect();
-        points.push(point);
+        points.push(
+            indices
+                .iter()
+                .zip(&axes)
+                .map(|(&index, axis)| axis[index])
+                .collect(),
+        );
 
         // Increment indices (like counting in base grid_size)
         let mut carry = true;
-        for index in &mut indices {
+        for (index, axis) in indices.iter_mut().zip(&axes) {
             if carry {
                 *index += 1;
-                if *index >= grid_size {
+                if *index >= axis.len() {
                     *index = 0;
                     // carry remains true
                 } else {
@@ -83,51 +93,25 @@ pub fn optimize_grid_search(
     opt_config: &OptimizationConfig,
     grid_size: usize,
 ) -> Result<OptimizationResult, SimulationError> {
+    super::config::validate_optimization(base_config, opt_config)?;
+    if grid_size == 0 {
+        return Err(SimulationError::Config("grid size must be positive".into()));
+    }
     let grid_points = generate_grid_points(&opt_config.parameters, grid_size);
     let total_points = grid_points.len();
 
-    if total_points == 0 {
-        return Err(SimulationError::Config(
-            "no parameters to optimize".to_string(),
-        ));
-    }
-
-    // Monte Carlo config for each evaluation
-    let mc_config = MonteCarloConfig {
-        iterations: opt_config.monte_carlo_iterations,
-        percentiles: vec![0.05, 0.50, 0.95],
-        compute_mean: true,
-        ..Default::default()
-    };
-
-    // Parallel evaluation of all grid points
-    let results: Vec<Option<EvaluationRecord>> = grid_points
+    // Propagate invalid candidates/simulation failures instead of silently
+    // presenting configuration errors as an infeasible search.
+    let results: Result<Vec<EvaluationRecord>, SimulationError> = grid_points
         .par_iter()
-        .map(|values| {
-            // Apply parameters
-            let config = apply_parameters(base_config, &opt_config.parameters, values)?;
-
-            // Run Monte Carlo simulation
-            let summary = monte_carlo_simulate_with_config(&config, &mc_config).ok()?;
-
-            // Calculate objective and check constraints
-            let objective_value = calculate_objective(&opt_config.objective, &summary);
-            let constraints_satisfied = check_constraints(&opt_config.constraints, &summary.stats);
-
-            Some(EvaluationRecord {
-                parameter_values: values.clone(),
-                objective_value,
-                constraints_satisfied,
-                stats: summary.stats,
-            })
-        })
+        .map(|values| evaluate(base_config, opt_config, values))
         .collect();
 
     // Build history and find best result
     let mut history = ConvergenceHistory::new();
     let mut best: Option<EvaluationRecord> = None;
 
-    for record in results.into_iter().flatten() {
+    for record in results? {
         history.record(record.clone());
 
         if record.constraints_satisfied
@@ -146,7 +130,7 @@ pub fn optimize_grid_search(
                 .iter()
                 .zip(record.parameter_values.iter())
             {
-                optimal_parameters.insert(param.name(), *value);
+                optimal_parameters.insert(param.parameter_id, *value);
             }
 
             Ok(OptimizationResult {
@@ -170,13 +154,13 @@ mod tests {
 
     #[test]
     fn test_generate_grid_points_1d() {
-        use crate::model::EventId;
+        use crate::model::{ParameterId, ParameterValue};
         use crate::optimization::config::OptimizableParameter;
 
-        let params = vec![OptimizableParameter::RetirementAge {
-            event_id: EventId(0),
-            min_age: 60,
-            max_age: 70,
+        let params = vec![OptimizableParameter {
+            parameter_id: ParameterId(0),
+            min_value: ParameterValue::Money(60.0),
+            max_value: ParameterValue::Money(70.0),
         }];
 
         let points = generate_grid_points(&params, 3);
@@ -188,19 +172,19 @@ mod tests {
 
     #[test]
     fn test_generate_grid_points_2d() {
-        use crate::model::EventId;
+        use crate::model::{ParameterId, ParameterValue};
         use crate::optimization::config::OptimizableParameter;
 
         let params = vec![
-            OptimizableParameter::RetirementAge {
-                event_id: EventId(0),
-                min_age: 60,
-                max_age: 70,
+            OptimizableParameter {
+                parameter_id: ParameterId(0),
+                min_value: ParameterValue::Money(60.0),
+                max_value: ParameterValue::Money(70.0),
             },
-            OptimizableParameter::WithdrawalAmount {
-                event_id: EventId(1),
-                min_amount: 0.0,
-                max_amount: 100.0,
+            OptimizableParameter {
+                parameter_id: ParameterId(1),
+                min_value: ParameterValue::Money(0.0),
+                max_value: ParameterValue::Money(100.0),
             },
         ];
 

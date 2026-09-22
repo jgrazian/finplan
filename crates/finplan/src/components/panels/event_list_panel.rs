@@ -98,7 +98,9 @@ impl EventListPanel {
         let block = focused_block_with_help(" EVENTS ", is_focused, &help_text);
 
         let list = List::new(items).block(block);
-        frame.render_widget(list, area);
+        let mut selection = ratatui::widgets::ListState::default()
+            .with_selected(Some(state.events_state.selected_event_index));
+        frame.render_stateful_widget(list, area, &mut selection);
     }
 
     /// Handle key events for the event list panel.
@@ -345,6 +347,12 @@ impl EventListPanel {
     /// Format amount in short form.
     pub fn format_amount_short(amount: &AmountData) -> String {
         match amount {
+            AmountData::Parameter { name } => format!("Parameter: {}", name),
+            AmountData::RateTimes { rate, inner } => format!(
+                "{} × {}",
+                rate,
+                crate::modals::amount_builder::format_amount_summary(inner)
+            ),
             AmountData::Fixed { value } => format_compact_currency(*value),
             AmountData::InflationAdjusted { inner } => {
                 format!("{} (infl-adj)", Self::format_amount_short(inner))
@@ -369,6 +377,8 @@ impl EventListPanel {
     /// Format trigger in short form.
     fn format_trigger_short(trigger: &TriggerData) -> String {
         match trigger {
+            TriggerData::DateParameter { name } => format!("Date: {name}"),
+            TriggerData::AgeParameter { name } => format!("Age: {name}"),
             TriggerData::Date { date } => format!("Date: {}", date),
             TriggerData::Age { years, .. } => format!("Age: {}", years),
             TriggerData::Repeating { interval, .. } => {

@@ -44,6 +44,14 @@ pub enum IntervalData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TriggerData {
+    /// Named calendar inputs resolved when a simulation starts.
+    DateParameter {
+        name: String,
+    },
+    AgeParameter {
+        name: String,
+    },
+
     /// Trigger on a specific date
     Date {
         date: String, // "2025-01-01" format
@@ -57,7 +65,10 @@ pub enum TriggerData {
     },
 
     /// Trigger relative to another event
-    RelativeToEvent { event: EventTag, offset: OffsetData },
+    RelativeToEvent {
+        event: EventTag,
+        offset: OffsetData,
+    },
 
     /// Trigger when account balance crosses threshold
     AccountBalance {
@@ -73,13 +84,19 @@ pub enum TriggerData {
     },
 
     /// Trigger when total net worth crosses threshold
-    NetWorth { threshold: ThresholdData },
+    NetWorth {
+        threshold: ThresholdData,
+    },
 
     /// All conditions must be true
-    And { conditions: Vec<TriggerData> },
+    And {
+        conditions: Vec<TriggerData>,
+    },
 
     /// Any condition can be true
-    Or { conditions: Vec<TriggerData> },
+    Or {
+        conditions: Vec<TriggerData>,
+    },
 
     /// Repeating schedule
     Repeating {
@@ -103,6 +120,15 @@ pub enum TriggerData {
 /// For backwards compatibility, bare floats in YAML (e.g., `amount: 5000.0`) are deserialized as `Fixed { value }`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AmountData {
+    /// A named Money input.
+    Parameter { name: String },
+
+    /// A named Rate multiplied by a money amount.
+    RateTimes {
+        rate: String,
+        inner: Box<AmountData>,
+    },
+
     /// Fixed dollar amount
     Fixed { value: f64 },
 
@@ -178,6 +204,8 @@ impl AmountData {
     /// Get the innermost amount type description
     pub fn base_type_name(&self) -> &'static str {
         match self {
+            Self::Parameter { .. } => "Parameter",
+            Self::RateTimes { inner, .. } => inner.base_type_name(),
             Self::Fixed { .. } => "Fixed",
             Self::InflationAdjusted { inner } => inner.base_type_name(),
             Self::Scale { inner, .. } => inner.base_type_name(),
@@ -199,6 +227,19 @@ impl Serialize for AmountData {
         use serde::ser::SerializeMap;
 
         match self {
+            Self::Parameter { name } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "Parameter")?;
+                map.serialize_entry("name", name)?;
+                map.end()
+            }
+            Self::RateTimes { rate, inner } => {
+                let mut map = serializer.serialize_map(Some(3))?;
+                map.serialize_entry("type", "RateTimes")?;
+                map.serialize_entry("rate", rate)?;
+                map.serialize_entry("inner", inner)?;
+                map.end()
+            }
             Self::Fixed { value } => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("type", "Fixed")?;
@@ -304,6 +345,8 @@ impl<'de> Deserialize<'de> for AmountData {
                 let mut multiplier: Option<f64> = None;
                 let mut inner: Option<AmountData> = None;
                 let mut account: Option<AccountTag> = None;
+                let mut name: Option<String> = None;
+                let mut rate: Option<String> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -313,6 +356,8 @@ impl<'de> Deserialize<'de> for AmountData {
                         "multiplier" => multiplier = Some(map.next_value()?),
                         "inner" => inner = Some(map.next_value()?),
                         "account" => account = Some(map.next_value()?),
+                        "name" => name = Some(map.next_value()?),
+                        "rate" => rate = Some(map.next_value()?),
                         _ => {
                             let _ = map.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -322,6 +367,13 @@ impl<'de> Deserialize<'de> for AmountData {
                 let type_str = type_str.ok_or_else(|| de::Error::missing_field("type"))?;
 
                 match type_str.as_str() {
+                    "Parameter" => Ok(AmountData::Parameter {
+                        name: name.ok_or_else(|| de::Error::missing_field("name"))?,
+                    }),
+                    "RateTimes" => Ok(AmountData::RateTimes {
+                        rate: rate.ok_or_else(|| de::Error::missing_field("rate"))?,
+                        inner: Box::new(inner.ok_or_else(|| de::Error::missing_field("inner"))?),
+                    }),
                     "Fixed" => {
                         let value = value.ok_or_else(|| de::Error::missing_field("value"))?;
                         Ok(AmountData::Fixed { value })
@@ -358,6 +410,8 @@ impl<'de> Deserialize<'de> for AmountData {
                     other => Err(de::Error::unknown_variant(
                         other,
                         &[
+                            "Parameter",
+                            "RateTimes",
                             "Fixed",
                             "InflationAdjusted",
                             "Scale",

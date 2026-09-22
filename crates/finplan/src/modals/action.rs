@@ -16,6 +16,29 @@ pub enum ModalAction {
     Analysis(AnalysisAction),
     Mapping(MappingAction),
     Amount(AmountAction),
+    Parameter(ParameterAction),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterAction {
+    PickType {
+        index: Option<usize>,
+    },
+    Save {
+        index: Option<usize>,
+        kind: ParameterKind,
+    },
+    Delete {
+        index: usize,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParameterKind {
+    Money,
+    Rate,
+    Date,
+    Age,
 }
 
 /// Scenario-specific actions

@@ -6,13 +6,13 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::MonteCarloStats;
+use crate::model::{MonteCarloStats, ParameterId, ParameterValue};
 
 /// A single evaluation during optimization
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluationRecord {
-    /// The parameter values that were evaluated
-    pub parameter_values: Vec<f64>,
+    /// The actual typed values evaluated, in optimization target order
+    pub parameter_values: Vec<ParameterValue>,
 
     /// The objective function value
     pub objective_value: f64,
@@ -95,8 +95,8 @@ pub enum TerminationReason {
 /// Final result from an optimization run
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationResult {
-    /// The optimal parameter values found (parameter name -> value)
-    pub optimal_parameters: HashMap<String, f64>,
+    /// The optimal registry values found, keyed by parameter ID
+    pub optimal_parameters: HashMap<ParameterId, ParameterValue>,
 
     /// The objective function value at the optimal point
     pub objective_value: f64,

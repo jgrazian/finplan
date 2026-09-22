@@ -190,6 +190,12 @@ impl AmountBuilderState {
 /// Format an AmountData as a human-readable summary
 pub fn format_amount_summary(amount: &AmountData) -> String {
     match amount {
+        AmountData::Parameter { name } => format!("Parameter: {}", name),
+        AmountData::RateTimes { rate, inner } => format!(
+            "{} × {}",
+            rate,
+            crate::modals::amount_builder::format_amount_summary(inner)
+        ),
         AmountData::Fixed { value } => format!("${:.2}", value),
         AmountData::InflationAdjusted { inner } => {
             format!("{} (inflation-adjusted)", format_amount_summary(inner))
@@ -212,6 +218,12 @@ pub fn format_amount_summary(amount: &AmountData) -> String {
 /// Format the base (non-wrapper) part of an amount for Scale display
 fn format_base_amount(amount: &AmountData) -> String {
     match amount {
+        AmountData::Parameter { name } => format!("Parameter: {}", name),
+        AmountData::RateTimes { rate, inner } => format!(
+            "{} × {}",
+            rate,
+            crate::modals::amount_builder::format_amount_summary(inner)
+        ),
         AmountData::Fixed { value } => format!("${:.2}", value),
         AmountData::InflationAdjusted { inner } => {
             format!("{} (infl-adj)", format_base_amount(inner))
@@ -262,7 +274,7 @@ impl AmountTypeOption {
     /// Get display name for the option
     pub fn display_name(&self) -> &'static str {
         match self {
-            AmountTypeOption::Fixed => "Fixed Amount ($X)",
+            AmountTypeOption::Fixed => "Amount",
             AmountTypeOption::InflationAdjusted => "Inflation-Adjusted",
             AmountTypeOption::Scale => "Percentage/Scale",
             AmountTypeOption::SourceBalance => "Source Balance",

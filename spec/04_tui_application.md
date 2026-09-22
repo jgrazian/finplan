@@ -115,9 +115,36 @@ pub enum TabId {
 
 ### Events Screen
 
-- List of configured events
-- Trigger configuration
-- Effect management (add/edit/delete)
+The left column is split evenly: Events on top and Parameters below. Details
+and Timeline retain their own columns. Cycle panel focus with Tab/Shift+Tab;
+use the focused Parameters panel to add, edit, or delete named Money, Rate,
+Date, and Age inputs.
+
+Named inputs live in `SimulationData.named_parameters`, separate from the
+existing `parameters` field for scenario settings (birth date, duration, taxes,
+etc.). Old scenario files load with an empty named-input list. The converter
+registers typed core values and resolves references by name to `ParameterId`.
+
+Event type lists offer Date and Age triggers. Each editor has a **Value source**
+selector: **Enter value**, or one of the matching Date/Age parameters. The same
+choice appears in recurring start/end conditions. The **Amount** editor offers
+entered money or a Money parameter; the inflation-adjusted amount editor also
+supports both. **Percentage of Account Balance** accepts an entered percentage
+or a Rate parameter and preserves the chosen account. Rates display as percentages
+(4% is stored as 0.04) and multiply the account balance. Return profiles remain
+configured separately. Parameter is no longer a separate amount or trigger type.
+
+When a parameter is selected, its current value is shown in grey, read-only
+fields. Switching to Enter value makes those fields editable, using a copy of
+the displayed value; it does not change the shared parameter. Existing literal
+values and parameter references are preselected when reopening their editors.
+Changing a parameter's value affects every event referencing it. Renaming updates
+nested references; deleting or changing the type of a referenced parameter is
+blocked until its references are removed, including references in disabled events.
+
+The TUI Analysis tab currently uses the separate core sweep API with event
+and effect targets. It does not call the core `optimization` module; migrating
+analysis authoring to registry parameters is separate work.
 
 ### Results Screen
 

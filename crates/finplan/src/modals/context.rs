@@ -164,10 +164,18 @@ pub enum TriggerChildSlot {
 /// Partial trigger being built (any type)
 #[derive(Debug, Clone, PartialEq)]
 pub enum PartialTrigger {
+    DateParameter {
+        name: String,
+    },
+    AgeParameter {
+        name: String,
+    },
     /// Explicitly no trigger (start immediately / run forever)
     None,
     /// Date-based trigger
-    Date { date: Option<String> },
+    Date {
+        date: Option<String>,
+    },
     /// Age-based trigger
     Age {
         years: Option<u8>,
@@ -206,6 +214,9 @@ impl PartialTrigger {
     /// Check if this partial trigger is complete and can be converted
     pub fn is_complete(&self) -> bool {
         match self {
+            PartialTrigger::DateParameter { name } | PartialTrigger::AgeParameter { name } => {
+                !name.is_empty()
+            }
             PartialTrigger::None => true,
             PartialTrigger::Date { date } => date.is_some(),
             PartialTrigger::Age { years, .. } => years.is_some(),
@@ -231,6 +242,9 @@ impl PartialTrigger {
     /// Get a display name for the trigger type
     pub fn type_name(&self) -> &'static str {
         match self {
+            PartialTrigger::DateParameter { .. } | PartialTrigger::AgeParameter { .. } => {
+                "Parameter"
+            }
             PartialTrigger::None => "None",
             PartialTrigger::Date { .. } => "Date",
             PartialTrigger::Age { .. } => "Age",
@@ -245,6 +259,9 @@ impl PartialTrigger {
     /// Get a short summary string for display in forms
     pub fn summary(&self) -> String {
         match self {
+            PartialTrigger::DateParameter { name } | PartialTrigger::AgeParameter { name } => {
+                format!("Parameter: {name}")
+            }
             PartialTrigger::None => "None".to_string(),
             PartialTrigger::Date { date } => date
                 .as_ref()

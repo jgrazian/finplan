@@ -1,11 +1,13 @@
 //! Optimization module for financial planning scenarios
 //!
 //! This module provides optimization algorithms to find optimal values for
-//! parameters like retirement age, contribution rates, and withdrawal amounts.
+//! Money, Rate, Date, and Age entries in the simulation parameter registry.
+//! Bounds and results are typed; optimization never rewrites effects or accounts.
 //!
 //! # Example
 //!
 //! ```ignore
+//! use finplan_core::model::{EventId, ParameterValue};
 //! use finplan_core::optimization::{
 //!     OptimizationConfig, OptimizationObjective, OptimizableParameter,
 //!     OptimizationConstraints, optimize,
@@ -17,10 +19,10 @@
 //!         target_success_rate: 0.95,
 //!     },
 //!     parameters: vec![
-//!         OptimizableParameter::WithdrawalAmount {
-//!             event_id: EventId(5),
-//!             min_amount: 30_000.0,
-//!             max_amount: 150_000.0,
+//!         OptimizableParameter {
+//!             parameter_id: withdrawal_id,
+//!             min_value: ParameterValue::Money(30_000.0),
+//!             max_value: ParameterValue::Money(150_000.0),
 //!         },
 //!     ],
 //!     constraints: OptimizationConstraints {
@@ -31,7 +33,7 @@
 //! };
 //!
 //! let result = optimize(&simulation_config, &opt_config, None)?;
-//! println!("Optimal withdrawal: ${:.0}", result.optimal_parameters["WithdrawalAmount(event_5)"]);
+//! println!("Optimal withdrawal: {:?}", result.optimal_parameters[&withdrawal_id]);
 //! ```
 
 mod binary_search;
@@ -63,7 +65,8 @@ use crate::error::SimulationError;
 /// or uses the explicitly specified algorithm.
 ///
 /// # Algorithm Selection (Auto mode)
-/// - 1 parameter: Binary search (efficient for monotonic problems)
+/// - Any Date/Age parameters: Grid search (discrete calendar candidates)
+/// - 1 continuous parameter: Binary search (efficient for monotonic problems)
 /// - 2-3 parameters: Grid search (exhaustive but feasible)
 /// - 4+ parameters: Nelder-Mead (scales better with dimension)
 ///
@@ -79,13 +82,8 @@ pub fn optimize(
     opt_config: &OptimizationConfig,
     progress_callback: Option<ProgressCallback>,
 ) -> Result<OptimizationResult, SimulationError> {
+    config::validate_optimization(base_config, opt_config)?;
     let num_params = opt_config.parameters.len();
-
-    if num_params == 0 {
-        return Err(SimulationError::Config(
-            "no parameters to optimize".to_string(),
-        ));
-    }
 
     match &opt_config.algorithm {
         OptimizationAlgorithm::BinarySearch => {
@@ -96,6 +94,17 @@ pub fn optimize(
         }
         OptimizationAlgorithm::NelderMead => {
             optimize_nelder_mead(base_config, opt_config, progress_callback)
+        }
+        OptimizationAlgorithm::Auto
+            if opt_config
+                .parameters
+                .iter()
+                .any(OptimizableParameter::is_discrete) =>
+        {
+            let grid_size = ((opt_config.max_iterations as f64).powf(1.0 / num_params as f64)
+                as usize)
+                .clamp(3, 20);
+            optimize_grid_search(base_config, opt_config, grid_size)
         }
         OptimizationAlgorithm::Auto => {
             // Auto-select algorithm based on parameter count
@@ -125,7 +134,6 @@ pub fn optimize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::EventId;
 
     #[test]
     fn test_optimize_no_params() {
@@ -137,27 +145,5 @@ mod tests {
 
         let result = optimize(&config, &opt_config, None);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_auto_select_binary_search() {
-        // With 1 parameter and Auto, should select binary search
-        let config = SimulationConfig::default();
-        let opt_config = OptimizationConfig {
-            objective: OptimizationObjective::MaximizeWealthAtDeath,
-            parameters: vec![OptimizableParameter::RetirementAge {
-                event_id: EventId(0),
-                min_age: 60,
-                max_age: 70,
-            }],
-            algorithm: OptimizationAlgorithm::Auto,
-            monte_carlo_iterations: 10, // Low for testing
-            max_iterations: 5,
-            ..Default::default()
-        };
-
-        // This will fail due to no valid simulation config, but that's expected
-        // The test is mainly to verify algorithm selection logic compiles
-        let _result = optimize(&config, &opt_config, None);
     }
 }

@@ -187,7 +187,7 @@ fn rename_account_in_amount(amount: &mut AmountData, old_name: &str, new_name: &
         AmountData::InflationAdjusted { inner } => {
             rename_account_in_amount(inner, old_name, new_name);
         }
-        AmountData::Scale { inner, .. } => {
+        AmountData::Scale { inner, .. } | AmountData::RateTimes { inner, .. } => {
             rename_account_in_amount(inner, old_name, new_name);
         }
         _ => {}

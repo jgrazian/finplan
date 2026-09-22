@@ -39,9 +39,14 @@ pub fn optimize_binary_search(
         ));
     }
 
+    super::config::validate_optimization(base_config, opt_config)?;
     let param = &opt_config.parameters[0];
     let (min_val, max_val) = param.bounds();
-    let param_name = param.name();
+    let threshold = if param.is_discrete() {
+        1.0
+    } else {
+        opt_config.tolerance * min_val.abs().max(max_val.abs()).max(1.0)
+    };
 
     let mut history = ConvergenceHistory::new();
     let mut low = min_val;
@@ -66,9 +71,13 @@ pub fn optimize_binary_search(
     }
 
     // Binary search loop
-    while iteration < opt_config.max_iterations && (high - low) > opt_config.tolerance * max_val {
+    while iteration < opt_config.max_iterations && (high - low) > threshold {
         iteration += 1;
-        let mid = f64::midpoint(low, high);
+        let mid = if param.is_discrete() {
+            f64::midpoint(low, high).floor()
+        } else {
+            f64::midpoint(low, high)
+        };
 
         let record = evaluate(base_config, opt_config, &[mid])?;
         history.record(record.clone());
@@ -99,11 +108,11 @@ pub fn optimize_binary_search(
 
     // Build result
     match best_feasible {
-        Some((optimal_val, objective_value, record)) => {
+        Some((_optimal_val, objective_value, record)) => {
             let mut optimal_parameters = HashMap::new();
-            optimal_parameters.insert(param_name, optimal_val);
+            optimal_parameters.insert(param.parameter_id, record.parameter_values[0]);
 
-            let converged = (high - low) <= opt_config.tolerance * max_val;
+            let converged = (high - low) <= threshold;
 
             Ok(OptimizationResult {
                 optimal_parameters,
@@ -127,7 +136,7 @@ pub fn optimize_binary_search(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::EventId;
+    use crate::model::{ParameterId, ParameterValue};
     use crate::optimization::config::{
         OptimizableParameter, OptimizationConstraints, OptimizationObjective,
     };
@@ -138,15 +147,15 @@ mod tests {
         let opt_config = OptimizationConfig {
             objective: OptimizationObjective::MaximizeWealthAtDeath,
             parameters: vec![
-                OptimizableParameter::RetirementAge {
-                    event_id: EventId(0),
-                    min_age: 55,
-                    max_age: 70,
+                OptimizableParameter {
+                    parameter_id: ParameterId(0),
+                    min_value: ParameterValue::Money(55.0),
+                    max_value: ParameterValue::Money(70.0),
                 },
-                OptimizableParameter::WithdrawalAmount {
-                    event_id: EventId(1),
-                    min_amount: 30000.0,
-                    max_amount: 100000.0,
+                OptimizableParameter {
+                    parameter_id: ParameterId(1),
+                    min_value: ParameterValue::Money(30000.0),
+                    max_value: ParameterValue::Money(100000.0),
                 },
             ],
             constraints: OptimizationConstraints::default(),

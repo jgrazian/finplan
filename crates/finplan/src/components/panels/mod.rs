@@ -1,8 +1,9 @@
 //! Panel components extracted from screen implementations.
 
 mod accounts_panel;
-mod event_list_panel;
+pub mod event_list_panel;
 mod ledger_panel;
+pub mod parameters_panel;
 mod profiles_panel;
 
 pub use accounts_panel::AccountsPanel;

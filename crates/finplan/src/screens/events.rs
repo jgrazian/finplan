@@ -153,13 +153,12 @@ impl EventsScreen {
         let title = format!(" {} TIMELINE ", indicator);
 
         let events = &state.data().events;
-        let birth_date = &state.data().parameters.birth_date;
 
         // Collect timeline entries with calculated years
         let mut timeline_entries: Vec<(Option<i32>, &EventData, bool)> = events
             .iter()
             .map(|event| {
-                let year = Self::calculate_trigger_year(&event.trigger, birth_date);
+                let year = Self::calculate_trigger_year(&event.trigger, state);
                 let is_repeating = matches!(event.trigger, TriggerData::Repeating { .. });
                 (year, event, is_repeating)
             })
@@ -288,7 +287,8 @@ impl EventsScreen {
     }
 
     /// Calculate the year a trigger will first fire (if determinable)
-    fn calculate_trigger_year(trigger: &TriggerData, birth_date: &str) -> Option<i32> {
+    fn calculate_trigger_year(trigger: &TriggerData, state: &AppState) -> Option<i32> {
+        let birth_date = &state.data().parameters.birth_date;
         match trigger {
             TriggerData::Date { date } => {
                 // Parse "YYYY-MM-DD" format
@@ -302,11 +302,48 @@ impl EventsScreen {
             TriggerData::Repeating { start, .. } => {
                 // Use start condition if present
                 if let Some(start_trigger) = start {
-                    Self::calculate_trigger_year(start_trigger, birth_date)
+                    Self::calculate_trigger_year(start_trigger, state)
                 } else {
                     // Starts immediately - use current year estimation
-                    Some(2025)
+                    state
+                        .data()
+                        .parameters
+                        .start_date
+                        .parse::<jiff::civil::Date>()
+                        .ok()
+                        .map(|d| i32::from(d.year()))
                 }
+            }
+            TriggerData::DateParameter { name } => state
+                .data()
+                .named_parameters
+                .iter()
+                .find(|p| &p.name == name)
+                .and_then(|p| {
+                    if let finplan_core::model::ParameterValue::Date(date) = p.value {
+                        Some(i32::from(date.year()))
+                    } else {
+                        None
+                    }
+                }),
+            TriggerData::AgeParameter { name } => {
+                let birth = birth_date.parse::<jiff::civil::Date>().ok()?;
+                state
+                    .data()
+                    .named_parameters
+                    .iter()
+                    .find(|p| &p.name == name)
+                    .and_then(|p| {
+                        if let finplan_core::model::ParameterValue::Age(age) = p.value {
+                            Some(
+                                i32::from(birth.year())
+                                    + i32::from(age.years)
+                                    + (i32::from(birth.month()) - 1 + i32::from(age.months)) / 12,
+                            )
+                        } else {
+                            None
+                        }
+                    })
             }
             TriggerData::RelativeToEvent { .. } => {
                 // Would need to resolve reference - mark as conditional for now
@@ -328,6 +365,9 @@ impl EventsScreen {
     fn append_trigger_details(trigger: &TriggerData, lines: &mut Vec<Line<'_>>, indent: usize) {
         let prefix = "  ".repeat(indent);
         match trigger {
+            TriggerData::DateParameter { name } | TriggerData::AgeParameter { name } => {
+                lines.push(Line::from(format!("{prefix}Parameter: {name}")))
+            }
             TriggerData::Date { date } => {
                 lines.push(Line::from(format!("{}Type: Date", prefix)));
                 lines.push(Line::from(format!("{}Date: {}", prefix, date)));
@@ -453,6 +493,9 @@ impl EventsScreen {
     /// Format a trigger in a single line for inline display
     fn format_trigger_inline(trigger: &TriggerData) -> String {
         match trigger {
+            TriggerData::DateParameter { name } | TriggerData::AgeParameter { name } => {
+                format!("Parameter: {name}")
+            }
             TriggerData::Date { date } => format!("Date {}", date),
             TriggerData::Age { years, months } => {
                 if let Some(m) = months {
@@ -563,6 +606,12 @@ impl EventsScreen {
 
     fn format_amount(amount: &AmountData) -> String {
         match amount {
+            AmountData::Parameter { name } => format!("Parameter: {}", name),
+            AmountData::RateTimes { rate, inner } => format!(
+                "{} × {}",
+                rate,
+                crate::modals::amount_builder::format_amount_summary(inner)
+            ),
             AmountData::Fixed { value } => format!("${:.2}", value),
             AmountData::InflationAdjusted { inner } => {
                 format!("{} (inflation-adjusted)", Self::format_amount(inner))
@@ -759,6 +808,9 @@ impl Component for EventsScreen {
         // Delegate to focused panel handler
         match state.events_state.focused_panel {
             EventsPanel::EventList => EventListPanel::handle_key(key, state),
+            EventsPanel::Parameters => {
+                crate::components::panels::parameters_panel::ParametersPanel::handle_key(key, state)
+            }
             EventsPanel::Details => {
                 // Details panel - navigation and forwarding
                 match key.code {
@@ -855,7 +907,12 @@ impl Component for EventsScreen {
             .constraints(constraints)
             .split(area);
 
-        EventListPanel::render(frame, columns[0], state);
+        let left = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(columns[0]);
+        EventListPanel::render(frame, left[0], state);
+        crate::components::panels::parameters_panel::ParametersPanel::render(frame, left[1], state);
         self.render_event_details(frame, columns[1], state);
         self.render_timeline(frame, columns[2], state);
     }
@@ -871,7 +928,10 @@ impl super::ModalHandler for EventsScreen {
     fn handles(&self, action: &ModalAction) -> bool {
         matches!(
             action,
-            ModalAction::Event(_) | ModalAction::Effect(_) | ModalAction::Amount(_)
+            ModalAction::Event(_)
+                | ModalAction::Effect(_)
+                | ModalAction::Amount(_)
+                | ModalAction::Parameter(_)
         )
     }
 
@@ -892,6 +952,7 @@ impl super::ModalHandler for EventsScreen {
         let ctx = ActionContext::new(modal_context.as_ref(), value);
 
         match action {
+            ModalAction::Parameter(action) => actions::parameter::handle(state, action, value),
             // Event actions
             ModalAction::Event(EventAction::PickTriggerType) => {
                 actions::handle_trigger_type_pick(state, value.as_str().unwrap_or_default())
@@ -1019,5 +1080,93 @@ impl super::ModalHandler for EventsScreen {
             // This shouldn't happen if handles() is correct
             _ => ActionResult::close(),
         }
+    }
+}
+
+#[cfg(test)]
+mod parameter_panel_tests {
+    use super::*;
+    use crate::data::named_parameters::NamedParameterData;
+    use crate::modals::ParameterAction;
+    use crossterm::event::KeyModifiers;
+    use finplan_core::model::ParameterValue;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn panel_focus_keyboard_and_split_rendering() {
+        let mut state = AppState::new();
+        let mut screen = EventsScreen;
+        screen.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut state);
+        assert_eq!(state.events_state.focused_panel, EventsPanel::Parameters);
+        state.keybindings.tabs.events.add = vec!["n".into()];
+        screen.handle_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            &mut state,
+        );
+        assert!(
+            matches!(state.modal,ModalState::Picker(ref p) if p.action==ModalAction::Parameter(ParameterAction::PickType{index:None}))
+        );
+        state.modal = ModalState::None;
+        for i in 0..25 {
+            state.data_mut().named_parameters.push(NamedParameterData {
+                name: format!("Parameter {i}"),
+                value: ParameterValue::Money(i as f64),
+            });
+        }
+        state.events_state.selected_parameter_index = 24;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal
+            .draw(|f| screen.render(f, f.area(), &state))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let line = |y| (0..42).map(|x| buffer[(x, y)].symbol()).collect::<String>();
+        assert!(line(0).contains("EVENTS"));
+        assert!(line(20).contains("PARAMETERS"));
+        assert!((21..39).any(|y| line(y).contains("Parameter 24")));
+        for _ in 0..3 {
+            screen.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut state);
+        }
+        assert_eq!(state.events_state.focused_panel, EventsPanel::EventList);
+        screen.handle_key(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+            &mut state,
+        );
+        assert_eq!(state.events_state.focused_panel, EventsPanel::Timeline);
+        let mut small = Terminal::new(TestBackend::new(24, 8)).unwrap();
+        small.draw(|f| screen.render(f, f.area(), &state)).unwrap();
+    }
+
+    #[test]
+    fn timeline_resolves_parameter_calendar_values() {
+        let mut state = AppState::new();
+        state.data_mut().parameters.birth_date = "1980-12-31".into();
+        state.data_mut().named_parameters = vec![
+            NamedParameterData {
+                name: "Start".into(),
+                value: ParameterValue::Date("2030-06-01".parse().unwrap()),
+            },
+            NamedParameterData {
+                name: "Retire".into(),
+                value: ParameterValue::Age(finplan_core::model::CalendarAge::new(65, 2)),
+            },
+        ];
+        assert_eq!(
+            EventsScreen::calculate_trigger_year(
+                &TriggerData::DateParameter {
+                    name: "Start".into()
+                },
+                &state
+            ),
+            Some(2030)
+        );
+        assert_eq!(
+            EventsScreen::calculate_trigger_year(
+                &TriggerData::AgeParameter {
+                    name: "Retire".into()
+                },
+                &state
+            ),
+            Some(2046)
+        );
     }
 }

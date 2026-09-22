@@ -10,6 +10,7 @@ mod config;
 mod effect;
 mod event;
 mod holding;
+pub mod parameter;
 mod profile;
 mod scenario;
 pub mod wizard;
@@ -165,3 +166,5 @@ impl<'a> ActionContext<'a> {
         self.selected().unwrap_or("")
     }
 }
+
+pub(crate) mod value_input;

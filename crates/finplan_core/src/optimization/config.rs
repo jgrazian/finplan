@@ -6,7 +6,7 @@
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AccountId, EventId, ParameterId};
+use crate::model::{CalendarAge, EventId, ParameterId, ParameterValue};
 
 /// What the optimization is trying to achieve
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,98 +30,127 @@ pub enum OptimizationObjective {
     MinimizeLifetimeTax,
 }
 
-/// A parameter that can be optimized
+/// A registry parameter to optimize, with inclusive bounds of the same type.
+///
+/// Money and Rate are continuous. Date is searched in whole days, and Age in
+/// whole months. Both bounds must match the configured parameter's type.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum OptimizableParameter {
-    /// Optimize the retirement age (modifies an Age trigger on an event)
-    RetirementAge {
-        event_id: EventId,
-        min_age: u8,
-        max_age: u8,
-    },
-
-    /// Optimize a contribution rate (modifies `TransferAmount::Fixed` in event effects)
-    ContributionRate {
-        event_id: EventId,
-        min_amount: f64,
-        max_amount: f64,
-    },
-
-    /// Optimize a withdrawal amount (modifies `TransferAmount::Fixed` in event effects)
-    WithdrawalAmount {
-        event_id: EventId,
-        min_amount: f64,
-        max_amount: f64,
-    },
-
-    /// Optimize asset allocation (stock vs bond percentage)
-    AssetAllocation {
-        account_id: AccountId,
-        min_stock_pct: f64,
-        max_stock_pct: f64,
-    },
-
-    /// Optimize one configured numeric parameter by ID.
-    /// Preferred for new amount and rate optimization.
-    NumericParameter {
-        parameter_id: ParameterId,
-        min_value: f64,
-        max_value: f64,
-    },
+pub struct OptimizableParameter {
+    pub parameter_id: ParameterId,
+    pub min_value: ParameterValue,
+    pub max_value: ParameterValue,
 }
 
 impl OptimizableParameter {
-    /// Returns the (min, max) bounds for this parameter
+    /// Internal search coordinates: numeric values, days since the lower Date
+    /// bound, or total months of Age. Invalid bound types produce NaN bounds.
     #[must_use]
     pub fn bounds(&self) -> (f64, f64) {
-        match self {
-            OptimizableParameter::RetirementAge {
-                min_age, max_age, ..
-            } => (f64::from(*min_age), f64::from(*max_age)),
-            OptimizableParameter::ContributionRate {
-                min_amount,
-                max_amount,
-                ..
-            } => (*min_amount, *max_amount),
-            OptimizableParameter::WithdrawalAmount {
-                min_amount,
-                max_amount,
-                ..
-            } => (*min_amount, *max_amount),
-            OptimizableParameter::AssetAllocation {
-                min_stock_pct,
-                max_stock_pct,
-                ..
-            } => (*min_stock_pct, *max_stock_pct),
-            OptimizableParameter::NumericParameter {
-                min_value,
-                max_value,
-                ..
-            } => (*min_value, *max_value),
+        match (self.min_value, self.max_value) {
+            (ParameterValue::Money(min), ParameterValue::Money(max))
+            | (ParameterValue::Rate(min), ParameterValue::Rate(max)) => (min, max),
+            (ParameterValue::Date(min), ParameterValue::Date(max)) => {
+                (0.0, f64::from((max - min).get_days()))
+            }
+            (ParameterValue::Age(min), ParameterValue::Age(max)) => {
+                (age_months(min), age_months(max))
+            }
+            _ => (f64::NAN, f64::NAN),
         }
     }
 
-    /// Returns a display name for this parameter
     #[must_use]
-    pub fn name(&self) -> String {
-        match self {
-            OptimizableParameter::RetirementAge { event_id, .. } => {
-                format!("RetirementAge(event_{})", event_id.0)
+    pub fn is_discrete(&self) -> bool {
+        matches!(
+            self.min_value,
+            ParameterValue::Date(_) | ParameterValue::Age(_)
+        )
+    }
+
+    /// Decode a search coordinate, rounding calendar values to the nearest day
+    /// or month. Reject invalid bounds and candidates outside the search range.
+    #[must_use]
+    pub fn value_at(&self, coordinate: f64) -> Option<ParameterValue> {
+        let (min, max) = self.bounds();
+        if !self.min_value.is_valid()
+            || !self.max_value.is_valid()
+            || !min.is_finite()
+            || !max.is_finite()
+            || min > max
+            || !coordinate.is_finite()
+            || coordinate < min
+            || coordinate > max
+        {
+            return None;
+        }
+        Some(match self.min_value {
+            ParameterValue::Money(_) => ParameterValue::Money(coordinate),
+            ParameterValue::Rate(_) => ParameterValue::Rate(coordinate),
+            ParameterValue::Date(date) => ParameterValue::Date(
+                date.checked_add(jiff::Span::new().days(coordinate.round() as i64))
+                    .ok()?,
+            ),
+            ParameterValue::Age(_) => {
+                let months = coordinate.round() as u16;
+                ParameterValue::Age(CalendarAge::new((months / 12) as u8, (months % 12) as u8))
             }
-            OptimizableParameter::ContributionRate { event_id, .. } => {
-                format!("ContributionRate(event_{})", event_id.0)
-            }
-            OptimizableParameter::WithdrawalAmount { event_id, .. } => {
-                format!("WithdrawalAmount(event_{})", event_id.0)
-            }
-            OptimizableParameter::AssetAllocation { account_id, .. } => {
-                format!("AssetAllocation(account_{})", account_id.0)
-            }
-            OptimizableParameter::NumericParameter { parameter_id, .. } => {
-                format!("NumericParameter(parameter_{})", parameter_id.0)
-            }
+        })
+    }
+}
+
+fn age_months(age: CalendarAge) -> f64 {
+    f64::from(age.years) * 12.0 + f64::from(age.months)
+}
+
+/// Check targets before any algorithm starts or candidate is applied.
+pub(super) fn validate_parameters(
+    config: &crate::config::SimulationConfig,
+    parameters: &[OptimizableParameter],
+) -> Result<(), crate::error::SimulationError> {
+    use crate::error::SimulationError;
+    let mut seen = std::collections::HashSet::new();
+    for parameter in parameters {
+        let invalid = |reason| {
+            SimulationError::Config(format!("parameter {}: {reason}", parameter.parameter_id.0))
+        };
+        if !seen.insert(parameter.parameter_id) {
+            return Err(invalid("duplicate optimization target"));
+        }
+        let current = config
+            .parameters
+            .get(&parameter.parameter_id)
+            .ok_or_else(|| invalid("optimization target does not exist"))?;
+        if !current.is_valid()
+            || std::mem::discriminant(current) != std::mem::discriminant(&parameter.min_value)
+        {
+            return Err(invalid("optimization bounds must match the parameter type"));
+        }
+        let (min, max) = parameter.bounds();
+        if parameter.value_at(min).is_none()
+            || parameter.value_at(max).is_none()
+            || !(max - min).is_finite()
+        {
+            return Err(invalid("invalid optimization bounds"));
         }
     }
+    Ok(())
+}
+
+pub(super) fn validate_optimization(
+    config: &crate::config::SimulationConfig,
+    optimization: &OptimizationConfig,
+) -> Result<(), crate::error::SimulationError> {
+    if optimization.parameters.is_empty() {
+        return Err(crate::error::SimulationError::Config(
+            "no parameters to optimize".into(),
+        ));
+    }
+    if !optimization.tolerance.is_finite() || optimization.tolerance <= 0.0 {
+        return Err(crate::error::SimulationError::Config(
+            "optimization tolerance must be positive and finite".into(),
+        ));
+    }
+    validate_parameters(config, &optimization.parameters)
 }
 
 /// Constraints that must be satisfied for a solution to be feasible
@@ -143,13 +172,13 @@ pub enum OptimizationAlgorithm {
     /// Binary search - efficient for single-parameter optimization
     BinarySearch,
 
-    /// Grid search - exhaustive search over parameter space
+    /// Grid search - sample each dimension, rounding/deduplicating calendar values
     GridSearch { grid_size: usize },
 
     /// Nelder-Mead simplex - good for multi-parameter continuous optimization
     NelderMead,
 
-    /// Automatically select the best algorithm based on parameter count
+    /// Grid search for Date/Age targets; otherwise select by parameter count
     #[default]
     Auto,
 }

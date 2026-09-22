@@ -17,7 +17,10 @@ Add algorithms that find optimal values for simulation parameters to maximize sp
 | Max Sustainable Withdrawal | Find highest safe withdrawal rate for a given success probability |
 | Min Tax Lifetime | Minimize total lifetime tax burden |
 
-### Proposed API
+### API outline
+
+Optimization targets only registered, typed parameters. See
+[core parameters](13_core_parameters_plan.md) for the implemented API and migration details.
 
 ```rust
 pub struct OptimizationConfig {
@@ -36,15 +39,14 @@ pub enum OptimizationObjective {
     MinimizeLifetimeTax,
 }
 
-pub enum OptimizableParameter {
-    RetirementAge { min: u8, max: u8 },
-    ContributionRate { event_id: EventId, min: f64, max: f64 },
-    WithdrawalAmount { event_id: EventId, min: f64, max: f64 },
-    AssetAllocation { account_id: AccountId },
+pub struct OptimizableParameter {
+    pub parameter_id: ParameterId,
+    pub min_value: ParameterValue, // Money, Rate, Date, or Age
+    pub max_value: ParameterValue, // same type as min and registry entry
 }
 
 pub struct OptimizationResult {
-    pub optimal_parameters: HashMap<String, f64>,
+    pub optimal_parameters: HashMap<ParameterId, ParameterValue>,
     pub objective_value: f64,
     pub iterations_run: usize,
     pub convergence_history: Vec<f64>,

@@ -23,34 +23,7 @@ fn balance_comparison_options() -> Vec<String> {
 /// Handle trigger type selection - shows appropriate form or picker
 pub fn handle_trigger_type_pick(state: &AppState, trigger_type: &str) -> ActionResult {
     match trigger_type {
-        "Date" => ActionResult::modal(ModalState::Form(
-            FormModal::new(
-                "New Event - Date Trigger",
-                vec![
-                    FormField::text("Event Name", ""),
-                    FormField::text("Description", ""),
-                    FormField::text("Date (YYYY-MM-DD)", "2025-01-01"),
-                    FormField::select("Once Only", yes_no_options(), "No"),
-                ],
-                ModalAction::CREATE_EVENT,
-            )
-            .with_typed_context(ModalContext::Trigger(TriggerContext::Date))
-            .start_editing(),
-        )),
-        "Age" => ActionResult::modal(ModalState::Form(
-            FormModal::new(
-                "New Event - Age Trigger",
-                vec![
-                    FormField::text("Event Name", ""),
-                    FormField::text("Description", ""),
-                    FormField::text("Age (years)", "65"),
-                    FormField::select("Once Only", yes_no_options(), "Yes"),
-                ],
-                ModalAction::CREATE_EVENT,
-            )
-            .with_typed_context(ModalContext::Trigger(TriggerContext::Age))
-            .start_editing(),
-        )),
+        "Date" | "Age" => show_calendar_trigger_form(state, trigger_type == "Date", None),
         "Repeating" => {
             // Show unified form with all fields together
             show_repeating_unified_form(TriggerBuilderState::new_repeating_unified(
@@ -239,8 +212,19 @@ pub fn handle_create_event(state: &mut AppState, ctx: ActionContext) -> ActionRe
 
     // Parse trigger type and create appropriate event
     let (trigger, name, description, once) = match trigger_ctx {
-        Some(TriggerContext::Date) => parse_date_trigger(form),
-        Some(TriggerContext::Age) => parse_age_trigger(form),
+        Some(TriggerContext::Date) | Some(TriggerContext::Age) => {
+            let is_date = matches!(trigger_ctx, Some(TriggerContext::Date));
+            let trigger = match read_calendar_trigger(state, form, 2, is_date) {
+                Ok(trigger) => trigger,
+                Err(error) => return ActionResult::error(error),
+            };
+            (
+                trigger,
+                form.get_str(0).unwrap_or("").to_string(),
+                form.get_optional_str(1),
+                form.get_bool_or(if is_date { 4 } else { 5 }, true),
+            )
+        }
         Some(TriggerContext::Manual) => parse_manual_trigger(form),
         Some(TriggerContext::NetWorth) => parse_net_worth_trigger(form),
         Some(TriggerContext::AccountBalance(account)) => {
@@ -341,32 +325,6 @@ pub fn handle_delete_event(state: &mut AppState, ctx: ActionContext) -> ActionRe
 }
 
 // Helper functions for parsing trigger data
-
-fn parse_date_trigger(form: &FormModal) -> (TriggerData, String, Option<String>, bool) {
-    let name = form.get_str(0).unwrap_or("").to_string();
-    let desc = form.get_optional_str(1);
-    let date = form.get_str(2).unwrap_or("2025-01-01").to_string();
-    let once = form.get_bool_or(3, false);
-
-    (TriggerData::Date { date }, name, desc, once)
-}
-
-fn parse_age_trigger(form: &FormModal) -> (TriggerData, String, Option<String>, bool) {
-    let name = form.get_str(0).unwrap_or("").to_string();
-    let desc = form.get_optional_str(1);
-    let years: u8 = form.get_int_or(2, 65);
-    let once = form.get_bool_or(3, true);
-
-    (
-        TriggerData::Age {
-            years,
-            months: None,
-        },
-        name,
-        desc,
-        once,
-    )
-}
 
 fn parse_manual_trigger(form: &FormModal) -> (TriggerData, String, Option<String>, bool) {
     let name = form.get_str(0).unwrap_or("").to_string();
@@ -487,21 +445,45 @@ pub fn handle_pick_child_trigger_type(
 
     match trigger_type {
         "None (Start Immediately)" | "None (Run Forever)" => {
-            // Skip this condition, move to next phase
             handle_none_trigger(state, builder, slot)
         }
-        "Date" => {
-            show_child_trigger_form(state, builder, slot, PartialTrigger::Date { date: None })
+        "Date" | "Age" => {
+            let is_date = trigger_type == "Date";
+            let existing = if let PartialTrigger::Repeating { start, end, .. } = &builder.current {
+                match slot {
+                    TriggerChildSlot::Start => start.as_deref(),
+                    TriggerChildSlot::End => end.as_deref(),
+                }
+            } else {
+                None
+            };
+            let partial = existing
+                .filter(|partial| {
+                    if is_date {
+                        matches!(
+                            partial,
+                            PartialTrigger::Date { .. } | PartialTrigger::DateParameter { .. }
+                        )
+                    } else {
+                        matches!(
+                            partial,
+                            PartialTrigger::Age { .. } | PartialTrigger::AgeParameter { .. }
+                        )
+                    }
+                })
+                .cloned()
+                .unwrap_or({
+                    if is_date {
+                        PartialTrigger::Date { date: None }
+                    } else {
+                        PartialTrigger::Age {
+                            years: None,
+                            months: None,
+                        }
+                    }
+                });
+            show_child_trigger_form(state, builder, slot, partial)
         }
-        "Age" => show_child_trigger_form(
-            state,
-            builder,
-            slot,
-            PartialTrigger::Age {
-                years: None,
-                months: None,
-            },
-        ),
         "Account Balance" => {
             // Need to pick account first
             let accounts = EventsScreen::get_account_names(state);
@@ -593,7 +575,7 @@ fn handle_none_trigger(
 
 /// Show the appropriate form for a child trigger type
 fn show_child_trigger_form(
-    _state: &mut AppState,
+    state: &mut AppState,
     mut builder: TriggerBuilderState,
     slot: TriggerChildSlot,
     partial: PartialTrigger,
@@ -602,24 +584,23 @@ fn show_child_trigger_form(
     builder.push_child(slot, partial.clone());
 
     let (title, fields) = match &partial {
-        PartialTrigger::Date { .. } => {
-            let title = match slot {
-                TriggerChildSlot::Start => "Start Condition - Date",
-                TriggerChildSlot::End => "End Condition - Date",
-            };
-            let fields = vec![FormField::text("Date (YYYY-MM-DD)", "2025-01-01")];
-            (title, fields)
-        }
-        PartialTrigger::Age { .. } => {
-            let title = match slot {
-                TriggerChildSlot::Start => "Start Condition - Age",
-                TriggerChildSlot::End => "End Condition - Age",
-            };
-            let fields = vec![
-                FormField::text("Age (years)", "65"),
-                FormField::text("Months (optional)", ""),
-            ];
-            (title, fields)
+        PartialTrigger::Date { .. }
+        | PartialTrigger::DateParameter { .. }
+        | PartialTrigger::Age { .. }
+        | PartialTrigger::AgeParameter { .. } => {
+            let is_date = matches!(
+                partial,
+                PartialTrigger::Date { .. } | PartialTrigger::DateParameter { .. }
+            );
+            let current = convert_partial_to_trigger(&partial);
+            (
+                if is_date {
+                    "Date Condition"
+                } else {
+                    "Age Condition"
+                },
+                calendar_fields(state, is_date, current.as_ref()),
+            )
         }
         PartialTrigger::NetWorth { .. } => {
             let title = match slot {
@@ -639,8 +620,24 @@ fn show_child_trigger_form(
         _ => return ActionResult::error("Unsupported trigger type for form"),
     };
 
+    let kind = match partial {
+        PartialTrigger::Date { .. } | PartialTrigger::DateParameter { .. } => {
+            crate::modals::FormKind::ValueInput {
+                source: 0,
+                kind: crate::modals::ParameterKind::Date,
+            }
+        }
+        PartialTrigger::Age { .. } | PartialTrigger::AgeParameter { .. } => {
+            crate::modals::FormKind::ValueInput {
+                source: 0,
+                kind: crate::modals::ParameterKind::Age,
+            }
+        }
+        _ => crate::modals::FormKind::Generic,
+    };
     ActionResult::modal(ModalState::Form(
         FormModal::new(title, fields, ModalAction::COMPLETE_CHILD_TRIGGER)
+            .with_kind(kind)
             .with_typed_context(ModalContext::Trigger(TriggerContext::RepeatingBuilder(
                 builder,
             )))
@@ -728,15 +725,31 @@ pub fn handle_complete_child_trigger(state: &mut AppState, ctx: ActionContext) -
         .map(|(_, slot)| *slot == TriggerChildSlot::Start)
         .unwrap_or(false);
 
-    // Update the current partial trigger with form values
+    if matches!(
+        builder.current,
+        PartialTrigger::Date { .. }
+            | PartialTrigger::DateParameter { .. }
+            | PartialTrigger::Age { .. }
+            | PartialTrigger::AgeParameter { .. }
+    ) {
+        let is_date = matches!(
+            builder.current,
+            PartialTrigger::Date { .. } | PartialTrigger::DateParameter { .. }
+        );
+        builder.current = match read_calendar_trigger(state, form, 0, is_date) {
+            Ok(TriggerData::Date { date }) => PartialTrigger::Date { date: Some(date) },
+            Ok(TriggerData::Age { years, months }) => PartialTrigger::Age {
+                years: Some(years),
+                months,
+            },
+            Ok(TriggerData::DateParameter { name }) => PartialTrigger::DateParameter { name },
+            Ok(TriggerData::AgeParameter { name }) => PartialTrigger::AgeParameter { name },
+            Err(error) => return ActionResult::error(error),
+            _ => unreachable!(),
+        };
+    }
+    // Update non-calendar condition fields.
     match &mut builder.current {
-        PartialTrigger::Date { date } => {
-            *date = form.get_str(0).map(|s| s.to_string());
-        }
-        PartialTrigger::Age { years, months } => {
-            *years = form.get_int(0);
-            *months = form.get_int(1);
-        }
         PartialTrigger::NetWorth {
             threshold,
             comparison,
@@ -1057,6 +1070,12 @@ pub fn handle_create_repeating_unified(state: &mut AppState, ctx: ActionContext)
 fn convert_partial_to_trigger(partial: &PartialTrigger) -> Option<TriggerData> {
     match partial {
         PartialTrigger::None => None,
+        PartialTrigger::DateParameter { name } => {
+            Some(TriggerData::DateParameter { name: name.clone() })
+        }
+        PartialTrigger::AgeParameter { name } => {
+            Some(TriggerData::AgeParameter { name: name.clone() })
+        }
         PartialTrigger::Date { date } => Some(TriggerData::Date {
             date: date.clone().unwrap_or_else(|| "2025-01-01".to_string()),
         }),
@@ -1280,30 +1299,9 @@ pub fn handle_edit_trigger_type_pick(
     };
 
     match trigger_type {
-        "Date" => ActionResult::modal(ModalState::Form(
-            FormModal::new(
-                "Edit Trigger - Date",
-                vec![FormField::text("Date (YYYY-MM-DD)", "2025-01-01")],
-                ModalAction::UPDATE_TRIGGER,
-            )
-            .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
-                event_index,
-                inner: Box::new(TriggerContext::Date),
-            }))
-            .start_editing(),
-        )),
-        "Age" => ActionResult::modal(ModalState::Form(
-            FormModal::new(
-                "Edit Trigger - Age",
-                vec![FormField::text("Age (years)", "65")],
-                ModalAction::UPDATE_TRIGGER,
-            )
-            .with_typed_context(ModalContext::Trigger(TriggerContext::Edit {
-                event_index,
-                inner: Box::new(TriggerContext::Age),
-            }))
-            .start_editing(),
-        )),
+        "Date" | "Age" => {
+            show_calendar_trigger_form(state, trigger_type == "Date", Some(event_index))
+        }
         "Repeating" => {
             // Show interval picker first
             let intervals = vec![
@@ -1476,15 +1474,11 @@ pub fn handle_update_trigger(state: &mut AppState, ctx: ActionContext) -> Action
 
     // Parse the new trigger based on type
     let trigger = match trigger_ctx {
-        TriggerContext::Date => {
-            let date = form.get_str(0).unwrap_or("2025-01-01").to_string();
-            TriggerData::Date { date }
-        }
-        TriggerContext::Age => {
-            let years: u8 = form.get_int_or(0, 65);
-            TriggerData::Age {
-                years,
-                months: None,
+        TriggerContext::Date | TriggerContext::Age => {
+            match read_calendar_trigger(state, form, 0, matches!(trigger_ctx, TriggerContext::Date))
+            {
+                Ok(trigger) => trigger,
+                Err(error) => return ActionResult::error(error),
             }
         }
         TriggerContext::Manual => TriggerData::Manual,
@@ -1574,5 +1568,317 @@ pub fn handle_update_repeating(state: &mut AppState, ctx: ActionContext) -> Acti
         ActionResult::modified()
     } else {
         ActionResult::error("Event not found")
+    }
+}
+
+fn calendar_fields(
+    state: &AppState,
+    is_date: bool,
+    current: Option<&TriggerData>,
+) -> Vec<FormField> {
+    use finplan_core::model::{CalendarAge, ParameterValue};
+    let default = if is_date {
+        ParameterValue::Date(
+            state
+                .data()
+                .parameters
+                .start_date
+                .parse()
+                .unwrap_or(jiff::civil::date(2025, 1, 1)),
+        )
+    } else {
+        ParameterValue::Age(CalendarAge::years(65))
+    };
+    let (value, reference) = match current {
+        Some(TriggerData::Date { date }) if is_date => (
+            date.parse().map(ParameterValue::Date).unwrap_or(default),
+            None,
+        ),
+        Some(TriggerData::Age { years, months }) if !is_date => (
+            ParameterValue::Age(CalendarAge::new(*years, months.unwrap_or(0))),
+            None,
+        ),
+        Some(TriggerData::DateParameter { name }) if is_date => (default, Some(name.as_str())),
+        Some(TriggerData::AgeParameter { name }) if !is_date => (default, Some(name.as_str())),
+        _ => (default, None),
+    };
+    super::value_input::fields(state, value, reference)
+}
+
+fn read_calendar_trigger(
+    state: &AppState,
+    form: &FormModal,
+    offset: usize,
+    is_date: bool,
+) -> Result<TriggerData, String> {
+    use super::value_input::ValueInput;
+    use crate::modals::ParameterKind;
+    use finplan_core::model::ParameterValue;
+    match super::value_input::read(
+        state,
+        form,
+        offset,
+        if is_date {
+            ParameterKind::Date
+        } else {
+            ParameterKind::Age
+        },
+    )? {
+        ValueInput::Parameter(name) => Ok(if is_date {
+            TriggerData::DateParameter { name }
+        } else {
+            TriggerData::AgeParameter { name }
+        }),
+        ValueInput::Entered(ParameterValue::Date(date)) => Ok(TriggerData::Date {
+            date: date.to_string(),
+        }),
+        ValueInput::Entered(ParameterValue::Age(age)) => Ok(TriggerData::Age {
+            years: age.years,
+            months: Some(age.months),
+        }),
+        _ => unreachable!(),
+    }
+}
+
+fn show_calendar_trigger_form(
+    state: &AppState,
+    is_date: bool,
+    index: Option<usize>,
+) -> ActionResult {
+    let current = index
+        .and_then(|i| state.data().events.get(i))
+        .map(|event| &event.trigger);
+    let mut fields = vec![];
+    if index.is_none() {
+        fields.extend([
+            FormField::text("Event Name", ""),
+            FormField::text("Description", ""),
+        ]);
+    }
+    fields.extend(calendar_fields(state, is_date, current));
+    if index.is_none() {
+        fields.push(FormField::select("Once Only", yes_no_options(), "Yes"));
+    }
+    let context = if is_date {
+        TriggerContext::Date
+    } else {
+        TriggerContext::Age
+    };
+    let (context, action) = if let Some(event_index) = index {
+        (
+            TriggerContext::Edit {
+                event_index,
+                inner: Box::new(context),
+            },
+            ModalAction::UPDATE_TRIGGER,
+        )
+    } else {
+        (context, ModalAction::CREATE_EVENT)
+    };
+    ActionResult::modal(ModalState::Form(
+        FormModal::new(
+            if is_date {
+                "Date Trigger"
+            } else {
+                "Age Trigger"
+            },
+            fields,
+            action,
+        )
+        .with_kind(crate::modals::FormKind::ValueInput {
+            source: if index.is_none() { 2 } else { 0 },
+            kind: if is_date {
+                crate::modals::ParameterKind::Date
+            } else {
+                crate::modals::ParameterKind::Age
+            },
+        })
+        .with_typed_context(ModalContext::Trigger(context)),
+    ))
+}
+
+#[cfg(test)]
+mod value_tests {
+    use super::*;
+    use crate::{data::named_parameters::NamedParameterData, modals::ConfirmedValue};
+    use finplan_core::model::{CalendarAge, ParameterValue};
+    fn setup() -> AppState {
+        let mut state = AppState::new();
+        state.data_mut().named_parameters = vec![
+            NamedParameterData {
+                name: "Start".into(),
+                value: ParameterValue::Date("2030-01-01".parse().unwrap()),
+            },
+            NamedParameterData {
+                name: "Retire".into(),
+                value: ParameterValue::Age(CalendarAge::new(65, 3)),
+            },
+            NamedParameterData {
+                name: "Pay".into(),
+                value: ParameterValue::Money(1000.0),
+            },
+        ];
+        state
+    }
+    #[test]
+    fn calendar_editors_create_references_and_switch_back_to_literals() {
+        let mut state = setup();
+        for (date, choice, name) in [(true, "Date", "Start"), (false, "Age", "Retire")] {
+            let ActionResult::Done(Some(ModalState::Form(mut form))) =
+                handle_trigger_type_pick(&state, choice)
+            else {
+                panic!()
+            };
+            assert_eq!(
+                form.fields[2].options,
+                vec!["Enter value".to_string(), format!("Parameter: {name}")]
+            );
+            form.fields[0].value = name.into();
+            form.fields[2].value = format!("Parameter: {name}");
+            let context = form.context.clone();
+            let value = ConfirmedValue::Form(Box::new(form));
+            assert!(matches!(
+                handle_create_event(&mut state, ActionContext::new(context.as_ref(), &value)),
+                ActionResult::Modified(_)
+            ));
+            let index = state.data().events.len() - 1;
+            assert!(matches!(
+                state.data().events[index].trigger,
+                TriggerData::DateParameter { .. } | TriggerData::AgeParameter { .. }
+            ));
+            let ActionResult::Done(Some(ModalState::Form(mut form))) =
+                show_calendar_trigger_form(&state, date, Some(index))
+            else {
+                panic!()
+            };
+            assert_eq!(form.get_str(0), Some(format!("Parameter: {name}").as_str()));
+            form.fields[0].value = "Enter value".into();
+            form.fields[1].value = if date { "2032-02-29" } else { "66" }.into();
+            if !date {
+                form.fields[2].value = "5".into();
+            }
+            let context = form.context.clone();
+            let value = ConfirmedValue::Form(Box::new(form));
+            assert!(matches!(
+                handle_update_trigger(&mut state, ActionContext::new(context.as_ref(), &value)),
+                ActionResult::Modified(_)
+            ));
+            match &state.data().events[index].trigger {
+                TriggerData::Date { date } => assert_eq!(date, "2032-02-29"),
+                TriggerData::Age { years, months } => assert_eq!((*years, *months), (66, Some(5))),
+                _ => panic!(),
+            }
+        }
+    }
+    #[test]
+    fn repeating_conditions_keep_parameter_selection_inside_date_and_age() {
+        let mut state = setup();
+        let mut builder = TriggerBuilderState::new_repeating_unified(IntervalData::Monthly);
+        for (slot, choice, name) in [
+            (TriggerChildSlot::Start, "Date", "Start"),
+            (TriggerChildSlot::End, "Age", "Retire"),
+        ] {
+            builder.editing_slot = Some(slot);
+            let context = ModalContext::Trigger(TriggerContext::RepeatingBuilder(builder));
+            let value = ConfirmedValue::Picker(choice.into());
+            let ActionResult::Done(Some(ModalState::Form(mut form))) =
+                handle_pick_child_trigger_type(
+                    &mut state,
+                    choice,
+                    ActionContext::new(Some(&context), &value),
+                )
+            else {
+                panic!()
+            };
+            assert_eq!(
+                form.fields[0].options,
+                vec!["Enter value".to_string(), format!("Parameter: {name}")]
+            );
+            form.fields[0].value = format!("Parameter: {name}");
+            let context = form.context.clone();
+            let value = ConfirmedValue::Form(Box::new(form));
+            let ActionResult::Done(Some(ModalState::Form(form))) = handle_complete_child_trigger(
+                &mut state,
+                ActionContext::new(context.as_ref(), &value),
+            ) else {
+                panic!()
+            };
+            let Some(ModalContext::Trigger(TriggerContext::RepeatingBuilder(updated))) =
+                form.context
+            else {
+                panic!()
+            };
+            builder = updated;
+        }
+        let Some(TriggerData::Repeating {
+            start: Some(start),
+            end: Some(end),
+            ..
+        }) = convert_partial_to_trigger(&builder.current)
+        else {
+            panic!()
+        };
+        assert!(matches!(*start, TriggerData::DateParameter { .. }));
+        assert!(matches!(*end, TriggerData::AgeParameter { .. }));
+        builder.editing_slot = Some(TriggerChildSlot::End);
+        let context = ModalContext::Trigger(TriggerContext::RepeatingBuilder(builder));
+        let value = ConfirmedValue::Picker("Age".into());
+        let ActionResult::Done(Some(ModalState::Form(form))) = handle_pick_child_trigger_type(
+            &mut state,
+            "Age",
+            ActionContext::new(Some(&context), &value),
+        ) else {
+            panic!()
+        };
+        assert_eq!(form.get_str(0), Some("Parameter: Retire"));
+    }
+    #[test]
+    fn type_lists_have_no_parameter_trigger_or_amount_type() {
+        use crate::components::panels::EventListPanel;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut state = setup();
+        EventListPanel::handle_key(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            &mut state,
+        );
+        let ModalState::Picker(picker) = &state.modal else {
+            panic!()
+        };
+        assert!(
+            !picker
+                .options
+                .iter()
+                .any(|option| option.contains("Parameter"))
+        );
+        assert_eq!(
+            crate::modals::amount_builder::AmountTypeOption::option_strings()[0],
+            "Amount"
+        );
+        for slot in [TriggerChildSlot::Start, TriggerChildSlot::End] {
+            let ActionResult::Done(Some(ModalState::Picker(picker))) =
+                show_child_trigger_type_picker(
+                    TriggerBuilderState::new_repeating_unified(IntervalData::Monthly),
+                    slot,
+                )
+            else {
+                panic!()
+            };
+            assert!(
+                !picker
+                    .options
+                    .iter()
+                    .any(|option| option.contains("Parameter"))
+            );
+        }
+        let ActionResult::Done(Some(ModalState::Form(mut form))) =
+            show_calendar_trigger_form(&state, true, None)
+        else {
+            panic!()
+        };
+        form.fields[2].value = "Parameter: Retire".into();
+        assert!(read_calendar_trigger(&state, &form, 2, true).is_err());
+        form.fields[2].value = "Enter value".into();
+        form.fields[3].value = "2031-02-29".into();
+        assert!(read_calendar_trigger(&state, &form, 2, true).is_err());
     }
 }

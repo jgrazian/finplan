@@ -161,13 +161,16 @@ pub fn optimize_nelder_mead(
     opt_config: &OptimizationConfig,
     progress_callback: Option<ProgressCallback>,
 ) -> Result<OptimizationResult, SimulationError> {
-    let n = opt_config.parameters.len();
-    if n == 0 {
+    super::config::validate_optimization(base_config, opt_config)?;
+    if opt_config
+        .parameters
+        .iter()
+        .any(OptimizableParameter::is_discrete)
+    {
         return Err(SimulationError::Config(
-            "no parameters to optimize".to_string(),
+            "Nelder-Mead requires continuous Money/Rate parameters; use GridSearch or BinarySearch for Date/Age".into(),
         ));
     }
-
     let bounds: Vec<(f64, f64)> = opt_config
         .parameters
         .iter()
@@ -315,8 +318,12 @@ pub fn optimize_nelder_mead(
     match best_feasible {
         Some(vertex) => {
             let mut optimal_parameters = HashMap::new();
-            for (param, value) in opt_config.parameters.iter().zip(vertex.values.iter()) {
-                optimal_parameters.insert(param.name(), *value);
+            for (param, value) in opt_config
+                .parameters
+                .iter()
+                .zip(vertex.record.parameter_values.iter())
+            {
+                optimal_parameters.insert(param.parameter_id, *value);
             }
 
             let cent = centroid(&simplex);

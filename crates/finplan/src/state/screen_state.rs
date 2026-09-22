@@ -192,6 +192,7 @@ impl Default for PortfolioProfilesState {
 
 #[derive(Debug)]
 pub struct EventsState {
+    pub selected_parameter_index: usize,
     pub selected_event_index: usize,
     pub focused_panel: EventsPanel,
     /// Whether the timeline panel is collapsed
@@ -202,6 +203,7 @@ impl Default for EventsState {
     fn default() -> Self {
         Self {
             selected_event_index: 0,
+            selected_parameter_index: 0,
             focused_panel: EventsPanel::EventList,
             timeline_collapsed: false,
         }

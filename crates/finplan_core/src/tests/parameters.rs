@@ -285,10 +285,10 @@ fn numeric_optimizer_changes_only_the_target_parameter() {
     ]);
     let updated = apply_parameters(
         &config,
-        &[OptimizableParameter::NumericParameter {
+        &[OptimizableParameter {
             parameter_id: a,
-            min_value: 0.0,
-            max_value: 100.0,
+            min_value: ParameterValue::Money(0.0),
+            max_value: ParameterValue::Money(100.0),
         }],
         &[12.5],
     )
@@ -307,10 +307,10 @@ fn numeric_optimizer_changes_only_the_target_parameter() {
     assert!(
         apply_parameters(
             &config,
-            &[OptimizableParameter::NumericParameter {
+            &[OptimizableParameter {
                 parameter_id: ParameterId(99),
-                min_value: 0.0,
-                max_value: 100.0,
+                min_value: ParameterValue::Money(0.0),
+                max_value: ParameterValue::Money(100.0),
             }],
             &[12.5],
         )
@@ -319,10 +319,10 @@ fn numeric_optimizer_changes_only_the_target_parameter() {
     assert!(
         apply_parameters(
             &config,
-            &[OptimizableParameter::NumericParameter {
+            &[OptimizableParameter {
                 parameter_id: a,
-                min_value: 0.0,
-                max_value: 100.0,
+                min_value: ParameterValue::Money(0.0),
+                max_value: ParameterValue::Money(100.0),
             }],
             &[f64::NAN],
         )
@@ -519,10 +519,10 @@ fn overrides_and_optimizer_preserve_parameter_kinds() {
             .with_parameter_value(age, ParameterValue::Age(CalendarAge::new(65, 12)))
             .is_none()
     );
-    let target = |parameter_id| OptimizableParameter::NumericParameter {
+    let target = |parameter_id| OptimizableParameter {
         parameter_id,
-        min_value: -2.0,
-        max_value: 2.0,
+        min_value: ParameterValue::Rate(-2.0),
+        max_value: ParameterValue::Rate(2.0),
     };
     assert_eq!(
         apply_parameters(&config, &[target(rate)], &[-1.25])
@@ -734,4 +734,288 @@ fn invalid_calendar_references_fail_before_run() {
     assert!(SimulationState::from_parameters(&config, 1).is_err());
     config.events[0].trigger = EventTrigger::DateParameter(ParameterId(9));
     assert!(SimulationState::from_parameters(&config, 1).is_err());
+}
+
+fn optimization_target(id: u16, min: ParameterValue, max: ParameterValue) -> OptimizableParameter {
+    OptimizableParameter {
+        parameter_id: ParameterId(id),
+        min_value: min,
+        max_value: max,
+    }
+}
+
+#[test]
+fn optimizer_applies_all_types_without_rewriting_scenario() {
+    use ParameterValue::{Age, Date, Money, Rate};
+    let mut config = config_with_amount(TransferAmount::Fixed(77.0));
+    config.parameters = HashMap::from([
+        (ParameterId(0), Money(20.0)),
+        (ParameterId(1), Rate(0.05)),
+        (ParameterId(2), Date(jiff::civil::date(2024, 2, 28))),
+        (ParameterId(3), Age(CalendarAge::years(64))),
+    ]);
+    let original = serde_json::to_value(&config).unwrap();
+    let targets = vec![
+        optimization_target(0, Money(10.0), Money(100.0)),
+        optimization_target(1, Rate(-0.5), Rate(2.0)),
+        optimization_target(
+            2,
+            Date(jiff::civil::date(2024, 2, 28)),
+            Date(jiff::civil::date(2024, 3, 1)),
+        ),
+        optimization_target(
+            3,
+            Age(CalendarAge::new(64, 11)),
+            Age(CalendarAge::new(65, 1)),
+        ),
+    ];
+    let updated = apply_parameters(&config, &targets, &[80.0, 1.5, 0.6, 779.6]).unwrap();
+    assert_eq!(updated.parameters[&ParameterId(0)], Money(80.0));
+    assert_eq!(updated.parameters[&ParameterId(1)], Rate(1.5));
+    assert_eq!(
+        updated.parameters[&ParameterId(2)],
+        Date(jiff::civil::date(2024, 2, 29))
+    );
+    assert_eq!(
+        updated.parameters[&ParameterId(3)],
+        Age(CalendarAge::years(65))
+    );
+    let mut restored = updated.clone();
+    restored.parameters = config.parameters.clone();
+    assert_eq!(serde_json::to_value(restored).unwrap(), original);
+    assert_eq!(serde_json::to_value(&config).unwrap(), original);
+    let json = serde_json::to_value(&targets).unwrap();
+    let round_trip: Vec<OptimizableParameter> = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(serde_json::to_value(round_trip).unwrap(), json);
+}
+
+#[test]
+fn optimizer_rejects_invalid_targets_and_candidates() {
+    use crate::optimization::{
+        OptimizationConfig, optimize_binary_search, optimize_grid_search, optimize_nelder_mead,
+    };
+    use ParameterValue::{Age, Money, Rate};
+    let mut config = config_with_amount(TransferAmount::Fixed(1.0));
+    config.parameters.insert(ParameterId(0), Money(10.0));
+    let valid = optimization_target(0, Money(0.0), Money(20.0));
+    let invalid_targets = vec![
+        vec![optimization_target(99, Money(0.0), Money(20.0))],
+        vec![optimization_target(0, Rate(0.0), Rate(20.0))],
+        vec![optimization_target(0, Money(0.0), Rate(20.0))],
+        vec![optimization_target(0, Money(20.0), Money(0.0))],
+        vec![optimization_target(0, Money(f64::NAN), Money(20.0))],
+        vec![optimization_target(0, Money(0.0), Money(f64::INFINITY))],
+        vec![valid.clone(), valid.clone()],
+    ];
+    for parameters in invalid_targets {
+        assert!(apply_parameters(&config, &parameters, &vec![1.0; parameters.len()]).is_none());
+        let opt = OptimizationConfig {
+            parameters,
+            ..Default::default()
+        };
+        assert!(optimize_grid_search(&config, &opt, 3).is_err());
+        assert!(optimize_binary_search(&config, &opt, None).is_err());
+        assert!(optimize_nelder_mead(&config, &opt, None).is_err());
+    }
+    for candidate in [-1.0, 21.0, f64::NAN, f64::INFINITY] {
+        assert!(apply_parameters(&config, std::slice::from_ref(&valid), &[candidate]).is_none());
+    }
+    assert!(apply_parameters(&config, &[valid], &[]).is_none());
+    let invalid_age = optimization_target(
+        1,
+        Age(CalendarAge::new(65, 12)),
+        Age(CalendarAge::years(70)),
+    );
+    assert!(invalid_age.value_at(800.0).is_none());
+    let reversed_dates = optimization_target(
+        2,
+        ParameterValue::Date(jiff::civil::date(2025, 1, 2)),
+        ParameterValue::Date(jiff::civil::date(2025, 1, 1)),
+    );
+    assert!(reversed_dates.value_at(0.0).is_none());
+}
+
+#[test]
+fn continuous_optimizers_return_reusable_typed_results() {
+    use crate::optimization::{OptimizationAlgorithm, OptimizationConfig, optimize};
+    for (initial, min, max) in [
+        (
+            ParameterValue::Money(10.0),
+            ParameterValue::Money(0.0),
+            ParameterValue::Money(100.0),
+        ),
+        (
+            ParameterValue::Rate(0.1),
+            ParameterValue::Rate(0.0),
+            ParameterValue::Rate(1.0),
+        ),
+    ] {
+        let amount = match initial {
+            ParameterValue::Money(_) => TransferAmount::parameter(ParameterId(0)),
+            _ => TransferAmount::Mul(
+                Box::new(TransferAmount::Fixed(100.0)),
+                Box::new(TransferAmount::parameter(ParameterId(0))),
+            ),
+        };
+        let mut config = config_with_amount(amount);
+        config.parameters.insert(ParameterId(0), initial);
+        for algorithm in [
+            OptimizationAlgorithm::Auto,
+            OptimizationAlgorithm::BinarySearch,
+            OptimizationAlgorithm::GridSearch { grid_size: 3 },
+            OptimizationAlgorithm::NelderMead,
+        ] {
+            let optimization = OptimizationConfig {
+                parameters: vec![optimization_target(0, min, max)],
+                algorithm,
+                monte_carlo_iterations: 2,
+                max_iterations: 30,
+                ..Default::default()
+            };
+            let result = optimize(&config, &optimization, None).unwrap();
+            assert_eq!(result.optimal_parameters[&ParameterId(0)], max);
+            assert_eq!(result.objective_value, 100.0);
+            let applied = config
+                .with_parameter_value(ParameterId(0), result.optimal_parameters[&ParameterId(0)])
+                .unwrap();
+            assert_eq!(
+                simulate(&applied, 0)
+                    .unwrap()
+                    .final_account_balance(AccountId(1)),
+                Some(100.0)
+            );
+            assert_eq!(config.parameters[&ParameterId(0)], initial);
+            let json = serde_json::to_value(&result).unwrap();
+            let decoded: crate::optimization::OptimizationResult =
+                serde_json::from_value(json).unwrap();
+            assert_eq!(decoded.optimal_parameters, result.optimal_parameters);
+        }
+    }
+}
+
+#[test]
+fn calendar_optimization_changes_schedules_and_reports_exact_values() {
+    use crate::optimization::{OptimizationAlgorithm, OptimizationConfig, optimize};
+    use ParameterValue::{Age, Date};
+    for (min, max, trigger) in [
+        (
+            Date(jiff::civil::date(2025, 1, 31)),
+            Date(jiff::civil::date(2025, 2, 2)),
+            EventTrigger::DateParameter(ParameterId(0)),
+        ),
+        (
+            Age(CalendarAge::years(65)),
+            Age(CalendarAge::new(65, 2)),
+            EventTrigger::AgeParameter(ParameterId(0)),
+        ),
+    ] {
+        let mut config = config_with_amount(TransferAmount::Fixed(100.0));
+        config.birth_date = Some(jiff::civil::date(1960, 1, 1));
+        config.parameters.insert(ParameterId(0), min);
+        config.events[0].trigger = EventTrigger::Repeating {
+            interval: RepeatInterval::Monthly,
+            start_condition: Some(Box::new(trigger)),
+            end_condition: None,
+            max_occurrences: None,
+        };
+        config.events[0].once = false;
+        let optimization = OptimizationConfig {
+            parameters: vec![optimization_target(0, min, max)],
+            algorithm: OptimizationAlgorithm::Auto,
+            monte_carlo_iterations: 2,
+            max_iterations: 10,
+            ..Default::default()
+        };
+        let result = optimize(&config, &optimization, None).unwrap();
+        assert_eq!(result.history.num_evaluations(), 3); // deduplicated calendar grid
+        assert_eq!(result.optimal_parameters[&ParameterId(0)], min);
+        assert!(
+            result.history.evaluations[0].objective_value
+                > result.history.evaluations[2].objective_value
+        );
+        assert_eq!(result.history.evaluations[0].parameter_values, vec![min]);
+        assert_eq!(result.history.evaluations[2].parameter_values, vec![max]);
+        let binary = OptimizationConfig {
+            algorithm: OptimizationAlgorithm::BinarySearch,
+            ..optimization.clone()
+        };
+        let binary_result = optimize(&config, &binary, None).unwrap();
+        assert_eq!(binary_result.optimal_parameters[&ParameterId(0)], min);
+        let simplex = OptimizationConfig {
+            algorithm: OptimizationAlgorithm::NelderMead,
+            ..optimization
+        };
+        assert!(
+            optimize(&config, &simplex, None)
+                .unwrap_err()
+                .to_string()
+                .contains("continuous")
+        );
+    }
+}
+
+#[test]
+fn mixed_parameter_grid_optimizes_amounts_and_schedules_together() {
+    use crate::optimization::{
+        OptimizationAlgorithm, OptimizationConfig, optimize, optimize_grid_search,
+    };
+    use ParameterValue::{Age, Date, Money, Rate};
+    let mut config = config_with_amount(TransferAmount::Mul(
+        Box::new(TransferAmount::parameter(ParameterId(0))),
+        Box::new(TransferAmount::parameter(ParameterId(1))),
+    ));
+    config.birth_date = Some(jiff::civil::date(1960, 1, 1));
+    config.parameters = HashMap::from([
+        (ParameterId(0), Money(100.0)),
+        (ParameterId(1), Rate(0.5)),
+        (ParameterId(2), Date(jiff::civil::date(2025, 1, 1))),
+        (ParameterId(3), Age(CalendarAge::new(65, 6))),
+    ]);
+    config.events[0].trigger = EventTrigger::Repeating {
+        interval: RepeatInterval::Monthly,
+        start_condition: Some(Box::new(EventTrigger::DateParameter(ParameterId(2)))),
+        end_condition: Some(Box::new(EventTrigger::AgeParameter(ParameterId(3)))),
+        max_occurrences: None,
+    };
+    config.events[0].once = false;
+    let opt = OptimizationConfig {
+        parameters: vec![
+            optimization_target(0, Money(100.0), Money(200.0)),
+            optimization_target(1, Rate(0.5), Rate(1.0)),
+            optimization_target(
+                2,
+                Date(jiff::civil::date(2025, 1, 1)),
+                Date(jiff::civil::date(2025, 3, 1)),
+            ),
+            optimization_target(
+                3,
+                Age(CalendarAge::new(65, 6)),
+                Age(CalendarAge::new(65, 8)),
+            ),
+        ],
+        algorithm: OptimizationAlgorithm::GridSearch { grid_size: 2 },
+        monte_carlo_iterations: 2,
+        ..Default::default()
+    };
+    let result = optimize(&config, &opt, None).unwrap();
+    assert_eq!(result.history.num_evaluations(), 16);
+    assert_eq!(
+        result.optimal_parameters,
+        HashMap::from([
+            (ParameterId(0), Money(200.0)),
+            (ParameterId(1), Rate(1.0)),
+            (ParameterId(2), Date(jiff::civil::date(2025, 1, 1))),
+            (ParameterId(3), Age(CalendarAge::new(65, 8))),
+        ])
+    );
+    assert_eq!(result.objective_value, 1600.0);
+    assert!(optimize_grid_search(&config, &opt, 0).is_err());
+    config.birth_date = None;
+    // A failed simulation is an error, not a successful "no feasible solution" result.
+    assert!(
+        optimize(&config, &opt, None)
+            .unwrap_err()
+            .to_string()
+            .contains("birth_date")
+    );
 }

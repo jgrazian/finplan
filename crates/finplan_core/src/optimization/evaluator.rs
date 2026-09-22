@@ -5,10 +5,7 @@
 
 use crate::config::SimulationConfig;
 use crate::error::SimulationError;
-use crate::model::{
-    EventEffect, MonteCarloConfig, MonteCarloStats, MonteCarloSummary, ParameterValue,
-    TransferAmount,
-};
+use crate::model::{MonteCarloConfig, MonteCarloStats, MonteCarloSummary};
 use crate::simulation::monte_carlo_simulate_with_config;
 
 use super::config::{
@@ -18,7 +15,8 @@ use super::result::EvaluationRecord;
 
 /// Apply parameter values to a simulation configuration
 ///
-/// Returns `None` if the configuration cannot be modified (e.g., event not found)
+/// Coordinates use `OptimizableParameter::bounds` units. Returns `None` for
+/// missing or duplicate targets, invalid bounds, type mismatches, or out-of-range values.
 #[must_use]
 pub fn apply_parameters(
     base_config: &SimulationConfig,
@@ -29,116 +27,14 @@ pub fn apply_parameters(
         return None;
     }
 
+    super::config::validate_parameters(base_config, parameters).ok()?;
     let mut config = base_config.clone();
-
-    for (param, value) in parameters.iter().zip(values.iter()) {
-        match param {
-            OptimizableParameter::RetirementAge { event_id, .. } => {
-                // Use the existing with_retirement_age helper
-                config = config.with_retirement_age(*event_id, *value as u8)?;
-            }
-            OptimizableParameter::ContributionRate { event_id, .. } => {
-                // Find the event and modify TransferAmount::Fixed in its effects
-                let event = config.events.iter_mut().find(|e| e.event_id == *event_id)?;
-                modify_fixed_amount_in_effects(&mut event.effects, *value);
-            }
-            OptimizableParameter::WithdrawalAmount { event_id, .. } => {
-                // Find the event and modify TransferAmount::Fixed in its effects
-                let event = config.events.iter_mut().find(|e| e.event_id == *event_id)?;
-                modify_fixed_amount_in_effects(&mut event.effects, *value);
-            }
-            OptimizableParameter::AssetAllocation { account_id, .. } => {
-                // Find the account and adjust asset allocation
-                // The stock_pct value represents what percentage of the portfolio
-                // should be in the first asset (stocks) vs cash
-                let stock_pct = *value;
-
-                let account = config
-                    .accounts
-                    .iter_mut()
-                    .find(|a| a.account_id == *account_id)?;
-
-                if let crate::model::AccountFlavor::Investment(ref mut inv) = account.flavor {
-                    // Calculate total value (positions + cash)
-                    // Use cost_basis as proxy for value since we don't have market data here
-                    let total_positions_value: f64 =
-                        inv.positions.iter().map(|p| p.cost_basis).sum();
-                    let total_value = total_positions_value + inv.cash.value;
-
-                    if total_value > 0.0 && !inv.positions.is_empty() {
-                        // Target: stock_pct in positions, (1-stock_pct) in cash
-                        let target_stock_value = total_value * stock_pct;
-                        let target_cash_value = total_value * (1.0 - stock_pct);
-
-                        // Scale all positions proportionally to hit target stock value
-                        if total_positions_value > 0.0 {
-                            let scale_factor = target_stock_value / total_positions_value;
-                            for position in &mut inv.positions {
-                                position.units *= scale_factor;
-                                position.cost_basis *= scale_factor;
-                            }
-                        }
-
-                        // Set cash to target cash value
-                        inv.cash.value = target_cash_value;
-                    }
-                }
-            }
-            OptimizableParameter::NumericParameter { parameter_id, .. } => {
-                if !value.is_finite() {
-                    return None;
-                }
-                let parameter = config.parameters.get_mut(parameter_id)?;
-                *parameter = match parameter {
-                    ParameterValue::Money(_) => ParameterValue::Money(*value),
-                    ParameterValue::Rate(_) => ParameterValue::Rate(*value),
-                    ParameterValue::Date(_) | ParameterValue::Age(_) => return None,
-                };
-            }
-        }
+    for (parameter, value) in parameters.iter().zip(values) {
+        config
+            .parameters
+            .insert(parameter.parameter_id, parameter.value_at(*value)?);
     }
-
     Some(config)
-}
-
-/// Modify `TransferAmount::Fixed` values in event effects
-fn modify_fixed_amount_in_effects(effects: &mut [EventEffect], new_amount: f64) {
-    for effect in effects {
-        match effect {
-            EventEffect::Income { amount, .. }
-            | EventEffect::Expense { amount, .. }
-            | EventEffect::AssetPurchase { amount, .. }
-            | EventEffect::AssetSale { amount, .. }
-            | EventEffect::Sweep { amount, .. }
-            | EventEffect::AdjustBalance { amount, .. }
-            | EventEffect::CashTransfer { amount, .. } => {
-                modify_transfer_amount(amount, new_amount);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Recursively modify `TransferAmount::Fixed` values
-fn modify_transfer_amount(amount: &mut TransferAmount, new_amount: f64) {
-    match amount {
-        TransferAmount::Fixed(val) => {
-            *val = new_amount;
-        }
-        TransferAmount::Min(a, b)
-        | TransferAmount::Max(a, b)
-        | TransferAmount::Sub(a, b)
-        | TransferAmount::Add(a, b)
-        | TransferAmount::Mul(a, b) => {
-            // Only modify the first Fixed we find in compound amounts
-            if matches!(**a, TransferAmount::Fixed(_)) {
-                modify_transfer_amount(a, new_amount);
-            } else if matches!(**b, TransferAmount::Fixed(_)) {
-                modify_transfer_amount(b, new_amount);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// Evaluate parameters and return a full evaluation record
@@ -169,7 +65,11 @@ pub fn evaluate(
     let constraints_satisfied = check_constraints(&opt_config.constraints, &summary.stats);
 
     Ok(EvaluationRecord {
-        parameter_values: values.to_vec(),
+        parameter_values: opt_config
+            .parameters
+            .iter()
+            .map(|p| config.parameters[&p.parameter_id])
+            .collect(),
         objective_value,
         constraints_satisfied,
         stats: summary.stats,

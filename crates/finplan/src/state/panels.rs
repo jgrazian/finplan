@@ -82,9 +82,10 @@ impl PanelNavigable for PortfolioProfilesPanel {
 /// Focused panel for the Events tab (3-panel layout)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventsPanel {
-    EventList, // Left: list of events
-    Details,   // Middle: event details
-    Timeline,  // Right: timeline visualization
+    EventList,  // Left: list of events
+    Parameters, // Left bottom: named typed parameters
+    Details,    // Middle: event details
+    Timeline,   // Right: timeline visualization
 }
 
 impl EventsPanel {
@@ -100,7 +101,8 @@ impl EventsPanel {
 impl PanelNavigable for EventsPanel {
     fn next(self) -> Self {
         match self {
-            Self::EventList => Self::Details,
+            Self::EventList => Self::Parameters,
+            Self::Parameters => Self::Details,
             Self::Details => Self::Timeline,
             Self::Timeline => Self::EventList,
         }
@@ -109,7 +111,8 @@ impl PanelNavigable for EventsPanel {
     fn prev(self) -> Self {
         match self {
             Self::EventList => Self::Timeline,
-            Self::Details => Self::EventList,
+            Self::Details => Self::Parameters,
+            Self::Parameters => Self::EventList,
             Self::Timeline => Self::Details,
         }
     }

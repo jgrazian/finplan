@@ -57,10 +57,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("parameter metadata is returned with the configuration");
     let optimization = OptimizationConfig {
         objective: finplan_core::optimization::OptimizationObjective::MaximizeWealthAtDeath,
-        parameters: vec![OptimizableParameter::NumericParameter {
+        parameters: vec![OptimizableParameter {
             parameter_id: savings_id,
-            min_value: 1_000.0,
-            max_value: 5_000.0,
+            min_value: ParameterValue::Money(1_000.0),
+            max_value: ParameterValue::Money(5_000.0),
         }],
         algorithm: OptimizationAlgorithm::GridSearch { grid_size: 5 },
         monte_carlo_iterations: 10,
@@ -73,10 +73,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         metadata
             .parameter_name(savings_id)
             .expect("registered parameter"),
-        result
-            .optimal_parameters
-            .get(&format!("NumericParameter(parameter_{})", savings_id.0))
-            .ok_or("optimizer did not return the parameter value")?,
+        match result.optimal_parameters.get(&savings_id) {
+            Some(ParameterValue::Money(amount)) => *amount,
+            _ => return Err("optimizer did not return the Money parameter".into()),
+        },
     );
     Ok(())
 }

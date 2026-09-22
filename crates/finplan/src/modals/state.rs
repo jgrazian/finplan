@@ -222,6 +222,11 @@ impl PickerModal {
 /// Only forms with special runtime behavior (e.g., dependent fields) need explicit kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FormKind {
+    /// An entered value or a matching named parameter.
+    ValueInput {
+        source: usize,
+        kind: super::ParameterKind,
+    },
     /// Asset purchase effect - has dependent fields (To Account → Asset)
     AssetPurchase,
     /// Asset sale effect - may need dependent fields (From Account → Asset)

@@ -5,8 +5,9 @@ use finplan_core::{
     model::{
         Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, AssetLot,
         BalanceThreshold, Cash, Event, EventEffect, EventId, EventTrigger, FixedAsset, IncomeType,
-        InvestmentContainer, LoanDetail, LotMethod, RepeatInterval, ReturnProfileId, TaxStatus,
-        TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
+        InvestmentContainer, LoanDetail, LotMethod, ParameterId, ParameterValue, RepeatInterval,
+        ReturnProfileId, TaxStatus, TransferAmount, TriggerOffset, WithdrawalOrder,
+        WithdrawalSources,
     },
 };
 use jiff::civil::Date;
@@ -25,6 +26,7 @@ use super::{
 
 #[derive(Debug, Clone)]
 pub enum ConvertError {
+    InvalidParameter(String),
     InvalidDate(String),
     AccountNotFound(String),
     AssetNotFound(String, String),
@@ -35,6 +37,7 @@ pub enum ConvertError {
 impl std::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ConvertError::InvalidParameter(s) => write!(f, "Invalid parameter: {s}"),
             ConvertError::InvalidDate(s) => write!(f, "Invalid date format: {}", s),
             ConvertError::AccountNotFound(s) => write!(f, "Account not found: {}", s),
             ConvertError::AssetNotFound(acc, asset) => {
@@ -50,6 +53,7 @@ impl std::error::Error for ConvertError {}
 
 /// Context for resolving string references to IDs
 struct ResolveContext {
+    parameter_ids: HashMap<String, (ParameterId, ParameterValue)>,
     account_ids: HashMap<String, AccountId>,
     asset_ids: HashMap<(String, String), (AccountId, AssetId)>, // (account_name, asset_name) -> (AccountId, AssetId)
     event_ids: HashMap<String, EventId>,
@@ -60,10 +64,13 @@ struct ResolveContext {
 
 /// Convert SimulationData (human-readable YAML) to SimulationConfig (engine format)
 pub fn to_simulation_config(data: &SimulationData) -> Result<SimulationConfig, ConvertError> {
+    data.validate_named_parameters()
+        .map_err(ConvertError::InvalidParameter)?;
     let mut config = SimulationConfig::new();
 
     // Build ID maps
     let ctx = build_resolve_context(data);
+    config.parameters = ctx.parameter_ids.values().copied().collect();
 
     // Convert parameters
     convert_parameters(&data.parameters, &mut config)?;
@@ -154,6 +161,17 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
     }
 
     ResolveContext {
+        parameter_ids: data
+            .named_parameters
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                (
+                    parameter.name.clone(),
+                    (ParameterId(index as u16), parameter.value),
+                )
+            })
+            .collect(),
         account_ids,
         asset_ids,
         event_ids,
@@ -446,6 +464,12 @@ fn convert_trigger(
     ctx: &ResolveContext,
 ) -> Result<EventTrigger, ConvertError> {
     match trigger {
+        TriggerData::DateParameter { name } => Ok(EventTrigger::DateParameter(resolve_parameter(
+            name, ctx, "Date",
+        )?)),
+        TriggerData::AgeParameter { name } => Ok(EventTrigger::AgeParameter(resolve_parameter(
+            name, ctx, "Age",
+        )?)),
         TriggerData::Date { date } => Ok(EventTrigger::Date(parse_date(date)?)),
 
         TriggerData::Age { years, months } => Ok(EventTrigger::Age {
@@ -535,7 +559,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             let to_id = resolve_account(to, ctx)?;
             Ok(EventEffect::Income {
                 to: to_id,
-                amount: convert_amount(amount, ctx),
+                amount: convert_amount(amount, ctx)?,
                 amount_mode: if *gross {
                     AmountMode::Gross
                 } else {
@@ -553,7 +577,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             let from_id = resolve_account(from, ctx)?;
             Ok(EventEffect::Expense {
                 from: from_id,
-                amount: convert_amount(amount, ctx),
+                amount: convert_amount(amount, ctx)?,
             })
         }
 
@@ -568,7 +592,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             Ok(EventEffect::AssetPurchase {
                 from: from_id,
                 to: to_coord,
-                amount: convert_amount(amount, ctx),
+                amount: convert_amount(amount, ctx)?,
             })
         }
 
@@ -590,7 +614,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             Ok(EventEffect::AssetSale {
                 from: from_id,
                 asset_id,
-                amount: convert_amount(amount, ctx),
+                amount: convert_amount(amount, ctx)?,
                 amount_mode: if *gross {
                     AmountMode::Gross
                 } else {
@@ -621,7 +645,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
                     exclude_accounts: exclude,
                 },
                 to: to_id,
-                amount: convert_amount(amount, ctx),
+                amount: convert_amount(amount, ctx)?,
                 amount_mode: if *gross {
                     AmountMode::Gross
                 } else {
@@ -671,7 +695,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             let account_id = resolve_account(account, ctx)?;
             Ok(EventEffect::AdjustBalance {
                 account: account_id,
-                amount: convert_amount(amount, ctx),
+                amount: convert_amount(amount, ctx)?,
             })
         }
 
@@ -681,7 +705,7 @@ fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffe
             Ok(EventEffect::CashTransfer {
                 from: from_id,
                 to: to_id,
-                amount: convert_amount(amount, ctx),
+                amount: convert_amount(amount, ctx)?,
             })
         }
 
@@ -760,35 +784,60 @@ fn resolve_event(tag: &EventTag, ctx: &ResolveContext) -> Result<EventId, Conver
         .ok_or_else(|| ConvertError::EventNotFound(tag.0.clone()))
 }
 
-fn convert_amount(amount: &AmountData, ctx: &ResolveContext) -> TransferAmount {
-    match amount {
+fn resolve_parameter(
+    name: &str,
+    ctx: &ResolveContext,
+    expected: &str,
+) -> Result<ParameterId, ConvertError> {
+    let (id, value) = ctx
+        .parameter_ids
+        .get(name)
+        .ok_or_else(|| ConvertError::InvalidParameter(format!("Parameter '{name}' not found")))?;
+    let actual = match value {
+        ParameterValue::Money(_) => "Money",
+        ParameterValue::Rate(_) => "Rate",
+        ParameterValue::Date(_) => "Date",
+        ParameterValue::Age(_) => "Age",
+    };
+    if actual != expected {
+        return Err(ConvertError::InvalidParameter(format!(
+            "Parameter '{name}' must be {expected}, found {actual}"
+        )));
+    }
+    Ok(*id)
+}
+
+fn convert_amount(
+    amount: &AmountData,
+    ctx: &ResolveContext,
+) -> Result<TransferAmount, ConvertError> {
+    Ok(match amount {
+        AmountData::Parameter { name } => {
+            TransferAmount::Parameter(resolve_parameter(name, ctx, "Money")?)
+        }
+        AmountData::RateTimes { rate, inner } => TransferAmount::Mul(
+            Box::new(TransferAmount::Parameter(resolve_parameter(
+                rate, ctx, "Rate",
+            )?)),
+            Box::new(convert_amount(inner, ctx)?),
+        ),
         AmountData::Fixed { value } => TransferAmount::Fixed(*value),
         AmountData::InflationAdjusted { inner } => {
-            TransferAmount::InflationAdjusted(Box::new(convert_amount(inner, ctx)))
+            TransferAmount::InflationAdjusted(Box::new(convert_amount(inner, ctx)?))
         }
         AmountData::Scale { multiplier, inner } => {
-            TransferAmount::Scale(*multiplier, Box::new(convert_amount(inner, ctx)))
+            TransferAmount::Scale(*multiplier, Box::new(convert_amount(inner, ctx)?))
         }
         AmountData::SourceBalance => TransferAmount::SourceBalance,
         AmountData::ZeroTargetBalance => TransferAmount::ZeroTargetBalance,
         AmountData::TargetToBalance { target } => TransferAmount::TargetToBalance(*target),
-        AmountData::AccountBalance { account } => {
-            let account_id = ctx
-                .account_ids
-                .get(&account.0)
-                .copied()
-                .unwrap_or(AccountId(0));
-            TransferAmount::AccountTotalBalance { account_id }
-        }
-        AmountData::AccountCashBalance { account } => {
-            let account_id = ctx
-                .account_ids
-                .get(&account.0)
-                .copied()
-                .unwrap_or(AccountId(0));
-            TransferAmount::AccountCashBalance { account_id }
-        }
-    }
+        AmountData::AccountBalance { account } => TransferAmount::AccountTotalBalance {
+            account_id: resolve_account(account, ctx)?,
+        },
+        AmountData::AccountCashBalance { account } => TransferAmount::AccountCashBalance {
+            account_id: resolve_account(account, ctx)?,
+        },
+    })
 }
 
 fn convert_offset(offset: &OffsetData) -> TriggerOffset {

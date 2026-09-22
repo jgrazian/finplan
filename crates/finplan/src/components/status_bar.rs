@@ -22,6 +22,11 @@ impl StatusBar {
         match state.active_tab {
             crate::state::TabId::PortfolioProfiles => " y: hist/param",
             crate::state::TabId::Events => {
+                if state.events_state.focused_panel == crate::state::EventsPanel::Parameters {
+                    let kb = &state.keybindings.tabs.events;
+                    let first = |keys: &Vec<String>| keys.first().cloned().unwrap_or_default();
+                    return format!("Parameters | {}: add | {}: edit | {}: delete | Tab: panel",first(&kb.add),first(&kb.edit),first(&kb.delete));
+                }
                 let effects_help = state
                     .keybindings
                     .tabs
