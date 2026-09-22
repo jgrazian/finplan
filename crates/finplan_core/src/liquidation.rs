@@ -339,7 +339,7 @@ fn sort_lots_by_method(lots: &[AssetLot], method: LotMethod) -> Vec<AssetLot> {
     let mut sorted: Vec<AssetLot> = lots.to_vec();
     match method {
         LotMethod::Fifo => sorted.sort_by_key(|l| l.purchase_date),
-        LotMethod::Lifo => sorted.sort_by(|a, b| b.purchase_date.cmp(&a.purchase_date)),
+        LotMethod::Lifo => sorted.sort_by_key(|l| std::cmp::Reverse(l.purchase_date)),
         LotMethod::HighestCost => sorted.sort_by(|a, b| {
             let a_per_unit = if a.units > 0.0 {
                 a.cost_basis / a.units

@@ -723,10 +723,8 @@ impl Component for ResultsScreen {
                         state.results_state.selected_year_index -= 1;
                     }
                 }
-                ResultsPanel::Ledger => {
-                    if state.results_state.ledger_scroll_offset > 0 {
-                        state.results_state.ledger_scroll_offset -= 1;
-                    }
+                ResultsPanel::Ledger if state.results_state.ledger_scroll_offset > 0 => {
+                    state.results_state.ledger_scroll_offset -= 1;
                 }
                 _ => {}
             }
@@ -746,10 +744,10 @@ impl Component for ResultsScreen {
                 }
                 ResultsPanel::NetWorthChart
                 | ResultsPanel::AccountChart
-                | ResultsPanel::YearlyBreakdown => {
-                    if state.results_state.selected_year_index > 0 {
-                        state.results_state.selected_year_index -= 1;
-                    }
+                | ResultsPanel::YearlyBreakdown
+                    if state.results_state.selected_year_index > 0 =>
+                {
+                    state.results_state.selected_year_index -= 1;
                 }
                 _ => {}
             }

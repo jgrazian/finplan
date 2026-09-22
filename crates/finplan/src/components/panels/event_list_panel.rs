@@ -85,8 +85,17 @@ impl EventListPanel {
                 .collect()
         };
 
-        let help_text = "[a]dd [e]dit [d]el [c]opy [Shift+J/K] Reorder [t]oggle";
-        let block = focused_block_with_help(" EVENTS ", is_focused, help_text);
+        let effects_help = state
+            .keybindings
+            .tabs
+            .events
+            .effects
+            .first()
+            .map(|key| format!("[{key}] Effects "))
+            .unwrap_or_default();
+        let help_text =
+            format!("{effects_help}[a]dd [e]dit [d]el [c]opy [Shift+J/K] Reorder [t]oggle");
+        let block = focused_block_with_help(" EVENTS ", is_focused, &help_text);
 
         let list = List::new(items).block(block);
         frame.render_widget(list, area);

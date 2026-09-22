@@ -92,15 +92,30 @@ impl EventsScreen {
             )));
             Self::append_trigger_details(&event.trigger, &mut lines, 1);
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
+            let mut effects_heading = vec![Span::styled(
                 "EFFECTS",
                 Style::default()
                     .add_modifier(Modifier::BOLD)
                     .fg(Color::Green),
-            )));
+            )];
+            if let Some(key) = state.keybindings.tabs.events.effects.first() {
+                effects_heading.push(Span::styled(
+                    format!(" [{key}] Add/Edit"),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            lines.push(Line::from(effects_heading));
 
             if event.effects.is_empty() {
-                lines.push(Line::from("  No effects"));
+                lines.push(Line::from("  No effects configured."));
+                lines.push(Line::from(
+                    "  Effects define what happens when this event triggers.",
+                ));
+                if let Some(key) = state.keybindings.tabs.events.effects.first() {
+                    lines.push(Line::from(format!(
+                        "  Press [{key}], then choose Add New Effect."
+                    )));
+                }
             } else {
                 for (i, effect) in event.effects.iter().enumerate() {
                     lines.push(Line::from(format!(
@@ -733,6 +748,12 @@ impl Component for EventsScreen {
         if KeybindingsConfig::matches(&key, &state.keybindings.navigation.prev_panel) {
             state.events_state.focused_panel = state.events_state.focused_panel.prev();
             return EventResult::Handled;
+        }
+
+        // The effects shortcut shown in the details panel works from every panel,
+        // including when the user has customized the binding.
+        if KeybindingsConfig::matches(&key, &state.keybindings.tabs.events.effects) {
+            return EventListPanel::handle_key(key, state);
         }
 
         // Delegate to focused panel handler

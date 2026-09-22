@@ -36,6 +36,22 @@ An example scenario is included in [`examples/example.yaml`](examples/example.ya
 2. Press `i` to import a YAML file
 3. Enter the path to `examples/example.yaml`
 
+## Events and Effects
+
+An event pairs a **trigger** (when it happens) with **effects** (what it does).
+For example, a monthly salary event uses a repeating monthly trigger and an Income
+effect that deposits money into your checking account. Other effects include
+expenses, account transfers, asset purchases and sales, and RSU vesting. An event
+can have multiple effects; an event with no effects performs no actions when it
+triggers.
+
+To add effects using the default shortcuts:
+
+1. Open the **Events** tab (`2`) and press `a` to create an event and configure its trigger.
+2. Select the event and press `f` to open **Manage Effects**.
+3. Choose **Add New Effect**, select an effect type, and configure its accounts and amount.
+4. Press `f` again whenever you want to add another effect or select an existing effect to edit or delete it.
+
 ## Features
 
 **Account Types**
@@ -72,6 +88,7 @@ The TUI uses vim-style navigation by default:
 | `Tab` | Switch panels |
 | `1-5` | Switch tabs |
 | `a/e/d` | Add/Edit/Delete |
+| `f` (Events tab) | Manage effects for the selected event (add, edit, or delete) |
 | `Ctrl+S` | Save |
 | `q` | Quit |
 

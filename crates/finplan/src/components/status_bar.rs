@@ -18,11 +18,19 @@ pub struct StatusBar;
 
 impl StatusBar {
     /// Returns tab-specific help text for the left side of the status bar
-    fn get_tab_help_text(state: &AppState) -> &'static str {
+    fn get_tab_help_text(state: &AppState) -> String {
         match state.active_tab {
             crate::state::TabId::PortfolioProfiles => " y: hist/param",
             crate::state::TabId::Events => {
-                " a: add | e: edit | d: del | c: copy | t: toggle | f: effects"
+                let effects_help = state
+                    .keybindings
+                    .tabs
+                    .events
+                    .effects
+                    .first()
+                    .map(|key| format!(" {key}: effects |"))
+                    .unwrap_or_default();
+                return format!("{effects_help} a: add | e: edit | d: del | c: copy | t: toggle");
             }
             crate::state::TabId::Scenario => {
                 "r: run | m: MC | M: MC Conv | R: all | c: copy | n: new | s/l: save/load | e: params"
@@ -30,6 +38,7 @@ impl StatusBar {
             crate::state::TabId::Results => " r: run | m: MC | $: real/nominal | v: percentile ",
             crate::state::TabId::Analysis => " r: run analysis | s: settings ",
         }
+        .to_string()
     }
 
     /// Returns global help text for the right side of the status bar
