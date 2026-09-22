@@ -31,6 +31,7 @@ build
 *.db.broken
 *.db-shm
 *.db-wal
+*.db.*
 next-env.d.ts
 flamegraph.svg
 perf.data*
