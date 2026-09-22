@@ -24,6 +24,122 @@
   box-shadow: var(--shadow-md);
 }
 
+/* ── Project footer ─────────────────────────────────────────────────────── */
+
+.app-footer {
+  display: grid;
+  grid-template-columns: minmax(520px, 1fr) auto;
+  gap: 24px 40px;
+  align-items: center;
+  width: 100%;
+  max-width: 1440px;
+  margin: 28px auto 0;
+  padding: 20px 0 4px;
+  border-top: 1px solid var(--color-divider);
+  font-size: 12px;
+}
+
+.app-footer-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+}
+
+.app-footer-summary strong {
+  flex: none;
+  color: var(--color-text);
+  font-family: var(--font-heading);
+  font-size: 14px;
+  letter-spacing: .08em;
+}
+
+.app-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 20px;
+}
+
+.app-footer-links a,
+.app-footer-links button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.app-footer-links a:hover,
+.app-footer-links button:hover {
+  color: var(--color-accent-800);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.app-footer-links span {
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  font-size: 10px;
+}
+
+.app-footer-note {
+  margin: 3px 0 0;
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.contact-intro,
+.contact-privacy {
+  margin: 0;
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.contact-message {
+  min-height: 130px;
+  resize: vertical;
+}
+
+.contact-privacy {
+  padding-left: 9px;
+  border-left: 2px solid var(--color-accent);
+  font-size: 11px;
+}
+
+@media (max-width: 1080px) {
+  .app-footer {
+    grid-template-columns: minmax(280px, 1fr) auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-footer {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .app-footer-links {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-footer-summary {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
 .tabbar {
   display: flex;
   gap: 0;

@@ -234,6 +234,93 @@ impl TestApp {
 }
 
 #[tokio::test]
+async fn contact_messages_are_private_validated_and_rate_limited() {
+    let mut app = TestApp::new().await;
+
+    let (status, _) = app
+        .post(
+            "/api/contact-messages",
+            json!({"topic":"question", "message":"Can you help?"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    app.login_as("contact@example.com").await;
+
+    for message in ["", "   "] {
+        let (status, error) = app
+            .post(
+                "/api/contact-messages",
+                json!({"topic":"feedback", "message":message}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    }
+    let (status, error) = app
+        .post(
+            "/api/contact-messages",
+            json!({"topic":"feedback", "message":"x".repeat(2_001)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+
+    for number in 1..=5 {
+        let (status, receipt) = app
+            .post(
+                "/api/contact-messages",
+                json!({
+                    "topic":"bug_report",
+                    "message":format!("  Private message {number}  ")
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{receipt}");
+        assert_eq!(receipt["topic"], "bug_report");
+        assert_eq!(receipt["status"], "new");
+        assert!(receipt.get("message").is_none());
+    }
+
+    let (status, error) = app
+        .post(
+            "/api/contact-messages",
+            json!({"topic":"question", "message":"One too many"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{error}");
+    assert_eq!(error["error"]["code"], "rate_limited");
+
+    let db = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        app._dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    let messages: Vec<String> =
+        sqlx::query_scalar("SELECT message FROM contact_messages ORDER BY id")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(messages.len(), 5);
+    assert_eq!(messages[0], "Private message 1");
+
+    let (status, _) = app
+        .delete_with(
+            "/api/auth/me",
+            json!({"password":"correct-horse-battery-staple"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contact_messages")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        remaining, 0,
+        "messages follow the account retention boundary"
+    );
+}
+
+#[tokio::test]
 async fn a_scenario_can_be_renamed_but_not_to_nothing() {
     let mut app = TestApp::new().await;
     app.login_as("scenario-rename@example.com").await;

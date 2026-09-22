@@ -362,7 +362,7 @@ mod tests {
         source.close().await;
 
         let report = rebuild(&source_path, &destination_path).await.unwrap();
-        assert_eq!(report.tables, 44);
+        assert_eq!(report.tables, 45);
 
         let rebuilt = connect(&format!("sqlite://{}", destination_path.display()), 1)
             .await
@@ -371,7 +371,7 @@ mod tests {
             .fetch_one(&rebuilt)
             .await
             .unwrap();
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 2);
         for table in ["run_cash_flows", "run_ledger"] {
             let ids: Vec<i64> = sqlx::query_scalar(&format!(
                 "SELECT DISTINCT run_id FROM {table} ORDER BY run_id"

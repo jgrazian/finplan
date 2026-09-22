@@ -1,7 +1,7 @@
 //! API error type and its HTTP representation.
 
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use ts_rs::TS;
@@ -23,6 +23,12 @@ pub enum ApiError {
     #[error("{0}")]
     Conflict(String),
 
+    #[error("{message}")]
+    RateLimited {
+        message: String,
+        retry_after_seconds: u64,
+    },
+
     /// The stored scenario cannot be lowered into a `SimulationConfig`.
     #[error("{0}")]
     Unprocessable(String),
@@ -41,6 +47,13 @@ impl ApiError {
 
     pub fn unprocessable(msg: impl Into<String>) -> Self {
         ApiError::Unprocessable(msg.into())
+    }
+
+    pub fn rate_limited(message: impl Into<String>, retry_after_seconds: u64) -> Self {
+        ApiError::RateLimited {
+            message: message.into(),
+            retry_after_seconds,
+        }
     }
 
     pub fn internal(msg: impl Into<String>) -> Self {
@@ -64,6 +77,7 @@ impl ApiError {
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Conflict(_) => StatusCode::CONFLICT,
+            ApiError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::Database(_) | ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -79,6 +93,7 @@ impl ApiError {
             ApiError::Forbidden(_) => "forbidden",
             ApiError::NotFound(_) => "not_found",
             ApiError::Conflict(_) => "conflict",
+            ApiError::RateLimited { .. } => "rate_limited",
             ApiError::Unprocessable(_) => "unprocessable",
             ApiError::Database(_) | ApiError::Internal(_) => "internal",
         }
@@ -102,6 +117,13 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.status();
         let code = self.code();
+        let retry_after = match &self {
+            ApiError::RateLimited {
+                retry_after_seconds,
+                ..
+            } => Some(*retry_after_seconds),
+            _ => None,
+        };
 
         // Never render raw SQL errors or internal strings to logs: they can
         // include SQL parameters, financial data, or user-authored text. The
@@ -131,6 +153,12 @@ impl IntoResponse for ApiError {
             }),
         )
             .into_response();
+        if let Some(seconds) = retry_after {
+            response.headers_mut().insert(
+                header::RETRY_AFTER,
+                HeaderValue::from_str(&seconds.to_string()).expect("retry-after is numeric"),
+            );
+        }
         let class = match self {
             ApiError::Database(_) => Some(crate::observability::ErrorClass::Database),
             ApiError::Internal(_) => Some(crate::observability::ErrorClass::Internal),

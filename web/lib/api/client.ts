@@ -13,6 +13,8 @@ import type {
   Asset,
   CachedSweep,
   CompileReport,
+  ContactMessageReceipt,
+  CreateContactMessage,
   CreateAccount,
   CreateAnalysis,
   CreateAsset,
@@ -73,6 +75,11 @@ export const api = {
     revokeSession: (id: string) => http.delete(`/auth/sessions/${encodeURIComponent(id)}`),
     /** Unrecoverable, and cascades to every scenario, run and session. */
     remove: (body: DeleteAccount) => http.delete("/auth/me", body),
+  },
+
+  contact: {
+    submit: (body: CreateContactMessage) =>
+      http.post<ContactMessageReceipt>("/contact-messages", body),
   },
 
   scenarios: {

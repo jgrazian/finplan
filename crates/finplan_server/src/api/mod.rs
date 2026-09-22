@@ -4,6 +4,7 @@ pub mod accounts;
 pub mod analysis;
 pub mod archives;
 pub mod assets;
+pub mod contact;
 pub mod events;
 pub mod onboarding;
 pub mod profiles;
@@ -39,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .merge(analysis::router())
         .merge(archives::router())
         .merge(onboarding::router())
+        .merge(contact::router())
         .nest("/billing", crate::billing::router())
 }
 

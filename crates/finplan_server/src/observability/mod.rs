@@ -34,7 +34,8 @@ bounded_enum!(Resource {
     Account => "account", Position => "position", Scenario => "scenario",
     Asset => "asset", Event => "event", ReturnProfile => "return_profile",
     InflationProfile => "inflation_profile", TaxConfig => "tax_config",
-    Onboarding => "onboarding", Archive => "archive", Run => "run", User => "user"
+    Onboarding => "onboarding", Archive => "archive", Run => "run", User => "user",
+    ContactMessage => "contact_message"
 });
 bounded_enum!(Operation {
     Created => "created", Updated => "updated", Deleted => "deleted",

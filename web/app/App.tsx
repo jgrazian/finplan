@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccountScreen } from "@/components/account";
 import { AnalysisScreen } from "@/components/analysis";
 import { LoginForm } from "@/components/auth/LoginForm";
-import { AppHeader, AppShell, type TabDef } from "@/components/layout";
+import { AppFooter, AppHeader, AppShell, type TabDef } from "@/components/layout";
 import { nearestStop, type RunEffort } from "@/components/results";
 import {
   EmptyState,
@@ -301,6 +301,8 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           </>
         )}
       </AppShell>
+
+      <AppFooter />
 
       {status.issue?.kind === "session" && (
         <SessionExpiredDialog onSignIn={() => void session.signOut()} />
