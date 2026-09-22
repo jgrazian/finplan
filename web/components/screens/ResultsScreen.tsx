@@ -167,9 +167,6 @@ export function ResultsScreen({
             onPercentileChange={onPercentileChange}
           />
 
-          {chartScale.reason && (
-            <p style={{ fontSize: 12, marginBottom: 10 }}>{chartScale.reason}</p>
-          )}
           <NetWorthChart
             bands={bands}
             accountSeries={results.accountSeries}

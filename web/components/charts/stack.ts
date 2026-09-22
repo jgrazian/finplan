@@ -42,7 +42,7 @@ export function resolveScaleKind(
 ): { kind: ScaleKind; reason?: string } {
   const reason =
     view !== "fan"
-      ? "Account composition uses a linear scale: positive balances above zero, debt below; the line shows net worth."
+      ? "Log scale is unavailable for account composition."
       : undefined;
   return { kind: reason ? "linear" : requested, reason };
 }

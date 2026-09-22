@@ -60,9 +60,10 @@ export function ChartToolbar({
       <div
         style={{
           display: "flex",
-          flexWrap: "wrap",
-          alignItems: "baseline",
+          flexDirection: "column",
+          alignItems: "flex-start",
           gap: 12,
+          flex: "1 1 0",
           minWidth: 0,
         }}
       >
@@ -76,7 +77,15 @@ export function ChartToolbar({
           {subtitle}
         </span>
       </div>
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginLeft: "auto" }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          flex: "0 0 auto",
+          marginLeft: "auto",
+        }}
+      >
         <SegmentedControl
           ariaLabel="Chart view"
           options={VIEW_OPTIONS}
