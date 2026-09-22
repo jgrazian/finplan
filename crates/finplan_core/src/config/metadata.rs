@@ -6,7 +6,7 @@
 //! `SimulationMetadata` provides bidirectional mappings between string names
 //! and IDs, enabling the builder DSL to use human-readable names.
 
-use crate::model::{AccountId, AssetId, EventId, ReturnProfileId};
+use crate::model::{AccountId, AssetId, EventId, ParameterId, ReturnProfileId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -29,6 +29,9 @@ pub struct SimulationMetadata {
     pub events: HashMap<EventId, EntityMetadata>,
     /// Return profile ID to metadata mapping
     pub return_profiles: HashMap<ReturnProfileId, EntityMetadata>,
+    /// Parameter ID to metadata mapping
+    #[serde(default)]
+    pub parameters: HashMap<ParameterId, EntityMetadata>,
 
     /// Name to Account ID reverse lookup
     #[serde(default)]
@@ -42,6 +45,9 @@ pub struct SimulationMetadata {
     /// Name to Return Profile ID reverse lookup
     #[serde(default)]
     pub return_profile_names: HashMap<String, ReturnProfileId>,
+    /// Name to parameter ID reverse lookup
+    #[serde(default)]
+    pub parameter_names: HashMap<String, ParameterId>,
 }
 
 impl SimulationMetadata {
@@ -105,6 +111,20 @@ impl SimulationMetadata {
             .insert(id, EntityMetadata { name, description });
     }
 
+    /// Register a numeric parameter's human-readable name and description.
+    pub fn register_parameter(
+        &mut self,
+        id: ParameterId,
+        name: Option<String>,
+        description: Option<String>,
+    ) {
+        if let Some(ref n) = name {
+            self.parameter_names.insert(n.clone(), id);
+        }
+        self.parameters
+            .insert(id, EntityMetadata { name, description });
+    }
+
     /// Look up an account ID by name
     #[must_use]
     pub fn account_id(&self, name: &str) -> Option<AccountId> {
@@ -127,6 +147,18 @@ impl SimulationMetadata {
     #[must_use]
     pub fn return_profile_id(&self, name: &str) -> Option<ReturnProfileId> {
         self.return_profile_names.get(name).copied()
+    }
+
+    /// Look up a parameter ID by name.
+    #[must_use]
+    pub fn parameter_id(&self, name: &str) -> Option<ParameterId> {
+        self.parameter_names.get(name).copied()
+    }
+
+    /// Get the human-readable name of a parameter by ID.
+    #[must_use]
+    pub fn parameter_name(&self, id: ParameterId) -> Option<&str> {
+        self.parameters.get(&id).and_then(|m| m.name.as_deref())
     }
 
     /// Get the name of an account by ID

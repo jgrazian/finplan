@@ -322,12 +322,12 @@ fn find_next_checkpoint(state: &SimulationState) -> jiff::civil::Date {
             continue;
         }
 
-        if let EventTrigger::Date(d) = event.trigger
-            && d > state.timeline.current_date
-            && d < next
-        {
-            next = d;
-        }
+        scan_trigger_dates(
+            &event.trigger,
+            state.timeline.birth_date,
+            state.timeline.current_date,
+            &mut next,
+        );
 
         if let EventTrigger::RelativeToEvent {
             event_id: ref_event_id,
@@ -362,6 +362,51 @@ fn find_next_checkpoint(state: &SimulationState) -> jiff::civil::Date {
     }
 
     next
+}
+
+/// Include nested static dates so recurring start/end conditions fire on the
+/// intended day, even when that day falls between quarterly heartbeats.
+fn scan_trigger_dates(
+    trigger: &EventTrigger,
+    birth_date: jiff::civil::Date,
+    current: jiff::civil::Date,
+    next: &mut jiff::civil::Date,
+) {
+    let candidate = match trigger {
+        EventTrigger::Date(date) => Some(*date),
+        EventTrigger::Age { years, months } => crate::simulation_state::checked_age_date(
+            birth_date,
+            crate::model::CalendarAge::new(*years, months.unwrap_or(0)),
+        )
+        .ok(),
+        _ => None,
+    };
+    if let Some(date) = candidate
+        && date > current
+        && date < *next
+    {
+        *next = date;
+    }
+    match trigger {
+        EventTrigger::And(children) | EventTrigger::Or(children) => {
+            for child in children {
+                scan_trigger_dates(child, birth_date, current, next);
+            }
+        }
+        EventTrigger::Repeating {
+            start_condition,
+            end_condition,
+            ..
+        } => {
+            if let Some(start) = start_condition {
+                scan_trigger_dates(start, birth_date, current, next);
+            }
+            if let Some(end) = end_condition {
+                scan_trigger_dates(end, birth_date, current, next);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Compound a single cash balance and optionally record a ledger entry.

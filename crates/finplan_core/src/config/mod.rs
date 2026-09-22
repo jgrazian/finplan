@@ -40,8 +40,8 @@
 use std::collections::HashMap;
 
 use crate::model::{
-    Account, AssetId, Event, EventId, EventTrigger, InflationProfile, ReturnProfile,
-    ReturnProfileId, TaxConfig,
+    Account, AssetId, Event, EventId, EventTrigger, InflationProfile, ParameterId, ParameterValue,
+    ReturnProfile, ReturnProfileId, TaxConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -159,6 +159,10 @@ pub struct SimulationConfig {
     #[serde(default)]
     pub asset_tracking_errors: HashMap<AssetId, f64>,
 
+    /// Named fixed values available to amount expressions and event schedules.
+    #[serde(default)]
+    pub parameters: HashMap<ParameterId, ParameterValue>,
+
     /// Whether to collect ledger entries during simulation (default: true)
     ///
     /// Disable for batch MC iterations and parameter sweeps to save CPU/memory.
@@ -175,6 +179,7 @@ impl Default for SimulationConfig {
             asset_returns: HashMap::new(),
             asset_prices: HashMap::new(),
             asset_tracking_errors: HashMap::new(),
+            parameters: HashMap::new(),
             tax_config: TaxConfig::default(),
             start_date: None,
             birth_date: None,
@@ -191,6 +196,24 @@ impl SimulationConfig {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Return a copy with an existing parameter overridden.
+    /// Returns `None` when the ID is absent, the type changes, or the value is invalid.
+    #[must_use]
+    pub fn with_parameter_value(
+        &self,
+        id: ParameterId,
+        value: impl Into<ParameterValue>,
+    ) -> Option<Self> {
+        let value = value.into();
+        let original = self.parameters.get(&id)?;
+        if !value.is_valid() || std::mem::discriminant(original) != std::mem::discriminant(&value) {
+            return None;
+        }
+        let mut config = self.clone();
+        config.parameters.insert(id, value);
+        Some(config)
     }
 
     // === Optimization Helpers ===

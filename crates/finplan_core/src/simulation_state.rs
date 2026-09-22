@@ -1,9 +1,9 @@
 use crate::config::SimulationConfig;
 use crate::error::{LookupError, Result, SimulationError};
 use crate::model::{
-    Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, Event, EventId,
-    EventTrigger, LedgerEntry, Market, ReturnProfileId, RmdTable, SimulationWarning, StateEvent,
-    TaxConfig, TaxSummary, WealthSnapshot,
+    Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, Event, EventEffect, EventId,
+    EventTrigger, LedgerEntry, Market, ParameterId, ParameterValue, ReturnProfileId, RmdTable,
+    SimulationWarning, StateEvent, TaxConfig, TaxSummary, TransferAmount, WealthSnapshot,
 };
 use rand::SeedableRng;
 use rustc_hash::FxHashMap;
@@ -339,6 +339,18 @@ impl SimulationState {
         params: &SimulationConfig,
         seed: u64,
     ) -> std::result::Result<Self, SimulationError> {
+        let mut resolved_events = params.events.clone();
+        for (&id, &value) in &params.parameters {
+            if !value.is_valid() {
+                return Err(SimulationError::Config(format!(
+                    "parameter {id:?} has invalid value {value:?}"
+                )));
+            }
+        }
+        for event in &mut resolved_events {
+            bind_event_parameters(event, &params.parameters, params.birth_date)?;
+        }
+
         let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
         let start_date = params
             .start_date
@@ -423,8 +435,7 @@ impl SimulationState {
         let birth_date = params.birth_date.unwrap_or(jiff::civil::date(1970, 1, 1));
 
         // Find max EventId for dense Vec sizing
-        let max_event_id = params
-            .events
+        let max_event_id = resolved_events
             .iter()
             .map(|e| e.event_id.0)
             .max()
@@ -439,16 +450,17 @@ impl SimulationState {
         let repeating_event_active: Vec<Option<bool>> = vec![None; vec_size];
 
         // Load events and pre-cache age trigger dates for performance
-        for event in &params.events {
+        for event in resolved_events {
+            let event_id = event.event_id;
             let mut age_dates = Vec::new();
             collect_age_trigger_dates(&event.trigger, birth_date, &mut age_dates);
 
             // Only cache if exactly one Age trigger exists in the tree
             if age_dates.len() == 1 {
-                age_trigger_dates[event.event_id.0 as usize] = Some(age_dates[0]);
+                age_trigger_dates[event_id.0 as usize] = Some(age_dates[0]);
             }
 
-            events[event.event_id.0 as usize] = Some(event.clone());
+            events[event_id.0 as usize] = Some(event);
         }
 
         // Create a separate RNG for stochastic effects (using a derived seed)
@@ -815,6 +827,243 @@ impl SimulationState {
     pub fn reset_monthly_contributions(&mut self) {
         self.portfolio.contributions_mtd.clear();
     }
+}
+
+/// Replace parameter references in an event copy with fixed values before a run starts.
+fn bind_event_parameters(
+    event: &mut Event,
+    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
+    birth_date: Option<jiff::civil::Date>,
+) -> std::result::Result<(), SimulationError> {
+    bind_trigger_parameters(&mut event.trigger, parameters, birth_date)?;
+    for effect in &mut event.effects {
+        bind_effect_parameters(effect, parameters)?;
+    }
+    Ok(())
+}
+
+fn bind_effect_parameters(
+    effect: &mut EventEffect,
+    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
+) -> std::result::Result<(), SimulationError> {
+    match effect {
+        EventEffect::Income { amount, .. }
+        | EventEffect::Expense { amount, .. }
+        | EventEffect::AssetPurchase { amount, .. }
+        | EventEffect::AssetSale { amount, .. }
+        | EventEffect::Sweep { amount, .. }
+        | EventEffect::AdjustBalance { amount, .. }
+        | EventEffect::CashTransfer { amount, .. } => {
+            if amount_types(amount, parameters)? & MONEY == 0 {
+                return Err(SimulationError::Config(
+                    "transfer amount must have Money type".into(),
+                ));
+            }
+            bind_amount_parameters(amount, parameters)
+        }
+        EventEffect::Random {
+            on_true, on_false, ..
+        } => {
+            bind_effect_parameters(on_true, parameters)?;
+            if let Some(on_false) = on_false {
+                bind_effect_parameters(on_false, parameters)?;
+            }
+            Ok(())
+        }
+        EventEffect::CreateAccount(_)
+        | EventEffect::DeleteAccount(_)
+        | EventEffect::TriggerEvent(_)
+        | EventEffect::PauseEvent(_)
+        | EventEffect::ResumeEvent(_)
+        | EventEffect::TerminateEvent(_)
+        | EventEffect::ApplyRmd { .. }
+        | EventEffect::RsuVesting { .. } => Ok(()),
+    }
+}
+
+fn bind_amount_parameters(
+    amount: &mut TransferAmount,
+    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
+) -> std::result::Result<(), SimulationError> {
+    match amount {
+        TransferAmount::Parameter(id) => {
+            let value = parameters.get(id).copied().ok_or_else(|| {
+                SimulationError::Config(format!("amount references missing parameter {id:?}"))
+            })?;
+            let number = match value {
+                ParameterValue::Money(v) | ParameterValue::Rate(v) => v,
+                _ => {
+                    return Err(SimulationError::Config(format!(
+                        "parameter {id:?} cannot be used as an amount"
+                    )));
+                }
+            };
+            *amount = TransferAmount::Fixed(number);
+            Ok(())
+        }
+        TransferAmount::InflationAdjusted(inner) | TransferAmount::Scale(_, inner) => {
+            bind_amount_parameters(inner, parameters)
+        }
+        TransferAmount::Min(left, right)
+        | TransferAmount::Max(left, right)
+        | TransferAmount::Sub(left, right)
+        | TransferAmount::Add(left, right)
+        | TransferAmount::Mul(left, right) => {
+            bind_amount_parameters(left, parameters)?;
+            bind_amount_parameters(right, parameters)
+        }
+        TransferAmount::Fixed(_)
+        | TransferAmount::SourceBalance
+        | TransferAmount::ZeroTargetBalance
+        | TransferAmount::TargetToBalance(_)
+        | TransferAmount::AssetBalance { .. }
+        | TransferAmount::AccountTotalBalance { .. }
+        | TransferAmount::AccountCashBalance { .. } => Ok(()),
+    }
+}
+
+const MONEY: u8 = 1;
+const RATE: u8 = 2;
+
+/// A Fixed literal can stand for money or a scalar rate, as existing amount
+/// expressions used it both ways. Typed parameters retain their declared kind.
+fn amount_types(
+    amount: &TransferAmount,
+    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
+) -> std::result::Result<u8, SimulationError> {
+    use TransferAmount as A;
+    let kinds = match amount {
+        A::Fixed(_) => MONEY | RATE,
+        A::Parameter(id) => match parameters.get(id) {
+            Some(ParameterValue::Money(_)) => MONEY,
+            Some(ParameterValue::Rate(_)) => RATE,
+            Some(_) => {
+                return Err(SimulationError::Config(format!(
+                    "parameter {id:?} cannot be used as an amount"
+                )));
+            }
+            None => {
+                return Err(SimulationError::Config(format!(
+                    "amount references missing parameter {id:?}"
+                )));
+            }
+        },
+        A::InflationAdjusted(inner) => amount_types(inner, parameters)? & MONEY,
+        A::Scale(_, inner) => amount_types(inner, parameters)?,
+        A::SourceBalance
+        | A::ZeroTargetBalance
+        | A::TargetToBalance(_)
+        | A::AssetBalance { .. }
+        | A::AccountTotalBalance { .. }
+        | A::AccountCashBalance { .. } => MONEY,
+        A::Min(a, b) | A::Max(a, b) | A::Sub(a, b) | A::Add(a, b) => {
+            let left = amount_types(a, parameters)?;
+            let right = amount_types(b, parameters)?;
+            left & right
+        }
+        A::Mul(a, b) => {
+            let left = amount_types(a, parameters)?;
+            let right = amount_types(b, parameters)?;
+            let mut result = 0;
+            if (left & MONEY != 0 && right & RATE != 0) || (left & RATE != 0 && right & MONEY != 0)
+            {
+                result |= MONEY;
+            }
+            if left & RATE != 0 && right & RATE != 0 {
+                result |= RATE;
+            }
+            result
+        }
+    };
+    if kinds == 0 {
+        Err(SimulationError::Config(
+            "incompatible types in transfer amount expression".into(),
+        ))
+    } else {
+        Ok(kinds)
+    }
+}
+
+fn bind_trigger_parameters(
+    trigger: &mut EventTrigger,
+    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
+    birth_date: Option<jiff::civil::Date>,
+) -> std::result::Result<(), SimulationError> {
+    match trigger {
+        EventTrigger::DateParameter(id) => {
+            let date = resolve_calendar_trigger(*id, false, parameters, birth_date)?;
+            *trigger = EventTrigger::Date(date);
+        }
+        EventTrigger::AgeParameter(id) => {
+            let date = resolve_calendar_trigger(*id, true, parameters, birth_date)?;
+            *trigger = EventTrigger::Date(date);
+        }
+        EventTrigger::And(children) | EventTrigger::Or(children) => {
+            for child in children {
+                bind_trigger_parameters(child, parameters, birth_date)?;
+            }
+        }
+        EventTrigger::Repeating {
+            start_condition,
+            end_condition,
+            ..
+        } => {
+            if let Some(start) = start_condition {
+                bind_trigger_parameters(start, parameters, birth_date)?;
+            }
+            if let Some(end) = end_condition {
+                bind_trigger_parameters(end, parameters, birth_date)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn resolve_calendar_trigger(
+    id: ParameterId,
+    is_age: bool,
+    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
+    birth_date: Option<jiff::civil::Date>,
+) -> std::result::Result<jiff::civil::Date, SimulationError> {
+    let value = parameters.get(&id).ok_or_else(|| {
+        SimulationError::Config(format!("trigger references missing parameter {id:?}"))
+    })?;
+    let date = match (is_age, value) {
+        (false, ParameterValue::Date(date)) => *date,
+        (true, ParameterValue::Age(age)) => {
+            let birth = birth_date.ok_or_else(|| {
+                SimulationError::Config("parameterized Age trigger requires birth_date".into())
+            })?;
+            checked_age_date(birth, *age)?
+        }
+        _ => {
+            return Err(SimulationError::Config(format!(
+                "trigger parameter {id:?} has the wrong type"
+            )));
+        }
+    };
+    Ok(date)
+}
+
+pub(crate) fn checked_age_date(
+    birth: jiff::civil::Date,
+    age: crate::model::CalendarAge,
+) -> std::result::Result<jiff::civil::Date, SimulationError> {
+    let months = i32::from(birth.year()) * 12 + i32::from(birth.month()) - 1
+        + i32::from(age.years) * 12
+        + i32::from(age.months);
+    let year = months.div_euclid(12);
+    let month = (months.rem_euclid(12) + 1) as i8;
+    let year = i16::try_from(year).map_err(|_| {
+        SimulationError::Config("parameterized Age resolves outside supported date range".into())
+    })?;
+    let day = birth
+        .day()
+        .min(crate::date_math::days_in_month(year, month));
+    jiff::civil::Date::new(year, month, day).map_err(|_| {
+        SimulationError::Config("parameterized Age resolves outside supported date range".into())
+    })
 }
 
 #[cfg(test)]

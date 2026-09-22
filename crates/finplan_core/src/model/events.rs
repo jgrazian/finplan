@@ -6,7 +6,7 @@
 use crate::model::AssetCoord;
 
 use super::accounts::Account;
-use super::ids::{AccountId, AssetId, EventId};
+use super::ids::{AccountId, AssetId, EventId, ParameterId};
 
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +58,10 @@ pub enum TransferAmount {
     // === Simple Cases (90% of use) ===
     /// Fixed dollar amount
     Fixed(f64),
+
+    /// Numeric value supplied by the simulation configuration.
+    /// Parameters are bound to fixed amounts when each run initializes.
+    Parameter(ParameterId),
 
     /// Adjusts the inner amount for cumulative inflation from simulation start.
     /// The inner value represents "real" (constant purchasing power) dollars;
@@ -121,6 +125,11 @@ pub enum TransferAmount {
 }
 
 impl TransferAmount {
+    /// Reference a named numeric parameter by its type-safe ID.
+    #[must_use]
+    pub fn parameter(id: ParameterId) -> Self {
+        TransferAmount::Parameter(id)
+    }
     /// Transfer the lesser of a fixed amount or available balance
     #[must_use]
     pub fn up_to(amount: f64) -> Self {
@@ -349,8 +358,14 @@ pub enum EventTrigger {
     /// Trigger on a specific date
     Date(jiff::civil::Date),
 
+    /// Date supplied by a named parameter; bound before the run begins.
+    DateParameter(ParameterId),
+
     /// Trigger at a specific age (requires `birth_date` in `SimulationParameters`)
     Age { years: u8, months: Option<u8> },
+
+    /// Calendar age supplied by a named parameter; requires `birth_date`.
+    AgeParameter(ParameterId),
 
     /// Trigger N days/months/years after another event
     RelativeToEvent {

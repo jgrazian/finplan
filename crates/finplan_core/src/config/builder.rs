@@ -53,8 +53,8 @@ use super::event_builder::{
 use super::metadata::SimulationMetadata;
 use crate::model::{
     AccountId, AssetCoord, AssetId, AssetLot, Event, EventEffect, EventId, EventTrigger,
-    IncomeType, InflationProfile, ReturnProfile, ReturnProfileId, TaxConfig, TransferAmount,
-    WithdrawalSources,
+    IncomeType, InflationProfile, ParameterId, ParameterValue, ReturnProfile, ReturnProfileId,
+    TaxConfig, TransferAmount, WithdrawalSources,
 };
 
 /// Builder for creating simulations with automatic ID assignment and metadata tracking
@@ -65,6 +65,7 @@ pub struct SimulationBuilder {
     next_asset_id: u16,
     next_event_id: u16,
     next_return_profile_id: u16,
+    next_parameter_id: u16,
 
     // Pending builders (resolved during build)
     pending_accounts: Vec<AccountBuilder>,
@@ -102,6 +103,7 @@ impl SimulationBuilder {
             next_asset_id: 0,
             next_event_id: 0,
             next_return_profile_id: 0,
+            next_parameter_id: 0,
             pending_accounts: Vec::new(),
             pending_assets: Vec::new(),
             pending_events: Vec::new(),
@@ -174,6 +176,25 @@ impl SimulationBuilder {
     pub fn tax_config(mut self, config: TaxConfig) -> Self {
         self.config.tax_config = config;
         self
+    }
+
+    /// Add a named typed parameter and return the updated builder. Bare numbers
+    /// are interpreted as money for compatibility with older callers.
+    /// Resolve its ID with [`Self::parameter_id`] when constructing custom effects.
+    /// If a name is repeated, lookup resolves to the most recently added parameter.
+    pub fn parameter(mut self, name: impl Into<String>, value: impl Into<ParameterValue>) -> Self {
+        let name = name.into();
+        let id = ParameterId(self.next_parameter_id);
+        self.next_parameter_id += 1;
+        self.config.parameters.insert(id, value.into());
+        self.metadata.register_parameter(id, Some(name), None);
+        self
+    }
+
+    /// Look up the ID assigned to a named parameter.
+    #[must_use]
+    pub fn parameter_id(&self, name: &str) -> Option<ParameterId> {
+        self.metadata.parameter_id(name)
     }
 
     // =========================================================================
@@ -523,6 +544,8 @@ impl SimulationBuilder {
                 }
             }
             TriggerSpec::Date(d) => EventTrigger::Date(*d),
+            TriggerSpec::DateParameter(id) => EventTrigger::DateParameter(*id),
+            TriggerSpec::AgeParameter(id) => EventTrigger::AgeParameter(*id),
             TriggerSpec::Age { years, months } => EventTrigger::Age {
                 years: *years,
                 months: *months,

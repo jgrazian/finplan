@@ -6,7 +6,8 @@
 use crate::config::SimulationConfig;
 use crate::error::SimulationError;
 use crate::model::{
-    EventEffect, MonteCarloConfig, MonteCarloStats, MonteCarloSummary, TransferAmount,
+    EventEffect, MonteCarloConfig, MonteCarloStats, MonteCarloSummary, ParameterValue,
+    TransferAmount,
 };
 use crate::simulation::monte_carlo_simulate_with_config;
 
@@ -82,6 +83,17 @@ pub fn apply_parameters(
                         inv.cash.value = target_cash_value;
                     }
                 }
+            }
+            OptimizableParameter::NumericParameter { parameter_id, .. } => {
+                if !value.is_finite() {
+                    return None;
+                }
+                let parameter = config.parameters.get_mut(parameter_id)?;
+                *parameter = match parameter {
+                    ParameterValue::Money(_) => ParameterValue::Money(*value),
+                    ParameterValue::Rate(_) => ParameterValue::Rate(*value),
+                    ParameterValue::Date(_) | ParameterValue::Age(_) => return None,
+                };
             }
         }
     }

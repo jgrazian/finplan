@@ -6,7 +6,7 @@
 use jiff::civil::Date;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{AccountId, EventId};
+use crate::model::{AccountId, EventId, ParameterId};
 
 /// What the optimization is trying to achieve
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +60,14 @@ pub enum OptimizableParameter {
         min_stock_pct: f64,
         max_stock_pct: f64,
     },
+
+    /// Optimize one configured numeric parameter by ID.
+    /// Preferred for new amount and rate optimization.
+    NumericParameter {
+        parameter_id: ParameterId,
+        min_value: f64,
+        max_value: f64,
+    },
 }
 
 impl OptimizableParameter {
@@ -85,6 +93,11 @@ impl OptimizableParameter {
                 max_stock_pct,
                 ..
             } => (*min_stock_pct, *max_stock_pct),
+            OptimizableParameter::NumericParameter {
+                min_value,
+                max_value,
+                ..
+            } => (*min_value, *max_value),
         }
     }
 
@@ -103,6 +116,9 @@ impl OptimizableParameter {
             }
             OptimizableParameter::AssetAllocation { account_id, .. } => {
                 format!("AssetAllocation(account_{})", account_id.0)
+            }
+            OptimizableParameter::NumericParameter { parameter_id, .. } => {
+                format!("NumericParameter(parameter_{})", parameter_id.0)
             }
         }
     }

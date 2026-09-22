@@ -15,6 +15,7 @@ rustc-hash = "2"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tdigest = "0.2"
+serde_json = "1.0"
 
 [[bench]]
 name = "simulation_benchmarks"

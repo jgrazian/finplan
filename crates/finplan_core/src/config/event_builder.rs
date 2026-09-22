@@ -31,8 +31,8 @@
 //! ```
 
 use crate::model::{
-    AccountId, AmountMode, AssetCoord, EventEffect, IncomeType, LotMethod, RepeatInterval,
-    TransferAmount, WithdrawalOrder,
+    AccountId, AmountMode, AssetCoord, EventEffect, IncomeType, LotMethod, ParameterId,
+    RepeatInterval, TransferAmount, WithdrawalOrder,
 };
 use jiff::civil::Date;
 
@@ -134,10 +134,12 @@ pub enum TriggerSpec {
     #[default]
     Immediate,
     Date(Date),
+    DateParameter(ParameterId),
     Age {
         years: u8,
         months: Option<u8>,
     },
+    AgeParameter(ParameterId),
     Repeating {
         interval: RepeatInterval,
         start: Option<Box<TriggerSpec>>,
@@ -443,6 +445,12 @@ impl EventBuilder {
         self
     }
 
+    /// Set an amount by referencing a configured numeric parameter.
+    #[must_use]
+    pub fn parameter_amount(self, id: crate::model::ParameterId) -> Self {
+        self.transfer_amount(TransferAmount::parameter(id))
+    }
+
     // =========================================================================
     // Amount Mode (Gross vs Net)
     // =========================================================================
@@ -580,6 +588,21 @@ impl EventBuilder {
         self
     }
 
+    /// Trigger on the `ParameterValue::Date`. Call `.once()` for a one-time event.
+    #[must_use]
+    pub fn on_date_parameter(mut self, id: ParameterId) -> Self {
+        self.trigger = TriggerSpec::DateParameter(id);
+        self
+    }
+
+    /// Trigger at the `ParameterValue::Age`, relative to `birth_date`.
+    /// Call `.once()` for a one-time event.
+    #[must_use]
+    pub fn at_age_parameter(mut self, id: ParameterId) -> Self {
+        self.trigger = TriggerSpec::AgeParameter(id);
+        self
+    }
+
     /// Trigger at a specific age
     #[must_use]
     pub fn at_age(mut self, years: u8) -> Self {
@@ -688,6 +711,20 @@ impl EventBuilder {
         self
     }
 
+    /// Start repeating on the `ParameterValue::Date`, including that date.
+    #[must_use]
+    pub fn starting_on_parameter(mut self, id: ParameterId) -> Self {
+        self.set_start_condition(TriggerSpec::DateParameter(id));
+        self
+    }
+
+    /// Start repeating at the `ParameterValue::Age`, including that date.
+    #[must_use]
+    pub fn starting_at_age_parameter(mut self, id: ParameterId) -> Self {
+        self.set_start_condition(TriggerSpec::AgeParameter(id));
+        self
+    }
+
     /// Start repeating at this age
     #[must_use]
     pub fn starting_at_age(mut self, years: u8) -> Self {
@@ -715,6 +752,24 @@ impl EventBuilder {
     pub fn until_date(mut self, date: Date) -> Self {
         if let TriggerSpec::Repeating { end, .. } = &mut self.trigger {
             *end = Some(Box::new(TriggerSpec::Date(date)));
+        }
+        self
+    }
+
+    /// Stop repeating on the `ParameterValue::Date`; the bound is exclusive.
+    #[must_use]
+    pub fn until_date_parameter(mut self, id: ParameterId) -> Self {
+        if let TriggerSpec::Repeating { end, .. } = &mut self.trigger {
+            *end = Some(Box::new(TriggerSpec::DateParameter(id)));
+        }
+        self
+    }
+
+    /// Stop repeating at the `ParameterValue::Age`; the bound is exclusive.
+    #[must_use]
+    pub fn until_age_parameter(mut self, id: ParameterId) -> Self {
+        if let TriggerSpec::Repeating { end, .. } = &mut self.trigger {
+            *end = Some(Box::new(TriggerSpec::AgeParameter(id)));
         }
         self
     }
@@ -774,12 +829,27 @@ impl EventBuilder {
     fn get_start_condition(&self) -> Option<Box<TriggerSpec>> {
         match &self.trigger {
             TriggerSpec::Date(d) => Some(Box::new(TriggerSpec::Date(*d))),
+            TriggerSpec::DateParameter(id) => Some(Box::new(TriggerSpec::DateParameter(*id))),
+            TriggerSpec::AgeParameter(id) => Some(Box::new(TriggerSpec::AgeParameter(*id))),
             TriggerSpec::Age { years, months } => Some(Box::new(TriggerSpec::Age {
                 years: *years,
                 months: *months,
             })),
             TriggerSpec::Repeating { start, .. } => start.clone(),
             TriggerSpec::Immediate => None,
+        }
+    }
+
+    fn set_start_condition(&mut self, condition: TriggerSpec) {
+        if let TriggerSpec::Repeating { start, .. } = &mut self.trigger {
+            *start = Some(Box::new(condition));
+        } else {
+            self.trigger = TriggerSpec::Repeating {
+                interval: RepeatInterval::Monthly,
+                start: Some(Box::new(condition)),
+                end: None,
+                max_occurrences: None,
+            };
         }
     }
 

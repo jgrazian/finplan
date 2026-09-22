@@ -23,6 +23,9 @@ fn evaluate_transfer_amount(
 ) -> Result<f64, TransferEvaluationError> {
     match amount {
         TransferAmount::Fixed(amt) => Ok(*amt),
+        TransferAmount::Parameter(id) => {
+            Err(crate::error::TransferEvaluationError::UnboundParameter(*id))
+        }
 
         TransferAmount::InflationAdjusted(inner) => {
             // First evaluate the inner amount (in "real" start-of-sim dollars)
@@ -137,9 +140,17 @@ pub fn evaluate_trigger(
             TriggerEvent::NextTriggerDate(*date)
         }),
 
-        EventTrigger::Age { .. } => {
-            // Use pre-computed trigger date (O(1) lookup)
-            if let Some(trigger_date) = state.event_state.age_trigger_date(*event_id) {
+        EventTrigger::DateParameter(id) | EventTrigger::AgeParameter(id) => {
+            Err(TriggerEventError::UnboundParameter(*id))
+        }
+
+        EventTrigger::Age { years, months } => {
+            // Calculate this particular age: compound events can contain several.
+            let age = crate::model::CalendarAge::new(*years, months.unwrap_or(0));
+            let trigger_date = state.event_state.age_trigger_date(*event_id).or_else(|| {
+                crate::simulation_state::checked_age_date(state.timeline.birth_date, age).ok()
+            });
+            if let Some(trigger_date) = trigger_date {
                 if state.timeline.current_date >= trigger_date {
                     Ok(TriggerEvent::Triggered)
                 } else {

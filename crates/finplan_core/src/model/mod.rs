@@ -2,6 +2,7 @@ mod accounts;
 mod events;
 mod ids;
 mod market;
+mod parameters;
 mod records;
 mod results;
 mod rmd;
@@ -18,11 +19,12 @@ pub use events::{
     LimitPeriod, LotMethod, RepeatInterval, TransferAmount, TransferEndpoint, TriggerOffset,
     WithdrawalOrder, WithdrawalSources,
 };
-pub use ids::{AccountId, AssetCoord, AssetId, EventId, ReturnProfileId};
+pub use ids::{AccountId, AssetCoord, AssetId, EventId, ParameterId, ReturnProfileId};
 pub use market::{
     AssetInfo, HistoricalInflation, HistoricalReturns, HistoricalStatistics, InflationProfile,
     Market, MultiAssetHistory, ReturnProfile, n_day_rate,
 };
+pub use parameters::{CalendarAge, ParameterValue};
 pub use records::{Record, RecordKind, TaxInfo, TransactionSource};
 pub use results::{
     ConvergenceConfig, ConvergenceMetric, MeanAccumulators, MonteCarloConfig, MonteCarloProgress,

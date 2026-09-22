@@ -354,6 +354,7 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
         asset_returns,
         asset_prices,
         asset_tracking_errors,
+        parameters: std::collections::HashMap::new(),
         tax_config,
         start_date: Some(start_date),
         birth_date,

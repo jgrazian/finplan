@@ -515,6 +515,31 @@ pub fn process_events_into(state: &mut SimulationState, triggered: &mut Vec<Even
     *triggered = std::mem::take(&mut scratch.triggered);
 }
 
+/// An end condition can become true before the next scheduled occurrence.
+/// Keep evaluating such events at every simulation checkpoint.
+fn set_repeat_next_possible_trigger(
+    state: &mut SimulationState,
+    event_id: EventId,
+    next_date: jiff::civil::Date,
+) {
+    let has_end_condition = state.event_state.get_event(event_id).is_some_and(|event| {
+        matches!(
+            &event.trigger,
+            EventTrigger::Repeating {
+                end_condition: Some(_),
+                ..
+            }
+        )
+    });
+    if has_end_condition {
+        state.event_state.clear_next_possible_trigger(event_id);
+    } else {
+        state
+            .event_state
+            .set_next_possible_trigger(event_id, next_date);
+    }
+}
+
 /// Process all pending events for the current date using pre-allocated scratch buffers.
 /// This is the most efficient variant - reuses all scratch buffers across calls.
 pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut SimulationScratch) {
@@ -606,9 +631,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 state.event_state.set_repeating_active(event_id, true);
                 state.event_state.set_next_date(event_id, next_date);
                 // Set next possible trigger to the scheduled next occurrence
-                state
-                    .event_state
-                    .set_next_possible_trigger(event_id, next_date);
+                set_repeat_next_possible_trigger(state, event_id, next_date);
                 // Increment occurrence count for max_occurrences tracking
                 state.event_state.increment_occurrence_count(event_id);
                 true // Trigger immediately on activation
@@ -617,9 +640,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                 // Schedule next occurrence
                 state.event_state.set_next_date(event_id, next_date);
                 // Set next possible trigger to the scheduled next occurrence
-                state
-                    .event_state
-                    .set_next_possible_trigger(event_id, next_date);
+                set_repeat_next_possible_trigger(state, event_id, next_date);
                 // Increment occurrence count for max_occurrences tracking
                 state.event_state.increment_occurrence_count(event_id);
                 true

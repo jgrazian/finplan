@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::model::{AccountId, AssetCoord, AssetId, ReturnProfileId};
+use crate::model::{AccountId, AssetCoord, AssetId, ParameterId, ReturnProfileId};
 
 /// Errors related to resource lookups
 #[derive(Debug, Clone)]
@@ -166,6 +166,8 @@ pub type Result<T> = std::result::Result<T, LookupError>;
 pub enum TransferEvaluationError {
     Lookup(LookupError),
     ExternalBalanceReference,
+    /// A parameter reference reached evaluation without run-time binding.
+    UnboundParameter(ParameterId),
     /// Inflation data not available for the requested date range
     InflationDataUnavailable,
 }
@@ -176,6 +178,9 @@ impl fmt::Display for TransferEvaluationError {
             TransferEvaluationError::Lookup(e) => write!(f, "{e}"),
             TransferEvaluationError::ExternalBalanceReference => {
                 write!(f, "cannot reference balance of external endpoint")
+            }
+            TransferEvaluationError::UnboundParameter(id) => {
+                write!(f, "parameter {id:?} was not bound before amount evaluation")
             }
             TransferEvaluationError::InflationDataUnavailable => {
                 write!(
@@ -208,6 +213,7 @@ pub enum TriggerEventError {
     Lookup(LookupError),
     TransferEvaluation(TransferEvaluationError),
     DateError(jiff::Error),
+    UnboundParameter(ParameterId),
 }
 
 impl fmt::Display for TriggerEventError {
@@ -216,6 +222,10 @@ impl fmt::Display for TriggerEventError {
             TriggerEventError::Lookup(e) => write!(f, "{e}"),
             TriggerEventError::TransferEvaluation(e) => write!(f, "{e}"),
             TriggerEventError::DateError(e) => write!(f, "date calculation error: {e}"),
+            TriggerEventError::UnboundParameter(id) => write!(
+                f,
+                "trigger parameter {id:?} was not bound before evaluation"
+            ),
         }
     }
 }
@@ -226,6 +236,7 @@ impl std::error::Error for TriggerEventError {
             TriggerEventError::Lookup(e) => Some(e),
             TriggerEventError::TransferEvaluation(e) => Some(e),
             TriggerEventError::DateError(e) => Some(e),
+            TriggerEventError::UnboundParameter(_) => None,
         }
     }
 }
