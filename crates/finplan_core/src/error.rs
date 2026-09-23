@@ -164,30 +164,15 @@ pub type Result<T> = std::result::Result<T, LookupError>;
 
 #[derive(Debug, Clone)]
 pub enum TransferEvaluationError {
+    Expression(crate::expression::ExpressionError),
     Lookup(LookupError),
-    ExternalBalanceReference,
-    /// A parameter reference reached evaluation without run-time binding.
-    UnboundParameter(ParameterId),
-    /// Inflation data not available for the requested date range
-    InflationDataUnavailable,
 }
 
 impl fmt::Display for TransferEvaluationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            TransferEvaluationError::Expression(e) => write!(f, "{e}"),
             TransferEvaluationError::Lookup(e) => write!(f, "{e}"),
-            TransferEvaluationError::ExternalBalanceReference => {
-                write!(f, "cannot reference balance of external endpoint")
-            }
-            TransferEvaluationError::UnboundParameter(id) => {
-                write!(f, "parameter {id:?} was not bound before amount evaluation")
-            }
-            TransferEvaluationError::InflationDataUnavailable => {
-                write!(
-                    f,
-                    "inflation data not available for the requested date range"
-                )
-            }
         }
     }
 }
@@ -195,8 +180,8 @@ impl fmt::Display for TransferEvaluationError {
 impl std::error::Error for TransferEvaluationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            TransferEvaluationError::Expression(e) => Some(e),
             TransferEvaluationError::Lookup(e) => Some(e),
-            _ => None,
         }
     }
 }

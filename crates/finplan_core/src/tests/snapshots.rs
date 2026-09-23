@@ -63,7 +63,7 @@ pub(super) fn market_dependent_plan() -> SimulationConfig {
         effects: vec![EventEffect::CashTransfer {
             from: AccountId(0),
             to: AccountId(1),
-            amount: TransferAmount::Fixed(10_000.0),
+            amount: TransferAmount::fixed(10_000.0),
         }],
         once: false,
     });

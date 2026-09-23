@@ -39,12 +39,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .event(
             EventBuilder::income("Monthly savings")
                 .to_account("Checking")
-                .transfer_amount(TransferAmount::Add(
-                    Box::new(TransferAmount::parameter(savings_id)),
-                    Box::new(TransferAmount::Mul(
-                        Box::new(TransferAmount::parameter(match_id)),
-                        Box::new(TransferAmount::parameter(savings_id)),
-                    )),
+                .transfer_amount(TransferAmount::parameter(savings_id).plus(
+                    TransferAmount::scaled_rate(match_id, TransferAmount::parameter(savings_id)),
                 ))
                 .monthly()
                 .starting_on_parameter(start_id)

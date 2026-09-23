@@ -41,6 +41,7 @@ pub mod apply;
 pub mod date_math;
 pub mod error;
 pub mod evaluate;
+pub mod expression;
 pub mod liquidation;
 pub mod metrics;
 pub mod optimization;

@@ -19,9 +19,9 @@ pub enum TriggerParam {
 /// Target for sweeping an effect parameter
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EffectParam {
-    /// Modify the Fixed value in an amount (unwraps `InflationAdjusted` if present)
+    /// Replace a literal money amount, including one wrapped in `inflation(...)`.
     Value,
-    /// Modify Scale multiplier
+    /// Replace the literal scalar factor of a root multiplication expression.
     Multiplier,
 }
 

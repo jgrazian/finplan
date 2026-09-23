@@ -48,7 +48,7 @@ fn test_monthly_contribution_limit() {
                 trigger: EventTrigger::Date(jiff::civil::date(2024, 1, 15)),
                 effects: vec![EventEffect::Income {
                     to: roth_ira,
-                    amount: TransferAmount::Fixed(600.0),
+                    amount: TransferAmount::fixed(600.0),
                     amount_mode: AmountMode::Net,
                     income_type: IncomeType::TaxFree,
                 }],
@@ -60,7 +60,7 @@ fn test_monthly_contribution_limit() {
                 trigger: EventTrigger::Date(jiff::civil::date(2024, 1, 25)),
                 effects: vec![EventEffect::Income {
                     to: roth_ira,
-                    amount: TransferAmount::Fixed(200.0),
+                    amount: TransferAmount::fixed(200.0),
                     amount_mode: AmountMode::Net,
                     income_type: IncomeType::TaxFree,
                 }],
@@ -72,7 +72,7 @@ fn test_monthly_contribution_limit() {
                 trigger: EventTrigger::Date(jiff::civil::date(2024, 2, 1)),
                 effects: vec![EventEffect::Income {
                     to: roth_ira,
-                    amount: TransferAmount::Fixed(500.0),
+                    amount: TransferAmount::fixed(500.0),
                     amount_mode: AmountMode::Net,
                     income_type: IncomeType::TaxFree,
                 }],
@@ -160,7 +160,7 @@ fn test_yearly_contribution_limit() {
                 },
                 effects: vec![EventEffect::Income {
                     to: roth_401k,
-                    amount: TransferAmount::Fixed(2000.0),
+                    amount: TransferAmount::fixed(2000.0),
                     amount_mode: AmountMode::Net,
                     income_type: IncomeType::TaxFree,
                 }],
@@ -255,7 +255,7 @@ fn test_contribution_limit_with_asset_purchase() {
                 trigger: EventTrigger::Date(jiff::civil::date(2024, 1, 15)),
                 effects: vec![EventEffect::Income {
                     to: ira,
-                    amount: TransferAmount::Fixed(3000.0),
+                    amount: TransferAmount::fixed(3000.0),
                     amount_mode: AmountMode::Net,
                     income_type: IncomeType::TaxFree,
                 }],
@@ -271,7 +271,7 @@ fn test_contribution_limit_with_asset_purchase() {
                         account_id: ira,
                         asset_id: vtsax,
                     },
-                    amount: TransferAmount::Fixed(2000.0),
+                    amount: TransferAmount::fixed(2000.0),
                 }],
                 once: true,
             },
@@ -281,7 +281,7 @@ fn test_contribution_limit_with_asset_purchase() {
                 trigger: EventTrigger::Date(jiff::civil::date(2024, 3, 1)),
                 effects: vec![EventEffect::Income {
                     to: ira,
-                    amount: TransferAmount::Fixed(5000.0),
+                    amount: TransferAmount::fixed(5000.0),
                     amount_mode: AmountMode::Net,
                     income_type: IncomeType::TaxFree,
                 }],

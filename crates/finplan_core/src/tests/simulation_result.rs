@@ -223,7 +223,7 @@ fn test_income_records_generated() {
             trigger: EventTrigger::Date(jiff::civil::date(2021, 1, 1)),
             effects: vec![EventEffect::Income {
                 to: AccountId(1),
-                amount: TransferAmount::Fixed(10_000.0),
+                amount: TransferAmount::fixed(10_000.0),
                 amount_mode: AmountMode::Gross,
                 income_type: IncomeType::TaxFree, // Tax-free to avoid complexity
             }],
@@ -398,7 +398,7 @@ fn test_record_filtering_methods() {
                 trigger: EventTrigger::Date(jiff::civil::date(2020, 6, 1)),
                 effects: vec![EventEffect::Income {
                     to: AccountId(1),
-                    amount: TransferAmount::Fixed(5_000.0),
+                    amount: TransferAmount::fixed(5_000.0),
                     amount_mode: AmountMode::Gross,
                     income_type: IncomeType::Taxable,
                 }],
@@ -410,7 +410,7 @@ fn test_record_filtering_methods() {
                 trigger: EventTrigger::Date(jiff::civil::date(2021, 1, 1)),
                 effects: vec![EventEffect::Expense {
                     from: AccountId(1),
-                    amount: TransferAmount::Fixed(2_000.0),
+                    amount: TransferAmount::fixed(2_000.0),
                 }],
                 once: true,
             },
@@ -468,7 +468,7 @@ fn test_ledger_captures_state_changes() {
             trigger: EventTrigger::Date(jiff::civil::date(2020, 6, 1)),
             effects: vec![EventEffect::Income {
                 to: AccountId(1),
-                amount: TransferAmount::Fixed(5_000.0),
+                amount: TransferAmount::fixed(5_000.0),
                 amount_mode: AmountMode::Gross,
                 income_type: IncomeType::TaxFree,
             }],
@@ -581,7 +581,7 @@ fn test_ledger_filter_by_account() {
                 trigger: EventTrigger::Date(jiff::civil::date(2020, 3, 1)),
                 effects: vec![EventEffect::Income {
                     to: account1,
-                    amount: TransferAmount::Fixed(1_000.0),
+                    amount: TransferAmount::fixed(1_000.0),
                     amount_mode: AmountMode::Gross,
                     income_type: IncomeType::TaxFree,
                 }],
@@ -592,7 +592,7 @@ fn test_ledger_filter_by_account() {
                 trigger: EventTrigger::Date(jiff::civil::date(2020, 6, 1)),
                 effects: vec![EventEffect::Income {
                     to: account2,
-                    amount: TransferAmount::Fixed(2_000.0),
+                    amount: TransferAmount::fixed(2_000.0),
                     amount_mode: AmountMode::Gross,
                     income_type: IncomeType::TaxFree,
                 }],
@@ -663,7 +663,7 @@ fn test_ledger_income_and_expense_events() {
                 trigger: EventTrigger::Date(jiff::civil::date(2020, 2, 1)),
                 effects: vec![EventEffect::Income {
                     to: checking_account,
-                    amount: TransferAmount::Fixed(3_000.0),
+                    amount: TransferAmount::fixed(3_000.0),
                     amount_mode: AmountMode::Gross,
                     income_type: IncomeType::Taxable,
                 }],
@@ -675,7 +675,7 @@ fn test_ledger_income_and_expense_events() {
                 trigger: EventTrigger::Date(jiff::civil::date(2020, 3, 15)),
                 effects: vec![EventEffect::Expense {
                     from: checking_account,
-                    amount: TransferAmount::Fixed(1_500.0),
+                    amount: TransferAmount::fixed(1_500.0),
                 }],
                 once: true,
             },
@@ -793,7 +793,7 @@ fn test_ledger_asset_purchase_and_sale_events() {
                         account_id: brokerage_account,
                         asset_id,
                     },
-                    amount: TransferAmount::Fixed(5_000.0),
+                    amount: TransferAmount::fixed(5_000.0),
                 }],
                 once: true,
             },
@@ -804,7 +804,7 @@ fn test_ledger_asset_purchase_and_sale_events() {
                 effects: vec![EventEffect::AssetSale {
                     from: brokerage_account,
                     asset_id: Some(asset_id),
-                    amount: TransferAmount::Fixed(2_000.0),
+                    amount: TransferAmount::fixed(2_000.0),
                     amount_mode: AmountMode::Net,
                     lot_method: crate::model::LotMethod::Fifo,
                 }],
@@ -972,7 +972,7 @@ fn test_monthly_cash_flows_match_yearly() {
                 },
                 effects: vec![EventEffect::Income {
                     to: checking_account,
-                    amount: TransferAmount::Fixed(5_000.0),
+                    amount: TransferAmount::fixed(5_000.0),
                     amount_mode: AmountMode::Gross,
                     income_type: IncomeType::Taxable,
                 }],
@@ -991,7 +991,7 @@ fn test_monthly_cash_flows_match_yearly() {
                 },
                 effects: vec![EventEffect::Expense {
                     from: checking_account,
-                    amount: TransferAmount::Fixed(2_000.0),
+                    amount: TransferAmount::fixed(2_000.0),
                 }],
                 once: false,
             },

@@ -834,38 +834,93 @@ fn apply_amount_param(
     param: &EffectParam,
     value: f64,
 ) -> Result<(), SimulationError> {
-    match param {
-        EffectParam::Value => {
-            // Unwrap InflationAdjusted if present, modify Fixed value
-            match amount {
-                TransferAmount::Fixed(v) => {
-                    *v = value;
-                }
-                TransferAmount::InflationAdjusted(inner) => {
-                    if let TransferAmount::Fixed(v) = inner.as_mut() {
-                        *v = value;
-                    } else {
-                        return Err(SimulationError::Config(
-                            "InflationAdjusted does not contain a Fixed amount".to_string(),
-                        ));
-                    }
-                }
-                _ => {
-                    return Err(SimulationError::Config(
-                        "Amount is not a Fixed or InflationAdjusted(Fixed) value".to_string(),
-                    ));
-                }
-            }
-        }
-        EffectParam::Multiplier => {
-            if let TransferAmount::Scale(multiplier, _) = amount {
-                *multiplier = value;
-            } else {
-                return Err(SimulationError::Config(
-                    "Amount is not a Scale type".to_string(),
-                ));
-            }
+    // Construct a replacement first so an unsupported expression leaves the
+    // original amount untouched (including when a sweep point fails).
+    let replacement = match param {
+        EffectParam::Value => amount.with_fixed_value(value),
+        EffectParam::Multiplier => amount.with_scale_factor(value),
+    }
+    .map_err(|error| SimulationError::Config(error.to_string()))?;
+    *amount = replacement;
+    Ok(())
+}
+
+#[cfg(test)]
+mod amount_param_tests {
+    use super::*;
+    use crate::SimulationBuilder;
+    use crate::expression::compile_amount;
+    use crate::model::ParameterValue;
+
+    fn sweep_amount(
+        source: &str,
+        param: EffectParam,
+        value: f64,
+    ) -> Result<String, SimulationError> {
+        let (config, metadata) = SimulationBuilder::new().bank("Cash", 1_000.0).build();
+        let mut amount = compile_amount(source, &metadata, &config.parameters)
+            .expect("valid test expression")
+            .amount;
+        apply_amount_param(&mut amount, &param, value)?;
+        Ok(amount
+            .to_source(&metadata)
+            .expect("rewritten expression is renderable"))
+    }
+
+    #[test]
+    fn value_sweep_replaces_literal_inside_optional_inflation() {
+        assert_eq!(
+            sweep_amount("100", EffectParam::Value, 250.0).unwrap(),
+            "250"
+        );
+        assert_eq!(
+            sweep_amount("-100", EffectParam::Value, 250.0).unwrap(),
+            "250"
+        );
+        assert_eq!(
+            sweep_amount("inflation(100)", EffectParam::Value, 250.0).unwrap(),
+            "inflation(250)"
+        );
+    }
+
+    #[test]
+    fn multiplier_sweep_preserves_balance_reference() {
+        assert_eq!(
+            sweep_amount("4% * balance(\"Cash\")", EffectParam::Multiplier, 0.1).unwrap(),
+            "((10)% * balance(\"Cash\"))"
+        );
+        assert_eq!(
+            sweep_amount("500 * 4%", EffectParam::Multiplier, 0.1).unwrap(),
+            "(500 * (10)%)"
+        );
+    }
+
+    #[test]
+    fn unsupported_rewrites_leave_original_expression_unchanged() {
+        let (config, metadata) = SimulationBuilder::new()
+            .bank("Cash", 1_000.0)
+            .parameter("Rate", ParameterValue::Rate(0.04))
+            .build();
+        for (source, param) in [
+            ("100 + 200", EffectParam::Value),
+            ("balance(\"Cash\")", EffectParam::Value),
+            ("$Rate * balance(\"Cash\")", EffectParam::Multiplier),
+            (
+                "years_since_start() * balance(\"Cash\")",
+                EffectParam::Multiplier,
+            ),
+            ("500 * 4", EffectParam::Multiplier),
+            ("4% * balance(\"Cash\") + 100", EffectParam::Multiplier),
+        ] {
+            let mut amount = compile_amount(source, &metadata, &config.parameters)
+                .expect("valid test expression")
+                .amount;
+            let original = amount.to_source(&metadata).unwrap();
+            assert!(
+                apply_amount_param(&mut amount, &param, 0.5).is_err(),
+                "{source}"
+            );
+            assert_eq!(amount.to_source(&metadata).unwrap(), original, "{source}");
         }
     }
-    Ok(())
 }

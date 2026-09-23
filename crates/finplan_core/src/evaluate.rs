@@ -5,6 +5,7 @@ use rustc_hash::FxHashMap;
 use crate::error::{
     AccountTypeError, LookupError, StateEventError, TransferEvaluationError, TriggerEventError,
 };
+use crate::expression::EvaluationContext;
 use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment_into};
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
@@ -21,95 +22,10 @@ fn evaluate_transfer_amount(
     to: &TransferEndpoint,
     state: &SimulationState,
 ) -> Result<f64, TransferEvaluationError> {
-    match amount {
-        TransferAmount::Fixed(amt) => Ok(*amt),
-        TransferAmount::Parameter(id) => {
-            Err(crate::error::TransferEvaluationError::UnboundParameter(*id))
-        }
-
-        TransferAmount::InflationAdjusted(inner) => {
-            // First evaluate the inner amount (in "real" start-of-sim dollars)
-            let base_amount = evaluate_transfer_amount(inner, from, to, state)?;
-
-            // Then adjust for cumulative inflation
-            state
-                .portfolio
-                .market
-                .get_inflation_adjusted_value(
-                    state.timeline.start_date,
-                    state.timeline.current_date,
-                    base_amount,
-                )
-                .map_err(|_| TransferEvaluationError::InflationDataUnavailable)
-        }
-
-        TransferAmount::SourceBalance => match from {
-            TransferEndpoint::Asset { asset_coord } => Ok(state.asset_balance(*asset_coord)?),
-            TransferEndpoint::Cash { account_id } => Ok(state.account_cash_balance(*account_id)?),
-            TransferEndpoint::External => Err(TransferEvaluationError::ExternalBalanceReference), // External has no balance
-        },
-
-        TransferAmount::ZeroTargetBalance => match to {
-            TransferEndpoint::Asset { asset_coord } => Ok(state.asset_balance(*asset_coord)?),
-            TransferEndpoint::Cash { account_id } => Ok(state.account_cash_balance(*account_id)?),
-            TransferEndpoint::External => Err(TransferEvaluationError::ExternalBalanceReference), // External has no balance
-        },
-
-        TransferAmount::TargetToBalance(target) => match to {
-            TransferEndpoint::Asset { asset_coord } => Ok(state
-                .asset_balance(*asset_coord)
-                .map(|current| (target - current).max(0.0))?),
-            TransferEndpoint::Cash { account_id } => Ok(state
-                .account_cash_balance(*account_id)
-                .map(|current| (target - current).max(0.0))?),
-            TransferEndpoint::External => Err(TransferEvaluationError::ExternalBalanceReference), // External has no balance
-        },
-
-        TransferAmount::AssetBalance { asset_coord } => Ok(state.asset_balance(*asset_coord)?),
-
-        TransferAmount::AccountTotalBalance { account_id } => {
-            Ok(state.account_balance(*account_id)?)
-        }
-
-        TransferAmount::AccountCashBalance { account_id } => {
-            Ok(state.account_cash_balance(*account_id)?)
-        }
-
-        TransferAmount::Min(left, right) => {
-            let left_val = evaluate_transfer_amount(left, from, to, state)?;
-            let right_val = evaluate_transfer_amount(right, from, to, state)?;
-            Ok(left_val.min(right_val))
-        }
-
-        TransferAmount::Max(left, right) => {
-            let left_val = evaluate_transfer_amount(left, from, to, state)?;
-            let right_val = evaluate_transfer_amount(right, from, to, state)?;
-            Ok(left_val.max(right_val))
-        }
-
-        TransferAmount::Sub(left, right) => {
-            let left_val = evaluate_transfer_amount(left, from, to, state)?;
-            let right_val = evaluate_transfer_amount(right, from, to, state)?;
-            Ok(left_val - right_val)
-        }
-
-        TransferAmount::Add(left, right) => {
-            let left_val = evaluate_transfer_amount(left, from, to, state)?;
-            let right_val = evaluate_transfer_amount(right, from, to, state)?;
-            Ok(left_val + right_val)
-        }
-
-        TransferAmount::Mul(left, right) => {
-            let left_val = evaluate_transfer_amount(left, from, to, state)?;
-            let right_val = evaluate_transfer_amount(right, from, to, state)?;
-            Ok(left_val * right_val)
-        }
-
-        TransferAmount::Scale(multiplier, inner) => {
-            let inner_val = evaluate_transfer_amount(inner, from, to, state)?;
-            Ok(multiplier * inner_val)
-        }
-    }
+    amount
+        .expression()
+        .evaluate(&crate::expression::EvaluationContext::new(state).with_endpoints(*from, *to))
+        .map_err(TransferEvaluationError::Expression)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -587,12 +503,25 @@ pub fn evaluate_effect_into(
             amount_mode,
             lot_method,
         } => {
-            let target_amount = evaluate_transfer_amount(
-                amount,
-                &TransferEndpoint::External,
-                &TransferEndpoint::External,
-                state,
-            )?;
+            let target = TransferEndpoint::Cash { account_id: *from };
+            let context = match asset_id {
+                Some(asset_id) => EvaluationContext::new(state).with_endpoints(
+                    TransferEndpoint::Asset {
+                        asset_coord: AssetCoord {
+                            account_id: *from,
+                            asset_id: *asset_id,
+                        },
+                    },
+                    target,
+                ),
+                None => EvaluationContext::new(state)
+                    .with_endpoints(TransferEndpoint::External, target)
+                    .with_source_account(*from),
+            };
+            let target_amount = amount
+                .expression()
+                .evaluate(&context)
+                .map_err(TransferEvaluationError::Expression)?;
 
             if target_amount <= 0.0 {
                 return Ok(());
@@ -754,12 +683,25 @@ pub fn evaluate_effect_into(
             // Track start index so we can analyze only the new effects for Sweep logic
             let start_idx = out.len();
             let mut total_liquidated = 0.0;
-            let mut remaining = evaluate_transfer_amount(
-                amount,
-                &TransferEndpoint::External,
-                &TransferEndpoint::Cash { account_id: *to },
-                state,
-            )?;
+            let target = TransferEndpoint::Cash { account_id: *to };
+            let context =
+                EvaluationContext::new(state).with_endpoints(TransferEndpoint::External, target);
+            let context = match sources {
+                WithdrawalSources::SingleAsset(asset_coord) => context.with_endpoints(
+                    TransferEndpoint::Asset {
+                        asset_coord: *asset_coord,
+                    },
+                    target,
+                ),
+                WithdrawalSources::SingleAccount(account_id) => {
+                    context.with_source_account(*account_id)
+                }
+                WithdrawalSources::Custom(_) | WithdrawalSources::Strategy { .. } => context,
+            };
+            let mut remaining = amount
+                .expression()
+                .evaluate(&context)
+                .map_err(TransferEvaluationError::Expression)?;
 
             // Step 2: Liquidate from source accounts until target is met
             for from_account in source_accounts {
@@ -771,8 +713,11 @@ pub fn evaluate_effect_into(
                 evaluate_effect_into(
                     &EventEffect::AssetSale {
                         from: from_account,
-                        asset_id: None, // Liquidate all assets in account
-                        amount: TransferAmount::Fixed(remaining),
+                        asset_id: match sources {
+                            WithdrawalSources::SingleAsset(coord) => Some(coord.asset_id),
+                            _ => None,
+                        },
+                        amount: TransferAmount::fixed(remaining),
                         amount_mode: *amount_mode,
                         lot_method: *lot_method,
                     },
@@ -869,7 +814,7 @@ pub fn evaluate_effect_into(
                 let sweep = EventEffect::Sweep {
                     sources: WithdrawalSources::SingleAccount(acc.account_id),
                     to: *destination,
-                    amount: TransferAmount::Fixed(required_value),
+                    amount: TransferAmount::fixed(required_value),
                     amount_mode: AmountMode::Gross,
                     lot_method: *lot_method,
                     income_type: IncomeType::Taxable, // RMDs are taxable income
@@ -925,7 +870,9 @@ pub fn evaluate_effect_into(
             let delta = evaluate_transfer_amount(
                 amount,
                 &TransferEndpoint::External,
-                &TransferEndpoint::External,
+                &TransferEndpoint::Cash {
+                    account_id: *account,
+                },
                 state,
             )?;
 
@@ -940,7 +887,7 @@ pub fn evaluate_effect_into(
             let transfer_amount = evaluate_transfer_amount(
                 amount,
                 &TransferEndpoint::Cash { account_id: *from },
-                &TransferEndpoint::External,
+                &TransferEndpoint::Cash { account_id: *to },
                 state,
             )?;
 

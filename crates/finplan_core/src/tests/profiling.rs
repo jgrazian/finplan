@@ -113,7 +113,7 @@ fn test_account_balance_trigger_safe() {
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
-            amount: TransferAmount::Fixed(500.0),
+            amount: TransferAmount::fixed(500.0),
         }],
         once: false,
     });
@@ -127,7 +127,7 @@ fn test_account_balance_trigger_safe() {
         },
         effects: vec![EventEffect::Income {
             to: AccountId(2),
-            amount: TransferAmount::Fixed(2_000.0),
+            amount: TransferAmount::fixed(2_000.0),
             amount_mode: AmountMode::Net,
             income_type: IncomeType::TaxFree,
         }],
@@ -196,7 +196,7 @@ fn test_account_balance_trigger_cooldown_prevents_infinite_loop() {
         },
         effects: vec![EventEffect::Income {
             to: AccountId(2),
-            amount: TransferAmount::Fixed(100.0),
+            amount: TransferAmount::fixed(100.0),
             amount_mode: AmountMode::Net,
             income_type: IncomeType::TaxFree,
         }],
@@ -214,7 +214,7 @@ fn test_account_balance_trigger_cooldown_prevents_infinite_loop() {
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
-            amount: TransferAmount::Fixed(100.0),
+            amount: TransferAmount::fixed(100.0),
         }],
         once: false, // Would be dangerous without cooldown
     });
@@ -287,7 +287,7 @@ fn test_event_count_scaling() {
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),
-                amount: TransferAmount::Fixed(100.0),
+                amount: TransferAmount::fixed(100.0),
             }],
             once: false,
         });
@@ -314,7 +314,7 @@ fn test_event_count_scaling() {
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),
-                amount: TransferAmount::Fixed(100.0),
+                amount: TransferAmount::fixed(100.0),
             }],
             once: false,
         });
@@ -435,7 +435,7 @@ fn test_high_frequency_events() {
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(2),
-                amount: TransferAmount::Fixed(100.0),
+                amount: TransferAmount::fixed(100.0),
             }],
             once: false,
         });

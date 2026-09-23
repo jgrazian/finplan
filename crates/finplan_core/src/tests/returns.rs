@@ -608,7 +608,7 @@ fn test_mid_simulation_cash_deposit() {
             trigger: EventTrigger::Date(deposit_date),
             effects: vec![EventEffect::Income {
                 to: AccountId(1),
-                amount: TransferAmount::Fixed(deposit_amount),
+                amount: TransferAmount::fixed(deposit_amount),
                 amount_mode: AmountMode::Gross,
                 income_type: IncomeType::TaxFree,
             }],
@@ -686,9 +686,7 @@ fn test_inflation_adjusted_expense() {
             },
             effects: vec![EventEffect::Expense {
                 from: AccountId(1),
-                amount: TransferAmount::InflationAdjusted(Box::new(TransferAmount::Fixed(
-                    monthly_expense * 12.0,
-                ))), // $12k/year in start dollars
+                amount: TransferAmount::inflation_adjusted(monthly_expense * 12.0), // $12k/year in start dollars
             }],
             once: false,
         }],

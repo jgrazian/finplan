@@ -47,14 +47,14 @@ use super::SimulationConfig;
 use super::account_builder::AccountBuilder;
 use super::asset_builder::{AssetBuilder, AssetDefinition};
 use super::event_builder::{
-    AccountRef, AmountSpec, AssetRef, EventBuilder, EventDefinition, EventType, TriggerSpec,
+    AccountRef, AssetRef, EventBuilder, EventDefinition, EventType, TriggerSpec,
     WithdrawalSourceSpec,
 };
 use super::metadata::SimulationMetadata;
 use crate::model::{
     AccountId, AssetCoord, AssetId, AssetLot, Event, EventEffect, EventId, EventTrigger,
     IncomeType, InflationProfile, ParameterId, ParameterValue, ReturnProfile, ReturnProfileId,
-    TaxConfig, TransferAmount, WithdrawalSources,
+    TaxConfig, WithdrawalSources,
 };
 
 /// Builder for creating simulations with automatic ID assignment and metadata tracking
@@ -575,7 +575,7 @@ impl SimulationBuilder {
                 let account_id = self.resolve_account_ref(&spec.to_account, account_ids);
                 vec![EventEffect::Income {
                     to: account_id,
-                    amount: self.resolve_amount(&spec.amount),
+                    amount: spec.amount.clone(),
                     amount_mode: spec.amount_mode,
                     income_type: spec.income_type.clone(),
                 }]
@@ -584,7 +584,7 @@ impl SimulationBuilder {
                 let account_id = self.resolve_account_ref(&spec.from_account, account_ids);
                 vec![EventEffect::Expense {
                     from: account_id,
-                    amount: self.resolve_amount(&spec.amount),
+                    amount: spec.amount.clone(),
                 }]
             }
             EventType::AssetPurchase(spec) => {
@@ -593,7 +593,7 @@ impl SimulationBuilder {
                 vec![EventEffect::AssetPurchase {
                     from: from_account,
                     to: to_asset,
-                    amount: self.resolve_amount(&spec.amount),
+                    amount: spec.amount.clone(),
                 }]
             }
             EventType::AssetSale(spec) => {
@@ -604,7 +604,7 @@ impl SimulationBuilder {
                 vec![EventEffect::Sweep {
                     sources,
                     to: to_account,
-                    amount: self.resolve_amount(&spec.amount),
+                    amount: spec.amount.clone(),
                     amount_mode: spec.amount_mode,
                     lot_method: spec.lot_method,
                     income_type: IncomeType::Taxable, // Default to taxable for asset sales
@@ -655,14 +655,6 @@ impl SimulationBuilder {
         }
     }
 
-    fn resolve_amount(&self, spec: &AmountSpec) -> TransferAmount {
-        match spec {
-            AmountSpec::Fixed(v) => TransferAmount::Fixed(*v),
-            AmountSpec::SourceBalance => TransferAmount::SourceBalance,
-            AmountSpec::TransferAmount(t) => t.clone(),
-        }
-    }
-
     fn resolve_withdrawal_sources(
         &self,
         spec: &WithdrawalSourceSpec,
@@ -684,6 +676,11 @@ impl SimulationBuilder {
                 }
             }
             WithdrawalSourceSpec::AccountOrder(accounts) => {
+                if let [account] = accounts.as_slice() {
+                    return WithdrawalSources::SingleAccount(
+                        self.resolve_account_ref(account, account_ids),
+                    );
+                }
                 // Convert account names to AssetCoords (using first asset in each account)
                 // This is a simplification - in practice you might want to handle this differently
                 let coords: Vec<AssetCoord> = accounts

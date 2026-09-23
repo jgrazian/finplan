@@ -59,7 +59,7 @@ pub(crate) enum EventType {
 #[derive(Debug, Clone)]
 pub(crate) struct IncomeSpec {
     pub to_account: AccountRef,
-    pub amount: AmountSpec,
+    pub amount: TransferAmount,
     pub amount_mode: AmountMode,
     pub income_type: IncomeType,
 }
@@ -67,20 +67,20 @@ pub(crate) struct IncomeSpec {
 #[derive(Debug, Clone)]
 pub(crate) struct ExpenseSpec {
     pub from_account: AccountRef,
-    pub amount: AmountSpec,
+    pub amount: TransferAmount,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct AssetPurchaseSpec {
     pub from_account: AccountRef,
     pub to_asset: AssetRef,
-    pub amount: AmountSpec,
+    pub amount: TransferAmount,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct AssetSaleSpec {
     pub to_account: AccountRef,
-    pub amount: AmountSpec,
+    pub amount: TransferAmount,
     pub sources: WithdrawalSourceSpec,
     pub amount_mode: AmountMode,
     pub lot_method: LotMethod,
@@ -107,14 +107,6 @@ pub enum AccountRef {
 pub enum AssetRef {
     Coord(AssetCoord),
     Named { account: String, asset: String },
-}
-
-/// Specification for transfer amount
-#[derive(Debug, Clone)]
-pub enum AmountSpec {
-    Fixed(f64),
-    SourceBalance,
-    TransferAmount(TransferAmount),
 }
 
 /// Specification for withdrawal sources
@@ -160,7 +152,7 @@ impl EventBuilder {
             description: None,
             event_type: EventType::Income(IncomeSpec {
                 to_account: AccountRef::Name("default".into()),
-                amount: AmountSpec::Fixed(0.0),
+                amount: TransferAmount::fixed(0.0),
                 amount_mode: AmountMode::Gross,
                 income_type: IncomeType::Taxable,
             }),
@@ -176,7 +168,7 @@ impl EventBuilder {
             description: None,
             event_type: EventType::Expense(ExpenseSpec {
                 from_account: AccountRef::Name("default".into()),
-                amount: AmountSpec::Fixed(0.0),
+                amount: TransferAmount::fixed(0.0),
             }),
             trigger: TriggerSpec::Immediate,
             once: false,
@@ -194,7 +186,7 @@ impl EventBuilder {
                     account: "default".into(),
                     asset: "default".into(),
                 },
-                amount: AmountSpec::Fixed(0.0),
+                amount: TransferAmount::fixed(0.0),
             }),
             trigger: TriggerSpec::Immediate,
             once: false,
@@ -208,7 +200,7 @@ impl EventBuilder {
             description: None,
             event_type: EventType::AssetSale(AssetSaleSpec {
                 to_account: AccountRef::Name("default".into()),
-                amount: AmountSpec::Fixed(0.0),
+                amount: TransferAmount::fixed(0.0),
                 sources: WithdrawalSourceSpec::Strategy {
                     order: WithdrawalOrder::TaxEfficientEarly,
                     exclude: vec![],
@@ -405,7 +397,7 @@ impl EventBuilder {
     /// Set a fixed amount
     #[must_use]
     pub fn amount(mut self, value: f64) -> Self {
-        let amount = AmountSpec::Fixed(value);
+        let amount = TransferAmount::fixed(value);
         match &mut self.event_type {
             EventType::Income(spec) => spec.amount = amount,
             EventType::Expense(spec) => spec.amount = amount,
@@ -420,12 +412,17 @@ impl EventBuilder {
     /// Use the full source balance
     #[must_use]
     pub fn full_balance(mut self) -> Self {
-        let amount = AmountSpec::SourceBalance;
+        let amount = TransferAmount::source_balance();
         match &mut self.event_type {
             EventType::Income(spec) => spec.amount = amount,
             EventType::Expense(spec) => spec.amount = amount,
             EventType::AssetPurchase(spec) => spec.amount = amount,
-            EventType::AssetSale(spec) => spec.amount = amount,
+            EventType::AssetSale(spec) => {
+                spec.amount =
+                    TransferAmount::account_balance(crate::expression::AccountRef::Source).minus(
+                        TransferAmount::cash_balance(crate::expression::AccountRef::Source),
+                    );
+            }
             EventType::RsuVesting(_) | EventType::Custom(_) => {}
         }
         self
@@ -434,7 +431,6 @@ impl EventBuilder {
     /// Set a complex transfer amount
     #[must_use]
     pub fn transfer_amount(mut self, amount: TransferAmount) -> Self {
-        let amount = AmountSpec::TransferAmount(amount);
         match &mut self.event_type {
             EventType::Income(spec) => spec.amount = amount,
             EventType::Expense(spec) => spec.amount = amount,
@@ -445,7 +441,7 @@ impl EventBuilder {
         self
     }
 
-    /// Set an amount by referencing a configured numeric parameter.
+    /// Set an amount by referencing a configured Money parameter.
     #[must_use]
     pub fn parameter_amount(self, id: crate::model::ParameterId) -> Self {
         self.transfer_amount(TransferAmount::parameter(id))
@@ -898,7 +894,13 @@ mod tests {
         match event.event_type {
             EventType::Income(spec) => {
                 assert!(matches!(spec.to_account, AccountRef::Name(ref n) if n == "Checking"));
-                assert!(matches!(spec.amount, AmountSpec::Fixed(v) if (v - 8_000.0).abs() < 0.01));
+                assert_eq!(
+                    spec.amount
+                        .expression()
+                        .to_source(&crate::config::SimulationMetadata::default())
+                        .unwrap(),
+                    "8000"
+                );
                 assert!(matches!(spec.amount_mode, AmountMode::Gross));
             }
             _ => panic!("Expected Income event type"),

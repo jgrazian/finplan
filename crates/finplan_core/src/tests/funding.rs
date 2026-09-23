@@ -41,7 +41,7 @@ fn event(id: u16, month: i8, effects: Vec<EventEffect>) -> Event {
 fn spend(amount: f64) -> EventEffect {
     EventEffect::Expense {
         from: AccountId(0),
-        amount: TransferAmount::Fixed(amount),
+        amount: TransferAmount::fixed(amount),
     }
 }
 
@@ -49,7 +49,7 @@ fn fund(amount: f64) -> EventEffect {
     EventEffect::CashTransfer {
         from: AccountId(1),
         to: AccountId(0),
-        amount: TransferAmount::Fixed(amount),
+        amount: TransferAmount::fixed(amount),
     }
 }
 
@@ -175,7 +175,7 @@ fn skipped_effect_is_not_a_successful_funding_check() {
         2,
         vec![EventEffect::Expense {
             from: AccountId(99),
-            amount: TransferAmount::Fixed(100.0),
+            amount: TransferAmount::fixed(100.0),
         }],
     )];
     let summary = monte_carlo_simulate_with_config(&config, &mc()).unwrap();
@@ -200,7 +200,7 @@ fn chained_effect_errors_also_fail_the_funding_check() {
             once: true,
             effects: vec![EventEffect::Expense {
                 from: AccountId(99),
-                amount: TransferAmount::Fixed(100.0),
+                amount: TransferAmount::fixed(100.0),
             }],
         },
         event(1, 2, vec![EventEffect::TriggerEvent(EventId(0))]),

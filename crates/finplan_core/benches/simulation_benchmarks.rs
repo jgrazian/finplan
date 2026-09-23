@@ -71,7 +71,7 @@ fn create_monthly_events_config() -> SimulationConfig {
         },
         effects: vec![EventEffect::Income {
             to: AccountId(2),
-            amount: TransferAmount::Fixed(8_000.0),
+            amount: TransferAmount::fixed(8_000.0),
             amount_mode: finplan_core::model::AmountMode::Gross,
             income_type: IncomeType::Taxable,
         }],
@@ -89,7 +89,7 @@ fn create_monthly_events_config() -> SimulationConfig {
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
-            amount: TransferAmount::Fixed(5_000.0),
+            amount: TransferAmount::fixed(5_000.0),
         }],
         once: false,
     });
@@ -128,7 +128,7 @@ fn create_account_balance_trigger_safe_config() -> SimulationConfig {
         },
         effects: vec![EventEffect::Expense {
             from: AccountId(2),
-            amount: TransferAmount::Fixed(500.0),
+            amount: TransferAmount::fixed(500.0),
         }],
         once: false,
     });
@@ -142,7 +142,7 @@ fn create_account_balance_trigger_safe_config() -> SimulationConfig {
         },
         effects: vec![EventEffect::Income {
             to: AccountId(2),
-            amount: TransferAmount::Fixed(3_000.0),
+            amount: TransferAmount::fixed(3_000.0),
             amount_mode: finplan_core::model::AmountMode::Net,
             income_type: IncomeType::TaxFree,
         }],

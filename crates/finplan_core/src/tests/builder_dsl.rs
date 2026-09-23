@@ -3,7 +3,9 @@
 //! These tests demonstrate and verify the fluent builder API for creating simulations.
 
 use crate::config::{AccountBuilder, AssetBuilder, EventBuilder, SimulationBuilder};
-use crate::model::{AccountFlavor, TaxStatus};
+use crate::model::{
+    AccountFlavor, AccountSnapshotFlavor, EventEffect, StateEvent, TaxStatus, WithdrawalSources,
+};
 use crate::simulation::simulate;
 
 /// Test basic `SimulationBuilder` usage
@@ -221,6 +223,146 @@ fn test_expense_event_builder() {
     assert_eq!(config.events.len(), 2);
     assert!(metadata.event_id("Rent").is_some());
     assert!(metadata.event_id("Utilities").is_some());
+}
+
+#[test]
+fn test_single_account_full_balance_sells_all_holdings_and_preserves_cash() {
+    for starting_cash in [0.0, 300.0] {
+        let (config, metadata) = SimulationBuilder::new()
+            .start(2025, 1, 1)
+            .years(1)
+            .inflation(0.0)
+            .asset(AssetBuilder::new("Stock").price(100.0).fixed_return(0.0))
+            .asset(AssetBuilder::new("Bond").price(50.0).fixed_return(0.0))
+            .account(AccountBuilder::taxable_brokerage("Brokerage").cash(starting_cash))
+            .account(AccountBuilder::bank_account("Checking").cash(0.0))
+            .position("Brokerage", "Stock", 10.0, 1_000.0)
+            .position("Brokerage", "Bond", 10.0, 500.0)
+            .event(
+                EventBuilder::withdrawal("Sell holdings")
+                    .from_single_account("Brokerage")
+                    .to_account("Checking")
+                    .full_balance()
+                    .on_date(jiff::civil::date(2025, 1, 2))
+                    .once(),
+            )
+            .build();
+
+        let brokerage_id = metadata.account_id("Brokerage").unwrap();
+        let checking_id = metadata.account_id("Checking").unwrap();
+        assert!(matches!(
+            &config.events[0].effects[0],
+            EventEffect::Sweep {
+                sources: WithdrawalSources::SingleAccount(id),
+                ..
+            } if *id == brokerage_id
+        ));
+
+        let result = simulate(&config, 42).unwrap();
+        let sold_assets: Vec<_> = result
+            .asset_sale_entries()
+            .filter_map(|entry| match &entry.event {
+                StateEvent::AssetSale {
+                    account_id,
+                    asset_id,
+                    ..
+                } if *account_id == brokerage_id => Some(*asset_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sold_assets.len(), 2);
+        assert!(sold_assets.contains(&metadata.asset_id("Stock").unwrap()));
+        assert!(sold_assets.contains(&metadata.asset_id("Bond").unwrap()));
+        assert_eq!(result.final_account_balance(checking_id), Some(1_500.0));
+        assert_eq!(
+            result.final_account_balance(brokerage_id),
+            Some(starting_cash)
+        );
+        let final_brokerage = result
+            .wealth_snapshots
+            .last()
+            .unwrap()
+            .accounts
+            .iter()
+            .find(|account| account.account_id == brokerage_id)
+            .unwrap();
+        assert!(matches!(
+            &final_brokerage.flavor,
+            AccountSnapshotFlavor::Investment { cash, assets }
+                if *cash == starting_cash && assets.values().all(|value| *value == 0.0)
+        ));
+    }
+}
+
+#[test]
+fn test_multiple_ordered_withdrawal_accounts_remain_custom_sources() {
+    let (config, metadata) = SimulationBuilder::new()
+        .start(2025, 1, 1)
+        .years(1)
+        .brokerage("First", 0.0)
+        .brokerage("Second", 0.0)
+        .bank("Checking", 0.0)
+        .event(
+            EventBuilder::withdrawal("Ordered withdrawal")
+                .from_accounts_in_order(["First", "Second"])
+                .to_account("Checking")
+                .amount(100.0),
+        )
+        .build();
+
+    assert!(matches!(
+        &config.events[0].effects[0],
+        EventEffect::Sweep {
+            sources: WithdrawalSources::Custom(coords),
+            ..
+        } if coords.len() == 2
+            && coords[0].account_id == metadata.account_id("First").unwrap()
+            && coords[1].account_id == metadata.account_id("Second").unwrap()
+    ));
+}
+
+#[test]
+fn test_scalar_full_balance_uses_cash_for_expense_and_purchase() {
+    let (config, metadata) = SimulationBuilder::new()
+        .start(2025, 1, 1)
+        .years(1)
+        .inflation(0.0)
+        .asset(AssetBuilder::new("Stock").price(100.0).fixed_return(0.0))
+        .account(AccountBuilder::bank_account("Checking").cash(250.0))
+        .account(AccountBuilder::taxable_brokerage("Brokerage").cash(300.0))
+        .event(
+            EventBuilder::expense("Spend checking")
+                .from_account("Checking")
+                .full_balance()
+                .on_date(jiff::civil::date(2025, 1, 2))
+                .once(),
+        )
+        .event(
+            EventBuilder::asset_purchase("Invest brokerage cash")
+                .from_account("Brokerage")
+                .to_asset("Brokerage", "Stock")
+                .full_balance()
+                .on_date(jiff::civil::date(2025, 1, 2))
+                .once(),
+        )
+        .build();
+
+    let result = simulate(&config, 42).unwrap();
+    assert_eq!(
+        result.final_account_balance(metadata.account_id("Checking").unwrap()),
+        Some(0.0)
+    );
+    assert_eq!(
+        result.final_account_balance(metadata.account_id("Brokerage").unwrap()),
+        Some(300.0)
+    );
+    assert_eq!(
+        result.final_asset_balance(
+            metadata.account_id("Brokerage").unwrap(),
+            metadata.asset_id("Stock").unwrap(),
+        ),
+        Some(300.0)
+    );
 }
 
 /// Test full simulation setup with builder

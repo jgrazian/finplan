@@ -3,7 +3,7 @@ use crate::error::{LookupError, Result, SimulationError};
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, Event, EventEffect, EventId,
     EventTrigger, LedgerEntry, Market, ParameterId, ParameterValue, ReturnProfileId, RmdTable,
-    SimulationWarning, StateEvent, TaxConfig, TaxSummary, TransferAmount, WealthSnapshot,
+    SimulationWarning, StateEvent, TaxConfig, TaxSummary, WealthSnapshot,
 };
 use rand::SeedableRng;
 use rustc_hash::FxHashMap;
@@ -837,7 +837,7 @@ fn bind_event_parameters(
 ) -> std::result::Result<(), SimulationError> {
     bind_trigger_parameters(&mut event.trigger, parameters, birth_date)?;
     for effect in &mut event.effects {
-        bind_effect_parameters(effect, parameters)?;
+        bind_effect_parameters(effect, parameters, birth_date)?;
     }
     Ok(())
 }
@@ -845,6 +845,7 @@ fn bind_event_parameters(
 fn bind_effect_parameters(
     effect: &mut EventEffect,
     parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
+    birth_date: Option<jiff::civil::Date>,
 ) -> std::result::Result<(), SimulationError> {
     match effect {
         EventEffect::Income { amount, .. }
@@ -854,19 +855,17 @@ fn bind_effect_parameters(
         | EventEffect::Sweep { amount, .. }
         | EventEffect::AdjustBalance { amount, .. }
         | EventEffect::CashTransfer { amount, .. } => {
-            if amount_types(amount, parameters)? & MONEY == 0 {
-                return Err(SimulationError::Config(
-                    "transfer amount must have Money type".into(),
-                ));
-            }
-            bind_amount_parameters(amount, parameters)
+            *amount = amount
+                .bind_parameters(parameters, birth_date)
+                .map_err(|error| SimulationError::Config(error.to_string()))?;
+            Ok(())
         }
         EventEffect::Random {
             on_true, on_false, ..
         } => {
-            bind_effect_parameters(on_true, parameters)?;
+            bind_effect_parameters(on_true, parameters, birth_date)?;
             if let Some(on_false) = on_false {
-                bind_effect_parameters(on_false, parameters)?;
+                bind_effect_parameters(on_false, parameters, birth_date)?;
             }
             Ok(())
         }
@@ -878,109 +877,6 @@ fn bind_effect_parameters(
         | EventEffect::TerminateEvent(_)
         | EventEffect::ApplyRmd { .. }
         | EventEffect::RsuVesting { .. } => Ok(()),
-    }
-}
-
-fn bind_amount_parameters(
-    amount: &mut TransferAmount,
-    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
-) -> std::result::Result<(), SimulationError> {
-    match amount {
-        TransferAmount::Parameter(id) => {
-            let value = parameters.get(id).copied().ok_or_else(|| {
-                SimulationError::Config(format!("amount references missing parameter {id:?}"))
-            })?;
-            let number = match value {
-                ParameterValue::Money(v) | ParameterValue::Rate(v) => v,
-                _ => {
-                    return Err(SimulationError::Config(format!(
-                        "parameter {id:?} cannot be used as an amount"
-                    )));
-                }
-            };
-            *amount = TransferAmount::Fixed(number);
-            Ok(())
-        }
-        TransferAmount::InflationAdjusted(inner) | TransferAmount::Scale(_, inner) => {
-            bind_amount_parameters(inner, parameters)
-        }
-        TransferAmount::Min(left, right)
-        | TransferAmount::Max(left, right)
-        | TransferAmount::Sub(left, right)
-        | TransferAmount::Add(left, right)
-        | TransferAmount::Mul(left, right) => {
-            bind_amount_parameters(left, parameters)?;
-            bind_amount_parameters(right, parameters)
-        }
-        TransferAmount::Fixed(_)
-        | TransferAmount::SourceBalance
-        | TransferAmount::ZeroTargetBalance
-        | TransferAmount::TargetToBalance(_)
-        | TransferAmount::AssetBalance { .. }
-        | TransferAmount::AccountTotalBalance { .. }
-        | TransferAmount::AccountCashBalance { .. } => Ok(()),
-    }
-}
-
-const MONEY: u8 = 1;
-const RATE: u8 = 2;
-
-/// A Fixed literal can stand for money or a scalar rate, as existing amount
-/// expressions used it both ways. Typed parameters retain their declared kind.
-fn amount_types(
-    amount: &TransferAmount,
-    parameters: &std::collections::HashMap<ParameterId, ParameterValue>,
-) -> std::result::Result<u8, SimulationError> {
-    use TransferAmount as A;
-    let kinds = match amount {
-        A::Fixed(_) => MONEY | RATE,
-        A::Parameter(id) => match parameters.get(id) {
-            Some(ParameterValue::Money(_)) => MONEY,
-            Some(ParameterValue::Rate(_)) => RATE,
-            Some(_) => {
-                return Err(SimulationError::Config(format!(
-                    "parameter {id:?} cannot be used as an amount"
-                )));
-            }
-            None => {
-                return Err(SimulationError::Config(format!(
-                    "amount references missing parameter {id:?}"
-                )));
-            }
-        },
-        A::InflationAdjusted(inner) => amount_types(inner, parameters)? & MONEY,
-        A::Scale(_, inner) => amount_types(inner, parameters)?,
-        A::SourceBalance
-        | A::ZeroTargetBalance
-        | A::TargetToBalance(_)
-        | A::AssetBalance { .. }
-        | A::AccountTotalBalance { .. }
-        | A::AccountCashBalance { .. } => MONEY,
-        A::Min(a, b) | A::Max(a, b) | A::Sub(a, b) | A::Add(a, b) => {
-            let left = amount_types(a, parameters)?;
-            let right = amount_types(b, parameters)?;
-            left & right
-        }
-        A::Mul(a, b) => {
-            let left = amount_types(a, parameters)?;
-            let right = amount_types(b, parameters)?;
-            let mut result = 0;
-            if (left & MONEY != 0 && right & RATE != 0) || (left & RATE != 0 && right & MONEY != 0)
-            {
-                result |= MONEY;
-            }
-            if left & RATE != 0 && right & RATE != 0 {
-                result |= RATE;
-            }
-            result
-        }
-    };
-    if kinds == 0 {
-        Err(SimulationError::Config(
-            "incompatible types in transfer amount expression".into(),
-        ))
-    } else {
-        Ok(kinds)
     }
 }
 

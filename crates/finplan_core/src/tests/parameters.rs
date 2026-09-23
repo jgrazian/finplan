@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::apply::process_events;
 use crate::config::SimulationBuilder;
 use crate::config::SimulationConfig;
+use crate::expression::EvaluationContext;
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, CalendarAge, Cash, Event, EventEffect, EventId,
     EventTrigger, IncomeType, InflationProfile, ParameterId, ParameterValue, RepeatInterval,
@@ -40,12 +41,8 @@ fn config_with_amount(amount: TransferAmount) -> SimulationConfig {
 #[test]
 fn parameter_references_bind_in_nested_expressions_and_preserve_config() {
     let id = ParameterId(7);
-    let mut config = config_with_amount(TransferAmount::InflationAdjusted(Box::new(
-        TransferAmount::Mul(
-            Box::new(TransferAmount::parameter(id)),
-            Box::new(TransferAmount::Fixed(2.0)),
-        ),
-    )));
+    let original_amount = TransferAmount::scaled(2.0, TransferAmount::parameter(id)).inflated();
+    let mut config = config_with_amount(original_amount.clone());
     config.parameters.insert(id, ParameterValue::Money(125.0));
     let original_config = serde_json::to_value(&config).unwrap();
 
@@ -54,27 +51,25 @@ fn parameter_references_bind_in_nested_expressions_and_preserve_config() {
     let EventEffect::AdjustBalance { amount, .. } = &bound.effects[0] else {
         panic!("expected balance adjustment")
     };
-    assert!(matches!(
-        amount,
-        TransferAmount::InflationAdjusted(inner)
-            if matches!(**inner, TransferAmount::Mul(ref left, ref right)
-                if matches!(**left, TransferAmount::Fixed(125.0))
-                    && matches!(**right, TransferAmount::Fixed(2.0)))
-    ));
+    assert_eq!(
+        amount
+            .expression()
+            .evaluate(&EvaluationContext::new(&state))
+            .unwrap(),
+        250.0
+    );
     assert_eq!(serde_json::to_value(&config).unwrap(), original_config);
-    assert!(matches!(
-        config.events[0].effects[0],
-        EventEffect::AdjustBalance {
-            amount: TransferAmount::InflationAdjusted(_),
-            ..
-        }
-    ));
+    let EventEffect::AdjustBalance { amount, .. } = &config.events[0].effects[0] else {
+        panic!("expected balance adjustment")
+    };
+    assert_eq!(
+        serde_json::to_value(amount).unwrap(),
+        serde_json::to_value(original_amount).unwrap()
+    );
 
     let parameter_result = simulate(&config, 5).unwrap();
     let literal_result = simulate(
-        &config_with_amount(TransferAmount::InflationAdjusted(Box::new(
-            TransferAmount::Fixed(250.0),
-        ))),
+        &config_with_amount(TransferAmount::fixed(250.0).inflated()),
         5,
     )
     .unwrap();
@@ -91,7 +86,7 @@ fn parameter_references_bind_in_nested_expressions_and_preserve_config() {
 #[test]
 fn shared_references_in_both_random_branches_match_literal_monte_carlo() {
     let id = ParameterId(4);
-    let mut parameterized = config_with_amount(TransferAmount::Fixed(0.0));
+    let mut parameterized = config_with_amount(TransferAmount::fixed(0.0));
     parameterized
         .parameters
         .insert(id, ParameterValue::Money(80.0));
@@ -99,11 +94,11 @@ fn shared_references_in_both_random_branches_match_literal_monte_carlo() {
         probability: 0.5,
         on_true: Box::new(EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::InflationAdjusted(Box::new(TransferAmount::parameter(id))),
+            amount: TransferAmount::parameter(id).inflated(),
         }),
         on_false: Some(Box::new(EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::Scale(2.0, Box::new(TransferAmount::parameter(id))),
+            amount: TransferAmount::scaled(2.0, TransferAmount::parameter(id)),
         })),
     }];
     parameterized.events.push(Event {
@@ -111,24 +106,21 @@ fn shared_references_in_both_random_branches_match_literal_monte_carlo() {
         trigger: EventTrigger::Date(jiff::civil::date(2025, 1, 1)),
         effects: vec![EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::Add(
-                Box::new(TransferAmount::Fixed(0.0)),
-                Box::new(TransferAmount::parameter(id)),
-            ),
+            amount: TransferAmount::fixed(0.0).plus(TransferAmount::parameter(id)),
         }],
         once: true,
     });
 
-    let mut literal = config_with_amount(TransferAmount::Fixed(0.0));
+    let mut literal = config_with_amount(TransferAmount::fixed(0.0));
     literal.events[0].effects = vec![EventEffect::Random {
         probability: 0.5,
         on_true: Box::new(EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::InflationAdjusted(Box::new(TransferAmount::Fixed(80.0))),
+            amount: TransferAmount::fixed(80.0).inflated(),
         }),
         on_false: Some(Box::new(EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::Scale(2.0, Box::new(TransferAmount::Fixed(80.0))),
+            amount: TransferAmount::scaled(2.0, TransferAmount::fixed(80.0)),
         })),
     }];
     literal.events.push(Event {
@@ -136,10 +128,7 @@ fn shared_references_in_both_random_branches_match_literal_monte_carlo() {
         trigger: EventTrigger::Date(jiff::civil::date(2025, 1, 1)),
         effects: vec![EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::Add(
-                Box::new(TransferAmount::Fixed(0.0)),
-                Box::new(TransferAmount::Fixed(80.0)),
-            ),
+            amount: TransferAmount::fixed(0.0).plus(TransferAmount::fixed(80.0)),
         }],
         once: true,
     });
@@ -196,16 +185,11 @@ fn parameterized_rate_uses_the_current_balance_and_inflation_at_event_time() {
             },
             effects: vec![EventEffect::Income {
                 to: AccountId(1),
-                amount: TransferAmount::Add(
-                    Box::new(TransferAmount::InflationAdjusted(Box::new(
-                        TransferAmount::parameter(amount_id),
-                    ))),
-                    Box::new(TransferAmount::Mul(
-                        Box::new(TransferAmount::parameter(rate_id)),
-                        Box::new(TransferAmount::AccountCashBalance {
-                            account_id: AccountId(1),
-                        }),
-                    )),
+                amount: TransferAmount::parameter(amount_id).inflated().plus(
+                    TransferAmount::scaled_rate(
+                        rate_id,
+                        TransferAmount::cash_balance(AccountId(1)),
+                    ),
                 ),
                 amount_mode: AmountMode::Gross,
                 income_type: IncomeType::TaxFree,
@@ -241,16 +225,16 @@ fn parameterized_rate_uses_the_current_balance_and_inflation_at_event_time() {
 #[test]
 fn missing_reference_in_unselected_random_branch_fails_during_initialization() {
     let missing = ParameterId(22);
-    let mut config = config_with_amount(TransferAmount::Fixed(10.0));
+    let mut config = config_with_amount(TransferAmount::fixed(10.0));
     config.events[0].effects = vec![EventEffect::Random {
         probability: 1.0,
         on_true: Box::new(EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::Fixed(10.0),
+            amount: TransferAmount::fixed(10.0),
         }),
         on_false: Some(Box::new(EventEffect::AdjustBalance {
             account: AccountId(1),
-            amount: TransferAmount::Scale(0.5, Box::new(TransferAmount::parameter(missing))),
+            amount: TransferAmount::scaled(0.5, TransferAmount::parameter(missing)),
         })),
     }];
 
@@ -258,7 +242,7 @@ fn missing_reference_in_unselected_random_branch_fails_during_initialization() {
     assert!(
         error
             .to_string()
-            .contains("missing parameter ParameterId(22)")
+            .contains("missing or invalid parameter ParameterId(22)")
     );
 }
 
@@ -278,7 +262,7 @@ fn non_finite_parameters_are_rejected_even_when_unused() {
 fn numeric_optimizer_changes_only_the_target_parameter() {
     let a = ParameterId(1);
     let b = ParameterId(2);
-    let mut config = config_with_amount(TransferAmount::Fixed(77.0));
+    let mut config = config_with_amount(TransferAmount::fixed(77.0));
     config.parameters = HashMap::from([
         (a, ParameterValue::Money(10.0)),
         (b, ParameterValue::Rate(20.0)),
@@ -297,13 +281,10 @@ fn numeric_optimizer_changes_only_the_target_parameter() {
     assert_eq!(updated.parameters[&a], ParameterValue::Money(12.5));
     assert_eq!(updated.parameters[&b], ParameterValue::Rate(20.0));
     assert_eq!(config.parameters[&a], ParameterValue::Money(10.0));
-    assert!(matches!(
-        updated.events[0].effects[0],
-        EventEffect::AdjustBalance {
-            amount: TransferAmount::Fixed(77.0),
-            ..
-        }
-    ));
+    assert_eq!(
+        serde_json::to_value(&updated.events[0].effects[0]).unwrap(),
+        serde_json::to_value(&config.events[0].effects[0]).unwrap()
+    );
     assert!(
         apply_parameters(
             &config,
@@ -331,7 +312,7 @@ fn numeric_optimizer_changes_only_the_target_parameter() {
 }
 
 #[test]
-fn parameter_config_serialization_is_backward_compatible_and_round_trips() {
+fn parameter_config_serialization_round_trips() {
     let id = ParameterId(9);
     let mut config = config_with_amount(TransferAmount::parameter(id));
     config.parameters.insert(id, ParameterValue::Money(4.25));
@@ -339,13 +320,13 @@ fn parameter_config_serialization_is_backward_compatible_and_round_trips() {
     let encoded = serde_json::to_value(&config).unwrap();
     let decoded: SimulationConfig = serde_json::from_value(encoded.clone()).unwrap();
     assert_eq!(decoded.parameters[&id], ParameterValue::Money(4.25));
-    assert!(matches!(
-        decoded.events[0].effects[0],
-        EventEffect::AdjustBalance {
-            amount: TransferAmount::Parameter(ParameterId(9)),
-            ..
-        }
-    ));
+    assert_eq!(serde_json::to_value(&decoded).unwrap(), encoded);
+    assert_eq!(
+        simulate(&decoded, 1)
+            .unwrap()
+            .final_account_balance(AccountId(1)),
+        Some(4.25)
+    );
 
     let mut legacy = encoded;
     legacy.as_object_mut().unwrap().remove("parameters");
@@ -377,19 +358,21 @@ fn builder_registers_and_resolves_parameter_names() {
 
 #[test]
 fn typed_arithmetic_accepts_money_times_rate_and_rejects_mismatches() {
-    let money = ParameterId(1);
-    let rate = ParameterId(2);
-    let mut config = config_with_amount(TransferAmount::Mul(
-        Box::new(TransferAmount::parameter(money)),
-        Box::new(TransferAmount::Mul(
-            Box::new(TransferAmount::parameter(rate)),
-            Box::new(TransferAmount::Fixed(2.0)),
-        )),
+    use crate::expression::compile_amount;
+
+    let (parameter_config, metadata) = SimulationBuilder::new()
+        .parameter("money", ParameterValue::Money(100.0))
+        .parameter("rate", ParameterValue::Rate(0.05))
+        .parameter("date", ParameterValue::Date(jiff::civil::date(2025, 2, 15)))
+        .parameter("age", ParameterValue::Age(CalendarAge::years(65)))
+        .build();
+    let money = metadata.parameter_id("money").unwrap();
+    let rate = metadata.parameter_id("rate").unwrap();
+    let mut config = config_with_amount(TransferAmount::scaled_rate(
+        rate,
+        TransferAmount::scaled(2.0, TransferAmount::parameter(money)),
     ));
-    config
-        .parameters
-        .insert(money, ParameterValue::Money(100.0));
-    config.parameters.insert(rate, ParameterValue::Rate(0.05));
+    config.parameters = parameter_config.parameters;
     assert_eq!(
         simulate(&config, 3)
             .unwrap()
@@ -397,63 +380,38 @@ fn typed_arithmetic_accepts_money_times_rate_and_rejects_mismatches() {
         Some(10.0)
     );
 
-    for amount in [
-        TransferAmount::Add(
-            Box::new(TransferAmount::parameter(money)),
-            Box::new(TransferAmount::parameter(rate)),
-        ),
-        TransferAmount::Mul(
-            Box::new(TransferAmount::parameter(money)),
-            Box::new(TransferAmount::parameter(money)),
-        ),
-        TransferAmount::parameter(rate),
+    for source in [
+        "$money + $rate",
+        "$money * $money",
+        "$rate",
+        "$date",
+        "$age",
     ] {
-        config.events[0].effects = vec![EventEffect::AdjustBalance {
-            account: AccountId(1),
-            amount,
-        }];
-        assert!(SimulationState::from_parameters(&config, 3).is_err());
-    }
-    for value in [
-        ParameterValue::Date(jiff::civil::date(2025, 2, 15)),
-        ParameterValue::Age(CalendarAge::years(65)),
-    ] {
-        config.parameters.insert(ParameterId(3), value);
-        config.events[0].effects = vec![EventEffect::AdjustBalance {
-            account: AccountId(1),
-            amount: TransferAmount::parameter(ParameterId(3)),
-        }];
-        assert!(SimulationState::from_parameters(&config, 3).is_err());
+        assert!(
+            compile_amount(source, &metadata, &config.parameters).is_err(),
+            "{source} should not compile as a Money amount"
+        );
     }
     config.events[0].effects = vec![EventEffect::AdjustBalance {
         account: AccountId(1),
-        amount: TransferAmount::Mul(
-            Box::new(TransferAmount::parameter(money)),
-            Box::new(TransferAmount::Scale(
-                2.0,
-                Box::new(TransferAmount::parameter(rate)),
-            )),
-        ),
+        amount: TransferAmount::parameter(rate),
+    }];
+    assert!(SimulationState::from_parameters(&config, 3).is_err());
+    config.events[0].effects = vec![EventEffect::AdjustBalance {
+        account: AccountId(1),
+        amount: TransferAmount::scaled_rate(rate, TransferAmount::fixed(100.0)),
     }];
     assert_eq!(
         simulate(&config, 3)
             .unwrap()
             .final_account_balance(AccountId(1)),
-        Some(10.0)
+        Some(5.0)
     );
-    config.events[0].effects = vec![EventEffect::AdjustBalance {
-        account: AccountId(1),
-        amount: TransferAmount::Mul(
-            Box::new(TransferAmount::parameter(rate)),
-            Box::new(TransferAmount::Fixed(100.0)),
-        ),
-    }];
-    assert!(SimulationState::from_parameters(&config, 3).is_ok());
 }
 
 #[test]
 fn typed_values_round_trip_and_legacy_numbers_become_money() {
-    let mut config = config_with_amount(TransferAmount::Fixed(1.0));
+    let mut config = config_with_amount(TransferAmount::fixed(1.0));
     config.parameters = HashMap::from([
         (ParameterId(1), ParameterValue::Money(100.0)),
         (ParameterId(2), ParameterValue::Rate(-0.5)),
@@ -477,7 +435,7 @@ fn typed_values_round_trip_and_legacy_numbers_become_money() {
 
 #[test]
 fn overrides_and_optimizer_preserve_parameter_kinds() {
-    let mut config = config_with_amount(TransferAmount::Fixed(1.0));
+    let mut config = config_with_amount(TransferAmount::fixed(1.0));
     let rate = ParameterId(1);
     let date = ParameterId(2);
     let age = ParameterId(3);
@@ -537,7 +495,7 @@ fn overrides_and_optimizer_preserve_parameter_kinds() {
 
 #[test]
 fn calendar_parameters_bind_nested_recurring_conditions_on_exact_dates() {
-    let mut config = config_with_amount(TransferAmount::Fixed(10.0));
+    let mut config = config_with_amount(TransferAmount::fixed(10.0));
     config.duration_years = 1;
     config.birth_date = Some(jiff::civil::date(1960, 1, 15));
     let start = ParameterId(1);
@@ -614,7 +572,7 @@ fn calendar_parameters_bind_nested_recurring_conditions_on_exact_dates() {
 
 #[test]
 fn two_parameterized_ages_in_one_recurring_event_remain_distinct() {
-    let mut config = config_with_amount(TransferAmount::Fixed(10.0));
+    let mut config = config_with_amount(TransferAmount::fixed(10.0));
     config.birth_date = Some(jiff::civil::date(1960, 1, 15));
     config
         .parameters
@@ -680,7 +638,7 @@ fn two_parameterized_ages_in_one_recurring_event_remain_distinct() {
 
 #[test]
 fn recurring_date_parameter_stops_between_scheduled_occurrences() {
-    let mut config = config_with_amount(TransferAmount::Fixed(10.0));
+    let mut config = config_with_amount(TransferAmount::fixed(10.0));
     let end = ParameterId(1);
     config
         .parameters
@@ -710,7 +668,7 @@ fn recurring_date_parameter_stops_between_scheduled_occurrences() {
 #[test]
 fn invalid_calendar_references_fail_before_run() {
     let id = ParameterId(1);
-    let mut config = config_with_amount(TransferAmount::Fixed(1.0));
+    let mut config = config_with_amount(TransferAmount::fixed(1.0));
     config.events[0].trigger = EventTrigger::AgeParameter(id);
     config
         .parameters
@@ -747,7 +705,7 @@ fn optimization_target(id: u16, min: ParameterValue, max: ParameterValue) -> Opt
 #[test]
 fn optimizer_applies_all_types_without_rewriting_scenario() {
     use ParameterValue::{Age, Date, Money, Rate};
-    let mut config = config_with_amount(TransferAmount::Fixed(77.0));
+    let mut config = config_with_amount(TransferAmount::fixed(77.0));
     config.parameters = HashMap::from([
         (ParameterId(0), Money(20.0)),
         (ParameterId(1), Rate(0.05)),
@@ -795,7 +753,7 @@ fn optimizer_rejects_invalid_targets_and_candidates() {
         OptimizationConfig, optimize_binary_search, optimize_grid_search, optimize_nelder_mead,
     };
     use ParameterValue::{Age, Money, Rate};
-    let mut config = config_with_amount(TransferAmount::Fixed(1.0));
+    let mut config = config_with_amount(TransferAmount::fixed(1.0));
     config.parameters.insert(ParameterId(0), Money(10.0));
     let valid = optimization_target(0, Money(0.0), Money(20.0));
     let invalid_targets = vec![
@@ -852,10 +810,7 @@ fn continuous_optimizers_return_reusable_typed_results() {
     ] {
         let amount = match initial {
             ParameterValue::Money(_) => TransferAmount::parameter(ParameterId(0)),
-            _ => TransferAmount::Mul(
-                Box::new(TransferAmount::Fixed(100.0)),
-                Box::new(TransferAmount::parameter(ParameterId(0))),
-            ),
+            _ => TransferAmount::scaled_rate(ParameterId(0), TransferAmount::fixed(100.0)),
         };
         let mut config = config_with_amount(amount);
         config.parameters.insert(ParameterId(0), initial);
@@ -909,7 +864,7 @@ fn calendar_optimization_changes_schedules_and_reports_exact_values() {
             EventTrigger::AgeParameter(ParameterId(0)),
         ),
     ] {
-        let mut config = config_with_amount(TransferAmount::Fixed(100.0));
+        let mut config = config_with_amount(TransferAmount::fixed(100.0));
         config.birth_date = Some(jiff::civil::date(1960, 1, 1));
         config.parameters.insert(ParameterId(0), min);
         config.events[0].trigger = EventTrigger::Repeating {
@@ -960,9 +915,9 @@ fn mixed_parameter_grid_optimizes_amounts_and_schedules_together() {
         OptimizationAlgorithm, OptimizationConfig, optimize, optimize_grid_search,
     };
     use ParameterValue::{Age, Date, Money, Rate};
-    let mut config = config_with_amount(TransferAmount::Mul(
-        Box::new(TransferAmount::parameter(ParameterId(0))),
-        Box::new(TransferAmount::parameter(ParameterId(1))),
+    let mut config = config_with_amount(TransferAmount::scaled_rate(
+        ParameterId(1),
+        TransferAmount::parameter(ParameterId(0)),
     ));
     config.birth_date = Some(jiff::civil::date(1960, 1, 1));
     config.parameters = HashMap::from([
