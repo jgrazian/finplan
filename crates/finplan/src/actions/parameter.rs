@@ -123,13 +123,19 @@ pub fn handle(
                     return ActionResult::error("Parameter no longer exists");
                 };
                 if kind(old.value) != selected_kind
-                    && !state.data().parameter_references(&old.name).is_empty()
+                    && (!state.data().parameter_references(&old.name).is_empty()
+                        || used_by_analysis(state, &old.name))
                 {
                     return ActionResult::error(
-                        "This parameter is used by events. Remove its references before changing its type.",
+                        "This parameter is used by events or analysis. Remove its references before changing its type.",
                     );
                 }
                 state.data_mut().rename_parameter(&old.name, &name);
+                for sweep in &mut state.analysis_state.sweep_parameters {
+                    if sweep.parameter_name == old.name {
+                        sweep.parameter_name = name.clone();
+                    }
+                }
                 state.data_mut().named_parameters[index] = NamedParameterData {
                     name,
                     value: parsed,
@@ -142,12 +148,19 @@ pub fn handle(
                 state.events_state.selected_parameter_index =
                     state.data().named_parameters.len() - 1;
             }
+            state.analysis_state.results = None;
+            state.analysis_state.results_fingerprint = None;
             ActionResult::modified()
         }
         ParameterAction::Delete { index } => {
             let Some(parameter) = state.data().named_parameters.get(index) else {
                 return ActionResult::close();
             };
+            if used_by_analysis(state, &parameter.name) {
+                return ActionResult::error(
+                    "This parameter is selected in Analysis. Remove its sweep before deleting it.",
+                );
+            }
             let refs = state.data().parameter_references(&parameter.name);
             if !refs.is_empty() {
                 return ActionResult::error(format!(
@@ -162,6 +175,15 @@ pub fn handle(
         }
     }
 }
+fn used_by_analysis(state: &AppState, name: &str) -> bool {
+    // Runtime analysis is authoritative for the current scenario; sync to disk on save.
+    state
+        .analysis_state
+        .sweep_parameters
+        .iter()
+        .any(|sweep| sweep.parameter_name == name)
+}
+
 fn show_form(state: &AppState, index: Option<usize>, wanted: ParameterKind) -> ActionResult {
     let current = index.and_then(|i| state.data().named_parameters.get(i));
     let value = current.filter(|p| kind(p.value) == wanted).map(|p| p.value);
@@ -343,5 +365,68 @@ mod tests {
             ActionResult::Modified(_)
         ));
         assert_eq!(state.data().named_parameters.len(), 3);
+    }
+    #[test]
+    fn analysis_references_follow_renames_and_protect_parameter_type_and_deletion() {
+        use crate::data::analysis_data::SweepParameterData;
+        let mut state = AppState::new();
+        submit(&mut state, None, ParameterKind::Money, &["Pay", "100"]);
+        state
+            .analysis_state
+            .sweep_parameters
+            .push(SweepParameterData {
+                parameter_name: "Pay".into(),
+                min_value: ParameterValue::Money(50.0),
+                max_value: ParameterValue::Money(150.0),
+                step_count: 3,
+            });
+        state.save_analysis_to_current_scenario();
+        assert!(matches!(
+            handle(
+                &mut state,
+                ParameterAction::Delete { index: 0 },
+                &ConfirmedValue::Confirm
+            ),
+            ActionResult::Error(_)
+        ));
+        assert!(matches!(
+            submit(&mut state, Some(0), ParameterKind::Rate, &["Pay", "4"]),
+            ActionResult::Error(_)
+        ));
+        assert!(matches!(
+            submit(
+                &mut state,
+                Some(0),
+                ParameterKind::Money,
+                &["Monthly Pay", "200"]
+            ),
+            ActionResult::Modified(_)
+        ));
+        assert_eq!(
+            state.analysis_state.sweep_parameters[0].parameter_name,
+            "Monthly Pay"
+        );
+        assert_eq!(
+            state.data().analysis.sweep_parameters[0].parameter_name,
+            "Monthly Pay"
+        );
+        state
+            .data_mut()
+            .rename_event("Monthly Pay", "Renamed event");
+        assert_eq!(
+            state.data().analysis.sweep_parameters[0].parameter_name,
+            "Monthly Pay"
+        );
+        state.analysis_state.sweep_parameters.clear();
+        assert!(matches!(
+            handle(
+                &mut state,
+                ParameterAction::Delete { index: 0 },
+                &ConfirmedValue::Confirm
+            ),
+            ActionResult::Modified(_)
+        ));
+        state.save_analysis_to_current_scenario();
+        assert!(state.data().analysis.sweep_parameters.is_empty());
     }
 }

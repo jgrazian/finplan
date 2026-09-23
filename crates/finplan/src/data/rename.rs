@@ -13,6 +13,7 @@ impl SimulationData {
         if old_name == new_name {
             return;
         }
+        super::expressions::rename_account_expressions(self, old_name, new_name);
         for event in &mut self.events {
             rename_account_in_trigger(&mut event.trigger, old_name, new_name);
             for effect in &mut event.effects {
@@ -30,12 +31,6 @@ impl SimulationData {
             rename_event_in_trigger(&mut event.trigger, old_name, new_name);
             for effect in &mut event.effects {
                 rename_event_in_effect(effect, old_name, new_name);
-            }
-        }
-        // Update sweep parameters
-        for sweep in &mut self.analysis.sweep_parameters {
-            if sweep.event_name == old_name {
-                sweep.event_name = new_name.to_string();
             }
         }
     }

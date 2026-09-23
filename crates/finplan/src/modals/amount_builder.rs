@@ -190,6 +190,7 @@ impl AmountBuilderState {
 /// Format an AmountData as a human-readable summary
 pub fn format_amount_summary(amount: &AmountData) -> String {
     match amount {
+        AmountData::Expression { source } => source.clone(),
         AmountData::Parameter { name } => format!("Parameter: {}", name),
         AmountData::RateTimes { rate, inner } => format!(
             "{} × {}",
@@ -218,6 +219,7 @@ pub fn format_amount_summary(amount: &AmountData) -> String {
 /// Format the base (non-wrapper) part of an amount for Scale display
 fn format_base_amount(amount: &AmountData) -> String {
     match amount {
+        AmountData::Expression { source } => source.clone(),
         AmountData::Parameter { name } => format!("Parameter: {}", name),
         AmountData::RateTimes { rate, inner } => format!(
             "{} × {}",

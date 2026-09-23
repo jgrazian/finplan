@@ -6,10 +6,12 @@ Core builders, analysis, optimization, examples, and benchmarks use it directly.
 The old amount enum and its loading format have been removed; no compatibility
 loader is provided. No new dependencies are required.
 
-The TUI and server still use the removed API and need a separate migration,
-including the website's request/storage shapes and editors. The core builds and
-tests independently with `cargo test -p finplan_core`; this change intentionally
-does not promise a working whole-workspace build.
+The TUI supports static/expression amount fields, parameter completion, and
+compilation of saved source (see `04_tui_application.md`). The server still uses
+the removed API and needs a separate migration, including the website's
+request/storage shapes and editors. The TUI and core can be tested with
+`cargo test -p finplan -p finplan_core`; the server migration is required for a
+working whole-workspace build.
 
 ## Syntax
 
@@ -236,10 +238,10 @@ has been removed. New rules should use the intended semantics directly.
 Use `payoff()` for debt payoff; `target_balance()` reads an endpoint and does not
 negate it. This removes the old `ZeroTargetBalance` variant's misleading semantics.
 
-Next UI integration work:
+Remaining server/web integration work:
 
-1. Add expression source to the server's request/storage schema and TUI saved
-   amount model. Compile with their shared name/ID metadata and typed parameters.
+1. Add expression source to the server's request/storage schema. Compile with
+   shared name/ID metadata and typed parameters.
 2. Replace the recursive editors with a text field, reference/function completion,
    syntax help, and span-based errors. Use `to_source` to render compiled amounts.
 3. Route gross/net annotations through `apply_to`, avoiding duplicated/conflicting

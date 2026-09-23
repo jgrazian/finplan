@@ -42,7 +42,7 @@ pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
     for _ in &modal.fields {
         constraints.push(Constraint::Length(4)); // Each field: 1 label + 3 input box
     }
-    constraints.push(Constraint::Min(1)); // Spacing
+    constraints.push(Constraint::Min(2)); // Error or expression example
     constraints.push(Constraint::Length(2)); // Help text (2 lines)
 
     let chunks = Layout::default()
@@ -55,36 +55,85 @@ pub fn render_form_modal(frame: &mut Frame, modal: &FormModal) {
         let is_focused = idx == modal.focused_field;
         let chunk_idx = idx + 1;
 
-        render_field(frame, chunks[chunk_idx], field, is_focused, modal.editing);
+        render_field(
+            frame,
+            chunks[chunk_idx],
+            field,
+            is_focused,
+            modal.editing && modal.amount_help.is_none(),
+        );
     }
+
+    let expression_editing = modal.editing
+        && modal
+            .fields
+            .get(modal.focused_field)
+            .and_then(|f| f.amount_input.as_ref())
+            .is_some_and(|input| input.expression);
+    let status = modal.error.clone().unwrap_or_else(|| {
+        if expression_editing {
+            "Example: inflation($Spending) or 4% * balance(\"Vanguard\")".into()
+        } else {
+            String::new()
+        }
+    });
+    frame.render_widget(
+        Paragraph::new(status)
+            .style(Style::default().fg(if modal.error.is_some() {
+                Color::Red
+            } else {
+                Color::DarkGray
+            }))
+            .wrap(ratatui::widgets::Wrap { trim: false }),
+        chunks[modal.fields.len() + 1],
+    );
 
     // Render help text at the bottom
     let help_idx = modal.fields.len() + 2;
-    let help = if modal.editing {
+    let help_available = super::amount_help::available(modal);
+    let help = if expression_editing {
+        MultiLineHelp::new()
+            .line(
+                HelpText::new()
+                    .key("[Tab/Shift+Tab]", Color::Cyan, "Complete variable")
+                    .key("[Enter]", Color::Green, "Done"),
+            )
+            .line(
+                HelpText::new()
+                    .key("[F10/Ctrl+S]", Color::Cyan, "Submit")
+                    .key("[Esc]", Color::Yellow, "Revert edit")
+                    .key("[?]", Color::Cyan, "Expressions"),
+            )
+            .build()
+    } else if modal.editing {
+        let mut editing_help = HelpText::new()
+            .key("[Enter]", Color::Green, "Done field")
+            .key("[Esc]", Color::Yellow, "Cancel");
+        if help_available {
+            editing_help = editing_help.key("[?]", Color::Cyan, "Expressions");
+        }
         MultiLineHelp::new()
             .line(
                 HelpText::new()
                     .key("EDITING:", Color::Cyan, "Type to enter text")
                     .key("[F10/Ctrl+S]", Color::Cyan, "Submit"),
             )
-            .line(
-                HelpText::new()
-                    .key("[Enter]", Color::Green, "Done field")
-                    .key("[Esc]", Color::Yellow, "Cancel"),
-            )
+            .line(editing_help)
             .build()
     } else {
+        let mut navigation_help = HelpText::new()
+            .key("[F10/Ctrl+S]", Color::Cyan, "Submit")
+            .key("[Esc]", Color::Yellow, "Cancel");
+        if help_available {
+            navigation_help = navigation_help.key("[?]", Color::Cyan, "Expressions");
+        }
         MultiLineHelp::new()
             .line(
                 HelpText::new()
                     .key("[j/k/Tab]", Color::DarkGray, "Navigate")
                     .key("[Enter]", Color::Green, "Edit field"),
             )
-            .line(
-                HelpText::new()
-                    .key("[F10/Ctrl+S]", Color::Cyan, "Submit")
-                    .key("[Esc]", Color::Yellow, "Cancel"),
-            )
+            .line(navigation_help)
             .build()
     };
     frame.render_widget(help, chunks[help_idx]);
@@ -125,7 +174,23 @@ fn render_field(
         FieldType::Select if is_focused => {
             label_spans.push(Span::styled(" [</>]", Style::default().fg(Color::Cyan)));
         }
-        FieldType::Amount(_) | FieldType::Trigger if is_focused => {
+        FieldType::Amount(_) if is_focused => {
+            let expression = field
+                .amount_input
+                .as_ref()
+                .is_some_and(|input| input.expression);
+            let hint = if expression && is_editing {
+                " [Expression: Tab complete]"
+            } else if expression {
+                " [Expression: Enter edit, x static]"
+            } else if is_editing {
+                " [Static: x expression]"
+            } else {
+                " [Static: Enter edit, x expression]"
+            };
+            label_spans.push(Span::styled(hint, Style::default().fg(Color::Cyan)));
+        }
+        FieldType::Trigger if is_focused => {
             label_spans.push(Span::styled(
                 " [Enter to edit]",
                 Style::default().fg(Color::Cyan),
@@ -176,7 +241,26 @@ fn render_field(
     if field.field_type == FieldType::Select {
         render_select_value(frame, input_inner, field, is_focused, fg_color);
     } else if matches!(field.field_type, FieldType::Amount(_)) {
-        render_amount_value(frame, input_inner, field, is_focused, fg_color);
+        if is_focused && is_editing {
+            render_editing_value(frame, input_inner, field);
+        } else {
+            let value = if field
+                .amount_input
+                .as_ref()
+                .is_some_and(|input| input.expression)
+            {
+                format!("= {}", field.value)
+            } else {
+                field
+                    .parsed_amount()
+                    .and_then(|a| a.as_fixed())
+                    .map_or_else(|| field.value.clone(), |v| format!("${v:.2}"))
+            };
+            frame.render_widget(
+                Paragraph::new(value).style(Style::default().fg(fg_color)),
+                input_inner,
+            );
+        }
     } else if field.field_type == FieldType::Trigger {
         render_trigger_value(frame, input_inner, field, is_focused, fg_color);
     } else if is_focused && is_editing && field.field_type != FieldType::ReadOnly {
@@ -216,43 +300,6 @@ fn render_select_value(
         Line::from(Span::styled("(none)", Style::default().fg(Color::DarkGray)))
     } else {
         Line::from(Span::styled(&field.value, Style::default().fg(fg_color)))
-    };
-
-    frame.render_widget(Paragraph::new(line), area);
-}
-
-fn render_amount_value(
-    frame: &mut Frame,
-    area: ratatui::layout::Rect,
-    field: &FormField,
-    is_focused: bool,
-    fg_color: Color,
-) {
-    // Amount fields show their summary value (stored in field.value)
-    // with a hint to press Enter to edit
-    let line = if is_focused {
-        // Truncate if too long for the display area
-        let max_len = area.width.saturating_sub(8) as usize;
-        let display_val = if field.value.len() > max_len {
-            format!("{}...", &field.value[..max_len.saturating_sub(3)])
-        } else {
-            field.value.clone()
-        };
-        Line::from(vec![
-            Span::styled(display_val, Style::default().fg(fg_color)),
-            Span::styled(" [Edit]", Style::default().fg(Color::DarkGray)),
-        ])
-    } else if field.value.is_empty() {
-        Line::from(Span::styled("$0.00", Style::default().fg(Color::DarkGray)))
-    } else {
-        // Truncate for non-focused display too
-        let max_len = area.width as usize;
-        let display_val = if field.value.len() > max_len {
-            format!("{}...", &field.value[..max_len.saturating_sub(3)])
-        } else {
-            field.value.clone()
-        };
-        Line::from(Span::styled(display_val, Style::default().fg(fg_color)))
     };
 
     frame.render_widget(Paragraph::new(line), area);
@@ -367,59 +414,6 @@ fn handle_editing_key(
         // Confirm opens the trigger editor
         if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm) {
             return ModalResult::TriggerFieldActivated(modal.focused_field);
-        }
-        // Cancel closes the modal
-        if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
-            return ModalResult::Cancelled;
-        }
-        // Navigate down (also Tab)
-        if KeybindingsConfig::matches(&key, &keybindings.navigation.down)
-            || KeybindingsConfig::matches(&key, &keybindings.navigation.next_panel)
-        {
-            // Move to next field
-            let start = modal.focused_field;
-            loop {
-                modal.focused_field = (modal.focused_field + 1) % modal.fields.len();
-                if !matches!(
-                    modal.fields[modal.focused_field].field_type,
-                    FieldType::ReadOnly
-                ) || modal.focused_field == start
-                {
-                    break;
-                }
-            }
-            return ModalResult::Continue;
-        }
-        // Navigate up (also Shift+Tab)
-        if KeybindingsConfig::matches(&key, &keybindings.navigation.up)
-            || KeybindingsConfig::matches(&key, &keybindings.navigation.prev_panel)
-        {
-            // Move to previous field
-            let start = modal.focused_field;
-            loop {
-                if modal.focused_field == 0 {
-                    modal.focused_field = modal.fields.len() - 1;
-                } else {
-                    modal.focused_field -= 1;
-                }
-                if !matches!(
-                    modal.fields[modal.focused_field].field_type,
-                    FieldType::ReadOnly
-                ) || modal.focused_field == start
-                {
-                    break;
-                }
-            }
-            return ModalResult::Continue;
-        }
-        return ModalResult::Continue;
-    }
-
-    // Handle Amount fields - Enter opens the amount editor
-    if matches!(field.field_type, FieldType::Amount(_)) {
-        // Confirm opens the amount editor
-        if KeybindingsConfig::matches(&key, &keybindings.navigation.confirm) {
-            return ModalResult::AmountFieldActivated(modal.focused_field);
         }
         // Cancel closes the modal
         if KeybindingsConfig::matches(&key, &keybindings.global.cancel) {
@@ -585,7 +579,10 @@ fn handle_editing_key(
         }
         KeyCode::Backspace => {
             if field.cursor_pos > 0 {
-                field.cursor_pos -= 1;
+                field.cursor_pos = field.value[..field.cursor_pos]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(i, _)| i);
                 field.value.remove(field.cursor_pos);
             }
             ModalResult::Continue
@@ -598,13 +595,20 @@ fn handle_editing_key(
         }
         KeyCode::Left => {
             if field.cursor_pos > 0 {
-                field.cursor_pos -= 1;
+                field.cursor_pos = field.value[..field.cursor_pos]
+                    .char_indices()
+                    .next_back()
+                    .map_or(0, |(i, _)| i);
             }
             ModalResult::Continue
         }
         KeyCode::Right => {
             if field.cursor_pos < field.value.len() {
-                field.cursor_pos += 1;
+                field.cursor_pos += field.value[field.cursor_pos..]
+                    .chars()
+                    .next()
+                    .unwrap()
+                    .len_utf8();
             }
             ModalResult::Continue
         }
@@ -623,15 +627,20 @@ fn handle_editing_key(
                     c.is_ascii_digit() || c == '.' || c == '-'
                 }
                 FieldType::Text => true,
-                FieldType::ReadOnly
-                | FieldType::Select
-                | FieldType::Amount(_)
-                | FieldType::Trigger => false,
+                FieldType::Amount(_) => {
+                    field
+                        .amount_input
+                        .as_ref()
+                        .is_some_and(|input| input.expression)
+                        || c.is_ascii_digit()
+                        || matches!(c, '.' | '-' | '+' | ',' | '$')
+                }
+                FieldType::ReadOnly | FieldType::Select | FieldType::Trigger => false,
             };
 
             if valid {
                 field.value.insert(field.cursor_pos, c);
-                field.cursor_pos += 1;
+                field.cursor_pos += c.len_utf8();
             }
             ModalResult::Continue
         }
@@ -681,12 +690,11 @@ fn handle_navigation_key(
             FieldType::Trigger => {
                 return ModalResult::TriggerFieldActivated(modal.focused_field);
             }
-            // Amount fields open a nested modal for editing
-            FieldType::Amount(_) => {
-                return ModalResult::AmountFieldActivated(modal.focused_field);
-            }
             // Text, Currency, Percentage fields enter inline edit mode
-            FieldType::Text | FieldType::Currency | FieldType::Percentage => {
+            FieldType::Text
+            | FieldType::Currency
+            | FieldType::Percentage
+            | FieldType::Amount(_) => {
                 modal.editing = true;
                 // Store original value for Esc to revert
                 modal.editing_original_value =

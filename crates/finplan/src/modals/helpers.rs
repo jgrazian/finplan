@@ -76,22 +76,18 @@ pub struct ScrolledView {
 /// * `max_width` - Maximum width available for display
 pub fn calculate_scroll(value: &str, cursor_pos: usize, max_width: usize) -> ScrolledView {
     let input_width = max_width.saturating_sub(2);
-
-    if value.len() <= input_width {
-        return ScrolledView {
-            display_value: value.to_string(),
-            cursor_pos,
-        };
-    }
-
-    // Center cursor in visible area
-    let start = cursor_pos.saturating_sub(input_width / 2);
-    let end = (start + input_width).min(value.len());
+    let chars: Vec<char> = value.chars().collect();
+    let cursor = value[..cursor_pos].chars().count();
+    let start = if chars.len() <= input_width {
+        0
+    } else {
+        cursor.saturating_sub(input_width / 2)
+    };
+    let end = (start + input_width).min(chars.len());
     let start = end.saturating_sub(input_width);
-
     ScrolledView {
-        display_value: value[start..end].to_string(),
-        cursor_pos: cursor_pos - start,
+        display_value: chars[start..end].iter().collect(),
+        cursor_pos: cursor - start,
     }
 }
 

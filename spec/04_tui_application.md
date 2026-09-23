@@ -127,24 +127,51 @@ registers typed core values and resolves references by name to `ParameterId`.
 
 Event type lists offer Date and Age triggers. Each editor has a **Value source**
 selector: **Enter value**, or one of the matching Date/Age parameters. The same
-choice appears in recurring start/end conditions. The **Amount** editor offers
-entered money or a Money parameter; the inflation-adjusted amount editor also
-supports both. **Percentage of Account Balance** accepts an entered percentage
-or a Rate parameter and preserves the chosen account. Rates display as percentages
-(4% is stored as 0.04) and multiply the account balance. Return profiles remain
-configured separately. Parameter is no longer a separate amount or trigger type.
+choice appears in recurring start/end conditions.
 
-When a parameter is selected, its current value is shown in grey, read-only
-fields. Switching to Enter value makes those fields editable, using a copy of
+Every effect **Amount** field supports inline static entry and expression mode.
+Press **Enter** to edit the amount or type a number directly; press **x** to enter
+expression mode. Expressions use the core DSL, for example
+`inflation($MonthlySpending)` or `$WithdrawalRate * balance("Vanguard")`.
+**Tab** completes a parameter name after `$`; repeated Tab cycles matches and
+**Shift+Tab** cycles backwards. Names containing spaces are quoted automatically.
+Press **?** on an amount field (in either mode), or while navigating a form with
+amounts, to open scrollable expression help. It includes syntax, variables,
+examples, all built-in functions, and source/target and gross/net rules. Use
+**Up/Down**, **j/k**, **Page Up/Down**, or **Home/End** to scroll; **Esc**, **Enter**,
+or **?** returns to the unchanged form draft, cursor, and completion state.
+**Enter** finishes the field, **F10/Ctrl+S** submits the form, and **Esc** reverts
+an edit. Outside editing, **x** switches modes again and preserves both drafts.
+Compiler errors stay in the form with the entered text and error byte range.
+Outer `gross(...)` / `net(...)` annotations update the Amount Type selection for
+income, sales, and sweeps; other effects reject these annotations.
+
+Existing saved amount builders reopen as editable expressions. New expression
+amounts retain source text in scenario YAML and compile against the same names,
+asset IDs, and typed parameters used by the simulation. This applies to income,
+expenses, purchases, sales, sweeps, balance adjustments, and cash transfers.
+Date/Age pickers and other static settings retain their typed value editors;
+the amount DSL does not define expressions for those settings.
+
+When a parameter is selected in a Date/Age picker, its current value is shown
+in grey, read-only fields. Switching to Enter value makes those fields editable, using a copy of
 the displayed value; it does not change the shared parameter. Existing literal
 values and parameter references are preselected when reopening their editors.
 Changing a parameter's value affects every event referencing it. Renaming updates
 nested references; deleting or changing the type of a referenced parameter is
 blocked until its references are removed, including references in disabled events.
 
-The TUI Analysis tab currently uses the separate core sweep API with event
-and effect targets. It does not call the core `optimization` module; migrating
-analysis authoring to registry parameters is separate work.
+The Analysis tab selects sweep dimensions exclusively from these named Parameters.
+The picker excludes variables already selected for analysis. Range forms use dollars
+for Money, percentages for Rate, YYYY-MM-DD dates for Date, and years/months for Age.
+Date sweeps advance in whole days; Age sweeps advance in whole months. Each sweep
+updates the shared parameter once and rebinds all event references for that run.
+Charts and saved results retain the variable names and their typed units.
+
+Renaming a variable updates its saved and active sweeps. Remove a variable's sweep
+before deleting it or changing its type. Old event-based sweep selections are ignored
+when loading a scenario; choose the corresponding named variables in Analysis.
+The core sweep API still supports event targets for other callers.
 
 ### Results Screen
 

@@ -1,5 +1,9 @@
 //! Analysis configuration data for persistence.
 
+use finplan_core::{
+    model::{ParameterId, ParameterValue},
+    optimization::OptimizableParameter,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -16,7 +20,11 @@ pub struct AnalysisConfigData {
     pub default_steps: usize,
 
     /// Sweep parameters configuration
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_sweep_parameters"
+    )]
     pub sweep_parameters: Vec<SweepParameterData>,
 
     /// Selected metrics to compute
@@ -36,58 +44,97 @@ fn default_steps() -> usize {
     6
 }
 
-/// Sweep parameter configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A named parameter and inclusive bounds of its declared type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SweepParameterData {
-    /// Event name being swept (resolved to EventId at runtime)
-    #[serde(alias = "name")]
-    pub event_name: String,
-
-    /// Type of sweep
-    pub sweep_type: SweepTypeData,
-
-    /// Minimum value
-    pub min_value: f64,
-
-    /// Maximum value
-    pub max_value: f64,
-
-    /// Number of steps
+    pub parameter_name: String,
+    pub min_value: ParameterValue,
+    pub max_value: ParameterValue,
     pub step_count: usize,
 }
 
-/// Type of parameter being swept
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SweepTypeData {
-    /// Age trigger (years)
-    TriggerAge,
-    /// Date trigger (year)
-    TriggerDate,
-    /// Effect amount (dollars)
-    EffectValue,
-    /// Repeating event start age
-    RepeatingStartAge,
-    /// Repeating event end age
-    RepeatingEndAge,
-}
-
-impl SweepTypeData {
-    /// Get display name
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::TriggerAge => "Age",
-            Self::TriggerDate => "Year",
-            Self::EffectValue => "Amount",
-            Self::RepeatingStartAge => "Start Age",
-            Self::RepeatingEndAge => "End Age",
+impl SweepParameterData {
+    pub fn parameter(&self, parameter_id: ParameterId) -> OptimizableParameter {
+        OptimizableParameter {
+            parameter_id,
+            min_value: self.min_value,
+            max_value: self.max_value,
         }
     }
 
-    /// Returns true if this sweep type represents a currency value
-    pub fn is_currency(&self) -> bool {
-        matches!(self, Self::EffectValue)
+    pub fn validate(&self, current: ParameterValue) -> Result<(), String> {
+        let parameter = self.parameter(ParameterId(0));
+        let (min, max) = parameter.bounds();
+        if std::mem::discriminant(&current) != std::mem::discriminant(&self.min_value)
+            || parameter.value_at(min).is_none()
+            || parameter.value_at(max).is_none()
+            || !(max - min).is_finite()
+            || min >= max
+        {
+            return Err(
+                "Enter valid bounds of the parameter's type, with minimum less than maximum".into(),
+            );
+        }
+        if self.step_count < 2 {
+            return Err("Use at least 2 steps".into());
+        }
+        if parameter.is_discrete() && self.step_count as f64 > max - min + 1.0 {
+            return Err(
+                "Steps cannot exceed the number of distinct days or months in the range".into(),
+            );
+        }
+        Ok(())
     }
+
+    pub fn format_coordinate(&self, coordinate: f64) -> String {
+        self.parameter(ParameterId(0))
+            .value_at(coordinate)
+            .map(format_sweep_value)
+            .unwrap_or_else(|| coordinate.to_string())
+    }
+}
+
+pub fn format_sweep_value(value: ParameterValue) -> String {
+    match value {
+        ParameterValue::Money(value) => crate::util::format::format_compact_currency(value),
+        ParameterValue::Rate(value) => format!("{:.2}%", value * 100.0),
+        ParameterValue::Date(date) => date.to_string(),
+        ParameterValue::Age(age) => format!("{}y {}m", age.years, age.months),
+    }
+}
+
+// Old event sweeps cannot be mapped to named inputs reliably. Ignore those
+// selections on load while preserving the scenario and its other analysis settings.
+fn deserialize_sweep_parameters<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<SweepParameterData>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum SavedSweep {
+        Named(SweepParameterData),
+        Legacy {
+            #[serde(alias = "name")]
+            event_name: String,
+            sweep_type: String,
+        },
+    }
+    Ok(Vec::<SavedSweep>::deserialize(deserializer)?
+        .into_iter()
+        .filter_map(|entry| match entry {
+            SavedSweep::Named(parameter) => Some(parameter),
+            SavedSweep::Legacy {
+                event_name,
+                sweep_type,
+            } => {
+                tracing::debug!(
+                    event_name,
+                    sweep_type,
+                    "Ignoring legacy event sweep; choose a named parameter"
+                );
+                None
+            }
+        })
+        .collect())
 }
 
 /// Analysis metric type for persistence
@@ -334,10 +381,10 @@ impl SweepConfigFingerprint {
         let mut hasher = DefaultHasher::new();
 
         for param in params {
-            param.event_name.hash(&mut hasher);
-            std::mem::discriminant(&param.sweep_type).hash(&mut hasher);
-            param.min_value.to_bits().hash(&mut hasher);
-            param.max_value.to_bits().hash(&mut hasher);
+            param.parameter_name.hash(&mut hasher);
+            // Typed bounds include the calendar origin and distinguish Money from Rate.
+            format!("{:?}", param.min_value).hash(&mut hasher);
+            format!("{:?}", param.max_value).hash(&mut hasher);
             param.step_count.hash(&mut hasher);
         }
 
@@ -354,4 +401,76 @@ pub struct CachedSweepResults {
     pub results: finplan_core::analysis::SweepResults,
     /// When the cache was created (ISO 8601 timestamp)
     pub created_at: String,
+}
+
+#[cfg(test)]
+mod named_sweep_tests {
+    use super::*;
+    use crate::{data::named_parameters::NamedParameterData, state::AnalysisState};
+    use jiff::civil::date;
+
+    #[test]
+    fn old_event_sweeps_are_removed_without_losing_analysis_settings() {
+        let yaml = "mc_iterations: 25\ndefault_steps: 7\nsweep_parameters:\n  - event_name: Salary\n    sweep_type: effect_value\n    min_value: 100\n    max_value: 200\n    step_count: 3\n  - name: Retirement\n    sweep_type: trigger_age\n    min_value: 60\n    max_value: 70\n    step_count: 6\n";
+        let config: AnalysisConfigData = serde_saphyr::from_str(yaml).unwrap();
+        assert!(config.sweep_parameters.is_empty());
+        assert_eq!(config.mc_iterations, 25);
+        assert_eq!(config.default_steps, 7);
+    }
+
+    #[test]
+    fn scenario_loading_keeps_only_existing_variables_with_matching_bounds() {
+        let sweep = SweepParameterData {
+            parameter_name: "Spend".into(),
+            min_value: ParameterValue::Money(100.0),
+            max_value: ParameterValue::Money(200.0),
+            step_count: 3,
+        };
+        let config = AnalysisConfigData {
+            sweep_parameters: vec![sweep],
+            ..Default::default()
+        };
+        let mut state = AnalysisState::new();
+        state.load_from_config(&config, &[]);
+        assert!(state.sweep_parameters.is_empty());
+        state.load_from_config(
+            &config,
+            &[NamedParameterData {
+                name: "Spend".into(),
+                value: ParameterValue::Rate(0.1),
+            }],
+        );
+        assert!(state.sweep_parameters.is_empty());
+        state.load_from_config(
+            &config,
+            &[NamedParameterData {
+                name: "Spend".into(),
+                value: ParameterValue::Money(150.0),
+            }],
+        );
+        assert_eq!(state.sweep_parameters, config.sweep_parameters);
+    }
+
+    #[test]
+    fn fingerprints_include_named_target_type_and_calendar_origin() {
+        let mut config = AnalysisConfigData {
+            sweep_parameters: vec![SweepParameterData {
+                parameter_name: "Start".into(),
+                min_value: ParameterValue::Date(date(2025, 1, 1)),
+                max_value: ParameterValue::Date(date(2025, 1, 3)),
+                step_count: 3,
+            }],
+            ..Default::default()
+        };
+        let original = SweepConfigFingerprint::from_config(&config);
+        config.sweep_parameters[0].min_value = ParameterValue::Date(date(2026, 1, 1));
+        config.sweep_parameters[0].max_value = ParameterValue::Date(date(2026, 1, 3));
+        assert_ne!(original, SweepConfigFingerprint::from_config(&config));
+        config.sweep_parameters[0].min_value = ParameterValue::Money(1.0);
+        config.sweep_parameters[0].max_value = ParameterValue::Money(2.0);
+        let money = SweepConfigFingerprint::from_config(&config);
+        config.sweep_parameters[0].min_value = ParameterValue::Rate(1.0);
+        config.sweep_parameters[0].max_value = ParameterValue::Rate(2.0);
+        assert_ne!(money, SweepConfigFingerprint::from_config(&config));
+    }
 }

@@ -296,12 +296,6 @@ pub fn handle_edit_event(state: &mut AppState, ctx: ActionContext) -> ActionResu
     let new_name = state.data().events[idx].name.0.clone();
     if old_name != new_name {
         state.data_mut().rename_event(&old_name, &new_name);
-        // Also update the runtime analysis state (separate from persisted data)
-        for sweep in &mut state.analysis_state.sweep_parameters {
-            if sweep.event_name == old_name {
-                sweep.event_name = new_name.clone();
-            }
-        }
     }
 
     ActionResult::modified()

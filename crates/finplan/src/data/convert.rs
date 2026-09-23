@@ -27,6 +27,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub enum ConvertError {
     InvalidParameter(String),
+    InvalidExpression(String),
     InvalidDate(String),
     AccountNotFound(String),
     AssetNotFound(String, String),
@@ -37,6 +38,7 @@ pub enum ConvertError {
 impl std::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ConvertError::InvalidExpression(s) => write!(f, "Invalid expression: {s}"),
             ConvertError::InvalidParameter(s) => write!(f, "Invalid parameter: {s}"),
             ConvertError::InvalidDate(s) => write!(f, "Invalid date format: {}", s),
             ConvertError::AccountNotFound(s) => write!(f, "Account not found: {}", s),
@@ -97,8 +99,9 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
     let mut profile_ids = HashMap::new();
     let mut property_assets = HashMap::new();
 
-    // Track the next available asset ID (start high to avoid collision with investment assets)
-    let mut next_property_asset_id: u16 = 1000;
+    // Account holdings and the expression compiler share one ID per asset name.
+    let mut next_asset_id: u16 = 1;
+    let mut named_asset_ids = HashMap::new();
 
     // Assign account IDs
     for (idx, account) in data.portfolios.accounts.iter().enumerate() {
@@ -112,8 +115,14 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
             | AccountType::Roth401k(inv)
             | AccountType::TraditionalIRA(inv)
             | AccountType::RothIRA(inv) => {
-                for (asset_idx, asset_val) in inv.assets.iter().enumerate() {
-                    let asset_id = AssetId((asset_idx + 1) as u16);
+                for asset_val in &inv.assets {
+                    let asset_id = *named_asset_ids
+                        .entry(asset_val.asset.0.clone())
+                        .or_insert_with(|| {
+                            let id = AssetId(next_asset_id);
+                            next_asset_id += 1;
+                            id
+                        });
                     asset_ids.insert(
                         (account.name.clone(), asset_val.asset.0.clone()),
                         (id, asset_id),
@@ -122,8 +131,8 @@ fn build_resolve_context(data: &SimulationData) -> ResolveContext {
             }
             // Track Property/Collectible assets with their return profiles
             AccountType::Property(prop) | AccountType::Collectible(prop) => {
-                let asset_id = AssetId(next_property_asset_id);
-                next_property_asset_id += 1;
+                let asset_id = AssetId(next_asset_id);
+                next_asset_id += 1;
                 property_assets.insert(
                     account.name.clone(),
                     (
@@ -549,6 +558,19 @@ fn convert_trigger(
 }
 
 fn convert_effect(effect: &EffectData, ctx: &ResolveContext) -> Result<EventEffect, ConvertError> {
+    let mut converted = convert_effect_inner(effect, ctx)?;
+    if let Some(amount) = effect.amount() {
+        compile_with_context(&amount.to_source(), ctx)?
+            .apply_to(&mut converted)
+            .map_err(|error| ConvertError::InvalidExpression(error.to_string()))?;
+    }
+    Ok(converted)
+}
+
+fn convert_effect_inner(
+    effect: &EffectData,
+    ctx: &ResolveContext,
+) -> Result<EventEffect, ConvertError> {
     match effect {
         EffectData::Income {
             to,
@@ -811,33 +833,45 @@ fn convert_amount(
     amount: &AmountData,
     ctx: &ResolveContext,
 ) -> Result<TransferAmount, ConvertError> {
-    Ok(match amount {
-        AmountData::Parameter { name } => {
-            TransferAmount::Parameter(resolve_parameter(name, ctx, "Money")?)
-        }
-        AmountData::RateTimes { rate, inner } => TransferAmount::Mul(
-            Box::new(TransferAmount::Parameter(resolve_parameter(
-                rate, ctx, "Rate",
-            )?)),
-            Box::new(convert_amount(inner, ctx)?),
-        ),
-        AmountData::Fixed { value } => TransferAmount::Fixed(*value),
-        AmountData::InflationAdjusted { inner } => {
-            TransferAmount::InflationAdjusted(Box::new(convert_amount(inner, ctx)?))
-        }
-        AmountData::Scale { multiplier, inner } => {
-            TransferAmount::Scale(*multiplier, Box::new(convert_amount(inner, ctx)?))
-        }
-        AmountData::SourceBalance => TransferAmount::SourceBalance,
-        AmountData::ZeroTargetBalance => TransferAmount::ZeroTargetBalance,
-        AmountData::TargetToBalance { target } => TransferAmount::TargetToBalance(*target),
-        AmountData::AccountBalance { account } => TransferAmount::AccountTotalBalance {
-            account_id: resolve_account(account, ctx)?,
-        },
-        AmountData::AccountCashBalance { account } => TransferAmount::AccountCashBalance {
-            account_id: resolve_account(account, ctx)?,
-        },
-    })
+    compile_with_context(&amount.to_source(), ctx).map(|compiled| compiled.amount)
+}
+
+fn compile_with_context(
+    source: &str,
+    ctx: &ResolveContext,
+) -> Result<finplan_core::expression::CompiledAmount, ConvertError> {
+    let (metadata, parameters) = expression_context(ctx);
+    finplan_core::expression::compile_amount(source, &metadata, &parameters)
+        .map_err(|error| ConvertError::InvalidExpression(format!("{source}: {error}")))
+}
+
+fn expression_context(
+    ctx: &ResolveContext,
+) -> (
+    finplan_core::config::SimulationMetadata,
+    HashMap<ParameterId, ParameterValue>,
+) {
+    let mut metadata = finplan_core::config::SimulationMetadata::new();
+    for (name, id) in &ctx.account_ids {
+        metadata.register_account(*id, Some(name.clone()), None);
+    }
+    for ((_, name), (_, id)) in &ctx.asset_ids {
+        metadata.register_asset(*id, Some(name.clone()), None);
+    }
+    for (name, (id, _)) in &ctx.parameter_ids {
+        metadata.register_parameter(*id, Some(name.clone()), None);
+    }
+    (metadata, ctx.parameter_ids.values().copied().collect())
+}
+
+/// Build exactly the same name/ID environment for the editor and the simulation.
+pub fn amount_expression_context(
+    data: &SimulationData,
+) -> (
+    finplan_core::config::SimulationMetadata,
+    HashMap<ParameterId, ParameterValue>,
+) {
+    expression_context(&build_resolve_context(data))
 }
 
 fn convert_offset(offset: &OffsetData) -> TriggerOffset {
@@ -1262,5 +1296,55 @@ mod tests {
             total_a,
             total_c
         );
+    }
+    #[test]
+    fn expression_holdings_resolve_the_same_assets_across_different_account_orders() {
+        use finplan_core::expression::{EvaluationContext, compile_amount};
+        use finplan_core::simulation_state::SimulationState;
+        let mut data = SimulationData::default();
+        data.parameters.returns_mode = ReturnsMode::Historical;
+        for (name, assets) in [
+            ("First", vec![("VTI", 100.0), ("BND", 200.0)]),
+            ("Second", vec![("BND", 300.0), ("VTI", 400.0)]),
+        ] {
+            data.portfolios.accounts.push(AccountData {
+                name: name.into(),
+                description: None,
+                account_type: AccountType::Brokerage(AssetAccount {
+                    assets: assets
+                        .into_iter()
+                        .map(|(asset, value)| AssetValue {
+                            asset: AssetTag(asset.into()),
+                            value,
+                        })
+                        .collect(),
+                }),
+            });
+        }
+        data.historical_assets
+            .insert(AssetTag("VTI".into()), ReturnProfileTag("S&P 500".into()));
+        data.historical_assets.insert(
+            AssetTag("BND".into()),
+            ReturnProfileTag("US Agg Bonds".into()),
+        );
+        let config = to_simulation_config(&data).unwrap();
+        let state = SimulationState::from_parameters(&config, 42).unwrap();
+        let (metadata, parameters) = amount_expression_context(&data);
+        for (source, expected) in [
+            ("holding(\"First\", \"VTI\")", 100.0),
+            ("holding(\"Second\", \"BND\")", 300.0),
+            ("holding(\"Second\", \"VTI\")", 400.0),
+        ] {
+            let amount = compile_amount(source, &metadata, &parameters)
+                .unwrap()
+                .amount;
+            assert_eq!(
+                amount
+                    .expression()
+                    .evaluate(&EvaluationContext::new(&state))
+                    .unwrap(),
+                expected
+            );
+        }
     }
 }

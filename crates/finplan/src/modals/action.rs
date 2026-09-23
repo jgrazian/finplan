@@ -154,7 +154,7 @@ pub enum OptimizeAction {
 /// Analysis-specific actions (parameter sweep sensitivity analysis)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnalysisAction {
-    /// Add a sweep parameter (shows event picker)
+    /// Add a sweep parameter (shows named input picker)
     AddParameter,
     /// Create a new parameter from form submission
     CreateParameter,
@@ -168,8 +168,6 @@ pub enum AnalysisAction {
     ConfigureSettings,
     /// Run the analysis
     RunAnalysis,
-    /// Select parameter target after picking event
-    SelectParameterTarget { event_index: usize },
     /// Configure a result chart (type, parameters, metric)
     ConfigureChart { index: usize },
 }

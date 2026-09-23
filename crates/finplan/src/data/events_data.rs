@@ -120,6 +120,9 @@ pub enum TriggerData {
 /// For backwards compatibility, bare floats in YAML (e.g., `amount: 5000.0`) are deserialized as `Fixed { value }`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AmountData {
+    /// Source text compiled against the scenario names when a simulation starts.
+    Expression { source: String },
+
     /// A named Money input.
     Parameter { name: String },
 
@@ -158,6 +161,26 @@ pub enum AmountData {
 }
 
 impl AmountData {
+    /// Editable DSL, including equivalents for previously saved amount builders.
+    pub fn to_source(&self) -> String {
+        use super::expressions::{parameter_source, quote};
+        match self {
+            Self::Expression { source } => source.clone(),
+            Self::Fixed { value } => value.to_string(),
+            Self::Parameter { name } => parameter_source(name),
+            Self::RateTimes { rate, inner } => {
+                format!("{} * ({})", parameter_source(rate), inner.to_source())
+            }
+            Self::InflationAdjusted { inner } => format!("inflation({})", inner.to_source()),
+            Self::Scale { multiplier, inner } => format!("{multiplier} * ({})", inner.to_source()),
+            Self::SourceBalance => "source_balance()".into(),
+            Self::ZeroTargetBalance => "payoff()".into(),
+            Self::TargetToBalance { target } => format!("top_up({target})"),
+            Self::AccountBalance { account } => format!("balance({})", quote(&account.0)),
+            Self::AccountCashBalance { account } => format!("cash({})", quote(&account.0)),
+        }
+    }
+
     /// Create a fixed dollar amount
     pub fn fixed(value: f64) -> Self {
         Self::Fixed { value }
@@ -204,6 +227,7 @@ impl AmountData {
     /// Get the innermost amount type description
     pub fn base_type_name(&self) -> &'static str {
         match self {
+            Self::Expression { .. } => "Expression",
             Self::Parameter { .. } => "Parameter",
             Self::RateTimes { inner, .. } => inner.base_type_name(),
             Self::Fixed { .. } => "Fixed",
@@ -227,6 +251,12 @@ impl Serialize for AmountData {
         use serde::ser::SerializeMap;
 
         match self {
+            Self::Expression { source } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("type", "Expression")?;
+                map.serialize_entry("source", source)?;
+                map.end()
+            }
             Self::Parameter { name } => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("type", "Parameter")?;
@@ -347,6 +377,7 @@ impl<'de> Deserialize<'de> for AmountData {
                 let mut account: Option<AccountTag> = None;
                 let mut name: Option<String> = None;
                 let mut rate: Option<String> = None;
+                let mut source: Option<String> = None;
 
                 while let Some(key) = map.next_key::<String>()? {
                     match key.as_str() {
@@ -358,6 +389,7 @@ impl<'de> Deserialize<'de> for AmountData {
                         "account" => account = Some(map.next_value()?),
                         "name" => name = Some(map.next_value()?),
                         "rate" => rate = Some(map.next_value()?),
+                        "source" => source = Some(map.next_value()?),
                         _ => {
                             let _ = map.next_value::<serde::de::IgnoredAny>()?;
                         }
@@ -367,6 +399,9 @@ impl<'de> Deserialize<'de> for AmountData {
                 let type_str = type_str.ok_or_else(|| de::Error::missing_field("type"))?;
 
                 match type_str.as_str() {
+                    "Expression" => Ok(AmountData::Expression {
+                        source: source.ok_or_else(|| de::Error::missing_field("source"))?,
+                    }),
                     "Parameter" => Ok(AmountData::Parameter {
                         name: name.ok_or_else(|| de::Error::missing_field("name"))?,
                     }),
@@ -410,6 +445,7 @@ impl<'de> Deserialize<'de> for AmountData {
                     other => Err(de::Error::unknown_variant(
                         other,
                         &[
+                            "Expression",
                             "Parameter",
                             "RateTimes",
                             "Fixed",

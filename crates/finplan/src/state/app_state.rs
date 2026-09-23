@@ -307,7 +307,8 @@ impl AppState {
 
         // Load analysis config for the new scenario
         if let Some(data) = self.app_data.simulations.get(name) {
-            self.analysis_state.load_from_config(&data.analysis);
+            self.analysis_state
+                .load_from_config(&data.analysis, &data.named_parameters);
         }
 
         // Try to load cached sweep results
@@ -374,7 +375,9 @@ impl AppState {
 
         // Load analysis config from the current scenario
         if let Some(data) = state.app_data.simulations.get(&result.current_scenario) {
-            state.analysis_state.load_from_config(&data.analysis);
+            state
+                .analysis_state
+                .load_from_config(&data.analysis, &data.named_parameters);
         }
 
         // Try to load cached sweep results

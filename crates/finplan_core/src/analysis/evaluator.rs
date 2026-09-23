@@ -673,6 +673,28 @@ pub fn apply_parameter(
 ) -> Result<SimulationConfig, SimulationError> {
     let mut modified = config.clone();
 
+    if let SweepTarget::Parameter(parameter) = &param.target {
+        let current = modified
+            .parameters
+            .get_mut(&parameter.parameter_id)
+            .ok_or_else(|| {
+                SimulationError::Config(format!("Parameter {} not found", parameter.parameter_id.0))
+            })?;
+        let replacement = parameter
+            .value_at(value)
+            .filter(|replacement| {
+                std::mem::discriminant(replacement) == std::mem::discriminant(current)
+            })
+            .ok_or_else(|| {
+                SimulationError::Config(format!(
+                    "Invalid value or type for parameter {}",
+                    parameter.parameter_id.0
+                ))
+            })?;
+        *current = replacement;
+        return Ok(modified);
+    }
+
     let event_idx = modified
         .events
         .iter()
@@ -680,6 +702,9 @@ pub fn apply_parameter(
         .ok_or_else(|| SimulationError::Config(format!("Event {} not found", param.event_id.0)))?;
 
     match &param.target {
+        SweepTarget::Parameter(_) => {
+            unreachable!("named parameters are handled before event lookup")
+        }
         SweepTarget::Trigger(trigger_param) => {
             apply_trigger_param(
                 &mut modified.events[event_idx].trigger,
@@ -921,6 +946,126 @@ mod amount_param_tests {
                 "{source}"
             );
             assert_eq!(amount.to_source(&metadata).unwrap(), original, "{source}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod named_parameter_tests {
+    use super::*;
+    use crate::{
+        SimulationBuilder,
+        model::{
+            AmountMode, CalendarAge, Event, EventEffect, EventId, IncomeType, ParameterId,
+            ParameterValue,
+        },
+        optimization::OptimizableParameter,
+    };
+    use jiff::civil::date;
+
+    #[test]
+    fn named_sweep_rebinds_all_event_references_and_lazy_reconstruction() {
+        let (mut config, metadata) = SimulationBuilder::new()
+            .start(2025, 1, 1)
+            .years(1)
+            .bank("Cash", 0.0)
+            .parameter("Pay", 100.0)
+            .build();
+        let id = metadata.parameter_id("Pay").unwrap();
+        let cash = metadata.account_id("Cash").unwrap();
+        for event_id in [EventId(7), EventId(9)] {
+            config.events.push(Event {
+                event_id,
+                trigger: EventTrigger::Date(date(2025, 1, 1)),
+                once: true,
+                effects: vec![EventEffect::Income {
+                    to: cash,
+                    amount: TransferAmount::parameter(id),
+                    amount_mode: AmountMode::Gross,
+                    income_type: IncomeType::TaxFree,
+                }],
+            });
+        }
+        let sweep = SweepConfig {
+            parameters: vec![SweepParameter::parameter(
+                OptimizableParameter {
+                    parameter_id: id,
+                    min_value: ParameterValue::Money(100.0),
+                    max_value: ParameterValue::Money(300.0),
+                },
+                3,
+            )],
+            mc_iterations: 1,
+            parallel_batches: 1,
+            seed: Some(42),
+            ..Default::default()
+        };
+        let result = sweep_simulate_lazy(&config, &sweep, None).unwrap();
+        assert_eq!(result.param_values, vec![vec![100.0, 200.0, 300.0]]);
+        for (index, expected) in [200.0, 400.0, 600.0].into_iter().enumerate() {
+            assert_eq!(
+                result
+                    .get_percentile_run(&[index], 0.5)
+                    .unwrap()
+                    .final_account_balance(cash),
+                Some(expected)
+            );
+        }
+        assert_eq!(config.parameters[&id], ParameterValue::Money(100.0));
+        assert_eq!(
+            crate::simulation::simulate(&config, 42)
+                .unwrap()
+                .final_account_balance(cash),
+            Some(200.0)
+        );
+    }
+
+    #[test]
+    fn typed_sweeps_keep_rates_dates_and_ages_and_do_not_require_events() {
+        let id = ParameterId(4);
+        for (min, middle, max) in [
+            (
+                ParameterValue::Rate(0.02),
+                ParameterValue::Rate(0.04),
+                ParameterValue::Rate(0.06),
+            ),
+            (
+                ParameterValue::Date(date(2024, 2, 28)),
+                ParameterValue::Date(date(2024, 2, 29)),
+                ParameterValue::Date(date(2024, 3, 1)),
+            ),
+            (
+                ParameterValue::Age(CalendarAge::new(65, 11)),
+                ParameterValue::Age(CalendarAge::new(66, 0)),
+                ParameterValue::Age(CalendarAge::new(66, 1)),
+            ),
+        ] {
+            let mut config = SimulationConfig::new();
+            config.parameters.insert(id, min);
+            let sweep = SweepParameter::parameter(
+                OptimizableParameter {
+                    parameter_id: id,
+                    min_value: min,
+                    max_value: max,
+                },
+                3,
+            );
+            for (coordinate, expected) in sweep.sweep_values().into_iter().zip([min, middle, max]) {
+                let actual = apply_parameter(&config, &sweep, coordinate)
+                    .unwrap()
+                    .parameters[&id];
+                match (actual, expected) {
+                    (ParameterValue::Rate(actual), ParameterValue::Rate(expected)) => {
+                        assert!((actual - expected).abs() < 1e-10);
+                    }
+                    _ => assert_eq!(actual, expected),
+                }
+            }
+            assert!(apply_parameter(&config, &sweep, f64::NAN).is_err());
+            config.parameters.insert(id, ParameterValue::Money(1.0));
+            assert!(apply_parameter(&config, &sweep, sweep.min_value).is_err());
+            config.parameters.clear();
+            assert!(apply_parameter(&config, &sweep, sweep.min_value).is_err());
         }
     }
 }

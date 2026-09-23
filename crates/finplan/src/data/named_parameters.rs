@@ -44,6 +44,11 @@ impl SimulationData {
         if old_name == new_name {
             return;
         }
+        for sweep in &mut self.analysis.sweep_parameters {
+            if sweep.parameter_name == old_name {
+                sweep.parameter_name = new_name.into();
+            }
+        }
         for event in &mut self.events {
             let mut rename = |name: &mut String| {
                 if name == old_name {
@@ -115,6 +120,9 @@ fn visit_effect_names(effect: &mut EffectData, visitor: &mut impl FnMut(&mut Str
 
 fn visit_amount_names(amount: &mut AmountData, visitor: &mut impl FnMut(&mut String)) {
     match amount {
+        AmountData::Expression { source } => {
+            super::expressions::visit_parameter_names(source, visitor)
+        }
         AmountData::Parameter { name } => visitor(name),
         AmountData::RateTimes { rate, inner } => {
             visitor(rate);
@@ -333,5 +341,71 @@ mod tests {
         data.rename_account("Checking", "Cash");
         data.portfolios.accounts[0].name = "Cash".into();
         assert!(to_simulation_config(&data).is_ok());
+    }
+    #[test]
+    fn expression_round_trip_renames_references_and_runs_with_typed_parameters() {
+        let mut data = parameterized_scenario();
+        *data.events[0].effects[0].amount_mut().unwrap() = AmountData::Expression {
+            source: "gross(if(age_years($Retire) >= 65 and days_until($Start) <= 0, inflation($Match * $Salary), 0))".into(),
+        };
+        let loaded = SimulationData::from_yaml(&data.to_yaml().unwrap()).unwrap();
+        let config = to_simulation_config(&loaded).unwrap();
+        assert_eq!(
+            finplan_core::simulation::simulate(&config, 42)
+                .unwrap()
+                .final_account_balance(AccountId(1)),
+            Some(100.0)
+        );
+        assert_eq!(data.parameter_references("Salary"), vec!["Monthly match"]);
+        data.rename_parameter("Salary", "Pay \"monthly\" \\ net");
+        data.named_parameters[0].name = "Pay \"monthly\" \\ net".into();
+        assert!(data.parameter_references("Salary").is_empty());
+        assert_eq!(
+            data.parameter_references("Pay \"monthly\" \\ net"),
+            vec!["Monthly match"]
+        );
+        data.named_parameters[0].value = ParameterValue::Money(2000.0);
+        let config = to_simulation_config(&data).unwrap();
+        assert_eq!(
+            finplan_core::simulation::simulate(&config, 42)
+                .unwrap()
+                .final_account_balance(AccountId(1)),
+            Some(200.0)
+        );
+    }
+
+    #[test]
+    fn expression_account_rename_preserves_mode_and_distinguishes_parameter_names() {
+        for rename_first in [true, false] {
+            let mut data = parameterized_scenario();
+            *data.events[0].effects[0].amount_mut().unwrap() = AmountData::Expression {
+                source: "net($Salary + balance(\"Checking\"))".into(),
+            };
+            if rename_first {
+                data.portfolios.accounts[0].name = "Cash \"joint\"".into();
+            }
+            data.rename_account("Checking", "Cash \"joint\"");
+            data.portfolios.accounts[0].name = "Cash \"joint\"".into();
+            let source = data.events[0].effects[0].amount().unwrap().to_source();
+            assert!(source.starts_with("net("));
+            assert!(source.contains("$Salary"));
+            assert!(source.contains("Cash \\\"joint\\\""));
+            assert!(to_simulation_config(&data).is_ok());
+        }
+    }
+
+    #[test]
+    fn expression_reference_tracking_ignores_dollars_inside_account_names() {
+        let mut data = parameterized_scenario();
+        *data.events[0].effects[0].amount_mut().unwrap() = AmountData::Expression {
+            source: "balance(\"$Salary\") + $\"Match\" * 100".into(),
+        };
+        assert!(data.parameter_references("Salary").is_empty());
+        assert_eq!(data.parameter_references("Match"), vec!["Monthly match"]);
+        data.rename_parameter("Match", "Match rate");
+        assert_eq!(
+            data.events[0].effects[0].amount().unwrap().to_source(),
+            "balance(\"$Salary\") + $\"Match rate\" * 100"
+        );
     }
 }

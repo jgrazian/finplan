@@ -1,6 +1,8 @@
 // Modal state types
 mod action;
 pub mod amount_builder;
+mod amount_help;
+mod amount_input;
 pub mod context;
 mod handler;
 mod state;
@@ -105,6 +107,9 @@ pub fn render_modal(frame: &mut Frame, state: &mut AppState) {
         }
         ModalState::Form(modal) => {
             render_form_modal(frame, modal);
+            if let Some(help) = &mut modal.amount_help {
+                amount_help::render(frame, help);
+            }
         }
         ModalState::Confirm(modal) => {
             render_confirm_modal(frame, modal);
@@ -114,6 +119,17 @@ pub fn render_modal(frame: &mut Frame, state: &mut AppState) {
 
 /// Handle key events for the active modal
 pub fn handle_modal_key(key: KeyEvent, state: &mut AppState) -> ModalResult {
+    if let ModalState::Form(modal) = &mut state.modal
+        && amount_help::handle_key(key, modal)
+    {
+        return ModalResult::Continue;
+    }
+    let environment = if matches!(&state.modal, ModalState::Form(form) if form.fields.iter().any(|field| field.amount_input.is_some()))
+    {
+        Some(amount_input::Environment::new(state.data()))
+    } else {
+        None
+    };
     let keybindings = &state.keybindings;
     let result = match &mut state.modal {
         ModalState::None => ModalResult::Continue,
@@ -123,7 +139,10 @@ pub fn handle_modal_key(key: KeyEvent, state: &mut AppState) -> ModalResult {
             scenario_picker::handle_scenario_picker_key(key, modal, keybindings)
         }
         ModalState::Picker(modal) => picker::handle_picker_key(key, modal, keybindings),
-        ModalState::Form(modal) => form::handle_form_key(key, modal, keybindings),
+        ModalState::Form(modal) => match &environment {
+            Some(environment) => amount_input::handle_key(key, modal, keybindings, environment),
+            None => form::handle_form_key(key, modal, keybindings),
+        },
         ModalState::Confirm(modal) => confirm::handle_confirm_key(key, modal),
     };
 

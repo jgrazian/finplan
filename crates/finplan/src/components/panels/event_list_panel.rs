@@ -347,6 +347,7 @@ impl EventListPanel {
     /// Format amount in short form.
     pub fn format_amount_short(amount: &AmountData) -> String {
         match amount {
+            AmountData::Expression { source } => source.clone(),
             AmountData::Parameter { name } => format!("Parameter: {}", name),
             AmountData::RateTimes { rate, inner } => format!(
                 "{} × {}",

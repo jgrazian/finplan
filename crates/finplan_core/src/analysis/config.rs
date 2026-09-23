@@ -1,6 +1,7 @@
 //! Configuration types for parameter sweep analysis.
 
 use crate::model::{AccountId, EventId};
+use crate::optimization::OptimizableParameter;
 use serde::{Deserialize, Serialize};
 
 /// Target for sweeping a trigger parameter
@@ -35,9 +36,11 @@ pub enum EffectTarget {
     Index(usize),
 }
 
-/// What part of an event to sweep
+/// A shared parameter or event field to sweep.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SweepTarget {
+    /// Vary a shared registry input, rebinding every reference on each run.
+    Parameter(OptimizableParameter),
     /// Sweep a trigger parameter
     Trigger(TriggerParam),
     /// Sweep an effect parameter
@@ -318,9 +321,9 @@ impl Iterator for GridIndices {
 /// Complete sweep parameter specification
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SweepParameter {
-    /// The event to modify
+    /// The event to modify; ignored for a named Parameter target.
     pub event_id: EventId,
-    /// What part of the event to sweep
+    /// The shared parameter or event field to sweep.
     pub target: SweepTarget,
     /// Minimum value for the sweep
     pub min_value: f64,
@@ -331,6 +334,19 @@ pub struct SweepParameter {
 }
 
 impl SweepParameter {
+    /// Sweep a typed registry input using the same calendar coordinates as optimization.
+    #[must_use]
+    pub fn parameter(parameter: OptimizableParameter, steps: usize) -> Self {
+        let (min_value, max_value) = parameter.bounds();
+        Self {
+            event_id: EventId(0),
+            target: SweepTarget::Parameter(parameter),
+            min_value,
+            max_value,
+            step_count: steps,
+        }
+    }
+
     /// Create a new sweep parameter for an age trigger
     #[must_use]
     pub fn age(event_id: EventId, min_age: u8, max_age: u8, steps: usize) -> Self {
@@ -365,8 +381,19 @@ impl SweepParameter {
             return vec![self.min_value];
         }
         let step_size = (self.max_value - self.min_value) / (self.step_count - 1) as f64;
+        let is_discrete = matches!(
+            &self.target,
+            SweepTarget::Parameter(parameter) if parameter.is_discrete()
+        );
         (0..self.step_count)
-            .map(|i| self.min_value + step_size * i as f64)
+            .map(|i| {
+                let value = if i + 1 == self.step_count {
+                    self.max_value
+                } else {
+                    self.min_value + step_size * i as f64
+                };
+                if is_discrete { value.round() } else { value }
+            })
             .collect()
     }
 
@@ -374,6 +401,7 @@ impl SweepParameter {
     #[must_use]
     pub fn label(&self) -> String {
         match &self.target {
+            SweepTarget::Parameter(parameter) => format!("Parameter {}", parameter.parameter_id.0),
             SweepTarget::Trigger(TriggerParam::Age) => {
                 format!("Age (Event {})", self.event_id.0)
             }

@@ -14,7 +14,7 @@ use super::Screen;
 use crate::data::keybindings_data::KeybindingsConfig;
 use crate::modals::{AnalysisAction, ConfirmedValue, ModalAction, ModalState};
 use crate::state::{AnalysisPanel, AnalysisResults, AppState, SensitivityEntry};
-use crate::util::format::{format_compact_currency, format_currency_short};
+use crate::util::format::format_compact_currency;
 use crate::{
     actions::ActionResult,
     data::analysis_data::{AnalysisMetricData, ColorScheme},
@@ -145,9 +145,9 @@ impl AnalysisScreen {
                     "Parameters you can sweep:",
                     Style::default().fg(Color::Cyan),
                 )),
-                Line::from("  - Event trigger ages"),
-                Line::from("  - Effect amounts"),
-                Line::from("  - Repeating event start/end"),
+                Line::from("  Named variables from Parameters"),
+                Line::from("  Money, Rate, Date, and Age"),
+                Line::from("  Define them on the Events tab."),
             ];
             let paragraph = Paragraph::new(content).block(block);
             frame.render_widget(paragraph, area);
@@ -156,19 +156,12 @@ impl AnalysisScreen {
                 .iter()
                 .enumerate()
                 .map(|(idx, param)| {
-                    let bounds = if param.sweep_type.is_currency() {
-                        format!(
-                            "[{}-{}, {} steps]",
-                            format_currency_short(param.min_value),
-                            format_currency_short(param.max_value),
-                            param.step_count
-                        )
-                    } else {
-                        format!(
-                            "[{:.0}-{:.0}, {} steps]",
-                            param.min_value, param.max_value, param.step_count
-                        )
-                    };
+                    let bounds = format!(
+                        "[{} - {}, {} steps]",
+                        crate::data::analysis_data::format_sweep_value(param.min_value),
+                        crate::data::analysis_data::format_sweep_value(param.max_value),
+                        param.step_count
+                    );
 
                     let is_selected = idx == selected_idx;
                     let style = if is_selected {
@@ -182,7 +175,7 @@ impl AnalysisScreen {
                     let prefix = if is_selected { "> " } else { "  " };
                     ListItem::new(Line::from(vec![
                         Span::styled(prefix, style),
-                        Span::styled(&param.event_name, style),
+                        Span::styled(&param.parameter_name, style),
                         Span::raw(" "),
                         Span::styled(bounds, Style::default().fg(Color::DarkGray)),
                     ]))
@@ -1061,7 +1054,12 @@ impl AnalysisScreen {
         // Layout: Y-axis labels | heatmap | legend
         // Top row: Y-axis title
         // Below heatmap: X-axis labels + title
-        let y_label_width: u16 = 6; // Space for Y-axis labels
+        let y_label_width = [y_min, (y_min + y_max) / 2.0, y_max]
+            .into_iter()
+            .map(|value| results.format_param_value(y_dim, value).chars().count() as u16 + 1)
+            .max()
+            .unwrap_or(6)
+            .max(6);
         let legend_width: u16 = 8; // Space for legend
         let top_padding: u16 = 1; // Space for Y-axis title
         let x_label_height: u16 = 2; // Space for X-axis labels + title (no extra row)
@@ -1091,15 +1089,7 @@ impl AnalysisScreen {
         let heatmap_y = inner.y + top_padding;
 
         // Render Y-axis labels (standard orientation: y_max at top, y_min at bottom)
-        // Check if axis represents currency (label ends with "Amount")
-        let y_is_currency = y_label.ends_with("Amount");
-        let format_y = |v: f64| {
-            if y_is_currency {
-                format_compact_currency(v).replace('$', "")
-            } else {
-                format!("{:.0}", v)
-            }
-        };
+        let format_y = |value| results.format_param_value(y_dim, value);
         let y_mid = (y_min + y_max) / 2.0;
         let y_labels = [
             (0, format_y(y_max)),
@@ -1173,19 +1163,15 @@ impl AnalysisScreen {
 
         // Render X-axis labels (low, mid, high)
         let x_axis_y = heatmap_y + actual_heatmap_height as u16;
-        let x_is_currency = x_label.ends_with("Amount");
-        let format_x = |v: f64| {
-            if x_is_currency {
-                format_compact_currency(v).replace('$', "")
-            } else {
-                format!("{:.0}", v)
-            }
-        };
+        let format_x = |value| results.format_param_value(x_dim, value);
         let x_mid = (x_min + x_max) / 2.0;
         let x_labels = [
             (0usize, format_x(x_min)),
             (actual_heatmap_width / 2, format_x(x_mid)),
-            (actual_heatmap_width.saturating_sub(4), format_x(x_max)),
+            (
+                actual_heatmap_width.saturating_sub(format_x(x_max).chars().count()),
+                format_x(x_max),
+            ),
         ];
 
         for (col_offset, label) in x_labels {
@@ -1359,22 +1345,11 @@ impl AnalysisScreen {
         // Create dataset with metric-specific color
         let color = metric_color(metric);
 
-        // Create axis labels - check if axis represents currency (label ends with "Amount")
         let x_label = results.param_label(x_dim);
-        let x_is_currency = x_label.ends_with("Amount");
-        let x_labels = if x_is_currency {
-            vec![
-                Span::raw(format_compact_currency(x_min)),
-                Span::raw(format_compact_currency((x_min + x_max) / 2.0)),
-                Span::raw(format_compact_currency(x_max)),
-            ]
-        } else {
-            vec![
-                Span::raw(format!("{:.0}", x_min)),
-                Span::raw(format!("{:.0}", (x_min + x_max) / 2.0)),
-                Span::raw(format!("{:.0}", x_max)),
-            ]
-        };
+        let x_labels = [x_min, (x_min + x_max) / 2.0, x_max]
+            .into_iter()
+            .map(|value| Span::raw(results.format_param_value(x_dim, value)))
+            .collect::<Vec<_>>();
 
         let y_labels = if *metric == AnalysisMetricData::SuccessRate {
             vec![
@@ -1577,16 +1552,12 @@ impl Component for AnalysisScreen {
         // d: Delete selected parameter
         if KeybindingsConfig::matches(&key, &kb.tabs.analyze.delete_param) {
             if panel == AnalysisPanel::Parameters {
-                let params = &mut state.analysis_state.sweep_parameters;
-                let idx = state.analysis_state.selected_param_index;
-                if idx < params.len() {
-                    params.remove(idx);
-                    // Adjust selection index if needed
-                    if state.analysis_state.selected_param_index >= params.len()
-                        && !params.is_empty()
-                    {
-                        state.analysis_state.selected_param_index = params.len() - 1;
-                    }
+                let index = state.analysis_state.selected_param_index;
+                if matches!(
+                    handle_analysis_action(state, AnalysisAction::DeleteParameter { index }, ""),
+                    ActionResult::Modified(_)
+                ) {
+                    state.mark_modified();
                 }
             }
             return EventResult::Handled;

@@ -881,16 +881,5 @@ fn convert_sweep_to_analysis_results(
     results: &finplan_core::analysis::SweepResults,
     sweep_params: &[crate::data::analysis_data::SweepParameterData],
 ) -> crate::state::AnalysisResults {
-    // Clone the results and update labels with event names
-    let mut sweep_results = results.clone();
-
-    // Generate labels from sweep parameters (e.g., "Retirement Age" instead of "Age (Event 8)")
-    for (idx, param) in sweep_params.iter().enumerate() {
-        if idx < sweep_results.param_labels.len() {
-            sweep_results.param_labels[idx] =
-                format!("{} {}", param.event_name, param.sweep_type.display_name());
-        }
-    }
-
-    AnalysisResults::new(sweep_results)
+    AnalysisResults::new(results.clone()).with_parameters(sweep_params)
 }

@@ -4,7 +4,6 @@
 /// in modal handlers.
 use std::str::FromStr;
 
-use crate::data::analysis_data::SweepTypeData;
 use crate::data::events_data::IntervalData;
 
 /// Top-level context enum for modal operations
@@ -706,15 +705,10 @@ pub enum OptimizeContext {
 /// Analysis context for parameter sweep configuration
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnalysisContext {
-    /// Selecting an event to create a sweep parameter
-    SelectEvent,
-    /// Selecting the sweep target (trigger/effect) for an event
-    SelectTarget { event_index: usize },
+    /// Selecting an input from the scenario's Parameters list.
+    SelectParameter,
     /// Configuring a NEW parameter (not yet added to state)
-    NewParameter {
-        event_name: String,
-        sweep_type: SweepTypeData,
-    },
+    NewParameter { parameter_name: String },
     /// Configuring an existing parameter at a specific index (min/max/steps)
     Parameter { index: usize },
     /// Selecting metrics

@@ -2,6 +2,7 @@ pub mod analysis_data;
 pub mod app_data;
 pub mod convert;
 pub mod events_data;
+pub mod expressions;
 pub mod keybindings_data;
 pub mod named_parameters;
 pub mod parameters_data;

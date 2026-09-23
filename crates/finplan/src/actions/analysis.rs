@@ -1,15 +1,15 @@
 // Analysis actions - parameter sweep configuration and execution
 
 use crate::data::analysis_data::{
-    AnalysisMetricData, ChartConfigData, ChartType, ColorScheme, SweepParameterData, SweepTypeData,
+    AnalysisMetricData, ChartConfigData, ChartType, ColorScheme, SweepParameterData,
 };
-use crate::data::events_data::{AmountData, EffectData, TriggerData};
 use crate::modals::context::AnalysisContext;
 use crate::modals::{
     AnalysisAction, FieldType, FormField, FormKind, FormModal, ModalAction, ModalContext,
     ModalState, PickerModal,
 };
 use crate::state::{AnalysisPanel, AppState};
+use finplan_core::model::{CalendarAge, ParameterValue};
 
 use super::ActionResult;
 
@@ -27,407 +27,260 @@ pub fn handle_analysis_action(
         AnalysisAction::ToggleMetric => handle_toggle_metric(state, value),
         AnalysisAction::ConfigureSettings => handle_configure_settings(state, value),
         AnalysisAction::RunAnalysis => handle_run_analysis(state),
-        AnalysisAction::SelectParameterTarget { event_index } => {
-            handle_select_parameter_target(state, event_index)
-        }
         AnalysisAction::ConfigureChart { index } => handle_configure_chart(state, index, value),
     }
 }
 
-/// Show picker to select an event for a new sweep parameter
+/// Select only variables declared in the scenario's Parameters panel.
 fn handle_add_parameter(state: &mut AppState, value: &str) -> ActionResult {
-    // If value is provided, we're handling a selection
-    if !value.is_empty() {
-        return handle_event_selected(state, value);
-    }
-
-    // Get events that have sweepable parameters
-    let sweepable = get_sweepable_events(state);
-
-    if sweepable.is_empty() {
-        return ActionResult::error(
-            "No sweepable events found. Add events with Age triggers or fixed Income/Expense effects.",
-        );
-    }
-
-    // Reasonable limit on dimensions to prevent exponential growth of sweep points
-    const MAX_SWEEP_DIMENSIONS: usize = 6;
-    if state.analysis_state.sweep_parameters.len() >= MAX_SWEEP_DIMENSIONS {
+    if state.analysis_state.sweep_parameters.len() >= 6 {
         return ActionResult::error(
             "Maximum of 6 sweep parameters supported. Remove a parameter to add a new one.",
         );
     }
-
-    let options: Vec<String> = sweepable.iter().map(|(name, _, _)| name.clone()).collect();
-
-    let picker = PickerModal::new(
-        "Select Event to Sweep",
-        options,
-        ModalAction::ADD_ANALYSIS_PARAMETER,
-    )
-    .with_typed_context(ModalContext::Analysis(AnalysisContext::SelectEvent));
-
-    ActionResult::modal(ModalState::Picker(picker))
-}
-
-/// Handle event selection - show target picker (trigger vs effect)
-fn handle_event_selected(state: &mut AppState, event_name: &str) -> ActionResult {
-    let sweepable = get_sweepable_events(state);
-
-    // Find the event index
-    let event_index = sweepable.iter().position(|(name, _, _)| name == event_name);
-
-    let Some(event_index) = event_index else {
-        return ActionResult::error(format!("Event '{}' not found", event_name));
-    };
-
-    let (_, targets, _) = &sweepable[event_index];
-
-    // If there's only one target, go straight to configuration
-    if targets.len() == 1 {
-        return show_parameter_config_form(state, event_index, &targets[0]);
-    }
-
-    // Otherwise show target picker
-    let options: Vec<String> = targets
-        .iter()
-        .map(|t| format!("{} ({})", t.display_name(), event_name))
-        .collect();
-
-    let picker = PickerModal::new(
-        "Select Parameter to Sweep",
-        options,
-        ModalAction::Analysis(AnalysisAction::SelectParameterTarget { event_index }),
-    )
-    .with_typed_context(ModalContext::Analysis(AnalysisContext::SelectTarget {
-        event_index,
-    }));
-
-    ActionResult::modal(ModalState::Picker(picker))
-}
-
-/// Handle target selection after event is picked
-fn handle_select_parameter_target(state: &mut AppState, event_index: usize) -> ActionResult {
-    // Get the selected target from the modal
-    let selected = if let ModalState::Picker(ref picker) = state.modal {
-        picker
-            .options
-            .get(picker.selected_index)
-            .cloned()
-            .unwrap_or_default()
-    } else {
-        return ActionResult::error("Expected picker modal");
-    };
-
-    let sweepable = get_sweepable_events(state);
-
-    if event_index >= sweepable.len() {
-        return ActionResult::error("Event index out of bounds");
-    }
-
-    let (_, targets, _) = &sweepable[event_index];
-
-    // Parse the target type from the selection
-    let target = targets
-        .iter()
-        .find(|t| selected.starts_with(t.display_name()))
-        .cloned();
-
-    let Some(target) = target else {
-        return ActionResult::error("Could not determine sweep target");
-    };
-
-    show_parameter_config_form(state, event_index, &target)
-}
-
-/// Show configuration form for a NEW sweep parameter (not yet added to state)
-fn show_parameter_config_form(
-    state: &mut AppState,
-    event_index: usize,
-    sweep_type: &SweepTypeData,
-) -> ActionResult {
-    let sweepable = get_sweepable_events(state);
-
-    if event_index >= sweepable.len() {
-        return ActionResult::error("Event index out of bounds");
-    }
-
-    let (event_name, _, defaults) = &sweepable[event_index];
-
-    // Get default values based on sweep type
-    let (default_min, default_max) = match sweep_type {
-        SweepTypeData::TriggerAge
-        | SweepTypeData::RepeatingStartAge
-        | SweepTypeData::RepeatingEndAge => {
-            // Look for age defaults
-            defaults
-                .iter()
-                .find(|(t, _, _)| t == sweep_type)
-                .map(|(_, min, max)| (*min, *max))
-                .unwrap_or((60.0, 70.0))
-        }
-        SweepTypeData::TriggerDate => defaults
+    if !value.is_empty() {
+        if state
+            .analysis_state
+            .sweep_parameters
             .iter()
-            .find(|(t, _, _)| t == sweep_type)
-            .map(|(_, min, max)| (*min, *max))
-            .unwrap_or((2030.0, 2040.0)),
-        SweepTypeData::EffectValue => defaults
-            .iter()
-            .find(|(t, _, _)| t == sweep_type)
-            .map(|(_, min, max)| (*min, *max))
-            .unwrap_or((0.0, 100000.0)),
-    };
-
-    let default_steps = state.analysis_state.default_steps;
-
-    let (label, fields) = match sweep_type {
-        SweepTypeData::TriggerAge
-        | SweepTypeData::RepeatingStartAge
-        | SweepTypeData::RepeatingEndAge => {
-            let type_label = sweep_type.display_name();
-            (
-                format!("Configure {} Sweep: {}", type_label, event_name),
-                vec![
-                    FormField::new(
-                        "Min Age",
-                        FieldType::Text,
-                        &format!("{}", default_min as u8),
-                    ),
-                    FormField::new(
-                        "Max Age",
-                        FieldType::Text,
-                        &format!("{}", default_max as u8),
-                    ),
-                    FormField::new("Steps", FieldType::Text, &default_steps.to_string()),
-                ],
-            )
-        }
-        SweepTypeData::TriggerDate => (
-            format!("Configure Year Sweep: {}", event_name),
-            vec![
-                FormField::new(
-                    "Min Year",
-                    FieldType::Text,
-                    &format!("{}", default_min as i32),
-                ),
-                FormField::new(
-                    "Max Year",
-                    FieldType::Text,
-                    &format!("{}", default_max as i32),
-                ),
-                FormField::new("Steps", FieldType::Text, &default_steps.to_string()),
-            ],
-        ),
-        SweepTypeData::EffectValue => (
-            format!("Configure Amount Sweep: {}", event_name),
-            vec![
-                FormField::currency("Min Amount", default_min),
-                FormField::currency("Max Amount", default_max),
-                FormField::new("Steps", FieldType::Text, &default_steps.to_string()),
-            ],
-        ),
-    };
-
-    // Use CreateParameter action - parameter will be added when form is confirmed
-    let action = ModalAction::Analysis(AnalysisAction::CreateParameter);
-    let form = FormModal::new(&label, fields, action)
-        .with_typed_context(ModalContext::Analysis(AnalysisContext::NewParameter {
-            event_name: event_name.clone(),
-            sweep_type: *sweep_type,
-        }))
-        .start_editing();
-
-    ActionResult::modal(ModalState::Form(form))
-}
-
-/// Handle creating a new parameter from form submission
-fn handle_create_parameter(state: &mut AppState) -> ActionResult {
-    // Extract event_name and sweep_type from the form context
-    let (event_name, sweep_type) = if let ModalState::Form(ref form) = state.modal {
-        if let Some(ModalContext::Analysis(AnalysisContext::NewParameter {
-            ref event_name,
-            sweep_type,
-        })) = form.context
+            .any(|p| p.parameter_name == value)
         {
-            (event_name.clone(), sweep_type)
-        } else {
-            return ActionResult::error("Missing parameter context");
+            return ActionResult::error("This parameter is already selected for analysis");
         }
-    } else {
-        return ActionResult::error("Expected form modal");
-    };
-
-    // Extract form values
-    let (min_value, max_value, step_count) = if let ModalState::Form(ref form) = state.modal {
-        let values = form.values();
-        match sweep_type {
-            SweepTypeData::TriggerAge
-            | SweepTypeData::RepeatingStartAge
-            | SweepTypeData::RepeatingEndAge => {
-                let min = values.int(0, 60) as f64;
-                let max = values.int(1, 70) as f64;
-                let steps = values.int(2, 6);
-                (min, max, steps)
-            }
-            SweepTypeData::TriggerDate => {
-                let min = values.int(0, 2030) as f64;
-                let max = values.int(1, 2040) as f64;
-                let steps = values.int(2, 6);
-                (min, max, steps)
-            }
-            SweepTypeData::EffectValue => {
-                let min = values.currency(0, 0.0);
-                let max = values.currency(1, 100000.0);
-                let steps = values.int(2, 6);
-                (min, max, steps)
-            }
-        }
-    } else {
-        return ActionResult::error("Expected form modal");
-    };
-
-    // Now add the parameter to state
-    state
-        .analysis_state
-        .sweep_parameters
-        .push(SweepParameterData {
-            event_name,
-            sweep_type,
+        let Some(parameter) = state
+            .data()
+            .named_parameters
+            .iter()
+            .find(|p| p.name == value)
+        else {
+            return ActionResult::error(format!("Parameter '{value}' not found"));
+        };
+        let (min_value, max_value) = default_bounds(parameter.value);
+        let sweep = SweepParameterData {
+            parameter_name: parameter.name.clone(),
             min_value,
             max_value,
-            step_count,
-        });
-
-    // Invalidate stale results since config changed
-    state.analysis_state.invalidate_stale_results();
-
-    ActionResult::Modified(None)
-}
-
-/// Handle parameter configuration - show form or process submission
-fn handle_configure_parameter(state: &mut AppState, index: usize) -> ActionResult {
-    // If no form modal exists, show the configuration form
-    if !matches!(state.modal, ModalState::Form(_)) {
-        return show_edit_parameter_form(state, index);
+            step_count: state.analysis_state.default_steps.max(2),
+        };
+        return parameter_form(&sweep, None);
     }
-
-    // Otherwise, extract form values and apply updates
-    let updates = if let ModalState::Form(ref form) = state.modal {
-        let values = form.values();
-
-        if let Some(param) = state.analysis_state.sweep_parameters.get(index) {
-            let (min, max, steps) = match param.sweep_type {
-                SweepTypeData::TriggerAge
-                | SweepTypeData::RepeatingStartAge
-                | SweepTypeData::RepeatingEndAge => {
-                    let min = values.int(0, 60) as f64;
-                    let max = values.int(1, 70) as f64;
-                    let steps = values.int(2, 6);
-                    (min, max, steps)
-                }
-                SweepTypeData::TriggerDate => {
-                    let min = values.int(0, 2030) as f64;
-                    let max = values.int(1, 2040) as f64;
-                    let steps = values.int(2, 6);
-                    (min, max, steps)
-                }
-                SweepTypeData::EffectValue => {
-                    let min = values.currency(0, 0.0);
-                    let max = values.currency(1, 100000.0);
-                    let steps = values.int(2, 6);
-                    (min, max, steps)
-                }
-            };
-            Some((min, max, steps))
+    let options = state
+        .data()
+        .named_parameters
+        .iter()
+        .filter(|parameter| {
+            !state
+                .analysis_state
+                .sweep_parameters
+                .iter()
+                .any(|sweep| sweep.parameter_name == parameter.name)
+        })
+        .map(|p| p.name.clone())
+        .collect::<Vec<_>>();
+    if options.is_empty() {
+        return ActionResult::error(if state.data().named_parameters.is_empty() {
+            "No named parameters defined. Add variables in the Parameters panel on the Events tab first."
         } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    // Apply updates
-    if let Some((min_value, max_value, step_count)) = updates
-        && let Some(param) = state.analysis_state.sweep_parameters.get_mut(index)
-    {
-        param.min_value = min_value;
-        param.max_value = max_value;
-        param.step_count = step_count;
+            "All named parameters are already selected for analysis."
+        });
     }
-
-    // Invalidate stale results since config changed
-    state.analysis_state.invalidate_stale_results();
-
-    ActionResult::Modified(None)
+    ActionResult::modal(ModalState::Picker(
+        PickerModal::new(
+            "Select Parameter to Sweep",
+            options,
+            ModalAction::ADD_ANALYSIS_PARAMETER,
+        )
+        .with_typed_context(ModalContext::Analysis(AnalysisContext::SelectParameter)),
+    ))
 }
 
-/// Show the parameter edit form for an existing parameter
-fn show_edit_parameter_form(state: &mut AppState, index: usize) -> ActionResult {
-    let param = match state.analysis_state.sweep_parameters.get(index) {
-        Some(p) => p,
-        None => return ActionResult::error("Parameter not found"),
-    };
-
-    let event_name = &param.event_name;
-    let sweep_type = param.sweep_type;
-    let current_min = param.min_value;
-    let current_max = param.max_value;
-    let current_steps = param.step_count;
-
-    let (label, fields) = match sweep_type {
-        SweepTypeData::TriggerAge
-        | SweepTypeData::RepeatingStartAge
-        | SweepTypeData::RepeatingEndAge => {
-            let type_label = sweep_type.display_name();
+fn default_bounds(value: ParameterValue) -> (ParameterValue, ParameterValue) {
+    match value {
+        ParameterValue::Money(value) => {
+            let spread = (value.abs() * 0.5).max(100.0);
             (
-                format!("Configure {} Sweep: {}", type_label, event_name),
-                vec![
-                    FormField::new(
-                        "Min Age",
-                        FieldType::Text,
-                        &format!("{}", current_min as i32),
-                    ),
-                    FormField::new(
-                        "Max Age",
-                        FieldType::Text,
-                        &format!("{}", current_max as i32),
-                    ),
-                    FormField::new("Steps", FieldType::Text, &current_steps.to_string()),
-                ],
+                ParameterValue::Money(value - spread),
+                ParameterValue::Money(value + spread),
             )
         }
-        SweepTypeData::TriggerDate => (
-            format!("Configure Year Sweep: {}", event_name),
-            vec![
-                FormField::new(
-                    "Min Year",
-                    FieldType::Text,
-                    &format!("{}", current_min as i32),
-                ),
-                FormField::new(
-                    "Max Year",
-                    FieldType::Text,
-                    &format!("{}", current_max as i32),
-                ),
-                FormField::new("Steps", FieldType::Text, &current_steps.to_string()),
-            ],
+        ParameterValue::Rate(value) => {
+            let spread = (value.abs() * 0.5).max(0.01);
+            (
+                ParameterValue::Rate(value - spread),
+                ParameterValue::Rate(value + spread),
+            )
+        }
+        ParameterValue::Date(date) => (
+            ParameterValue::Date(date),
+            ParameterValue::Date(date.checked_add(jiff::Span::new().years(1)).unwrap_or(date)),
         ),
-        SweepTypeData::EffectValue => (
-            format!("Configure Amount Sweep: {}", event_name),
-            vec![
-                FormField::currency("Min Amount", current_min),
-                FormField::currency("Max Amount", current_max),
-                FormField::new("Steps", FieldType::Text, &current_steps.to_string()),
-            ],
+        ParameterValue::Age(age) => {
+            let months = u16::from(age.years) * 12 + u16::from(age.months);
+            let to_age = |months: u16| {
+                ParameterValue::Age(CalendarAge::new((months / 12) as u8, (months % 12) as u8))
+            };
+            (
+                to_age(months.saturating_sub(60)),
+                to_age((months + 60).min(3071)),
+            )
+        }
+    }
+}
+
+fn parameter_form(sweep: &SweepParameterData, index: Option<usize>) -> ActionResult {
+    let mut fields = match (sweep.min_value, sweep.max_value) {
+        (ParameterValue::Money(min), ParameterValue::Money(max)) => vec![
+            FormField::new("Min Amount", FieldType::Currency, &min.to_string()),
+            FormField::new("Max Amount", FieldType::Currency, &max.to_string()),
+        ],
+        (ParameterValue::Rate(min), ParameterValue::Rate(max)) => vec![
+            FormField::new(
+                "Min Rate (%)",
+                FieldType::Percentage,
+                &(min * 100.0).to_string(),
+            ),
+            FormField::new(
+                "Max Rate (%)",
+                FieldType::Percentage,
+                &(max * 100.0).to_string(),
+            ),
+        ],
+        (ParameterValue::Date(min), ParameterValue::Date(max)) => vec![
+            FormField::text("Min Date (YYYY-MM-DD)", &min.to_string()),
+            FormField::text("Max Date (YYYY-MM-DD)", &max.to_string()),
+        ],
+        (ParameterValue::Age(min), ParameterValue::Age(max)) => vec![
+            FormField::text("Min Age (years)", &min.years.to_string()),
+            FormField::text("Min Age (months 0-11)", &min.months.to_string()),
+            FormField::text("Max Age (years)", &max.years.to_string()),
+            FormField::text("Max Age (months 0-11)", &max.months.to_string()),
+        ],
+        _ => return ActionResult::error("Sweep bounds must have the same parameter type"),
+    };
+    fields.push(FormField::text("Steps", &sweep.step_count.to_string()));
+    let (action, context) = match index {
+        Some(index) => (
+            AnalysisAction::ConfigureParameter { index },
+            AnalysisContext::Parameter { index },
+        ),
+        None => (
+            AnalysisAction::CreateParameter,
+            AnalysisContext::NewParameter {
+                parameter_name: sweep.parameter_name.clone(),
+            },
         ),
     };
+    ActionResult::modal(ModalState::Form(
+        FormModal::new(
+            &format!(
+                "Sweep: {} ({})",
+                sweep.parameter_name,
+                super::parameter::kind_name(sweep.min_value)
+            ),
+            fields,
+            ModalAction::Analysis(action),
+        )
+        .with_typed_context(ModalContext::Analysis(context))
+        .start_editing(),
+    ))
+}
 
-    let action = ModalAction::Analysis(AnalysisAction::ConfigureParameter { index });
-    let form = FormModal::new(&label, fields, action)
-        .with_typed_context(ModalContext::Analysis(AnalysisContext::Parameter { index }))
-        .start_editing();
+fn read_parameter_form(state: &AppState, name: &str) -> Result<SweepParameterData, String> {
+    let current = state
+        .data()
+        .named_parameters
+        .iter()
+        .find(|p| p.name == name)
+        .ok_or_else(|| format!("Parameter '{name}' not found"))?
+        .value;
+    let ModalState::Form(form) = &state.modal else {
+        return Err("Expected form modal".into());
+    };
+    let age = |offset| {
+        form.get_int::<u8>(offset)
+            .zip(form.get_int::<u8>(offset + 1))
+            .map(|(years, months)| ParameterValue::Age(CalendarAge::new(years, months)))
+    };
+    let (min, max, steps_index) = match current {
+        ParameterValue::Money(_) => (
+            form.get_currency(0).map(ParameterValue::Money),
+            form.get_currency(1).map(ParameterValue::Money),
+            2,
+        ),
+        ParameterValue::Rate(_) => (
+            form.get_percentage(0).map(ParameterValue::Rate),
+            form.get_percentage(1).map(ParameterValue::Rate),
+            2,
+        ),
+        ParameterValue::Date(_) => (
+            form.get_str(0)
+                .and_then(|s| s.parse().ok())
+                .map(ParameterValue::Date),
+            form.get_str(1)
+                .and_then(|s| s.parse().ok())
+                .map(ParameterValue::Date),
+            2,
+        ),
+        ParameterValue::Age(_) => (age(0), age(2), 4),
+    };
+    let min_value = min.ok_or("Enter a valid minimum value")?;
+    let max_value = max.ok_or("Enter a valid maximum value")?;
+    let step_count = form
+        .get_int::<usize>(steps_index)
+        .ok_or("Enter a whole number of steps")?;
+    let sweep = SweepParameterData {
+        parameter_name: name.into(),
+        min_value,
+        max_value,
+        step_count,
+    };
+    sweep.validate(current)?;
+    Ok(sweep)
+}
 
-    ActionResult::modal(ModalState::Form(form))
+fn handle_create_parameter(state: &mut AppState) -> ActionResult {
+    let name = match &state.modal {
+        ModalState::Form(form) => match &form.context {
+            Some(ModalContext::Analysis(AnalysisContext::NewParameter { parameter_name })) => {
+                parameter_name.clone()
+            }
+            _ => return ActionResult::error("Missing parameter context"),
+        },
+        _ => return ActionResult::error("Expected form modal"),
+    };
+    if state.analysis_state.sweep_parameters.len() >= 6
+        || state
+            .analysis_state
+            .sweep_parameters
+            .iter()
+            .any(|p| p.parameter_name == name)
+    {
+        return ActionResult::error("Choose a different parameter (maximum 6 dimensions)");
+    }
+    let sweep = match read_parameter_form(state, &name) {
+        Ok(sweep) => sweep,
+        Err(error) => return ActionResult::error(error),
+    };
+    state.analysis_state.sweep_parameters.push(sweep);
+    state.analysis_state.selected_param_index = state.analysis_state.sweep_parameters.len() - 1;
+    state.analysis_state.invalidate_stale_results();
+    ActionResult::Modified(None)
+}
+
+fn handle_configure_parameter(state: &mut AppState, index: usize) -> ActionResult {
+    let Some(sweep) = state.analysis_state.sweep_parameters.get(index) else {
+        return ActionResult::error("Parameter not found");
+    };
+    if !matches!(state.modal, ModalState::Form(_)) {
+        return parameter_form(sweep, Some(index));
+    }
+    let updated = match read_parameter_form(state, &sweep.parameter_name) {
+        Ok(sweep) => sweep,
+        Err(error) => return ActionResult::error(error),
+    };
+    state.analysis_state.sweep_parameters[index] = updated;
+    state.analysis_state.invalidate_stale_results();
+    ActionResult::Modified(None)
 }
 
 /// Delete a sweep parameter
@@ -576,53 +429,51 @@ fn handle_configure_settings(state: &mut AppState, _value: &str) -> ActionResult
 /// Start the analysis run
 fn handle_run_analysis(state: &mut AppState) -> ActionResult {
     use crate::state::PendingSimulation;
-    use finplan_core::analysis::{
-        EffectParam, EffectTarget, SweepConfig, SweepParameter, SweepTarget, TriggerParam,
-    };
-    use finplan_core::model::EventId;
-
-    // Validate we have parameters
+    use finplan_core::analysis::{SweepConfig, SweepParameter};
     if state.analysis_state.sweep_parameters.is_empty() {
-        return ActionResult::error("No sweep parameters configured. Press 'a' to add parameters.");
+        return ActionResult::error(
+            "No sweep parameters configured. Press 'a' to choose a named variable.",
+        );
     }
-
-    // Build core SweepConfig from TUI state
+    if state.analysis_state.mc_iterations == 0 {
+        return ActionResult::error("Use at least one Monte Carlo iteration in analysis settings");
+    }
+    if let Err(error) = state.data().validate_named_parameters() {
+        return ActionResult::error(error);
+    }
+    let (metadata, _) = crate::data::convert::amount_expression_context(state.data());
     let mut parameters = Vec::new();
-    for param in &state.analysis_state.sweep_parameters {
-        // Resolve EventId from event_name
-        let event_id = state
+    let mut names = std::collections::HashSet::new();
+    let mut total_points = 1usize;
+    for sweep in &state.analysis_state.sweep_parameters {
+        let Some(parameter) = state
             .data()
-            .events
+            .named_parameters
             .iter()
-            .position(|e| e.name.0 == param.event_name)
-            .map(|idx| EventId((idx + 1) as u16));
-
-        let Some(event_id) = event_id else {
-            return ActionResult::error(format!("Event '{}' not found", param.event_name));
+            .find(|p| p.name == sweep.parameter_name)
+        else {
+            return ActionResult::error(format!(
+                "Parameter '{}' no longer exists",
+                sweep.parameter_name
+            ));
         };
-
-        let target = match param.sweep_type {
-            SweepTypeData::TriggerAge => SweepTarget::Trigger(TriggerParam::Age),
-            SweepTypeData::TriggerDate => SweepTarget::Trigger(TriggerParam::Date),
-            SweepTypeData::EffectValue => SweepTarget::Effect {
-                param: EffectParam::Value,
-                target: EffectTarget::FirstEligible,
-            },
-            SweepTypeData::RepeatingStartAge => {
-                SweepTarget::Trigger(TriggerParam::RepeatingStart(Box::new(TriggerParam::Age)))
-            }
-            SweepTypeData::RepeatingEndAge => {
-                SweepTarget::Trigger(TriggerParam::RepeatingEnd(Box::new(TriggerParam::Age)))
-            }
+        if !names.insert(&sweep.parameter_name) {
+            return ActionResult::error("Each parameter can only be swept once");
+        }
+        if let Err(error) = sweep.validate(parameter.value) {
+            return ActionResult::error(format!("{}: {error}", sweep.parameter_name));
+        }
+        total_points = match total_points.checked_mul(sweep.step_count) {
+            Some(points) => points,
+            None => return ActionResult::error("Too many sweep points"),
         };
-
-        parameters.push(SweepParameter {
-            event_id,
-            target,
-            min_value: param.min_value,
-            max_value: param.max_value,
-            step_count: param.step_count,
-        });
+        let id = metadata
+            .parameter_id(&sweep.parameter_name)
+            .expect("validated named parameter");
+        parameters.push(SweepParameter::parameter(
+            sweep.parameter(id),
+            sweep.step_count,
+        ));
     }
 
     // Compute ALL metrics during sweep analysis (they all come from the same P50 run)
@@ -652,7 +503,7 @@ fn handle_run_analysis(state: &mut AppState) -> ActionResult {
     // Mark as running and set up progress tracking
     state.analysis_state.running = true;
     state.analysis_state.current_point = 0;
-    state.analysis_state.total_points = state.analysis_state.total_sweep_points();
+    state.analysis_state.total_points = total_points;
     state.analysis_state.results = None;
 
     // Switch to results panel to show progress
@@ -875,134 +726,208 @@ fn parse_color_scheme(value: &str) -> ColorScheme {
     }
 }
 
-// ========== Helper Functions ==========
-
-/// Sweepable target information: (event_name, sweep_types, defaults)
-/// Defaults are (sweep_type, default_min, default_max)
-type SweepableEvent = (String, Vec<SweepTypeData>, Vec<(SweepTypeData, f64, f64)>);
-
-/// Get events that have sweepable parameters
-fn get_sweepable_events(state: &AppState) -> Vec<SweepableEvent> {
-    let mut result = Vec::new();
-
-    for event in &state.data().events {
-        let mut targets = Vec::new();
-        let mut defaults = Vec::new();
-
-        // Check trigger for sweepable types
-        analyze_trigger(&event.trigger, &mut targets, &mut defaults);
-
-        // Check effects for sweepable types
-        for effect in &event.effects {
-            analyze_effect(effect, &mut targets, &mut defaults);
-        }
-
-        if !targets.is_empty() {
-            result.push((event.name.0.clone(), targets, defaults));
-        }
-    }
-
-    result
-}
-
-/// Analyze a trigger for sweepable parameters
-fn analyze_trigger(
-    trigger: &TriggerData,
-    targets: &mut Vec<SweepTypeData>,
-    defaults: &mut Vec<(SweepTypeData, f64, f64)>,
-) {
-    match trigger {
-        TriggerData::Age { years, .. } => {
-            if !targets.contains(&SweepTypeData::TriggerAge) {
-                targets.push(SweepTypeData::TriggerAge);
-                let age = *years as f64;
-                defaults.push((SweepTypeData::TriggerAge, age - 5.0, age + 5.0));
-            }
-        }
-        TriggerData::Date { date } => {
-            if !targets.contains(&SweepTypeData::TriggerDate) {
-                targets.push(SweepTypeData::TriggerDate);
-                // Parse year from date string "YYYY-MM-DD"
-                let year = date
-                    .split('-')
-                    .next()
-                    .and_then(|s| s.parse::<f64>().ok())
-                    .unwrap_or(2030.0);
-                defaults.push((SweepTypeData::TriggerDate, year - 5.0, year + 5.0));
-            }
-        }
-        TriggerData::Repeating { start, end, .. } => {
-            // Check start trigger
-            if let Some(start_trigger) = start
-                && let TriggerData::Age { years, .. } = start_trigger.as_ref()
-                && !targets.contains(&SweepTypeData::RepeatingStartAge)
-            {
-                targets.push(SweepTypeData::RepeatingStartAge);
-                let age = *years as f64;
-                defaults.push((SweepTypeData::RepeatingStartAge, age - 5.0, age + 5.0));
-            }
-            // Check end trigger
-            if let Some(end_trigger) = end
-                && let TriggerData::Age { years, .. } = end_trigger.as_ref()
-                && !targets.contains(&SweepTypeData::RepeatingEndAge)
-            {
-                targets.push(SweepTypeData::RepeatingEndAge);
-                let age = *years as f64;
-                defaults.push((SweepTypeData::RepeatingEndAge, age - 5.0, age + 5.0));
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Analyze an effect for sweepable parameters
-fn analyze_effect(
-    effect: &EffectData,
-    targets: &mut Vec<SweepTypeData>,
-    defaults: &mut Vec<(SweepTypeData, f64, f64)>,
-) {
-    // Only sweep fixed amounts (not dynamic/account-based)
-    let amount = match effect {
-        EffectData::Income { amount, .. } => Some(amount),
-        EffectData::Expense { amount, .. } => Some(amount),
-        EffectData::Sweep { amount, .. } => Some(amount),
-        EffectData::AssetPurchase { amount, .. } => Some(amount),
-        EffectData::AssetSale { amount, .. } => Some(amount),
-        EffectData::AdjustBalance { amount, .. } => Some(amount),
-        EffectData::CashTransfer { amount, .. } => Some(amount),
-        _ => None,
-    };
-
-    if let Some(amount) = amount
-        && let Some(fixed_value) = extract_fixed_amount(amount)
-        && !targets.contains(&SweepTypeData::EffectValue)
-    {
-        targets.push(SweepTypeData::EffectValue);
-        // Default range: 50% to 150% of current value
-        let min = (fixed_value * 0.5).max(0.0);
-        let max = fixed_value * 1.5;
-        defaults.push((SweepTypeData::EffectValue, min, max));
-    }
-}
-
-/// Extract fixed value from an amount (handling inflation-adjusted wrappers)
-fn extract_fixed_amount(amount: &AmountData) -> Option<f64> {
-    match amount {
-        AmountData::Fixed { value } => Some(*value),
-        AmountData::InflationAdjusted { inner } => extract_fixed_amount(inner),
-        AmountData::Scale { inner, .. } => extract_fixed_amount(inner),
-        _ => None,
-    }
-}
-
-/// Get display label for a sweep parameter
+/// Get a readable range for a named sweep parameter.
 pub fn format_parameter_label(param: &SweepParameterData) -> String {
+    use crate::data::analysis_data::format_sweep_value;
     format!(
-        "{}: {} ({:.0} - {:.0}, {} steps)",
-        param.event_name,
-        param.sweep_type.display_name(),
-        param.min_value,
-        param.max_value,
+        "{}: {} - {} ({} steps)",
+        param.parameter_name,
+        format_sweep_value(param.min_value),
+        format_sweep_value(param.max_value),
         param.step_count
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{
+        app_data::SimulationData,
+        events_data::{AccountTag, AmountData, EffectData, EventData, EventTag, TriggerData},
+        named_parameters::NamedParameterData,
+    };
+    use crate::state::{AnalysisResults, PendingSimulation};
+    use finplan_core::{
+        analysis::{SweepResults, SweepTarget},
+        model::ParameterId,
+    };
+    use jiff::civil::date;
+
+    fn state() -> AppState {
+        let mut state = AppState::new();
+        state.data_mut().events = vec![EventData {
+            name: EventTag("Event only".into()),
+            description: None,
+            trigger: TriggerData::Age {
+                years: 65,
+                months: None,
+            },
+            effects: vec![EffectData::Income {
+                to: AccountTag("Cash".into()),
+                amount: AmountData::fixed(100.0),
+                gross: true,
+                taxable: false,
+            }],
+            once: true,
+            enabled: true,
+        }];
+        state.data_mut().named_parameters = vec![
+            NamedParameterData {
+                name: "Spending".into(),
+                value: ParameterValue::Money(1000.0),
+            },
+            NamedParameterData {
+                name: "Rate".into(),
+                value: ParameterValue::Rate(0.04),
+            },
+            NamedParameterData {
+                name: "Start".into(),
+                value: ParameterValue::Date(date(2025, 1, 1)),
+            },
+            NamedParameterData {
+                name: "Retire".into(),
+                value: ParameterValue::Age(CalendarAge::new(65, 0)),
+            },
+        ];
+        state
+    }
+    fn choose(state: &mut AppState, name: &str, values: &[&str]) {
+        let ActionResult::Done(Some(ModalState::Form(mut form))) =
+            handle_add_parameter(state, name)
+        else {
+            panic!("expected typed form")
+        };
+        for (field, value) in form.fields.iter_mut().zip(values) {
+            field.value = (*value).into();
+        }
+        state.modal = ModalState::Form(form);
+    }
+
+    #[test]
+    fn picker_uses_only_declared_variables_and_excludes_selected_ones() {
+        let mut state = state();
+        let ActionResult::Done(Some(ModalState::Picker(picker))) =
+            handle_add_parameter(&mut state, "")
+        else {
+            panic!()
+        };
+        assert_eq!(picker.options, ["Spending", "Rate", "Start", "Retire"]);
+        assert!(matches!(
+            handle_add_parameter(&mut state, "Event only"),
+            ActionResult::Error(_)
+        ));
+        choose(&mut state, "Spending", &["500", "1500", "3"]);
+        assert!(matches!(
+            handle_create_parameter(&mut state),
+            ActionResult::Modified(_)
+        ));
+        let ActionResult::Done(Some(ModalState::Picker(picker))) =
+            handle_add_parameter(&mut state, "")
+        else {
+            panic!()
+        };
+        assert_eq!(picker.options, ["Rate", "Start", "Retire"]);
+        assert!(matches!(
+            handle_add_parameter(&mut state, "Spending"),
+            ActionResult::Error(_)
+        ));
+        state.data_mut().named_parameters.clear();
+        assert!(
+            matches!(handle_add_parameter(&mut state, ""), ActionResult::Error(message) if message.contains("Parameters panel"))
+        );
+    }
+
+    #[test]
+    fn all_parameter_types_save_load_and_target_the_registry() {
+        let mut state = state();
+        for (name, fields) in [
+            ("Spending", vec!["500", "1500", "3"]),
+            ("Rate", vec!["2", "6", "3"]),
+            ("Start", vec!["2024-02-28", "2024-03-01", "3"]),
+            ("Retire", vec!["65", "11", "66", "1", "3"]),
+        ] {
+            choose(&mut state, name, &fields);
+            assert!(
+                matches!(
+                    handle_create_parameter(&mut state),
+                    ActionResult::Modified(_)
+                ),
+                "{name}"
+            );
+        }
+        assert_eq!(
+            state.analysis_state.sweep_parameters[1].min_value,
+            ParameterValue::Rate(0.02)
+        );
+        state.save_analysis_to_current_scenario();
+        let loaded = SimulationData::from_yaml(&state.data().to_yaml().unwrap()).unwrap();
+        assert_eq!(
+            loaded.analysis.sweep_parameters,
+            state.analysis_state.sweep_parameters
+        );
+        state
+            .analysis_state
+            .load_from_config(&loaded.analysis, &loaded.named_parameters);
+        assert!(matches!(
+            handle_run_analysis(&mut state),
+            ActionResult::Done(_)
+        ));
+        let Some(PendingSimulation::SweepAnalysis { sweep_config }) = &state.pending_simulation
+        else {
+            panic!()
+        };
+        assert_eq!(sweep_config.total_points(), 81);
+        for (index, sweep) in sweep_config.parameters.iter().enumerate() {
+            assert!(
+                matches!(&sweep.target, SweepTarget::Parameter(p) if p.parameter_id == ParameterId(index as u16))
+            );
+        }
+        let result = AnalysisResults::new(SweepResults::new(
+            sweep_config.all_sweep_values(),
+            sweep_config.labels(),
+            1960,
+        ))
+        .with_parameters(&state.analysis_state.sweep_parameters);
+        assert_eq!(result.param_label(1), "Rate");
+        assert_eq!(result.format_param_value(1, 0.04), "4.00%");
+        assert_eq!(result.format_param_value(2, 1.0), "2024-02-29");
+        assert_eq!(result.format_param_value(3, 792.0), "66y 0m");
+    }
+
+    #[test]
+    fn invalid_ranges_do_not_create_or_modify_a_sweep() {
+        let mut state = state();
+        for (name, fields) in [
+            ("Spending", vec!["NaN", "1500", "3"]),
+            ("Spending", vec!["500", "1500", "1"]),
+            ("Rate", vec!["6", "2", "3"]),
+            ("Start", vec!["2024-02-30", "2024-03-01", "3"]),
+            ("Start", vec!["2024-02-28", "2024-03-01", "4"]),
+            ("Retire", vec!["65", "12", "66", "1", "3"]),
+        ] {
+            choose(&mut state, name, &fields);
+            assert!(
+                matches!(handle_create_parameter(&mut state), ActionResult::Error(_)),
+                "{name}"
+            );
+            assert!(state.analysis_state.sweep_parameters.is_empty());
+        }
+        choose(&mut state, "Rate", &["2", "6", "3"]);
+        handle_create_parameter(&mut state);
+        let before = state.analysis_state.sweep_parameters.clone();
+        if let ModalState::Form(form) = &mut state.modal {
+            form.fields[1].value = "bad".into();
+        }
+        assert!(matches!(
+            handle_configure_parameter(&mut state, 0),
+            ActionResult::Error(_)
+        ));
+        assert_eq!(state.analysis_state.sweep_parameters, before);
+        state.data_mut().named_parameters[1].value = ParameterValue::Money(1.0);
+        assert!(matches!(
+            handle_run_analysis(&mut state),
+            ActionResult::Error(_)
+        ));
+        assert!(state.pending_simulation.is_none());
+    }
 }

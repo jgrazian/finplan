@@ -391,12 +391,32 @@ pub struct SensitivityEntry {
 pub struct AnalysisResults {
     /// The core sweep results with N-dimensional data
     pub sweep_results: SweepResults,
+    /// Typed bounds for names and chart-axis formatting.
+    pub parameters: Vec<SweepParameterData>,
 }
 
 impl AnalysisResults {
     /// Create new analysis results from core SweepResults
     pub fn new(sweep_results: SweepResults) -> Self {
-        Self { sweep_results }
+        Self {
+            sweep_results,
+            parameters: Vec::new(),
+        }
+    }
+
+    pub fn with_parameters(mut self, parameters: &[SweepParameterData]) -> Self {
+        self.parameters = parameters.to_vec();
+        for (label, parameter) in self.sweep_results.param_labels.iter_mut().zip(parameters) {
+            *label = parameter.parameter_name.clone();
+        }
+        self
+    }
+
+    pub fn format_param_value(&self, dimension: usize, coordinate: f64) -> String {
+        self.parameters.get(dimension).map_or_else(
+            || coordinate.to_string(),
+            |p| p.format_coordinate(coordinate),
+        )
     }
 
     /// Get number of dimensions
@@ -1120,12 +1140,29 @@ impl AnalysisState {
     }
 
     /// Convert persistable config to runtime state (loads from scenario)
-    pub fn load_from_config(&mut self, config: &AnalysisConfigData) {
-        self.sweep_parameters = config.sweep_parameters.clone();
+    pub fn load_from_config(
+        &mut self,
+        config: &AnalysisConfigData,
+        parameters: &[crate::data::named_parameters::NamedParameterData],
+    ) {
+        self.sweep_parameters = config
+            .sweep_parameters
+            .iter()
+            .filter(|sweep| {
+                parameters
+                    .iter()
+                    .any(|p| p.name == sweep.parameter_name && sweep.validate(p.value).is_ok())
+            })
+            .cloned()
+            .collect();
         self.selected_metrics = config.selected_metrics.clone();
         self.mc_iterations = config.mc_iterations;
         self.default_steps = config.default_steps;
-        self.chart_configs = config.chart_configs.clone();
+        self.chart_configs = if self.sweep_parameters.len() == config.sweep_parameters.len() {
+            config.chart_configs.clone()
+        } else {
+            Vec::new()
+        };
         // Reset transient state
         self.selected_param_index = 0;
         self.selected_metric_index = 0;
@@ -1196,16 +1233,5 @@ fn convert_sweep_to_analysis_results(
     results: &finplan_core::analysis::SweepResults,
     sweep_params: &[SweepParameterData],
 ) -> AnalysisResults {
-    // Clone the results and update labels with event names
-    let mut sweep_results = results.clone();
-
-    // Generate labels from sweep parameters (e.g., "Retirement Age" instead of "Age (Event 8)")
-    for (idx, param) in sweep_params.iter().enumerate() {
-        if idx < sweep_results.param_labels.len() {
-            sweep_results.param_labels[idx] =
-                format!("{} {}", param.event_name, param.sweep_type.display_name());
-        }
-    }
-
-    AnalysisResults::new(sweep_results)
+    AnalysisResults::new(results.clone()).with_parameters(sweep_params)
 }

@@ -1,6 +1,5 @@
 /// Modal types for forms, pickers, and confirmations.
 use super::action::ModalAction;
-use super::amount_builder::format_amount_summary;
 use super::context::ModalContext;
 use crate::data::events_data::AmountData;
 
@@ -104,12 +103,15 @@ impl TextInputModal {
 
     pub fn insert_char(&mut self, c: char) {
         self.value.insert(self.cursor_pos, c);
-        self.cursor_pos += 1;
+        self.cursor_pos += c.len_utf8();
     }
 
     pub fn backspace(&mut self) {
         if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
+            self.cursor_pos = self.value[..self.cursor_pos]
+                .char_indices()
+                .next_back()
+                .map_or(0, |(i, _)| i);
             self.value.remove(self.cursor_pos);
         }
     }
@@ -122,13 +124,20 @@ impl TextInputModal {
 
     pub fn move_cursor_left(&mut self) {
         if self.cursor_pos > 0 {
-            self.cursor_pos -= 1;
+            self.cursor_pos = self.value[..self.cursor_pos]
+                .char_indices()
+                .next_back()
+                .map_or(0, |(i, _)| i);
         }
     }
 
     pub fn move_cursor_right(&mut self) {
         if self.cursor_pos < self.value.len() {
-            self.cursor_pos += 1;
+            self.cursor_pos += self.value[self.cursor_pos..]
+                .chars()
+                .next()
+                .unwrap()
+                .len_utf8();
         }
     }
 
@@ -273,7 +282,7 @@ pub enum FieldType {
     ReadOnly,
     /// Select from a list of options (options stored in FormField.options)
     Select,
-    /// Complex amount with recursive structure (displayed as summary, edited via modal)
+    /// Static or expression amount, edited inline
     Amount(Box<AmountData>),
     /// Trigger field - displays summary, Enter opens trigger editor
     /// Stores the trigger summary string for display
@@ -288,6 +297,7 @@ pub struct FormField {
     pub cursor_pos: usize,
     /// Options for Select field type
     pub options: Vec<String>,
+    pub amount_input: Option<super::amount_input::AmountInput>,
 }
 
 impl FormField {
@@ -298,6 +308,7 @@ impl FormField {
             value: value.to_string(),
             cursor_pos: 0,
             options: Vec::new(),
+            amount_input: None,
         }
     }
 
@@ -336,19 +347,38 @@ impl FormField {
             value,
             cursor_pos: 0,
             options,
+            amount_input: None,
         }
     }
 
-    /// Create an amount field with recursive AmountData structure.
-    /// The value is displayed as a summary; editing opens a nested modal.
+    /// All effect amount fields share the static/expression editor.
     pub fn amount(label: &str, amount: AmountData) -> Self {
-        let value = format_amount_summary(&amount);
-        Self {
-            label: label.to_string(),
-            field_type: FieldType::Amount(Box::new(amount)),
-            value,
-            cursor_pos: 0,
-            options: Vec::new(),
+        let mut field = Self::new(label, FieldType::Amount(Box::new(amount.clone())), "");
+        field.set_amount(amount);
+        field
+    }
+
+    pub fn parsed_amount(&self) -> Option<AmountData> {
+        let input = self.amount_input.as_ref()?;
+        if input.expression {
+            if let FieldType::Amount(original) = &self.field_type
+                && original.as_fixed().is_none()
+                && original.to_source() == self.value
+            {
+                return Some((**original).clone());
+            }
+            Some(AmountData::Expression {
+                source: self.value.clone(),
+            })
+        } else {
+            self.value
+                .trim()
+                .trim_start_matches('$')
+                .replace(',', "")
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite())
+                .map(AmountData::fixed)
         }
     }
 
@@ -368,12 +398,18 @@ impl FormField {
             value: summary.to_string(),
             cursor_pos: 0,
             options: Vec::new(),
+            amount_input: None,
         }
     }
 
     /// Update the amount data (for Amount fields)
     pub fn set_amount(&mut self, amount: AmountData) {
-        self.value = format_amount_summary(&amount);
+        self.value = amount.to_source();
+        self.cursor_pos = self.value.len();
+        self.amount_input = Some(super::amount_input::AmountInput {
+            expression: amount.as_fixed().is_none(),
+            alternate: None,
+        });
         self.field_type = FieldType::Amount(Box::new(amount));
     }
 
@@ -421,6 +457,11 @@ pub struct FormModal {
     pub kind: FormKind,
     /// Original value of field being edited (for Esc to revert)
     pub editing_original_value: Option<String>,
+    pub editing_original_amount: Option<Box<FormField>>,
+    pub error: Option<String>,
+    pub completion: Option<super::amount_input::Completion>,
+    /// Help overlays the form without changing its draft or editing state.
+    pub amount_help: Option<super::amount_help::AmountHelp>,
 }
 
 impl FormModal {
@@ -440,6 +481,10 @@ impl FormModal {
             context: None,
             kind: FormKind::default(),
             editing_original_value: None,
+            editing_original_amount: None,
+            error: None,
+            completion: None,
+            amount_help: None,
         }
     }
 
@@ -542,10 +587,7 @@ impl FormModal {
 
     /// Get an AmountData value from a field by index
     pub fn get_amount(&self, index: usize) -> Option<AmountData> {
-        self.fields.get(index).and_then(|f| match &f.field_type {
-            FieldType::Amount(amount) => Some((**amount).clone()),
-            _ => None,
-        })
+        self.fields.get(index).and_then(FormField::parsed_amount)
     }
 
     /// Get an AmountData value with a default if not found or not an Amount field
@@ -639,7 +681,7 @@ impl FormModal {
     pub fn amount(&self, label: &str) -> Option<AmountData> {
         self.field_by_label(label)
             .and_then(|f| match &f.field_type {
-                FieldType::Amount(amount) => Some((**amount).clone()),
+                FieldType::Amount(_) => f.parsed_amount(),
                 _ => None,
             })
     }

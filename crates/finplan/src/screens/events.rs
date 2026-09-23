@@ -606,6 +606,7 @@ impl EventsScreen {
 
     fn format_amount(amount: &AmountData) -> String {
         match amount {
+            AmountData::Expression { source } => source.clone(),
             AmountData::Parameter { name } => format!("Parameter: {}", name),
             AmountData::RateTimes { rate, inner } => format!(
                 "{} × {}",

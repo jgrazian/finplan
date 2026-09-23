@@ -34,7 +34,7 @@ pub enum OptimizationObjective {
 ///
 /// Money and Rate are continuous. Date is searched in whole days, and Age in
 /// whole months. Both bounds must match the configured parameter's type.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OptimizableParameter {
     pub parameter_id: ParameterId,
     pub min_value: ParameterValue,
