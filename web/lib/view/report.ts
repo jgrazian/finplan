@@ -1,4 +1,5 @@
 import type { Results } from "../api/types";
+import type { RealQuantilePoint } from "../api/generated/RealQuantilePoint";
 import type { RunInputs } from "../api/generated/RunInputs";
 export function escapeReport(value: unknown): string {
   return String(value ?? "Not recorded").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -51,6 +52,23 @@ function assumptions(graph: Graph): string {
     <h3>Income, spending and life events</h3>${eventTable ? table(eventTable) : "<p>No events recorded. Missing spending can overstate cash funding.</p>"}
     <p>This summary describes the saved assumptions; download the saved inputs in FinPlan to inspect complete funding rules and nested event schedules.</p>`;
 }
+/** Final real net worth at every percentile the run measured, low to high. */
+function terminalRow(point: RealQuantilePoint, baseDate: string): string {
+  const all: Array<[number, number | null]> = [
+    [5, point.p5],
+    [10, point.p10],
+    [25, point.p25],
+    [50, point.p50],
+    [75, point.p75],
+    [90, point.p90],
+    [95, point.p95],
+  ];
+  const ranks = all.filter((entry): entry is [number, number] => entry[1] != null);
+  return row(
+    `Final real net worth ${ranks.map(([p]) => `P${p}`).join(" / ")} (${baseDate} dollars)`,
+    ranks.map(([, v]) => money(v)).join(" / "),
+  );
+}
 export function reportHtml(results: Results, inputs: RunInputs): string {
   const graph = inputs.snapshot as Graph | null, scenario = record(graph?.scenario);
   const real = results.real_net_worth;
@@ -59,7 +77,7 @@ export function reportHtml(results: Results, inputs: RunInputs): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>FinPlan run ${results.run_id}</title><style>body{font:14px system-ui;max-width:900px;margin:32px auto;padding:24px;color:#172520;line-height:1.5}h1{font-size:28px}h2{margin-top:28px}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:8px;border-bottom:1px solid #bbb;vertical-align:top}th{width:38%}p{overflow-wrap:anywhere}@media print{body{margin:0}tr{break-inside:avoid}h2,h3{break-after:avoid}}</style></head><body>
   <h1>${escapeReport(scenario.name ?? "Historical plan")}</h1><p>FinPlan saved run #${results.run_id} · Generated ${escapeReport(new Date().toISOString())}</p>
   <p>This report describes the saved run's inputs. It does not incorporate later plan edits. Simulation outcomes depend on the assumptions below and are not guarantees.</p>
-  <h2>Outcomes</h2>${table(row("Cash funding", percent(results.stats.funding_success_rate)) + row("Positive ending net worth", percent(results.stats.success_rate)) + row("Mean final net worth (nominal)", money(results.stats.mean_final_net_worth)) + percentileRows + (real ? row(`Mean final net worth (${real.terminal.base_date} dollars)`, money(real.terminal.mean)) : "") + (terminalPoint ? row(`Final real net worth P5 / P50 / P95 (${real!.terminal.base_date} dollars)`, [terminalPoint.p5, terminalPoint.p50, terminalPoint.p95].map(money).join(" / ")) : "") + row("Lifetime taxes (nominal run summary)", money(results.stats.lifetime_taxes)))}
+  <h2>Outcomes</h2>${table(row("Cash funding", percent(results.stats.funding_success_rate)) + row("Positive ending net worth", percent(results.stats.success_rate)) + row("Mean final net worth (nominal)", money(results.stats.mean_final_net_worth)) + percentileRows + (real ? row(`Mean final net worth (${real.terminal.base_date} dollars)`, money(real.terminal.mean)) : "") + (terminalPoint ? terminalRow(terminalPoint, real!.terminal.base_date) : "") + row("Lifetime taxes (nominal run summary)", money(results.stats.lifetime_taxes)))}
   <p>Cash funding checks settled cash shortfalls and event-processing warnings. It cannot detect omitted spending. Positive ending net worth measures terminal wealth and can coexist with earlier cash shortfalls. Percentiles describe simulated outcomes, not guarantees.</p>
   <h2>Selected path warnings</h2><p>Path ${escapeReport(results.series_id)}; these are representative-path diagnostics, not all-path failure frequencies.</p><ul>${results.warnings.map(w => `<li>${escapeReport(w.date)}: ${escapeReport(w.message)}</li>`).join("") || "<li>No warnings recorded for this path.</li>"}</ul>
   ${graph ? assumptions(graph) : "<h2>Saved assumptions</h2><p>Historical inputs were not captured. Assumptions cannot be reconstructed.</p>"}

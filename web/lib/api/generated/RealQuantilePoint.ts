@@ -6,6 +6,14 @@
 export type RealQuantilePoint = {
   date: string;
   p5: number;
+  /**
+   * P10, P25, P75 and P90: the Results fan's two bands. Null on runs
+   * stored before they were measured, which only have P5–P95.
+   */
+  p10: number | null;
+  p25: number | null;
   p50: number;
+  p75: number | null;
+  p90: number | null;
   p95: number;
 };

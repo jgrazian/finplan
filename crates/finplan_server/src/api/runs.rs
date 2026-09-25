@@ -86,8 +86,11 @@ fn default_iterations() -> i64 {
     1000
 }
 
+/// The example runs stored alongside the envelope: a bad case, the middle and
+/// a good case, at the fan's outer band rather than out at P5/P95, where a
+/// path is often a degenerate wipe-out or a runaway.
 fn default_percentiles() -> Vec<f64> {
-    vec![0.05, 0.50, 0.95]
+    vec![0.10, 0.50, 0.90]
 }
 
 fn default_batch() -> i64 {
@@ -496,7 +499,13 @@ pub struct Warning {
 pub struct RealQuantilePoint {
     pub date: String,
     pub p5: f64,
+    /// P10, P25, P75 and P90: the Results fan's two bands. Null on runs
+    /// stored before they were measured, which only have P5–P95.
+    pub p10: Option<f64>,
+    pub p25: Option<f64>,
     pub p50: f64,
+    pub p75: Option<f64>,
+    pub p90: Option<f64>,
     pub p95: f64,
 }
 
@@ -737,8 +746,12 @@ pub(crate) async fn results(
     ).bind(id).fetch_optional(&state.db).await?;
     let real_net_worth = if let Some(terminal) = real_terminal {
         let points = sqlx::query_as(
-            "SELECT as_of_date AS date, p5, p50, p95 FROM run_real_quantiles WHERE run_id = ?1 ORDER BY as_of_date",
-        ).bind(id).fetch_all(&state.db).await?;
+            "SELECT as_of_date AS date, p5, p10, p25, p50, p75, p90, p95
+             FROM run_real_quantiles WHERE run_id = ?1 ORDER BY as_of_date",
+        )
+        .bind(id)
+        .fetch_all(&state.db)
+        .await?;
         Some(RealNetWorthSummary { terminal, points })
     } else {
         None

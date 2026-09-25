@@ -45,7 +45,13 @@ export function isTerminal(status: string): boolean {
  * rank; detail/ledger requests must use the resolved ID, not the selector target.
  */
 export const SERIES: Record<Percentile, string> = {
-  p5: "0.05",
+  p10: "0.1",
   p50: "0.5",
-  p95: "0.95",
+  p90: "0.9",
 };
+
+/**
+ * The example runs a new run stores. A run started before these keeps its
+ * P5/P95 paths, and the server answers a P10/P90 request with the nearest.
+ */
+export const STORED_PERCENTILES = [0.1, 0.5, 0.9];

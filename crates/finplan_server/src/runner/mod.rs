@@ -559,7 +559,7 @@ async fn execute(
     let mc_config = MonteCarloConfig {
         iterations: iterations as usize,
         percentiles: if percentiles.is_empty() {
-            vec![0.05, 0.50, 0.95]
+            vec![0.10, 0.50, 0.90]
         } else {
             percentiles
         },

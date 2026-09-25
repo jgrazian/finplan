@@ -1,41 +1,38 @@
 "use client";
 
 import { type Scale, areaPath, bandPath, barColumn, linePath } from "./geometry";
-import type { AccountSeries } from "@/lib/types";
+import type { AccountSeries, NetWorthBands } from "@/lib/types";
 import { stackSeries } from "./stack";
 
-/** Pointwise real P5–P95 envelope. Dashed median is NOT a coherent path. */
+/**
+ * Pointwise real envelope: the outer band (P10–P90) light, the inner band
+ * (P25–P75) darker over it, and the P50. None of them is a coherent path.
+ * The scale is set by the inner band, so the outer one may run off the top
+ * and is clipped there by the scale's own clamp.
+ */
 export function FanSeries({
-  p5,
-  p50,
-  p95,
+  bands,
   scale,
 }: {
-  p5: number[];
-  p50: number[];
-  p95: number[];
+  bands: NetWorthBands;
   scale: Scale;
 }) {
+  const [lo, hi] = bands.outer;
   return (
     <g>
-      <path d={bandPath(p95, p5, scale)} fill="var(--color-accent)" fillOpacity={0.16} />
-      <path
-        d={linePath(p95, scale)}
-        fill="none"
-        stroke="var(--color-accent)"
-        strokeOpacity={0.55}
-        strokeWidth={1}
-        strokeDasharray="4 3"
-      />
-      <path
-        d={linePath(p5, scale)}
-        fill="none"
-        stroke="var(--color-accent)"
-        strokeOpacity={0.55}
-        strokeWidth={1}
-        strokeDasharray="4 3"
-      />
-      <path d={linePath(p50, scale)} fill="none" stroke="var(--color-accent-700)" strokeWidth={2} strokeDasharray="6 4">
+      <path d={bandPath(bands.high, bands.low, scale)} fill="var(--color-accent)" fillOpacity={0.12}>
+        <title>{`Pointwise real P${lo}–P${hi}`}</title>
+      </path>
+      {bands.upperQuartile.length > 0 && (
+        <path
+          d={bandPath(bands.upperQuartile, bands.lowerQuartile, scale)}
+          fill="var(--color-accent)"
+          fillOpacity={0.22}
+        >
+          <title>Pointwise real P25–P75</title>
+        </path>
+      )}
+      <path d={linePath(bands.p50, scale)} fill="none" stroke="var(--color-accent-700)" strokeWidth={2} strokeDasharray="6 4">
         <title>Pointwise real P50 across all iterations (not a path)</title>
       </path>
     </g>

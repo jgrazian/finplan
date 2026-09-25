@@ -19,9 +19,9 @@ const SCALE_OPTIONS = [
 /* Ranked low to high, the way the envelope is drawn, rather than in the order
    the old cycle button happened to visit them. */
 const PATH_OPTIONS = [
-  { value: "p5" as const, label: "P5" },
+  { value: "p10" as const, label: "P10" },
   { value: "p50" as const, label: "P50" },
-  { value: "p95" as const, label: "P95" },
+  { value: "p90" as const, label: "P90" },
 ];
 
 /** Title, subtitle, view and axis switches, and the selected-path picker. */

@@ -76,14 +76,20 @@ export function toResultsData(
   const real = results.real_net_worth;
   const byDate = new Map(real?.points.map((point) => [point.date, point]));
   const hasEnvelope = isReal && dates.length > 0 && dates.every((date) => byDate.has(date));
-  const at = (key: "p5" | "p50" | "p95") =>
-    hasEnvelope ? dates.map((date) => byDate.get(date)![key]) : [];
+  const at = (key: "p5" | "p10" | "p25" | "p50" | "p75" | "p90" | "p95") =>
+    hasEnvelope ? dates.map((date) => byDate.get(date)![key] ?? Number.NaN) : [];
+  // Runs stored before the quartiles were measured have only P5–P95: draw
+  // that as the outer band and no inner one, rather than invent either.
+  const quartiles = hasQuartiles(real);
   const bands: NetWorthBands = {
     years: dates.map(yearOf),
     ages: dates.map(axis.at),
-    p5: at("p5"),
+    low: at(quartiles ? "p10" : "p5"),
+    high: at(quartiles ? "p90" : "p95"),
+    outer: quartiles ? [10, 90] : [5, 95],
+    lowerQuartile: quartiles ? at("p25") : [],
+    upperQuartile: quartiles ? at("p75") : [],
     p50: at("p50"),
-    p95: at("p95"),
   };
   const cashFlows = toCashFlows(results, axis, factorFor, pathValues, bands.years);
   const baseDate = real?.terminal.base_date ?? path?.dates[0] ?? scenario.start_date;
@@ -107,6 +113,15 @@ export function toResultsData(
     dollarLabel: isReal ? `${baseDate} dollars (annual inflation)` : "nominal dollars",
     totalInflation: isReal ? finalFactor(path) : Number.NaN,
   };
+}
+
+/** Whether a run measured P10–P90 and P25–P75, not just P5–P95. */
+function hasQuartiles(real: Results["real_net_worth"]): boolean {
+  return (
+    real != null &&
+    real.points.length > 0 &&
+    real.points.every((p) => p.p10 != null && p.p25 != null && p.p75 != null && p.p90 != null)
+  );
 }
 
 /** Cumulative inflation over the whole horizon of one path. */
@@ -143,7 +158,21 @@ function toStats(
     stdDevFinalNetWorth: real?.terminal.std_dev ?? Number.NaN,
     minFinalNetWorth: real?.terminal.min ?? Number.NaN,
     maxFinalNetWorth: real?.terminal.max ?? Number.NaN,
-    percentileValues: final ? [[0.05, final.p5], [0.5, final.p50], [0.95, final.p95]] : [],
+    percentileValues: !final
+      ? []
+      : hasQuartiles(real)
+        ? [
+            [0.1, final.p10!],
+            [0.25, final.p25!],
+            [0.5, final.p50],
+            [0.75, final.p75!],
+            [0.9, final.p90!],
+          ]
+        : [
+            [0.05, final.p5],
+            [0.5, final.p50],
+            [0.95, final.p95],
+          ],
     converged: stats.converged ?? undefined,
     convergenceMetric: stats.convergence_metric ?? undefined,
     convergenceValue: stats.convergence_value ?? undefined,

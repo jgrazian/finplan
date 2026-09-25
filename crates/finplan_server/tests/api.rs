@@ -398,7 +398,8 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
         .await;
     let run_id = run["id"].as_i64().unwrap();
     assert_eq!(app.await_run(run_id).await, "succeeded");
-    for series in ["0.05", "0.5", "0.95"] {
+    // The default example runs sit at the fan's outer band.
+    for series in ["0.1", "0.5", "0.9"] {
         let (status, results) = app
             .get(&format!("/api/runs/{run_id}/results?series={series}"))
             .await;
@@ -407,6 +408,12 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
         assert_eq!(results["stats"]["funding_success_rate"], 0.0);
         assert_eq!(results["series_id"], series);
         let real = &results["real_net_worth"];
+        // Both fan bands are stored, nested around the median.
+        for point in real["points"].as_array().unwrap() {
+            let q = |k: &str| point[k].as_f64().unwrap_or_else(|| panic!("{k}: {point}"));
+            assert!(q("p5") <= q("p10") && q("p10") <= q("p25") && q("p25") <= q("p50"));
+            assert!(q("p50") <= q("p75") && q("p75") <= q("p90") && q("p90") <= q("p95"));
+        }
         assert_eq!(real["terminal"]["num_iterations"], 4);
         assert_eq!(real["terminal"]["base_date"], "2026-01-01");
         // These deterministic paths all include a cash shortfall. They still

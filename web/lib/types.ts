@@ -99,7 +99,8 @@ export interface Account {
 }
 
 // ── results ───────────────────────────────────────────────────────────────
-export type Percentile = "p5" | "p50" | "p95";
+/** The example runs the Results page can follow: the fan's outer edges and middle. */
+export type Percentile = "p10" | "p50" | "p90";
 
 /**
  * Real terminal aggregates measured after deflating EACH iteration. Unmeasured
@@ -129,9 +130,17 @@ export interface NetWorthBands {
   years: number[];
   /** Age at each year, or the calendar year again when no birth date is set. */
   ages: number[];
-  p5: number[];
+  /**
+   * The outer band: P10–P90, or P5–P95 on a run stored before P10 and P90
+   * were measured. `outer` names which.
+   */
+  low: number[];
+  high: number[];
+  outer: [number, number];
+  /** The inner band, P25–P75. Empty on those older runs. */
+  lowerQuartile: number[];
+  upperQuartile: number[];
   p50: number[];
-  p95: number[];
 }
 
 /** Per-account contribution to net worth, for the stacked view. */

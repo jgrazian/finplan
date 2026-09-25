@@ -158,13 +158,18 @@ pub async fn persist(
         .execute(&mut *tx).await?;
         for point in &real.points {
             sqlx::query(
-                "INSERT INTO run_real_quantiles (run_id, as_of_date, p5, p50, p95)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO run_real_quantiles
+                     (run_id, as_of_date, p5, p10, p25, p50, p75, p90, p95)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )
             .bind(run_id)
             .bind(point.date.to_string())
             .bind(point.p5)
+            .bind(point.p10)
+            .bind(point.p25)
             .bind(point.p50)
+            .bind(point.p75)
+            .bind(point.p90)
             .bind(point.p95)
             .execute(&mut *tx)
             .await?;

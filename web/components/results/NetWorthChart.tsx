@@ -48,10 +48,18 @@ export function NetWorthChart({
     [accountSeries, bands.years.length],
   );
 
-  // Scale to everything drawn: a nominal-ranked real path can lie outside the
-  // pointwise envelope. Account composition also needs gross signed extents.
+  // The fan scales to its inner band and the path being followed, not to the
+  // outer band: the upper tail of long-horizon wealth is so skewed that
+  // scaling to P90 presses the median flat, so P10–P90 is clipped instead.
+  // Older runs without quartiles scale to their P5–P95 as before. Account
+  // composition needs gross signed extents.
   const plotted = useMemo(
-    () => (view === "fan" ? [bands.p5, bands.p50, bands.p95, pathValues] : [stack.positive, stack.negative, pathValues]),
+    () =>
+      view === "fan"
+        ? bands.upperQuartile.length
+          ? [bands.lowerQuartile, bands.p50, bands.upperQuartile, pathValues]
+          : [bands.low, bands.p50, bands.high, pathValues]
+        : [stack.positive, stack.negative, pathValues],
     [view, stack, bands, pathValues],
   );
 
@@ -79,7 +87,7 @@ export function NetWorthChart({
         onSelect={focus.pin}
       >
         {view === "fan" && (
-          <FanSeries p5={bands.p5} p50={bands.p50} p95={bands.p95} scale={scale} />
+          <FanSeries bands={bands} scale={scale} />
         )}
         {view === "stack" && <StackedSeries series={accountSeries} scale={scale} />}
         {view === "bar" && (

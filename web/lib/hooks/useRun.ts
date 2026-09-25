@@ -4,7 +4,7 @@ import { api } from "@/lib/api/client";
 import { historyApi } from "@/lib/api/history";
 import type { Results, Run, Scenario } from "@/lib/api/types";
 import type { RunInputs } from "@/lib/api/generated/RunInputs";
-import { SERIES, isTerminal } from "@/lib/api/types";
+import { SERIES, STORED_PERCENTILES, isTerminal } from "@/lib/api/types";
 import { preferredRun } from "@/lib/run/freshness";
 import { serverMonitor } from "@/lib/status/monitor";
 import type { RunEffort } from "@/components/results";
@@ -85,7 +85,7 @@ export function useRun(scenario: Scenario | undefined): RunState {
   const start=useCallback(async(effort:RunEffort)=>{
     if(id == null) return;
     try {
-      const queued=await api.runs.create(id,{iterations:effort.iterations,converge:effort.converge,percentiles:[0.05,0.5,0.95]});
+      const queued=await api.runs.create(id,{iterations:effort.iterations,converge:effort.converge,percentiles:STORED_PERCENTILES});
       update(id,v=>({...v,history:[queued,...v.history],selected:undefined,error:undefined,loading:false}));
       setRevision(v=>v+1);
     }catch(e){update(id,v=>({...v,error:e instanceof Error ? e.message : String(e),loading:false}));}

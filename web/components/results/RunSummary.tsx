@@ -13,6 +13,9 @@ export function RunSummary({
   totalInflation: number;
 }) {
   const quantile = (p: number) => stats.percentileValues.find(([rank]) => rank === p)?.[1] ?? Number.NaN;
+  // P10/P90 where the run measured them; P5/P95 on runs stored before.
+  const [low, high] = stats.percentileValues.some(([rank]) => rank === 0.1) ? [0.1, 0.9] : [0.05, 0.95];
+  const pct = (p: number) => `P${Math.round(p * 100)}`;
   return (
     <div>
       <SectionHeading className="mb-[10px]">All paths · {baseDate} dollars</SectionHeading>
@@ -24,8 +27,8 @@ export function RunSummary({
           } />
         )}
         <Stat label="real median final (P50)" value={fmtCompact(quantile(0.5))} />
-        <Stat label="real P5 final" value={fmtCompact(quantile(0.05))} />
-        <Stat label="real P95 final" value={fmtCompact(quantile(0.95))} />
+        <Stat label={`real ${pct(low)} final`} value={fmtCompact(quantile(low))} />
+        <Stat label={`real ${pct(high)} final`} value={fmtCompact(quantile(high))} />
         <Stat label="real mean final" value={fmtCompact(stats.meanFinalNetWorth)} />
         {!stats.percentileValues.length && <p>Not measured for this run. Rerun for real terminal statistics.</p>}
         <SectionHeading>Selected path</SectionHeading>

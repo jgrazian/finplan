@@ -25,9 +25,9 @@ function fixture(series = "0.5"): Results {
     real_net_worth: {
       terminal: {base_date: dates[0], num_iterations: 3, mean: 100, std_dev: 40.82, min: 50, max: 150},
       points: [
-        {date: dates[0], p5: 100, p50: 100, p95: 100},
-        {date: dates[1], p5: -35, p50: 100, p95: 280},
-        {date: dates[2], p5: 55, p50: 100, p95: 145},
+        {date: dates[0], p5: 100, p10: 100, p25: 100, p50: 100, p75: 100, p90: 100, p95: 100},
+        {date: dates[1], p5: -35, p10: -20, p25: 40, p50: 100, p75: 190, p90: 250, p95: 280},
+        {date: dates[2], p5: 55, p10: 60, p25: 80, p50: 100, p75: 120, p90: 140, p95: 145},
       ],
     },
     account_series: [{account_id: 1, label: "Bank", values: selected.net_worth}],
@@ -39,12 +39,16 @@ function fixture(series = "0.5"): Results {
 
 test("pointwise envelope and real aggregates are never inferred from nominal-ranked paths", () => {
   const data = toResultsData(fixture(), scenario, axis);
-  assert.deepEqual(data.bands.p5, [-35, 55]);
+  // Outer band P10–P90, inner band P25–P75.
+  assert.deepEqual(data.bands.outer, [10, 90]);
+  assert.deepEqual(data.bands.low, [-20, 60]);
+  assert.deepEqual(data.bands.lowerQuartile, [40, 80]);
   assert.deepEqual(data.bands.p50, [100, 100]);
-  assert.deepEqual(data.bands.p95, [280, 145]);
+  assert.deepEqual(data.bands.upperQuartile, [190, 120]);
+  assert.deepEqual(data.bands.high, [250, 140]);
   assert.deepEqual(data.pathValues, [300, 50]);
   assert.equal(data.stats.meanFinalNetWorth, 100); // NOT nominal mean 200 / selected inflation 4.
-  assert.deepEqual(data.stats.percentileValues, [[0.05, 55], [0.5, 100], [0.95, 145]]);
+  assert.deepEqual(data.stats.percentileValues, [[0.1, 60], [0.25, 80], [0.5, 100], [0.75, 120], [0.9, 140]]);
   assert.equal(data.baseDate, "2026-06-01");
   assert.equal(data.dollarLabel, "2026-06-01 dollars (annual inflation)");
   assert.equal(data.pathLabel, "P50 path");
@@ -76,9 +80,9 @@ test("historical runs show unavailable real statistics and no fabricated envelop
   old.real_net_worth = null;
   const data = toResultsData(old, scenario, axis);
   assert.equal(data.hasEnvelope, false);
-  assert.deepEqual(data.bands.p5, []);
+  assert.deepEqual(data.bands.low, []);
   assert.deepEqual(data.bands.p50, []);
-  assert.deepEqual(data.bands.p95, []);
+  assert.deepEqual(data.bands.high, []);
   assert.deepEqual(data.pathValues, [300, 50]);
   assert.ok(Number.isNaN(data.stats.meanFinalNetWorth));
   assert.deepEqual(data.stats.percentileValues, []);
@@ -107,4 +111,18 @@ test("empty detail does not borrow another path or fabricate wealth", () => {
   assert.deepEqual(data.bands.p50, []);
   assert.equal(data.stats.meanFinalNetWorth, 100);
   assert.ok(Number.isNaN(data.stats.lifetimeTaxes));
+});
+
+test("runs stored before the quartiles fall back to their P5–P95 band and no inner one", () => {
+  const old = fixture();
+  old.real_net_worth!.points = old.real_net_worth!.points.map((p) => ({
+    ...p, p10: null, p25: null, p75: null, p90: null,
+  }));
+  const data = toResultsData(old, scenario, axis);
+  assert.deepEqual(data.bands.outer, [5, 95]);
+  assert.deepEqual(data.bands.low, [-35, 55]);
+  assert.deepEqual(data.bands.high, [280, 145]);
+  assert.deepEqual(data.bands.lowerQuartile, []);
+  assert.deepEqual(data.bands.upperQuartile, []);
+  assert.deepEqual(data.stats.percentileValues, [[0.05, 55], [0.5, 100], [0.95, 145]]);
 });
