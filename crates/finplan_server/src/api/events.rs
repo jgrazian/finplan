@@ -348,6 +348,9 @@ fn read_effect(graph: &ScenarioGraph, effect_id: i64, depth: usize) -> ApiResult
                 _ => None,
             },
         },
+        "MarketShock" => EffectSpec::MarketShock {
+            drop: row.shock_drop.unwrap_or_default(),
+        },
         "SellProperty" => EffectSpec::SellProperty {
             property_account_id: from,
             to_account_id: to,
@@ -700,7 +703,7 @@ async fn collect_orphans(
     Ok(())
 }
 
-async fn write_tree(
+pub(crate) async fn write_tree(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     scenario_id: i64,
     event_id: i64,

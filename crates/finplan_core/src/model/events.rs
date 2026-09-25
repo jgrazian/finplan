@@ -466,6 +466,21 @@ pub enum EventEffect {
         payoff: Option<AccountId>,
     },
 
+    // === Market Events ===
+    /// A one-time crash: the price of every *market* asset drops by `drop`
+    /// (a fraction, `0.3` = −30%) at the moment the event fires, and keeps
+    /// compounding from the lower level afterwards.
+    ///
+    /// "Market" assets are the ones held as lots in investment accounts (and
+    /// any registered asset not backing a property). Cash balances, property
+    /// values and liability principals are left alone: a stock crash does not
+    /// mark down a checking account, a house, or a mortgage. Cost bases are
+    /// untouched, so a later sale realizes the loss.
+    MarketShock {
+        /// Fraction of value lost, in `(0, 1)`. Clamped to `[0, 1]`.
+        drop: f64,
+    },
+
     // === Equity Compensation ===
     /// RSU vesting: shares vest and are deposited to an investment account.
     /// The FMV at vesting is taxed as ordinary income.

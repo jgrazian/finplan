@@ -149,6 +149,7 @@ function walkEffect(effect: EffectSpec, out: Set<number>): void {
     case "PauseEvent":
     case "ResumeEvent":
     case "TerminateEvent":
+    case "MarketShock":
       return;
   }
 }

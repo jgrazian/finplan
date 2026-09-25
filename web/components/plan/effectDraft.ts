@@ -5,7 +5,7 @@
  * Covered: every effect the engine has except `Random`, which branches into two
  * more effects and would make this a tree editor rather than a list one.
  *
- * Sixteen engine kinds in thirteen forms: the four event-control effects differ
+ * Seventeen engine kinds in fourteen forms: the four event-control effects differ
  * only in their verb, and a block whose one field is an event id should not be
  * drawn four ways, so they share a form and the verb is a select inside it.
  *
@@ -44,6 +44,7 @@ export const EFFECT_FORMS = [
   "DeleteAccount",
   "BuyProperty",
   "SellProperty",
+  "MarketShock",
   "Event control",
 ] as const;
 export type EffectForm = (typeof EFFECT_FORMS)[number];
@@ -77,6 +78,7 @@ export const FAMILY: Record<EffectForm, { label: string; tone: TagTone }> = {
   DeleteAccount: { label: "accounts", tone: "outline" },
   BuyProperty: { label: "real estate", tone: "outline" },
   SellProperty: { label: "real estate", tone: "outline" },
+  MarketShock: { label: "market", tone: "neutral" },
   "Event control": { label: "event control", tone: "neutral" },
 };
 
@@ -155,6 +157,8 @@ export interface EffectDraft {
   sellingCostRate: number;
   /** `SellProperty`: gain excluded from tax. */
   gainExclusion: number;
+  /** `MarketShock`: the one-time fall in market asset prices, as a fraction (0–1). */
+  drop: number;
   /** An effect the form cannot express (`Random`) — held verbatim. */
   raw?: EffectSpec;
 }
@@ -187,6 +191,7 @@ export function emptyEffect(accountId: number, assetId: number): EffectDraft {
     payoff: true,
     sellingCostRate: 0.06,
     gainExclusion: 250_000,
+    drop: 0.3,
   };
 }
 
@@ -215,6 +220,8 @@ export interface EffectShape {
   financing: boolean;
   /** A sale's costs, exclusion and payoff. */
   sale: boolean;
+  /** A market shock's drop. */
+  shock: boolean;
 }
 
 const NOTHING: EffectShape = {
@@ -234,6 +241,7 @@ const NOTHING: EffectShape = {
   property: false,
   financing: false,
   sale: false,
+  shock: false,
 };
 
 export function shape(form: EffectForm): EffectShape {
@@ -278,6 +286,8 @@ export function shape(form: EffectForm): EffectShape {
       return { ...NOTHING, from: true, property: true, amount: true, financing: true };
     case "SellProperty":
       return { ...NOTHING, to: true, property: true, sale: true };
+    case "MarketShock":
+      return { ...NOTHING, shock: true };
     default:
       return { ...NOTHING, event: true, verb: true };
   }
@@ -300,6 +310,7 @@ const TERM: Partial<Record<keyof EffectShape, string>> = {
   property: "the property",
   financing: "the financing",
   sale: "the sale terms",
+  shock: "the market drop",
 };
 
 /** `a, b and c` — the list as it reads in the sentence below. */
@@ -356,6 +367,7 @@ export function effectProblem(draft: EffectDraft, index: number): string | null 
     draft.rawDownPayment?.kind === "Expression" && !draft.rawDownPayment.source.trim()
   ) return say("needs a down payment expression");
   if (fields.sale && draft.payoff && draft.loanAccountId === 0) return say("needs the loan it pays off");
+  if (fields.shock && !(draft.drop > 0 && draft.drop < 1)) return say("needs a drop between 0% and 100%");
   return null;
 }
 
@@ -503,6 +515,8 @@ export function toEffectSpec(draft: EffectDraft): EffectSpec {
         gain_exclusion: draft.gainExclusion,
         payoff_account_id: draft.payoff ? draft.loanAccountId : null,
       };
+    case "MarketShock":
+      return { kind: "MarketShock", drop: draft.drop };
     default:
       return { kind: draft.verb, target_event_id: draft.targetEventId };
   }
@@ -688,6 +702,8 @@ export function draftOfEffect(
         payoff: effect.payoff_account_id != null,
         loanAccountId: effect.payoff_account_id ?? 0,
       };
+    case "MarketShock":
+      return { ...base, form: "MarketShock", drop: effect.drop };
     case "Random":
       return { ...base, raw: effect };
   }

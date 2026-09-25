@@ -544,6 +544,8 @@ export function describeEffect(effect: EffectSpec, names: EventNames): EventEffe
           effect.gain_exclusion > 0 ? ` · ${money(effect.gain_exclusion)} excluded` : ""
         }${effect.payoff_account_id != null ? ` · pays off ${names.account(effect.payoff_account_id)}` : ""}`,
       };
+    case "MarketShock":
+      return { kind, detail: `markets fall ${Number((effect.drop * 100).toFixed(2))}%` };
   }
 }
 

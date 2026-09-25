@@ -30,6 +30,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobKind as MetricKind, Origin};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
+use finplan_core::config::SimulationConfig;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -64,6 +65,13 @@ const MAX_VARIED: usize = 3;
 const MAX_SWEEP_POINTS: usize = 512;
 const MAX_ANALYSIS_ITERATIONS: usize = 2_000;
 const MIN_ITERATIONS: usize = 25;
+/// Monte Carlo iterations behind a whole what-if when the request names none.
+///
+/// A budget for the stack, not per step: it is split evenly across the plan and
+/// each layer, so adding an override does not make every nudge slower. Every
+/// step runs on the same seed, which keeps the step-to-step differences stable
+/// even at a few dozen iterations each.
+const DEFAULT_WHAT_IF_ITERATIONS: usize = 500;
 
 /// The default grid resolution: six steps an axis, which is what a heatmap can
 /// label without crowding.
@@ -177,6 +185,16 @@ pub enum CreateAnalysis {
         #[serde(default)]
         iterations: Option<usize>,
     },
+    /// The plan with an ordered stack of overrides applied cumulatively: one
+    /// step for the plan and one more per layer.
+    WhatIf {
+        /// The enabled layers only, in order. At most eight.
+        layers: Vec<crate::api::what_if::WhatIfLayer>,
+        /// Simulations for the whole stack, split evenly across its steps
+        /// (each gets at least the analysis minimum).
+        #[serde(default)]
+        iterations: Option<usize>,
+    },
 }
 
 /// A queued or finished analysis.
@@ -185,7 +203,7 @@ pub enum CreateAnalysis {
 pub struct Analysis {
     pub id: i64,
     pub scenario_id: i64,
-    /// `"sweep"`, `"sensitivity"` or `"solve"`.
+    /// `"sweep"`, `"sensitivity"`, `"solve"` or `"what-if"`.
     pub kind: String,
     /// `"queued"`, `"running"`, `"succeeded"`, `"failed"` or `"canceled"`.
     pub status: String,
@@ -244,6 +262,7 @@ async fn create(
         CreateAnalysis::Sweep { .. } => MetricKind::Sweep,
         CreateAnalysis::Sensitivity { .. } => MetricKind::Sensitivity,
         CreateAnalysis::Solve { .. } => MetricKind::Solve,
+        CreateAnalysis::WhatIf { .. } => MetricKind::WhatIf,
     };
     let mut decision = Submission::new(&state.telemetry, kind);
     let result = create_analysis(&state, &user, scenario_id, body, &mut decision).await;
@@ -258,15 +277,53 @@ async fn create_analysis(
     body: CreateAnalysis,
     decision: &mut Submission,
 ) -> ApiResult<(StatusCode, Json<Analysis>)> {
+    let Prepared {
+        base,
+        spec,
+        is_solve,
+    } = prepare(state, user, scenario_id, body).await?;
+    let admission =
+        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    if is_solve {
+        crate::billing::reserve_goal_seek(&state.db, &user.id, &state.config).await?;
+    }
+    let handle = state
+        .analyses
+        .start(scenario_id, &user.id, base, spec, admission);
+    decision.accepted();
+    let view = state.analyses.view(handle.id, &user.id)?;
+    Ok((StatusCode::ACCEPTED, Json(view.into())))
+}
+
+/// An analysis checked, lowered and costed, but not yet admitted or started.
+pub(crate) struct Prepared {
+    pub base: SimulationConfig,
+    pub spec: JobSpec,
+    is_solve: bool,
+}
+
+/// Everything short of admission: access, iteration bounds, compiling the
+/// plan and lowering the request. Shared by the job route and the
+/// synchronous quick what-if, so the two cannot drift on what they accept.
+pub(crate) async fn prepare(
+    state: &AppState,
+    user: &CurrentUser,
+    scenario_id: i64,
+    body: CreateAnalysis,
+) -> ApiResult<Prepared> {
     let entitlements = crate::billing::entitlements(&state.db, &user.id, &state.config).await?;
     let is_solve = matches!(&body, CreateAnalysis::Solve { .. });
     if !is_solve {
         crate::billing::require_pro(&state.db, &user.id, &state.config).await?;
     }
+    // A what-if's `iterations` is a budget for the whole stack, clamped to the
+    // plan's ceiling below rather than refused: the screen asks for a fixed
+    // refinement size and should get the most the account allows.
     let requested_iterations = match &body {
         CreateAnalysis::Sweep { iterations, .. }
         | CreateAnalysis::Sensitivity { iterations, .. }
         | CreateAnalysis::Solve { iterations, .. } => *iterations,
+        CreateAnalysis::WhatIf { .. } => None,
     };
     // A deployment resource ceiling is request validation, independent of paid access.
     if requested_iterations.is_some_and(|n| n > state.config.max_iterations) {
@@ -281,8 +338,12 @@ async fn create_analysis(
             entitlements.max_iterations
         )));
     }
-    let (compiled, available) = plan(state, scenario_id, &user.id).await?;
-    if available.is_empty() {
+    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let compiled = compile::compile(&graph)?;
+    let available = parameters(&compiled);
+    // A what-if can be all shocks and one-offs, so it is the one analysis that
+    // does not need a named parameter to vary.
+    if available.is_empty() && !matches!(&body, CreateAnalysis::WhatIf { .. }) {
         return Err(ApiError::unprocessable(
             "this plan has no named parameters to analyse — add parameters on the Plan tab and reference them in amounts or schedules",
         ));
@@ -401,6 +462,27 @@ async fn create_analysis(
                 },
             }
         }
+
+        CreateAnalysis::WhatIf { layers, iterations } => {
+            let lowered = crate::api::what_if::lower(&graph, &compiled, &layers)?;
+            let ceiling = entitlements
+                .max_iterations
+                .clamp(MIN_ITERATIONS, MAX_ANALYSIS_ITERATIONS);
+            let total = iterations
+                .unwrap_or(DEFAULT_WHAT_IF_ITERATIONS)
+                .clamp(MIN_ITERATIONS, ceiling);
+            let per_step = total
+                .div_ceil(lowered.steps.len().max(1))
+                .max(MIN_ITERATIONS);
+            JobSpec::WhatIf {
+                steps: lowered.steps,
+                iterations: per_step,
+                parallel_batches,
+                seed: Some(ANALYSIS_SEED),
+                plan_retirement_age: lowered.plan_retirement_age,
+                what_if_retirement_age: lowered.what_if_retirement_age,
+            }
+        }
     };
 
     // Cost includes all probes/cells and the full horizon; reject before quota use.
@@ -409,17 +491,11 @@ async fn create_analysis(
             "Analysis is too large. Reduce iterations, years, or varied parameters.",
         ));
     }
-    let admission =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
-    if is_solve {
-        crate::billing::reserve_goal_seek(&state.db, &user.id, &state.config).await?;
-    }
-    let handle = state
-        .analyses
-        .start(scenario_id, &user.id, compiled.config, spec, admission);
-    decision.accepted();
-    let view = state.analyses.view(handle.id, &user.id)?;
-    Ok((StatusCode::ACCEPTED, Json(view.into())))
+    Ok(Prepared {
+        base: compiled.config,
+        spec,
+        is_solve,
+    })
 }
 
 /// The scenario's most recent sweep, or `null` if it has never been swept.

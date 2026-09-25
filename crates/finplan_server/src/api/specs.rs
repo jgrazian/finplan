@@ -707,6 +707,11 @@ pub enum EffectSpec {
         #[serde(default)]
         payoff_account_id: Option<i64>,
     },
+    /// A one-time market crash: every market asset's price (not cash,
+    /// property or debt) drops by `drop`, a fraction in (0, 1).
+    MarketShock {
+        drop: f64,
+    },
 }
 
 /// How a `BuyProperty` is financed.
@@ -783,6 +788,13 @@ impl EffectSpec {
                     ));
                 }
             }
+            if let EffectSpec::MarketShock { drop } = self
+                && !(*drop > 0.0 && *drop < 1.0)
+            {
+                return Err(ApiError::bad_request(
+                    "a market shock's drop is a fraction between 0 and 1",
+                ));
+            }
             if let EffectSpec::BuyProperty {
                 financing: Some(financing),
                 ..
@@ -802,9 +814,9 @@ impl EffectSpec {
                      from_account_id, to_account_id, asset_id, amount_id, target_event_id,
                      amount_mode, income_type, lot_method, probability, units, sell_to_cover,
                      loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
-                     gain_exclusion)
+                     gain_exclusion, shock_drop)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
-                         ?18,?19,?20,?21,?22)
+                         ?18,?19,?20,?21,?22,?23)
                  RETURNING id",
             )
             .bind(scenario_id)
@@ -829,6 +841,7 @@ impl EffectSpec {
             .bind(f.term_months)
             .bind(f.selling_cost_rate)
             .bind(f.gain_exclusion)
+            .bind(f.shock_drop)
             .fetch_one(&mut **tx)
             .await?;
 
@@ -904,6 +917,7 @@ struct EffectFields {
     term_months: Option<i64>,
     selling_cost_rate: Option<f64>,
     gain_exclusion: Option<f64>,
+    shock_drop: Option<f64>,
 }
 
 impl EffectFields {
@@ -924,6 +938,7 @@ impl EffectFields {
             term_months: None,
             selling_cost_rate: None,
             gain_exclusion: None,
+            shock_drop: None,
         }
     }
 }
@@ -1093,6 +1108,10 @@ impl From<&EffectSpec> for EffectFields {
                 selling_cost_rate: Some(*selling_cost_rate),
                 gain_exclusion: Some(*gain_exclusion),
                 ..EffectFields::blank("SellProperty")
+            },
+            EffectSpec::MarketShock { drop } => EffectFields {
+                shock_drop: Some(*drop),
+                ..EffectFields::blank("MarketShock")
             },
         }
     }

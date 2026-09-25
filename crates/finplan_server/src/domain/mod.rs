@@ -30,6 +30,25 @@ pub(crate) async fn clone_into(
     graph: &ScenarioGraph,
     name: &str,
 ) -> ApiResult<i64> {
+    Ok(clone_into_mapped(tx, graph, name).await?.id)
+}
+
+/// A copied scenario, with where the source's rows landed in it.
+pub(crate) struct Cloned {
+    pub id: i64,
+    /// Source account id to the copy's.
+    pub accounts: Remap,
+    /// Source named-parameter id to the copy's.
+    pub parameters: Remap,
+}
+
+/// [`clone_into`], keeping the id maps for callers that go on to write into
+/// the copy by the source's ids.
+pub(crate) async fn clone_into_mapped(
+    tx: &mut Transaction<'_, Sqlite>,
+    graph: &ScenarioGraph,
+    name: &str,
+) -> ApiResult<Cloned> {
     if name.is_empty() {
         return Err(ApiError::bad_request("scenario name cannot be empty"));
     }
@@ -245,7 +264,11 @@ pub(crate) async fn clone_into(
         }
     }
 
-    Ok(new_id)
+    Ok(Cloned {
+        id: new_id,
+        accounts,
+        parameters,
+    })
 }
 
 fn remap(map: &Remap, old: i64, what: &str) -> ApiResult<i64> {
@@ -507,9 +530,9 @@ fn copy_effect<'a>(
                  from_account_id, to_account_id, asset_id, amount_id, target_event_id,
                  amount_mode, income_type, lot_method, probability, units, sell_to_cover,
                  loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
-                 gain_exclusion)
+                 gain_exclusion, shock_drop)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
-                     ?18,?19,?20,?21,?22)
+                     ?18,?19,?20,?21,?22,?23)
              RETURNING id",
         )
         .bind(scenario_id)
@@ -558,6 +581,7 @@ fn copy_effect<'a>(
         .bind(row.term_months)
         .bind(row.selling_cost_rate)
         .bind(row.gain_exclusion)
+        .bind(row.shock_drop)
         .fetch_one(&mut **tx)
         .await?;
 

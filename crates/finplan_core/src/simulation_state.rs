@@ -909,6 +909,7 @@ fn bind_effect_parameters(
         | EventEffect::TerminateEvent(_)
         | EventEffect::ApplyRmd { .. }
         | EventEffect::SellProperty { .. }
+        | EventEffect::MarketShock { .. }
         | EventEffect::RsuVesting { .. } => Ok(()),
     }
 }

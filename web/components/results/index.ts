@@ -10,8 +10,6 @@ export type { RunEffort } from "./RunEffort";
 export { RunSummary } from "./RunSummary";
 export { SuccessRate } from "./SuccessRate";
 export { WarningList } from "./WarningList";
-export { WhatIfPanel } from "./WhatIfPanel";
-export type { WhatIfOverrides } from "./WhatIfPanel";
 export type { ChartView } from "./types";
 export { useYearFocus } from "./useYearFocus";
 export type { YearFocus } from "./useYearFocus";

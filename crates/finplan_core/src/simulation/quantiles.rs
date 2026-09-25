@@ -94,7 +94,11 @@ impl RealAccumulator {
                 .map(|(date, values)| RealQuantilePoint {
                     date,
                     p5: quantile(&values, 0.05),
+                    p10: quantile(&values, 0.10),
+                    p25: quantile(&values, 0.25),
                     p50: quantile(&values, 0.5),
+                    p75: quantile(&values, 0.75),
+                    p90: quantile(&values, 0.90),
                     p95: quantile(&values, 0.95),
                 })
                 .collect(),

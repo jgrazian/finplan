@@ -16,6 +16,7 @@ pub mod runs;
 pub mod scenarios;
 pub mod specs;
 pub mod taxes;
+pub mod what_if;
 
 use std::collections::HashSet;
 
@@ -43,6 +44,7 @@ pub fn router() -> Router<AppState> {
         .merge(runs::router())
         .merge(reports::router())
         .merge(analysis::router())
+        .merge(what_if::router())
         .merge(archives::router())
         .merge(onboarding::router())
         .merge(contact::router())

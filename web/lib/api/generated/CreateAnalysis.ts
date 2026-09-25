@@ -2,6 +2,7 @@
 import type { AxisRequest } from "./AxisRequest";
 import type { ConstraintRequest } from "./ConstraintRequest";
 import type { ObjectiveRequest } from "./ObjectiveRequest";
+import type { WhatIfLayer } from "./WhatIfLayer";
 
 /**
  * The analysis to run. `kind` selects which of the three, and the fields that
@@ -31,5 +32,16 @@ export type CreateAnalysis = {
    * The floor, as a fraction: `0.95` for "success ≥ 95%".
    */
   min_value: number;
+  iterations?: number | null;
+} | {
+  "kind": "what-if";
+  /**
+   * The enabled layers only, in order. At most eight.
+   */
+  layers: Array<WhatIfLayer>;
+  /**
+   * Simulations for the whole stack, split evenly across its steps
+   * (each gets at least the analysis minimum).
+   */
   iterations?: number | null;
 };

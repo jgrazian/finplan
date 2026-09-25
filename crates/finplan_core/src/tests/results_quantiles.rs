@@ -49,12 +49,15 @@ fn crossing_paths_real_ranks_interpolation_and_warning_paths() {
     assert_eq!(real.num_iterations, 3);
     for point in &real.points {
         assert!(point.p5 <= point.p50 && point.p50 <= point.p95);
+        assert!(point.p10 <= point.p25 && point.p25 <= point.p50);
+        assert!(point.p50 <= point.p75 && point.p75 <= point.p90);
     }
     assert_eq!(real.points[1].p5, -35.0);
     assert_eq!(real.points[1].p50, 100.0);
     assert!((real.points[1].p95 - 280.0).abs() < 1e-10);
     let last = real.points.last().unwrap();
     assert_eq!((last.p5, last.p50, last.p95), (55.0, 100.0, 145.0));
+    assert_eq!((last.p25, last.p75), (75.0, 125.0));
     assert_eq!(
         (real.terminal.min, real.terminal.mean, real.terminal.max),
         (50.0, 100.0, 150.0)

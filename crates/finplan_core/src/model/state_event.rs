@@ -212,6 +212,11 @@ pub enum StateEvent {
         actual_amount: f64,
     },
 
+    // === Market Operations ===
+    /// A one-time drop in the price of the listed market assets: each price
+    /// was multiplied by `1 - drop`.
+    MarketShock { drop: f64, assets: Vec<AssetId> },
+
     // === Balance Operations ===
     /// Direct balance adjustment (for liabilities, cash accounts, etc.)
     BalanceAdjusted {

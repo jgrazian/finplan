@@ -87,4 +87,5 @@ export type EffectSpec =
      */
     gain_exclusion: number;
     payoff_account_id: number | null;
-  };
+  }
+  | { "kind": "MarketShock"; drop: number };

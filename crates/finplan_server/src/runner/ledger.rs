@@ -302,6 +302,18 @@ pub fn flatten(entry: &LedgerEntry, names: &Names<'_>) -> Option<LedgerRow> {
             names.account_db_id(*account),
         ),
 
+        StateEvent::MarketShock { drop, assets } => row(
+            ASSET,
+            "Market shock",
+            format!(
+                "prices down {:.0}% on {} market asset(s)",
+                drop * 100.0,
+                assets.len()
+            ),
+            None,
+            None,
+        ),
+
         StateEvent::CreateAccount(account) => row(
             EVENT,
             "Account opened",

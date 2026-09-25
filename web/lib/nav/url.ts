@@ -36,7 +36,7 @@ export const DEFAULT_TAB: TabId = "results";
  */
 export const DEFAULT_SECTION: Partial<Record<TabId, string>> = {
   portfolio: "accounts",
-  analysis: "sweep",
+  analysis: "what-if",
   account: "profile",
 };
 

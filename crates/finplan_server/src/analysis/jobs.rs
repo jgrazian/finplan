@@ -19,7 +19,7 @@ use finplan_core::analysis::{
 };
 use finplan_core::config::SimulationConfig;
 use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, MonteCarloStats};
-use finplan_core::simulation::monte_carlo_stats_only;
+use finplan_core::simulation::{monte_carlo_simulate_with_progress, monte_carlo_stats_only};
 use tokio::sync::Semaphore;
 use tracing::{Instrument, instrument::WithSubscriber};
 
@@ -27,7 +27,7 @@ use super::cache;
 use super::params::PlanParameter;
 use super::results::{
     AnalysisOutcome, AnalysisParameter, AnalysisPoint, SensitivityResults, SensitivityRow,
-    SolveOutcome, SweepAxis, SweepCell, SweepResults,
+    SolveOutcome, SweepAxis, SweepCell, SweepResults, WhatIfFan, WhatIfOutcome, WhatIfStep,
 };
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
@@ -48,6 +48,7 @@ pub enum JobKind {
     Sweep,
     Sensitivity,
     Solve,
+    WhatIf,
 }
 
 impl From<JobKind> for MetricKind {
@@ -56,6 +57,7 @@ impl From<JobKind> for MetricKind {
             JobKind::Sweep => Self::Sweep,
             JobKind::Sensitivity => Self::Sensitivity,
             JobKind::Solve => Self::Solve,
+            JobKind::WhatIf => Self::WhatIf,
         }
     }
 }
@@ -66,6 +68,7 @@ impl JobKind {
             Self::Sweep => "sweep",
             Self::Sensitivity => "sensitivity",
             Self::Solve => "solve",
+            Self::WhatIf => "what-if",
         }
     }
 }
@@ -114,6 +117,17 @@ pub enum JobSpec {
         params: Vec<PlanParameter>,
         config: SolveConfig,
     },
+    /// The plan and each cumulative override step, already lowered: `steps[0]`
+    /// is the plan itself, `steps[i]` the plan with the first `i` layers on.
+    WhatIf {
+        steps: Vec<SimulationConfig>,
+        iterations: usize,
+        parallel_batches: usize,
+        seed: Option<u64>,
+        /// Retirement age before and after the layers, where the plan names one.
+        plan_retirement_age: Option<f64>,
+        what_if_retirement_age: Option<f64>,
+    },
 }
 
 impl JobSpec {
@@ -122,6 +136,7 @@ impl JobSpec {
             Self::Sweep { .. } => JobKind::Sweep,
             Self::Sensitivity { .. } => JobKind::Sensitivity,
             Self::Solve { .. } => JobKind::Solve,
+            Self::WhatIf { .. } => JobKind::WhatIf,
         }
     }
 
@@ -135,6 +150,9 @@ impl JobSpec {
                 params, iterations, ..
             } => (params.len() * 2 + 1) * iterations,
             Self::Solve { config, .. } => config.probe_budget() * config.mc_iterations,
+            Self::WhatIf {
+                steps, iterations, ..
+            } => steps.len() * iterations,
         }
     }
 }
@@ -573,26 +591,31 @@ impl AnalysisJobs {
     /// worker claim and retains its established meaning.
     pub fn queue_snapshot(&self) -> Vec<QueueSnapshot> {
         let reg = self.lock();
-        [JobKind::Sweep, JobKind::Sensitivity, JobKind::Solve]
-            .into_iter()
-            .map(|kind| {
-                let mut queued = 0;
-                let mut oldest_age_seconds: f64 = 0.0;
-                for job in reg
-                    .jobs
-                    .values()
-                    .filter(|job| job.kind == kind && job.status == JobStatus::Queued)
-                {
-                    queued += 1;
-                    oldest_age_seconds = oldest_age_seconds.max(job.submitted.elapsed());
-                }
-                QueueSnapshot {
-                    kind: kind.into(),
-                    queued,
-                    oldest_age_seconds,
-                }
-            })
-            .collect()
+        [
+            JobKind::Sweep,
+            JobKind::Sensitivity,
+            JobKind::Solve,
+            JobKind::WhatIf,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let mut queued = 0;
+            let mut oldest_age_seconds: f64 = 0.0;
+            for job in reg
+                .jobs
+                .values()
+                .filter(|job| job.kind == kind && job.status == JobStatus::Queued)
+            {
+                queued += 1;
+                oldest_age_seconds = oldest_age_seconds.max(job.submitted.elapsed());
+            }
+            QueueSnapshot {
+                kind: kind.into(),
+                queued,
+                oldest_age_seconds,
+            }
+        })
+        .collect()
     }
 
     /// A poisoned registry means a handler panicked while holding the lock.
@@ -661,6 +684,30 @@ impl From<finplan_core::error::SimulationError> for WorkerError {
 
 type WorkerResult<T> = Result<T, WorkerError>;
 
+/// Why an analysis run on the caller's own thread produced nothing.
+#[derive(Debug)]
+pub(crate) enum InlineFailure {
+    Cancelled,
+    Failed,
+}
+
+/// Run an analysis to completion on the calling thread, outside the job
+/// table: no id, no polling, nothing kept. For answers small enough to wait
+/// on in one request. Blocking, so call it from `spawn_blocking`.
+pub(crate) fn run_inline(
+    base: &SimulationConfig,
+    spec: &JobSpec,
+    progress: &SweepProgress,
+) -> Result<AnalysisOutcome, InlineFailure> {
+    run(base, spec, progress).map_err(|err| {
+        if err.is_cancel() {
+            InlineFailure::Cancelled
+        } else {
+            InlineFailure::Failed
+        }
+    })
+}
+
 fn run(
     base: &SimulationConfig,
     spec: &JobSpec,
@@ -701,7 +748,106 @@ fn run(
                 &results, &described,
             )))
         }
+        JobSpec::WhatIf {
+            steps,
+            iterations,
+            parallel_batches,
+            seed,
+            plan_retirement_age,
+            what_if_retirement_age,
+        } => Ok(AnalysisOutcome::WhatIf(run_what_if(
+            steps,
+            *iterations,
+            *parallel_batches,
+            *seed,
+            (*plan_retirement_age, *what_if_retirement_age),
+            progress,
+        )?)),
     }
+}
+
+/// Run each cumulative what-if step on the same seed, and read the plan and
+/// the last step's fans off the engine's real-dollar envelope — the same
+/// deflated, pointwise quantiles a run stores for its Results chart.
+fn run_what_if(
+    steps: &[SimulationConfig],
+    iterations: usize,
+    parallel_batches: usize,
+    seed: Option<u64>,
+    (plan_retirement_age, what_if_retirement_age): (Option<f64>, Option<f64>),
+    progress: &SweepProgress,
+) -> WorkerResult<WhatIfOutcome> {
+    let Some(plan) = steps.first() else {
+        return Err(WorkerError { cancel: false });
+    };
+    let birth_date = plan.birth_date;
+
+    let mut outcome_steps = Vec::with_capacity(steps.len());
+    let mut envelopes = Vec::with_capacity(steps.len());
+    for config in steps {
+        if progress.is_cancelled() {
+            return Err(finplan_core::error::SimulationError::Cancelled.into());
+        }
+        let mut config = config.clone();
+        config.collect_ledger = false;
+        let mc = MonteCarloConfig {
+            iterations,
+            percentiles: PERCENTILES.to_vec(),
+            compute_mean: false,
+            parallel_batches,
+            seed,
+            ..Default::default()
+        };
+        let summary = monte_carlo_simulate_with_progress(&config, &mc, &progress.as_mc_progress())?;
+        let real = summary
+            .real_net_worth
+            .ok_or(WorkerError { cancel: false })?;
+        let at = |date: jiff::civil::Date| match birth_date {
+            Some(birth) => fractional_years(date) - fractional_years(birth),
+            None => fractional_years(date),
+        };
+        outcome_steps.push(WhatIfStep {
+            point: AnalysisPoint::from(&summary.stats),
+            median_end_real: real.points.last().map_or(0.0, |p| p.p50),
+            p10_dry_at: real
+                .points
+                .iter()
+                .find(|p| p.p10 <= 0.0)
+                .map(|p| at(p.date)),
+        });
+        envelopes.push(real.points);
+    }
+
+    let fan = |points: &[finplan_core::model::RealQuantilePoint]| WhatIfFan {
+        p25: points.iter().map(|p| p.p25).collect(),
+        p50: points.iter().map(|p| p.p50).collect(),
+        p75: points.iter().map(|p| p.p75).collect(),
+    };
+    let plan_points = envelopes.first().cloned().unwrap_or_default();
+    let last_points = envelopes.last().cloned().unwrap_or_default();
+    let years: Vec<f64> = plan_points
+        .iter()
+        .map(|p| fractional_years(p.date))
+        .collect();
+    let ages = birth_date.map(|birth| {
+        let born = fractional_years(birth);
+        years.iter().map(|year| year - born).collect()
+    });
+
+    Ok(WhatIfOutcome {
+        steps: outcome_steps,
+        ages,
+        years,
+        plan_fan: fan(&plan_points),
+        what_if_fan: fan(&last_points),
+        plan_retirement_age,
+        what_if_retirement_age,
+    })
+}
+
+/// A date as a fractional calendar year: 2030-07-02 is about 2030.5.
+fn fractional_years(date: jiff::civil::Date) -> f64 {
+    f64::from(date.year()) + (f64::from(date.day_of_year()) - 1.0) / f64::from(date.days_in_year())
 }
 
 /// The plan as configured, measured the same way every cell is.

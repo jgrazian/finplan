@@ -305,7 +305,18 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
               />
             )}
             {nav.tab === "analysis" && (
-              <AnalysisScreen scenarioId={workspace.scenario.id} />
+              <AnalysisScreen
+                scenario={workspace.scenario}
+                onPlanChanged={saved}
+                onScenarioCreated={(created) => {
+                  // The same bridge a new scenario gets: the list reload
+                  // lands after the navigation, and the switcher must not
+                  // fall back to another plan in between.
+                  setRecentlyCreated(created);
+                  nav.openScenario(created.id, "analysis");
+                  scenarios.reload();
+                }}
+              />
             )}
           </>
         )}

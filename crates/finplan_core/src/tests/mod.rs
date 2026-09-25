@@ -18,6 +18,7 @@ mod basic;
 mod builder_dsl;
 mod contribution_limits;
 mod funding;
+mod market_shock;
 mod parameters;
 mod profiling;
 mod real_estate;

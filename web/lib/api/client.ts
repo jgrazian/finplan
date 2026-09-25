@@ -7,6 +7,7 @@
 import { http } from "./http";
 import type {
   Account,
+  ApplyWhatIf,
   Analysis,
   AnalysisOutcome,
   AnalysisParameter,
@@ -37,6 +38,7 @@ import type {
   PasswordChange,
   Position,
   Profile,
+  QuickWhatIf,
   RegisterCredentials,
   ReorderRequest,
   Results,
@@ -53,6 +55,8 @@ import type {
   UpdateTaxConfig,
   UpdateUserProfile,
   UserResponse,
+  WhatIfOutcome,
+  WhatIfStack,
 } from "./types";
 
 const scenario = (id: number) => `/scenarios/${id}`;
@@ -232,6 +236,27 @@ export const api = {
      */
     saveSweepLayout: (scenarioId: number, graphs: unknown[]) =>
       http.put<void>(`${scenario(scenarioId)}/analyses/sweep/layout`, graphs),
+  },
+
+  /**
+   * The What-if override stack: stored per scenario so a reload finds the same
+   * layers, and applied — onto this scenario or a copy — only when asked. What
+   * the stack does to the outcome is an analysis like any other:
+   * `analysis.start` with `{ kind: "what-if", layers }`.
+   */
+  whatIf: {
+    get: (scenarioId: number) => http.get<WhatIfStack>(`${scenario(scenarioId)}/what-if`),
+    save: (scenarioId: number, body: WhatIfStack) =>
+      http.put<void>(`${scenario(scenarioId)}/what-if`, body),
+    /** Returns the scenario written to: this one, or the new copy when named. */
+    apply: (scenarioId: number, body: ApplyWhatIf) =>
+      http.post<Scenario>(`${scenario(scenarioId)}/what-if/apply`, body),
+    /**
+     * A small what-if answered in the response — no job, no polling. Aborting
+     * `signal` stops the server's simulation too.
+     */
+    quick: (scenarioId: number, body: QuickWhatIf, signal?: AbortSignal) =>
+      http.post<WhatIfOutcome>(`${scenario(scenarioId)}/what-if/quick`, body, signal),
   },
 
   runs: {

@@ -204,6 +204,7 @@ impl Telemetry {
             JobKind::Sweep,
             JobKind::Sensitivity,
             JobKind::Solve,
+            JobKind::WhatIf,
         ] {
             queued.get_or_create(&job_labels(kind)).set(0);
             oldest.get_or_create(&job_labels(kind)).set(0.0);
@@ -324,6 +325,7 @@ impl Telemetry {
             JobKind::Sweep,
             JobKind::Sensitivity,
             JobKind::Solve,
+            JobKind::WhatIf,
         ] {
             drop(canceled_before_start.get_or_create(&job_labels(kind)));
             for outcome in [

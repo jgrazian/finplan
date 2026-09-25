@@ -254,6 +254,50 @@ impl SolveOutcome {
     }
 }
 
+/// One cumulative step of a what-if: the plan with the first `i` enabled
+/// layers applied.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WhatIfStep {
+    pub point: AnalysisPoint,
+    /// Real (today's $) median net worth at plan end.
+    pub median_end_real: f64,
+    /// First age (or year if no birth_date) at which the P10 path's net worth
+    /// hits <= 0; null = never.
+    pub p10_dry_at: Option<f64>,
+}
+
+/// Pointwise real-dollar net worth quantiles, one value per fan point.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WhatIfFan {
+    pub p25: Vec<f64>,
+    pub p50: Vec<f64>,
+    pub p75: Vec<f64>,
+}
+
+/// A finished what-if: the plan, then each enabled layer applied on top of
+/// the ones before it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WhatIfOutcome {
+    /// steps[0] = the plan with no overrides; steps[i] = plan + layers[0..i]
+    /// (so steps.len() == layers.len() + 1).
+    pub steps: Vec<WhatIfStep>,
+    /// Owner age at each point of the fan (whole or fractional years); null when
+    /// the scenario has no birth_date, in which case `years` is used.
+    pub ages: Option<Vec<f64>>,
+    /// Calendar year (fractional ok) at each point of the fan.
+    pub years: Vec<f64>,
+    /// Fan for steps[0] and for the last step, TODAY'S dollars (deflated).
+    pub plan_fan: WhatIfFan,
+    pub what_if_fan: WhatIfFan,
+    /// Retirement age of plan / what-if, where the plan has a parameter of kind
+    /// age whose name contains "retire" (case-insensitive); null otherwise.
+    pub plan_retirement_age: Option<f64>,
+    pub what_if_retirement_age: Option<f64>,
+}
+
 /// The results of whichever analysis was asked for, tagged so the client can
 /// narrow on `kind` rather than on which field happens to be present.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -263,6 +307,7 @@ pub enum AnalysisOutcome {
     Sweep(SweepResults),
     Sensitivity(SensitivityResults),
     Solve(SolveOutcome),
+    WhatIf(WhatIfOutcome),
 }
 
 #[cfg(test)]

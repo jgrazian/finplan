@@ -15,12 +15,18 @@ export interface AnalysisState<T> {
   job: Analysis | undefined;
   /** The finished results, narrowed to the kind this hook was asked for. */
   results: T | undefined;
+  /**
+   * The job `results` came from. A caller that starts jobs back to back reads
+   * this rather than `job`, which may already name the next one.
+   */
+  resultsFor: number | undefined;
   /** Queued or executing right now. */
   active: boolean;
   /** A job is in flight, or its results are being fetched. */
   loading: boolean;
   error: string | undefined;
-  start: (body: CreateAnalysis) => Promise<void>;
+  /** Resolves to the job started, or undefined when it could not be. */
+  start: (body: CreateAnalysis) => Promise<Analysis | undefined>;
   cancel: () => Promise<void>;
   /** Throw the answer away without starting another — back to the empty state. */
   clear: () => void;
@@ -44,7 +50,7 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
   type Results = Extract<AnalysisOutcome, { kind: K }>;
 
   const [job, setJob] = useState<Analysis>();
-  const [results, setResults] = useState<Results>();
+  const [results, setResults] = useState<{ outcome: Results; job: number }>();
   const [error, setError] = useState<string>();
 
   // A job belongs to the scenario it was started for. Switching scenarios has
@@ -98,7 +104,7 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
         // A payload of the wrong kind means the mode changed under a request
         // already in flight; the caller asked a different question by now.
         if (outcome.kind === kind) {
-          setResults(outcome as Results);
+          setResults({ outcome: outcome as Results, job: jobId });
           setError(undefined);
         }
       })
@@ -111,16 +117,19 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
 
   const start = useCallback(
     async (body: CreateAnalysis) => {
-      if (scenarioId == null) return;
+      if (scenarioId == null) return undefined;
       setError(undefined);
       // The previous answer goes with the previous question: leaving a grid on
       // screen while a differently-shaped one is computed reads as the new one.
       setResults(undefined);
       try {
-        setJob(await api.analysis.start(scenarioId, body));
+        const started = await api.analysis.start(scenarioId, body);
+        setJob(started);
+        return started;
       } catch (err) {
         setJob(undefined);
         setError(err instanceof Error ? err.message : String(err));
+        return undefined;
       }
     },
     [scenarioId],
@@ -147,7 +156,8 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
 
   return {
     job,
-    results,
+    results: results?.outcome,
+    resultsFor: results?.job,
     active,
     loading: active || reading,
     error,
@@ -246,11 +256,15 @@ export function useSweepLayout(
   return { layout: edited ?? stored, setLayout };
 }
 
-/** The plan's varyable parameters, loaded once per scenario. */
-export function useParameters(scenarioId: number | undefined) {
-  const { data, loading, error } = useAsync(
+/**
+ * The plan's varyable parameters, loaded once per scenario — and again when
+ * `version` (the scenario's `updated_at`) moves, or on `reload`, since an
+ * applied what-if rewrites their values.
+ */
+export function useParameters(scenarioId: number | undefined, version?: string) {
+  const { data, loading, error, reload } = useAsync(
     async () => (scenarioId == null ? undefined : api.analysis.parameters(scenarioId)),
-    [scenarioId],
+    [scenarioId, version],
   );
-  return { parameters: data, loading, error: error?.message };
+  return { parameters: data, loading, error: error?.message, reload };
 }

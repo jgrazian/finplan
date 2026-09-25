@@ -1112,6 +1112,11 @@ fn build_effect(
                 financing,
             });
         }
+        "MarketShock" => EventEffect::MarketShock {
+            drop: row
+                .shock_drop
+                .ok_or_else(|| ApiError::unprocessable("MarketShock effect is missing its drop"))?,
+        },
         "SellProperty" => EventEffect::SellProperty {
             property: ids.account(from()?)?,
             to: ids.account(to()?)?,

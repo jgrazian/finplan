@@ -521,6 +521,23 @@ function EffectSlots({
         </>
       );
     }
+    case "MarketShock":
+      return (
+        <>
+          {kind}
+          <span>: markets fall</span>
+          <NumberInput
+            value={Number((effect.drop * 100).toFixed(2))}
+            readOnly={disabled}
+            onValueChange={(pct) => onChange({ drop: Math.min(99, Math.max(0, pct)) / 100 })}
+            decimals={2}
+            min={0}
+            max={99}
+            suffix="%"
+            aria-label="Market drop"
+          />
+        </>
+      );
     case "Event control":
       return (
         <>

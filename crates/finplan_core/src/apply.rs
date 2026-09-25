@@ -441,6 +441,26 @@ pub fn apply_eval_event_with_source(
             Ok(())
         }
 
+        EvalEvent::MarketShock { drop, assets } => {
+            let factor = 1.0 - drop;
+            let mut shocked = Vec::with_capacity(assets.len());
+            for asset in assets {
+                if state.portfolio.market.scale_asset_price(*asset, factor) {
+                    shocked.push(*asset);
+                }
+            }
+            record_ledger_entry(
+                state,
+                current_date,
+                source_event,
+                StateEvent::MarketShock {
+                    drop: *drop,
+                    assets: shocked,
+                },
+            );
+            Ok(())
+        }
+
         EvalEvent::AdjustBalance { account, delta } => {
             let (start, now) = (state.timeline.start_date, state.timeline.current_date);
             let property_growth = match state.portfolio.accounts.get(account).map(|a| &a.flavor) {

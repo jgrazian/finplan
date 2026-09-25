@@ -38,6 +38,27 @@ pub enum TriggerEvent {
     TriggerRepeating(Date),
 }
 
+/// The assets a `MarketShock` marks down: every registered asset except the
+/// ones backing a property account. Cash is not an asset here and liabilities
+/// hold none, so both are excluded by construction.
+fn market_asset_ids(state: &SimulationState) -> Vec<AssetId> {
+    let property_assets: Vec<AssetId> = state
+        .portfolio
+        .accounts
+        .values()
+        .filter_map(|account| match &account.flavor {
+            AccountFlavor::Property(asset) => Some(asset.asset_id),
+            _ => None,
+        })
+        .collect();
+    state
+        .portfolio
+        .market
+        .asset_ids()
+        .filter(|id| !property_assets.contains(id))
+        .collect()
+}
+
 /// Evaluates whether a trigger condition is met
 pub fn evaluate_trigger(
     event_id: &EventId,
@@ -310,6 +331,12 @@ pub enum EvalEvent {
         loan: AccountId,
         from: AccountId,
         term_months: u32,
+    },
+
+    /// Scale the listed assets' prices by `1 - drop` (a `MarketShock`).
+    MarketShock {
+        drop: f64,
+        assets: Vec<AssetId>,
     },
 
     // === Event Management ===
@@ -1039,6 +1066,22 @@ pub fn evaluate_effect_into(
                     });
                 }
             }
+            Ok(())
+        }
+
+        EventEffect::MarketShock { drop } => {
+            let drop = if drop.is_finite() {
+                drop.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            if drop <= 0.0 {
+                return Ok(());
+            }
+            out.push(EvalEvent::MarketShock {
+                drop,
+                assets: market_asset_ids(state),
+            });
             Ok(())
         }
 

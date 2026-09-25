@@ -407,6 +407,13 @@ impl LedgerPanel {
                     format_currency(*new_balance)
                 )
             }
+            StateEvent::MarketShock { drop, assets } => {
+                format!(
+                    "Market shock: -{:.0}% on {} asset(s)",
+                    drop * 100.0,
+                    assets.len()
+                )
+            }
         }
     }
 

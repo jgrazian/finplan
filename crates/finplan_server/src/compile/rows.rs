@@ -208,6 +208,8 @@ pub struct EffectRow {
     pub selling_cost_rate: Option<f64>,
     #[serde(default)]
     pub gain_exclusion: Option<f64>,
+    #[serde(default)]
+    pub shock_drop: Option<f64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -482,7 +484,7 @@ impl ScenarioGraph {
                     to_account_id, asset_id, amount_id, target_event_id, amount_mode,
                     income_type, lot_method, probability, units, sell_to_cover,
                     loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
-                    gain_exclusion
+                    gain_exclusion, shock_drop
                FROM effects WHERE scenario_id = ?1 ORDER BY event_id, position, id",
         )
         .bind(scenario_id)

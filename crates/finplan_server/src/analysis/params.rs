@@ -50,7 +50,7 @@ impl ParamKind {
 }
 
 impl PlanParameter {
-    fn typed_value(&self, value: f64) -> ApiResult<ParameterValue> {
+    pub(crate) fn typed_value(&self, value: f64) -> ApiResult<ParameterValue> {
         let invalid = || {
             ApiError::bad_request(format!(
                 "{} has an invalid {} bound",

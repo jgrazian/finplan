@@ -7,7 +7,7 @@ export type Analysis = {
   id: number;
   scenario_id: number;
   /**
-   * `"sweep"`, `"sensitivity"` or `"solve"`.
+   * `"sweep"`, `"sensitivity"`, `"solve"` or `"what-if"`.
    */
   kind: string;
   /**

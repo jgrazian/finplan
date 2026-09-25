@@ -7,6 +7,18 @@
  */
 export * from "./generated";
 
+// The what-if stack's bindings, named one by one: the barrel above is rebuilt
+// by `gen-bindings.sh`, and these are what the Analysis tab's What-if mode is
+// typed with whichever way round the two land.
+export type { ApplyWhatIf } from "./generated/ApplyWhatIf";
+export type { QuickWhatIf } from "./generated/QuickWhatIf";
+export type { WhatIfEntry } from "./generated/WhatIfEntry";
+export type { WhatIfFan } from "./generated/WhatIfFan";
+export type { WhatIfLayer } from "./generated/WhatIfLayer";
+export type { WhatIfOutcome } from "./generated/WhatIfOutcome";
+export type { WhatIfStack } from "./generated/WhatIfStack";
+export type { WhatIfStep } from "./generated/WhatIfStep";
+
 import type { FlavorSpec, UpdateAccount } from "./generated";
 import type { Percentile } from "@/lib/types";
 

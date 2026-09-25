@@ -374,6 +374,36 @@ impl Market {
             .map(|value| value / price)
     }
 
+    /// Every registered asset id, in id order.
+    pub fn asset_ids(&self) -> impl Iterator<Item = AssetId> + '_ {
+        self.assets
+            .iter()
+            .enumerate()
+            .filter(|(_, info)| info.is_some())
+            .map(|(idx, _)| AssetId(idx as u16))
+    }
+
+    /// Multiply an asset's price level by `factor` from now on.
+    ///
+    /// Prices are `base price × cumulative growth`, so scaling the base
+    /// scales every later price by the same factor while the returns that
+    /// compound on top are unchanged. `asset_growth` (value relative to the
+    /// base) is deliberately unaffected. Returns false for an unregistered
+    /// asset.
+    pub fn scale_asset_price(&mut self, asset_id: AssetId, factor: f64) -> bool {
+        match self
+            .assets
+            .get_mut(asset_id.0 as usize)
+            .and_then(Option::as_mut)
+        {
+            Some(info) => {
+                info.price *= factor;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn get_asset_value(
         &self,
         start_date: Date,

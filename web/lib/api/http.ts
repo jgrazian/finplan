@@ -43,6 +43,7 @@ async function request<T>(
   method: Method,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   // Every outcome is reported to the monitor, which owns the reconnect
   // schedule and the status bar. A refused write is graver than a refused
@@ -56,8 +57,11 @@ async function request<T>(
       credentials: "include",
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
+      signal,
     });
-  } catch {
+  } catch (err) {
+    // The caller withdrew the question; the server is not at fault.
+    if (signal?.aborted) throw err;
     serverMonitor.failed(writing ? "write" : "read");
     throw new NetworkError();
   }
@@ -97,7 +101,9 @@ async function toApiError(response: Response): Promise<ApiError> {
 
 export const http = {
   get: <T>(path: string) => request<T>("GET", path),
-  post: <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
+  /** `signal` aborts the request, for answers the caller may stop wanting. */
+  post: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
+    request<T>("POST", path, body ?? {}, signal),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
   /** A body is optional, and only account deletion sends one (the password). */

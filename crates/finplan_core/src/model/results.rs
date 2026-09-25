@@ -763,7 +763,19 @@ impl MeanAccumulators {
 pub struct RealQuantilePoint {
     pub date: jiff::civil::Date,
     pub p5: f64,
+    /// The 10th and 90th percentiles, for fans drawn inside the 5–95 band.
+    /// Zero on summaries produced before they were measured.
+    #[serde(default)]
+    pub p10: f64,
+    /// The interquartile range, for the inner band of a fan.
+    /// Zero on summaries produced before they were measured.
+    #[serde(default)]
+    pub p25: f64,
     pub p50: f64,
+    #[serde(default)]
+    pub p75: f64,
+    #[serde(default)]
+    pub p90: f64,
     pub p95: f64,
 }
 

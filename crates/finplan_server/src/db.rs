@@ -369,7 +369,7 @@ mod tests {
         source.close().await;
 
         let report = rebuild(&source_path, &destination_path).await.unwrap();
-        assert_eq!(report.tables, 46);
+        assert_eq!(report.tables, 47);
 
         let rebuilt = connect(&format!("sqlite://{}", destination_path.display()), 1)
             .await
@@ -378,7 +378,7 @@ mod tests {
             .fetch_one(&rebuilt)
             .await
             .unwrap();
-        assert_eq!(migration_count, 3);
+        assert_eq!(migration_count, 4);
         let parameter_value: f64 = sqlx::query_scalar(
             "SELECT number_value FROM named_parameters WHERE scenario_id=1 AND name='Spending'",
         )

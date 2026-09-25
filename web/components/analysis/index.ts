@@ -8,4 +8,5 @@ export { SensitivityPanel } from "./SensitivityPanel";
 export { SolvePanel } from "./SolvePanel";
 export { GraphLegend, HeatGraph, LineGraph, SurfaceGraph } from "./SweepGraphs";
 export { SweepPanel } from "./SweepPanel";
+export { WhatIfPanel } from "./WhatIfPanel";
 export { VariableStrip, combinations, variableFor, type SweptVariable } from "./VariableStrip";
