@@ -31,7 +31,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 prometheus-client = "0.24"
 base64ct = { version = "1", features = ["alloc"] }
 sha2 = "0.10"
-ts-rs = "12.0.1"
+# `deserialize_with` fields (the PATCH double-options) spell their TS shape
+# with `#[ts(...)]`, so ts-rs ignoring that serde attribute is expected.
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 
 [features]

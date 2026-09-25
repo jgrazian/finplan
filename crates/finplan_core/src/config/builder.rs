@@ -506,7 +506,7 @@ impl SimulationBuilder {
 
         // 4. Register and resolve all events
         // Drain events first to avoid borrow issues
-        let pending_events: Vec<_> = self.pending_events.drain(..).collect();
+        let pending_events = std::mem::take(&mut self.pending_events);
         for event_def in pending_events {
             let event_id = EventId(self.next_event_id);
             self.next_event_id += 1;
