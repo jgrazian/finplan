@@ -113,7 +113,7 @@ export function emptyCondition(accountId: number, assetId: number): ConditionDra
     ageMonths: null,
     eventId: 0,
     unit: "Years",
-    offset: 1,
+    offset: 0,
     accountId,
     assetId,
     comparison: "GreaterThanOrEqual",

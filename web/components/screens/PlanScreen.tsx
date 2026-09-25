@@ -10,7 +10,7 @@ import {
   eventProblem,
   toEventBody,
 } from "@/components/plan";
-import { Button } from "@/components/ui";
+import { Button, Dialog, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Event as ApiEvent, EventBody, UpdateScenario } from "@/lib/api/types";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
@@ -52,13 +52,10 @@ function blankEvent(name: string): EventBody {
 }
 
 /**
- * Plan tab, in the shape of artboard 10a: the scenario as a line across the
- * top, the events as a rail on the left, the editor for the selected one
- * filling the width beside it, and the whole plan as a band of lanes along the
- * bottom.
- *
- * Two columns rather than three, so the editor is wide enough to put when an
- * event fires beside what it does instead of stacking them down a 400px rail.
+ * Plan tab, in the shape of artboard 17a: the scenario as a line across the
+ * top, a rail on the left that switches between the events and the parameters
+ * they use, the editor for the selected row filling the width beside it, and
+ * the whole plan as a band of lanes along the bottom.
  */
 export function PlanScreen({
   scenarioId,
@@ -93,10 +90,31 @@ export function PlanScreen({
   const selectedParameter = parameters.find((p) => p.id === parameterId);
   const selected = events.find((e) => e.id === (parameterId == null ? nav.selection : lastEventId)) ?? events[0];
   const selectedRaw = raw.events.find((e) => e.id === selected?.serverId);
-  const selectEvent = (name: string) => { setLastEventId(name); nav.setSelection(name); };
+  // The rail shows one list at a time. It follows the selection, except when
+  // Parameters was picked with none to select — then it holds on the empty list.
+  const [emptyParameters, setEmptyParameters] = useState(false);
+  const railMode: RailMode =
+    parameterId != null || (emptyParameters && parameters.length === 0) ? "parameters" : "events";
+  const selectEvent = (name: string) => {
+    setEmptyParameters(false);
+    setLastEventId(name);
+    nav.setSelection(name);
+  };
   const selectParameter = (id: number) => {
     if (parameterId == null && selected) setLastEventId(selected.id);
     nav.setSelection(`parameter:${id}`);
+  };
+  const switchRail = (mode: RailMode) => {
+    if (mode === railMode) return;
+    if (mode === "events") {
+      setEmptyParameters(false);
+      nav.setSelection(lastEventId ?? events[0]?.id);
+    } else if (parameters[0]) {
+      selectParameter(parameters[0].id);
+    } else {
+      if (selected) setLastEventId(selected.id);
+      setEmptyParameters(true);
+    }
   };
   const saveOrder = useReorderWrite(onChanged);
   // The pickers' choices, plus the two things that let a condition explain
@@ -201,15 +219,27 @@ export function PlanScreen({
     );
   };
 
+  // Asked in the app's own dialog rather than the browser's. A refusal — the
+  // server will not delete an event another one points at, and names the
+  // referrers — lands inside it, beside the question it answers.
+  const [deleting, setDeleting] = useState<PlanEvent>();
+  const [removing, setRemoving] = useState(false);
+  const [removeError, setRemoveError] = useState<string>();
+  const askRemove = (event: PlanEvent) => {
+    setRemoveError(undefined);
+    setDeleting(event);
+  };
   const remove = async (event: PlanEvent) => {
-    if (!confirm(`Delete ${event.id}?`)) return;
+    setRemoving(true);
+    setRemoveError(undefined);
     try {
       await api.events.remove(scenarioId, event.serverId);
+      setDeleting(undefined);
       onChanged();
     } catch (err) {
-      // Refused while another event points at this one, and the message names
-      // the referrers.
-      alert(err instanceof Error ? err.message : String(err));
+      setRemoveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRemoving(false);
     }
   };
 
@@ -244,58 +274,79 @@ export function PlanScreen({
           minHeight: 460,
         }}
       >
-        <div style={{ borderRight: "1px solid var(--color-divider)", minWidth: 0, display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", height: "min(75vh, 740px)", minHeight: 430, alignSelf: "start", overflow: "hidden" }}>
-          <div style={{ minHeight: 0, overflow: "auto" }}>
-            <EventRail
-              events={events}
-              selectedId={parameterId == null ? selected?.id ?? "" : ""}
-              onSelect={selectEvent}
-              onAdd={add}
-              adding={editing.busy}
-              onReorder={offline ? undefined : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))}
-              offline={offline}
+        <div style={{ borderRight: "1px solid var(--color-divider)", minWidth: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", height: "min(78vh, 780px)", minHeight: 430, alignSelf: "start", overflow: "hidden" }}>
+          {/* Artboard 17a — one rail, two lists, at the same weight. */}
+          <div style={{ padding: "14px 18px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <SegmentedControl<RailMode>
+              ariaLabel="Rail"
+              value={railMode}
+              options={[
+                { value: "events", label: `Events ${events.length}` },
+                { value: "parameters", label: `Parameters ${parameters.length}` },
+              ]}
+              onChange={switchRail}
             />
+            <Button
+              variant="ghost"
+              shortcut={railMode === "events" ? "a" : undefined}
+              onClick={railMode === "events" ? add : () => addParameter("Money")}
+              disabled={offline || editing.busy}
+              aria-label={railMode === "events" ? "Add event" : "Add parameter"}
+              title={offline ? "No connection to the server." : undefined}
+            >
+              Add
+            </Button>
           </div>
-          <ParameterRail parameters={parameters} selectedId={parameterId}
-            onSelect={selectParameter} onAdd={addParameter} adding={editing.busy}
-            submitError={editing.error} offline={offline} />
+          <div style={{ minHeight: 0, overflow: "auto" }}>
+            {railMode === "events" ? (
+              <EventRail
+                events={events}
+                selectedId={selected?.id ?? ""}
+                onSelect={selectEvent}
+                onReorder={offline ? undefined : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))}
+              />
+            ) : (
+              <ParameterRail parameters={parameters} selectedId={parameterId}
+                onSelect={selectParameter} error={editing.error} />
+            )}
+          </div>
         </div>
         <div style={{ minWidth: 0 }}>
           {selectedParameter && <ParameterEditor key={`${scenarioId}:${selectedParameter.id}`}
             parameter={selectedParameter} scenarioId={scenarioId}
             onSaved={onChanged}
-            onDeleted={() => { nav.setSelection(selected?.id); onChanged(); }}
-            onSelectEvent={selectEvent} offline={offline} />}
-          {!selectedParameter && events.length === 0 && <div style={{ padding: "34px 24px", maxWidth: 520 }}>
-          <h4 style={{ margin: "0 0 6px" }}>No events</h4>
-          <p
-            style={{
-              margin: "0 0 14px",
-              fontSize: 13,
-              lineHeight: 1.5,
-              color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+            onDeleted={() => {
+              const next = parameters.find((p) => p.id !== selectedParameter.id);
+              if (next) selectParameter(next.id);
+              else { setEmptyParameters(true); nav.setSelection(lastEventId ?? selected?.id); }
+              onChanged();
             }}
-          >
-            Events are what makes the plan move: income arriving, spending leaving, a
-            retirement age pausing one and starting another. Without any, the
-            simulation just compounds the opening balances.
-          </p>
-          <Button
-            variant="primary"
-            shortcut="a"
-            onClick={add}
-            disabled={offline || editing.busy}
-          >
-            Add event
-          </Button>
-          {editing.error && (
-            <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--color-accent-900)" }}>
-              {editing.error}
-            </p>
+            onSelectEvent={selectEvent} offline={offline} />}
+          {railMode === "parameters" && !selectedParameter && (
+            <Empty
+              title="No parameters"
+              body="A parameter is a named value — a retirement age, a spending level — that amounts and triggers refer to by name, and that Analysis offers as an axis to sweep or solve for. Change it once and every event using it follows."
+              action="Add parameter"
+              onAction={() => addParameter("Money")}
+              disabled={offline || editing.busy}
+              error={editing.error}
+            />
           )}
-          </div>}
+          {railMode === "events" && events.length === 0 && (
+            <Empty
+              title="No events"
+              body="Events are what makes the plan move: income arriving, spending leaving, a retirement age pausing one and starting another. Without any, the simulation just compounds the opening balances."
+              action="Add event"
+              shortcut="a"
+              onAction={add}
+              disabled={offline || editing.busy}
+              error={editing.error}
+            />
+          )}
           {selected && selectedRaw && (
-            <div style={{ display: selectedParameter ? "none" : undefined }}>
+            // Kept mounted under a parameter, so an unsaved draft survives a
+            // look at the parameter it uses.
+            <div style={{ display: railMode === "parameters" ? "none" : undefined }}>
               <EventEditor
                 // A fresh draft per row: edits are not carried across events.
                 key={selectedRaw.id}
@@ -304,7 +355,7 @@ export function PlanScreen({
                 context={context}
                 onApply={(draft) => apply(selected, draft)}
                 onDuplicate={offline ? undefined : () => duplicate(selectedRaw)}
-                onDelete={offline ? undefined : () => remove(selected)}
+                onDelete={offline ? undefined : () => askRemove(selected)}
                 onSelectEvent={selectEvent}
                 busy={editing.busy}
                 error={editing.error}
@@ -318,11 +369,65 @@ export function PlanScreen({
       {events.length > 0 && <PlanTimeline
         events={events}
         axis={axis}
-        selectedId={parameterId == null ? selected?.id ?? "" : ""}
+        selectedId={railMode === "events" ? selected?.id ?? "" : ""}
         onSelect={selectEvent}
       />}
 
+      {deleting && (
+        <Dialog
+          title="Delete event"
+          submitLabel="Delete"
+          busy={removing}
+          error={removeError}
+          onClose={() => setDeleting(undefined)}
+          onSubmit={() => remove(deleting)}
+        >
+          <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
+            Delete <span className="cd-name">{deleting.id}</span>
+            {deleting.effects.length > 0
+              ? ` and its ${deleting.effects.length === 1 ? "effect" : `${deleting.effects.length} effects`}`
+              : ""}
+            ? The next run goes without it. To keep its setup but leave it out of runs, untick
+            Enabled instead.
+          </p>
+        </Dialog>
+      )}
     </>
+  );
+}
+
+type RailMode = "events" | "parameters";
+
+/** What the editor pane says when the rail's list is empty. */
+function Empty({ title, body, action, shortcut, onAction, disabled, error }: {
+  title: string;
+  body: string;
+  action: string;
+  shortcut?: string;
+  onAction: () => void;
+  disabled?: boolean;
+  error?: string;
+}) {
+  return (
+    <div style={{ padding: "34px 28px", maxWidth: 520 }}>
+      <h4 style={{ margin: "0 0 6px" }}>{title}</h4>
+      <p
+        style={{
+          margin: "0 0 14px",
+          fontSize: 13,
+          lineHeight: 1.5,
+          color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+        }}
+      >
+        {body}
+      </p>
+      <Button variant="primary" shortcut={shortcut} onClick={onAction} disabled={disabled}>
+        {action}
+      </Button>
+      {error && (
+        <p style={{ margin: "10px 0 0", fontSize: 12, color: "var(--color-accent-900)" }}>{error}</p>
+      )}
+    </div>
   );
 }
 

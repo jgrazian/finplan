@@ -13,10 +13,11 @@ use finplan_core::config::SimulationMetadata;
 use finplan_core::expression::compile_amount;
 use finplan_core::model::{
     Account, AccountFlavor, AmountMode, AssetCoord, AssetLot, BalanceThreshold, CalendarAge, Cash,
-    ContributionLimit, ContributionLimitPeriod, Event, EventEffect, EventTrigger, FixedAsset,
-    HistoricalInflation, HistoricalReturns, IncomeType, InflationProfile, InvestmentContainer,
-    LoanDetail, LotMethod, ParameterValue, RepeatInterval, ReturnProfile, TaxBracket, TaxConfig,
-    TaxStatus, TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
+    ContributionLimit, ContributionLimitPeriod, Event, EventEffect, EventTrigger, Financing,
+    FixedAsset, HistoricalInflation, HistoricalReturns, IncomeType, InflationProfile,
+    InvestmentContainer, LoanDetail, LotMethod, ParameterValue, Repayment, RepeatInterval,
+    ReturnProfile, TaxBracket, TaxConfig, TaxStatus, TransferAmount, TriggerOffset,
+    WithdrawalOrder, WithdrawalSources,
 };
 use jiff::civil::Date;
 
@@ -331,6 +332,7 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
                 AccountFlavor::Property(FixedAsset {
                     asset_id: id_map.asset(prop.asset_id)?,
                     value: prop.value,
+                    cost_basis: None,
                 })
             }
             "Liability" => {
@@ -340,9 +342,22 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
                         row.name
                     ))
                 })?;
+                let repayment = crate::api::accounts::repayment_of(
+                    loan.repay_from_account_id,
+                    loan.term_months,
+                )
+                .map(|r| -> ApiResult<Repayment> {
+                    Ok(Repayment {
+                        from: id_map.account(r.from_account_id)?,
+                        term_months: r.term_months,
+                    })
+                })
+                .transpose()?;
                 AccountFlavor::Liability(LoanDetail {
                     principal: loan.principal,
                     interest_rate: loan.interest_rate,
+                    repayment,
+                    schedule: None,
                 })
             }
             other => {
@@ -1053,6 +1068,56 @@ fn build_effect(
         "ApplyRmd" => EventEffect::ApplyRmd {
             destination: ids.account(to()?)?,
             lot_method,
+        },
+        "BuyProperty" => {
+            // Both amounts may be expressions; each is compiled here rather
+            // than by the single-amount pass below.
+            let resolve = |id: i64| -> ApiResult<TransferAmount> {
+                match graph
+                    .amounts
+                    .get(&id)
+                    .and_then(|r| r.expression_source.as_deref())
+                {
+                    Some(source) => compile_amount(source, metadata, parameters)
+                        .map(|compiled| compiled.amount)
+                        .map_err(|e| ApiError::unprocessable(format!("effect {effect_id}: {e}"))),
+                    None => build_amount(graph, ids, id, depth),
+                }
+            };
+            let price = row.amount_id.ok_or_else(|| {
+                ApiError::unprocessable("BuyProperty effect is missing its price")
+            })?;
+            let financing = match (
+                row.loan_account_id,
+                row.down_payment_amount_id,
+                row.term_months,
+            ) {
+                (Some(loan), Some(down), Some(term)) => Some(Financing {
+                    loan: ids.account(loan)?,
+                    down_payment: resolve(down)?,
+                    term_months: u32::try_from(term)
+                        .map_err(|_| ApiError::unprocessable("BuyProperty term is out of range"))?,
+                }),
+                (None, None, None) => None,
+                _ => {
+                    return Err(ApiError::unprocessable(
+                        "BuyProperty financing needs a loan, a down payment and a term",
+                    ));
+                }
+            };
+            return Ok(EventEffect::BuyProperty {
+                property: ids.account(to()?)?,
+                price: resolve(price)?,
+                from: ids.account(from()?)?,
+                financing,
+            });
+        }
+        "SellProperty" => EventEffect::SellProperty {
+            property: ids.account(from()?)?,
+            to: ids.account(to()?)?,
+            selling_cost_rate: row.selling_cost_rate.unwrap_or_default(),
+            gain_exclusion: row.gain_exclusion.unwrap_or_default(),
+            payoff: row.loan_account_id.map(|id| ids.account(id)).transpose()?,
         },
         "RsuVesting" => EventEffect::RsuVesting {
             to: ids.account(to()?)?,

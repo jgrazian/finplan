@@ -391,6 +391,8 @@ function amountOf(effect: EffectSpec): AmountSpec | null {
     case "AdjustBalance":
     case "CashTransfer":
       return effect.amount;
+    case "BuyProperty":
+      return effect.price;
     case "Random":
       return amountOf(effect.on_true);
     default:
@@ -524,5 +526,30 @@ export function describeEffect(effect: EffectSpec, names: EventNames): EventEffe
         kind,
         detail: `p=${effect.probability} → ${effect.on_true.kind}${effect.on_false ? ` else ${effect.on_false.kind}` : ""}`,
       };
+    case "BuyProperty": {
+      const f = effect.financing;
+      return {
+        kind,
+        detail: `${names.account(effect.property_account_id)} · ${amount(effect.price)}${
+          f
+            ? ` · ${amount(f.down_payment)} down from ${names.account(effect.from_account_id)}, ${names.account(f.loan_account_id)} over ${termLabel(f.term_months)}`
+            : ` from ${names.account(effect.from_account_id)}`
+        }`,
+      };
+    }
+    case "SellProperty":
+      return {
+        kind,
+        detail: `${names.account(effect.property_account_id)} → ${names.account(effect.to_account_id)} · ${Number((effect.selling_cost_rate * 100).toFixed(2))}% costs${
+          effect.gain_exclusion > 0 ? ` · ${money(effect.gain_exclusion)} excluded` : ""
+        }${effect.payoff_account_id != null ? ` · pays off ${names.account(effect.payoff_account_id)}` : ""}`,
+      };
   }
+}
+
+/** `360` → "30 yr", `66` → "5 yr 6 mo". */
+export function termLabel(months: number): string {
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  return [years ? `${years} yr` : "", rest ? `${rest} mo` : ""].filter(Boolean).join(" ") || "0 mo";
 }

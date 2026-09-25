@@ -10,8 +10,9 @@ use std::collections::HashMap;
 
 use crate::config::SimulationConfig;
 use crate::model::{
-    Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, FixedAsset, InflationProfile,
-    InvestmentContainer, LoanDetail, ReturnProfile, ReturnProfileId, TaxStatus,
+    Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, Event, EventEffect, EventId,
+    EventTrigger, FixedAsset, InflationProfile, InvestmentContainer, LoanDetail, ReturnProfile,
+    ReturnProfileId, TaxStatus, TransferAmount,
 };
 use crate::simulation::simulate;
 
@@ -169,6 +170,7 @@ fn test_property_account_appreciation() {
                 flavor: AccountFlavor::Property(FixedAsset {
                     asset_id: house_id,
                     value: house_value,
+                    cost_basis: None,
                 }),
             },
             Account {
@@ -176,6 +178,7 @@ fn test_property_account_appreciation() {
                 flavor: AccountFlavor::Property(FixedAsset {
                     asset_id: car_id,
                     value: car_value,
+                    cost_basis: None,
                 }),
             },
         ],
@@ -203,6 +206,57 @@ fn test_property_account_appreciation() {
     );
 }
 
+/// A property opened at zero and bought mid-plan with `AdjustBalance`: the
+/// purchase counts at its price on the day it lands, and appreciates from
+/// there rather than from the plan's start. Before, the property's worth was
+/// read off the asset's opening price alone, so the adjustment was dropped.
+#[test]
+fn test_property_bought_mid_plan_counts_and_appreciates() {
+    let start_date = jiff::civil::date(2020, 1, 1);
+    let house_id = AssetId(1);
+    let house_profile = ReturnProfileId(0);
+    let house_return = 0.03;
+    let price = 1_200_000.0;
+
+    let params = SimulationConfig {
+        start_date: Some(start_date),
+        duration_years: 10,
+        birth_date: None,
+        inflation_profile: InflationProfile::None,
+        return_profiles: HashMap::from([(house_profile, ReturnProfile::Fixed(house_return))]),
+        asset_returns: HashMap::from([(house_id, house_profile)]),
+        // The server registers every asset with its own opening price.
+        asset_prices: HashMap::from([(house_id, 100.0)]),
+        accounts: vec![Account {
+            account_id: AccountId(1),
+            flavor: AccountFlavor::Property(FixedAsset {
+                asset_id: house_id,
+                value: 0.0,
+                cost_basis: None,
+            }),
+        }],
+        events: vec![Event {
+            event_id: EventId(1),
+            trigger: EventTrigger::Date(jiff::civil::date(2025, 1, 1)),
+            effects: vec![EventEffect::AdjustBalance {
+                account: AccountId(1),
+                amount: TransferAmount::fixed(price),
+            }],
+            once: true,
+        }],
+        ..Default::default()
+    };
+
+    let result = simulate(&params, 42).unwrap();
+    let actual = result.final_account_balance(AccountId(1)).unwrap();
+    // Five years held (2025 → 2030), not ten.
+    let expected = price * (1.0 + house_return).powi(5);
+    assert!(
+        (actual - expected).abs() / expected < 0.001,
+        "House expected ${expected:.2}, got ${actual:.2}"
+    );
+}
+
 /// Test liability account
 #[test]
 fn test_liability_account_negative_balance() {
@@ -223,6 +277,8 @@ fn test_liability_account_negative_balance() {
             flavor: AccountFlavor::Liability(LoanDetail {
                 principal: loan_principal,
                 interest_rate: loan_rate,
+                repayment: None,
+                schedule: None,
             }),
         }],
         events: vec![],

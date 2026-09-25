@@ -6,10 +6,7 @@ import {
   Blueprint,
   Button,
   CompactInput,
-  DirtyField,
   Field,
-  Hr,
-  InlineStat,
   SectionHeading,
   Tag,
   cx,
@@ -19,17 +16,10 @@ import { fmtClock } from "@/lib/format";
 import type { PlanEvent } from "@/lib/types";
 import { eventRefs } from "@/lib/view/refs";
 import { namesOf } from "@/lib/view/events";
-import { EffectsBlock } from "./EffectFields";
+import { EffectCards } from "./EffectSentence";
 import { renameAmountReferences, renameParameterReferences } from "./amountDraft";
-import {
-  Note,
-  ScheduleFields,
-  type TriggerContext,
-  TriggerFamily,
-  TriggerFields,
-  TriggerFormSelect,
-  hasSchedule,
-} from "./TriggerFields";
+import { Note, type TriggerContext, TriggerFamily } from "./TriggerFields";
+import { TriggerSentence } from "./TriggerSentence";
 import { isManual, triggerConversion } from "./triggerDraft";
 import {
   type EventDraft,
@@ -55,16 +45,15 @@ function renameSavedEffect(effect: EffectSpec, oldName: string, newName: string)
 }
 
 /**
- * Artboard 10a — the event editor, two columns wide: when it fires on the
- * left, what it does on the right, identity across the top of both.
+ * Artboard 17a — the event editor as one column read top to bottom:
+ * identity across the top, then When as a sentence, then What as a stack of
+ * sentence cards, with what the server resolved pinned to the foot.
  *
- * The blocks themselves are unchanged from the drawer of artboard 8, and so is
- * their contract: order never changes, a block is present or absent, never
- * moved, and only the trigger's terms and the selected effect's terms vary in
- * content. A term the engine does not read for the chosen kind is absent, not
- * disabled — no greyed-out lot method on an Expense. What the wider column
- * buys is that the polymorphic halves sit beside each other instead of one
- * scrolling the other off a 400px rail.
+ * The contract of the artboard 8 drawer still holds: a term the engine does
+ * not read for the chosen kind is absent, not disabled. What changes is that
+ * the terms sit inside the words that say what they mean, so the event can be
+ * read before it is edited, and the paycheck-shaped event reads in the order
+ * the money actually flows.
  *
  * Mount with a `key` of the event id so switching rows starts a fresh draft
  * rather than carrying edits across.
@@ -125,6 +114,9 @@ export function EventEditor({
             ? { rawAmount: { kind: "Expression" as const, source: rename(effect.rawAmount.source) } }
             : {}),
           ...(effect.expressionDraft ? { expressionDraft: rename(effect.expressionDraft) } : {}),
+          ...(effect.rawDownPayment?.kind === "Expression"
+            ? { rawDownPayment: { kind: "Expression" as const, source: rename(effect.rawDownPayment.source) } }
+            : {}),
           ...(effect.raw ? { raw: renames.reduce(
             (saved, [oldName, newName]) => renameSavedEffect(saved, oldName, newName), effect.raw,
           ) } : {}),
@@ -169,7 +161,7 @@ export function EventEditor({
           alignItems: "center",
           flexWrap: "wrap",
           gap: "8px 12px",
-          padding: "12px 20px",
+          padding: "14px 28px",
           borderBottom: "1px solid var(--color-divider)",
         }}
       >
@@ -269,7 +261,7 @@ export function EventEditor({
       </div>
 
       {(error || !draft.enabled) && (
-        <div style={{ padding: "10px 20px 0" }}>
+        <div style={{ padding: "10px 28px 0" }}>
           {error && (
             <p style={{ margin: 0, fontSize: 12, color: "var(--color-accent-900)" }}>
               {error}
@@ -284,100 +276,68 @@ export function EventEditor({
         </div>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          flex: 1,
-          minHeight: 0,
-          alignItems: "stretch",
-        }}
-      >
-        {/* When — blocks 2 and 3, straight out of artboard 8 */}
-        <Column border>
-          <SectionHeading action={<TriggerFamily trigger={draft.trigger} />}>
-            When
-          </SectionHeading>
-          <DirtyField label="Fires" changed={changed.trigger}>
-            <TriggerFormSelect
-              trigger={draft.trigger}
-              disabled={offline}
-              onChange={(trigger) => set("trigger", trigger)}
-            />
-          </DirtyField>
-          {conversion && <ConversionNote>{conversion}</ConversionNote>}
-          <TriggerFields
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+        {/* When — one sentence, the trigger's shape and terms in the words
+            that say what they mean */}
+        <Section border>
+          <SectionHeading action={<TriggerFamily trigger={draft.trigger} />}>When</SectionHeading>
+          <TriggerSentence
             trigger={draft.trigger}
             context={context}
             disabled={offline}
             onChange={(trigger) => set("trigger", trigger)}
           />
+          {conversion && <ConversionNote>{conversion}</ConversionNote>}
+        </Section>
 
-          {/* 3 · Schedule — the one trigger that keeps one */}
-          {hasSchedule(draft.trigger) && (
-            <>
-              <Hr flush />
-              <SectionHeading>Schedule</SectionHeading>
-              <ScheduleFields
-                trigger={draft.trigger}
-                context={context}
-                disabled={offline}
-                onChange={(trigger) => set("trigger", trigger)}
-              />
-            </>
-          )}
-
-          {/* 6 · Next fires — absent for Manual, which has nothing to resolve */}
-          {!manual && (
-            <div
-              style={{
-                marginTop: "auto",
-                paddingTop: 12,
-                borderTop: "1px solid var(--color-divider)",
-              }}
-            >
-              {/* Off the saved event, not the draft: these are what the server
-                  last worked out, and an unsaved edit has not been resolved. */}
-              <div style={{ display: "flex", gap: 26, flexWrap: "wrap" }}>
-                <InlineStat label="Next fires" value={event.next} />
-                <InlineStat label="Amount" value={event.amount} />
-              </div>
-              {dirty && <Note>As last saved — apply to resolve the edits above.</Note>}
-            </div>
-          )}
-        </Column>
-
-        {/* What — blocks 4, 5 and 7, straight out of artboard 8 */}
-        <Column>
-          <EffectsBlock
-            label="What"
+        {/* What — the effects as sentence cards, one open at a time */}
+        <Section>
+          <EffectCards
             effects={draft.effects}
             context={context}
             disabled={offline}
             onChange={(effects) => set("effects", effects)}
           />
+        </Section>
+      </div>
 
-          {/* 7 · Referenced by */}
-          <div style={{ marginTop: "auto", paddingTop: 12 }}>
-            <SectionHeading className="mb-[6px]">Referenced by</SectionHeading>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {drivers.length === 0 ? (
-                <span className="text-muted" style={{ fontSize: 12 }}>
-                  No event fires, pauses or ends this one.
-                </span>
-              ) : (
-                drivers.map((e) => (
+      {/* The foot: what the server last resolved for the saved event, and who
+          drives it — pinned under both sections so it reads as the result of
+          them. */}
+      <div
+        style={{
+          borderTop: "1px solid var(--color-divider)",
+          padding: "14px 28px",
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "flex-end",
+          gap: "10px 44px",
+          background: "color-mix(in srgb, var(--color-text) 3%, transparent)",
+        }}
+      >
+        {!manual && (
+          <>
+            {/* Off the saved event, not the draft: an unsaved edit has not
+                been resolved. */}
+            <FootStat label="Next fires" value={event.next} />
+            <FootStat label="Amount" value={event.amount} />
+          </>
+        )}
+        <div style={{ marginLeft: "auto", textAlign: "right", display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
+          {dirty && !manual && <Note>As last saved — apply to resolve the edits above.</Note>}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", justifyContent: "flex-end", fontSize: 12 }}>
+            {drivers.length === 0 ? (
+              <span style={{ color: MUTED }}>No event fires, pauses or ends this one.</span>
+            ) : (
+              <>
+                <span style={{ color: MUTED }}>Referenced by</span>
+                {drivers.map((e) => (
                   <Tag key={e.id} tone="neutral">
                     {onSelectEvent ? (
                       <button
                         type="button"
                         onClick={() => onSelectEvent(e.name)}
-                        style={{
-                          all: "unset",
-                          cursor: "pointer",
-                          textDecoration: "underline",
-                          textUnderlineOffset: 3,
-                        }}
+                        style={{ all: "unset", cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 3 }}
                       >
                         {e.name}
                       </button>
@@ -385,30 +345,39 @@ export function EventEditor({
                       e.name
                     )}
                   </Tag>
-                ))
-              )}
-            </div>
+                ))}
+              </>
+            )}
           </div>
-        </Column>
+        </div>
       </div>
     </div>
   );
 }
 
-/** One half of the editor: same padding, same rhythm, optional hairline. */
-function Column({ children, border }: { children: ReactNode; border?: boolean }) {
+/** One band of the editor: same padding, same rhythm, optional hairline. */
+function Section({ children, border }: { children: ReactNode; border?: boolean }) {
   return (
     <div
       style={{
-        padding: "16px 20px 18px",
+        padding: "18px 28px",
         display: "flex",
         flexDirection: "column",
-        gap: 11,
+        gap: 10,
         minWidth: 0,
-        borderRight: border ? "1px solid var(--color-divider)" : undefined,
+        borderBottom: border ? "1px solid var(--color-divider)" : undefined,
       }}
     >
       {children}
+    </div>
+  );
+}
+
+function FootStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="stat-l">{label}</div>
+      <div className="stat-v" style={{ fontSize: 22 }}>{value}</div>
     </div>
   );
 }

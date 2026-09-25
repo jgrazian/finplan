@@ -331,6 +331,30 @@ fn read_effect(graph: &ScenarioGraph, effect_id: i64, depth: usize) -> ApiResult
             to_account_id: to,
             lot_method,
         },
+        "BuyProperty" => EffectSpec::BuyProperty {
+            property_account_id: to,
+            from_account_id: from,
+            price: amount()?,
+            financing: match (
+                row.loan_account_id,
+                row.down_payment_amount_id,
+                row.term_months,
+            ) {
+                (Some(loan), Some(down), Some(term)) => Some(super::specs::FinancingSpec {
+                    loan_account_id: loan,
+                    down_payment: read_amount(graph, down, depth)?,
+                    term_months: u32::try_from(term).unwrap_or(360),
+                }),
+                _ => None,
+            },
+        },
+        "SellProperty" => EffectSpec::SellProperty {
+            property_account_id: from,
+            to_account_id: to,
+            selling_cost_rate: row.selling_cost_rate.unwrap_or_default(),
+            gain_exclusion: row.gain_exclusion.unwrap_or_default(),
+            payoff_account_id: row.loan_account_id,
+        },
         "RsuVesting" => EffectSpec::RsuVesting {
             to_account_id: to,
             asset_id: row.asset_id.unwrap_or_default(),
@@ -636,7 +660,9 @@ async fn collect_orphans(
         let removed = sqlx::query(
             "DELETE FROM transfer_amounts
               WHERE scenario_id = ?1
-                AND NOT EXISTS (SELECT 1 FROM effects e WHERE e.amount_id = transfer_amounts.id)
+                AND NOT EXISTS (SELECT 1 FROM effects e
+                                 WHERE e.amount_id = transfer_amounts.id
+                                    OR e.down_payment_amount_id = transfer_amounts.id)
                 AND NOT EXISTS (SELECT 1 FROM transfer_amounts p
                                  WHERE p.left_id = transfer_amounts.id
                                     OR p.right_id = transfer_amounts.id)",

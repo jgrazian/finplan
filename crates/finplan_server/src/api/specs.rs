@@ -682,6 +682,42 @@ pub enum EffectSpec {
         #[serde(default)]
         on_false: Option<Box<EffectSpec>>,
     },
+    /// Buy a home: the price lands on the Property account, the cash side
+    /// leaves `from_account_id` as a transfer, and a financed purchase draws
+    /// the loan for the rest and starts it amortizing.
+    BuyProperty {
+        property_account_id: i64,
+        from_account_id: i64,
+        price: AmountSpec,
+        #[serde(default)]
+        financing: Option<FinancingSpec>,
+    },
+    /// Sell a home: proceeds net of selling costs and gains tax land in
+    /// `to_account_id`, after paying off `payoff_account_id` if named.
+    SellProperty {
+        property_account_id: i64,
+        to_account_id: i64,
+        /// Share of the sale price lost to fees and closing costs, 0–1.
+        #[serde(default)]
+        selling_cost_rate: f64,
+        /// Gain excluded from tax: 250000 single, 500000 joint, 0 if not a
+        /// primary residence.
+        #[serde(default)]
+        gain_exclusion: f64,
+        #[serde(default)]
+        payoff_account_id: Option<i64>,
+    },
+}
+
+/// How a `BuyProperty` is financed.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FinancingSpec {
+    /// Liability account drawn for price less down payment, at its own rate.
+    pub loan_account_id: i64,
+    pub down_payment: AmountSpec,
+    /// Months to amortize over — 360 for a 30-year mortgage.
+    pub term_months: u32,
 }
 
 /// Where an effect row hangs: in an event's ordered list, or in a `Random` slot.
@@ -718,6 +754,45 @@ impl EffectSpec {
                 Some(spec) => Some(spec.insert(tx, scenario_id, depth).await?),
                 None => None,
             };
+            let down_payment_amount_id = match self {
+                EffectSpec::BuyProperty {
+                    financing: Some(financing),
+                    ..
+                } => Some(
+                    financing
+                        .down_payment
+                        .insert(tx, scenario_id, depth)
+                        .await?,
+                ),
+                _ => None,
+            };
+            if let EffectSpec::SellProperty {
+                selling_cost_rate,
+                gain_exclusion,
+                ..
+            } = self
+            {
+                if !(0.0..=1.0).contains(selling_cost_rate) {
+                    return Err(ApiError::bad_request(
+                        "selling costs are a share of the price, between 0 and 1",
+                    ));
+                }
+                if *gain_exclusion < 0.0 {
+                    return Err(ApiError::bad_request(
+                        "the gain exclusion cannot be negative",
+                    ));
+                }
+            }
+            if let EffectSpec::BuyProperty {
+                financing: Some(financing),
+                ..
+            } = self
+                && financing.term_months == 0
+            {
+                return Err(ApiError::bad_request(
+                    "a mortgage term must be at least one month",
+                ));
+            }
 
             let f = EffectFields::from(self);
 
@@ -725,8 +800,11 @@ impl EffectSpec {
                 "INSERT INTO effects
                     (scenario_id, event_id, parent_id, parent_slot, position, kind,
                      from_account_id, to_account_id, asset_id, amount_id, target_event_id,
-                     amount_mode, income_type, lot_method, probability, units, sell_to_cover)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+                     amount_mode, income_type, lot_method, probability, units, sell_to_cover,
+                     loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
+                     gain_exclusion)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
+                         ?18,?19,?20,?21,?22)
                  RETURNING id",
             )
             .bind(scenario_id)
@@ -746,6 +824,11 @@ impl EffectSpec {
             .bind(f.probability)
             .bind(f.units)
             .bind(f.sell_to_cover)
+            .bind(f.loan_account_id)
+            .bind(down_payment_amount_id)
+            .bind(f.term_months)
+            .bind(f.selling_cost_rate)
+            .bind(f.gain_exclusion)
             .fetch_one(&mut **tx)
             .await?;
 
@@ -797,7 +880,8 @@ impl EffectSpec {
             | EffectSpec::AssetSale { amount, .. }
             | EffectSpec::Sweep { amount, .. }
             | EffectSpec::AdjustBalance { amount, .. }
-            | EffectSpec::CashTransfer { amount, .. } => Some(amount),
+            | EffectSpec::CashTransfer { amount, .. }
+            | EffectSpec::BuyProperty { price: amount, .. } => Some(amount),
             _ => None,
         }
     }
@@ -816,6 +900,10 @@ struct EffectFields {
     probability: Option<f64>,
     units: Option<f64>,
     sell_to_cover: Option<i64>,
+    loan_account_id: Option<i64>,
+    term_months: Option<i64>,
+    selling_cost_rate: Option<f64>,
+    gain_exclusion: Option<f64>,
 }
 
 impl EffectFields {
@@ -832,6 +920,10 @@ impl EffectFields {
             probability: None,
             units: None,
             sell_to_cover: None,
+            loan_account_id: None,
+            term_months: None,
+            selling_cost_rate: None,
+            gain_exclusion: None,
         }
     }
 }
@@ -975,6 +1067,32 @@ impl From<&EffectSpec> for EffectFields {
             EffectSpec::Random { probability, .. } => EffectFields {
                 probability: Some(*probability),
                 ..EffectFields::blank("Random")
+            },
+            EffectSpec::BuyProperty {
+                property_account_id,
+                from_account_id,
+                financing,
+                ..
+            } => EffectFields {
+                from_account_id: Some(*from_account_id),
+                to_account_id: Some(*property_account_id),
+                loan_account_id: financing.as_ref().map(|f| f.loan_account_id),
+                term_months: financing.as_ref().map(|f| i64::from(f.term_months)),
+                ..EffectFields::blank("BuyProperty")
+            },
+            EffectSpec::SellProperty {
+                property_account_id,
+                to_account_id,
+                selling_cost_rate,
+                gain_exclusion,
+                payoff_account_id,
+            } => EffectFields {
+                from_account_id: Some(*property_account_id),
+                to_account_id: Some(*to_account_id),
+                loan_account_id: *payoff_account_id,
+                selling_cost_rate: Some(*selling_cost_rate),
+                gain_exclusion: Some(*gain_exclusion),
+                ..EffectFields::blank("SellProperty")
             },
         }
     }

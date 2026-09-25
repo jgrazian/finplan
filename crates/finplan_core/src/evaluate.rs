@@ -298,6 +298,20 @@ pub enum EvalEvent {
         delta: f64, // Positive = increase, negative = decrease
     },
 
+    /// Add to (or, negative, take from) a property's cost basis.
+    PropertyBasis {
+        account: AccountId,
+        delta: f64,
+    },
+
+    /// Put a loan on a fixed monthly payment from `from`, sized for what it
+    /// owes now, starting a month from today.
+    StartRepayment {
+        loan: AccountId,
+        from: AccountId,
+        term_months: u32,
+    },
+
     // === Event Management ===
     TriggerEvent(EventId),
     PauseEvent(EventId),
@@ -883,6 +897,151 @@ pub fn evaluate_effect_into(
             Ok(())
         }
 
+        EventEffect::BuyProperty {
+            property,
+            price,
+            from,
+            financing,
+        } => {
+            expect_flavor(state, *property, |f| {
+                matches!(f, AccountFlavor::Property(_))
+            })?;
+            let price = evaluate_transfer_amount(
+                price,
+                &TransferEndpoint::Cash { account_id: *from },
+                &TransferEndpoint::External,
+                state,
+            )?
+            .max(0.0);
+            if price < 0.01 {
+                return Ok(());
+            }
+
+            // The cash side is a transfer into an asset, not spending: a
+            // $200k down payment is not a $200k year of expenses.
+            let cash = match financing {
+                None => price,
+                Some(financing) => {
+                    expect_flavor(state, financing.loan, |f| {
+                        matches!(f, AccountFlavor::Liability(_))
+                    })?;
+                    let down = evaluate_transfer_amount(
+                        &financing.down_payment,
+                        &TransferEndpoint::Cash { account_id: *from },
+                        &TransferEndpoint::External,
+                        state,
+                    )?
+                    .clamp(0.0, price);
+                    let borrowed = price - down;
+                    if borrowed > 0.005 {
+                        out.push(EvalEvent::AdjustBalance {
+                            account: financing.loan,
+                            delta: borrowed,
+                        });
+                        out.push(EvalEvent::StartRepayment {
+                            loan: financing.loan,
+                            from: *from,
+                            term_months: financing.term_months,
+                        });
+                    }
+                    down
+                }
+            };
+            if cash > 0.005 {
+                out.push(EvalEvent::CashDebit {
+                    from: *from,
+                    net_amount: cash,
+                    kind: CashFlowKind::Transfer,
+                });
+            }
+            out.push(EvalEvent::AdjustBalance {
+                account: *property,
+                delta: price,
+            });
+            out.push(EvalEvent::PropertyBasis {
+                account: *property,
+                delta: price,
+            });
+            Ok(())
+        }
+
+        EventEffect::SellProperty {
+            property,
+            to,
+            selling_cost_rate,
+            gain_exclusion,
+            payoff,
+        } => {
+            let account = state
+                .portfolio
+                .accounts
+                .get(property)
+                .ok_or(LookupError::AccountNotFound(*property))?;
+            let AccountFlavor::Property(asset) = &account.flavor else {
+                return Err(AccountTypeError::InvalidAccountType(*property).into());
+            };
+            let value = asset.current_value(
+                &state.portfolio.market,
+                state.timeline.start_date,
+                state.timeline.current_date,
+            );
+            if value < 0.01 {
+                return Ok(());
+            }
+            let basis = asset.cost_basis.unwrap_or(0.0);
+            let proceeds = value * (1.0 - selling_cost_rate.clamp(0.0, 1.0));
+
+            // Held as long-term: a home is rarely sold inside a year, and the
+            // property keeps no purchase date to say otherwise.
+            let gain = (proceeds - basis - gain_exclusion.max(0.0)).max(0.0);
+            let mut tax = 0.0;
+            if gain > 0.005 {
+                let config = &state.taxes.config;
+                let federal_tax = gain * config.capital_gains_rate;
+                let state_tax = gain * config.state_rate;
+                tax = federal_tax + state_tax;
+                out.push(EvalEvent::LongTermCapitalGainsTax {
+                    gross_gain_amount: gain,
+                    federal_tax,
+                    state_tax,
+                });
+            }
+
+            out.push(EvalEvent::AdjustBalance {
+                account: *property,
+                delta: -value,
+            });
+            out.push(EvalEvent::PropertyBasis {
+                account: *property,
+                delta: -basis,
+            });
+            out.push(EvalEvent::CashCredit {
+                to: *to,
+                net_amount: proceeds - tax,
+                kind: CashFlowKind::LiquidationProceeds,
+            });
+
+            if let Some(loan) = payoff {
+                let owed = match state.portfolio.accounts.get(loan).map(|a| &a.flavor) {
+                    Some(AccountFlavor::Liability(detail)) => detail.principal,
+                    Some(_) => return Err(AccountTypeError::InvalidAccountType(*loan).into()),
+                    None => return Err(LookupError::AccountNotFound(*loan).into()),
+                };
+                if owed > 0.005 {
+                    out.push(EvalEvent::CashDebit {
+                        from: *to,
+                        net_amount: owed,
+                        kind: CashFlowKind::Transfer,
+                    });
+                    out.push(EvalEvent::AdjustBalance {
+                        account: *loan,
+                        delta: -owed,
+                    });
+                }
+            }
+            Ok(())
+        }
+
         EventEffect::CashTransfer { from, to, amount } => {
             let transfer_amount = evaluate_transfer_amount(
                 amount,
@@ -1140,5 +1299,19 @@ pub fn resolve_withdrawal_sources(
                 })
                 .collect()
         }
+    }
+}
+
+/// Refuse an effect aimed at the wrong kind of account, rather than let it
+/// write to a field the account does not have.
+fn expect_flavor(
+    state: &SimulationState,
+    account: AccountId,
+    ok: impl Fn(&AccountFlavor) -> bool,
+) -> Result<(), StateEventError> {
+    match state.portfolio.accounts.get(&account) {
+        Some(a) if ok(&a.flavor) => Ok(()),
+        Some(_) => Err(AccountTypeError::InvalidAccountType(account).into()),
+        None => Err(LookupError::AccountNotFound(account).into()),
     }
 }

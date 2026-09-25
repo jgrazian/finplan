@@ -429,6 +429,43 @@ pub enum EventEffect {
         on_false: Option<Box<EventEffect>>,
     },
 
+    // === Real Estate ===
+    /// Buy a property: its price lands on the Property account (and in its
+    /// cost basis), the cash side leaves `from` as a transfer rather than an
+    /// expense, and — when financed — the loan is drawn for the rest and
+    /// starts amortizing a month later.
+    BuyProperty {
+        /// The Property account the home is held in.
+        property: AccountId,
+        /// Purchase price.
+        price: TransferAmount,
+        /// Cash account paying the down payment, or the whole price when
+        /// there is no financing.
+        from: AccountId,
+        #[serde(default)]
+        financing: Option<Financing>,
+    },
+
+    /// Sell a property: proceeds net of selling costs and capital-gains tax
+    /// (after any exclusion) land in `to`, and — when named — the loan is
+    /// paid off out of them first.
+    SellProperty {
+        /// The Property account being sold.
+        property: AccountId,
+        /// Cash account receiving the proceeds.
+        to: AccountId,
+        /// Agent fees and closing costs, as a share of the sale price.
+        #[serde(default)]
+        selling_cost_rate: f64,
+        /// Gain excluded from tax — $250k single or $500k joint for a primary
+        /// residence held two of the last five years, 0 otherwise.
+        #[serde(default)]
+        gain_exclusion: f64,
+        /// Loan paid off from the proceeds.
+        #[serde(default)]
+        payoff: Option<AccountId>,
+    },
+
     // === Equity Compensation ===
     /// RSU vesting: shares vest and are deposited to an investment account.
     /// The FMV at vesting is taxed as ordinary income.
@@ -447,6 +484,18 @@ pub enum EventEffect {
         #[serde(default)]
         lot_method: LotMethod,
     },
+}
+
+/// How a `BuyProperty` is financed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Financing {
+    /// The Liability account drawn for `price - down_payment`. Its interest
+    /// rate is the loan's rate.
+    pub loan: AccountId,
+    /// Cash put down; the loan covers the rest of the price.
+    pub down_payment: TransferAmount,
+    /// Months to amortize over — 360 for a 30-year mortgage.
+    pub term_months: u32,
 }
 
 /// An event with a trigger condition and effects

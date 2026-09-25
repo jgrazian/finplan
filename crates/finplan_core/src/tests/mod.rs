@@ -20,6 +20,7 @@ mod contribution_limits;
 mod funding;
 mod parameters;
 mod profiling;
+mod real_estate;
 mod returns;
 mod rsu;
 mod simulation_result;

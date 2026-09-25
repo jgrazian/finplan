@@ -2,7 +2,7 @@
 
 import { type ReactNode, useState } from "react";
 import { Blueprint, Button, CompactInput, DirtyField, Dropdown, Tag } from "@/components/ui";
-import type { Asset, Profile } from "@/lib/api/types";
+import type { Account as ApiAccount, Asset, Profile } from "@/lib/api/types";
 import { fmtClock } from "@/lib/format";
 import type { Account, AccountId, AssetLot } from "@/lib/types";
 import { AccountTerms } from "./AccountTerms";
@@ -50,6 +50,7 @@ export function AccountInspector({
   account,
   profiles,
   assets,
+  payers,
   onApply,
   onAddLot,
   onEditLot,
@@ -68,6 +69,8 @@ export function AccountInspector({
   profiles: Profile[];
   /** Every asset a property could be marked against. */
   assets: Asset[];
+  /** Accounts a loan's payment can be drawn from. */
+  payers?: ApiAccount[];
   onApply: (draft: AccountDraft) => void;
   /** Omitted where the kind cannot hold lots. */
   onAddLot?: () => void;
@@ -179,6 +182,7 @@ export function AccountInspector({
         set={set}
         profiles={profiles}
         assets={assets}
+        payers={payers ?? []}
         offline={offline}
       />
 

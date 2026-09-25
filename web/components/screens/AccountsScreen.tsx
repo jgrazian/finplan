@@ -73,6 +73,10 @@ function flavorOf(raw: ApiAccount, draft: AccountDraft): FlavorSpec {
         flavor: "Liability",
         principal: draft.amount,
         interest_rate: draft.interestRate,
+        repayment:
+          draft.repayFrom == null
+            ? null
+            : { from_account_id: draft.repayFrom, term_months: draft.termMonths },
       };
   }
 }
@@ -289,6 +293,7 @@ export function AccountsScreen({
               account={selected}
               profiles={raw.returnProfiles}
               assets={assets}
+              payers={raw.accounts.filter((a) => a.flavor === "Bank" || a.flavor === "Investment")}
               onApply={(draft) => apply(selected, draft)}
               onSelectAccount={select}
               onAddLot={
@@ -345,6 +350,7 @@ export function AccountsScreen({
           scenarioId={scenarioId}
           profiles={raw.returnProfiles}
           assets={assets}
+          payers={raw.accounts.filter((a) => a.flavor === "Bank" || a.flavor === "Investment")}
           onClose={() => setCreating(false)}
           onCreated={onChanged}
           onAssetCreated={assetCreated}

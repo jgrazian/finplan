@@ -86,6 +86,8 @@ export interface Account {
   assetServerId?: number;
   /** Annual rate as a fraction; liabilities only. */
   interestRate?: number;
+  /** A loan's level monthly payment, where it amortizes; liabilities only. */
+  repayment?: { fromAccountId: number; termMonths: number };
   /** The property or debt on the other side of this one, if an event pairs them. */
   linked: LinkedAccount[];
   /** What the account holds, in one line — the list's widest column. */
@@ -277,7 +279,9 @@ export type EffectKind =
   | "ResumeEvent"
   | "TriggerEvent"
   | "TerminateEvent"
-  | "Random";
+  | "Random"
+  | "BuyProperty"
+  | "SellProperty";
 
 export interface EventEffect {
   kind: EffectKind;

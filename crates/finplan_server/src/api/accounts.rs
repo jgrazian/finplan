@@ -103,7 +103,22 @@ pub enum FlavorSpec {
         principal: f64,
         #[serde(default)]
         interest_rate: f64,
+        /// A fixed monthly payment that pays the loan off; absent, it is paid
+        /// down only by explicit transfers.
+        #[serde(default)]
+        repayment: Option<RepaymentSpec>,
     },
+}
+
+/// How a loan pays itself off: a level monthly payment from a cash account.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RepaymentSpec {
+    /// Bank or investment account the payment is drawn from.
+    pub from_account_id: i64,
+    /// Months remaining at plan start — 360 for a new 30-year mortgage. A
+    /// loan drawn by a BuyProperty takes the term that effect names instead.
+    pub term_months: u32,
 }
 
 impl FlavorSpec {
@@ -133,6 +148,16 @@ impl FlavorSpec {
         {
             return Err(ApiError::bad_request(
                 "liability principal is stored as a positive amount owed",
+            ));
+        }
+        if let FlavorSpec::Liability {
+            repayment: Some(repayment),
+            ..
+        } = self
+            && repayment.term_months == 0
+        {
+            return Err(ApiError::bad_request(
+                "a repayment term must be at least one month",
             ));
         }
         Ok(())
@@ -265,15 +290,18 @@ async fn load_account(state: &AppState, scenario_id: i64, id: i64) -> ApiResult<
             FlavorSpec::Property { asset_id, value }
         }
         _ => {
-            let (principal, interest_rate): (f64, f64) = sqlx::query_as(
-                "SELECT principal, interest_rate FROM account_liability WHERE account_id = ?1",
-            )
-            .bind(id)
-            .fetch_one(&state.db)
-            .await?;
+            let (principal, interest_rate, from, term): (f64, f64, Option<i64>, Option<i64>) =
+                sqlx::query_as(
+                    "SELECT principal, interest_rate, repay_from_account_id, term_months
+                       FROM account_liability WHERE account_id = ?1",
+                )
+                .bind(id)
+                .fetch_one(&state.db)
+                .await?;
             FlavorSpec::Liability {
                 principal,
                 interest_rate,
+                repayment: repayment_of(from, term),
             }
         }
     };
@@ -353,19 +381,48 @@ async fn insert_detail(
         FlavorSpec::Liability {
             principal,
             interest_rate,
+            repayment,
         } => {
+            if let Some(repayment) = repayment {
+                // The payer has to be a cash-holding account in the same plan.
+                let payer: Option<String> = sqlx::query_scalar(
+                    "SELECT p.flavor FROM accounts p JOIN accounts a ON a.scenario_id = p.scenario_id
+                      WHERE a.id = ?1 AND p.id = ?2",
+                )
+                .bind(account_id)
+                .bind(repayment.from_account_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+                if !matches!(payer.as_deref(), Some("Bank" | "Investment")) {
+                    return Err(ApiError::bad_request(
+                        "a loan is repaid from a bank or investment account in the same plan",
+                    ));
+                }
+            }
             sqlx::query(
-                "INSERT INTO account_liability (account_id, principal, interest_rate)
-                 VALUES (?1,?2,?3)",
+                "INSERT INTO account_liability
+                    (account_id, principal, interest_rate, repay_from_account_id, term_months)
+                 VALUES (?1,?2,?3,?4,?5)",
             )
             .bind(account_id)
             .bind(principal)
             .bind(interest_rate)
+            .bind(repayment.map(|r| r.from_account_id))
+            .bind(repayment.map(|r| i64::from(r.term_months)))
             .execute(&mut **tx)
             .await?;
         }
     }
     Ok(())
+}
+
+/// Both columns or neither: the payer set to NULL by its deletion leaves a
+/// term with nothing to draw from, which reads as no repayment.
+pub(crate) fn repayment_of(from: Option<i64>, term: Option<i64>) -> Option<RepaymentSpec> {
+    Some(RepaymentSpec {
+        from_account_id: from?,
+        term_months: u32::try_from(term?).ok().filter(|t| *t > 0)?,
+    })
 }
 
 async fn list(
@@ -920,6 +977,7 @@ impl ActivityFields for CreateAccount {
         "value",
         "principal",
         "interest_rate",
+        "repayment",
     ];
 }
 
@@ -939,6 +997,7 @@ impl ActivityFields for UpdateAccount {
         "value",
         "principal",
         "interest_rate",
+        "repayment",
     ];
 }
 

@@ -127,6 +127,20 @@ function walkEffect(effect: EffectSpec, out: Set<number>): void {
     case "DeleteAccount":
       out.add(effect.account_id);
       return;
+    case "BuyProperty":
+      out.add(effect.property_account_id);
+      out.add(effect.from_account_id);
+      walkAmount(effect.price, out);
+      if (effect.financing) {
+        out.add(effect.financing.loan_account_id);
+        walkAmount(effect.financing.down_payment, out);
+      }
+      return;
+    case "SellProperty":
+      out.add(effect.property_account_id);
+      out.add(effect.to_account_id);
+      if (effect.payoff_account_id != null) out.add(effect.payoff_account_id);
+      return;
     case "Random":
       walkEffect(effect.on_true, out);
       if (effect.on_false) walkEffect(effect.on_false, out);

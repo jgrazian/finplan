@@ -70,6 +70,13 @@ export function toViewAccounts(
           : undefined,
       assetServerId: account.flavor === "Property" ? account.asset_id : undefined,
       interestRate: account.flavor === "Liability" ? account.interest_rate : undefined,
+      repayment:
+        account.flavor === "Liability" && account.repayment
+          ? {
+              fromAccountId: account.repayment.from_account_id,
+              termMonths: account.repayment.term_months,
+            }
+          : undefined,
       linked: [],
       positions,
       referencedBy: referencedBy.get(account.id) ?? [],

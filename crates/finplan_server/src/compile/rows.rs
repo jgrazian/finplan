@@ -106,6 +106,10 @@ pub struct LiabilityRow {
     pub account_id: i64,
     pub principal: f64,
     pub interest_rate: f64,
+    #[serde(default)]
+    pub repay_from_account_id: Option<i64>,
+    #[serde(default)]
+    pub term_months: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -194,6 +198,16 @@ pub struct EffectRow {
     pub probability: Option<f64>,
     pub units: Option<f64>,
     pub sell_to_cover: Option<i64>,
+    #[serde(default)]
+    pub loan_account_id: Option<i64>,
+    #[serde(default)]
+    pub down_payment_amount_id: Option<i64>,
+    #[serde(default)]
+    pub term_months: Option<i64>,
+    #[serde(default)]
+    pub selling_cost_rate: Option<f64>,
+    #[serde(default)]
+    pub gain_exclusion: Option<f64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -343,7 +357,8 @@ impl ScenarioGraph {
         .await?;
 
         let liability: Vec<LiabilityRow> = sqlx::query_as(
-            "SELECT l.account_id, l.principal, l.interest_rate
+            "SELECT l.account_id, l.principal, l.interest_rate, l.repay_from_account_id,
+                    l.term_months
                FROM account_liability l JOIN accounts a ON a.id = l.account_id
               WHERE a.scenario_id = ?1",
         )
@@ -465,7 +480,9 @@ impl ScenarioGraph {
         let effect_rows: Vec<EffectRow> = sqlx::query_as(
             "SELECT id, event_id, parent_id, parent_slot, position, kind, from_account_id,
                     to_account_id, asset_id, amount_id, target_event_id, amount_mode,
-                    income_type, lot_method, probability, units, sell_to_cover
+                    income_type, lot_method, probability, units, sell_to_cover,
+                    loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
+                    gain_exclusion
                FROM effects WHERE scenario_id = ?1 ORDER BY event_id, position, id",
         )
         .bind(scenario_id)

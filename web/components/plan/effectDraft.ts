@@ -5,7 +5,7 @@
  * Covered: every effect the engine has except `Random`, which branches into two
  * more effects and would make this a tree editor rather than a list one.
  *
- * Fourteen engine kinds in eleven forms: the four event-control effects differ
+ * Sixteen engine kinds in thirteen forms: the four event-control effects differ
  * only in their verb, and a block whose one field is an event id should not be
  * drawn four ways, so they share a form and the verb is a select inside it.
  *
@@ -42,6 +42,8 @@ export const EFFECT_FORMS = [
   "ApplyRmd",
   "RsuVesting",
   "DeleteAccount",
+  "BuyProperty",
+  "SellProperty",
   "Event control",
 ] as const;
 export type EffectForm = (typeof EFFECT_FORMS)[number];
@@ -73,6 +75,8 @@ export const FAMILY: Record<EffectForm, { label: string; tone: TagTone }> = {
   ApplyRmd: { label: "multi-account", tone: "accent" },
   AdjustBalance: { label: "adjustment", tone: "neutral" },
   DeleteAccount: { label: "accounts", tone: "outline" },
+  BuyProperty: { label: "real estate", tone: "outline" },
+  SellProperty: { label: "real estate", tone: "outline" },
   "Event control": { label: "event control", tone: "neutral" },
 };
 
@@ -135,6 +139,22 @@ export interface EffectDraft {
   /** Which lots a sale reaches for. */
   lotMethod: LotMethod;
   taxFree: boolean;
+  /** `BuyProperty` / `SellProperty`: the Property account. */
+  propertyAccountId: number;
+  /** `BuyProperty`: whether a loan covers part of the price. */
+  financed: boolean;
+  /** `BuyProperty`: the Liability drawn; `SellProperty`: the one paid off. */
+  loanAccountId: number;
+  /** `BuyProperty`: cash put down — a figure unless it came as an expression. */
+  downPayment: number;
+  rawDownPayment?: AmountSpec;
+  termMonths: number;
+  /** `SellProperty`: whether the sale pays a loan off. */
+  payoff: boolean;
+  /** `SellProperty`: fees and closing costs, as a share of the price (0–1). */
+  sellingCostRate: number;
+  /** `SellProperty`: gain excluded from tax. */
+  gainExclusion: number;
   /** An effect the form cannot express (`Random`) — held verbatim. */
   raw?: EffectSpec;
 }
@@ -157,6 +177,16 @@ export function emptyEffect(accountId: number, assetId: number): EffectDraft {
     strategy: "TaxEfficientEarly",
     lotMethod: "Fifo",
     taxFree: false,
+    // No account is a sensible default for these three: a property or a loan
+    // picked for you is one you did not notice being picked.
+    propertyAccountId: 0,
+    financed: true,
+    loanAccountId: 0,
+    downPayment: 0,
+    termMonths: 360,
+    payoff: true,
+    sellingCostRate: 0.06,
+    gainExclusion: 250_000,
   };
 }
 
@@ -179,6 +209,12 @@ export interface EffectShape {
   strategy: boolean;
   lots: boolean;
   taxable: boolean;
+  /** Names a Property account. */
+  property: boolean;
+  /** A purchase's loan: down payment, loan account, term. */
+  financing: boolean;
+  /** A sale's costs, exclusion and payoff. */
+  sale: boolean;
 }
 
 const NOTHING: EffectShape = {
@@ -195,6 +231,9 @@ const NOTHING: EffectShape = {
   strategy: false,
   lots: false,
   taxable: false,
+  property: false,
+  financing: false,
+  sale: false,
 };
 
 export function shape(form: EffectForm): EffectShape {
@@ -235,6 +274,10 @@ export function shape(form: EffectForm): EffectShape {
       return { ...NOTHING, to: true, asset: true, units: true, lots: true };
     case "DeleteAccount":
       return { ...NOTHING, account: true };
+    case "BuyProperty":
+      return { ...NOTHING, from: true, property: true, amount: true, financing: true };
+    case "SellProperty":
+      return { ...NOTHING, to: true, property: true, sale: true };
     default:
       return { ...NOTHING, event: true, verb: true };
   }
@@ -254,6 +297,9 @@ const TERM: Partial<Record<keyof EffectShape, string>> = {
   lots: "the lot method",
   taxable: "the income type",
   event: "the target event",
+  property: "the property",
+  financing: "the financing",
+  sale: "the sale terms",
 };
 
 /** `a, b and c` — the list as it reads in the sentence below. */
@@ -302,6 +348,14 @@ export function effectProblem(draft: EffectDraft, index: number): string | null 
   }
   if (fields.amount && draft.rawAmount?.kind === "Expression" && !draft.rawAmount.source.trim())
     return say("needs a value expression");
+  if (fields.property && draft.propertyAccountId === 0) return say("needs a property account");
+  if (fields.financing && draft.financed && draft.loanAccountId === 0) return say("needs a loan account");
+  if (fields.financing && draft.financed && draft.termMonths < 1) return say("needs a term");
+  if (
+    fields.financing && draft.financed &&
+    draft.rawDownPayment?.kind === "Expression" && !draft.rawDownPayment.source.trim()
+  ) return say("needs a down payment expression");
+  if (fields.sale && draft.payoff && draft.loanAccountId === 0) return say("needs the loan it pays off");
   return null;
 }
 
@@ -426,6 +480,29 @@ export function toEffectSpec(draft: EffectDraft): EffectSpec {
       };
     case "DeleteAccount":
       return { kind: "DeleteAccount", account_id: draft.toAccountId };
+    case "BuyProperty":
+      return {
+        kind: "BuyProperty",
+        property_account_id: draft.propertyAccountId,
+        from_account_id: draft.fromAccountId,
+        price: amount,
+        financing: draft.financed
+          ? {
+              loan_account_id: draft.loanAccountId,
+              down_payment: draft.rawDownPayment ?? staticAmount(draft.downPayment, false),
+              term_months: draft.termMonths,
+            }
+          : null,
+      };
+    case "SellProperty":
+      return {
+        kind: "SellProperty",
+        property_account_id: draft.propertyAccountId,
+        to_account_id: draft.toAccountId,
+        selling_cost_rate: draft.sellingCostRate,
+        gain_exclusion: draft.gainExclusion,
+        payoff_account_id: draft.payoff ? draft.loanAccountId : null,
+      };
     default:
       return { kind: draft.verb, target_event_id: draft.targetEventId };
   }
@@ -570,7 +647,76 @@ export function draftOfEffect(
         verb: effect.kind,
         targetEventId: effect.target_event_id,
       };
+    case "BuyProperty": {
+      const down = effect.financing ? readStaticAmount(effect.financing.down_payment) : null;
+      return {
+        ...base,
+        form: "BuyProperty",
+        propertyAccountId: effect.property_account_id,
+        fromAccountId: effect.from_account_id,
+        financed: effect.financing != null,
+        ...(effect.financing
+          ? {
+              loanAccountId: effect.financing.loan_account_id,
+              termMonths: effect.financing.term_months,
+              // A plain figure is edited as one; anything else is kept as it
+              // came, so saving the event cannot flatten a formula.
+              ...(down && !down.inflationAdjusted
+                ? { downPayment: down.value }
+                : {
+                    rawDownPayment: {
+                      kind: "Expression" as const,
+                      source: amountSource(effect.financing.down_payment, names ?? {
+                        account: (id) => `account ${id}`,
+                        asset: (id) => `asset ${id}`,
+                      }),
+                    },
+                  }),
+            }
+          : {}),
+        ...withAmount(effect.price),
+      };
+    }
+    case "SellProperty":
+      return {
+        ...base,
+        form: "SellProperty",
+        propertyAccountId: effect.property_account_id,
+        toAccountId: effect.to_account_id,
+        sellingCostRate: effect.selling_cost_rate,
+        gainExclusion: effect.gain_exclusion,
+        payoff: effect.payoff_account_id != null,
+        loanAccountId: effect.payoff_account_id ?? 0,
+      };
     case "Random":
       return { ...base, raw: effect };
   }
+}
+
+/**
+ * The down payment into an expression and back — the price's ƒ, for the
+ * purchase's second amount. A figure opens as itself; an expression comes back
+ * to a figure only while it still is one.
+ */
+export function expandDownPayment(draft: EffectDraft): Partial<EffectDraft> {
+  return { rawDownPayment: { kind: "Expression", source: String(draft.downPayment) } };
+}
+
+export function collapseDownPayment(draft: EffectDraft): Partial<EffectDraft> | null {
+  const read = draft.rawDownPayment ? readStaticAmount(draft.rawDownPayment) : null;
+  if (!read || read.inflationAdjusted) return null;
+  return { rawDownPayment: undefined, downPayment: read.value };
+}
+
+/**
+ * Something the expression checker can read the down payment as. It only ever
+ * looks at an effect's main amount, so this stands the down payment in as an
+ * Expense from the paying account — the same account `source` means in it.
+ */
+export function downPaymentProbe(draft: EffectDraft): EffectSpec {
+  return {
+    kind: "Expense",
+    from_account_id: draft.fromAccountId,
+    amount: draft.rawDownPayment ?? staticAmount(draft.downPayment, false),
+  };
 }

@@ -21,6 +21,10 @@ export interface AccountDraft {
   assetServerId: number | undefined;
   /** Annual rate as a fraction; debt only. */
   interestRate: number;
+  /** The account a loan's monthly payment comes from; null leaves it unpaid. */
+  repayFrom: number | null;
+  /** Months left to pay at plan start. */
+  termMonths: number;
   contributionLimit: number | null;
   contributionPeriod: ContributionLimitPeriod;
 }
@@ -52,6 +56,8 @@ export function draftOf(account: Account): AccountDraft {
     returnProfileServerId: account.returnProfileServerId,
     assetServerId: account.assetServerId,
     interestRate: account.interestRate ?? 0,
+    repayFrom: account.repayment?.fromAccountId ?? null,
+    termMonths: account.repayment?.termMonths ?? 360,
     contributionLimit: account.contributionLimit?.amount ?? null,
     contributionPeriod: account.contributionLimit?.period ?? "Yearly",
   };
@@ -66,6 +72,7 @@ export interface ChangedFields {
   profile: boolean;
   asset: boolean;
   rate: boolean;
+  repayment: boolean;
   limit: boolean;
 }
 
@@ -83,6 +90,10 @@ export function changedFields(
     profile: draft.returnProfileServerId !== pristine.returnProfileServerId,
     asset: draft.assetServerId !== pristine.assetServerId,
     rate: draft.interestRate !== pristine.interestRate,
+    repayment:
+      draft.repayFrom !== pristine.repayFrom ||
+      // A term with nothing paying it is not an edit anyone can see.
+      (draft.repayFrom != null && draft.termMonths !== pristine.termMonths),
     limit:
       draft.contributionLimit !== pristine.contributionLimit ||
       // A period on its own says nothing until there is a figure to divide.

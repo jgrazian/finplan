@@ -2958,6 +2958,9 @@ mod archives_cases;
 #[path = "cases/parameters.rs"]
 mod parameter_cases;
 
+#[path = "cases/real_estate.rs"]
+mod real_estate_cases;
+
 mod named_analysis_cases {
     use super::*;
     include!("cases/named_analysis.rs");

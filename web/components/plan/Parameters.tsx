@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button, CompactInput, CurrencyInput, DateInput, Dropdown, Field, NumberInput, Tag } from "@/components/ui";
+import { Button, CompactInput, Dialog, CurrencyInput, DateInput, Dropdown, Field, NumberInput } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { NamedParameter, ParameterValueSpec } from "@/lib/api/types";
 
@@ -27,46 +27,37 @@ function valueLabel(value: ParameterValueSpec): string {
   }
 }
 
-export function ParameterRail({ parameters, selectedId, onSelect, onAdd, adding, loading, error, submitError, offline }: {
+/**
+ * Artboard 15a — the parameters as the rail's second list, at the same weight
+ * as the events. The name is monospace because it is the name you type into an
+ * expression; the second line trades a type tag for type and usage, which is
+ * what you want to know before deleting one.
+ */
+export function ParameterRail({ parameters, selectedId, onSelect, error }: {
   parameters: NamedParameter[];
   selectedId?: number;
   onSelect: (id: number) => void;
-  onAdd: (kind: Kind) => void;
-  adding?: boolean;
-  loading?: boolean;
-  error?: Error;
-  submitError?: string;
-  offline?: boolean;
+  error?: string;
 }) {
-  const [expanded, setExpanded] = useState(true);
   return (
-    <div style={{ borderTop: "1px solid var(--color-divider)", display: "flex", flexDirection: "column", minHeight: 0, maxHeight: 230, overflow: "hidden" }}>
-      <div style={{ padding: "14px 16px 8px", display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, flexShrink: 0 }}>
-        <h4 style={{ margin: 0 }}>
-          <button type="button" aria-expanded={expanded} aria-label="Toggle parameters" onClick={() => setExpanded((open) => !open)}
-            style={{ background: "none", border: 0, padding: 0, color: "inherit", cursor: "pointer", font: "inherit", textAlign: "left" }}>
-            <span aria-hidden="true">{expanded ? "▾" : "▸"}</span> Parameters <span className="text-muted" style={{ fontSize: 13 }}>{parameters.length}</span>
-          </button>
-        </h4>
-        <Button variant="ghost" onClick={() => { setExpanded(true); onAdd("Money"); }} disabled={offline || adding || !!error}
-          aria-label="Add parameter" title={offline ? "No connection to the server." : undefined}>
-          Add
-        </Button>
-      </div>
-      {expanded && <div style={{ flex: "0 1 auto", minHeight: 0, overflowY: "auto", overflowX: "hidden" }}>
-        {loading && parameters.length === 0 && <p style={{ padding: "4px 16px", fontSize: 12, color: muted }}>Loading parameters…</p>}
-        {error && <p role="alert" style={{ padding: "4px 16px", fontSize: 12, color: "var(--color-accent-900)" }}>{error.message}</p>}
-        {submitError && <p role="alert" style={{ padding: "4px 16px", fontSize: 12, color: "var(--color-accent-900)" }}>{submitError}</p>}
-        {!loading && !error && parameters.length === 0 && <p style={{ padding: "4px 16px", fontSize: 12, color: muted }}>Name values to reuse in events and analysis.</p>}
-        <div role="listbox" aria-label="Parameters">
-          {parameters.map((p) => <div key={p.id} role="option" tabIndex={0} aria-selected={p.id === selectedId}
+    <div style={{ display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
+      {error && <p role="alert" style={{ margin: 0, padding: "4px 16px 8px", fontSize: 12, color: "var(--color-accent-900)" }}>{error}</p>}
+      <div role="listbox" aria-label="Parameters">
+        {parameters.map((p) => {
+          const on = p.id === selectedId;
+          return <div key={p.id} className="rowsel" role="option" tabIndex={0} aria-selected={on}
             onClick={() => onSelect(p.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(p.id); } }}
-            style={{ cursor: "pointer", borderTop: "1px solid var(--color-divider)", padding: "9px 16px", background: p.id === selectedId ? "color-mix(in srgb, var(--color-accent) 14%, transparent)" : undefined, boxShadow: p.id === selectedId ? "inset 3px 0 0 var(--color-accent)" : undefined }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, fontSize: 12.5 }}><strong style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{p.name}</strong><Tag tone="outline">{p.value.kind}</Tag></div>
-            <div style={{ fontSize: 12, color: muted, marginTop: 3 }}>{valueLabel(p.value)}</div>
-          </div>)}
-        </div>
-      </div>}
+            style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "2px 8px", padding: "10px 18px", borderTop: "1px solid var(--color-divider)", background: on ? "color-mix(in srgb, var(--color-accent) 14%, transparent)" : undefined, boxShadow: on ? "inset 3px 0 0 var(--color-accent)" : undefined }}>
+            <span className="cd-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
+            <span style={{ fontSize: 13 }}>{valueLabel(p.value)}</span>
+            <span style={{ fontSize: 11.5, color: muted }}>{p.value.kind} · {p.uses.length ? `used by ${p.uses.length}` : "unused"}</span>
+          </div>;
+        })}
+      </div>
+      {parameters.length > 0 && <div style={{ borderTop: "1px solid var(--color-divider)" }} />}
+      <p style={{ margin: "auto 0 0", padding: "12px 16px 14px", fontSize: 11.5, color: muted }}>
+        {parameters.length === 0 ? "Name values to reuse in events and analysis." : "Reference one in an amount as $name."}
+      </p>
     </div>
   );
 }
@@ -116,12 +107,15 @@ export function ParameterEditor({ parameter, scenarioId, onSaved, onDeleted, onS
     catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
   };
+  // Asked in the app's own dialog rather than the browser's, so the question
+  // can name what goes and say why it is safe.
+  const [confirming, setConfirming] = useState(false);
+  const [deleteError, setDeleteError] = useState<string>();
   const remove = async () => {
     if (parameter.uses.length) return;
-    if (!confirm(`Delete ${parameter.name}?`)) return;
-    setBusy(true); setError(undefined);
-    try { await api.parameters.remove(scenarioId, parameter.id); onDeleted(); }
-    catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    setBusy(true); setDeleteError(undefined);
+    try { await api.parameters.remove(scenarioId, parameter.id); setConfirming(false); onDeleted(); }
+    catch (err) { setDeleteError(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
   };
   return <div style={{ padding: "18px 24px", minWidth: 0 }}>
@@ -132,7 +126,7 @@ export function ParameterEditor({ parameter, scenarioId, onSaved, onDeleted, onS
       <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
         {dirty && <Button variant="ghost" disabled={busy} onClick={() => { setName(parameter.name); setValue(parameter.value); setError(undefined); }}>Revert</Button>}
         {dirty && <Button variant="primary" disabled={busy || offline} onClick={save}>Apply</Button>}
-        <Button variant="ghost" disabled={busy || offline || parameter.uses.length > 0} title={parameter.uses.length ? "Remove its references before deleting this parameter." : undefined} onClick={remove}>Delete</Button>
+        <Button variant="ghost" disabled={busy || offline || parameter.uses.length > 0} title={parameter.uses.length ? "Remove its references before deleting this parameter." : undefined} onClick={() => { setDeleteError(undefined); setConfirming(true); }}>Delete</Button>
       </div>
     </div>
     {error && <p role="alert" style={{ fontSize: 12, color: "var(--color-accent-900)" }}>{error}</p>}
@@ -152,5 +146,18 @@ export function ParameterEditor({ parameter, scenarioId, onSaved, onDeleted, onS
         </div>}
       {parameter.uses.length > 0 && <p style={{ color: muted, fontSize: 12 }}>Remove these references before changing its type or deleting this parameter.</p>}
     </div>
+    {confirming && <Dialog
+      title="Delete parameter"
+      submitLabel="Delete"
+      busy={busy}
+      error={deleteError}
+      onClose={() => setConfirming(false)}
+      onSubmit={remove}
+    >
+      <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
+        Delete <span className="cd-name">{parameter.name}</span> ({valueLabel(parameter.value)})?
+        No event refers to it, so the plan runs the same without it. Analysis will stop offering it as an axis.
+      </p>
+    </Dialog>}
   </div>;
 }

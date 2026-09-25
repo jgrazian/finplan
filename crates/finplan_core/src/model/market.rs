@@ -354,6 +354,26 @@ impl Market {
         Ok(market)
     }
 
+    /// How far an asset's price has moved since the plan started, as a
+    /// multiplier: `1.0` at start, `1.03` a year into a 3% profile. `None` for an
+    /// unregistered asset, or one registered at a price of zero, which has no
+    /// growth to measure.
+    #[must_use]
+    pub fn asset_growth(
+        &self,
+        start_date: Date,
+        eval_date: Date,
+        asset_id: AssetId,
+    ) -> Option<f64> {
+        let price = self.assets.get(asset_id.0 as usize)?.as_ref()?.price;
+        if price <= 0.0 {
+            return None;
+        }
+        self.get_asset_value(start_date, eval_date, asset_id)
+            .ok()
+            .map(|value| value / price)
+    }
+
     pub fn get_asset_value(
         &self,
         start_date: Date,

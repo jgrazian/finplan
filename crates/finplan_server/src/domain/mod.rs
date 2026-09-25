@@ -131,13 +131,16 @@ pub(crate) async fn clone_into(
             .await?;
         }
         if let Some(loan) = graph.liability.get(&account.id) {
+            // The payer may not be copied yet; it is linked up once every
+            // account has its new id, below.
             sqlx::query(
-                "INSERT INTO account_liability (account_id, principal, interest_rate)
-                 VALUES (?1,?2,?3)",
+                "INSERT INTO account_liability (account_id, principal, interest_rate, term_months)
+                 VALUES (?1,?2,?3,?4)",
             )
             .bind(id)
             .bind(loan.principal)
             .bind(loan.interest_rate)
+            .bind(loan.term_months)
             .execute(&mut **tx)
             .await?;
         }
@@ -163,6 +166,18 @@ pub(crate) async fn clone_into(
             .bind(lot.units)
             .bind(lot.cost_basis)
             .bind(rank as i64)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+
+    for loan in graph.liability.values() {
+        if let Some(from) = loan.repay_from_account_id {
+            sqlx::query(
+                "UPDATE account_liability SET repay_from_account_id = ?2 WHERE account_id = ?1",
+            )
+            .bind(remap(&accounts, loan.account_id, "account")?)
+            .bind(remap(&accounts, from, "account")?)
             .execute(&mut **tx)
             .await?;
         }
@@ -472,6 +487,12 @@ fn copy_effect<'a>(
             }
             None => None,
         };
+        let down_payment_amount_id = match row.down_payment_amount_id {
+            Some(id) => {
+                Some(copy_amount(tx, graph, scenario_id, id, accounts, assets, amounts).await?)
+            }
+            None => None,
+        };
 
         let parent_id = match row.parent_id {
             Some(id) => Some(*amounts.get(&-id).ok_or_else(|| {
@@ -484,8 +505,11 @@ fn copy_effect<'a>(
             "INSERT INTO effects
                 (scenario_id, event_id, parent_id, parent_slot, position, kind,
                  from_account_id, to_account_id, asset_id, amount_id, target_event_id,
-                 amount_mode, income_type, lot_method, probability, units, sell_to_cover)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+                 amount_mode, income_type, lot_method, probability, units, sell_to_cover,
+                 loan_account_id, down_payment_amount_id, term_months, selling_cost_rate,
+                 gain_exclusion)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,
+                     ?18,?19,?20,?21,?22)
              RETURNING id",
         )
         .bind(scenario_id)
@@ -525,6 +549,15 @@ fn copy_effect<'a>(
         .bind(row.probability)
         .bind(row.units)
         .bind(row.sell_to_cover)
+        .bind(
+            row.loan_account_id
+                .map(|id| remap(accounts, id, "account"))
+                .transpose()?,
+        )
+        .bind(down_payment_amount_id)
+        .bind(row.term_months)
+        .bind(row.selling_cost_rate)
+        .bind(row.gain_exclusion)
         .fetch_one(&mut **tx)
         .await?;
 

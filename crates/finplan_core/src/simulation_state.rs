@@ -388,11 +388,22 @@ impl SimulationState {
                 }
                 AccountFlavor::Property(asset) => {
                     if let Some(&return_profile_id) = params.asset_returns.get(&asset.asset_id) {
-                        // Property uses asset.value as the initial price
+                        // The price only indexes growth — the holding's worth
+                        // is its own `value` — but it has to be positive to be
+                        // an index at all, and a property can open at zero
+                        // (one bought mid-plan).
+                        let price = [
+                            Some(asset.value),
+                            params.asset_prices.get(&asset.asset_id).copied(),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .find(|p| *p > 0.0)
+                        .unwrap_or(1.0);
                         let tracking_error =
                             params.asset_tracking_errors.get(&asset.asset_id).copied();
                         assets.entry(asset.asset_id).or_insert(AssetInfo {
-                            price: asset.value,
+                            price,
                             return_profile_id,
                             tracking_error,
                         });
@@ -461,6 +472,18 @@ impl SimulationState {
             }
 
             events[event_id.0 as usize] = Some(event);
+        }
+
+        // What the plan opens with: a property's basis is its opening value
+        // unless one was given, and an amortizing loan starts paying at once.
+        for account in accounts.values_mut() {
+            match &mut account.flavor {
+                AccountFlavor::Property(asset) => {
+                    asset.cost_basis.get_or_insert(asset.value);
+                }
+                AccountFlavor::Liability(loan) => loan.start_repayment(start_date),
+                _ => {}
+            }
         }
 
         // Create a separate RNG for stochastic effects (using a derived seed)
@@ -581,16 +604,11 @@ impl SimulationState {
             }
             AccountFlavor::Property(asset) => {
                 if asset.asset_id == asset_coord.asset_id {
-                    let value = self
-                        .portfolio
-                        .market
-                        .get_asset_value(
-                            self.timeline.start_date,
-                            self.timeline.current_date,
-                            asset.asset_id,
-                        )
-                        .unwrap_or(asset.value);
-                    Ok(value)
+                    Ok(asset.current_value(
+                        &self.portfolio.market,
+                        self.timeline.start_date,
+                        self.timeline.current_date,
+                    ))
                 } else {
                     Err(LookupError::AssetNotFound(asset_coord))
                 }
@@ -860,6 +878,20 @@ fn bind_effect_parameters(
                 .map_err(|error| SimulationError::Config(error.to_string()))?;
             Ok(())
         }
+        EventEffect::BuyProperty {
+            price, financing, ..
+        } => {
+            *price = price
+                .bind_parameters(parameters, birth_date)
+                .map_err(|error| SimulationError::Config(error.to_string()))?;
+            if let Some(financing) = financing {
+                financing.down_payment = financing
+                    .down_payment
+                    .bind_parameters(parameters, birth_date)
+                    .map_err(|error| SimulationError::Config(error.to_string()))?;
+            }
+            Ok(())
+        }
         EventEffect::Random {
             on_true, on_false, ..
         } => {
@@ -876,6 +908,7 @@ fn bind_effect_parameters(
         | EventEffect::ResumeEvent(_)
         | EventEffect::TerminateEvent(_)
         | EventEffect::ApplyRmd { .. }
+        | EventEffect::SellProperty { .. }
         | EventEffect::RsuVesting { .. } => Ok(()),
     }
 }

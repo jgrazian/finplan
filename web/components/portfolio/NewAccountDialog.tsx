@@ -8,10 +8,12 @@ import {
   Dropdown,
   Field,
   Input,
+  NumberInput,
   Select,
 } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type {
+  Account as ApiAccount,
   Asset,
   ContributionPeriod,
   CreateAccount,
@@ -42,6 +44,7 @@ export function NewAccountDialog({
   scenarioId,
   profiles,
   assets,
+  payers,
   onClose,
   onCreated,
   onAssetCreated,
@@ -49,6 +52,8 @@ export function NewAccountDialog({
   scenarioId: number;
   profiles: Profile[];
   assets: Asset[];
+  /** Accounts a loan's monthly payment can be drawn from. */
+  payers: ApiAccount[];
   onClose: () => void;
   onCreated: () => void;
   /** A ticker made here, so the screen can reload and keep it selectable. */
@@ -66,6 +71,8 @@ export function NewAccountDialog({
   const [value, setValue] = useState(0);
   const [principal, setPrincipal] = useState(0);
   const [rate, setRate] = useState("6.0");
+  const [repayFrom, setRepayFrom] = useState<number | null>(null);
+  const [termMonths, setTermMonths] = useState(360);
 
   const submit = useSubmit();
 
@@ -89,7 +96,13 @@ export function NewAccountDialog({
         return { flavor, asset_id: assetId ?? 0, value };
       case "Liability":
         // Stored as a positive amount owed, and the rate as a fraction.
-        return { flavor, principal, interest_rate: (Number(rate) || 0) / 100 };
+        return {
+          flavor,
+          principal,
+          interest_rate: (Number(rate) || 0) / 100,
+          repayment:
+            repayFrom == null ? null : { from_account_id: repayFrom, term_months: termMonths },
+        };
     }
   };
 
@@ -246,6 +259,35 @@ export function NewAccountDialog({
           <Field label="Interest rate (%)">
             <Input type="number" step="any" value={rate} onChange={(e) => setRate(e.target.value)} />
           </Field>
+        </DialogRow>
+      )}
+      {flavor === "Liability" && (
+        <DialogRow>
+          <Field label="Paid from">
+            <Dropdown
+              className="dd-field"
+              options={[
+                { value: 0, label: "not repaid" },
+                ...payers.map((a) => ({ value: a.id, label: a.name, detail: a.flavor })),
+              ]}
+              value={repayFrom ?? 0}
+              onChange={(id) => setRepayFrom(id === 0 ? null : id)}
+              ariaLabel="Paid from"
+            />
+          </Field>
+          {repayFrom != null && (
+            <Field label="Months left to pay">
+              <NumberInput
+                value={termMonths}
+                decimals={0}
+                min={1}
+                max={600}
+                suffix="months"
+                onValueChange={(m) => setTermMonths(Math.max(1, Math.round(m)))}
+                aria-label="Months left to pay"
+              />
+            </Field>
+          )}
         </DialogRow>
       )}
     </Dialog>

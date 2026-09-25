@@ -9,9 +9,9 @@ use crate::error::SimulationError;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
     AccountFlavor, AccountId, AssetId, AssetLot, CashFlowKind, ConvergenceMetric, EventTrigger,
-    LedgerEntry, MeanAccumulators, MonteCarloConfig, MonteCarloProgress, MonteCarloStats,
-    MonteCarloSummary, MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent,
-    TaxStatus, WarningKind, YearlyCashFlowSummary, final_net_worth,
+    LedgerEntry, LoanDetail, MeanAccumulators, MonteCarloConfig, MonteCarloProgress,
+    MonteCarloStats, MonteCarloSummary, MonthlyCashFlowSummary, SimulationResult,
+    SimulationWarning, StateEvent, TaxStatus, WarningKind, YearlyCashFlowSummary, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 use rand::{RngCore, SeedableRng};
@@ -213,6 +213,9 @@ fn simulate_inner(
     let mut cash_shortfall_recorded = false;
 
     while state.timeline.current_date < state.timeline.end_date {
+        // Loan payments fall before the day's events, so an event reading a
+        // balance sees the month's payment already made.
+        crate::apply::pay_scheduled_loans(&mut state);
         let mut something_happened = true;
         let mut iteration_count: u64 = 0;
 
@@ -346,6 +349,20 @@ fn find_next_checkpoint(state: &SimulationState) -> jiff::civil::Date {
     for date in state.event_state.event_next_date.iter().flatten() {
         if *date > state.timeline.current_date && *date < next {
             next = *date;
+        }
+    }
+
+    // Loan payment dates
+    for account in state.portfolio.accounts.values() {
+        if let AccountFlavor::Liability(LoanDetail {
+            schedule: Some(schedule),
+            ..
+        }) = &account.flavor
+        {
+            let due = schedule.next_due();
+            if due > state.timeline.current_date && due < next {
+                next = due;
+            }
         }
     }
 

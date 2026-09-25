@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, DragHandle, DropLine, Kbd, Tag } from "@/components/ui";
+import { DragHandle, DropLine, Kbd, Tag } from "@/components/ui";
 import { useReorder } from "@/lib/hooks/useReorder";
 import type { EventId, PlanEvent } from "@/lib/types";
 import { NO_AMOUNT } from "@/lib/view/events";
@@ -8,7 +8,9 @@ import { NO_AMOUNT } from "@/lib/view/events";
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
 
 /**
- * Artboard 10a — the plan's events as a narrow rail down the left edge.
+ * Artboard 10a — the plan's events as a narrow rail down the left edge. Its
+ * header — the Events | Parameters switch and Add — belongs to the screen,
+ * which owns both lists (artboard 17a).
  *
  * A table needed five columns to say what two lines say here: what the event
  * is called, and — under it — when it fires and for how much. That buys the
@@ -21,21 +23,13 @@ export function EventRail({
   events,
   selectedId,
   onSelect,
-  onAdd,
   onReorder,
-  adding,
-  offline,
 }: {
   events: PlanEvent[];
   selectedId: EventId;
   onSelect: (id: EventId) => void;
-  onAdd?: () => void;
   /** Server ids in their new order. Omitted where writes are refused. */
   onReorder?: (ids: number[]) => void | Promise<unknown>;
-  /** A write is in flight, so Add is closed — a second click would ask for a
-   *  second event under the name the first one has not claimed yet. */
-  adding?: boolean;
-  offline?: boolean;
 }) {
   const byServerId = new Map(events.map((e) => [e.serverId, e]));
   // Destructured rather than kept as one object: a `ref` prop taken off a
@@ -46,32 +40,6 @@ export function EventRail({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minWidth: 0, height: "100%" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          gap: 8,
-          padding: "14px 16px 8px",
-        }}
-      >
-        <h4 style={{ margin: 0 }}>
-          Events{" "}
-          <span className="text-muted" style={{ fontSize: 13 }}>
-            {events.length}
-          </span>
-        </h4>
-        <Button
-          variant="ghost"
-          shortcut="a"
-          onClick={onAdd}
-          disabled={offline || adding}
-          title={offline ? "No connection to the server." : undefined}
-        >
-          Add
-        </Button>
-      </div>
-
       <div ref={attachList} style={listStyle} role="listbox" aria-label="Events">
         <DropLine at={indicator} />
         {order.map((serverId) => {

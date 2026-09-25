@@ -39,7 +39,9 @@ export function Dialog({
     window.addEventListener("keydown", onKey);
     // Focus the first control so the dialog is usable without reaching for the
     // mouse, and so screen readers land inside it.
-    panel.current?.querySelector<HTMLElement>("input, select")?.focus();
+    // A confirmation has no field, so it lands on the button that commits it.
+    (panel.current?.querySelector<HTMLElement>("input, select, textarea") ??
+      panel.current?.querySelector<HTMLElement>("button[type=submit]"))?.focus();
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 

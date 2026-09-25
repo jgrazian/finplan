@@ -12,12 +12,12 @@ mod tax_config;
 pub use accounts::{
     Account, AccountFlavor, AccountSnapshot, AccountSnapshotFlavor, AssetLot, Cash,
     ContributionLimit, ContributionLimitPeriod, FixedAsset, InvestmentContainer, LoanDetail,
-    TaxStatus,
+    PaymentSchedule, Repayment, TaxStatus, amortized_payment,
 };
 pub use events::{
-    AmountMode, BalanceThreshold, Event, EventEffect, EventTrigger, FlowLimits, IncomeType,
-    LimitPeriod, LotMethod, RepeatInterval, TransferAmount, TransferEndpoint, TriggerOffset,
-    WithdrawalOrder, WithdrawalSources,
+    AmountMode, BalanceThreshold, Event, EventEffect, EventTrigger, Financing, FlowLimits,
+    IncomeType, LimitPeriod, LotMethod, RepeatInterval, TransferAmount, TransferEndpoint,
+    TriggerOffset, WithdrawalOrder, WithdrawalSources,
 };
 pub use ids::{AccountId, AssetCoord, AssetId, EventId, ParameterId, ReturnProfileId};
 pub use market::{

@@ -7,8 +7,8 @@ use crate::{
     error::{AccountTypeError, ApplyError, LookupError},
     evaluate::{EvalEvent, TriggerEvent, evaluate_effect_into, evaluate_trigger},
     model::{
-        AccountFlavor, AssetLot, EventId, EventTrigger, LedgerEntry, SimulationWarning, StateEvent,
-        WarningKind,
+        AccountFlavor, AccountId, AssetLot, CashFlowKind, EventId, EventTrigger, LedgerEntry,
+        LoanDetail, Repayment, SimulationWarning, StateEvent, WarningKind,
     },
     simulation_state::SimulationState,
 };
@@ -354,6 +354,48 @@ pub fn apply_eval_event_with_source(
             }
         }
 
+        EvalEvent::PropertyBasis { account, delta } => {
+            match state
+                .portfolio
+                .accounts
+                .get_mut(account)
+                .map(|a| &mut a.flavor)
+            {
+                Some(AccountFlavor::Property(asset)) => {
+                    asset.cost_basis = Some((asset.cost_basis.unwrap_or(0.0) + delta).max(0.0));
+                    Ok(())
+                }
+                Some(_) => Err(ApplyError::AccountType(
+                    AccountTypeError::InvalidAccountType(*account),
+                )),
+                None => Err(ApplyError::Lookup(LookupError::AccountNotFound(*account))),
+            }
+        }
+
+        EvalEvent::StartRepayment {
+            loan,
+            from,
+            term_months,
+        } => match state
+            .portfolio
+            .accounts
+            .get_mut(loan)
+            .map(|a| &mut a.flavor)
+        {
+            Some(AccountFlavor::Liability(detail)) => {
+                detail.repayment = Some(Repayment {
+                    from: *from,
+                    term_months: *term_months,
+                });
+                detail.start_repayment(current_date);
+                Ok(())
+            }
+            Some(_) => Err(ApplyError::AccountType(
+                AccountTypeError::InvalidAccountType(*loan),
+            )),
+            None => Err(ApplyError::Lookup(LookupError::AccountNotFound(*loan))),
+        },
+
         EvalEvent::TriggerEvent(event_id) => {
             // Mark event for immediate triggering
             state.pending_triggers.push(*event_id);
@@ -400,6 +442,16 @@ pub fn apply_eval_event_with_source(
         }
 
         EvalEvent::AdjustBalance { account, delta } => {
+            let (start, now) = (state.timeline.start_date, state.timeline.current_date);
+            let property_growth = match state.portfolio.accounts.get(account).map(|a| &a.flavor) {
+                Some(AccountFlavor::Property(asset)) => state
+                    .portfolio
+                    .market
+                    .asset_growth(start, now, asset.asset_id)
+                    .filter(|g| *g > 0.0)
+                    .unwrap_or(1.0),
+                _ => 1.0,
+            };
             let acc = state
                 .portfolio
                 .accounts
@@ -455,17 +507,15 @@ pub fn apply_eval_event_with_source(
                     Ok(())
                 }
                 AccountFlavor::Property(asset) => {
-                    let previous = asset.value;
-                    asset.value += delta;
-                    // Ensure value doesn't go negative
-                    if asset.value < 0.0 {
-                        asset.value = 0.0;
-                    }
+                    // The delta is in today's dollars; `value` is held at the
+                    // plan-start price level, so convert before adding.
+                    let previous = asset.value * property_growth;
+                    asset.value = (asset.value + delta / property_growth).max(0.0);
 
                     let ledger_event = StateEvent::BalanceAdjusted {
                         account: *account,
                         previous_balance: previous,
-                        new_balance: asset.value,
+                        new_balance: asset.value * property_growth,
                         delta: *delta,
                     };
                     record_ledger_entry(state, current_date, source_event, ledger_event);
@@ -808,6 +858,74 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                         message: format!("failed to evaluate effect: {error}"),
                         kind: WarningKind::EvaluationFailed,
                     }),
+                }
+            }
+        }
+    }
+}
+
+/// Make every loan payment due on or before today.
+///
+/// A payment is an ordinary cash debit from the paying account and a
+/// reduction of what is owed, so it shows in the ledger and cash flows the
+/// same way a hand-built `CashTransfer` to the loan would. The last one is
+/// whatever is left, and a loan paid off — on schedule, early by extra
+/// transfers, or by a `SellProperty` — stops drawing.
+pub fn pay_scheduled_loans(state: &mut SimulationState) {
+    let today = state.timeline.current_date;
+    let due: Vec<AccountId> = state
+        .portfolio
+        .accounts
+        .iter()
+        .filter_map(|(id, account)| match &account.flavor {
+            AccountFlavor::Liability(LoanDetail {
+                schedule: Some(schedule),
+                ..
+            }) if schedule.next_due() <= today => Some(*id),
+            _ => None,
+        })
+        .collect();
+
+    for loan in due {
+        while let Some(AccountFlavor::Liability(detail)) = state
+            .portfolio
+            .accounts
+            .get_mut(&loan)
+            .map(|a| &mut a.flavor)
+        {
+            let Some(schedule) = detail.schedule.as_mut() else {
+                break;
+            };
+            if schedule.next_due() > today {
+                break;
+            }
+            if detail.principal < 0.01 {
+                detail.schedule = None;
+                break;
+            }
+            let payment = schedule.monthly_payment.min(detail.principal);
+            let from = schedule.from;
+            schedule.paid += 1;
+
+            for event in [
+                EvalEvent::CashDebit {
+                    from,
+                    net_amount: payment,
+                    kind: CashFlowKind::Expense,
+                },
+                EvalEvent::AdjustBalance {
+                    account: loan,
+                    delta: -payment,
+                },
+            ] {
+                if let Err(error) = apply_eval_event(state, &event) {
+                    state.warnings.push(SimulationWarning {
+                        date: today,
+                        event_id: None,
+                        message: format!("loan payment failed: {error}"),
+                        kind: WarningKind::EvaluationFailed,
+                    });
+                    break;
                 }
             }
         }

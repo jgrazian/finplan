@@ -306,6 +306,7 @@ fn convert_account_flavor(
             Ok(AccountFlavor::Property(FixedAsset {
                 asset_id,
                 value: prop.value,
+                cost_basis: None,
             }))
         }
 
@@ -314,6 +315,9 @@ fn convert_account_flavor(
         | AccountType::StudentLoanDebt(debt) => Ok(AccountFlavor::Liability(LoanDetail {
             principal: debt.balance,
             interest_rate: debt.interest_rate,
+            // The TUI's debts are paid down by the events that name them.
+            repayment: None,
+            schedule: None,
         })),
 
         AccountType::Brokerage(inv) => Ok(AccountFlavor::Investment(convert_investment_container(

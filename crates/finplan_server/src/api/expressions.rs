@@ -322,7 +322,8 @@ fn effect_amount(effect: &EffectSpec) -> Option<&AmountSpec> {
         | EffectSpec::AssetSale { amount, .. }
         | EffectSpec::Sweep { amount, .. }
         | EffectSpec::AdjustBalance { amount, .. }
-        | EffectSpec::CashTransfer { amount, .. } => Some(amount),
+        | EffectSpec::CashTransfer { amount, .. }
+        | EffectSpec::BuyProperty { price: amount, .. } => Some(amount),
         _ => None,
     }
 }
@@ -344,6 +345,23 @@ pub(crate) fn validate_tree(graph: &ScenarioGraph, effects: &[EffectSpec]) -> Ap
                 "invalid amount expression: {} at bytes {}..{}",
                 error.message, error.start, error.end,
             )));
+        }
+        // A purchase's second amount, which the preview endpoint never sees.
+        if let EffectSpec::BuyProperty {
+            financing: Some(financing),
+            ..
+        } = effect
+            && let AmountSpec::Expression { source } = &financing.down_payment
+        {
+            let (_, metadata, parameters) = compile::expression_context(graph)?;
+            let amount = compile_amount(source, &metadata, &parameters).map_err(|error| {
+                ApiError::bad_request(format!("invalid down payment expression: {error}"))
+            })?;
+            if amount.amount_mode.is_some() {
+                return Err(ApiError::bad_request(
+                    "gross/net is unavailable for a down payment",
+                ));
+            }
         }
         Ok(())
     }

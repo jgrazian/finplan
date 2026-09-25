@@ -3,17 +3,40 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { EffectSpec } from "@/lib/api/types";
 import { api } from "@/lib/api/client";
-import { Button, Field } from "@/components/ui";
-import { Note, type TriggerContext } from "./TriggerFields";
+import { Button, Dropdown, Field } from "@/components/ui";
+import { Note, type TriggerContext, accountOptions, assetOptions } from "./TriggerFields";
 import { byteSpanToText, completionToken, nameInsertion, parameterReference, replaceText, type TextRange } from "./amountDraft";
 
 type Validation = Awaited<ReturnType<typeof api.expressions.validate>>;
-const FUNCTIONS = [
-  "inflation(", "balance(", "cash(", "holding(", "endpoint_balance(",
-  "source_balance()", "target_balance()", "net_worth()", "min(", "max(",
-  "clamp(", "abs(", "if(", "top_up(", "payoff()", "age()", "age_years(",
-  "year()", "month()", "years_since_start()", "days_until(", "years_until(",
+/**
+ * The DSL's functions, with what each one reads — the Insert function menu's
+ * rows, and the completion list. Wording follows spec/14_expression_dsl.md.
+ */
+const FUNCTION_INFO: ReadonlyArray<{ insert: string; detail: string; group: string }> = [
+  { insert: "inflation(", detail: "today's dollars, grown to then", group: "money" },
+  { insert: "min(", detail: "smaller of two", group: "money" },
+  { insert: "max(", detail: "larger of two", group: "money" },
+  { insert: "clamp(", detail: "value, lower, upper", group: "money" },
+  { insert: "abs(", detail: "absolute value", group: "money" },
+  { insert: "if(", detail: "condition, then, else", group: "money" },
+  { insert: "balance(", detail: "an account's total value", group: "balances" },
+  { insert: "cash(", detail: "an account's cash only", group: "balances" },
+  { insert: "holding(", detail: "account, asset", group: "balances" },
+  { insert: "net_worth()", detail: "everything, less debts", group: "balances" },
+  { insert: "source_balance()", detail: "the paying endpoint", group: "balances" },
+  { insert: "target_balance()", detail: "the receiving endpoint", group: "balances" },
+  { insert: "endpoint_balance(", detail: "source or target", group: "balances" },
+  { insert: "top_up(", detail: "fill the target up to", group: "balances" },
+  { insert: "payoff()", detail: "what the target debt owes", group: "balances" },
+  { insert: "age()", detail: "years, to the month", group: "time" },
+  { insert: "age_years(", detail: "an Age parameter, in years", group: "time" },
+  { insert: "year()", detail: "simulated calendar year", group: "time" },
+  { insert: "month()", detail: "simulated month, 1–12", group: "time" },
+  { insert: "years_since_start()", detail: "since the plan began", group: "time" },
+  { insert: "days_until(", detail: "a date", group: "time" },
+  { insert: "years_until(", detail: "a date", group: "time" },
 ];
+const FUNCTIONS = FUNCTION_INFO.map((f) => f.insert);
 
 function contextHint(effect: EffectSpec): string {
   switch (effect.kind) {
@@ -29,7 +52,9 @@ function contextHint(effect: EffectSpec): string {
 }
 
 /** A source editor for the compiler's amount DSL. Parent owns the unsaved text. */
-export function AmountExpression({ source, effect, context, onChange, disabled }: {
+export function AmountExpression({ source, effect, context, onChange, disabled, label = "Value expression" }: {
+  /** What the field is called — a purchase has two amounts. */
+  label?: string;
   source: string;
   effect: EffectSpec;
   context: TriggerContext;
@@ -122,17 +147,19 @@ export function AmountExpression({ source, effect, context, onChange, disabled }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <Field label="Value expression">
+      <Field label={label}>
         <textarea
           ref={input}
           className="input"
-          aria-label="Value expression"
+          aria-label={label}
           aria-invalid={!!diagnostic}
           value={source}
           readOnly={disabled}
           spellCheck={false}
-          rows={3}
-          style={{ width: "100%", minHeight: 84, resize: "vertical", fontFamily: "var(--font-mono, monospace)" }}
+          // One line until the expression has more: most are a single call,
+          // and a three-line well made a one-liner look unfinished.
+          rows={Math.max(1, source.split("\n").length)}
+          style={{ width: "100%", minHeight: 36, resize: "vertical", fontFamily: "var(--font-mono, monospace)" }}
           onChange={(event) => {
             onChange(event.target.value);
             setSelection({ start: event.target.selectionStart, end: event.target.selectionEnd });
@@ -145,36 +172,60 @@ export function AmountExpression({ source, effect, context, onChange, disabled }
         />
       </Field>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-        <select
-          aria-label="Insert parameter"
+        <Dropdown<number>
+          inline
+          options={(context.parameters ?? []).map((p) => ({ value: p.id, label: p.name, detail: p.value.kind }))}
+          value={null}
+          placeholder="Insert parameter…"
+          ariaLabel="Insert parameter"
           disabled={disabled || !context.parameters?.length}
-          value=""
-          onChange={(event) => {
-            const parameter = context.parameters?.find((p) => p.id === Number(event.target.value));
+          maxMenuHeight={300}
+          onChange={(id) => {
+            const parameter = context.parameters?.find((p) => p.id === id);
             if (parameter) insertName(parameter.name, "parameter");
           }}
-        >
-          <option value="">Insert parameter…</option>
-          {(context.parameters ?? []).map((p) => <option key={p.id} value={p.id}>{p.name} · {p.value.kind}</option>)}
-        </select>
-        <select aria-label="Insert account" disabled={disabled || context.accounts.length === 0} value=""
-          onChange={(event) => {
-            const account = context.accounts.find((a) => a.id === Number(event.target.value));
+        />
+        <Dropdown<number>
+          inline
+          options={accountOptions(context.accounts)}
+          value={null}
+          placeholder="Insert account…"
+          ariaLabel="Insert account"
+          disabled={disabled || context.accounts.length === 0}
+          maxMenuHeight={300}
+          onChange={(id) => {
+            const account = context.accounts.find((a) => a.id === id);
             if (account) insertName(account.name, "account");
-          }}>
-          <option value="">Insert account…</option>
-          {context.accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
-        <select aria-label="Insert asset" disabled={disabled || context.assets.length === 0} value=""
-          onChange={(event) => {
-            const asset = context.assets.find((a) => a.id === Number(event.target.value));
+          }}
+        />
+        <Dropdown<number>
+          inline
+          options={assetOptions(context.assets)}
+          value={null}
+          placeholder="Insert asset…"
+          ariaLabel="Insert asset"
+          disabled={disabled || context.assets.length === 0}
+          maxMenuHeight={300}
+          onChange={(id) => {
+            const asset = context.assets.find((a) => a.id === id);
             if (asset) insertName(asset.name, "account");
-          }}>
-          <option value="">Insert asset…</option>
-          {context.assets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
-        <Button variant="ghost" disabled={disabled} onClick={() => insert("inflation(")}>Inflation</Button>
-        <Button variant="ghost" disabled={disabled} onClick={() => insert("balance(")}>Account balance</Button>
+          }}
+        />
+        <Dropdown<string>
+          inline
+          options={FUNCTION_INFO.map((f) => ({
+            value: f.insert,
+            label: f.insert.endsWith("()") ? f.insert : `${f.insert}…)`,
+            detail: f.detail,
+            group: f.group,
+          }))}
+          value={null}
+          placeholder="Insert function…"
+          ariaLabel="Insert function"
+          disabled={disabled}
+          maxMenuHeight={320}
+          onChange={(fn) => insert(fn)}
+        />
         {checkingKey === requestKey && <span style={{ fontSize: 12 }}>Checking expression…</span>}
       </div>
       {showSuggestions && candidates.length > 0 && (

@@ -825,7 +825,8 @@ fn apply_effect_param(
         | EventEffect::AssetSale { amount, .. }
         | EventEffect::Sweep { amount, .. }
         | EventEffect::AdjustBalance { amount, .. }
-        | EventEffect::CashTransfer { amount, .. } => {
+        | EventEffect::CashTransfer { amount, .. }
+        | EventEffect::BuyProperty { price: amount, .. } => {
             apply_amount_param(amount, param, value)?;
         }
         _ => {
@@ -850,6 +851,7 @@ fn has_sweepable_amount(effect: &crate::model::EventEffect) -> bool {
             | EventEffect::Sweep { .. }
             | EventEffect::AdjustBalance { .. }
             | EventEffect::CashTransfer { .. }
+            | EventEffect::BuyProperty { .. }
     )
 }
 

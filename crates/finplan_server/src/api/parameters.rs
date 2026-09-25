@@ -340,18 +340,25 @@ fn effect_uses(
     let Some(row) = graph.effects.get(&id) else {
         return false;
     };
-    if row
-        .amount_id
-        .and_then(|id| graph.amounts.get(&id))
-        .and_then(|a| a.expression_source.as_deref())
-        .and_then(|s| finplan_core::expression::compile_amount(s, metadata, parameters).ok())
-        .is_some_and(|amount| {
+    if [row.amount_id, row.down_payment_amount_id]
+        .into_iter()
+        .flatten()
+        .filter_map(|id| graph.amounts.get(&id))
+        .any(|amount| {
             amount
-                .amount
-                .expression()
-                .references()
-                .parameters
-                .contains(&parameter)
+                .expression_source
+                .as_deref()
+                .and_then(|s| {
+                    finplan_core::expression::compile_amount(s, metadata, parameters).ok()
+                })
+                .is_some_and(|amount| {
+                    amount
+                        .amount
+                        .expression()
+                        .references()
+                        .parameters
+                        .contains(&parameter)
+                })
         })
     {
         return true;

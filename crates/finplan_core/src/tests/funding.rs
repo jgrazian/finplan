@@ -144,6 +144,8 @@ fn ordinary_liabilities_are_not_cash_shortfalls_and_zero_is_funded() {
             flavor: AccountFlavor::Liability(LoanDetail {
                 principal: 1000.0,
                 interest_rate: 0.0,
+                repayment: None,
+                schedule: None,
             }),
         },
     ];

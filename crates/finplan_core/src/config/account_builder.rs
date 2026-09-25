@@ -25,7 +25,7 @@
 
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, FixedAsset, InvestmentContainer,
-    LoanDetail, ReturnProfileId, TaxStatus,
+    LoanDetail, Repayment, ReturnProfileId, TaxStatus,
 };
 use jiff::civil::Date;
 
@@ -55,6 +55,7 @@ enum AccountFlavorBuilder {
     Liability {
         principal: f64,
         interest_rate: f64,
+        repayment: Option<Repayment>,
     },
 }
 
@@ -231,6 +232,7 @@ impl AccountBuilder {
             flavor: AccountFlavorBuilder::Liability {
                 principal,
                 interest_rate,
+                repayment: None,
             },
         }
     }
@@ -244,6 +246,7 @@ impl AccountBuilder {
             flavor: AccountFlavorBuilder::Liability {
                 principal,
                 interest_rate,
+                repayment: None,
             },
         }
     }
@@ -257,6 +260,7 @@ impl AccountBuilder {
             flavor: AccountFlavorBuilder::Liability {
                 principal,
                 interest_rate,
+                repayment: None,
             },
         }
     }
@@ -346,7 +350,21 @@ impl AccountBuilder {
     #[must_use]
     pub fn fixed_asset(mut self, asset_id: AssetId, value: f64) -> Self {
         if let AccountFlavorBuilder::Property { asset } = &mut self.flavor {
-            *asset = Some(FixedAsset { asset_id, value });
+            *asset = Some(FixedAsset {
+                asset_id,
+                value,
+                cost_basis: None,
+            });
+        }
+        self
+    }
+
+    /// Amortize a Liability: a fixed monthly payment from `from` that clears
+    /// the principal in `term_months`.
+    #[must_use]
+    pub fn repayment(mut self, from: AccountId, term_months: u32) -> Self {
+        if let AccountFlavorBuilder::Liability { repayment, .. } = &mut self.flavor {
+            *repayment = Some(Repayment { from, term_months });
         }
         self
     }
@@ -380,14 +398,18 @@ impl AccountBuilder {
                 AccountFlavor::Property(asset.unwrap_or(FixedAsset {
                     asset_id: AssetId(0),
                     value: 0.0,
+                    cost_basis: None,
                 }))
             }
             AccountFlavorBuilder::Liability {
                 principal,
                 interest_rate,
+                repayment,
             } => AccountFlavor::Liability(LoanDetail {
                 principal,
                 interest_rate,
+                repayment,
+                schedule: None,
             }),
         };
 

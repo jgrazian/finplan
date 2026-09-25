@@ -1,7 +1,8 @@
 "use client";
 
 import { CompactInput, CurrencyInput, DirtyField, Dropdown, Field, NumberInput } from "@/components/ui";
-import type { Asset, Profile } from "@/lib/api/types";
+import type { Account as ApiAccount, Asset, Profile } from "@/lib/api/types";
+import { termLabel } from "@/lib/view/events";
 import { fmtCurrency } from "@/lib/format";
 import type { Account, TaxStatus } from "@/lib/types";
 import type { AccountDraft, ChangedFields, SetDraft } from "./accountDraft";
@@ -29,6 +30,7 @@ export function AccountTerms({
   set,
   profiles,
   assets,
+  payers,
   offline,
 }: {
   account: Account;
@@ -38,6 +40,8 @@ export function AccountTerms({
   set: SetDraft;
   profiles: Profile[];
   assets: Asset[];
+  /** Accounts a loan's monthly payment can be drawn from. */
+  payers: ApiAccount[];
   offline?: boolean;
 }) {
   const profileField = (label: string) => (
@@ -167,7 +171,59 @@ export function AccountTerms({
               title="The principal beside it, at that rate, for a full year."
             />
           </Field>
+          {/* Repayment: without a payer the loan only accrues, and nothing
+              pays it down unless an event does. */}
+          <DirtyField label="Paid from" changed={changed.repayment}>
+            <Dropdown
+              className="dd-field"
+              options={[
+                { value: 0, label: "not repaid" },
+                ...payers.map((a) => ({ value: a.id, label: a.name, detail: a.flavor })),
+              ]}
+              value={draft.repayFrom ?? 0}
+              disabled={offline}
+              onChange={(id) => set("repayFrom", id === 0 ? null : id)}
+              ariaLabel="Paid from"
+            />
+          </DirtyField>
+          {draft.repayFrom != null ? (
+            <DirtyField label={`Term · ${termLabel(draft.termMonths)}`} changed={changed.repayment}>
+              <NumberInput
+                style={{ minHeight: 32 }}
+                value={draft.termMonths}
+                decimals={0}
+                suffix="months"
+                min={1}
+                max={600}
+                readOnly={offline}
+                onValueChange={(months) => set("termMonths", Math.max(1, Math.round(months)))}
+                aria-label="Months left to pay"
+              />
+            </DirtyField>
+          ) : (
+            <span />
+          )}
+          {draft.repayFrom != null && (
+            <Field label="Monthly payment">
+              <CompactInput
+                value={fmtCurrency(monthlyPayment(draft.amount, draft.interestRate, draft.termMonths))}
+                readOnly
+                title="Level payment that clears the principal over the term, at this rate."
+              />
+            </Field>
+          )}
         </div>
       );
   }
+}
+
+/**
+ * The level monthly payment the engine will make: the same amortization, at
+ * the monthly rate equivalent to the annual one it accrues at.
+ */
+export function monthlyPayment(principal: number, rate: number, months: number): number {
+  const n = Math.max(1, months);
+  const monthly = Math.pow(1 + rate, 1 / 12) - 1;
+  if (Math.abs(monthly) < 1e-12) return principal / n;
+  return (principal * monthly) / (1 - Math.pow(1 + monthly, -n));
 }

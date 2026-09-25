@@ -512,6 +512,8 @@ fn debt_payoff_includes_liabilities_in_net_worth() {
         flavor: AccountFlavor::Liability(LoanDetail {
             principal: 750.0,
             interest_rate: 0.0,
+            repayment: None,
+            schedule: None,
         }),
     });
     metadata.register_account(debt, Some("Debt".into()), None);
