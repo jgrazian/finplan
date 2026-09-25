@@ -49,7 +49,7 @@ export function AnalysisScreen({ scenarioId }: { scenarioId: number }) {
     return (
       <EmptyState
         title="Nothing to analyse yet"
-        detail="Analysis varies numbers the plan already has. Give an event an age trigger or a fixed amount on the Plan tab, and both modes will have something to move."
+        detail="Add named parameters on the Plan tab and reference them in amounts or schedules. Analysis varies these shared inputs across runs."
       />
     );
   }

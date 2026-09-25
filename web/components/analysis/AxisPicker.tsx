@@ -2,6 +2,7 @@
 
 import { Blueprint, Dropdown, NumberInput, StatLabel } from "@/components/ui";
 import type { AnalysisParameter } from "@/lib/api/types";
+import { ParameterRangeInput } from "./ParameterRangeInput";
 import { paramId } from "@/lib/view/analysis";
 
 /** An axis as the screen holds it: which parameter, over what, in how many steps. */
@@ -45,7 +46,7 @@ export function AxisPicker({
   disabled?: boolean;
 }) {
   const selected = parameters.find((p) => p.id === value.parameterId);
-  const money = selected?.kind === "amount";
+  const kind = selected?.kind ?? "amount";
 
   return (
     <Blueprint
@@ -65,7 +66,7 @@ export function AxisPicker({
         options={parameters.map((p) => ({
           value: p.id,
           label: paramId(p),
-          detail: p.event_name,
+          detail: p.kind,
           disabled: p.id !== value.parameterId && taken.includes(p.id),
         }))}
         value={value.parameterId}
@@ -81,16 +82,16 @@ export function AxisPicker({
           );
         }}
       />
-      <Range
+      <ParameterRangeInput
         label="from"
-        money={money}
+        kind={kind}
         value={value.min}
         disabled={disabled}
         onCommit={(min) => onChange({ ...value, min })}
       />
-      <Range
+      <ParameterRangeInput
         label="to"
-        money={money}
+        kind={kind}
         value={value.max}
         disabled={disabled}
         onCommit={(max) => onChange({ ...value, max })}

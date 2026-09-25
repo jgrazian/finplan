@@ -6,7 +6,10 @@ pub mod archives;
 pub mod assets;
 pub mod contact;
 pub mod events;
+mod expression_refs;
+pub mod expressions;
 pub mod onboarding;
+pub mod parameters;
 pub mod profiles;
 pub mod reports;
 pub mod runs;
@@ -33,6 +36,8 @@ pub fn router() -> Router<AppState> {
         .merge(assets::router())
         .merge(accounts::router())
         .merge(events::router())
+        .merge(expressions::router())
+        .merge(parameters::router())
         .merge(profiles::router())
         .merge(taxes::router())
         .merge(runs::router())

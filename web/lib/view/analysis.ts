@@ -14,19 +14,33 @@ import type {
 } from "@/lib/api/types";
 import { fmtCompact, fmtCurrency, fmtPercent } from "../format.ts";
 
-/** A parameter as a monospace identifier: `retirement-spending.amount`. */
-export function paramId(parameter: { event_name: string; role: string }): string {
-  return `${parameter.event_name} · ${parameter.role}`;
+/** Stable named input, shared with the Plan parameters editor. */
+export function paramId(parameter: { name: string }): string {
+  return parameter.name;
 }
 
-/** A value in the parameter's own units — an age is a number, money is money. */
+/** The API represents calendar dates as integral UTC epoch days. */
+export function parameterDate(value: number): string {
+  return new Date(Math.round(value) * 86_400_000).toISOString().slice(0, 10);
+}
+
+export function parameterDay(date: string): number {
+  return Date.parse(`${date}T00:00:00Z`) / 86_400_000;
+}
+
 export function paramValue(kind: string, value: number): string {
-  return kind === "amount" ? fmtCurrency(value) : String(Math.round(value));
+  if (kind === "amount") return fmtCurrency(value);
+  if (kind === "rate") return `${Number((value * 100).toFixed(6))}%`;
+  if (kind === "date") return parameterDate(value);
+  if (kind === "age") {
+    const months = Math.round(value * 12);
+    return `${Math.floor(months / 12)} yr${months % 12 ? ` ${months % 12} mo` : ""}`;
+  }
+  return String(Math.round(value));
 }
 
-/** The same, abbreviated for an axis tick. */
 export function paramTick(kind: string, value: number): string {
-  return kind === "amount" ? fmtCompact(value) : String(Math.round(value));
+  return kind === "amount" ? fmtCompact(value) : paramValue(kind, value);
 }
 
 function clamp01(v: number): number {
@@ -175,6 +189,8 @@ export function solveRows(outcome: SolveOutcome): SolveRow[] {
 function signed(kind: string, delta: number): string {
   if (Math.abs(delta) < 1e-9) return "unchanged";
   const sign = delta > 0 ? "+" : "−";
+  if (kind === "date") return `${sign}${Math.round(Math.abs(delta))} days`;
+  if (kind === "rate") return `${sign}${Number((Math.abs(delta) * 100).toFixed(6))} pp`;
   return sign + paramValue(kind, Math.abs(delta));
 }
 

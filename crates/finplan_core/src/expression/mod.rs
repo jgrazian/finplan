@@ -183,6 +183,19 @@ pub struct Expression {
     program: Vec<Instruction>,
 }
 
+/// Entity IDs used by a compiled expression. A caller can retain references
+/// across renames and guard deletions without inspecting editable source text.
+#[derive(Debug, Default, Clone)]
+pub struct ExpressionReferences {
+    pub accounts: Vec<AccountId>,
+    pub assets: Vec<AssetId>,
+    pub parameters: Vec<ParameterId>,
+    pub source_account: bool,
+    pub source_endpoint: bool,
+    pub target_account: bool,
+    pub target_endpoint: bool,
+}
+
 /// Operand roots in the flat postfix program, derived while checking its types.
 /// Runtime evaluation uses these to skip unselected branches without recursion.
 struct ProgramAnalysis {
@@ -191,6 +204,174 @@ struct ProgramAnalysis {
 }
 
 impl Expression {
+    /// Whether a runtime error occurred in a calculation that reads the
+    /// simulation state. Call on a parameter-bound expression after evaluation.
+    /// A constant subexpression can fail even inside a larger dynamic amount.
+    pub fn error_depends_on_state(
+        &self,
+        error: &ExpressionError,
+        context: &EvaluationContext<'_>,
+    ) -> bool {
+        let Ok(analysis) = self.analyze() else {
+            return false;
+        };
+        let mut dependent = vec![false; self.program.len()];
+        let mut starts = vec![0; self.program.len()];
+        for (index, instruction) in self.program.iter().enumerate() {
+            starts[index] = if instruction.op.arity() == 0 {
+                index
+            } else {
+                starts[analysis.operands[index][0]]
+            };
+            let intrinsic = matches!(
+                instruction.op,
+                Op::Balance(_)
+                    | Op::Cash(_)
+                    | Op::Holding(_, _)
+                    | Op::EndpointBalance(_)
+                    | Op::NetWorth
+                    | Op::Age
+                    | Op::Year
+                    | Op::Month
+                    | Op::YearsSinceStart
+                    | Op::DaysUntil(_)
+                    | Op::YearsUntil(_)
+                    | Op::Inflate
+            );
+            dependent[index] = intrinsic
+                || analysis.operands[index][..instruction.op.arity()]
+                    .iter()
+                    .any(|child| dependent[*child]);
+        }
+        let matching = self
+            .program
+            .iter()
+            .enumerate()
+            .filter(|(_, instruction)| instruction.span == error.span)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let constant_value = |root: usize| {
+            if dependent[root] {
+                return None;
+            }
+            Expression {
+                program: self.program[starts[root]..=root].to_vec(),
+            }
+            .evaluate(context)
+            .ok()
+        };
+        for &index in &matching {
+            let roots = analysis.operands[index];
+            match self.program[index].op {
+                Op::Div if constant_value(roots[1]) == Some(0.0) => return false,
+                Op::Clamp
+                    if constant_value(roots[1])
+                        .zip(constant_value(roots[2]))
+                        .is_some_and(|(lower, upper)| lower > upper) =>
+                {
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        if matching.is_empty() {
+            dependent.last().copied().unwrap_or(false)
+        } else {
+            matching.into_iter().any(|index| dependent[index])
+        }
+    }
+
+    #[must_use]
+    pub fn references(&self) -> ExpressionReferences {
+        let mut refs = ExpressionReferences::default();
+        for instruction in &self.program {
+            match instruction.op {
+                Op::Parameter(id, _)
+                | Op::AgeYears(id)
+                | Op::DaysUntil(DateRef::Parameter(id))
+                | Op::YearsUntil(DateRef::Parameter(id)) => {
+                    if !refs.parameters.contains(&id) {
+                        refs.parameters.push(id);
+                    }
+                }
+                Op::Balance(AccountRef::Account(id))
+                | Op::Cash(AccountRef::Account(id))
+                | Op::EndpointBalance(AccountRef::Account(id)) => {
+                    if !refs.accounts.contains(&id) {
+                        refs.accounts.push(id);
+                    }
+                }
+                Op::Holding(AccountRef::Account(id), asset) => {
+                    if !refs.accounts.contains(&id) {
+                        refs.accounts.push(id);
+                    }
+                    if !refs.assets.contains(&asset) {
+                        refs.assets.push(asset);
+                    }
+                }
+                Op::Holding(reference, asset) => {
+                    if !refs.assets.contains(&asset) {
+                        refs.assets.push(asset);
+                    }
+                    match reference {
+                        AccountRef::Source => refs.source_account = true,
+                        AccountRef::Target => refs.target_account = true,
+                        AccountRef::Account(_) => {}
+                    }
+                }
+                Op::Balance(AccountRef::Source) | Op::Cash(AccountRef::Source) => {
+                    refs.source_account = true
+                }
+                Op::Balance(AccountRef::Target) | Op::Cash(AccountRef::Target) => {
+                    refs.target_account = true
+                }
+                Op::EndpointBalance(AccountRef::Source) => refs.source_endpoint = true,
+                Op::EndpointBalance(AccountRef::Target) => refs.target_endpoint = true,
+                _ => {}
+            }
+        }
+        refs
+    }
+
+    /// Check effect endpoints across all branches, including lazy branches that
+    /// happen not to run at the opening date.
+    pub fn validate_context(
+        &self,
+        source_account: bool,
+        source_endpoint: bool,
+        target_account: bool,
+        target_endpoint: bool,
+    ) -> Result<(), ExpressionError> {
+        for instruction in &self.program {
+            let error = match instruction.op {
+                Op::Balance(AccountRef::Source)
+                | Op::Cash(AccountRef::Source)
+                | Op::Holding(AccountRef::Source, _)
+                    if !source_account =>
+                {
+                    Some("source has no single account in this effect")
+                }
+                Op::Balance(AccountRef::Target)
+                | Op::Cash(AccountRef::Target)
+                | Op::Holding(AccountRef::Target, _)
+                    if !target_account =>
+                {
+                    Some("target has no single account in this effect")
+                }
+                Op::EndpointBalance(AccountRef::Source) if !source_endpoint => {
+                    Some("source has no single endpoint balance in this effect")
+                }
+                Op::EndpointBalance(AccountRef::Target) if !target_endpoint => {
+                    Some("target has no single endpoint balance in this effect")
+                }
+                _ => None,
+            };
+            if let Some(message) = error {
+                return Err(ExpressionError::new(instruction.span.clone(), message));
+            }
+        }
+        Ok(())
+    }
     /// Compile arithmetic, conditions, and functions, checking names and types.
     pub fn compile(
         source: &str,

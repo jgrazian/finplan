@@ -219,7 +219,13 @@ impl SolveConfig {
     /// The method this configuration selects. The caller never picks it.
     #[must_use]
     pub fn method(&self) -> SolveMethod {
-        if self.parameters.len() == 1 && self.objective.is_parameter() {
+        let discrete = self.parameters.iter().any(|p| {
+            matches!(
+                &p.target,
+                super::SweepTarget::Parameter(parameter) if parameter.is_discrete()
+            )
+        });
+        if self.parameters.len() == 1 && self.objective.is_parameter() && !discrete {
             SolveMethod::Bisection
         } else {
             SolveMethod::GridSearch

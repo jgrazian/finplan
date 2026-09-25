@@ -6,12 +6,11 @@ Core builders, analysis, optimization, examples, and benchmarks use it directly.
 The old amount enum and its loading format have been removed; no compatibility
 loader is provided. No new dependencies are required.
 
-The TUI supports static/expression amount fields, parameter completion, and
-compilation of saved source (see `04_tui_application.md`). The server still uses
-the removed API and needs a separate migration, including the website's
-request/storage shapes and editors. The TUI and core can be tested with
-`cargo test -p finplan -p finplan_core`; the server migration is required for a
-working whole-workspace build.
+The TUI and web UI support static/expression amount fields, parameter completion,
+and compilation of saved source. The server persists source and compiles it with
+scenario names and typed parameters. Existing server amount records remain readable
+through a compatibility adapter; newly edited web amounts use expression source.
+See `04_tui_application.md` and `15_web_parameters.md` for the editors.
 
 ## Syntax
 
@@ -238,16 +237,12 @@ has been removed. New rules should use the intended semantics directly.
 Use `payoff()` for debt payoff; `target_balance()` reads an endpoint and does not
 negate it. This removes the old `ZeroTargetBalance` variant's misleading semantics.
 
-Remaining server/web integration work:
-
-1. Add expression source to the server's request/storage schema. Compile with
-   shared name/ID metadata and typed parameters.
-2. Replace the recursive editors with a text field, reference/function completion,
-   syntax help, and span-based errors. Use `to_source` to render compiled amounts.
-3. Route gross/net annotations through `apply_to`, avoiding duplicated/conflicting
-   form controls. Derive source/target help from the selected effect.
-4. Update reference tracking, rename/delete behavior, analysis parameter discovery,
-   and bindings together. Legacy amount loading is not required.
+Server/web integration uses `AmountSpec::Expression { source }`. Expression
+validation checks syntax, types, names, and all branches' source/target requirements;
+previews are qualified as opening-date values. Saved account, asset, and parameter
+renames compile against the previous names and render through their stable IDs in
+the same transaction. Referenced entities cannot be deleted. Analysis discovers
+named scenario parameters, so one input can control several effects and schedules.
 
 Further candidates are rounding, contribution room, previous-year balances, and explicit
 real-dollar conversion. RMD tables, lot selection, contribution limits, recurring

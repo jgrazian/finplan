@@ -333,6 +333,13 @@ mod tests {
         .execute(&source)
         .await
         .unwrap();
+        sqlx::query(
+            "INSERT INTO named_parameters(id,scenario_id,name,kind,number_value)
+             VALUES(1,1,'Spending','Money',2500)",
+        )
+        .execute(&source)
+        .await
+        .unwrap();
         for run_id in [1, 2] {
             sqlx::query(
                 "INSERT INTO runs(id,scenario_id,user_id,status,iterations)
@@ -362,7 +369,7 @@ mod tests {
         source.close().await;
 
         let report = rebuild(&source_path, &destination_path).await.unwrap();
-        assert_eq!(report.tables, 45);
+        assert_eq!(report.tables, 46);
 
         let rebuilt = connect(&format!("sqlite://{}", destination_path.display()), 1)
             .await
@@ -371,7 +378,14 @@ mod tests {
             .fetch_one(&rebuilt)
             .await
             .unwrap();
-        assert_eq!(migration_count, 1);
+        assert_eq!(migration_count, 2);
+        let parameter_value: f64 = sqlx::query_scalar(
+            "SELECT number_value FROM named_parameters WHERE scenario_id=1 AND name='Spending'",
+        )
+        .fetch_one(&rebuilt)
+        .await
+        .unwrap();
+        assert_eq!(parameter_value, 2500.0);
         for table in ["run_cash_flows", "run_ledger"] {
             let ids: Vec<i64> = sqlx::query_scalar(&format!(
                 "SELECT DISTINCT run_id FROM {table} ORDER BY run_id"

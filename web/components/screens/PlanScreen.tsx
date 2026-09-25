@@ -19,6 +19,7 @@ import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
 import type { AssumptionChoices, PlanEvent, ScenarioParams } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
+import { ParameterEditor, ParameterRail, blankParameterValue } from "@/components/plan/Parameters";
 
 /**
  * What Add event makes: a yearly repeat that does nothing yet.
@@ -80,13 +81,23 @@ export function PlanScreen({
   offline?: boolean;
 }) {
   const [savedAt, setSavedAt] = useState<Map<number, number>>(new Map());
+  const [lastEventId, setLastEventId] = useState<string>();
   const editing = useSubmit();
   // The selected event is in the query, by name, so a link opens the editor on
   // it. Derived rather than stored: an event deleted here or renamed elsewhere
   // falls back to the first row instead of leaving the editor empty.
   const nav = useNav();
-  const selected = events.find((e) => e.id === nav.selection) ?? events[0];
+  const parameterId = nav.selection?.startsWith("parameter:")
+    ? Number(nav.selection.slice("parameter:".length)) : undefined;
+  const parameters = raw.parameters;
+  const selectedParameter = parameters.find((p) => p.id === parameterId);
+  const selected = events.find((e) => e.id === (parameterId == null ? nav.selection : lastEventId)) ?? events[0];
   const selectedRaw = raw.events.find((e) => e.id === selected?.serverId);
+  const selectEvent = (name: string) => { setLastEventId(name); nav.setSelection(name); };
+  const selectParameter = (id: number) => {
+    if (parameterId == null && selected) setLastEventId(selected.id);
+    nav.setSelection(`parameter:${id}`);
+  };
   const saveOrder = useReorderWrite(onChanged);
   // The pickers' choices, plus the two things that let a condition explain
   // itself: the plan's birth date, and which event is being edited.
@@ -94,6 +105,8 @@ export function PlanScreen({
     accounts: raw.accounts,
     assets: raw.assets,
     events: raw.events,
+    parameters,
+    scenarioId,
     birthDate: params.birthDate || undefined,
     selfId: selectedRaw?.id,
   };
@@ -139,7 +152,7 @@ export function PlanScreen({
         setSavedAt((m) => new Map(m).set(event.serverId, Date.now()));
         // The query holds the selection by name, so a rename has to carry it —
         // otherwise saving one drops the editor back onto the first row.
-        if (name !== event.id) nav.setSelection(name);
+        if (name !== event.id) selectEvent(name);
         onChanged();
       },
     );
@@ -155,7 +168,7 @@ export function PlanScreen({
     editing.run(
       () => api.events.create(scenarioId, blankEvent(name)),
       () => {
-        nav.setSelection(name);
+        selectEvent(name);
         onChanged();
       },
     );
@@ -182,7 +195,7 @@ export function PlanScreen({
           effects: source.effects,
         }),
       () => {
-        nav.setSelection(name);
+        selectEvent(name);
         onChanged();
       },
     );
@@ -200,6 +213,20 @@ export function PlanScreen({
     }
   };
 
+  const addParameter = (kind: ReturnType<typeof blankParameterValue>["kind"]) => {
+    const names = new Set(parameters.map((p) => p.name));
+    let name = `New ${kind}`;
+    for (let suffix = 2; names.has(name); suffix += 1) name = `New ${kind} ${suffix}`;
+    let createdId: number | undefined;
+    editing.run(
+      async () => { createdId = (await api.parameters.create(scenarioId, { name, value: blankParameterValue(kind) })).id; },
+      () => {
+        if (createdId != null) selectParameter(createdId);
+        onChanged();
+      },
+    );
+  };
+
   return (
     <>
       <ScenarioStrip
@@ -209,8 +236,37 @@ export function PlanScreen({
         offline={offline}
       />
 
-      {events.length === 0 ? (
-        <div style={{ padding: "34px 24px", maxWidth: 520 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "300px 1fr",
+          alignItems: "stretch",
+          minHeight: 460,
+        }}
+      >
+        <div style={{ borderRight: "1px solid var(--color-divider)", minWidth: 0, display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", height: "min(75vh, 740px)", minHeight: 430, alignSelf: "start", overflow: "hidden" }}>
+          <div style={{ minHeight: 0, overflow: "auto" }}>
+            <EventRail
+              events={events}
+              selectedId={parameterId == null ? selected?.id ?? "" : ""}
+              onSelect={selectEvent}
+              onAdd={add}
+              adding={editing.busy}
+              onReorder={offline ? undefined : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))}
+              offline={offline}
+            />
+          </div>
+          <ParameterRail parameters={parameters} selectedId={parameterId}
+            onSelect={selectParameter} onAdd={addParameter} adding={editing.busy}
+            submitError={editing.error} offline={offline} />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          {selectedParameter && <ParameterEditor key={`${scenarioId}:${selectedParameter.id}`}
+            parameter={selectedParameter} scenarioId={scenarioId}
+            onSaved={onChanged}
+            onDeleted={() => { nav.setSelection(selected?.id); onChanged(); }}
+            onSelectEvent={selectEvent} offline={offline} />}
+          {!selectedParameter && events.length === 0 && <div style={{ padding: "34px 24px", maxWidth: 520 }}>
           <h4 style={{ margin: "0 0 6px" }}>No events</h4>
           <p
             style={{
@@ -237,38 +293,9 @@ export function PlanScreen({
               {editing.error}
             </p>
           )}
-        </div>
-      ) : (
-        <>
-          {/* The rail and the editor stretch to each other's height, so the
-              hairline between them runs the full way down whichever is taller,
-              and both can push their footers — the reorder note, the resolved
-              fire dates, what references this event — to the bottom. */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "300px 1fr",
-              alignItems: "stretch",
-              minHeight: 460,
-            }}
-          >
-            <div style={{ borderRight: "1px solid var(--color-divider)", minWidth: 0 }}>
-              <EventRail
-                events={events}
-                selectedId={selected?.id ?? ""}
-                onSelect={nav.setSelection}
-                onAdd={add}
-                adding={editing.busy}
-                onReorder={
-                  offline
-                    ? undefined
-                    : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))
-                }
-                offline={offline}
-              />
-            </div>
-
-            {selected && selectedRaw && (
+          </div>}
+          {selected && selectedRaw && (
+            <div style={{ display: selectedParameter ? "none" : undefined }}>
               <EventEditor
                 // A fresh draft per row: edits are not carried across events.
                 key={selectedRaw.id}
@@ -278,23 +305,22 @@ export function PlanScreen({
                 onApply={(draft) => apply(selected, draft)}
                 onDuplicate={offline ? undefined : () => duplicate(selectedRaw)}
                 onDelete={offline ? undefined : () => remove(selected)}
-                onSelectEvent={nav.setSelection}
+                onSelectEvent={selectEvent}
                 busy={editing.busy}
                 error={editing.error}
                 savedAt={savedAt.get(selected.serverId)}
                 offline={offline}
               />
-            )}
-          </div>
-
-          <PlanTimeline
-            events={events}
-            axis={axis}
-            selectedId={selected?.id ?? ""}
-            onSelect={nav.setSelection}
-          />
-        </>
-      )}
+            </div>
+          )}
+        </div>
+      </div>
+      {events.length > 0 && <PlanTimeline
+        events={events}
+        axis={axis}
+        selectedId={parameterId == null ? selected?.id ?? "" : ""}
+        onSelect={selectEvent}
+      />}
 
     </>
   );

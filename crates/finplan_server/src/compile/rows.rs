@@ -127,6 +127,18 @@ pub struct TransferAmountRow {
     pub asset_id: Option<i64>,
     pub left_id: Option<i64>,
     pub right_id: Option<i64>,
+    pub expression_source: Option<String>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct ParameterRow {
+    pub id: i64,
+    pub name: String,
+    pub kind: String,
+    pub number_value: Option<f64>,
+    pub date_value: Option<String>,
+    pub age_years: Option<i64>,
+    pub age_months: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -160,6 +172,7 @@ pub struct TriggerRow {
     pub max_occurrences: Option<i64>,
     pub parent_id: Option<i64>,
     pub position: i64,
+    pub parameter_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -240,6 +253,8 @@ pub struct ScenarioGraph {
     pub tax_brackets: Vec<TaxBracketRow>,
 
     pub events: Vec<EventRow>,
+    #[serde(default)]
+    pub parameters: Vec<ParameterRow>,
     pub triggers: HashMap<i64, TriggerRow>,
     /// parent trigger id -> ordered child ids (And/Or members)
     pub trigger_children: HashMap<i64, Vec<i64>>,
@@ -421,10 +436,18 @@ impl ScenarioGraph {
         .fetch_all(&mut *db)
         .await?;
 
+        let parameters: Vec<ParameterRow> = sqlx::query_as(
+            "SELECT id, name, kind, number_value, date_value, age_years, age_months
+               FROM named_parameters WHERE scenario_id = ?1 ORDER BY id",
+        )
+        .bind(scenario_id)
+        .fetch_all(&mut *db)
+        .await?;
+
         let trigger_rows: Vec<TriggerRow> = sqlx::query_as(
             "SELECT id, event_id, kind, on_date, age_years, age_months, ref_event_id,
                     offset_unit, offset_value, account_id, asset_id, comparison, threshold,
-                    interval, start_trigger_id, end_trigger_id, max_occurrences, parent_id, position
+                    interval, start_trigger_id, end_trigger_id, max_occurrences, parent_id, position, parameter_id
                FROM triggers WHERE scenario_id = ?1 ORDER BY parent_id, position, id",
         )
         .bind(scenario_id)
@@ -432,7 +455,7 @@ impl ScenarioGraph {
         .await?;
 
         let amount_rows: Vec<TransferAmountRow> = sqlx::query_as(
-            "SELECT id, kind, value, account_id, asset_id, left_id, right_id
+            "SELECT id, kind, value, account_id, asset_id, left_id, right_id, expression_source
                FROM transfer_amounts WHERE scenario_id = ?1",
         )
         .bind(scenario_id)
@@ -520,6 +543,7 @@ impl ScenarioGraph {
             tax_config,
             tax_brackets,
             events,
+            parameters,
             triggers,
             trigger_children,
             event_trigger,

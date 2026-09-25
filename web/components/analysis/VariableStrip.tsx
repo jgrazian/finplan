@@ -2,6 +2,7 @@
 
 import { Button, Dropdown, Field, NumberInput, StatLabel, Table, Td, Th } from "@/components/ui";
 import type { AnalysisParameter } from "@/lib/api/types";
+import { ParameterRangeInput } from "./ParameterRangeInput";
 import { paramId, paramValue } from "@/lib/view/analysis";
 
 /** One variable the sweep steps over, as the screen holds it. */
@@ -150,7 +151,7 @@ export function VariableStrip({
             <tbody>
               {variables.map((variable) => {
                 const parameter = byId.get(variable.parameterId);
-                const money = parameter?.kind === "amount";
+                const kind = parameter?.kind ?? "amount";
                 return (
                   <tr key={variable.parameterId}>
                     <Td>
@@ -180,7 +181,7 @@ export function VariableStrip({
                         options={parameters.map((p) => ({
                           value: p.id,
                           label: paramId(p),
-                          detail: p.event_name,
+                          detail: p.kind,
                           disabled:
                             p.id !== variable.parameterId &&
                             variables.some((v) => v.parameterId === p.id),
@@ -190,18 +191,18 @@ export function VariableStrip({
                       />
                     </Td>
                     <Td>
-                      <Cell
+                      <ParameterRangeInput
                         label="from"
-                        money={money}
+                        kind={kind}
                         value={variable.min}
                         disabled={disabled}
                         onCommit={(min) => onChange(variable.parameterId, { ...variable, min })}
                       />
                     </Td>
                     <Td>
-                      <Cell
+                      <ParameterRangeInput
                         label="to"
-                        money={money}
+                        kind={kind}
                         value={variable.max}
                         disabled={disabled}
                         onCommit={(max) => onChange(variable.parameterId, { ...variable, max })}

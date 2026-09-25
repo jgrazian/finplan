@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Blueprint,
   Button,
@@ -14,11 +14,13 @@ import {
   Tag,
   cx,
 } from "@/components/ui";
-import type { Event as ApiEvent } from "@/lib/api/types";
+import type { EffectSpec, Event as ApiEvent } from "@/lib/api/types";
 import { fmtClock } from "@/lib/format";
 import type { PlanEvent } from "@/lib/types";
 import { eventRefs } from "@/lib/view/refs";
+import { namesOf } from "@/lib/view/events";
 import { EffectsBlock } from "./EffectFields";
+import { renameAmountReferences, renameParameterReferences } from "./amountDraft";
 import {
   Note,
   ScheduleFields,
@@ -39,6 +41,18 @@ import {
 export type { EventDraft } from "./eventDraft";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 55%, transparent)";
+
+function renameSavedEffect(effect: EffectSpec, oldName: string, newName: string): EffectSpec {
+  if (effect.kind === "Random") return {
+    ...effect,
+    on_true: renameSavedEffect(effect.on_true, oldName, newName),
+    on_false: effect.on_false ? renameSavedEffect(effect.on_false, oldName, newName) : null,
+  };
+  if ("amount" in effect) return {
+    ...effect, amount: renameAmountReferences(effect.amount, oldName, newName),
+  };
+  return effect;
+}
 
 /**
  * Artboard 10a — the event editor, two columns wide: when it fires on the
@@ -88,8 +102,36 @@ export function EventEditor({
   offline?: boolean;
 }) {
   const seed = () =>
-    draftOfEvent(raw, context.accounts[0]?.id ?? 0, context.assets[0]?.id ?? 0);
+    draftOfEvent(raw, context.accounts[0]?.id ?? 0, context.assets[0]?.id ?? 0, namesOf(context));
   const [draft, setDraft] = useState<EventDraft>(seed);
+  const previousParameters = useRef(new Map((context.parameters ?? []).map((p) => [p.id, p.name])));
+  useEffect(() => {
+    const next = new Map((context.parameters ?? []).map((p) => [p.id, p.name]));
+    const renames = [...next].flatMap(([id, name]) => {
+      const previous = previousParameters.current.get(id);
+      return previous && previous !== name ? [[previous, name] as const] : [];
+    });
+    previousParameters.current = next;
+    if (renames.length === 0) return;
+    setDraft((current) => ({
+      ...current,
+      effects: current.effects.map((effect) => {
+        const rename = (source: string) => renames.reduce(
+          (text, [oldName, newName]) => renameParameterReferences(text, oldName, newName), source,
+        );
+        return {
+          ...effect,
+          ...(effect.rawAmount?.kind === "Expression"
+            ? { rawAmount: { kind: "Expression" as const, source: rename(effect.rawAmount.source) } }
+            : {}),
+          ...(effect.expressionDraft ? { expressionDraft: rename(effect.expressionDraft) } : {}),
+          ...(effect.raw ? { raw: renames.reduce(
+            (saved, [oldName, newName]) => renameSavedEffect(saved, oldName, newName), effect.raw,
+          ) } : {}),
+        };
+      }),
+    }));
+  }, [context.parameters]);
   const set = <K extends keyof EventDraft>(key: K, value: EventDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 

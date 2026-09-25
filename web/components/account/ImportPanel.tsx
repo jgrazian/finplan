@@ -14,7 +14,7 @@ export function ImportPanel({ disabled }: { disabled?: boolean }) {
   const [error, setError] = useState<string>();
   return <section style={{ marginTop: 24, maxWidth: 720 }}>
     <h3>Restore plan inputs</h3>
-    <p>Choose a FinPlan version 2 JSON input export under 1.9 MB. Imports must pass plan validation. Accounts, events and referenced assumptions become independent copies; saved runs, reports, billing and unreferenced library items are not restored.</p>
+    <p>Choose a FinPlan version 2 or 3 JSON input export under 1.9 MB. Imports must pass plan validation. Accounts, parameters, events and referenced assumptions become independent copies; saved runs, reports, billing and unreferenced library items are not restored.</p>
     <input aria-label="Choose FinPlan archive" type="file" accept=".json,application/json" disabled={disabled || busy}
       onChange={async (event) => {
         const file = event.target.files?.[0];

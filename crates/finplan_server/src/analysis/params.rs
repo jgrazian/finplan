@@ -1,258 +1,235 @@
-//! What a plan has that could have been a different number.
-//!
-//! Read off the compiled scenario rather than the stored rows: the engine is
-//! what the sweep will actually modify, so the list of things it can modify has
-//! to come from there. Anything the engine cannot vary — a date trigger, a
-//! balance-referencing amount — is simply not offered, which is a better answer
-//! than offering it and failing at run time.
-//!
-//! Each parameter carries a suggested range as well as its identity. A sweep
-//! axis needs bounds before it can draw anything, and the plan's own value is
-//! the only honest place to centre them on.
+//! Named scenario inputs exposed to analysis. Coordinates on the wire are dollars,
+//! fractional rates, calendar years (including months / 12), or UTC epoch days.
+//! Only the registry is varied; event literals are never rewritten.
 
-use finplan_core::analysis::{
-    EffectParam, EffectTarget, SweepParameter, SweepTarget, TriggerParam,
-};
-use finplan_core::model::{EventEffect, EventId, EventTrigger, TransferAmount};
+use finplan_core::analysis::SweepParameter;
+use finplan_core::model::{CalendarAge, ParameterId, ParameterValue};
+use finplan_core::optimization::OptimizableParameter;
+use jiff::civil::Date;
 
 use crate::compile::CompiledScenario;
+use crate::error::{ApiError, ApiResult};
 
-/// The kind of number a parameter is, which is all the client needs to format
-/// it and to pick a sensible step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {
-    /// An age in whole years.
     Age,
-    /// A dollar amount, per occurrence of the event.
     Amount,
+    Rate,
+    Date,
 }
 
-/// One varyable number in the plan, with the range a sweep should default to.
 #[derive(Debug, Clone)]
 pub struct PlanParameter {
-    /// Stable identity, unique within a scenario: `event:<db id>:<slot>`.
-    /// Round-trips through the URL and the request body, so it is a string
-    /// rather than a tuple the client would have to reassemble.
     pub id: String,
-    /// The event this belongs to, by database id.
-    pub event_id: i64,
-    /// The event's own name, for display.
-    pub event_name: String,
-    /// What about the event varies — "retirement age", "monthly amount".
-    pub role: &'static str,
+    pub parameter_id: i64,
+    pub name: String,
     pub kind: ParamKind,
-    /// The value the plan is configured with today.
     pub current: f64,
-    /// A defensible default range: wide enough to bracket an answer, narrow
-    /// enough that six steps still say something.
     pub min: f64,
     pub max: f64,
-    /// How this parameter is applied, ready to hand to the engine.
-    pub target: SweepTarget,
-    /// The engine-side id, which the sweep config wants rather than the db one.
-    pub dense_event_id: EventId,
+    pub dense_id: ParameterId,
+}
+
+fn epoch() -> Date {
+    Date::constant(1970, 1, 1)
+}
+
+pub fn date_coordinate(date: Date) -> f64 {
+    f64::from((date - epoch()).get_days())
+}
+
+impl ParamKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Age => "age",
+            Self::Amount => "amount",
+            Self::Rate => "rate",
+            Self::Date => "date",
+        }
+    }
 }
 
 impl PlanParameter {
-    /// A sweep axis over this parameter's default range.
-    #[must_use]
-    pub fn sweep(&self, min: f64, max: f64, steps: usize) -> SweepParameter {
-        SweepParameter {
-            event_id: self.dense_event_id,
-            target: self.target.clone(),
-            min_value: min,
-            max_value: max,
-            step_count: steps,
+    fn typed_value(&self, value: f64) -> ApiResult<ParameterValue> {
+        let invalid = || {
+            ApiError::bad_request(format!(
+                "{} has an invalid {} bound",
+                self.name,
+                self.kind.as_str()
+            ))
+        };
+        if !value.is_finite() {
+            return Err(invalid());
+        }
+        Ok(match self.kind {
+            ParamKind::Amount => ParameterValue::Money(value),
+            ParamKind::Rate => ParameterValue::Rate(value),
+            ParamKind::Age => {
+                let months = (value * 12.0).round();
+                if !(0.0..=3071.0).contains(&months) {
+                    return Err(invalid());
+                }
+                ParameterValue::Age(CalendarAge::new(
+                    (months as u16 / 12) as u8,
+                    (months as u16 % 12) as u8,
+                ))
+            }
+            ParamKind::Date => {
+                if value < date_coordinate(Date::MIN) || value > date_coordinate(Date::MAX) {
+                    return Err(invalid());
+                }
+                ParameterValue::Date(
+                    epoch()
+                        .checked_add(jiff::Span::new().days(value.round() as i64))
+                        .map_err(|_| invalid())?,
+                )
+            }
+        })
+    }
+
+    pub fn sweep(&self, min: f64, max: f64, steps: usize) -> ApiResult<SweepParameter> {
+        let parameter = OptimizableParameter {
+            parameter_id: self.dense_id,
+            min_value: self.typed_value(min)?,
+            max_value: self.typed_value(max)?,
+        };
+        let (lo, hi) = parameter.bounds();
+        if hi < lo || (steps > 1 && hi == lo) {
+            return Err(ApiError::bad_request(format!(
+                "{} needs distinct ordered bounds",
+                self.name
+            )));
+        }
+        let steps = if parameter.is_discrete() {
+            steps.min((hi - lo) as usize + 1)
+        } else {
+            steps
+        };
+        Ok(SweepParameter::parameter(parameter, steps))
+    }
+
+    /// Translate internal calendar coordinates back to the API's units.
+    pub fn display_coordinate(&self, sweep: &SweepParameter, coordinate: f64) -> f64 {
+        match self.kind {
+            ParamKind::Age => coordinate / 12.0,
+            ParamKind::Date => match &sweep.target {
+                finplan_core::analysis::SweepTarget::Parameter(p) => match p.min_value {
+                    ParameterValue::Date(date) => date_coordinate(date) + coordinate,
+                    _ => coordinate,
+                },
+                _ => coordinate,
+            },
+            _ => coordinate,
         }
     }
 
-    /// The range a sensitivity ranking probes: the plan's value ±`fraction`,
-    /// clamped to the parameter's own bounds so an age stays an age.
-    #[must_use]
     pub fn perturbed(&self, fraction: f64) -> (f64, f64) {
-        let span = (self.current * fraction).abs();
-        let (mut lo, mut hi) = (self.current - span, self.current + span);
-        if self.kind == ParamKind::Age {
-            // Ages are whole years, and a ±20% band on 65 is nobody's question.
-            lo = (self.current - 5.0).round();
-            hi = (self.current + 5.0).round();
-        }
+        let span = match self.kind {
+            ParamKind::Age => 5.0,
+            ParamKind::Date => 365.0,
+            ParamKind::Rate => (self.current * fraction).abs().max(0.01),
+            ParamKind::Amount => (self.current * fraction).abs().max(100.0),
+        };
         (
-            lo.max(self.min).min(self.max),
-            hi.min(self.max).max(self.min),
+            (self.current - span).max(self.min),
+            (self.current + span).min(self.max),
         )
     }
 }
 
-/// Every parameter of the compiled plan a sweep or solve could vary.
-///
-/// Order follows the plan's own event order, so the list reads the way the Plan
-/// tab does.
 #[must_use]
 pub fn parameters(compiled: &CompiledScenario) -> Vec<PlanParameter> {
     let mut out = Vec::new();
-
-    for event in &compiled.config.events {
-        let Some(db_id) = compiled.id_map.event_db_id(event.event_id) else {
+    for (&dense_id, value) in &compiled.config.parameters {
+        let Some(parameter_id) = compiled.id_map.parameter_db_id(dense_id) else {
             continue;
         };
         let name = compiled
-            .event_names
-            .get(&db_id)
-            .cloned()
-            .unwrap_or_else(|| format!("event {db_id}"));
-
-        for (slot, role, kind, current, target) in trigger_params(&event.trigger) {
-            let (min, max) = default_range(kind, current);
-            if max <= min {
-                continue;
-            }
-            out.push(PlanParameter {
-                id: format!("event:{db_id}:{slot}"),
-                event_id: db_id,
-                event_name: name.clone(),
-                role,
-                kind,
-                current,
-                min,
-                max,
-                target,
-                dense_event_id: event.event_id,
-            });
-        }
-
-        // Only the first amount-carrying effect is offered. An event with two
-        // of them is rare, and "which of this event's amounts" is a question
-        // the axis chips have no room to ask.
-        if let Some(current) = event.effects.iter().find_map(fixed_amount) {
-            let (min, max) = default_range(ParamKind::Amount, current);
-            if max > min {
-                out.push(PlanParameter {
-                    id: format!("event:{db_id}:amount"),
-                    event_id: db_id,
-                    event_name: name,
-                    role: "amount",
-                    kind: ParamKind::Amount,
-                    current,
-                    min,
-                    max,
-                    target: SweepTarget::Effect {
-                        param: EffectParam::Value,
-                        target: EffectTarget::FirstEligible,
-                    },
-                    dense_event_id: event.event_id,
-                });
-            }
-        }
+            .metadata
+            .parameter_name(dense_id)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Parameter {parameter_id}"));
+        let (kind, current) = match value {
+            ParameterValue::Money(v) => (ParamKind::Amount, *v),
+            ParameterValue::Rate(v) => (ParamKind::Rate, *v),
+            ParameterValue::Age(age) => (
+                ParamKind::Age,
+                f64::from(age.years) + f64::from(age.months) / 12.0,
+            ),
+            ParameterValue::Date(date) => (ParamKind::Date, date_coordinate(*date)),
+        };
+        let (min, max) = default_range(kind, current);
+        out.push(PlanParameter {
+            id: format!("parameter:{parameter_id}"),
+            parameter_id,
+            name,
+            kind,
+            current,
+            min,
+            max,
+            dense_id,
+        });
     }
-
+    out.sort_by_key(|p| p.parameter_id);
     out
 }
 
-/// The ages a trigger exposes: its own, or the ones bounding a schedule.
-fn trigger_params(
-    trigger: &EventTrigger,
-) -> Vec<(&'static str, &'static str, ParamKind, f64, SweepTarget)> {
-    match trigger {
-        EventTrigger::Age { years, .. } => vec![(
-            "age",
-            "age",
-            ParamKind::Age,
-            f64::from(*years),
-            SweepTarget::Trigger(TriggerParam::Age),
-        )],
-        EventTrigger::Repeating {
-            start_condition,
-            end_condition,
-            ..
-        } => {
-            let mut out = Vec::new();
-            if let Some(EventTrigger::Age { years, .. }) = start_condition.as_deref() {
-                out.push((
-                    "start-age",
-                    "starts at age",
-                    ParamKind::Age,
-                    f64::from(*years),
-                    SweepTarget::Trigger(TriggerParam::RepeatingStart(Box::new(TriggerParam::Age))),
-                ));
-            }
-            if let Some(EventTrigger::Age { years, .. }) = end_condition.as_deref() {
-                out.push((
-                    "end-age",
-                    "ends at age",
-                    ParamKind::Age,
-                    f64::from(*years),
-                    SweepTarget::Trigger(TriggerParam::RepeatingEnd(Box::new(TriggerParam::Age))),
-                ));
-            }
-            out
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// The fixed dollar figure behind an effect's amount, if it has one.
-///
-/// `InflationAdjusted` wraps a real-dollar figure, which is the number the plan
-/// was written in and so the one to vary; everything else — a balance, a
-/// computed transfer — has no single number to move.
-fn fixed_amount(effect: &EventEffect) -> Option<f64> {
-    let amount = match effect {
-        EventEffect::Income { amount, .. }
-        | EventEffect::Expense { amount, .. }
-        | EventEffect::AssetPurchase { amount, .. }
-        | EventEffect::AssetSale { amount, .. }
-        | EventEffect::Sweep { amount, .. }
-        | EventEffect::AdjustBalance { amount, .. }
-        | EventEffect::CashTransfer { amount, .. } => amount,
-        _ => return None,
-    };
-    match amount {
-        TransferAmount::Fixed(v) => Some(*v),
-        TransferAmount::InflationAdjusted(inner) => match inner.as_ref() {
-            TransferAmount::Fixed(v) => Some(*v),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// The range a fresh axis opens on, centred on the plan's own value.
-///
-/// Ages get a decade to move in and stay inside a working life; amounts get
-/// half to double, which brackets both "could I spend more" and "what if this
-/// has to halve" without ever proposing a negative dollar.
 fn default_range(kind: ParamKind, current: f64) -> (f64, f64) {
     match kind {
         ParamKind::Age => (
-            (current - 10.0).max(18.0).round(),
-            (current + 10.0).min(100.0).round(),
+            (current - 10.0).max(0.0),
+            (current + 10.0).min(3071.0 / 12.0),
         ),
+        ParamKind::Date => (
+            (current - 1826.0).max(date_coordinate(Date::MIN)),
+            (current + 1826.0).min(date_coordinate(Date::MAX)),
+        ),
+        ParamKind::Rate => {
+            let span = (current.abs() * 0.5).max(0.01);
+            (current - span, current + span)
+        }
         ParamKind::Amount => {
-            // A zero amount has no proportional band to open around it, so it
-            // gets an absolute one rather than the degenerate (0, 0).
-            if current.abs() < 1.0 {
-                (0.0, 10_000.0)
-            } else if current > 0.0 {
-                (round_step(current * 0.5), round_step(current * 2.0))
-            } else {
-                (round_step(current * 2.0), round_step(current * 0.5))
-            }
+            let span = (current.abs() * 0.5).max(1000.0);
+            (current - span, current + span)
         }
     }
 }
 
-/// Round a bound to something a person would have typed.
-fn round_step(value: f64) -> f64 {
-    let magnitude = value.abs();
-    let step = if magnitude >= 100_000.0 {
-        10_000.0
-    } else if magnitude >= 10_000.0 {
-        1_000.0
-    } else if magnitude >= 1_000.0 {
-        100.0
-    } else {
-        10.0
-    };
-    (value / step).round() * step
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn parameter(kind: ParamKind, current: f64) -> PlanParameter {
+        let (min, max) = default_range(kind, current);
+        PlanParameter {
+            id: "parameter:9".into(),
+            parameter_id: 9,
+            name: "Input".into(),
+            kind,
+            current,
+            min,
+            max,
+            dense_id: ParameterId(2),
+        }
+    }
+    #[test]
+    fn calendar_sweeps_round_trip_and_deduplicate_adjacent_values() {
+        let age = parameter(ParamKind::Age, 40.5);
+        let sweep = age.sweep(40.0, 40.0 + 1.0 / 12.0, 12).unwrap();
+        assert_eq!(sweep.sweep_values(), vec![480.0, 481.0]);
+        assert_eq!(age.display_coordinate(&sweep, 481.0), 40.0 + 1.0 / 12.0);
+        let current = date_coordinate(Date::constant(2035, 1, 1));
+        let date = parameter(ParamKind::Date, current);
+        let sweep = date.sweep(current, current + 2.0, 12).unwrap();
+        assert_eq!(sweep.sweep_values(), vec![0.0, 1.0, 2.0]);
+        assert_eq!(date.display_coordinate(&sweep, 2.0), current + 2.0);
+        assert!(age.sweep(-1.0, 30.0, 2).is_err());
+        assert!(date.sweep(f64::INFINITY, current, 2).is_err());
+    }
+    #[test]
+    fn rates_remain_fractional_and_are_not_clamped_to_one() {
+        let rate = parameter(ParamKind::Rate, 1.5);
+        let sweep = rate.sweep(-0.1, 2.0, 3).unwrap();
+        assert_eq!(sweep.min_value, -0.1);
+        assert_eq!(sweep.max_value, 2.0);
+    }
 }

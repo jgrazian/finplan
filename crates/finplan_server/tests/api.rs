@@ -2047,8 +2047,20 @@ impl TestApp {
             )
             .await;
         }
-        // Spending that starts at an age: one event carrying both an age and
-        // an amount, which is the shape the sweep axes are picked from.
+        let (status, age) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/parameters"),
+                json!({"name":"RetirementAge","value":{"kind":"Age","years":45,"months":0}}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let (status, _) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/parameters"),
+                json!({"name":"Spending","value":{"kind":"Money","value":1000.0}}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED);
         let (status, _) = self
             .post(
                 &format!("/api/scenarios/{scenario_id}/events"),
@@ -2056,10 +2068,10 @@ impl TestApp {
                     "name": "Retirement spending", "enabled": true,
                     "trigger": {
                         "kind": "Repeating", "interval": "Monthly",
-                        "start_condition": {"kind": "Age", "years": 45}
+                        "start_condition": {"kind": "AgeParameter", "parameter_id": age["id"]}
                     },
                     "effects": [{"kind": "Expense", "from_account_id": checking,
-                        "amount": {"kind": "Fixed", "value": 1_000.0}}]
+                        "amount": {"kind": "Expression", "source": "$Spending"}}]
                 }),
             )
             .await;
@@ -2069,25 +2081,25 @@ impl TestApp {
 }
 
 #[tokio::test]
-async fn parameters_are_read_off_the_plan_rather_than_asked_for() {
+async fn analysis_lists_only_explicit_named_parameters() {
     let mut app = TestApp::new().await;
     app.login_as("params@example.com").await;
     let scenario_id = app.seed_analysable().await;
 
     let (status, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     assert_eq!(status, StatusCode::OK);
     let rows = params.as_array().unwrap();
 
     // The one event offers both of its numbers, and nothing else does.
     let ids: Vec<&str> = rows.iter().map(|p| p["id"].as_str().unwrap()).collect();
-    assert!(ids.iter().any(|id| id.ends_with(":start-age")), "{ids:?}");
-    assert!(ids.iter().any(|id| id.ends_with(":amount")), "{ids:?}");
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().all(|id| id.starts_with("parameter:")), "{ids:?}");
 
     let age = rows.iter().find(|p| p["kind"] == "age").unwrap();
     assert_eq!(age["current"], 45.0);
-    assert_eq!(age["event_name"], "Retirement spending");
+    assert_eq!(age["name"], "RetirementAge");
     // The suggested range brackets the plan's own value.
     assert!(age["min"].as_f64().unwrap() < 45.0);
     assert!(age["max"].as_f64().unwrap() > 45.0);
@@ -2099,7 +2111,7 @@ async fn a_sweep_returns_a_grid_the_client_can_index() {
     app.login_as("sweep@example.com").await;
     let scenario_id = app.seed_analysable().await;
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let age = params.as_array().unwrap()[0]["id"]
         .as_str()
@@ -2168,7 +2180,7 @@ async fn the_newest_sweep_is_kept_so_a_reload_finds_it() {
     assert!(empty.is_null(), "{empty}");
 
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let age = params.as_array().unwrap()[0]["id"]
         .as_str()
@@ -2236,7 +2248,7 @@ async fn the_graphs_arranged_over_a_sweep_are_kept_with_it() {
     let layout = format!("{cached}/layout");
 
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let age = params.as_array().unwrap()[0]["id"]
         .as_str()
@@ -2320,8 +2332,13 @@ async fn a_sweep_carries_more_variables_than_any_one_graph_draws() {
     let mut app = TestApp::new().await;
     app.login_as("workspace@example.com").await;
     let scenario_id = app.seed_analysable().await;
-    // A second dated expense, so the plan offers four parameters and a sweep
-    // has something to hold while a graph draws two of them.
+    let (status, _) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/parameters"),
+            json!({"name":"TravelBudget","value":{"kind":"Money","value":400.0}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
     let (_, accounts) = app
         .get(&format!("/api/scenarios/{scenario_id}/accounts"))
         .await;
@@ -2336,14 +2353,14 @@ async fn a_sweep_carries_more_variables_than_any_one_graph_draws() {
                     "start_condition": {"kind": "Age", "years": 50}
                 },
                 "effects": [{"kind": "Expense", "from_account_id": checking,
-                    "amount": {"kind": "Fixed", "value": 400.0}}]
+                    "amount": {"kind": "Expression", "source": "$TravelBudget"}}]
             }),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED);
 
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let ids: Vec<String> = params
         .as_array()
@@ -2424,7 +2441,7 @@ async fn spending_more_never_raises_the_success_rate() {
     app.login_as("monotone@example.com").await;
     let scenario_id = app.seed_analysable().await;
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let amount = params
         .as_array()
@@ -2469,7 +2486,7 @@ async fn a_solve_answers_with_the_boundary_and_shows_its_working() {
     app.login_as("solve@example.com").await;
     let scenario_id = app.seed_analysable().await;
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let amount = params
         .as_array()
@@ -2585,7 +2602,7 @@ async fn an_analysis_refuses_a_question_it_cannot_answer() {
     let scenario_id = app.seed_analysable().await;
     let base = format!("/api/scenarios/{scenario_id}/analyses");
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let amount = params
         .as_array()
@@ -2655,7 +2672,7 @@ async fn an_analysis_belongs_to_the_user_who_started_it() {
     app.login_as("owner@example.com").await;
     let scenario_id = app.seed_analysable().await;
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let amount = params.as_array().unwrap()[1]["id"]
         .as_str()
@@ -2686,7 +2703,7 @@ async fn an_analysis_belongs_to_the_user_who_started_it() {
     );
     // The scenario's own parameters are equally out of reach.
     assert_eq!(
-        app.get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        app.get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
             .await
             .0,
         StatusCode::NOT_FOUND
@@ -2699,7 +2716,7 @@ async fn results_are_only_available_once_the_analysis_has_finished() {
     app.login_as("pending@example.com").await;
     let scenario_id = app.seed_analysable().await;
     let (_, params) = app
-        .get(&format!("/api/scenarios/{scenario_id}/parameters"))
+        .get(&format!("/api/scenarios/{scenario_id}/analysis/parameters"))
         .await;
     let amount = params.as_array().unwrap()[1]["id"]
         .as_str()
@@ -2743,6 +2760,13 @@ async fn a_plan_whose_schedule_follows_the_market_runs_and_analyses() {
     app.login_as("market-schedule@example.com").await;
     let (scenario_id, checking, brokerage) = app.seed_scenario().await;
     let base = format!("/api/scenarios/{scenario_id}");
+    let (status, _) = app
+        .post(
+            &format!("{base}/parameters"),
+            json!({"name":"Spending","value":{"kind":"Money","value":1000.0}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
 
     let (status, _) = app
         .post(
@@ -2754,7 +2778,7 @@ async fn a_plan_whose_schedule_follows_the_market_runs_and_analyses() {
                     "start_condition": {"kind": "Age", "years": 45}
                 },
                 "effects": [{"kind": "Expense", "from_account_id": checking,
-                    "amount": {"kind": "Fixed", "value": 1_000.0}}]
+                    "amount": {"kind": "Expression", "source": "$Spending"}}]
             }),
         )
         .await;
@@ -2795,7 +2819,7 @@ async fn a_plan_whose_schedule_follows_the_market_runs_and_analyses() {
     );
 
     // Every analysis finishes too, on the same plan.
-    let (_, params) = app.get(&format!("{base}/parameters")).await;
+    let (_, params) = app.get(&format!("{base}/analysis/parameters")).await;
     let amount = params
         .as_array()
         .unwrap()
@@ -2930,3 +2954,11 @@ mod onboarding_cases;
 
 #[path = "cases/archives.rs"]
 mod archives_cases;
+
+#[path = "cases/parameters.rs"]
+mod parameter_cases;
+
+mod named_analysis_cases {
+    use super::*;
+    include!("cases/named_analysis.rs");
+}

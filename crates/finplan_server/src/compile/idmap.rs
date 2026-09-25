@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use finplan_core::model::{AccountId, AssetId, EventId, ReturnProfileId};
+use finplan_core::model::{AccountId, AssetId, EventId, ParameterId, ReturnProfileId};
 
 use crate::error::{ApiError, ApiResult};
 
@@ -23,6 +23,8 @@ pub struct IdMap {
     event_to_db: HashMap<u16, i64>,
     profile_to_dense: HashMap<i64, ReturnProfileId>,
     profile_to_db: HashMap<u16, i64>,
+    parameter_to_dense: HashMap<i64, ParameterId>,
+    parameter_to_db: HashMap<u16, i64>,
 }
 
 /// The engine's ids are `u16`, so a scenario cannot exceed this many of any one
@@ -81,6 +83,28 @@ impl IdMap {
         self.profile_to_dense.insert(db_id, ReturnProfileId(idx));
         self.profile_to_db.insert(idx, db_id);
         Ok(ReturnProfileId(idx))
+    }
+
+    pub fn intern_parameter(&mut self, db_id: i64) -> ApiResult<ParameterId> {
+        if let Some(id) = self.parameter_to_dense.get(&db_id) {
+            return Ok(*id);
+        }
+        let idx = next_index(self.parameter_to_dense.len(), "parameters")?;
+        let id = ParameterId(idx);
+        self.parameter_to_dense.insert(db_id, id);
+        self.parameter_to_db.insert(idx, db_id);
+        Ok(id)
+    }
+
+    pub fn parameter(&self, db_id: i64) -> ApiResult<ParameterId> {
+        self.parameter_to_dense.get(&db_id).copied().ok_or_else(|| {
+            ApiError::unprocessable(format!("parameter {db_id} is not part of this scenario"))
+        })
+    }
+
+    #[must_use]
+    pub fn parameter_db_id(&self, id: ParameterId) -> Option<i64> {
+        self.parameter_to_db.get(&id.0).copied()
     }
 
     /// Resolve an id that must already have been interned. Effects and triggers

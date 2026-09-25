@@ -17,12 +17,14 @@ import type {
 } from "@/lib/api/types";
 import type { EffectKind, EventEffect, PlanEvent } from "@/lib/types";
 import type { PlanAxis } from "./axis";
-import { addYears, money, ratePercent } from "./format";
+import { addCalendarMonths, addYears, money, ratePercent } from "./format";
 
 export interface EventNames {
   account: (id: number) => string;
   asset: (id: number) => string;
   event: (id: number) => string;
+  parameter: (id: number) => string;
+  parameterValue: (id: number) => { kind: string; value?: string; years?: number; months?: number } | undefined;
 }
 
 /**
@@ -36,14 +38,27 @@ export function namesOf(rows: {
   accounts: { id: number; name: string }[];
   assets: { id: number; name: string }[];
   events: { id: number; name: string }[];
+  parameters?: { id: number; name: string; value?: { kind: string; value?: string | number; years?: number; months?: number } }[];
 }): EventNames {
   const account = new Map(rows.accounts.map((a) => [a.id, a.name]));
   const asset = new Map(rows.assets.map((a) => [a.id, a.name]));
   const event = new Map(rows.events.map((e) => [e.id, e.name]));
+  const parameter = new Map((rows.parameters ?? []).map((p) => [p.id, p.name]));
+  const parameterValue = new Map((rows.parameters ?? []).map((p) => [p.id, p.value]));
   return {
     account: (id) => account.get(id) ?? `account ${id}`,
     asset: (id) => asset.get(id) ?? `asset ${id}`,
     event: (id) => event.get(id) ?? `event ${id}`,
+    parameter: (id) => parameter.get(id) ?? `parameter ${id}`,
+    parameterValue: (id) => {
+      const value = parameterValue.get(id);
+      if (!value) return undefined;
+      if (value.kind === "Date" && typeof value.value === "string")
+        return { kind: "Date", value: value.value };
+      if (value.kind === "Age")
+        return { kind: "Age", years: value.years, months: value.months };
+      return { kind: value.kind };
+    },
   };
 }
 
@@ -54,7 +69,7 @@ export function toViewEvents(
   names: EventNames,
   today = new Date().toISOString().slice(0, 10),
 ): PlanEvent[] {
-  const clock = new PlanClock(events, scenario);
+  const clock = new PlanClock(events, scenario, names);
 
   return events.map((event) => {
     const first = clock.firstFire(event.id);
@@ -102,6 +117,7 @@ class PlanClock {
   constructor(
     events: ApiEvent[],
     private readonly scenario: Scenario,
+    private readonly names: EventNames,
   ) {
     this.byId = new Map(events.map((e) => [e.id, e]));
   }
@@ -140,9 +156,20 @@ class PlanClock {
     switch (trigger.kind) {
       case "Date":
         return trigger.on_date;
+      case "DateParameter":
+        {
+          const value = this.names.parameterValue(trigger.parameter_id);
+          return value?.kind === "Date" ? value.value ?? null : null;
+        }
+      case "AgeParameter": {
+        const value = this.names.parameterValue(trigger.parameter_id);
+        return value?.kind === "Age" && this.scenario.birth_date
+          ? addCalendarMonths(this.scenario.birth_date, (value.years ?? 0) * 12 + (value.months ?? 0))
+          : null;
+      }
       case "Age":
         return this.scenario.birth_date
-          ? addYears(this.scenario.birth_date, trigger.years)
+          ? addCalendarMonths(this.scenario.birth_date, trigger.years * 12 + (trigger.months ?? 0))
           : null;
       case "RelativeToEvent": {
         const anchor = this.firstFire(trigger.event_id);
@@ -249,8 +276,12 @@ function summarizeTrigger(trigger: TriggerSpec, names: EventNames): string {
   switch (trigger.kind) {
     case "Date":
       return `Date · ${trigger.on_date}`;
+    case "DateParameter":
+      return `Date · ${names.parameter(trigger.parameter_id)}`;
     case "Age":
       return `Age ${trigger.years}`;
+    case "AgeParameter":
+      return `Age · ${names.parameter(trigger.parameter_id)}`;
     case "Repeating":
       return `Repeating · ${trigger.interval.toLowerCase()}`;
     case "RelativeToEvent":
@@ -275,8 +306,12 @@ function conditionLabel(trigger: TriggerSpec, names: EventNames): string {
   switch (trigger.kind) {
     case "Date":
       return trigger.on_date;
+    case "DateParameter":
+      return names.parameter(trigger.parameter_id);
     case "Age":
       return `age ${trigger.years}`;
+    case "AgeParameter":
+      return `age ${names.parameter(trigger.parameter_id)}`;
     default:
       return summarizeTrigger(trigger, names);
   }
@@ -284,6 +319,9 @@ function conditionLabel(trigger: TriggerSpec, names: EventNames): string {
 
 export function detailTrigger(trigger: TriggerSpec, names: EventNames): string {
   switch (trigger.kind) {
+    case "DateParameter":
+    case "AgeParameter":
+      return names.parameter(trigger.parameter_id);
     case "Age":
       return trigger.months == null
         ? `years ${trigger.years}`
@@ -363,6 +401,15 @@ function amountOf(effect: EffectSpec): AmountSpec | null {
 export function describeAmount(amount: AmountSpec, names: EventNames): string {
   const rec = (a: AmountSpec) => describeAmount(a, names);
   switch (amount.kind) {
+    case "Expression":
+      if (/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(amount.source.trim())) {
+        return money(Number(amount.source.trim()));
+      }
+      {
+        const inflated = /^inflation\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\)$/.exec(amount.source.trim());
+        if (inflated) return `${money(Number(inflated[1]))} infl-adj`;
+      }
+      return amount.source;
     case "Fixed":
       return money(amount.value);
     case "InflationAdjusted":

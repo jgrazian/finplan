@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addYears, yearsBetween } from "../lib/view/format.ts";
+import { addCalendarMonths, addYears, yearsBetween } from "../lib/view/format.ts";
+
+test("calendar ages clamp month end after applying both years and months", () => {
+  assert.equal(addCalendarMonths("2024-02-29", 12), "2025-02-28");
+  assert.equal(addCalendarMonths("2024-02-29", 13), "2025-03-29");
+  assert.equal(addCalendarMonths("2024-01-31", 1), "2024-02-29");
+  assert.equal(addCalendarMonths("2024-01-31", 2), "2024-03-31");
+});
 
 test("plan end preserves leap dates and clamps only in non-leap years", () => {
   assert.equal(addYears("2024-02-29", 4), "2028-02-29");

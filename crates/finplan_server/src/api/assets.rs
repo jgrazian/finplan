@@ -227,6 +227,11 @@ async fn update(
     Json(Submitted { body, fields }): Json<Submitted<UpdateAsset>>,
 ) -> ApiResult<Json<Asset>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    let rename_graph = if body.name.is_some() {
+        Some(crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?)
+    } else {
+        None
+    };
     // `Some(None)` is a deliberate unmap, `None` is silence about the mapping.
     let remap = body.return_profile_id.is_some();
     let profile_id = body.return_profile_id.flatten();
@@ -234,6 +239,7 @@ async fn update(
         owned_profile(&state, profile_id, &user.id).await?;
     }
 
+    let mut tx = state.db.begin().await?;
     let affected = sqlx::query(
         "UPDATE assets SET
             name              = COALESCE(?3, name),
@@ -254,7 +260,7 @@ async fn update(
     .bind(body.tracking_error)
     .bind(body.sort_order)
     .bind(remap)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await
     .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?
     .rows_affected();
@@ -262,6 +268,16 @@ async fn update(
     if affected == 0 {
         return Err(ApiError::NotFound("asset"));
     }
+    if let (Some(graph), Some(name)) = (&rename_graph, &body.name) {
+        super::expression_refs::rerender(
+            &mut tx,
+            graph,
+            super::expression_refs::Entity::Asset(id),
+            name.trim(),
+        )
+        .await?;
+    }
+    tx.commit().await?;
 
     state.telemetry.mutation(
         Resource::Asset,
@@ -289,6 +305,14 @@ async fn destroy(
     Path((scenario_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    if graph.assets.iter().any(|a| a.id == id)
+        && super::expression_refs::used_by(&graph, super::expression_refs::Entity::Asset(id))?
+    {
+        return Err(ApiError::Conflict(
+            "asset is referenced by an amount expression".into(),
+        ));
+    }
 
     // `account_property.asset_id` is ON DELETE RESTRICT, so deleting an asset a
     // property account is built on fails at the database. Report that clearly.

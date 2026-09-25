@@ -159,15 +159,17 @@ pub(crate) fn pack(graphs: Vec<ScenarioGraph>) -> ApiResult<PlanArchive> {
         .collect::<ApiResult<_>>()?;
     Ok(PlanArchive {
         format: "finplan.inputs".into(),
-        version: 2,
+        // Older servers must reject these inputs instead of silently ignoring
+        // parameters and treating expression-backed amounts as their zero stub.
+        version: 3,
         plans,
     })
 }
 
 fn unpack(archive: &PlanArchive) -> ApiResult<Vec<ScenarioGraph>> {
-    if archive.format != "finplan.inputs" || archive.version != 2 {
+    if archive.format != "finplan.inputs" || !matches!(archive.version, 2 | 3) {
         return Err(ApiError::bad_request(
-            "Unsupported archive. Use a version 2 FinPlan input export; legacy browser and CLI archives have different formats.",
+            "Unsupported archive. Use a version 2 or 3 FinPlan input export; legacy browser and CLI archives have different formats.",
         ));
     }
     if archive.plans.is_empty() || archive.plans.len() > 100 {
@@ -187,6 +189,7 @@ fn unpack(archive: &PlanArchive) -> ApiResult<Vec<ScenarioGraph>> {
 
 fn validate_graph(graph: &ScenarioGraph) -> ApiResult<()> {
     let size = graph.accounts.len()
+        + graph.parameters.len()
         + graph.assets.len()
         + graph.events.len()
         + graph.distributions.len()
@@ -214,6 +217,7 @@ fn validate_graph(graph: &ScenarioGraph) -> ApiResult<()> {
     if !unique(graph.accounts.iter().map(|r| r.id).collect())
         || !unique(graph.assets.iter().map(|r| r.id).collect())
         || !unique(graph.events.iter().map(|r| r.id).collect())
+        || !unique(graph.parameters.iter().map(|r| r.id).collect())
     {
         return Err(invalid());
     }
@@ -344,6 +348,41 @@ fn validate_graph(graph: &ScenarioGraph) -> ApiResult<()> {
                 .collect(),
         )
     }))?;
+    let (_, metadata, parameters) = compile::expression_context(graph)
+        .map_err(|e| ApiError::bad_request(format!("Archive parameter is invalid: {e}")))?;
+    for row in graph.triggers.values() {
+        if let Some(id) = row.parameter_id {
+            let required = match row.kind.as_str() {
+                "Date" => "Date",
+                "Age" => "Age",
+                _ => return Err(invalid()),
+            };
+            if graph
+                .parameters
+                .iter()
+                .find(|p| p.id == id)
+                .is_none_or(|p| p.kind != required)
+            {
+                return Err(invalid());
+            }
+        }
+    }
+    for row in graph.amounts.values() {
+        if let Some(source) = &row.expression_source {
+            finplan_core::expression::compile_amount(source, &metadata, &parameters).map_err(
+                |e| ApiError::bad_request(format!("Archive expression is invalid: {e}")),
+            )?;
+            if graph
+                .amounts
+                .values()
+                .any(|parent| parent.left_id == Some(row.id) || parent.right_id == Some(row.id))
+            {
+                return Err(ApiError::bad_request(
+                    "Archive nests an Expression inside a legacy amount",
+                ));
+            }
+        }
+    }
     compile::compile(graph)
         .map_err(|e| ApiError::bad_request(format!("Archive plan cannot be compiled: {e}")))?;
     Ok(())

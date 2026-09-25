@@ -37,7 +37,9 @@ function walkTrigger(trigger: TriggerSpec, out: Set<number>): void {
       if (trigger.end_condition) walkTrigger(trigger.end_condition, out);
       return;
     case "Date":
+    case "DateParameter":
     case "Age":
+    case "AgeParameter":
     case "RelativeToEvent":
     case "NetWorth":
     case "Manual":
@@ -47,6 +49,9 @@ function walkTrigger(trigger: TriggerSpec, out: Set<number>): void {
 
 function walkAmount(amount: AmountSpec, out: Set<number>): void {
   switch (amount.kind) {
+    case "Expression":
+      // Source text names accounts; it has no stable numeric IDs to add here.
+      return;
     case "AssetBalance":
     case "AccountTotalBalance":
     case "AccountCashBalance":

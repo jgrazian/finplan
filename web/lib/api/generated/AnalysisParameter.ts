@@ -6,17 +6,13 @@
  */
 export type AnalysisParameter = {
   /**
-   * `event:<event id>:<slot>`, stable for as long as the event exists.
+   * `parameter:<database id>`, stable across renames.
    */
   id: string;
-  event_id: number;
-  event_name: string;
+  parameter_id: number;
+  name: string;
   /**
-   * What varies — "age", "amount", "starts at age".
-   */
-  role: string;
-  /**
-   * `"age"` or `"amount"`: how to format it, and what a step means.
+   * `age` (years), `amount` (money), `rate` (fraction), or `date` (UTC epoch days).
    */
   kind: string;
   /**

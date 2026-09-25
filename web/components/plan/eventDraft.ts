@@ -9,6 +9,7 @@
  * carries through rather than redraws.
  */
 import type { Event as ApiEvent, EventBody } from "@/lib/api/types";
+import type { AmountNames } from "./amountDraft";
 import {
   type EffectDraft,
   draftOfEffect,
@@ -42,6 +43,7 @@ export function draftOfEvent(
   event: ApiEvent,
   accountId: number,
   assetId: number,
+  names?: AmountNames,
 ): EventDraft {
   return {
     name: event.name,
@@ -49,7 +51,7 @@ export function draftOfEvent(
     firesOnce: event.fires_once,
     enabled: event.enabled,
     trigger: draftOfTrigger(event.trigger, accountId, assetId),
-    effects: event.effects.map((effect) => draftOfEffect(effect, accountId, assetId)),
+    effects: event.effects.map((effect) => draftOfEffect(effect, accountId, assetId, names)),
   };
 }
 

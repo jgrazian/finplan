@@ -686,7 +686,16 @@ fn run(
             progress,
         )?)),
         JobSpec::Solve { params, config } => {
-            let results = solve(base, config, Some(progress))?;
+            let mut results = solve(base, config, Some(progress))?;
+            for probe in results.probes.iter_mut().chain(results.best.iter_mut()) {
+                for (i, value) in probe.values.iter_mut().enumerate() {
+                    *value = params[i].display_coordinate(&config.parameters[i], *value);
+                }
+                if let Some((lo, hi)) = probe.bracket.as_mut() {
+                    *lo = params[0].display_coordinate(&config.parameters[0], *lo);
+                    *hi = params[0].display_coordinate(&config.parameters[0], *hi);
+                }
+            }
             let described: Vec<AnalysisParameter> = params.iter().map(Into::into).collect();
             Ok(AnalysisOutcome::Solve(SolveOutcome::new(
                 &results, &described,
@@ -754,7 +763,21 @@ fn run_sweep(
     // The grid first: it resets the shared counter as it starts, so anything
     // measured before it would be counted and then forgotten.
     let grid = sweep_simulate_lazy(base, config, Some(progress))?;
-    let values = config.all_sweep_values();
+    let values: Vec<Vec<f64>> = config
+        .all_sweep_values()
+        .into_iter()
+        .enumerate()
+        .map(|(i, values)| {
+            values
+                .into_iter()
+                .map(|value| {
+                    params.get(i).map_or(value, |p| {
+                        p.display_coordinate(&config.parameters[i], value)
+                    })
+                })
+                .collect()
+        })
+        .collect();
     let plan = plan_point(
         base,
         config.mc_iterations,
@@ -768,8 +791,8 @@ fn run_sweep(
         .zip(&values)
         .map(|(param, steps)| SweepAxis {
             parameter_id: param.id.clone(),
-            label: format!("{} · {}", param.event_name, param.role),
-            role: param.role.to_string(),
+            label: param.name.clone(),
+            role: param.name.clone(),
             kind: AnalysisParameter::from(param).kind,
             values: steps.clone(),
         })
@@ -847,8 +870,10 @@ fn run_sensitivity(
             continue;
         }
         let at = |value: f64| -> WorkerResult<AnalysisPoint> {
-            let axis: SweepParameter = param.sweep(value, value, 1);
-            let modified = finplan_core::analysis::apply_parameter(base, &axis, value)
+            let axis: SweepParameter = param
+                .sweep(value, value, 1)
+                .map_err(|_| WorkerError { cancel: false })?;
+            let modified = finplan_core::analysis::apply_parameter(base, &axis, axis.min_value)
                 .map_err(WorkerError::from)?;
             Ok(AnalysisPoint::from(&simulate(
                 &modified,
@@ -863,7 +888,7 @@ fn run_sensitivity(
         let high = at(high_value)?;
         rows.push(SensitivityRow {
             parameter_id: param.id.clone(),
-            label: format!("{} · {}", param.event_name, param.role),
+            label: param.name.clone(),
             kind: AnalysisParameter::from(param).kind,
             low_value,
             high_value,

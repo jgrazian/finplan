@@ -89,7 +89,8 @@ export function SolvePanel({
 
   // The same rule the server applies, stated here so the screen can say what
   // will happen before it happens.
-  const bisects = vary.length === 1 && (objective === "max-parameter" || objective === "min-parameter");
+  const bisects = vary.length === 1 && varied[0]?.kind !== "date" && varied[0]?.kind !== "age"
+    && (objective === "max-parameter" || objective === "min-parameter");
 
   const run = useCallback(() => {
     if (vary.length === 0) return;
@@ -177,7 +178,7 @@ export function SolvePanel({
               {vary.length > 1 && (
                 <Button
                   variant="ghost"
-                  aria-label={`Stop varying ${paramId(varied[i] ?? { event_name: "", role: "" })}`}
+                  aria-label={`Stop varying ${paramId(varied[i] ?? { name: "" })}`}
                   disabled={solve.active}
                   onClick={() => setVary((current) => current.filter((_, j) => j !== i))}
                 >
@@ -210,7 +211,7 @@ export function SolvePanel({
         >
           {bisects
             ? "Bisection assumes the selected outcome changes monotonically across this range. The search stops at one thousandth of the range or after 16 probes; simulation uncertainty remains. Use a sweep to check for multiple feasible regions."
-            : "More than one parameter, or an objective read off the simulation: the search evaluates the grid and keeps the best point that clears the constraint. The method follows the selection; you never pick it."}
+            : "Calendar inputs, multiple parameters, and outcome objectives use grid search. Each point is tested, and the best feasible point is selected. Dates use whole days and ages use whole months."}
         </p>
       </div>
 

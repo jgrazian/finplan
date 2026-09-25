@@ -9,19 +9,18 @@ import {
   solveRows,
 } from "../lib/view/analysis.ts";
 
-test("parameters read as event names, and values in their own units", () => {
+test("parameters read as shared input names, and values in their own units", () => {
   const parameter: AnalysisParameter = {
     id: "event:3:amount",
-    event_id: 3,
-    event_name: "Retirement spending",
-    role: "starts at age",
+    parameter_id: 3,
+    name: "Retirement spending",
     kind: "age",
     current: 62,
     min: 52,
     max: 72,
   };
-  assert.equal(paramId(parameter), "Retirement spending · starts at age");
-  assert.equal(paramValue("age", 62.4), "62");
+  assert.equal(paramId(parameter), "Retirement spending");
+  assert.equal(paramValue("age", 62.5), "62 yr 6 mo");
   assert.equal(paramValue("amount", 7_000), "$7,000");
 });
 
@@ -99,9 +98,8 @@ test("a ranking where nothing moves still draws readable bars", () => {
 function solve(best: SolveOutcome["best"]): SolveOutcome {
   const parameter: AnalysisParameter = {
     id: "event:3:amount",
-    event_id: 3,
-    event_name: "Retirement spending",
-    role: "amount",
+    parameter_id: 3,
+    name: "Retirement spending",
     kind: "amount",
     current: 9_000,
     min: 4_500,
@@ -134,7 +132,7 @@ test("the solve comparison quotes the parameter, then what moved with it", () =>
     }),
   );
   assert.deepEqual(rows[0], {
-    label: "Retirement spending · amount",
+    label: "Retirement spending",
     mono: true,
     plan: "$9,000",
     best: "$12,000",
@@ -167,4 +165,11 @@ test("funding ranking uses funding differences and omits unmeasured rows", () =>
   assert.deepEqual(sensitivityView(results).rows.map(r => r.parameterId), ["funding", "wealth"]);
   assert.equal(sensitivityView(results).rows[0].span, 80);
   assert.equal(sensitivityView(results, "success").rows[0].parameterId, "wealth");
+});
+
+test("rate and calendar coordinates display without losing their units", () => {
+  assert.equal(paramValue("rate", 0.0456789), "4.56789%");
+  assert.equal(paramValue("rate", 1.2), "120%");
+  assert.equal(paramValue("date", Date.UTC(2035, 0, 2) / 86_400_000), "2035-01-02");
+  assert.equal(paramValue("age", 40 + 1/12), "40 yr 1 mo");
 });

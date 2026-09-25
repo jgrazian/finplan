@@ -30,6 +30,9 @@ fn check_depth(depth: usize) -> ApiResult<()> {
 #[serde(tag = "kind")]
 #[ts(export)]
 pub enum AmountSpec {
+    Expression {
+        source: String,
+    },
     Fixed {
         value: f64,
     },
@@ -87,9 +90,29 @@ impl AmountSpec {
     ) -> std::pin::Pin<Box<dyn Future<Output = ApiResult<i64>> + Send + 'a>> {
         Box::pin(async move {
             check_depth(depth)?;
+            let nested_expression = match self {
+                AmountSpec::InflationAdjusted { inner } | AmountSpec::Scale { inner, .. } => {
+                    matches!(inner.as_ref(), AmountSpec::Expression { .. })
+                }
+                AmountSpec::Min { left, right }
+                | AmountSpec::Max { left, right }
+                | AmountSpec::Sub { left, right }
+                | AmountSpec::Add { left, right }
+                | AmountSpec::Mul { left, right } => {
+                    matches!(left.as_ref(), AmountSpec::Expression { .. })
+                        || matches!(right.as_ref(), AmountSpec::Expression { .. })
+                }
+                _ => false,
+            };
+            if nested_expression {
+                return Err(ApiError::bad_request(
+                    "an Expression must be the root amount; put the full calculation in its source",
+                ));
+            }
 
             // Children first, so the parent row can reference them.
             let (kind, value, account_id, asset_id, left_id, right_id) = match self {
+                AmountSpec::Expression { .. } => ("Fixed", Some(0.0), None, None, None, None),
                 AmountSpec::Fixed { value } => ("Fixed", Some(*value), None, None, None, None),
                 AmountSpec::TargetToBalance { value } => {
                     ("TargetToBalance", Some(*value), None, None, None, None)
@@ -153,8 +176,8 @@ impl AmountSpec {
 
             let id: i64 = sqlx::query_scalar(
                 "INSERT INTO transfer_amounts
-                    (scenario_id, kind, value, account_id, asset_id, left_id, right_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
+                    (scenario_id, kind, value, account_id, asset_id, left_id, right_id, expression_source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id",
             )
             .bind(scenario_id)
             .bind(kind)
@@ -163,6 +186,7 @@ impl AmountSpec {
             .bind(asset_id)
             .bind(left_id)
             .bind(right_id)
+            .bind(match self { AmountSpec::Expression { source } => Some(source.as_str()), _ => None })
             .fetch_one(&mut **tx)
             .await?;
 
@@ -235,6 +259,12 @@ impl Interval {
 #[serde(tag = "kind")]
 #[ts(export)]
 pub enum TriggerSpec {
+    DateParameter {
+        parameter_id: i64,
+    },
+    AgeParameter {
+        parameter_id: i64,
+    },
     Date {
         on_date: String,
     },
@@ -304,6 +334,27 @@ impl TriggerSpec {
     ) -> std::pin::Pin<Box<dyn Future<Output = ApiResult<i64>> + Send + 'a>> {
         Box::pin(async move {
             check_depth(depth)?;
+            if let TriggerSpec::DateParameter { parameter_id }
+            | TriggerSpec::AgeParameter { parameter_id } = self
+            {
+                let actual: Option<String> = sqlx::query_scalar(
+                    "SELECT kind FROM named_parameters WHERE id=?1 AND scenario_id=?2",
+                )
+                .bind(parameter_id)
+                .bind(scenario_id)
+                .fetch_optional(&mut **tx)
+                .await?;
+                let required = if matches!(self, TriggerSpec::DateParameter { .. }) {
+                    "Date"
+                } else {
+                    "Age"
+                };
+                if actual.as_deref() != Some(required) {
+                    return Err(ApiError::bad_request(format!(
+                        "{required} trigger requires a {required} parameter from this scenario"
+                    )));
+                }
+            }
 
             let (event_id, parent_id, position) = match parent {
                 TriggerParent::Event(id) => (Some(id), None, 0),
@@ -342,6 +393,8 @@ impl TriggerSpec {
             };
 
             let kind = match self {
+                TriggerSpec::DateParameter { .. } => "Date",
+                TriggerSpec::AgeParameter { .. } => "Age",
                 TriggerSpec::Date { .. } => "Date",
                 TriggerSpec::Age { .. } => "Age",
                 TriggerSpec::RelativeToEvent { .. } => "RelativeToEvent",
@@ -355,10 +408,12 @@ impl TriggerSpec {
             };
 
             let on_date = match self {
+                TriggerSpec::DateParameter { .. } => Some("2000-01-01".to_string()),
                 TriggerSpec::Date { on_date } => Some(validate_date(on_date)?),
                 _ => None,
             };
             let (age_years, age_months) = match self {
+                TriggerSpec::AgeParameter { .. } => (Some(0), None),
                 TriggerSpec::Age { years, months } => {
                     (Some(i64::from(*years)), months.map(i64::from))
                 }
@@ -415,8 +470,8 @@ impl TriggerSpec {
                 "INSERT INTO triggers
                     (scenario_id, event_id, kind, on_date, age_years, age_months, ref_event_id,
                      offset_unit, offset_value, account_id, asset_id, comparison, threshold,
-                     interval, start_trigger_id, end_trigger_id, max_occurrences, parent_id, position)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+                     interval, start_trigger_id, end_trigger_id, max_occurrences, parent_id, position, parameter_id)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
                  RETURNING id",
             )
             .bind(scenario_id)
@@ -438,6 +493,7 @@ impl TriggerSpec {
             .bind(max_occurrences)
             .bind(parent_id)
             .bind(position)
+            .bind(match self { TriggerSpec::DateParameter { parameter_id } | TriggerSpec::AgeParameter { parameter_id } => Some(*parameter_id), _ => None })
             .fetch_one(&mut **tx)
             .await?;
 

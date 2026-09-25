@@ -5,7 +5,7 @@
  */
 export type AxisRequest = {
   /**
-   * An id from `GET /scenarios/{id}/parameters`.
+   * An id from `GET /scenarios/{id}/analysis/parameters`.
    */
   parameter_id: string;
   /**

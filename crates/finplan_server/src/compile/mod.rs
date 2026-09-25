@@ -9,12 +9,14 @@ pub mod rows;
 use std::collections::{HashMap, HashSet};
 
 use finplan_core::config::SimulationConfig;
+use finplan_core::config::SimulationMetadata;
+use finplan_core::expression::compile_amount;
 use finplan_core::model::{
-    Account, AccountFlavor, AmountMode, AssetCoord, AssetLot, BalanceThreshold, Cash,
+    Account, AccountFlavor, AmountMode, AssetCoord, AssetLot, BalanceThreshold, CalendarAge, Cash,
     ContributionLimit, ContributionLimitPeriod, Event, EventEffect, EventTrigger, FixedAsset,
     HistoricalInflation, HistoricalReturns, IncomeType, InflationProfile, InvestmentContainer,
-    LoanDetail, LotMethod, RepeatInterval, ReturnProfile, TaxBracket, TaxConfig, TaxStatus,
-    TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
+    LoanDetail, LotMethod, ParameterValue, RepeatInterval, ReturnProfile, TaxBracket, TaxConfig,
+    TaxStatus, TransferAmount, TriggerOffset, WithdrawalOrder, WithdrawalSources,
 };
 use jiff::civil::Date;
 
@@ -26,6 +28,7 @@ use rows::{DistributionRow, ScenarioGraph};
 pub struct CompiledScenario {
     pub config: SimulationConfig,
     pub id_map: IdMap,
+    pub metadata: SimulationMetadata,
     /// Display names keyed by database account id, for labelling result series.
     pub account_names: HashMap<i64, String>,
     /// Display names keyed by database event id, for labelling ledger entries.
@@ -54,6 +57,59 @@ fn depth_check(depth: usize, what: &str) -> ApiResult<()> {
     Ok(())
 }
 
+/// Only the names, IDs, and typed values needed to inspect expressions. This
+/// remains available when an unrelated event or account makes a full plan
+/// uncompileable, so parameter editing can help repair that plan.
+pub fn expression_context(
+    graph: &ScenarioGraph,
+) -> ApiResult<(
+    IdMap,
+    SimulationMetadata,
+    HashMap<finplan_core::model::ParameterId, ParameterValue>,
+)> {
+    let mut ids = IdMap::new();
+    let mut metadata = SimulationMetadata::new();
+    for row in &graph.assets {
+        metadata.register_asset(
+            ids.intern_asset(row.id)?,
+            Some(row.name.clone()),
+            row.description.clone(),
+        );
+    }
+    for row in &graph.accounts {
+        metadata.register_account(
+            ids.intern_account(row.id)?,
+            Some(row.name.clone()),
+            row.description.clone(),
+        );
+    }
+    let mut parameters = HashMap::new();
+    for row in &graph.parameters {
+        let id = ids.intern_parameter(row.id)?;
+        metadata.register_parameter(id, Some(row.name.clone()), None);
+        let invalid =
+            || ApiError::unprocessable(format!("parameter '{}' has an invalid value", row.name));
+        let value = match row.kind.as_str() {
+            "Money" => ParameterValue::Money(row.number_value.ok_or_else(invalid)?),
+            "Rate" => ParameterValue::Rate(row.number_value.ok_or_else(invalid)?),
+            "Date" => ParameterValue::Date(parse_date(
+                row.date_value.as_deref().ok_or_else(invalid)?,
+                "parameter date",
+            )?),
+            "Age" => ParameterValue::Age(CalendarAge::new(
+                u8::try_from(row.age_years.ok_or_else(invalid)?).map_err(|_| invalid())?,
+                u8::try_from(row.age_months.ok_or_else(invalid)?).map_err(|_| invalid())?,
+            )),
+            _ => return Err(invalid()),
+        };
+        if !value.is_valid() {
+            return Err(invalid());
+        }
+        parameters.insert(id, value);
+    }
+    Ok((ids, metadata, parameters))
+}
+
 pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
     let mut id_map = IdMap::new();
 
@@ -79,6 +135,50 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
         if event.enabled != 0 {
             id_map.intern_event(event.id)?;
         }
+    }
+    for parameter in &graph.parameters {
+        id_map.intern_parameter(parameter.id)?;
+    }
+
+    let mut metadata = SimulationMetadata::new();
+    for row in &graph.accounts {
+        metadata.register_account(
+            id_map.account(row.id)?,
+            Some(row.name.clone()),
+            row.description.clone(),
+        );
+    }
+    for row in &graph.assets {
+        metadata.register_asset(
+            id_map.asset(row.id)?,
+            Some(row.name.clone()),
+            row.description.clone(),
+        );
+    }
+    for row in &graph.parameters {
+        metadata.register_parameter(id_map.parameter(row.id)?, Some(row.name.clone()), None);
+    }
+    let mut parameters = HashMap::new();
+    for row in &graph.parameters {
+        let invalid =
+            || ApiError::unprocessable(format!("parameter '{}' has an invalid value", row.name));
+        let value = match row.kind.as_str() {
+            "Money" => ParameterValue::Money(row.number_value.ok_or_else(invalid)?),
+            "Rate" => ParameterValue::Rate(row.number_value.ok_or_else(invalid)?),
+            "Date" => ParameterValue::Date(parse_date(
+                row.date_value.as_deref().ok_or_else(invalid)?,
+                "parameter date",
+            )?),
+            "Age" => ParameterValue::Age(CalendarAge::new(
+                u8::try_from(row.age_years.ok_or_else(invalid)?).map_err(|_| invalid())?,
+                u8::try_from(row.age_months.ok_or_else(invalid)?).map_err(|_| invalid())?,
+            )),
+            _ => return Err(invalid()),
+        };
+        if !value.is_valid() {
+            return Err(invalid());
+        }
+        parameters.insert(id_map.parameter(row.id)?, value);
     }
 
     // ── Return profiles: intern only those the scenario actually references ──
@@ -274,7 +374,14 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
 
         let mut effects = Vec::new();
         for effect_id in graph.event_effects.get(&row.id).into_iter().flatten() {
-            effects.push(build_effect(graph, &id_map, *effect_id, 0)?);
+            effects.push(build_effect(
+                graph,
+                &id_map,
+                &metadata,
+                &parameters,
+                *effect_id,
+                0,
+            )?);
         }
 
         events.push(Event {
@@ -354,7 +461,7 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
         asset_returns,
         asset_prices,
         asset_tracking_errors,
-        parameters: std::collections::HashMap::new(),
+        parameters,
         tax_config,
         start_date: Some(start_date),
         birth_date,
@@ -367,6 +474,7 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
     Ok(CompiledScenario {
         config,
         id_map,
+        metadata,
         account_names,
         event_names,
     })
@@ -374,7 +482,7 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
 
 fn trigger_needs_birth_date(trigger: &EventTrigger) -> bool {
     match trigger {
-        EventTrigger::Age { .. } => true,
+        EventTrigger::Age { .. } | EventTrigger::AgeParameter(_) => true,
         EventTrigger::And(children) | EventTrigger::Or(children) => {
             children.iter().any(trigger_needs_birth_date)
         }
@@ -569,6 +677,38 @@ fn build_trigger(
     };
 
     Ok(match row.kind.as_str() {
+        "Date" if row.parameter_id.is_some() => {
+            let id = row.parameter_id.unwrap();
+            if !matches!(
+                graph
+                    .parameters
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.kind.as_str()),
+                Some("Date")
+            ) {
+                return Err(ApiError::unprocessable(
+                    "Date trigger requires a Date parameter",
+                ));
+            }
+            EventTrigger::DateParameter(ids.parameter(id)?)
+        }
+        "Age" if row.parameter_id.is_some() => {
+            let id = row.parameter_id.unwrap();
+            if !matches!(
+                graph
+                    .parameters
+                    .iter()
+                    .find(|p| p.id == id)
+                    .map(|p| p.kind.as_str()),
+                Some("Age")
+            ) {
+                return Err(ApiError::unprocessable(
+                    "Age trigger requires an Age parameter",
+                ));
+            }
+            EventTrigger::AgeParameter(ids.parameter(id)?)
+        }
         "Date" => {
             let text = row
                 .on_date
@@ -703,51 +843,82 @@ fn build_amount(
             ApiError::unprocessable(format!("{} amount is missing 'value'", row.kind))
         })
     };
-    let left = |depth: usize| -> ApiResult<Box<TransferAmount>> {
+    let left = |depth: usize| -> ApiResult<TransferAmount> {
         let id = row.left_id.ok_or_else(|| {
             ApiError::unprocessable(format!("{} amount is missing its operand", row.kind))
         })?;
-        Ok(Box::new(build_amount(graph, ids, id, depth + 1)?))
+        if graph
+            .amounts
+            .get(&id)
+            .is_some_and(|r| r.expression_source.is_some())
+        {
+            return Err(ApiError::unprocessable(
+                "an Expression cannot be nested inside a legacy amount",
+            ));
+        }
+        build_amount(graph, ids, id, depth + 1)
     };
-    let right = |depth: usize| -> ApiResult<Box<TransferAmount>> {
+    let right = |depth: usize| -> ApiResult<TransferAmount> {
         let id = row.right_id.ok_or_else(|| {
             ApiError::unprocessable(format!("{} amount is missing its right operand", row.kind))
         })?;
-        Ok(Box::new(build_amount(graph, ids, id, depth + 1)?))
+        if graph
+            .amounts
+            .get(&id)
+            .is_some_and(|r| r.expression_source.is_some())
+        {
+            return Err(ApiError::unprocessable(
+                "an Expression cannot be nested inside a legacy amount",
+            ));
+        }
+        build_amount(graph, ids, id, depth + 1)
     };
 
     Ok(match row.kind.as_str() {
-        "Fixed" => TransferAmount::Fixed(value()?),
-        "InflationAdjusted" => TransferAmount::InflationAdjusted(left(depth)?),
-        "SourceBalance" => TransferAmount::SourceBalance,
-        "ZeroTargetBalance" => TransferAmount::ZeroTargetBalance,
-        "TargetToBalance" => TransferAmount::TargetToBalance(value()?),
-        "AssetBalance" => TransferAmount::AssetBalance {
-            asset_coord: AssetCoord {
-                account_id: ids.account(row.account_id.ok_or_else(|| {
-                    ApiError::unprocessable("AssetBalance amount is missing 'account_id'")
-                })?)?,
-                asset_id: ids.asset(row.asset_id.ok_or_else(|| {
-                    ApiError::unprocessable("AssetBalance amount is missing 'asset_id'")
-                })?)?,
-            },
-        },
-        "AccountTotalBalance" => TransferAmount::AccountTotalBalance {
+        "Fixed" => TransferAmount::fixed(value()?),
+        "InflationAdjusted" => left(depth)?.inflated(),
+        "SourceBalance" => TransferAmount::source_balance(),
+        "ZeroTargetBalance" => TransferAmount::payoff(),
+        "TargetToBalance" => TransferAmount::top_up(value()?),
+        "AssetBalance" => TransferAmount::holding_balance(AssetCoord {
             account_id: ids.account(row.account_id.ok_or_else(|| {
+                ApiError::unprocessable("AssetBalance amount is missing 'account_id'")
+            })?)?,
+            asset_id: ids.asset(row.asset_id.ok_or_else(|| {
+                ApiError::unprocessable("AssetBalance amount is missing 'asset_id'")
+            })?)?,
+        }),
+        "AccountTotalBalance" => {
+            TransferAmount::account_balance(ids.account(row.account_id.ok_or_else(|| {
                 ApiError::unprocessable("AccountTotalBalance amount is missing 'account_id'")
-            })?)?,
-        },
-        "AccountCashBalance" => TransferAmount::AccountCashBalance {
-            account_id: ids.account(row.account_id.ok_or_else(|| {
+            })?)?)
+        }
+        "AccountCashBalance" => {
+            TransferAmount::cash_balance(ids.account(row.account_id.ok_or_else(|| {
                 ApiError::unprocessable("AccountCashBalance amount is missing 'account_id'")
-            })?)?,
-        },
-        "Min" => TransferAmount::Min(left(depth)?, right(depth)?),
-        "Max" => TransferAmount::Max(left(depth)?, right(depth)?),
-        "Sub" => TransferAmount::Sub(left(depth)?, right(depth)?),
-        "Add" => TransferAmount::Add(left(depth)?, right(depth)?),
-        "Mul" => TransferAmount::Mul(left(depth)?, right(depth)?),
-        "Scale" => TransferAmount::Scale(value()?, left(depth)?),
+            })?)?)
+        }
+        "Min" => left(depth)?.min(right(depth)?),
+        "Max" => left(depth)?.max(right(depth)?),
+        "Sub" => left(depth)?.minus(right(depth)?),
+        "Add" => left(depth)?.plus(right(depth)?),
+        "Mul" => {
+            let fixed = |id: Option<i64>| {
+                id.and_then(|id| graph.amounts.get(&id))
+                    .filter(|r| r.kind == "Fixed" && r.expression_source.is_none())
+                    .and_then(|r| r.value)
+            };
+            if let Some(factor) = fixed(row.left_id) {
+                TransferAmount::scaled(factor, right(depth)?)
+            } else if let Some(factor) = fixed(row.right_id) {
+                TransferAmount::scaled(factor, left(depth)?)
+            } else {
+                return Err(ApiError::unprocessable(
+                    "legacy Mul needs a fixed scalar operand",
+                ));
+            }
+        }
+        "Scale" => TransferAmount::scaled(value()?, left(depth)?),
         other => {
             return Err(ApiError::unprocessable(format!(
                 "unknown transfer amount kind '{other}'"
@@ -761,6 +932,8 @@ fn build_amount(
 fn build_effect(
     graph: &ScenarioGraph,
     ids: &IdMap,
+    metadata: &SimulationMetadata,
+    parameters: &HashMap<finplan_core::model::ParameterId, ParameterValue>,
     effect_id: i64,
     depth: usize,
 ) -> ApiResult<EventEffect> {
@@ -827,7 +1000,7 @@ fn build_effect(
         }
     };
 
-    Ok(match row.kind.as_str() {
+    let mut effect = match row.kind.as_str() {
         "Income" => EventEffect::Income {
             to: ids.account(to()?)?,
             amount: amount(depth)?,
@@ -906,12 +1079,21 @@ fn build_effect(
             let on_false = graph
                 .effect_children
                 .get(&(effect_id, "on_false".to_string()))
-                .map(|id| build_effect(graph, ids, *id, depth + 1).map(Box::new))
+                .map(|id| {
+                    build_effect(graph, ids, metadata, parameters, *id, depth + 1).map(Box::new)
+                })
                 .transpose()?;
 
             EventEffect::Random {
                 probability,
-                on_true: Box::new(build_effect(graph, ids, *on_true_id, depth + 1)?),
+                on_true: Box::new(build_effect(
+                    graph,
+                    ids,
+                    metadata,
+                    parameters,
+                    *on_true_id,
+                    depth + 1,
+                )?),
                 on_false,
             }
         }
@@ -920,7 +1102,18 @@ fn build_effect(
                 "unknown effect kind '{other}'"
             )));
         }
-    })
+    };
+    if let Some(source) = row
+        .amount_id
+        .and_then(|id| graph.amounts.get(&id))
+        .and_then(|r| r.expression_source.as_deref())
+    {
+        compile_amount(source, metadata, parameters)
+            .map_err(|e| ApiError::unprocessable(format!("effect {effect_id}: {e}")))?
+            .apply_to(&mut effect)
+            .map_err(|e| ApiError::unprocessable(format!("effect {effect_id}: {e}")))?;
+    }
+    Ok(effect)
 }
 
 fn build_withdrawal_sources(

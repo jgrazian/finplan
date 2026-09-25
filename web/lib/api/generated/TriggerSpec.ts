@@ -4,6 +4,8 @@ import type { Interval } from "./Interval";
 import type { OffsetUnit } from "./OffsetUnit";
 
 export type TriggerSpec =
+  | { "kind": "DateParameter"; parameter_id: number }
+  | { "kind": "AgeParameter"; parameter_id: number }
   | { "kind": "Date"; on_date: string }
   | { "kind": "Age"; years: number; months: number | null }
   | {

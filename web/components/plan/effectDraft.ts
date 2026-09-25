@@ -29,7 +29,7 @@ import type {
   WithdrawalSourcesSpec,
   WithdrawalStrategy,
 } from "@/lib/api/types";
-import { amountProblem } from "./amountDraft";
+import { amountSource, readStaticAmount, rootAmountMode, staticAmount, type AmountNames } from "./amountDraft.ts";
 
 export const EFFECT_FORMS = [
   "Income",
@@ -114,6 +114,8 @@ export interface EffectDraft {
    * fields above mean nothing — see `expandAmount` and `collapseAmount`.
    */
   rawAmount?: AmountSpec;
+  /** Kept while the static control is shown, so switching back restores the formula. */
+  expressionDraft?: string;
   /** Whether the amount is what arrives, or what is taken before tax. */
   amountMode: AmountMode;
   fromAccountId: number;
@@ -298,10 +300,8 @@ export function effectProblem(draft: EffectDraft, index: number): string | null 
   if (fields.asset && !(fields.anyAsset && draft.anyAsset) && draft.assetId === 0) {
     return say("needs an asset");
   }
-  if (fields.amount && draft.rawAmount) {
-    const problem = amountProblem(draft.rawAmount);
-    if (problem) return say(`has an amount that ${problem}`);
-  }
+  if (fields.amount && draft.rawAmount?.kind === "Expression" && !draft.rawAmount.source.trim())
+    return say("needs a value expression");
   return null;
 }
 
@@ -309,8 +309,7 @@ export function effectProblem(draft: EffectDraft, index: number): string | null 
 
 function amountSpec(draft: EffectDraft): AmountSpec {
   if (draft.rawAmount) return draft.rawAmount;
-  const fixed: AmountSpec = { kind: "Fixed", value: draft.amount };
-  return draft.inflationAdjusted ? { kind: "InflationAdjusted", inner: fixed } : fixed;
+  return staticAmount(draft.amount, draft.inflationAdjusted);
 }
 
 /**
@@ -319,18 +318,34 @@ function amountSpec(draft: EffectDraft): AmountSpec {
  * Expanding is lossless by construction — the figure and its inflation tick
  * are exactly a one- or two-node tree, so the editor opens on what the field
  * was already saying. Collapsing only keeps a figure where the expression
- * still is one; anything else falls back to the figure the draft last held,
- * which is the one the field will show.
+ * still is one. A computed expression remains in expression mode so switching
+ * cannot silently replace it with the draft's earlier static figure.
  */
-export function expandAmount(draft: EffectDraft): Partial<EffectDraft> {
-  return { rawAmount: amountSpec(draft) };
+export function expandAmount(draft: EffectDraft, names?: AmountNames): Partial<EffectDraft> {
+  const source = draft.expressionDraft ?? amountSource(amountSpec(draft), names ?? {
+    account: (id) => `account ${id}`,
+    asset: (id) => `asset ${id}`,
+  });
+  return { rawAmount: { kind: "Expression", source } };
 }
 
 export function collapseAmount(draft: EffectDraft): Partial<EffectDraft> {
-  const read = draft.rawAmount ? readAmount(draft.rawAmount) : null;
+  const read = draft.rawAmount ? readStaticAmount(draft.rawAmount) : null;
+  if (!read) return {};
   return {
     rawAmount: undefined,
-    ...(read ? { amount: read.value, inflationAdjusted: read.inflationAdjusted } : {}),
+    expressionDraft: draft.rawAmount?.kind === "Expression" ? draft.rawAmount.source : undefined,
+    amount: read.value,
+    inflationAdjusted: read.inflationAdjusted,
+  };
+}
+
+export function updateExpression(draft: EffectDraft, source: string): Partial<EffectDraft> {
+  const mode = shape(draft.form).mode ? rootAmountMode(source) : null;
+  return {
+    rawAmount: { kind: "Expression", source },
+    expressionDraft: source,
+    ...(mode ? { amountMode: mode } : {}),
   };
 }
 
@@ -419,16 +434,6 @@ export function toEffectSpec(draft: EffectDraft): EffectSpec {
 /* ── from the wire ──────────────────────────────────────────────────────── */
 
 /** A `Fixed`, alone or wrapped in one `InflationAdjusted` — what the form asks. */
-function readAmount(
-  amount: AmountSpec,
-): { value: number; inflationAdjusted: boolean } | null {
-  if (amount.kind === "Fixed") return { value: amount.value, inflationAdjusted: false };
-  if (amount.kind === "InflationAdjusted" && amount.inner.kind === "Fixed") {
-    return { value: amount.inner.value, inflationAdjusted: true };
-  }
-  return null;
-}
-
 /** A plain strategy, or nothing — a named account or a custom list is neither. */
 function readStrategy(sources: WithdrawalSourcesSpec | null): WithdrawalStrategy | null {
   return sources?.mode === "Strategy" && sources.exclude_accounts.length === 0
@@ -446,14 +451,20 @@ export function draftOfEffect(
   effect: EffectSpec,
   accountId: number,
   assetId: number,
+  names?: AmountNames,
 ): EffectDraft {
   const base = emptyEffect(accountId, assetId);
 
   const withAmount = (amount: AmountSpec): Partial<EffectDraft> => {
-    const read = readAmount(amount);
-    return read
+    const read = readStaticAmount(amount);
+    const annotatedMode = amount.kind === "Expression" ? rootAmountMode(amount.source) : null;
+    const fields: Partial<EffectDraft> = read
       ? { amount: read.value, inflationAdjusted: read.inflationAdjusted }
-      : { rawAmount: amount };
+      : { rawAmount: { kind: "Expression", source: amountSource(amount, names ?? {
+        account: (id) => `account ${id}`,
+        asset: (id) => `asset ${id}`,
+      }) } };
+    return { ...fields, ...(annotatedMode ? { amountMode: annotatedMode } : {}) };
   };
 
   switch (effect.kind) {

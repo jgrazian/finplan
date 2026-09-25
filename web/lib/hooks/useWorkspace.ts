@@ -6,6 +6,7 @@ import type {
   Account as ApiAccount,
   Asset,
   Event as ApiEvent,
+  NamedParameter,
   Profile,
   Scenario as ApiScenario,
 } from "@/lib/api/types";
@@ -20,7 +21,7 @@ import type {
 import { type PlanAxis, planAxis } from "@/lib/view/axis";
 import { toViewAccounts } from "@/lib/view/accounts";
 import { toInflationChoices, toTaxChoices } from "@/lib/view/assumptions";
-import { toViewEvents } from "@/lib/view/events";
+import { namesOf, toViewEvents } from "@/lib/view/events";
 import { toViewInflationProfiles, toViewReturnProfiles } from "@/lib/view/profiles";
 import { useAsync } from "./useAsync";
 
@@ -34,6 +35,7 @@ export interface RawWorkspace {
   accounts: ApiAccount[];
   assets: Asset[];
   events: ApiEvent[];
+  parameters: NamedParameter[];
   returnProfiles: Profile[];
 }
 
@@ -60,17 +62,18 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
   const { data, error, loading, reload } = useAsync(async () => {
     if (scenarioId == null) return undefined;
     // Independent reads; one round trip's latency rather than seven.
-    const [scenario, accounts, assets, events, returnProfiles, inflationProfiles, taxConfigs] =
+    const [scenario, accounts, assets, events, parameters, returnProfiles, inflationProfiles, taxConfigs] =
       await Promise.all([
         api.scenarios.get(scenarioId),
         api.accounts.list(scenarioId),
         api.assets.list(scenarioId),
         api.events.list(scenarioId),
+        api.parameters.list(scenarioId),
         api.returnProfiles.list(),
         api.inflationProfiles.list(),
         api.taxConfigs.list(),
       ]);
-    return { scenario, accounts, assets, events, returnProfiles, inflationProfiles, taxConfigs };
+    return { scenario, accounts, assets, events, parameters, returnProfiles, inflationProfiles, taxConfigs };
   }, [scenarioId]);
 
   return useMemo(() => {
@@ -85,25 +88,18 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
         inflationProfiles: [],
         assumptions: { inflation: [], tax: [] },
         activeInflationProfile: undefined,
-        raw: { accounts: [], assets: [], events: [], returnProfiles: [] },
+        raw: { accounts: [], assets: [], events: [], parameters: [], returnProfiles: [] },
         loading,
         error,
         reload,
       };
     }
 
-    const { scenario, accounts, assets, events, returnProfiles, inflationProfiles, taxConfigs } =
+    const { scenario, accounts, assets, events, parameters, returnProfiles, inflationProfiles, taxConfigs } =
       data;
     const axis = planAxis(scenario);
 
-    const assetName = new Map(assets.map((a) => [a.id, a.name]));
-    const accountName = new Map(accounts.map((a) => [a.id, a.name]));
-    const eventName = new Map(events.map((e) => [e.id, e.name]));
-    const names = {
-      account: (id: number) => accountName.get(id) ?? `account ${id}`,
-      asset: (id: number) => assetName.get(id) ?? `asset ${id}`,
-      event: (id: number) => eventName.get(id) ?? `event ${id}`,
-    };
+    const names = namesOf({ accounts, assets, events, parameters });
 
     const inflation = inflationProfiles.find((p) => p.id === scenario.inflation_profile_id);
     const taxConfig = taxConfigs.find((t) => t.id === scenario.tax_config_id);
@@ -131,7 +127,7 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
         tax: toTaxChoices(taxConfigs),
       },
       activeInflationProfile: inflation?.name,
-      raw: { accounts, assets, events, returnProfiles },
+      raw: { accounts, assets, events, parameters, returnProfiles },
       loading,
       error,
       reload,

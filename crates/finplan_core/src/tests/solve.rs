@@ -333,3 +333,37 @@ fn constraint_uncertainty_uses_selected_proportion_and_preserves_legacy_meaning(
     results.best.as_mut().unwrap().funding_success_rate = None;
     assert_eq!(results.constraint_std_error(), None);
 }
+
+#[test]
+fn named_calendar_solve_reports_only_calendar_candidates() {
+    use crate::model::{CalendarAge, ParameterValue};
+    use crate::optimization::OptimizableParameter;
+    let (base, metadata) = SimulationBuilder::new()
+        .start(2020, 1, 1)
+        .years(1)
+        .inflation(0.0)
+        .bank("Cash", 1000.0)
+        .parameter("Retirement", ParameterValue::Age(CalendarAge::new(60, 0)))
+        .build();
+    let id = metadata.parameter_id("Retirement").unwrap();
+    let parameter = SweepParameter::parameter(
+        OptimizableParameter {
+            parameter_id: id,
+            min_value: ParameterValue::Age(CalendarAge::new(60, 0)),
+            max_value: ParameterValue::Age(CalendarAge::new(60, 2)),
+        },
+        3,
+    );
+    let config = config_for(SolveObjective::MaxParameter, vec![parameter]);
+    let results = solve(&base, &config, None).unwrap();
+    assert_eq!(results.method, SolveMethod::GridSearch);
+    assert_eq!(
+        results
+            .probes
+            .iter()
+            .map(|p| p.values[0])
+            .collect::<Vec<_>>(),
+        vec![720.0, 721.0, 722.0]
+    );
+    assert_eq!(results.best.unwrap().values, vec![722.0]);
+}

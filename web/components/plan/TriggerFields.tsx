@@ -12,8 +12,8 @@ import {
   NumberInput,
   Tag,
 } from "@/components/ui";
-import type { Account, Asset, Event as ApiEvent } from "@/lib/api/types";
-import { addYears } from "@/lib/view/format";
+import type { Account, Asset, Event as ApiEvent, NamedParameter } from "@/lib/api/types";
+import { addCalendarMonths } from "@/lib/view/format";
 import { detailTrigger, namesOf } from "@/lib/view/events";
 import { eventRefs } from "@/lib/view/refs";
 import {
@@ -38,6 +38,8 @@ export interface TriggerContext {
   accounts: Account[];
   assets: Asset[];
   events: ApiEvent[];
+  parameters?: NamedParameter[];
+  scenarioId?: number;
   /** The scenario's, for resolving an age to the date it lands on. */
   birthDate?: string;
   /** The event being edited, so it cannot anchor or be listed against itself. */
@@ -70,6 +72,12 @@ export function eventOptions(events: ApiEvent[], selfId?: number): DropdownOptio
   return events
     .filter((e) => e.id !== selfId)
     .map((e) => ({ value: e.id, label: e.name }));
+}
+
+function parameterOptions(parameters: NamedParameter[] | undefined, kind: "Date" | "Age"): DropdownOption<number>[] {
+  return (parameters ?? [])
+    .filter((parameter) => parameter.value.kind === kind)
+    .map((parameter) => ({ value: parameter.id, label: parameter.name }));
 }
 
 /** A row of controls that wraps rather than squeezing — conditions run 1–4 wide. */
@@ -537,25 +545,54 @@ function ConditionFields({
     case "on a date":
       return (
         <Row>
-          <Field label="Date">
-            <DateInput
-              value={condition.date}
-              onValueChange={(date) => patch({ date })}
-              ariaLabel="Trigger date"
-            />
+          <Field label="Date from">
+            <Dropdown className="dd-field" value={condition.dateSource} ariaLabel="Date source"
+              options={[{ value: "fixed", label: "Fixed date" }, { value: "parameter", label: "Parameter" }]}
+              disabled={disabled} onChange={(dateSource) => patch({ dateSource })} />
           </Field>
+          {condition.dateSource === "parameter" ? (
+            <Field label="Date parameter">
+              <Dropdown className="dd-field" value={condition.dateParameterId}
+                options={parameterOptions(context.parameters, "Date")}
+                placeholder="— pick a date parameter —" ariaLabel="Date parameter"
+                disabled={disabled} onChange={(dateParameterId) => patch({ dateParameterId })} />
+            </Field>
+          ) : (
+            <Field label="Date">
+              <DateInput value={condition.date} onValueChange={(date) => patch({ date })}
+                ariaLabel="Trigger date" disabled={disabled} />
+            </Field>
+          )}
         </Row>
       );
 
     case "at an age": {
+      const selectedAge = context.parameters?.find((p) => p.id === condition.ageParameterId);
+      const years = condition.ageSource === "parameter" && selectedAge?.value.kind === "Age"
+        ? selectedAge.value.years : condition.age;
+      const months = condition.ageSource === "parameter" && selectedAge?.value.kind === "Age"
+        ? selectedAge.value.months : condition.ageMonths;
       const lands =
-        context.birthDate && condition.age > 0
-          ? shiftMonths(addYears(context.birthDate, condition.age), condition.ageMonths ?? 0)
+        context.birthDate && years >= 0 &&
+        (condition.ageSource === "fixed" || selectedAge?.value.kind === "Age")
+          ? addCalendarMonths(context.birthDate, years * 12 + (months ?? 0))
           : null;
       return (
         <>
           <Row>
-            <Field label="Years">
+            <Field label="Age from">
+              <Dropdown className="dd-field" value={condition.ageSource} ariaLabel="Age source"
+                options={[{ value: "fixed", label: "Fixed age" }, { value: "parameter", label: "Parameter" }]}
+                disabled={disabled} onChange={(ageSource) => patch({ ageSource })} />
+            </Field>
+            {condition.ageSource === "parameter" ? (
+              <Field label="Age parameter">
+                <Dropdown className="dd-field" value={condition.ageParameterId}
+                  options={parameterOptions(context.parameters, "Age")}
+                  placeholder="— pick an age parameter —" ariaLabel="Age parameter"
+                  disabled={disabled} onChange={(ageParameterId) => patch({ ageParameterId })} />
+              </Field>
+            ) : <><Field label="Years">
               <NumberInput
                 value={condition.age}
                 readOnly={disabled}
@@ -581,17 +618,19 @@ function ConditionFields({
                 affixesWhenEmpty
                 aria-label="Months"
               />
-            </Field>
+            </Field></>}
           </Row>
           <Note>
-            Months is optional — left empty it means the birthday itself.{" "}
+            {condition.ageSource === "fixed" && "Months is optional — left empty it means the birthday itself. "}
             {lands ? (
               <>
                 Resolves to <strong style={{ fontWeight: 600 }}>{lands}</strong> for this
                 plan.
               </>
             ) : (
-              <>Ages need the scenario&rsquo;s birth date; without one this never fires.</>
+              <>{condition.ageSource === "parameter" && !selectedAge
+                ? "Pick an age parameter to resolve a date."
+                : "Ages need the scenario’s birth date; without one this never fires."}</>
             )}
           </Note>
         </>
@@ -684,12 +723,4 @@ function ConditionFields({
         </>
       );
   }
-}
-
-/** An ISO date moved on by whole months, for the age note above. */
-function shiftMonths(isoDate: string, months: number): string {
-  if (months === 0) return isoDate;
-  const [y, m, d] = isoDate.split("-").map(Number);
-  // UTC so a timezone west of Greenwich cannot roll the date back a day.
-  return new Date(Date.UTC(y, m - 1 + months, d)).toISOString().slice(0, 10);
 }

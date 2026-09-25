@@ -35,3 +35,14 @@ export function addYears(isoDate: string, years: number): string {
   const day = m === 2 && d === 29 && !leap ? 28 : d;
   return `${targetYear}-${String(m).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
+
+/** Calendar age offsets clamp once, after moving the full number of months. */
+export function addCalendarMonths(isoDate: string, months: number): string {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const first = new Date(0);
+  first.setUTCFullYear(year, month - 1 + months, 1);
+  const end = new Date(first);
+  end.setUTCMonth(end.getUTCMonth() + 1, 0);
+  first.setUTCDate(Math.min(day, end.getUTCDate()));
+  return first.toISOString().slice(0, 10);
+}

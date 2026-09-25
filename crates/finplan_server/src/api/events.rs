@@ -84,6 +84,12 @@ fn read_trigger(graph: &ScenarioGraph, trigger_id: i64, depth: usize) -> ApiResu
     };
 
     Ok(match row.kind.as_str() {
+        "Date" if row.parameter_id.is_some() => TriggerSpec::DateParameter {
+            parameter_id: row.parameter_id.unwrap(),
+        },
+        "Age" if row.parameter_id.is_some() => TriggerSpec::AgeParameter {
+            parameter_id: row.parameter_id.unwrap(),
+        },
         "Date" => TriggerSpec::Date {
             on_date: row.on_date.clone().unwrap_or_default(),
         },
@@ -162,6 +168,12 @@ fn read_amount(graph: &ScenarioGraph, amount_id: i64, depth: usize) -> ApiResult
         .amounts
         .get(&amount_id)
         .ok_or(ApiError::NotFound("transfer amount"))?;
+
+    if let Some(source) = &row.expression_source {
+        return Ok(AmountSpec::Expression {
+            source: source.clone(),
+        });
+    }
 
     let left = |depth: usize| -> ApiResult<Box<AmountSpec>> {
         let id = row
@@ -484,6 +496,8 @@ async fn create(
     Json(Submitted { body, fields }): Json<Submitted<EventBody>>,
 ) -> ApiResult<(StatusCode, Json<Event>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    let current = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    super::expressions::validate_tree(&current, &body.effects)?;
 
     let mut tx = state.db.begin().await?;
     let id: i64 = sqlx::query_scalar(
@@ -535,6 +549,8 @@ async fn replace(
     Json(Submitted { body, fields }): Json<Submitted<EventBody>>,
 ) -> ApiResult<Json<Event>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    let current = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    super::expressions::validate_tree(&current, &body.effects)?;
 
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT id FROM events WHERE id = ?1 AND scenario_id = ?2")

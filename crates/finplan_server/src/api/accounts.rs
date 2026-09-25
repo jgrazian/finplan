@@ -487,6 +487,11 @@ async fn update(
     Json(Submitted { body, fields }): Json<Submitted<UpdateAccount>>,
 ) -> ApiResult<Json<Account>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    let rename_graph = if body.name.is_some() {
+        Some(crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?)
+    } else {
+        None
+    };
 
     let existing_flavor: Option<String> =
         sqlx::query_scalar("SELECT flavor FROM accounts WHERE id = ?1 AND scenario_id = ?2")
@@ -549,6 +554,15 @@ async fn update(
             .await?;
         insert_detail(&mut tx, id, flavor).await?;
     }
+    if let (Some(graph), Some(name)) = (&rename_graph, &body.name) {
+        super::expression_refs::rerender(
+            &mut tx,
+            graph,
+            super::expression_refs::Entity::Account(id),
+            name.trim(),
+        )
+        .await?;
+    }
 
     tx.commit().await?;
 
@@ -573,6 +587,14 @@ async fn destroy(
     Path((scenario_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    if graph.accounts.iter().any(|a| a.id == id)
+        && super::expression_refs::used_by(&graph, super::expression_refs::Entity::Account(id))?
+    {
+        return Err(ApiError::Conflict(
+            "account is referenced by an amount expression".into(),
+        ));
+    }
 
     let affected = sqlx::query("DELETE FROM accounts WHERE id = ?1 AND scenario_id = ?2")
         .bind(id)

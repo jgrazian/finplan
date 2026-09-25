@@ -7,7 +7,27 @@ async fn archives_restore_independent_inputs_retry_and_reject_cycles() {
     let (sid, _, _) = app.seed_scenario().await;
     let (status, archive) = app.get(&format!("/api/scenarios/{sid}/archive")).await;
     assert_eq!(status, StatusCode::OK, "{archive}");
+    assert_eq!(archive["version"], 3);
     assert_eq!(archive["plans"][0]["scenario"]["user_id"], "");
+    let mut legacy = archive.clone();
+    legacy["version"] = json!(2);
+    let graph = legacy["plans"][0].as_object_mut().unwrap();
+    graph.remove("parameters");
+    for row in graph["amounts"].as_object_mut().unwrap().values_mut() {
+        row.as_object_mut().unwrap().remove("expression_source");
+    }
+    for row in graph["triggers"].as_object_mut().unwrap().values_mut() {
+        row.as_object_mut().unwrap().remove("parameter_id");
+    }
+    let (status, restored_legacy) = app
+        .post(
+            "/api/archives/import",
+            json!({
+                "archive": legacy, "name_prefix": "Legacy ", "request_id": "legacy-v2"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{restored_legacy}");
     let (status, preview) = app.post("/api/archives/preview", archive.clone()).await;
     assert_eq!(status, StatusCode::OK, "{preview}");
     assert_eq!(preview["accounts"], 2);

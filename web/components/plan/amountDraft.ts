@@ -1,237 +1,211 @@
-/**
- * The transfer-amount language, as the form draws it.
- *
- * An amount is a small expression tree — `Min(AccountCashBalance, Scale(0.04,
- * Fixed))` is a legal withdrawal rule — and every node of it is one of the
- * fourteen kinds below. This module is the metadata that lets one recursive
- * component draw any of them: what each kind is called, what its operands are
- * called, and what changing a node's kind keeps.
- *
- * There is no draft type here. The tree the editor holds *is* an `AmountSpec`,
- * because there is nothing in it the form cannot express — unlike triggers and
- * effects, an amount needs no `raw` hold and loses nothing on a round trip.
- */
-import type { DropdownOption } from "@/components/ui";
 import type { AmountSpec } from "@/lib/api/types";
 
-export type AmountKind = AmountSpec["kind"];
-
-/**
- * The kinds, in the three families the picker bands them into.
- *
- * Fourteen options in one flat list is a wall; the split is by what the node
- * *is* — a value you type, a balance the plan already holds, or arithmetic
- * over two more amounts.
- */
-const AMOUNT_GROUPS = [
-  { label: "Values", kinds: ["Fixed", "InflationAdjusted", "TargetToBalance"] },
-  {
-    label: "Balances",
-    kinds: [
-      "AccountTotalBalance",
-      "AccountCashBalance",
-      "AssetBalance",
-      "SourceBalance",
-      "ZeroTargetBalance",
-    ],
-  },
-  { label: "Arithmetic", kinds: ["Min", "Max", "Add", "Sub", "Mul", "Scale"] },
-] satisfies { label: string; kinds: AmountKind[] }[];
-
-/**
- * What each kind is called in the picker.
- *
- * The engine's own term for the node, not a paraphrase of it: someone reading
- * `Min(AccountCashBalance, Scale(0.04, Fixed))` in the spec should be able to
- * find each of those words in this menu. The prose that explains a term lives
- * in `AMOUNT_HINT`, under the node it belongs to.
- *
- * Exhaustive over the generated union, so a kind added to the server has to be
- * named here before this compiles.
- */
-const AMOUNT_LABEL: Record<AmountKind, string> = {
-  Fixed: "Static Value",
-  InflationAdjusted: "Static Value (Inflation Adjusted)",
-  TargetToBalance: "Target To Balance",
-  SourceBalance: "Source Balance",
-  ZeroTargetBalance: "Zero Target Balance",
-  AssetBalance: "Asset Balance",
-  AccountTotalBalance: "Account Balance",
-  AccountCashBalance: "Account Cash Balance",
-  Min: "Min",
-  Max: "Max",
-  Add: "Add",
-  Sub: "Subtract",
-  Mul: "Multiply",
-  Scale: "Scale (Percentage)",
-};
-
-/** The kind picker's menu: every kind, under its family's band. */
-export const AMOUNT_OPTIONS: DropdownOption<AmountKind>[] = AMOUNT_GROUPS.flatMap(
-  (family) =>
-    family.kinds.map((value) => ({ value, label: AMOUNT_LABEL[value], group: family.label })),
-);
-
-/**
- * The line under a node, for the kinds whose meaning is not in their name.
- *
- * The names above are the engine's, which makes them precise and not always
- * self-explanatory — this is where each one is spelled out. Source and target
- * are the effect's own accounts, not something the amount names, which is the
- * one thing about this language that surprises people.
- */
-export const AMOUNT_HINT: Partial<Record<AmountKind, string>> = {
-  InflationAdjusted:
-    "The value below is in plan-start dollars, grown by inflation to the day this fires.",
-  TargetToBalance:
-    "Moves only the shortfall to bring the effect's own destination up to this balance — nothing if it is already there.",
-  SourceBalance: "Everything the effect's own source account holds.",
-  ZeroTargetBalance:
-    "Enough to bring the effect's own destination to zero — for paying a debt off.",
-  Scale: "Multiplies the operand below by a factor, typed as a percentage: 4% of a balance.",
-};
-
-/**
- * What this kind's operands are called, in the order they are drawn.
- *
- * The field names off the wire: a unary node stores its operand as `inner` and
- * a binary one as `left` and `right`, so `Subtract` is left − right and the
- * labels say which is which without a sentence about it.
- */
-export function operandLabels(kind: AmountKind): string[] {
-  return kind === "InflationAdjusted" || kind === "Scale"
-    ? ["Inner"]
-    : ["Left", "Right"];
+export interface AmountNames {
+  account: (id: number) => string;
+  asset: (id: number) => string;
 }
 
-/* ── walking the tree ───────────────────────────────────────────────────── */
+const quote = (name: string) => JSON.stringify(name);
 
-export function operandsOf(amount: AmountSpec): AmountSpec[] {
+/** The compiler's names are case-sensitive; quote anything outside its identifier grammar. */
+export function parameterReference(name: string): string {
+  return /^[_\p{L}][\p{L}\p{N}_]*$/u.test(name) ? `$${name}` : `$${quote(name)}`;
+}
+
+/** Rename a bound parameter token while leaving account strings and other text intact. */
+export function renameParameterReferences(source: string, oldName: string, newName: string): string {
+  return source.replace(/\$"(?:\\.|[^"\\])*"|\$[_\p{L}][\p{L}\p{N}_]*|"(?:\\.|[^"\\])*"/gu, (token) => {
+    if (!token.startsWith("$")) return token;
+    let name: string;
+    try {
+      name = token[1] === '"' ? JSON.parse(token.slice(1)) as string : token.slice(1);
+    } catch {
+      return token; // Keep an unfinished or malformed quoted token in the draft.
+    }
+    return name === oldName ? parameterReference(newName) : token;
+  });
+}
+
+export function renameAmountReferences(amount: AmountSpec, oldName: string, newName: string): AmountSpec {
   switch (amount.kind) {
+    case "Expression":
+      return { ...amount, source: renameParameterReferences(amount.source, oldName, newName) };
     case "InflationAdjusted":
     case "Scale":
-      return [amount.inner];
+      return { ...amount, inner: renameAmountReferences(amount.inner, oldName, newName) };
     case "Min":
     case "Max":
     case "Sub":
     case "Add":
     case "Mul":
-      return [amount.left, amount.right];
-    default:
-      return [];
-  }
-}
-
-/** The same node with one operand replaced. A leaf is returned untouched. */
-export function withOperand(
-  amount: AmountSpec,
-  index: number,
-  child: AmountSpec,
-): AmountSpec {
-  switch (amount.kind) {
-    case "InflationAdjusted":
-    case "Scale":
-      return { ...amount, inner: child };
-    case "Min":
-    case "Max":
-    case "Sub":
-    case "Add":
-    case "Mul":
-      return index === 0 ? { ...amount, left: child } : { ...amount, right: child };
+      return { ...amount,
+        left: renameAmountReferences(amount.left, oldName, newName),
+        right: renameAmountReferences(amount.right, oldName, newName) };
     default:
       return amount;
   }
 }
 
-/* ── changing a node's kind ─────────────────────────────────────────────── */
-
-const ZERO: AmountSpec = { kind: "Fixed", value: 0 };
-
-/** The dollar figure a node carries, where it carries one. */
-function valueOf(amount: AmountSpec): number | null {
-  return amount.kind === "Fixed" || amount.kind === "TargetToBalance" ? amount.value : null;
-}
-
-function accountOf(amount: AmountSpec): number | null {
+export function amountSource(amount: AmountSpec, names: AmountNames): string {
+  if (amount.kind === "Expression") return amount.source;
+  const source = (nested: AmountSpec) => amountSource(nested, names);
   switch (amount.kind) {
-    case "AssetBalance":
-    case "AccountTotalBalance":
-    case "AccountCashBalance":
-      return amount.account_id;
-    default:
-      return null;
+    case "Fixed": return String(amount.value);
+    case "InflationAdjusted": return `inflation(${source(amount.inner)})`;
+    case "SourceBalance": return "source_balance()";
+    case "ZeroTargetBalance": return "payoff()";
+    case "TargetToBalance": return `top_up(${amount.value})`;
+    case "AssetBalance": return `holding(${quote(names.account(amount.account_id))}, ${quote(names.asset(amount.asset_id))})`;
+    case "AccountTotalBalance": return `balance(${quote(names.account(amount.account_id))})`;
+    case "AccountCashBalance": return `cash(${quote(names.account(amount.account_id))})`;
+    case "Min": return `min(${source(amount.left)}, ${source(amount.right)})`;
+    case "Max": return `max(${source(amount.left)}, ${source(amount.right)})`;
+    case "Sub": return `(${source(amount.left)} - ${source(amount.right)})`;
+    case "Add": return `(${source(amount.left)} + ${source(amount.right)})`;
+    case "Mul": return `(${source(amount.left)} * ${source(amount.right)})`;
+    case "Scale": return `(${amount.factor} * ${source(amount.inner)})`;
+    default: return exhaustive(amount);
   }
 }
 
-/**
- * The same amount as a different kind, keeping everything the new kind can
- * still hold.
- *
- * The operand rule is what makes this a builder rather than a reset: a leaf
- * becoming an operator *becomes its own left operand*, so turning `$2,000`
- * into `Min` gives `min($2,000, $0)` and you fill in the other side. Nothing
- * else in the editor wraps a subtree, and nothing else needs to.
- */
-export function withAmountKind(
-  amount: AmountSpec,
-  kind: AmountKind,
-  fallback: { accountId: number; assetId: number },
-): AmountSpec {
-  if (amount.kind === kind) return amount;
+function exhaustive(value: never): never { throw new Error(`Unknown amount: ${String(value)}`); }
 
-  const value = valueOf(amount) ?? 0;
-  const account_id = accountOf(amount) ?? fallback.accountId;
-  const asset_id = amount.kind === "AssetBalance" ? amount.asset_id : fallback.assetId;
-  const factor = amount.kind === "Scale" ? amount.factor : 1;
-
-  // A leaf standing in for its own first operand is how wrapping happens.
-  const kept = operandsOf(amount);
-  const carried = kept.length > 0 ? kept : [amount];
-  const operand = (index: number) => carried[index] ?? ZERO;
-
-  switch (kind) {
-    case "Fixed":
-      return { kind, value };
-    case "TargetToBalance":
-      return { kind, value };
-    case "SourceBalance":
-    case "ZeroTargetBalance":
-      return { kind };
-    case "AccountTotalBalance":
-    case "AccountCashBalance":
-      return { kind, account_id };
-    case "AssetBalance":
-      return { kind, account_id, asset_id };
-    case "InflationAdjusted":
-      return { kind, inner: operand(0) };
-    case "Scale":
-      return { kind, factor, inner: operand(0) };
-    default:
-      return { kind, left: operand(0), right: operand(1) };
-  }
+export function staticAmount(value: number, inflated: boolean): AmountSpec {
+  return { kind: "Expression", source: inflated ? `inflation(${value})` : String(value) };
 }
 
-/* ── validation ─────────────────────────────────────────────────────────── */
-
-/**
- * Why this expression cannot be sent yet, or null when it can.
- *
- * Only unnamed references: an account or holding select left at `0` — which is
- * what a plan with no accounts, or a reference to a deleted one, leaves behind.
- */
-export function amountProblem(amount: AmountSpec): string | null {
-  switch (amount.kind) {
-    case "AssetBalance":
-      if (amount.asset_id === 0) return "names no holding";
-      return amount.account_id === 0 ? "names no account" : null;
-    case "AccountTotalBalance":
-    case "AccountCashBalance":
-      return amount.account_id === 0 ? "names no account" : null;
-    default:
-      for (const child of operandsOf(amount)) {
-        const problem = amountProblem(child);
-        if (problem) return problem;
-      }
-      return null;
+/** Only a literal, optionally in inflation(), is safe to show in the static field. */
+export function readStaticAmount(amount: AmountSpec): { value: number; inflationAdjusted: boolean } | null {
+  if (amount.kind === "Fixed") return { value: amount.value, inflationAdjusted: false };
+  if (amount.kind === "InflationAdjusted" && amount.inner.kind === "Fixed") {
+    return { value: amount.inner.value, inflationAdjusted: true };
   }
+  if (amount.kind !== "Expression") return null;
+  const text = amount.source.trim();
+  const wrapper = /^inflation\(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*\)$/.exec(text);
+  const literal = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)$/.exec(text);
+  const match = wrapper ?? literal;
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? { value, inflationAdjusted: !!wrapper } : null;
+}
+
+function rootAnnotation(source: string): { mode: "Gross" | "Net"; inner: string } | null {
+  const text = source.trim();
+  const match = /^(gross|net)\s*\(/.exec(text);
+  if (!match) return null;
+  const opening = match[0].length - 1;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = opening; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') quoted = true;
+    else if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth === 0 && index !== text.length - 1) return null;
+      if (depth < 0) return null;
+    }
+  }
+  if (quoted || depth !== 0) return null;
+  return { mode: match[1] === "gross" ? "Gross" : "Net", inner: text.slice(opening + 1, -1) };
+}
+
+export function rootAmountMode(source: string): "Gross" | "Net" | null {
+  return rootAnnotation(source)?.mode ?? null;
+}
+
+export function withRootAmountMode(source: string, mode: "Gross" | "Net"): string {
+  const text = source.trim();
+  const inner = rootAnnotation(text)?.inner ?? text;
+  return `${mode.toLowerCase()}(${inner})`;
+}
+
+/** Convert a compiler byte span to browser UTF-16 offsets for highlighting. */
+export function byteSpanToText(source: string, start: number, end: number): [number, number] {
+  const bytes = new TextEncoder().encode(source);
+  const prefix = new TextDecoder().decode(bytes.slice(0, Math.max(0, start)));
+  const highlighted = new TextDecoder().decode(bytes.slice(Math.max(0, start), Math.max(start, end)));
+  return [prefix.length, prefix.length + highlighted.length];
+}
+
+export interface TextRange { start: number; end: number }
+export interface CompletionToken extends TextRange {
+  query: string;
+  kind: "parameter" | "quoted" | "identifier";
+}
+
+/** The full token at the cursor, including a quoted argument's closing quote. */
+export function completionToken(source: string, position: number): CompletionToken | null {
+  const cursor = Math.max(0, Math.min(position, source.length));
+  let quotedFrom = -1;
+  let escaped = false;
+  for (let index = 0; index < cursor; index += 1) {
+    const char = source[index];
+    if (quotedFrom >= 0) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quotedFrom = -1;
+    } else if (char === '"') quotedFrom = index;
+  }
+  if (quotedFrom >= 0) {
+    let close = cursor;
+    let escaping = escaped;
+    for (; close < source.length; close += 1) {
+      const char = source[close];
+      if (escaping) escaping = false;
+      else if (char === "\\") escaping = true;
+      else if (char === '"') break;
+    }
+    const parameter = quotedFrom > 0 && source[quotedFrom - 1] === "$";
+    const start = parameter ? quotedFrom - 1 : quotedFrom;
+    return {
+      start,
+      end: Math.min(close + 1, source.length),
+      query: (parameter ? "$\"" : "") + source.slice(quotedFrom + 1, cursor),
+      kind: parameter ? "parameter" : "quoted",
+    };
+  }
+  const before = source.slice(0, cursor);
+  const match = /(?:\$[\p{L}\p{N}_]*|[\p{L}_][\p{L}\p{N}_]*)$/u.exec(before);
+  if (!match) return null;
+  const start = cursor - match[0].length;
+  const suffix = /^[\p{L}\p{N}_]*/u.exec(source.slice(cursor))?.[0].length ?? 0;
+  return { start, end: cursor + suffix, query: match[0],
+    kind: match[0].startsWith("$") ? "parameter" : "identifier" };
+}
+
+export function replaceText(source: string, range: TextRange, inserted: string): { source: string; cursor: number } {
+  const start = Math.max(0, Math.min(range.start, source.length));
+  const end = Math.max(start, Math.min(range.end, source.length));
+  return { source: source.slice(0, start) + inserted + source.slice(end), cursor: start + inserted.length };
+}
+
+/** Pick an insertion range that keeps an existing quoted argument valid. */
+export function nameInsertion(
+  source: string,
+  selection: TextRange,
+  token: CompletionToken | null,
+  name: string,
+  kind: "parameter" | "account",
+): { range: TextRange; text: string } {
+  const encoded = kind === "parameter" ? parameterReference(name) : JSON.stringify(name);
+  const matchesQuoted = token && (kind === "parameter"
+    ? token.kind === "parameter" && source[token.start + 1] === '"'
+    : token.kind === "quoted");
+  if (!matchesQuoted) return { range: selection, text: encoded };
+  const quoteStart = token.start + (source[token.start] === "$" ? 1 : 0);
+  const quoteEnd = source[token.end - 1] === '"' ? token.end - 1 : token.end;
+  if (selection.start !== selection.end) {
+    return { range: selection, text: selection.start > quoteStart && selection.end <= quoteEnd
+      ? JSON.stringify(name).slice(1, -1) : encoded };
+  }
+  return { range: token, text: encoded };
 }

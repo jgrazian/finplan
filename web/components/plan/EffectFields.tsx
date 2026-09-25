@@ -12,12 +12,14 @@ import {
   type DropdownOption,
   Field,
   NumberInput,
+  SegmentedControl,
   SectionHeading,
   Tag,
 } from "@/components/ui";
 import { useReorder } from "@/lib/hooks/useReorder";
 import { describeEffect, namesOf } from "@/lib/view/events";
 import { AmountExpression } from "./AmountFields";
+import { readStaticAmount, withRootAmountMode } from "./amountDraft";
 import {
   Note,
   type TriggerContext,
@@ -40,6 +42,7 @@ import {
   effectProblem,
   emptyEffect,
   expandAmount,
+  updateExpression,
   shape,
   toEffectSpec,
 } from "./effectDraft";
@@ -352,7 +355,12 @@ export function EffectTerms({
         value={effect.amountMode}
         ariaLabel="Amount is"
         disabled={disabled}
-        onChange={(amountMode) => onChange({ amountMode })}
+        onChange={(amountMode) => onChange({
+          amountMode,
+          ...(effect.rawAmount?.kind === "Expression"
+            ? updateExpression(effect, withRootAmountMode(effect.rawAmount.source, amountMode))
+            : {}),
+        })}
       />
     </Field>
   );
@@ -453,16 +461,36 @@ export function EffectTerms({
       )}
 
       {/* how much */}
+      {fields.amount && (
+        <Field label="Value entry">
+          <SegmentedControl<"Static" | "Expression">
+            ariaLabel="Value entry"
+            value={effect.rawAmount ? "Expression" : "Static"}
+            options={[
+              { value: "Static", label: "Static", disabled: disabled || (!!effect.rawAmount && !readStaticAmount(effect.rawAmount)),
+                title: effect.rawAmount && !readStaticAmount(effect.rawAmount)
+                  ? "Edit the formula to a literal before switching to a static value" : undefined },
+              { value: "Expression", label: "Expression", disabled },
+            ]}
+            onChange={(mode) => onChange(mode === "Expression"
+              ? expandAmount(effect, names)
+              : collapseAmount(effect))}
+          />
+        </Field>
+      )}
       {fields.amount &&
         (effect.rawAmount ? (
           <>
             <AmountExpression
-              amount={effect.rawAmount}
+              source={effect.rawAmount.kind === "Expression" ? effect.rawAmount.source : ""}
+              effect={toEffectSpec(effect)}
               context={context}
               disabled={disabled}
-              onChange={(rawAmount) => onChange({ rawAmount })}
-              onCollapse={() => onChange(collapseAmount(effect))}
+              onChange={(source) => onChange(updateExpression(effect, source))}
             />
+            {!readStaticAmount(effect.rawAmount) && (
+              <Note>Edit the expression to a single number before using a static value.</Note>
+            )}
             {fields.mode && <Row>{amountModeField}</Row>}
           </>
         ) : (
@@ -472,23 +500,12 @@ export function EffectTerms({
                 <CurrencyInput
                   value={effect.amount}
                   readOnly={disabled}
-                  onValueChange={(amount) => onChange({ amount })}
+                  onValueChange={(amount) => onChange({ amount, expressionDraft: undefined })}
                   aria-label="Amount per occurrence"
                 />
               </Field>
               {fields.mode && amountModeField}
             </Row>
-            <Aside
-              action={
-                <Button
-                  variant="ghost"
-                  disabled={disabled}
-                  onClick={() => onChange(expandAmount(effect))}
-                >
-                  Advanced expression
-                </Button>
-              }
-            />
           </>
         ))}
 
@@ -569,7 +586,7 @@ export function EffectTerms({
             type="checkbox"
             checked={effect.inflationAdjusted}
             disabled={disabled}
-            onChange={(e) => onChange({ inflationAdjusted: e.target.checked })}
+            onChange={(e) => onChange({ inflationAdjusted: e.target.checked, expressionDraft: undefined })}
           />
           <span className="dot" />
           In today&rsquo;s money

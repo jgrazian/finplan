@@ -12,20 +12,18 @@ use finplan_core::model::MonteCarloStats;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::params::{ParamKind, PlanParameter};
+use super::params::PlanParameter;
 
 /// A number in the plan that a sweep axis, a sensitivity row or a solve can
 /// vary, and the range it defaults to.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct AnalysisParameter {
-    /// `event:<event id>:<slot>`, stable for as long as the event exists.
+    /// `parameter:<database id>`, stable across renames.
     pub id: String,
-    pub event_id: i64,
-    pub event_name: String,
-    /// What varies — "age", "amount", "starts at age".
-    pub role: String,
-    /// `"age"` or `"amount"`: how to format it, and what a step means.
+    pub parameter_id: i64,
+    pub name: String,
+    /// `age` (years), `amount` (money), `rate` (fraction), or `date` (UTC epoch days).
     pub kind: String,
     /// The plan's own value today.
     pub current: f64,
@@ -37,14 +35,9 @@ impl From<&PlanParameter> for AnalysisParameter {
     fn from(p: &PlanParameter) -> Self {
         Self {
             id: p.id.clone(),
-            event_id: p.event_id,
-            event_name: p.event_name.clone(),
-            role: p.role.to_string(),
-            kind: match p.kind {
-                ParamKind::Age => "age",
-                ParamKind::Amount => "amount",
-            }
-            .to_string(),
+            parameter_id: p.parameter_id,
+            name: p.name.clone(),
+            kind: p.kind.as_str().to_string(),
             current: p.current,
             min: p.min,
             max: p.max,

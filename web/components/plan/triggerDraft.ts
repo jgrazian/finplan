@@ -85,7 +85,11 @@ export type ConditionForm = (typeof CONDITION_FORMS)[number];
 export interface ConditionDraft {
   form: ConditionForm;
   date: string;
+  dateSource: "fixed" | "parameter";
+  dateParameterId: number;
   age: number;
+  ageSource: "fixed" | "parameter";
+  ageParameterId: number;
   /** Null is the birthday itself; the engine reads whole months past it. */
   ageMonths: number | null;
   eventId: number;
@@ -101,7 +105,11 @@ export function emptyCondition(accountId: number, assetId: number): ConditionDra
   return {
     form: "on a date",
     date: "",
+    dateSource: "fixed",
+    dateParameterId: 0,
     age: 65,
+    ageSource: "fixed",
+    ageParameterId: 0,
     ageMonths: null,
     eventId: 0,
     unit: "Years",
@@ -199,9 +207,13 @@ export function toConditionSpec(condition: ConditionDraft): TriggerSpec {
   const { comparison, threshold } = condition;
   switch (condition.form) {
     case "on a date":
-      return { kind: "Date", on_date: condition.date };
+      return condition.dateSource === "parameter"
+        ? { kind: "DateParameter", parameter_id: condition.dateParameterId }
+        : { kind: "Date", on_date: condition.date };
     case "at an age":
-      return { kind: "Age", years: condition.age, months: condition.ageMonths };
+      return condition.ageSource === "parameter"
+        ? { kind: "AgeParameter", parameter_id: condition.ageParameterId }
+        : { kind: "Age", years: condition.age, months: condition.ageMonths };
     case "relative to an event":
       return {
         kind: "RelativeToEvent",
@@ -264,9 +276,13 @@ export function toTriggerSpec(draft: TriggerDraft): TriggerSpec {
 function conditionProblem(condition: ConditionDraft): string | null {
   switch (condition.form) {
     case "on a date":
-      return condition.date === "" ? "needs a date" : null;
+      return condition.dateSource === "parameter"
+        ? condition.dateParameterId === 0 ? "needs a date parameter" : null
+        : condition.date === "" ? "needs a date" : null;
     case "at an age":
-      return condition.age > 0 ? null : "needs an age";
+      return condition.ageSource === "parameter"
+        ? condition.ageParameterId === 0 ? "needs an age parameter" : null
+        : condition.age > 0 ? null : "needs an age";
     case "relative to an event":
       return condition.eventId === 0 ? "needs an event to measure from" : null;
     case "on an account balance":
@@ -336,9 +352,13 @@ const FORM_OF: Record<ConditionForm, TriggerForm> = {
 function conditionOf(spec: TriggerSpec, base: ConditionDraft): ConditionDraft | null {
   switch (spec.kind) {
     case "Date":
-      return { ...base, form: "on a date", date: spec.on_date };
+      return { ...base, form: "on a date", date: spec.on_date, dateSource: "fixed" };
+    case "DateParameter":
+      return { ...base, form: "on a date", dateSource: "parameter", dateParameterId: spec.parameter_id };
     case "Age":
-      return { ...base, form: "at an age", age: spec.years, ageMonths: spec.months };
+      return { ...base, form: "at an age", age: spec.years, ageMonths: spec.months, ageSource: "fixed" };
+    case "AgeParameter":
+      return { ...base, form: "at an age", ageSource: "parameter", ageParameterId: spec.parameter_id };
     case "RelativeToEvent":
       return {
         ...base,

@@ -5,7 +5,7 @@
 //! done, POST to cancel — so they share a route family and the client polls one
 //! endpoint whatever it asked for.
 //!
-//! Requests name parameters by the ids `GET /scenarios/{id}/parameters` hands
+//! Requests name parameters by the ids `GET /scenarios/{id}/analysis/parameters` hands
 //! out. Nothing here takes an event id and a target from the client: what a
 //! plan can vary is derived from the compiled plan, so a request can only ask
 //! for something the engine can actually do.
@@ -33,7 +33,10 @@ use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/scenarios/{scenario_id}/parameters", get(list_parameters))
+        .route(
+            "/scenarios/{scenario_id}/analysis/parameters",
+            get(list_parameters),
+        )
         .route("/scenarios/{scenario_id}/analyses", post(create))
         .route("/scenarios/{scenario_id}/analyses/sweep", get(cached_sweep))
         .route(
@@ -79,7 +82,7 @@ const ANALYSIS_SEED: u64 = 0x5EED;
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct AxisRequest {
-    /// An id from `GET /scenarios/{id}/parameters`.
+    /// An id from `GET /scenarios/{id}/analysis/parameters`.
     pub parameter_id: String,
     /// Range to cover. Omitted, the parameter's own suggested range is used.
     #[serde(default)]
@@ -281,7 +284,7 @@ async fn create_analysis(
     let (compiled, available) = plan(state, scenario_id, &user.id).await?;
     if available.is_empty() {
         return Err(ApiError::unprocessable(
-            "this plan has no parameters to analyse — an analysable event needs an age trigger or a fixed amount",
+            "this plan has no named parameters to analyse — add parameters on the Plan tab and reference them in amounts or schedules",
         ));
     }
 
@@ -532,7 +535,7 @@ fn resolve(
             )));
         }
 
-        sweeps.push(param.sweep(min, max, steps));
+        sweeps.push(param.sweep(min, max, steps)?);
         params.push(param.clone());
     }
 

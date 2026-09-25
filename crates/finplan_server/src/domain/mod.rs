@@ -168,6 +168,17 @@ pub(crate) async fn clone_into(
         }
     }
 
+    let mut parameters: Remap = HashMap::new();
+    for parameter in &graph.parameters {
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO named_parameters (scenario_id,name,kind,number_value,date_value,age_years,age_months)
+             VALUES (?1,?2,?3,?4,?5,?6,?7) RETURNING id")
+            .bind(new_id).bind(&parameter.name).bind(&parameter.kind).bind(parameter.number_value)
+            .bind(&parameter.date_value).bind(parameter.age_years).bind(parameter.age_months)
+            .fetch_one(&mut **tx).await?;
+        parameters.insert(parameter.id, id);
+    }
+
     // ── events, before triggers and effects that reference them ─────────────
     let mut events: Remap = HashMap::new();
     for event in &graph.events {
@@ -199,6 +210,7 @@ pub(crate) async fn clone_into(
                 &accounts,
                 &assets,
                 &events,
+                &parameters,
                 &mut triggers,
             )
             .await?;
@@ -236,6 +248,7 @@ fn copy_trigger<'a>(
     accounts: &'a Remap,
     assets: &'a Remap,
     events: &'a Remap,
+    parameters: &'a Remap,
     done: &'a mut Remap,
 ) -> Fut<'a, i64> {
     Box::pin(async move {
@@ -251,19 +264,52 @@ fn copy_trigger<'a>(
         // Sub-conditions are referenced by column, so they must exist first.
         let start_id = match row.start_trigger_id {
             Some(id) => Some(
-                copy_trigger(tx, graph, scenario_id, id, accounts, assets, events, done).await?,
+                copy_trigger(
+                    tx,
+                    graph,
+                    scenario_id,
+                    id,
+                    accounts,
+                    assets,
+                    events,
+                    parameters,
+                    done,
+                )
+                .await?,
             ),
             None => None,
         };
         let end_id = match row.end_trigger_id {
             Some(id) => Some(
-                copy_trigger(tx, graph, scenario_id, id, accounts, assets, events, done).await?,
+                copy_trigger(
+                    tx,
+                    graph,
+                    scenario_id,
+                    id,
+                    accounts,
+                    assets,
+                    events,
+                    parameters,
+                    done,
+                )
+                .await?,
             ),
             None => None,
         };
         let parent_id = match row.parent_id {
             Some(id) => Some(
-                copy_trigger(tx, graph, scenario_id, id, accounts, assets, events, done).await?,
+                copy_trigger(
+                    tx,
+                    graph,
+                    scenario_id,
+                    id,
+                    accounts,
+                    assets,
+                    events,
+                    parameters,
+                    done,
+                )
+                .await?,
             ),
             None => None,
         };
@@ -289,8 +335,8 @@ fn copy_trigger<'a>(
             "INSERT INTO triggers
                 (scenario_id, event_id, kind, on_date, age_years, age_months, ref_event_id,
                  offset_unit, offset_value, account_id, asset_id, comparison, threshold,
-                 interval, start_trigger_id, end_trigger_id, max_occurrences, parent_id, position)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+                 interval, start_trigger_id, end_trigger_id, max_occurrences, parent_id, position, parameter_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
              RETURNING id",
         )
         .bind(scenario_id)
@@ -312,6 +358,7 @@ fn copy_trigger<'a>(
         .bind(row.max_occurrences)
         .bind(parent_id)
         .bind(row.position)
+        .bind(row.parameter_id.map(|id|remap(parameters,id,"parameter")).transpose()?)
         .fetch_one(&mut **tx)
         .await?;
 
@@ -331,6 +378,7 @@ fn copy_trigger<'a>(
                 accounts,
                 assets,
                 events,
+                parameters,
                 done,
             )
             .await?;
@@ -374,8 +422,8 @@ fn copy_amount<'a>(
 
         let id: i64 = sqlx::query_scalar(
             "INSERT INTO transfer_amounts
-                (scenario_id, kind, value, account_id, asset_id, left_id, right_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7) RETURNING id",
+                (scenario_id, kind, value, account_id, asset_id, left_id, right_id, expression_source)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8) RETURNING id",
         )
         .bind(scenario_id)
         .bind(&row.kind)
@@ -392,6 +440,7 @@ fn copy_amount<'a>(
         )
         .bind(left)
         .bind(right)
+        .bind(&row.expression_source)
         .fetch_one(&mut **tx)
         .await?;
 

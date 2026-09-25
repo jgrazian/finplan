@@ -27,6 +27,10 @@ import type {
   DeleteAccount,
   Event,
   EventBody,
+  NamedParameter,
+  ParameterBody,
+  ExpressionValidation,
+  ExpressionValidationRequest,
   HistoryPreset,
   LedgerPage,
   LedgerQuery,
@@ -151,6 +155,22 @@ export const api = {
       http.post<void>(`${scenario(scenarioId)}/events/reorder`, { ids }),
   },
 
+  parameters: {
+    list: (scenarioId: number) =>
+      http.get<NamedParameter[]>(`${scenario(scenarioId)}/parameters`),
+    create: (scenarioId: number, body: ParameterBody) =>
+      http.post<NamedParameter>(`${scenario(scenarioId)}/parameters`, body),
+    update: (scenarioId: number, id: number, body: ParameterBody) =>
+      http.patch<NamedParameter>(`${scenario(scenarioId)}/parameters/${id}`, body),
+    remove: (scenarioId: number, id: number) =>
+      http.delete(`${scenario(scenarioId)}/parameters/${id}`),
+  },
+
+  expressions: {
+    validate: (scenarioId: number, body: ExpressionValidationRequest) =>
+      http.post<ExpressionValidation>(`${scenario(scenarioId)}/expressions/validate`, body),
+  },
+
   returnProfiles: {
     list: () => http.get<Profile[]>("/return-profiles"),
     create: (body: CreateProfile) => http.post<Profile>("/return-profiles", body),
@@ -191,7 +211,7 @@ export const api = {
   analysis: {
     /** What this plan can vary, and the range each axis defaults to. */
     parameters: (scenarioId: number) =>
-      http.get<AnalysisParameter[]>(`${scenario(scenarioId)}/parameters`),
+      http.get<AnalysisParameter[]>(`${scenario(scenarioId)}/analysis/parameters`),
     start: (scenarioId: number, body: CreateAnalysis) =>
       http.post<Analysis>(`${scenario(scenarioId)}/analyses`, body),
     get: (id: number) => http.get<Analysis>(`/analyses/${id}`),

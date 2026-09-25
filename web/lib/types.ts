@@ -249,7 +249,9 @@ export interface Scenario {
 /** Discriminant of `TriggerSpec`. */
 export type TriggerKind =
   | "Date"
+  | "DateParameter"
   | "Age"
+  | "AgeParameter"
   | "Repeating"
   | "NetWorth"
   | "AccountBalance"
