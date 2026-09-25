@@ -266,6 +266,29 @@ export function toTriggerSpec(draft: TriggerDraft): TriggerSpec {
   }
 }
 
+/**
+ * Whether the event's "Fires once" flag changes anything under this trigger.
+ *
+ * The engine fires a date, an age or an offset from another event once per
+ * day it falls due, and a schedule ignores the flag, so for those it is noise.
+ * A balance or net-worth condition can hold for step after step, a group of
+ * conditions can too, and a manual event fires whenever another one says so —
+ * there the flag is the difference between a crossing and a standing rule.
+ */
+export function firesOnceMatters(draft: TriggerDraft): boolean {
+  switch (toTriggerSpec(draft).kind) {
+    case "Date":
+    case "DateParameter":
+    case "Age":
+    case "AgeParameter":
+    case "RelativeToEvent":
+    case "Repeating":
+      return false;
+    default:
+      return true;
+  }
+}
+
 /* ── what cannot be sent yet ────────────────────────────────────────────── */
 
 /**

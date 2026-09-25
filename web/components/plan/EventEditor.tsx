@@ -20,7 +20,7 @@ import { EffectCards } from "./EffectSentence";
 import { renameAmountReferences, renameParameterReferences } from "./amountDraft";
 import { Note, type TriggerContext, TriggerFamily } from "./TriggerFields";
 import { TriggerSentence } from "./TriggerSentence";
-import { isManual, triggerConversion } from "./triggerDraft";
+import { firesOnceMatters, isManual, triggerConversion } from "./triggerDraft";
 import {
   type EventDraft,
   changedFields,
@@ -196,16 +196,20 @@ export function EventEditor({
           />
         </Field>
 
-        <label className="radio" style={{ fontSize: 12.5 }}>
-          <input
-            type="checkbox"
-            checked={draft.firesOnce}
-            disabled={offline}
-            onChange={(e) => set("firesOnce", e.target.checked)}
-          />
-          <span className="dot" />
-          Fires once
-        </label>
+        {/* Time triggers already fire once per due day and schedules ignore
+            the flag; a hidden flag keeps its saved value. */}
+        {firesOnceMatters(draft.trigger) && (
+          <label className="radio" style={{ fontSize: 12.5 }}>
+            <input
+              type="checkbox"
+              checked={draft.firesOnce}
+              disabled={offline}
+              onChange={(e) => set("firesOnce", e.target.checked)}
+            />
+            <span className="dot" />
+            Fires once
+          </label>
+        )}
         <label className="radio" style={{ fontSize: 12.5 }}>
           <input
             type="checkbox"
