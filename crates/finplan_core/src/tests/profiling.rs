@@ -4,6 +4,7 @@
 //! - Normal simulations have reasonable iteration counts
 //! - `AccountBalance` triggers with `once: true` work correctly
 //! - `AccountBalance` triggers with `once: false` are caught by iteration limits
+//! - Point-in-time triggers fire once per due day even with `once: false`
 //! - Event count scaling is linear with simulation complexity
 
 use std::collections::HashMap;
@@ -14,6 +15,7 @@ use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetId, AssetLot, BalanceThreshold, Cash,
     Event, EventEffect, EventId, EventTrigger, IncomeType, InflationProfile, InvestmentContainer,
     MonteCarloConfig, RepeatInterval, ReturnProfile, ReturnProfileId, TaxStatus, TransferAmount,
+    TriggerOffset,
 };
 use crate::simulation::{monte_carlo_simulate_with_config, simulate_with_metrics};
 
@@ -161,6 +163,106 @@ fn test_account_balance_trigger_safe() {
         "  Total events triggered: {}",
         metrics.total_events_triggered
     );
+}
+
+/// A one-off expense from a separate checking account, not marked `once`.
+fn one_off_expense(event_id: u16, trigger: EventTrigger) -> Event {
+    Event {
+        event_id: EventId(event_id),
+        trigger,
+        effects: vec![EventEffect::Expense {
+            from: AccountId(2),
+            amount: TransferAmount::fixed(100.0),
+        }],
+        once: false,
+    }
+}
+
+fn with_checking(mut config: SimulationConfig) -> SimulationConfig {
+    config.accounts.push(Account {
+        account_id: AccountId(2),
+        flavor: AccountFlavor::Bank(Cash {
+            value: 10_000.0,
+            return_profile_id: ReturnProfileId(1),
+        }),
+    });
+    config
+}
+
+#[test]
+fn test_point_in_time_triggers_fire_once_without_once_flag() {
+    // "On or after this day" stays true once the day has passed; without a
+    // guard these refired on every same-date pass and every later checkpoint.
+    let mut config = with_checking(create_basic_config(5));
+    config.events.push(one_off_expense(
+        1,
+        EventTrigger::Date(jiff::civil::date(2026, 3, 1)),
+    ));
+    config.events.push(one_off_expense(
+        2,
+        EventTrigger::Age {
+            years: 46,
+            months: None,
+        },
+    ));
+    config.events.push(one_off_expense(
+        3,
+        EventTrigger::RelativeToEvent {
+            event_id: EventId(1),
+            offset: TriggerOffset::Months(6),
+        },
+    ));
+
+    let (result, metrics) =
+        simulate_with_metrics(&config, 42, &InstrumentationConfig::default()).unwrap();
+
+    assert!(
+        !metrics.had_iteration_limit_hits(),
+        "a passed date must not keep the same-date loop spinning"
+    );
+    for id in 1..=3 {
+        assert_eq!(
+            metrics.events_by_id.get(&EventId(id)).copied(),
+            Some(1),
+            "event {id} should fire exactly once"
+        );
+    }
+    assert!(
+        result.warnings.is_empty(),
+        "unexpected warnings: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn test_relative_trigger_rearms_when_its_event_fires_again() {
+    // Offset from a quarterly event: once per quarter, not once overall.
+    let mut config = with_checking(create_basic_config(2));
+    config.events.push(Event {
+        event_id: EventId(1),
+        trigger: EventTrigger::Repeating {
+            interval: RepeatInterval::Quarterly,
+            start_condition: None,
+            end_condition: None,
+            max_occurrences: Some(4),
+        },
+        effects: vec![],
+        once: false,
+    });
+    config.events.push(one_off_expense(
+        2,
+        EventTrigger::RelativeToEvent {
+            event_id: EventId(1),
+            offset: TriggerOffset::Days(10),
+        },
+    ));
+
+    let (_, metrics) =
+        simulate_with_metrics(&config, 42, &InstrumentationConfig::default()).unwrap();
+
+    assert!(!metrics.had_iteration_limit_hits());
+    assert_eq!(metrics.events_by_id.get(&EventId(1)).copied(), Some(4));
+    assert_eq!(metrics.events_by_id.get(&EventId(2)).copied(), Some(4));
 }
 
 #[test]

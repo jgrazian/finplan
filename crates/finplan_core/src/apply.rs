@@ -5,13 +5,26 @@
 
 use crate::{
     error::{AccountTypeError, ApplyError, LookupError},
-    evaluate::{EvalEvent, TriggerEvent, evaluate_effect_into, evaluate_trigger},
+    evaluate::{
+        EvalEvent, TriggerEvent, evaluate_effect_into, evaluate_trigger, point_in_time_target,
+    },
     model::{
         AccountFlavor, AccountId, AssetLot, CashFlowKind, EventId, EventTrigger, LedgerEntry,
         LoanDetail, Repayment, SimulationWarning, StateEvent, WarningKind,
     },
     simulation_state::SimulationState,
 };
+
+/// Whether an event with a point-in-time trigger has already fired on or after
+/// the day that trigger fell due.
+fn fired_since_due(state: &SimulationState, event_id: EventId) -> bool {
+    let Some(event) = state.event_state.get_event(event_id) else {
+        return false;
+    };
+    point_in_time_target(&event_id, &event.trigger, state)
+        .zip(state.event_state.triggered_date(event_id))
+        .is_some_and(|(due, fired)| fired >= due)
+}
 
 /// Pre-allocated scratch buffers for simulation hot paths.
 /// Allocated once per thread and reused across Monte Carlo iterations.
@@ -669,6 +682,12 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
         };
 
         let should_trigger = match trigger_result {
+            // A point-in-time trigger stays true after its day, so without this
+            // an event not marked `once` would refire on every pass until the
+            // same-date iteration limit, and again at every later checkpoint.
+            // Firing once per due day keeps `RelativeToEvent` re-arming each
+            // time the event it follows fires again.
+            TriggerEvent::Triggered if fired_since_due(state, event_id) => false,
             TriggerEvent::Triggered => {
                 // For balance-based triggers (AccountBalance, AssetBalance, NetWorth),
                 // set a 1-day cooldown to prevent them from re-firing in the inner loop

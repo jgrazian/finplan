@@ -59,6 +59,35 @@ fn market_asset_ids(state: &SimulationState) -> Vec<AssetId> {
         .collect()
 }
 
+/// The day a point-in-time trigger (a date, an age, or an offset from another
+/// event) falls due, or `None` for a condition trigger or one not yet
+/// resolvable. Such a trigger reads "on or after that day", so it stays true
+/// once the day has passed.
+pub fn point_in_time_target(
+    event_id: &EventId,
+    trigger: &EventTrigger,
+    state: &SimulationState,
+) -> Option<Date> {
+    match trigger {
+        EventTrigger::Date(date) => Some(*date),
+        EventTrigger::Age { years, months } => {
+            // Calculate this particular age: compound events can contain several.
+            let age = crate::model::CalendarAge::new(*years, months.unwrap_or(0));
+            state.event_state.age_trigger_date(*event_id).or_else(|| {
+                crate::simulation_state::checked_age_date(state.timeline.birth_date, age).ok()
+            })
+        }
+        EventTrigger::RelativeToEvent {
+            event_id: ref_event_id,
+            offset,
+        } => state
+            .event_state
+            .triggered_date(*ref_event_id)
+            .map(|trigger_date| offset.add_to_date(trigger_date)),
+        _ => None,
+    }
+}
+
 /// Evaluates whether a trigger condition is met
 pub fn evaluate_trigger(
     event_id: &EventId,
@@ -71,51 +100,18 @@ pub fn evaluate_trigger(
     }
 
     match trigger {
-        EventTrigger::Date(date) => Ok(if state.timeline.current_date >= *date {
-            TriggerEvent::Triggered
-        } else {
-            TriggerEvent::NextTriggerDate(*date)
-        }),
+        EventTrigger::Date(_) | EventTrigger::Age { .. } | EventTrigger::RelativeToEvent { .. } => {
+            Ok(match point_in_time_target(event_id, trigger, state) {
+                Some(target) if state.timeline.current_date >= target => TriggerEvent::Triggered,
+                Some(target) => TriggerEvent::NextTriggerDate(target),
+                // An age with no usable birth date, or an offset from an event
+                // that has not fired yet.
+                None => TriggerEvent::NotTriggered,
+            })
+        }
 
         EventTrigger::DateParameter(id) | EventTrigger::AgeParameter(id) => {
             Err(TriggerEventError::UnboundParameter(*id))
-        }
-
-        EventTrigger::Age { years, months } => {
-            // Calculate this particular age: compound events can contain several.
-            let age = crate::model::CalendarAge::new(*years, months.unwrap_or(0));
-            let trigger_date = state.event_state.age_trigger_date(*event_id).or_else(|| {
-                crate::simulation_state::checked_age_date(state.timeline.birth_date, age).ok()
-            });
-            if let Some(trigger_date) = trigger_date {
-                if state.timeline.current_date >= trigger_date {
-                    Ok(TriggerEvent::Triggered)
-                } else {
-                    Ok(TriggerEvent::NextTriggerDate(trigger_date))
-                }
-            } else {
-                // Fallback: event not in cache (shouldn't happen in normal use)
-                Ok(TriggerEvent::NotTriggered)
-            }
-        }
-
-        EventTrigger::RelativeToEvent {
-            event_id: ref_event_id,
-            offset,
-        } => {
-            // O(1) lookup from dense Vec
-            if let Some(trigger_date) = state.event_state.triggered_date(*ref_event_id) {
-                // Fast date arithmetic - avoids expensive Span conversion
-                let target_date = offset.add_to_date(trigger_date);
-
-                if state.timeline.current_date >= target_date {
-                    Ok(TriggerEvent::Triggered)
-                } else {
-                    Ok(TriggerEvent::NextTriggerDate(target_date))
-                }
-            } else {
-                Ok(TriggerEvent::NotTriggered)
-            }
         }
 
         EventTrigger::AccountBalance {
