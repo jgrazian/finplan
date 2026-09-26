@@ -1,0 +1,9 @@
+# /etc/grafana/provisioning/dashboards/finplan.yaml
+# Dashboards are files from the repo; edits in the UI are not saved back.
+apiVersion: 1
+providers:
+  - name: finplan
+    type: file
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

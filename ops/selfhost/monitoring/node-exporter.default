@@ -1,0 +1,3 @@
+# /etc/default/prometheus-node-exporter. Read by prometheus-node-exporter.service.
+# The systemd collector is limited to the units worth graphing.
+ARGS='--web.listen-address=127.0.0.1:9100 --collector.systemd --collector.systemd.unit-include=(finplan-.*|cloudflared|prometheus|prometheus-node-exporter|grafana-server)[.](service|timer)'

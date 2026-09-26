@@ -1,0 +1,4 @@
+# /etc/default/prometheus. Read by the packaged prometheus.service.
+# Loopback only: the FedoraWorkstation firewall zone admits LAN traffic to
+# every port above 1024, so 0.0.0.0 would publish the query API.
+ARGS='--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/data --storage.tsdb.retention.time=90d --web.listen-address=127.0.0.1:9090'

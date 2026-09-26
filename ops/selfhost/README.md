@@ -102,6 +102,50 @@ Registration is open in the example config. To close it, set
 `FINPLAN_REGISTRATION_OPEN=false` and restart the server. Existing users can
 still sign in.
 
+## Monitoring
+
+Prometheus scrapes finplan-server and node-exporter every 15 seconds and
+keeps 90 days. Grafana serves a provisioned **FinPlan** dashboard on the LAN
+at `http://fedora.local:3000`.
+
+| Service | Listens on | Scrapes / serves |
+|---|---|---|
+| finplan-server metrics | `127.0.0.1:9480` | `FINPLAN_METRICS_BIND` in `server.env` |
+| prometheus | `127.0.0.1:9090` | TSDB in `/var/lib/prometheus/data` |
+| prometheus-node-exporter | `127.0.0.1:9100` | host stats, finplan-related systemd units |
+| grafana-server | `0.0.0.0:3000` | login required, sign-up disabled |
+
+The FedoraWorkstation firewall zone admits LAN traffic to every port above
+1024, so anything not meant for the LAN must bind to loopback. None of these
+ports go through the tunnel.
+
+Install, from `monitoring/`:
+
+```sh
+sudo dnf install grafana prometheus node-exporter
+sudo install -m 644 prometheus.yml /etc/prometheus/prometheus.yml
+sudo install -m 644 prometheus.default /etc/default/prometheus
+sudo install -m 644 node-exporter.default /etc/default/prometheus-node-exporter
+sudo install -d -m 755 /etc/systemd/system/grafana-server.service.d /etc/grafana/dashboards
+sudo install -m 644 grafana-server.conf /etc/systemd/system/grafana-server.service.d/finplan.conf
+sudo install -m 640 -g grafana grafana-datasource.yaml /etc/grafana/provisioning/datasources/finplan.yaml
+sudo install -m 640 -g grafana grafana-dashboards.yaml /etc/grafana/provisioning/dashboards/finplan.yaml
+sudo install -m 644 finplan-dashboard.json /etc/grafana/dashboards/finplan.json
+sudo install -m 640 -g grafana grafana.env.example /etc/grafana/finplan.env  # then set a password
+sudo systemctl daemon-reload
+sudo systemctl enable --now prometheus prometheus-node-exporter grafana-server
+sudo firewall-cmd --permanent --add-service=grafana && sudo firewall-cmd --reload
+```
+
+Sign in as `admin` with the password in `/etc/grafana/finplan.env`. That file
+only seeds the first start; to change it later run
+`sudo grafana cli admin reset-admin-password <new>`.
+
+The dashboard is read-only in the UI. To change it, edit
+`finplan-dashboard.json`, copy it to `/etc/grafana/dashboards/`, and Grafana
+picks it up within a minute. After editing `prometheus.yml`, run
+`promtool check config` and `sudo systemctl reload prometheus`.
+
 ## Backups
 
 `finplan-backup` copies the live database with SQLite's online backup API and
