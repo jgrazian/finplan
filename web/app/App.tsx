@@ -23,6 +23,7 @@ import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
 import { NavProvider, type TabId, useNav } from "@/lib/nav";
+import { resolveScenario } from "@/lib/nav/url";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import { useAppearance } from "@/lib/theme";
 import type { InflationProfile, Scenario } from "@/lib/types";
@@ -121,16 +122,14 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   // until the query names something else. Derived, so a scenario deleted
   // elsewhere — or a stale id in a bookmarked URL — falls back rather than
   // leaving the screen pointed at nothing.
-  const scenarioId =
-    nav.scenario != null && list.some((s) => s.id === nav.scenario)
-      ? nav.scenario
-      : list[0]?.id;
+  const selectedScenario = resolveScenario(list, nav.scenario);
+  const scenarioId = selectedScenario?.id;
+  const scenarioSlug = selectedScenario?.slug;
 
-  // Write that fallback back, so the URL names the scenario actually open and
-  // the next refresh is not a second guess. Quietly: nothing was navigated to.
+  // Canonicalize fallbacks and legacy numeric bookmarks without adding history.
   useEffect(() => {
-    if (scenarioId != null) nav.adoptScenario(scenarioId);
-  }, [nav, scenarioId]);
+    if (scenarioSlug != null) nav.adoptScenario(scenarioSlug);
+  }, [nav, scenarioSlug]);
 
   const workspace = useWorkspace(scenarioId);
   const run = useRun(workspace.scenario);
@@ -214,8 +213,8 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           activeTab={nav.tab}
           onTabChange={nav.setTab}
           scenarios={headerScenarios}
-          activeScenarioId={scenarioId == null ? "" : String(scenarioId)}
-          onScenarioChange={(id) => nav.setScenario(Number(id))}
+          activeScenarioId={scenarioSlug ?? ""}
+          onScenarioChange={nav.setScenario}
           onNewScenario={() => setCreating(true)}
           userInitials={initials(user.display_name ?? user.email)}
           onAccount={() => {
@@ -313,7 +312,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                   // lands after the navigation, and the switcher must not
                   // fall back to another plan in between.
                   setRecentlyCreated(created);
-                  nav.openScenario(created.id, "analysis");
+                  nav.openScenario(created.slug, "analysis");
                   scenarios.reload();
                 }}
               />
@@ -336,7 +335,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           onClose={() => setCreating(false)}
           onCreated={(created) => {
             setRecentlyCreated(created);
-            nav.openScenario(created.id, "plan");
+            nav.openScenario(created.slug, "plan");
             scenarios.reload();
           }}
         />
@@ -351,7 +350,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
  */
 function toHeaderScenario(scenario: ApiScenario): Scenario {
   return {
-    id: String(scenario.id),
+    id: scenario.slug,
     serverId: scenario.id,
     name: scenario.name,
     dirty: scenario.last_run_at != null && scenario.updated_at > scenario.last_run_at,

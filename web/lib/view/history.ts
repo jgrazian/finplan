@@ -8,6 +8,8 @@ export function snapshotScenario(inputs: RunInputs, raw: Results): Scenario {
   const dates = raw.bands.flatMap((band) => band.dates).sort();
   return {
     id: raw.scenario_id, name: source?.name ?? "Historical plan (inputs unavailable)",
+    // Historical snapshots are display-only and may predate public slugs.
+    slug: source?.slug ?? "",
     description: source?.description ?? null,
     start_date: source?.start_date ?? dates[0] ?? "2000-01-01",
     birth_date: source?.birth_date ?? null,

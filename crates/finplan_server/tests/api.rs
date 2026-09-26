@@ -2975,3 +2975,86 @@ mod named_analysis_cases {
     use super::*;
     include!("cases/named_analysis.rs");
 }
+
+#[tokio::test]
+async fn scenario_slugs_are_unique_and_survive_renaming() {
+    let mut app = TestApp::new().await;
+    app.login_as("slugs@example.com").await;
+    let (status, created) = app
+        .post(
+            "/api/scenarios",
+            json!({
+                "name": "Slug plan", "start_date": "2026-01-01"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let slug = created["slug"].as_str().unwrap();
+    assert_eq!(slug.len(), 13);
+    assert!(slug.starts_with('s'));
+    assert!(slug.chars().all(|c| c.is_ascii_alphanumeric()));
+    let base = format!("/api/scenarios/{}", created["id"]);
+    let (status, renamed) = app
+        .send("PATCH", &base, Some(json!({"name": "Renamed"})))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(renamed["slug"], slug);
+    let (status, duplicate) = app
+        .post(&format!("{base}/duplicate"), json!({"name": "Copy"}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_ne!(duplicate["slug"], slug);
+    assert_eq!(app.get(&base).await.1["slug"], slug);
+    let (_, listed) = app.get("/api/scenarios").await;
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["slug"] == slug)
+    );
+}
+
+#[tokio::test]
+async fn scenario_slug_migration_backfills_existing_rows() {
+    let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE scenarios(id INTEGER PRIMARY KEY, name TEXT);
+        INSERT INTO scenarios VALUES (1, 'Existing'), (2, 'Another');",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!("../migrations/0007_scenario_slugs.sql"))
+        .execute(&db)
+        .await
+        .unwrap();
+    let before: Vec<String> = sqlx::query_scalar("SELECT slug FROM scenarios ORDER BY id")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(before.len(), 2);
+    assert_ne!(before[0], before[1]);
+    assert!(
+        before
+            .iter()
+            .all(|slug| slug.len() == 13 && slug.starts_with('s'))
+    );
+    sqlx::query("INSERT INTO scenarios(name) VALUES ('New'), ('Imported')")
+        .execute(&db)
+        .await
+        .unwrap();
+    let after: Vec<String> = sqlx::query_scalar("SELECT slug FROM scenarios ORDER BY id")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(&after[..2], &before);
+    assert!(after.iter().all(|slug| slug.len() == 13));
+    assert!(
+        sqlx::query("INSERT INTO scenarios(name, slug) VALUES ('Collision', ?)")
+            .bind(&before[0])
+            .execute(&db)
+            .await
+            .is_err()
+    );
+}

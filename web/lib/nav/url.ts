@@ -5,7 +5,7 @@
  * which row — is in the URL, so a refresh, a bookmark or a pasted link comes
  * back to the same place. The tab is the path; everything under it is query:
  *
- *     /plan?scenario=3&sel=Retire+at+65
+ *     /plan?scenario=s8a4f21b7c903&sel=Retire+at+65
  *
  * Values are written in each screen's own vocabulary — an account is its
  * display name, not its row id — so the URL stays readable and survives a
@@ -41,8 +41,8 @@ export const DEFAULT_SECTION: Partial<Record<TabId, string>> = {
 };
 
 export interface NavState {
-  /** Database id of the open scenario; undefined lets the list pick one. */
-  scenario?: number;
+  /** Stable slug of the open scenario; undefined lets the list pick one. */
+  scenario?: string;
   tab: TabId;
   /** Sub-tab within the tab, defaulted per `DEFAULT_SECTION`. */
   section?: string;
@@ -56,12 +56,10 @@ export function parseNav(pathname: string, search: string): NavState {
   // Only the first segment is the tab; `/` is the default one, and anything
   // deeper cannot arrive because the route enumerates the paths it serves.
   const tab = TAB_IDS.find((id) => id === pathname.split("/")[1]) ?? DEFAULT_TAB;
-  // `Number(null)` and `Number("")` are both 0, which the positive test drops
-  // along with `?scenario=abc`.
-  const scenario = Number(query.get("scenario"));
+  const scenario = query.get("scenario");
   const fallback = DEFAULT_SECTION[tab];
   return {
-    scenario: Number.isSafeInteger(scenario) && scenario > 0 ? scenario : undefined,
+    scenario: scenario != null && /^[a-zA-Z0-9]+$/.test(scenario) ? scenario : undefined,
     tab,
     section: fallback == null ? undefined : (query.get("sec") ?? fallback),
     selection: query.get("sel") ?? undefined,
@@ -69,8 +67,8 @@ export function parseNav(pathname: string, search: string): NavState {
 }
 
 /**
- * The other direction, defaults omitted: the Results tab of scenario 3 is
- * `/results?scenario=3`, not `/results?scenario=3&sec=&sel=`. The tab is
+ * The other direction, defaults omitted: the Results tab of a scenario is
+ * `/results?scenario=s8a4f21b7c903`, not `/results?scenario=s8a4f21b7c903&sec=&sel=`. The tab is
  * always named, including the default one, so every screen has one address
  * rather than two.
  */
@@ -88,6 +86,16 @@ export function toHref(state: NavState): string {
 }
 
 /** One navigation for scenario creation: no intermediate old-scenario tab move. */
-export function scenarioDestination(scenario: number, tab: TabId): NavState {
+export function scenarioDestination(scenario: string, tab: TabId): NavState {
   return { scenario, tab, section: DEFAULT_SECTION[tab] };
+}
+
+/** Resolve owned slugs, accepting old numeric bookmarks until canonicalized. */
+export function resolveScenario<T extends { id: number; slug: string }>(
+  scenarios: readonly T[],
+  reference: string | undefined,
+): T | undefined {
+  return scenarios.find((scenario) => scenario.slug === reference)
+    ?? scenarios.find((scenario) => String(scenario.id) === reference)
+    ?? scenarios[0];
 }

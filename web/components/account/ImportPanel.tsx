@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import { Button, Field, Input } from "@/components/ui";
+import { api } from "@/lib/api/client";
+import { scenarioDestination, toHref } from "@/lib/nav/url";
 import { http } from "@/lib/api/http";
 import type { PlanArchive } from "@/lib/api/generated/PlanArchive";
 import type { ArchivePreview } from "@/lib/api/generated/ArchivePreview";
@@ -42,7 +44,8 @@ export function ImportPanel({ disabled }: { disabled?: boolean }) {
           const restored = await http.post<ArchiveImported>("/archives/import", {
             archive: pending.archive, name_prefix: prefix, request_id: pending.key,
           });
-          window.location.assign(`/plan?scenario=${restored.scenario_ids[0]}`);
+          const scenario = await api.scenarios.get(restored.scenario_ids[0]);
+          window.location.assign(toHref(scenarioDestination(scenario.slug, "plan")));
         } catch (e) { setError(e instanceof Error ? e.message : "Import failed. You can retry safely."); }
         finally { setBusy(false); }
       }}>{busy ? "Restoring…" : "Restore as new plans"}</Button>

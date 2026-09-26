@@ -378,7 +378,7 @@ mod tests {
             .fetch_one(&rebuilt)
             .await
             .unwrap();
-        assert_eq!(migration_count, 6);
+        assert_eq!(migration_count as usize, MIGRATOR.iter().count());
         let parameter_value: f64 = sqlx::query_scalar(
             "SELECT number_value FROM named_parameters WHERE scenario_id=1 AND name='Spending'",
         )

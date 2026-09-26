@@ -26,6 +26,7 @@ pub fn router() -> Router<AppState> {
 #[ts(export)]
 pub struct Scenario {
     pub id: i64,
+    pub slug: String,
     pub name: String,
     pub description: Option<String>,
     pub start_date: String,
@@ -47,7 +48,7 @@ pub struct Scenario {
 /// one: a scenario holds a single run (see `0008_one_run_per_scenario.sql`), so
 /// where that run failed the card shows no figure rather than a stale one.
 pub(crate) const SCENARIO_COLUMNS: &str =
-    "id, name, description, start_date, birth_date, duration_years,
+    "id, slug, name, description, start_date, birth_date, duration_years,
      inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at,
      (SELECT r.finished_at FROM runs r
        WHERE r.scenario_id = scenarios.id AND r.status = 'succeeded'

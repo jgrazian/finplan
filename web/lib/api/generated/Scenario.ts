@@ -2,6 +2,7 @@
 
 export type Scenario = {
   id: number;
+  slug: string;
   name: string;
   description: string | null;
   start_date: string;

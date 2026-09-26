@@ -13,10 +13,10 @@ import { DEFAULT_SECTION, type NavState, type TabId, parseNav, toHref, scenarioD
 
 export interface Nav extends NavState {
   /** Opens a different scenario, dropping a row pick its ids no longer name. */
-  setScenario: (id: number) => void;
-  openScenario: (id: number, tab: TabId, selection?: string) => void;
+  setScenario: (slug: string) => void;
+  openScenario: (slug: string, tab: TabId, selection?: string) => void;
   /** Records the scenario actually opened, without a history entry. */
-  adoptScenario: (id: number) => void;
+  adoptScenario: (slug: string) => void;
   setTab: (tab: TabId) => void;
   setSection: (section: string) => void;
   setSelection: (selection: string | undefined) => void;
