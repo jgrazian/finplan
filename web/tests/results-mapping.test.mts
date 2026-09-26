@@ -15,7 +15,7 @@ function fixture(series = "0.5"): Results {
   ];
   const selected = bands.find(b => b.path_id === series)!;
   return {
-    run_id: 7, scenario_id: 2, series_id: series, series_percentile: selected.percentile,
+    run_id: 7, scenario_id: 2, path_details: true, series_id: series, series_percentile: selected.percentile,
     stats: { num_iterations: 3, success_rate: 1, funding_success_rate: 2/3,
       mean_final_net_worth: 200, std_dev_final_net_worth: 81.65, min_final_net_worth: 100, max_final_net_worth: 300,
       lifetime_taxes: 999, converged: null, convergence_metric: null, convergence_value: null,

@@ -543,7 +543,13 @@ pub struct Results {
     pub bands: Vec<Band>,
     /// Null for historical runs; never inferred from stored representative paths.
     pub real_net_worth: Option<RealNetWorthSummary>,
+    /// False once a newer run in the scenario has succeeded. Only the newest
+    /// successful run keeps its paths, account series, cash flows, taxes,
+    /// warnings, real-dollar bands and ledger; an older run serves `stats`
+    /// and `real_net_worth.terminal`, and every per-path field is empty.
+    pub path_details: bool,
     /// Actual run-local path ID shared by accounts, cash flows and ledger.
+    /// Empty when `path_details` is false.
     pub series_id: String,
     /// Per-account decomposition of the path named by `series_percentile`.
     pub account_series: Vec<AccountSeries>,
@@ -659,8 +665,15 @@ pub(crate) async fn results(
         });
     }
 
-    // Which path the per-account series and cash flows describe.
-    let series_percentile = resolve_series(query.series.as_deref(), &path_percentiles)?;
+    // Which path the per-account series and cash flows describe. A superseded
+    // run has no stored paths left, so every per-path read below comes back
+    // empty and only the summary is served.
+    let path_details = !path_percentiles.is_empty();
+    let series_percentile = if path_details {
+        resolve_series(query.series.as_deref(), &path_percentiles)?
+    } else {
+        None
+    };
 
     let account_rows: Vec<(i64, String, f64)> = sqlx::query_as(
         "SELECT p.account_id, a.name, p.value
@@ -759,7 +772,12 @@ pub(crate) async fn results(
 
     Ok(Json(Results {
         real_net_worth,
-        series_id: path_id(series_percentile),
+        path_details,
+        series_id: if path_details {
+            path_id(series_percentile)
+        } else {
+            String::new()
+        },
         run_id: run.id,
         scenario_id: run.scenario_id,
         stats,

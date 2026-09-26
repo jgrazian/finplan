@@ -8,7 +8,7 @@
 use finplan_core::model::{MonteCarloSummary, SimulationResult, WarningKind, final_net_worth};
 
 use crate::compile::CompiledScenario;
-use crate::db::Db;
+use crate::db::{CURRENT_RUN_ONLY_TABLES, Db};
 use crate::runner::ledger;
 
 pub async fn mark_failed(db: &Db, run_id: i64, message: &str) -> Result<bool, sqlx::Error> {
@@ -194,14 +194,14 @@ pub async fn persist(
     .execute(&mut *tx)
     .await?;
 
-    // Cash flows and the itemised ledger are high-volume path details that the
-    // UI only needs for the current result. Keep them only for the newest
-    // successful run in this scenario; the rest of each historical result
-    // remains available. Pruning at success rather than enqueue leaves the
-    // prior details intact if a replacement is canceled or fails. Selecting by
-    // id also makes an older concurrent run discard its own details if a newer
-    // run has already succeeded.
-    for table in ["run_cash_flows", "run_ledger"] {
+    // Path series and the itemised ledger are high-volume details that the UI
+    // only needs for the current result. Keep them only for the newest
+    // successful run in this scenario; older runs keep their summary stats.
+    // Pruning at success rather than enqueue leaves the prior details intact if
+    // a replacement is canceled or fails. Selecting by id also makes an older
+    // concurrent run discard its own details if a newer run has already
+    // succeeded.
+    for table in CURRENT_RUN_ONLY_TABLES {
         sqlx::query(&format!(
             "DELETE FROM {table}
               WHERE run_id IN (

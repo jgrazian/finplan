@@ -968,6 +968,7 @@ async fn a_scenario_retains_its_prior_runs() {
     let (_, first_results) = app.get(&format!("/api/runs/{first_id}/results")).await;
     assert!(!first_results["cash_flows"].as_array().unwrap().is_empty());
     assert!(!first_results["ledger_years"].as_array().unwrap().is_empty());
+    assert_eq!(first_results["path_details"], true);
 
     let (status, second) = app.post(&path, body(40)).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{second}");
@@ -984,12 +985,34 @@ async fn a_scenario_retains_its_prior_runs() {
     assert_ne!(first_id, second_id);
     let (status, results) = app.get(&format!("/api/runs/{first_id}/results")).await;
     assert_eq!(status, StatusCode::OK);
+    // The superseded run keeps its summary and nothing path-shaped.
     assert_eq!(results["stats"]["num_iterations"], 30);
-    assert_eq!(results["cash_flows"], json!([]));
-    assert_eq!(results["ledger_years"], json!([]));
+    assert_eq!(results["path_details"], false);
+    assert!(results["real_net_worth"]["terminal"]["mean"].is_number());
+    for field in [
+        "bands",
+        "account_series",
+        "cash_flows",
+        "inflation",
+        "warnings",
+        "ledger_years",
+    ] {
+        assert_eq!(results[field], json!([]), "{field} survived supersession");
+    }
+    assert_eq!(results["real_net_worth"]["points"], json!([]));
+    let (status, _) = app
+        .get(&format!("/api/runs/{first_id}/results?series=0.9"))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a series query still serves the summary"
+    );
 
     let (status, results) = app.get(&format!("/api/runs/{second_id}/results")).await;
     assert_eq!(status, StatusCode::OK, "{results}");
+    assert_eq!(results["path_details"], true);
+    assert!(!results["bands"].as_array().unwrap().is_empty());
     assert_eq!(results["stats"]["num_iterations"], 40);
     assert!(!results["cash_flows"].as_array().unwrap().is_empty());
     assert!(!results["ledger_years"].as_array().unwrap().is_empty());

@@ -13,6 +13,23 @@ pub type Db = sqlx::SqlitePool;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
+/// Per-path series and itemised detail, kept only for the newest successful run
+/// in each scenario. Older runs keep their summary (`run_stats`,
+/// `run_percentile_values`, `run_real_stats`), which is all a history or
+/// comparison view needs. Only tables written when a run succeeds belong here:
+/// `run_account_labels` is captured at enqueue, so pruning it would strip a
+/// newer run that is still in flight.
+pub const CURRENT_RUN_ONLY_TABLES: [&str; 8] = [
+    "run_net_worth_points",
+    "run_account_points",
+    "run_cash_flows",
+    "run_taxes",
+    "run_inflation",
+    "run_warnings",
+    "run_real_quantiles",
+    "run_ledger",
+];
+
 #[derive(Debug)]
 pub struct RebuildReport {
     pub tables: usize,
@@ -146,15 +163,15 @@ async fn rebuild_into(source: &Path, destination: &Path) -> Result<RebuildReport
     let mut transaction = connection.begin().await?;
 
     for (table, columns) in &tables {
-        let retain_current_details = matches!(table.as_str(), "run_cash_flows" | "run_ledger");
+        let retain_current_details = CURRENT_RUN_ONLY_TABLES.contains(&table.as_str());
         let table = quote_identifier(table);
         let columns = columns
             .iter()
             .map(|column| quote_identifier(&column.name))
             .collect::<Vec<_>>()
             .join(", ");
-        // These path details intentionally exist only for the newest successful
-        // run in a scenario. Filtering while copying also upgrades a migration
+        // Path details intentionally exist only for the newest successful run
+        // in a scenario. Filtering while copying also upgrades a migration
         // 15 database without first mutating it with the retired migration 16.
         let retained = if retain_current_details {
             " WHERE run_id IN (
