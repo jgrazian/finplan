@@ -1,0 +1,24 @@
+[Unit]
+Description=FinPlan web frontend (Next.js)
+After=finplan-server.service
+Wants=finplan-server.service
+
+[Service]
+User=finplan
+Group=finplan
+Environment=NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=127.0.0.1 PORT=3480
+WorkingDirectory=/opt/finplan/current/web
+ExecStart=/usr/bin/node-24 server.js
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Deploy the latest FinPlan commit from GitHub main
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/finplan-deploy
+TimeoutStartSec=1h
+Nice=10
+IOSchedulingClass=idle

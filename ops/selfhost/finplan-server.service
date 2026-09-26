@@ -1,0 +1,27 @@
+[Unit]
+Description=FinPlan API server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=finplan
+Group=finplan
+EnvironmentFile=/etc/finplan/server.env
+ExecStart=/opt/finplan/current/bin/finplan-server
+WorkingDirectory=/var/lib/finplan
+StateDirectory=finplan
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

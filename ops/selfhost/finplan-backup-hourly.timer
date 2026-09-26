@@ -1,0 +1,9 @@
+[Unit]
+Description=Hourly FinPlan hot backup (overwritten)
+
+[Timer]
+OnCalendar=hourly
+Unit=finplan-backup@hourly.service
+
+[Install]
+WantedBy=timers.target

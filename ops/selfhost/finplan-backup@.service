@@ -1,0 +1,16 @@
+[Unit]
+Description=FinPlan %i database backup
+
+[Service]
+Type=oneshot
+User=finplan
+Group=finplan
+ExecStart=/usr/local/sbin/finplan-backup %i
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/finplan

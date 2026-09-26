@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily FinPlan backup (30 kept)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=finplan-backup@daily.service
+
+[Install]
+WantedBy=timers.target
