@@ -9,7 +9,6 @@ import {
   Field,
   Input,
   NumberInput,
-  Select,
 } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type {
@@ -137,11 +136,16 @@ export function NewAccountDialog({
           <Input aria-label="Account name" value={name} onChange={(e) => setName(e.target.value)} required />
         </Field>
         <Field label="Account type">
-          <Select aria-label="Account type" value={flavor} onChange={(e) => setFlavor(e.target.value as Flavor)}>
-            {FLAVORS.map((f) => (
-              <option key={f} value={f}>{f === "Bank" ? "Cash / bank" : f === "Liability" ? "Debt / loan" : f}</option>
-            ))}
-          </Select>
+          <Dropdown
+            className="dd-field"
+            ariaLabel="Account type"
+            value={flavor}
+            onChange={setFlavor}
+            options={FLAVORS.map((value) => ({
+              value,
+              label: value === "Bank" ? "Cash / bank" : value === "Liability" ? "Debt / loan" : value,
+            }))}
+          />
         </Field>
       </DialogRow>
 
@@ -158,11 +162,16 @@ export function NewAccountDialog({
         <>
           <DialogRow>
             <Field label="Tax treatment">
-              <Select aria-label="Tax treatment" value={taxStatus} onChange={(e) => setTaxStatus(e.target.value as TaxStatus)}>
-                {TAX_STATUSES.map((t) => (
-                  <option key={t} value={t}>{t === "TaxDeferred" ? "Tax-deferred" : t === "TaxFree" ? "Tax-free" : "Taxable"}</option>
-                ))}
-              </Select>
+              <Dropdown
+                className="dd-field"
+                ariaLabel="Tax treatment"
+                value={taxStatus}
+                onChange={setTaxStatus}
+                options={TAX_STATUSES.map((value) => ({
+                  value,
+                  label: value === "TaxDeferred" ? "Tax-deferred" : value === "TaxFree" ? "Tax-free" : "Taxable",
+                }))}
+              />
             </Field>
             <Field label="Opening cash">
               <CurrencyInput value={cash} onValueChange={setCash} aria-label="Opening cash" />
@@ -189,15 +198,14 @@ export function NewAccountDialog({
               />
             </Field>
             <Field label="Limit period">
-              <Select
+              <Dropdown
+                className="dd-field"
+                ariaLabel="Limit period"
                 value={period}
                 disabled={limit == null}
-                onChange={(e) => setPeriod(e.target.value as ContributionPeriod)}
-              >
-                {PERIODS.map((p) => (
-                  <option key={p}>{p}</option>
-                ))}
-              </Select>
+                onChange={setPeriod}
+                options={PERIODS.map((value) => ({ value, label: value }))}
+              />
             </Field>
           </DialogRow>
         </>
@@ -307,13 +315,14 @@ function ProfileField({
 }) {
   return (
     <Field label={label}>
-      <Select aria-label={label} value={value} onChange={(e) => onChange(Number(e.target.value))}>
-        {profiles.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </Select>
+      <Dropdown
+        className="dd-field"
+        ariaLabel={label}
+        value={value}
+        onChange={onChange}
+        options={profiles.map((p) => ({ value: p.id, label: p.name }))}
+        placeholder="No return profiles"
+      />
     </Field>
   );
 }

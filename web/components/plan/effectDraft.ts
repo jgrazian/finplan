@@ -505,10 +505,10 @@ export function toEffectSpec(draft: EffectDraft): EffectSpec {
         price: amount,
         financing: draft.financed
           ? {
-              loan_account_id: draft.loanAccountId,
-              down_payment: draft.rawDownPayment ?? staticAmount(draft.downPayment, false),
-              term_months: draft.termMonths,
-            }
+            loan_account_id: draft.loanAccountId,
+            down_payment: draft.rawDownPayment ?? staticAmount(draft.downPayment, false),
+            term_months: draft.termMonths,
+          }
           : null,
       };
     case "SellProperty":
@@ -557,10 +557,14 @@ export function draftOfEffect(
     const annotatedMode = amount.kind === "Expression" ? rootAmountMode(amount.source) : null;
     const fields: Partial<EffectDraft> = read
       ? { amount: read.value, inflationAdjusted: read.inflationAdjusted }
-      : { rawAmount: { kind: "Expression", source: amountSource(amount, names ?? {
-        account: (id) => `account ${id}`,
-        asset: (id) => `asset ${id}`,
-      }) } };
+      : {
+        rawAmount: {
+          kind: "Expression", source: amountSource(amount, names ?? {
+            account: (id) => `account ${id}`,
+            asset: (id) => `asset ${id}`,
+          })
+        }
+      };
     return { ...fields, ...(annotatedMode ? { amountMode: annotatedMode } : {}) };
   };
 
@@ -624,11 +628,11 @@ export function draftOfEffect(
         // held verbatim rather than flattened to the strategy alone.
         ...(strategy
           ? {
-              strategy,
-              bracketCeiling: effect.sources?.mode === "Strategy"
-                ? (effect.sources.bracket_ceiling ?? 0.12) * 100
-                : base.bracketCeiling,
-            }
+            strategy,
+            bracketCeiling: effect.sources?.mode === "Strategy"
+              ? (effect.sources.bracket_ceiling ?? 0.12) * 100
+              : base.bracketCeiling,
+          }
           : effect.sources
             ? { rawSources: effect.sources }
             : { strategy: "TaxEfficientEarly" }),
@@ -681,22 +685,22 @@ export function draftOfEffect(
         financed: effect.financing != null,
         ...(effect.financing
           ? {
-              loanAccountId: effect.financing.loan_account_id,
-              termMonths: effect.financing.term_months,
-              // A plain figure is edited as one; anything else is kept as it
-              // came, so saving the event cannot flatten a formula.
-              ...(down && !down.inflationAdjusted
-                ? { downPayment: down.value }
-                : {
-                    rawDownPayment: {
-                      kind: "Expression" as const,
-                      source: amountSource(effect.financing.down_payment, names ?? {
-                        account: (id) => `account ${id}`,
-                        asset: (id) => `asset ${id}`,
-                      }),
-                    },
+            loanAccountId: effect.financing.loan_account_id,
+            termMonths: effect.financing.term_months,
+            // A plain figure is edited as one; anything else is kept as it
+            // came, so saving the event cannot flatten a formula.
+            ...(down && !down.inflationAdjusted
+              ? { downPayment: down.value }
+              : {
+                rawDownPayment: {
+                  kind: "Expression" as const,
+                  source: amountSource(effect.financing.down_payment, names ?? {
+                    account: (id) => `account ${id}`,
+                    asset: (id) => `asset ${id}`,
                   }),
-            }
+                },
+              }),
+          }
           : {}),
         ...withAmount(effect.price),
       };

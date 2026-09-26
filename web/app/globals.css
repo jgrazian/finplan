@@ -1300,26 +1300,9 @@ tr:hover > * > .grip,
   outline-offset: 2px;
 }
 
-/* The tile that adds one. A frame like the graphs beside it, so the layout
-   reads as a grid with a gap in it rather than as charts plus a button. */
+/* The graph creation button keeps its place in the chart grid. */
 .add-graph {
   min-height: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  background: none;
-  cursor: pointer;
-  color: var(--color-accent-800);
-  font-family: var(--font-heading);
-  font-weight: 600;
-  font-size: 15px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.add-graph:hover {
-  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
 }
 
 /* ── Sentence editors (artboard 17a) ───────────────────────────────────────
@@ -1469,4 +1452,56 @@ tr:hover > * > .grip,
   text-align: center;
   border-left: 1px solid var(--color-divider);
   border-right: 1px solid var(--color-divider);
+}
+
+/* Explanations on demand, without changing a heading or label's typography. */
+.tooltip-trigger {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  text-align: inherit;
+  text-decoration: underline dotted;
+  text-decoration-color: color-mix(in srgb, var(--color-text) 35%, transparent);
+  text-underline-offset: .2em;
+  cursor: help;
+}
+
+.tooltip-trigger:hover {
+  text-decoration-color: var(--color-accent);
+}
+
+.tooltip-trigger:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+
+.tooltip-content {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  box-sizing: border-box;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 24px);
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--color-divider);
+  background: var(--color-bg);
+  color: var(--color-text);
+  box-shadow: var(--shadow-lg);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.55;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: auto;
 }

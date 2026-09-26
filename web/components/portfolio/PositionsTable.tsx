@@ -65,7 +65,7 @@ export function PositionsTable({
         className="mb-[4px]"
         action={
           onAddLot ? (
-            <Button variant="ghost" onClick={onAddLot} disabled={addDisabled}>
+            <Button variant="add" onClick={onAddLot} disabled={addDisabled}>
               Add lot
             </Button>
           ) : (

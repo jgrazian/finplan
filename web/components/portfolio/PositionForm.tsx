@@ -382,7 +382,7 @@ export function PositionForm(props: PositionFormProps) {
             </Button>
           ) : (
             <Button
-              variant="ghost"
+              variant="add"
               disabled={busy || units <= 0 || makingAsset}
               onClick={() => submit(true)}
             >
@@ -393,8 +393,8 @@ export function PositionForm(props: PositionFormProps) {
             Cancel
           </Button>
           <Button
-            variant="primary"
-            shortcut="⌘⏎"
+            variant={editing ? "primary" : "add"}
+            shortcut={editing ? "⌘⏎" : undefined}
             disabled={busy || units <= 0 || makingAsset}
             onClick={() => submit(false)}
           >

@@ -375,9 +375,9 @@ export function SweepPanel({
                   <GraphGap key={spec.id} spec={spec} position={index + 1} />
                 );
               })}
-              <button
-                type="button"
-                className="blueprint add-graph"
+              <Button
+                variant="add"
+                className="add-graph"
                 onClick={() => {
                   const spec = newGraph(space.axes, graphs);
                   if (!spec) return;
@@ -385,12 +385,8 @@ export function SweepPanel({
                   setSelected(spec.id);
                 }}
               >
-                <i className="corner tl" />
-                <i className="corner tr" />
-                <i className="corner bl" />
-                <i className="corner br" />
                 <span style={{ fontSize: 22, lineHeight: 1 }}>+</span> Add graph
-              </button>
+              </Button>
             </div>
           </div>
         }

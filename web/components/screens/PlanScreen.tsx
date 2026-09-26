@@ -287,8 +287,7 @@ export function PlanScreen({
               onChange={switchRail}
             />
             <Button
-              variant="ghost"
-              shortcut={railMode === "events" ? "a" : undefined}
+              variant="add"
               onClick={railMode === "events" ? add : () => addParameter("Money")}
               disabled={offline || editing.busy}
               aria-label={railMode === "events" ? "Add event" : "Add parameter"}
@@ -337,7 +336,6 @@ export function PlanScreen({
               title="No events"
               body="Events are what makes the plan move: income arriving, spending leaving, a retirement age pausing one and starting another. Without any, the simulation just compounds the opening balances."
               action="Add event"
-              shortcut="a"
               onAction={add}
               disabled={offline || editing.busy}
               error={editing.error}
@@ -399,11 +397,10 @@ export function PlanScreen({
 type RailMode = "events" | "parameters";
 
 /** What the editor pane says when the rail's list is empty. */
-function Empty({ title, body, action, shortcut, onAction, disabled, error }: {
+function Empty({ title, body, action, onAction, disabled, error }: {
   title: string;
   body: string;
   action: string;
-  shortcut?: string;
   onAction: () => void;
   disabled?: boolean;
   error?: string;
@@ -421,7 +418,7 @@ function Empty({ title, body, action, shortcut, onAction, disabled, error }: {
       >
         {body}
       </p>
-      <Button variant="primary" shortcut={shortcut} onClick={onAction} disabled={disabled}>
+      <Button variant="add" onClick={onAction} disabled={disabled}>
         {action}
       </Button>
       {error && (

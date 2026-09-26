@@ -17,7 +17,7 @@ import {
   ProfileInspector,
   ProfileLibraryTable,
 } from "@/components/profiles";
-import { Button, Dropdown } from "@/components/ui";
+import { Button, Dropdown, Tooltip } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Profile, UpdateAsset, UpdateProfile } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
@@ -257,11 +257,15 @@ export function AssetsScreen({
             )}
 
             <SectionBar
-              title="Assets"
+              title={
+                <Tooltip content="Assets represent the investments held in your accounts. Each asset points to a return profile that supplies its growth assumptions. Select an asset to edit its details, or select multiple rows to change their return profile together.">
+                  Assets
+                </Tooltip>
+              }
               count={`${rows.length}${rows.length > 0 ? ` · ${fmtCurrency(mix.total)}` : ""}`}
               action={
                 <Button
-                  shortcut="a"
+                  variant="add"
                   onClick={() => setAddingAsset(true)}
                   disabled={offline}
                   title={offline ? "No connection to the server." : undefined}
@@ -388,10 +392,15 @@ export function AssetsScreen({
 
             <div style={{ marginTop: 26 }}>
               <SectionBar
-                title="Return profile library"
+                title={
+                  <Tooltip content="Return profiles define growth assumptions, including expected returns, volatility, or historical returns. Assign them to holdings or directly to an account's cash or property value. Profiles are shared across scenarios, so editing one affects every plan that uses it.">
+                    Return profile library
+                  </Tooltip>
+                }
                 count={String(returnProfiles.length)}
                 action={
                   <Button
+                    variant="add"
                     onClick={() => setAddingProfile(true)}
                     disabled={offline}
                     title={offline ? "No connection to the server." : undefined}
@@ -414,7 +423,11 @@ export function AssetsScreen({
 
             <div style={{ marginTop: 26 }}>
               <SectionBar
-                title="Inflation"
+                title={
+                  <Tooltip content="Inflation profiles define how prices change over time in the simulation. The active profile supplies the inflation rate for amounts marked to grow with inflation. Choose one profile for this scenario; amounts without inflation adjustment keep their specified values.">
+                    Inflation
+                  </Tooltip>
+                }
                 count={activeInflationProfile ? "one is in use" : "none in use"}
               />
               {inflationProfiles.length === 0 ? (
@@ -494,7 +507,7 @@ function SectionBar({
   count,
   action,
 }: {
-  title: string;
+  title: ReactNode;
   count: string;
   action?: ReactNode;
 }) {

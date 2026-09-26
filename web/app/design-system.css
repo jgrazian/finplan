@@ -809,3 +809,22 @@ textarea.input {
 .btn-ghost {
   border-color: transparent;
 }
+
+/* Creation actions share the secondary outline and the accent text color. */
+.btn-add {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.btn-add:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+.btn-add:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.btn-add:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

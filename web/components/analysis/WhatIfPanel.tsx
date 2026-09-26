@@ -613,7 +613,7 @@ function AddOverride({
   return (
     <div ref={root} className="dd" style={{ alignSelf: "flex-start" }} data-open={open ? "true" : undefined}>
       <Button
-        variant="ghost"
+        variant="add"
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={open}

@@ -18,6 +18,8 @@ export type { SegmentOption } from "./SegmentedControl";
 export { InlineStat, Stat, StatLabel } from "./Stat";
 export { Table, Td, Th } from "./Table";
 export { Tag } from "./Tag";
+export { Tooltip } from "./Tooltip";
+export type { TooltipProps } from "./Tooltip";
 export type { TagTone } from "./Tag";
 export { SELECTED_ROW, rowStyle } from "./rowSelection";
 export { cx } from "./cx";

@@ -13,6 +13,7 @@ import {
   Field,
   NumberInput,
   SectionHeading,
+  Tooltip,
 } from "@/components/ui";
 import { monthlyPayment } from "@/components/portfolio/AccountTerms";
 import { useReorder } from "@/lib/hooks/useReorder";
@@ -126,7 +127,7 @@ export function EffectCards({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <SectionHeading
         action={
-          <Button variant="ghost" disabled={disabled} onClick={add}>
+          <Button variant="add" disabled={disabled} onClick={add}>
             Add effect
           </Button>
         }
@@ -661,7 +662,11 @@ function EffectDetails({
   if (fields.strategy && !effect.rawSources) {
     grid.push(
       <div key="strategy" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 12 }}>
-        <Field label="Source order">
+        <Field label={
+          <Tooltip content="Source order determines which accounts fund this sweep. Bracket Filling draws from tax-deferred accounts up to the selected ordinary-income bracket ceiling after age 59½, then uses the penalty-aware order for the rest. Before 59½ it uses the penalty-aware order. The default bracket ceiling is 12%.">
+            Source order
+          </Tooltip>
+        }>
           <Dropdown
             className="dd-field"
             options={STRATEGIES.map((s) => ({ value: s, label: s === "BracketFilling" ? "Bracket Filling" : s }))}
@@ -707,9 +712,9 @@ function EffectDetails({
             onFigure={
               readStaticAmount(effect.rawAmount)
                 ? () => {
-                    onChange(collapseAmount(effect));
-                    onEdit(undefined);
-                  }
+                  onChange(collapseAmount(effect));
+                  onEdit(undefined);
+                }
                 : undefined
             }
             disabled={disabled}
@@ -732,9 +737,9 @@ function EffectDetails({
               onFigure={
                 collapseDownPayment(effect)
                   ? () => {
-                      onChange(collapseDownPayment(effect) ?? {});
-                      onEdit(undefined);
-                    }
+                    onChange(collapseDownPayment(effect) ?? {});
+                    onEdit(undefined);
+                  }
                   : undefined
               }
               disabled={disabled}

@@ -200,9 +200,9 @@ export function TriggerSentence({
             </div>
           ))}
           <Button
-            variant="ghost"
+            variant="add"
             disabled={disabled}
-            style={{ alignSelf: "flex-start", fontSize: 12.5 }}
+            style={{ alignSelf: "flex-start" }}
             onClick={() =>
               onChange({
                 ...trigger,
@@ -588,7 +588,7 @@ function RelativeSlots({
           </button>
         </>
       ) : (
-        <Button variant="ghost" disabled={disabled} style={{ fontSize: 12 }} onClick={() => setAdding(true)}>
+        <Button variant="add" disabled={disabled} onClick={() => setAdding(true)}>
           + offset
         </Button>
       )}

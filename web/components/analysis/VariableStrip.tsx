@@ -241,7 +241,7 @@ export function VariableStrip({
           </Table>
 
           <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 8 }}>
-            <Button variant="ghost" disabled={disabled || free.length === 0} onClick={onAdd}>
+            <Button variant="add" disabled={disabled || free.length === 0} onClick={onAdd}>
               Add variable
             </Button>
             {free.length === 0 && (

@@ -10,7 +10,7 @@ import {
   PositionForm,
   type AccountDraft,
 } from "@/components/portfolio";
-import { Button } from "@/components/ui";
+import { Button, Tooltip } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type {
   Account as ApiAccount,
@@ -215,7 +215,11 @@ export function AccountsScreen({
               }}
             >
               <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                <h4 style={{ margin: 0 }}>Accounts</h4>
+                <h4 style={{ margin: 0 }}>
+                  <Tooltip content="Accounts hold your cash, investments, property, and debt. Their tax treatment and return profiles determine how balances grow and how withdrawals are taxed. Select an account to edit its details and holdings.">
+                    Accounts
+                  </Tooltip>
+                </h4>
                 <span
                   style={{
                     fontSize: 12,
@@ -227,7 +231,7 @@ export function AccountsScreen({
                 </span>
               </div>
               <Button
-                shortcut="a"
+                variant="add"
                 onClick={() => setCreating(true)}
                 disabled={offline}
                 title={offline ? "No connection to the server." : undefined}

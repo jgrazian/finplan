@@ -4,7 +4,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cx } from "./cx";
 import { Kbd } from "./Kbd";
 
-type Variant = "primary" | "secondary" | "ghost";
+type Variant = "primary" | "secondary" | "ghost" | "add";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
@@ -38,7 +38,7 @@ export function Button({
       {...rest}
     >
       {children}
-      {shortcut && (
+      {shortcut && variant !== "add" && (
         <Kbd style={variant === "primary" ? { borderColor: "currentColor" } : undefined}>
           {shortcut}
         </Kbd>

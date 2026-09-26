@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Blueprint, Button, CompactInput, CurrencyInput, Field, Select } from "@/components/ui";
+import { Blueprint, Button, CompactInput, CurrencyInput, Dropdown, Field } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Asset, Profile } from "@/lib/api/types";
 import { tickerDefaults } from "@/lib/tickers";
@@ -135,21 +135,21 @@ export function NewAssetInline({
         </div>
 
         <Field label="Return profile" style={{ marginTop: 8 }}>
-          <Select
-            aria-label="New asset return profile"
-            value={profileId === undefined ? "" : profileId === null ? "flat" : String(profileId)}
+          <Dropdown<number | "flat">
+            className="dd-field"
+            ariaLabel="New asset return profile"
+            value={profileId === null ? "flat" : profileId}
             disabled={busy}
-            onChange={(e) => {
-              setProfileChoice(e.target.value === "flat" ? null : Number(e.target.value));
+            placeholder="Choose a return assumption"
+            onChange={(value) => {
+              setProfileChoice(value === "flat" ? null : value);
               setError(undefined);
             }}
-          >
-            <option value="" disabled>Choose a return assumption</option>
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>{profile.name}</option>
-            ))}
-            <option value="flat">No price growth — keep the opening price</option>
-          </Select>
+            options={[
+              ...profiles.map((profile) => ({ value: profile.id, label: profile.name })),
+              { value: "flat", label: "No price growth — keep the opening price" },
+            ]}
+          />
         </Field>
 
         <p style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.5, color: MUTED }}>
