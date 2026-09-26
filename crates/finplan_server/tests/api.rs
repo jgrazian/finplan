@@ -3016,19 +3016,17 @@ async fn scenario_slugs_are_unique_and_survive_renaming() {
 }
 
 #[tokio::test]
-async fn scenario_slug_migration_backfills_existing_rows() {
+async fn baseline_assigns_unique_scenario_slugs() {
     let db = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    finplan_server::db::MIGRATOR.run(&db).await.unwrap();
     sqlx::raw_sql(
-        "CREATE TABLE scenarios(id INTEGER PRIMARY KEY, name TEXT);
-        INSERT INTO scenarios VALUES (1, 'Existing'), (2, 'Another');",
+        "INSERT INTO users(id, email, password_hash) VALUES ('owner', 'owner@example.com', 'unused');
+         INSERT INTO scenarios(id, user_id, name, start_date)
+         VALUES (1, 'owner', 'Existing', '2026-01-01'), (2, 'owner', 'Another', '2026-01-01');",
     )
     .execute(&db)
     .await
     .unwrap();
-    sqlx::raw_sql(include_str!("../migrations/0007_scenario_slugs.sql"))
-        .execute(&db)
-        .await
-        .unwrap();
     let before: Vec<String> = sqlx::query_scalar("SELECT slug FROM scenarios ORDER BY id")
         .fetch_all(&db)
         .await
@@ -3040,7 +3038,7 @@ async fn scenario_slug_migration_backfills_existing_rows() {
             .iter()
             .all(|slug| slug.len() == 13 && slug.starts_with('s'))
     );
-    sqlx::query("INSERT INTO scenarios(name) VALUES ('New'), ('Imported')")
+    sqlx::query("INSERT INTO scenarios(user_id, name, start_date) VALUES ('owner', 'New', '2026-01-01'), ('owner', 'Imported', '2026-01-01')")
         .execute(&db)
         .await
         .unwrap();
@@ -3051,7 +3049,7 @@ async fn scenario_slug_migration_backfills_existing_rows() {
     assert_eq!(&after[..2], &before);
     assert!(after.iter().all(|slug| slug.len() == 13));
     assert!(
-        sqlx::query("INSERT INTO scenarios(name, slug) VALUES ('Collision', ?)")
+        sqlx::query("INSERT INTO scenarios(user_id, name, start_date, slug) VALUES ('owner', 'Collision', '2026-01-01', ?)")
             .bind(&before[0])
             .execute(&db)
             .await

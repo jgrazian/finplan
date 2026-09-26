@@ -34,7 +34,7 @@ been validated. Preserve the existing local/self-hosted option.
   positive-terminal-net-worth metric; add optional `funding_success_rate` for paths
   with neither a settled cash shortfall nor an event-processing warning. Count it
   over all Monte Carlo iterations, not the displayed percentile paths.
-- `crates/finplan_server/migrations/0005_run_funding_success.sql`,
+- `crates/finplan_server/migrations/0001_init.sql`,
   `src/runner/store.rs`, `src/api/runs.rs`: persist/export the new measurement.
   Historical rows remain NULL; do not infer path-wide funding from yearly snapshots.
 - `web/components/results/SuccessRate.tsx`, `WarningList.tsx`,
@@ -107,7 +107,7 @@ Tests: `crates/finplan_server/tests/api.rs`, a new runner-recovery test module,
 
 **Implemented.** Real pointwise envelopes and terminal aggregates now come from
 all iterations, independently of representative paths ranked by terminal nominal
-net worth. Migration `0006_run_real_quantiles.sql` stores the new measurements;
+net worth. The baseline schema in `0001_init.sql` stores the new measurements;
 historical runs remain explicitly unmeasured. The web uses response-owned path
 IDs for atomic detail changes and identifies dollar base dates. Exact type-7
 annual vectors were selected after benchmarking against t-digests.

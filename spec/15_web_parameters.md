@@ -47,7 +47,7 @@ Analysis transmits Rate as a fraction, Date as UTC epoch days, and Age as years
 plus months divided by 12. These coordinates are converted to the core's typed
 parameter sweep values and converted back for result axes and solver probes.
 
-Migration `0002_named_parameters.sql` adds typed parameter storage, expression
+The baseline schema in `0001_init.sql` includes typed parameter storage, expression
 source, and trigger references. Cloning and archive import/export preserve values
 and remap IDs. Exports use archive version 3 so older servers cannot silently lose
 expression amounts; version 2 exports remain importable. Renames update stored source through compiled references in the

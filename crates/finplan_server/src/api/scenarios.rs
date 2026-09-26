@@ -44,9 +44,8 @@ pub struct Scenario {
     pub last_success_rate: Option<f64>,
 }
 
-/// The trailing two columns describe the scenario's run, and only a succeeded
-/// one: a scenario holds a single run (see `0008_one_run_per_scenario.sql`), so
-/// where that run failed the card shows no figure rather than a stale one.
+/// The trailing two columns describe the scenario's latest successful run.
+/// Failed or pending runs do not replace the last successful result.
 pub(crate) const SCENARIO_COLUMNS: &str =
     "id, slug, name, description, start_date, birth_date, duration_years,
      inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at,

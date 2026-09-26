@@ -186,6 +186,8 @@ CREATE INDEX idx_tax_brackets_config ON tax_brackets(tax_config_id);
 CREATE TABLE scenarios (
     id                   INTEGER PRIMARY KEY,
     user_id              TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- Stable public reference; assigned by the insert trigger below.
+    slug                 TEXT    NOT NULL DEFAULT '',
     name                 TEXT    NOT NULL,
     description          TEXT,
     start_date           TEXT    NOT NULL,               -- ISO-8601 civil date
@@ -199,6 +201,15 @@ CREATE TABLE scenarios (
     UNIQUE (user_id, name)
 );
 CREATE INDEX idx_scenarios_user ON scenarios(user_id);
+CREATE UNIQUE INDEX scenarios_slug ON scenarios(slug);
+
+-- Cover every creation path, including onboarding, cloning and archive imports.
+CREATE TRIGGER scenarios_assign_slug
+AFTER INSERT ON scenarios
+WHEN NEW.slug = ''
+BEGIN
+    UPDATE scenarios SET slug = 's' || lower(hex(randomblob(6))) WHERE id = NEW.id;
+END;
 
 -- ===========================================================================
 -- Assets (scenario-scoped: prices are a property of the scenario)
@@ -264,7 +275,10 @@ CREATE TABLE account_property (
 CREATE TABLE account_liability (
     account_id    INTEGER PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
     principal     REAL NOT NULL DEFAULT 0.0 CHECK (principal >= 0),
-    interest_rate REAL NOT NULL DEFAULT 0.0
+    interest_rate REAL NOT NULL DEFAULT 0.0,
+    -- Both NULL means repayment happens only through explicit transfers.
+    repay_from_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+    term_months INTEGER CHECK (term_months IS NULL OR term_months > 0)
 );
 
 -- Cost-basis lots inside investment accounts.
@@ -279,6 +293,20 @@ CREATE TABLE positions (
 );
 CREATE INDEX idx_positions_account ON positions(account_id);
 CREATE INDEX idx_positions_asset ON positions(asset_id);
+
+-- Typed parameters used by amount expressions and date/age triggers.
+CREATE TABLE named_parameters (
+    id INTEGER PRIMARY KEY,
+    scenario_id INTEGER NOT NULL REFERENCES scenarios(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('Money','Rate','Date','Age')),
+    number_value REAL,
+    date_value TEXT,
+    age_years INTEGER CHECK (age_years IS NULL OR age_years BETWEEN 0 AND 255),
+    age_months INTEGER CHECK (age_months IS NULL OR age_months BETWEEN 0 AND 11),
+    UNIQUE (scenario_id, name)
+);
+CREATE INDEX idx_named_parameters_scenario ON named_parameters(scenario_id);
 
 -- ===========================================================================
 -- Transfer amounts: recursive expression tree
@@ -297,6 +325,8 @@ CREATE TABLE transfer_amounts (
     asset_id    INTEGER REFERENCES assets(id)   ON DELETE CASCADE,  -- AssetBalance
     left_id     INTEGER REFERENCES transfer_amounts(id) ON DELETE CASCADE,
     right_id    INTEGER REFERENCES transfer_amounts(id) ON DELETE CASCADE,
+    -- Expressions use a Fixed row with value 0; this source is authoritative.
+    expression_source TEXT,
 
     CHECK (kind NOT IN ('Fixed','TargetToBalance','Scale') OR value IS NOT NULL),
     CHECK (kind NOT IN ('InflationAdjusted','Scale') OR left_id IS NOT NULL),
@@ -334,6 +364,7 @@ CREATE TABLE triggers (
                       'Date','Age','RelativeToEvent','AccountBalance','AssetBalance',
                       'NetWorth','And','Or','Repeating','Manual')),
 
+    parameter_id  INTEGER REFERENCES named_parameters(id) ON DELETE NO ACTION,
     on_date       TEXT,     -- Date
     age_years     INTEGER CHECK (age_years IS NULL OR age_years BETWEEN 0 AND 130),
     age_months    INTEGER CHECK (age_months IS NULL OR age_months BETWEEN 0 AND 11),
@@ -384,7 +415,7 @@ CREATE TABLE effects (
                      'Income','Expense','AssetPurchase','AssetSale','Sweep',
                      'AdjustBalance','CashTransfer','TriggerEvent','PauseEvent',
                      'ResumeEvent','TerminateEvent','ApplyRmd','Random','RsuVesting',
-                     'DeleteAccount')),
+                     'DeleteAccount','BuyProperty','SellProperty','MarketShock')),
 
     from_account_id  INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
     to_account_id    INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
@@ -401,6 +432,16 @@ CREATE TABLE effects (
     units        REAL CHECK (units IS NULL OR units >= 0),
     sell_to_cover INTEGER CHECK (sell_to_cover IS NULL OR sell_to_cover IN (0,1)),
 
+    -- BuyProperty financing, and the loan a SellProperty pays off.
+    loan_account_id        INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
+    down_payment_amount_id INTEGER REFERENCES transfer_amounts(id) ON DELETE CASCADE,
+    term_months            INTEGER CHECK (term_months IS NULL OR term_months > 0),
+    -- SellProperty terms.
+    selling_cost_rate      REAL CHECK (selling_cost_rate IS NULL OR selling_cost_rate BETWEEN 0 AND 1),
+    gain_exclusion         REAL CHECK (gain_exclusion IS NULL OR gain_exclusion >= 0),
+    -- MarketShock: the fraction of market value lost.
+    shock_drop             REAL CHECK (shock_drop IS NULL OR (shock_drop > 0 AND shock_drop < 1)),
+
     CHECK ((event_id IS NULL) <> (parent_id IS NULL)),
     CHECK ((parent_id IS NULL) = (parent_slot IS NULL)),
     CHECK (kind <> 'Income'        OR (to_account_id IS NOT NULL AND amount_id IS NOT NULL AND income_type IS NOT NULL)),
@@ -415,7 +456,17 @@ CREATE TABLE effects (
     CHECK (kind <> 'ApplyRmd'      OR to_account_id IS NOT NULL),
     CHECK (kind <> 'Random'        OR probability IS NOT NULL),
     CHECK (kind <> 'RsuVesting'    OR (to_account_id IS NOT NULL AND asset_id IS NOT NULL AND units IS NOT NULL)),
-    CHECK (kind <> 'DeleteAccount' OR to_account_id IS NOT NULL)
+    CHECK (kind <> 'DeleteAccount' OR to_account_id IS NOT NULL),
+    -- BuyProperty: property in to_account_id, cash payer in from_account_id,
+    -- price in amount_id; financing is all three loan columns or none.
+    CHECK (kind <> 'BuyProperty'   OR (from_account_id IS NOT NULL AND to_account_id IS NOT NULL
+                                       AND amount_id IS NOT NULL
+                                       AND (loan_account_id IS NULL) = (down_payment_amount_id IS NULL)
+                                       AND (loan_account_id IS NULL) = (term_months IS NULL))),
+    -- SellProperty: property in from_account_id, proceeds to to_account_id.
+    CHECK (kind <> 'SellProperty'  OR (from_account_id IS NOT NULL AND to_account_id IS NOT NULL
+                                       AND selling_cost_rate IS NOT NULL AND gain_exclusion IS NOT NULL)),
+    CHECK (kind <> 'MarketShock'   OR shock_drop IS NOT NULL)
 );
 CREATE INDEX idx_effects_scenario ON effects(scenario_id);
 CREATE INDEX idx_effects_event ON effects(event_id, position);
@@ -428,7 +479,10 @@ CREATE TABLE effect_withdrawal_sources (
     account_id INTEGER REFERENCES accounts(id) ON DELETE CASCADE,
     asset_id   INTEGER REFERENCES assets(id)   ON DELETE CASCADE,
     strategy   TEXT CHECK (strategy IS NULL OR strategy IN
-                   ('TaxEfficientEarly','TaxDeferredFirst','TaxFreeFirst','ProRata','PenaltyAware')),
+                   ('TaxEfficientEarly','TaxDeferredFirst','TaxFreeFirst','ProRata','PenaltyAware',
+                    'BracketFilling')),
+    -- BracketFilling: the highest marginal rate to fill to. NULL is the default.
+    bracket_ceiling REAL CHECK (bracket_ceiling IS NULL OR (bracket_ceiling >= 0 AND bracket_ceiling < 1)),
 
     CHECK (mode <> 'SingleAsset'   OR (account_id IS NOT NULL AND asset_id IS NOT NULL)),
     CHECK (mode <> 'SingleAccount' OR account_id IS NOT NULL),
@@ -627,6 +681,11 @@ CREATE TABLE run_real_quantiles (
     p5         REAL    NOT NULL,
     p50        REAL    NOT NULL,
     p95        REAL    NOT NULL,
+    -- Nullable for imported historical runs that did not measure these bands.
+    p10        REAL,
+    p25        REAL,
+    p75        REAL,
+    p90        REAL,
     PRIMARY KEY (run_id, as_of_date),
     CHECK (p5 <= p50 AND p50 <= p95)
 );
@@ -643,6 +702,16 @@ CREATE TABLE sweep_layout (
     scenario_id INTEGER PRIMARY KEY REFERENCES scenarios(id) ON DELETE CASCADE,
     user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     graphs      TEXT    NOT NULL,
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+-- The What-if stack a user is building over a scenario: a JSON document of
+-- override layers, written and read whole. Like sweep_layout, it belongs to
+-- the scenario and goes with it.
+CREATE TABLE what_if_stacks (
+    scenario_id INTEGER PRIMARY KEY REFERENCES scenarios(id) ON DELETE CASCADE,
+    user_id     TEXT    NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stack       TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 

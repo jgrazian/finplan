@@ -11,9 +11,14 @@ cargo test -p finplan_server                # integration tests
 
 ## Rebuilding a pre-v0 database
 
-The v0 schema is a consolidated baseline. A database carrying the development
-migration chain must be rebuilt before it is opened by a build containing that
-baseline. Stop every server using the source database, then create a separate
+The v0 schema is a single consolidated `migrations/0001_init.sql` baseline,
+including parameters, real estate, what-if stacks, result quartiles, bracket
+filling, and scenario slugs. Fresh databases apply only this migration.
+
+A database carrying the development migration chain must be rebuilt before it is opened by a build containing that
+baseline. The rebuild requires a source with the same application schema;
+apply the full development chain with the previous build first if needed.
+Stop every server using the source database, then create a separate
 verified database:
 
 ```bash
