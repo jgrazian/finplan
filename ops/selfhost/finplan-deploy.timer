@@ -1,5 +1,5 @@
 [Unit]
-Description=Poll GitHub main for new FinPlan commits
+Description=Poll GitHub for new FinPlan release tags
 
 [Timer]
 OnBootSec=2min

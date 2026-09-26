@@ -1,6 +1,6 @@
 # Self-hosted deployment (Fedora + Cloudflare Tunnel)
 
-Runs the newest commit on GitHub `main` as native release builds under systemd,
+Runs the newest `vX.Y.Z` release tag on GitHub as native release builds under systemd,
 exposed through an existing Cloudflare Tunnel. No ports are opened on the host
 and TLS terminates at Cloudflare.
 
@@ -18,12 +18,13 @@ browser ──https──> Cloudflare ──tunnel──> cloudflared
 | `/var/lib/finplan/finplan.db` | SQLite database, owned by the `finplan` system user |
 | `/var/lib/finplan/backups` | Hourly, daily and pre-deploy backups |
 | `/etc/finplan/server.env` | Server settings, including SMTP credentials |
-| `/etc/finplan/deploy.env` | Build user for the deploy script |
+| `/etc/finplan/deploy.env` | Build user and optional pinned tag for the deploy script |
 
 ## How deploys happen
 
 `finplan-deploy.timer` runs `/usr/local/sbin/finplan-deploy` five minutes after
-each previous run. The script fetches `main`, exits if that commit is already
+each previous run. The script picks the highest `vX.Y.Z` tag on GitHub (or the
+tag pinned by `FINPLAN_TAG` in `deploy.env`), exits if that commit is already
 live, and otherwise:
 
 1. builds `finplan-server` with `cargo build --release` and the web app with
@@ -31,6 +32,9 @@ live, and otherwise:
 2. installs the result into a new release directory;
 3. backs up the database, then switches `current` and restarts both services;
 4. checks the API and web health, then prunes to the newest five releases.
+
+Pushes to `main` do not deploy. Without a pin, the script also refuses to move
+to a tag whose commit is older than the live one, and logs why instead.
 
 The server applies migrations when it starts. A failed health check leaves the
 deploy unit failed and does not roll back. Because migrations may already have
@@ -62,14 +66,27 @@ In Cloudflare Zero Trust, open the tunnel, go to **Public Hostnames**, and add
 `finplan.rayknot.com` with service `HTTP` → `127.0.0.1:3480`. The zone must
 be in the same Cloudflare account as the tunnel.
 
+## Release
+
+Cutting a release deploys it within five minutes. `release.yml` builds the
+TUI binaries from the same tag.
+
+```sh
+# bump `version` in crates/*/Cargo.toml and web/package.json, then:
+cargo check                                  # refreshes Cargo.lock
+git commit -am "chore: release X.Y.Z"
+git tag -a vX.Y.Z -m "Release X.Y.Z"
+git push origin main vX.Y.Z
+```
+
 ## Operate
 
 ```sh
 sudo systemctl start finplan-deploy          # deploy now instead of waiting
-sudo finplan-deploy --force                  # rebuild and redeploy the live commit
+sudo finplan-deploy --force                  # rebuild and redeploy the selected tag
 journalctl -u finplan-deploy -e              # build and deploy output
 journalctl -u finplan-server -u finplan-web -f
-readlink /opt/finplan/current                # live commit
+cat /opt/finplan/current/TAG                 # live tag (readlink for the commit)
 sudo systemctl stop finplan-deploy.timer     # pause automatic deploys
 ```
 
@@ -78,18 +95,26 @@ After editing `/etc/finplan/server.env`, run
 
 ### Roll back
 
+Pin the last good tag so the timer stops chasing the broken one:
+
+```sh
+echo FINPLAN_TAG=v<good> | sudo tee -a /etc/finplan/deploy.env
+sudo systemctl start finplan-deploy           # rebuilds and deploys that tag
+```
+
+If the broken release migrated the schema, the older server may refuse the
+database. Then restore the pre-deploy backup taken before the bad release:
+
 ```sh
 sudo systemctl stop finplan-deploy.timer finplan-web finplan-server
-sudo ln -sfn /opt/finplan/releases/<older-sha> /opt/finplan/current
-# Only if the newer release migrated the schema:
 sudo -u finplan python3 /opt/finplan/current/bin/sqlite-backup.py restore \
     /var/lib/finplan/backups/<backup>.db /var/lib/finplan/restored.db
 # ...then move restored.db into place as finplan.db (remove the -wal/-shm files)
-sudo systemctl start finplan-server finplan-web
+sudo systemctl start finplan-server finplan-web finplan-deploy.timer
 ```
 
-Leave the timer stopped until a fix is on `main`; otherwise it redeploys the
-broken commit on its next run.
+Once a fixed release is tagged, remove the `FINPLAN_TAG` line to resume
+following new tags.
 
 ## Email
 

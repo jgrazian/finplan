@@ -1,5 +1,5 @@
 [Unit]
-Description=Deploy the latest FinPlan commit from GitHub main
+Description=Deploy the newest FinPlan release tag from GitHub
 After=network-online.target
 Wants=network-online.target
 

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Build and deploy the newest commit on GitHub main, if it is not already live.
+# Build and deploy the newest vX.Y.Z release tag on GitHub, if it is not already live.
 # Installed as /usr/local/sbin/finplan-deploy and run as root by finplan-deploy.timer.
-# `finplan-deploy --force` rebuilds and redeploys the current commit.
+# `finplan-deploy --force` rebuilds and redeploys the selected tag even if it is live.
+#
+# FINPLAN_TAG in deploy.env pins one tag instead of following the newest. Without a
+# pin the script never moves to a tag older than the live commit: the live release
+# may already have migrated the database past what that tag understands.
 set -euo pipefail
 
 [[ -f /etc/finplan/deploy.env ]] && source /etc/finplan/deploy.env
 REPO=${FINPLAN_REPO:-https://github.com/jgrazian/finplan.git}
-BRANCH=${FINPLAN_BRANCH:-main}
+PIN=${FINPLAN_TAG:-}
 BUILD_USER=${FINPLAN_BUILD_USER:?set FINPLAN_BUILD_USER in /etc/finplan/deploy.env}
 BUILD_HOME=$(getent passwd "$BUILD_USER" | cut -d: -f6)
 BUILD_PATH=${FINPLAN_BUILD_PATH:-$BUILD_HOME/.cargo/bin:$BUILD_HOME/.local/bin:/usr/local/bin:/usr/bin:/bin}
@@ -42,13 +46,24 @@ if [[ ! -d $SRC/.git ]]; then
     as_builder git clone --quiet "$REPO" "$SRC"
 fi
 cd "$SRC"
-as_builder git fetch --quiet origin "$BRANCH"
-sha=$(as_builder git rev-parse FETCH_HEAD)
+if [[ -n $PIN ]]; then
+    tag=$PIN
+else
+    tag=$(as_builder git ls-remote --tags --refs origin 'v*' | sed 's#.*refs/tags/##' \
+        | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } | sort -V | tail -n 1)
+    [[ -n $tag ]] || { echo "no vX.Y.Z tags on origin"; exit 1; }
+fi
+as_builder git fetch --quiet --force origin "refs/tags/$tag:refs/tags/$tag"
+sha=$(as_builder git rev-parse "$tag^{commit}")
 live=$(basename "$(readlink -f "$ROOT/current" 2>/dev/null || echo none)")
 if [[ $sha == "$live" && ${1:-} != --force ]]; then
     exit 0
 fi
-echo "deploying $sha (live: $live)"
+if [[ -z $PIN && $live != none ]] && as_builder git merge-base --is-ancestor "$sha" "$live" 2>/dev/null; then
+    echo "newest tag $tag ($sha) is older than live $live; set FINPLAN_TAG to roll back"
+    exit 0
+fi
+echo "deploying $tag $sha (live: $live)"
 
 as_builder git checkout --quiet --force --detach "$sha"
 # Keep the cargo target and node_modules caches; everything else is rebuilt.
@@ -61,6 +76,7 @@ release=$RELEASES/$sha
 rm -rf "$release.tmp"
 install -d "$release.tmp/bin" "$release.tmp/web/.next"
 install -m 755 target/release/finplan-server "$release.tmp/bin/"
+echo "$tag" > "$release.tmp/TAG"
 install -m 755 scripts/sqlite-backup.py "$release.tmp/bin/"
 cp -a web/.next/standalone/. "$release.tmp/web/"
 cp -a web/.next/static "$release.tmp/web/.next/static"
@@ -83,6 +99,6 @@ systemctl restart finplan-server
 wait_healthy "$API_ORIGIN/api/health" || { echo "API failed health check"; exit 1; }
 systemctl restart finplan-web
 wait_healthy "$WEB_URL/" || { echo "web failed health check"; exit 1; }
-echo "live: $sha"
+echo "live: $tag $sha"
 
 ls -1dt "$RELEASES"/* | { grep -v -e "/$sha\$" || true; } | tail -n +"$KEEP_RELEASES" | xargs -r rm -rf
