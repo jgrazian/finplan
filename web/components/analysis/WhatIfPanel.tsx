@@ -368,10 +368,6 @@ export function WhatIfPanel({
           }}
         >
           <h6 style={{ margin: 0 }}>Overrides</h6>
-          <p style={{ fontSize: 12, margin: "0 0 4px", color: MUTED, textWrap: "pretty" }}>
-            Applied top to bottom on a copy of {scenario.name}. Switch one off to see the
-            answer without it.
-          </p>
 
           {entries?.map((entry) => {
             const view = layerView(entry, ctx);

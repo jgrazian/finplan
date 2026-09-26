@@ -343,7 +343,6 @@ export function SweepPanel({
     <>
       {toolbar}
       {strip}
-      <p style={{ padding: "0 18px", fontSize: 12 }}>Cash funding checks modeled cash balances and event-processing warnings; it does not detect omitted spending or guarantee future outcomes. Positive ending net worth measures only the final balance.</p>
       {space.plan.funding_success_rate == null && <p role="status" style={{ padding: "0 18px" }}>Cash funding: Not measured — rerun.</p>}
       <SplitPane
         railWidth={272}

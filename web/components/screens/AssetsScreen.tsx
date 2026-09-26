@@ -383,9 +383,7 @@ export function AssetsScreen({
             )}
 
             <p style={NOTE}>
-              Select rows to remap several holdings at once. Cash and property
-              carry a profile the same way a fund does, so nothing needs a
-              special case.
+              Select rows to remap several holdings at once.
             </p>
 
             <div style={{ marginTop: 26 }}>
@@ -412,10 +410,6 @@ export function AssetsScreen({
                     : (ids) => saveOrder(() => api.returnProfiles.reorder(ids))
                 }
               />
-              <p style={NOTE}>
-                A profile with no assets is unremarkable here — an account can
-                point at one directly for its cash or its property value.
-              </p>
             </div>
 
             <div style={{ marginTop: 26 }}>

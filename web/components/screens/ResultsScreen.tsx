@@ -144,7 +144,6 @@ export function ResultsScreen({
         <div style={{ padding: "22px 24px" }}>
           {active && <RunProgress run={run} onCancel={onCancel} />}
           <SuccessRate
-            successRate={stats.successRate}
             fundingSuccessRate={stats.fundingSuccessRate}
             iterations={stats.numIterations}
           />

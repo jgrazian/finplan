@@ -1,6 +1,6 @@
 "use client";
 
-import { Blueprint, Field, NumberInput, PercentInput, Select, StatLabel } from "@/components/ui";
+import { Blueprint, Dropdown, Field, NumberInput, PercentInput, StatLabel } from "@/components/ui";
 import type { HistoryPreset } from "@/lib/api/types";
 import { historyStats } from "@/lib/history";
 import type { DistributionKind } from "@/lib/types";
@@ -125,21 +125,17 @@ export function DistributionTerms({
           {percent("Mean", "mean")}
           {percent("Scale", "scale")}
           <Field label="df">
-            <Select
+            <Dropdown
+              className="dd-field"
               style={{ minHeight: 32 }}
               value={draft.df}
               disabled={readOnly}
-              onChange={(e) => onChange({ df: Number(e.target.value) })}
-              aria-label="Degrees of freedom"
-            >
-              {(DF_CHOICES.includes(draft.df) ? DF_CHOICES : [draft.df, ...DF_CHOICES]).map(
-                (df) => (
-                  <option key={df} value={df}>
-                    {df}
-                  </option>
-                ),
+              onChange={(df) => onChange({ df })}
+              ariaLabel="Degrees of freedom"
+              options={(DF_CHOICES.includes(draft.df) ? DF_CHOICES : [draft.df, ...DF_CHOICES]).map(
+                (value) => ({ value, label: String(value) }),
               )}
-            </Select>
+            />
           </Field>
         </div>
       );
@@ -162,24 +158,20 @@ export function DistributionTerms({
       return (
         <>
           <Field label="Historical preset">
-            <Select
+            <Dropdown
+              className="dd-field"
               style={{ minHeight: 32 }}
               value={draft.preset}
               disabled={readOnly}
-              onChange={(e) => onChange({ preset: e.target.value })}
-            >
-              {draft.preset === "" && <option value="">Pick a history…</option>}
-              {/* A preset the server no longer offers still has to be showable,
-                  or opening the profile would silently remap it. */}
-              {!chosen && draft.preset !== "" && (
-                <option value={draft.preset}>{draft.preset}</option>
-              )}
-              {presets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </Select>
+              ariaLabel="Historical preset"
+              onChange={(preset) => onChange({ preset })}
+              options={[
+                ...(draft.preset === "" ? [{ value: "", label: "Pick a history…" }] : []),
+                // Keep presets the server no longer offers visible as saved.
+                ...(!chosen && draft.preset !== "" ? [{ value: draft.preset, label: draft.preset }] : []),
+                ...presets.map((p) => ({ value: p.id, label: p.name })),
+              ]}
+            />
           </Field>
           <Field label="Block size">
             <NumberInput

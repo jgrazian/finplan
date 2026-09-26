@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Dialog, Field, Input, Select } from "@/components/ui";
+import { Dialog, Dropdown, Field, Input } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { AssetClass, HistoryPreset, Profile } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -12,7 +12,7 @@ import { ShapePanel } from "./Shape";
 import { RETURN_SCALE } from "./distribution";
 import { draftOf, problemWith, specOf } from "./distributionDraft";
 
-/** The `<option>` value standing in for "no class"; `null` is not a value. */
+/** The dropdown value standing in for "no class". */
 const UNCLASSIFIED = "";
 
 /**
@@ -74,36 +74,27 @@ export function NewProfileDialog({
         />
       </Field>
       <Field label="Asset class">
-        <Select
+        <Dropdown<AssetClass | typeof UNCLASSIFIED>
+          className="dd-field"
+          ariaLabel="Asset class"
           value={assetClass ?? UNCLASSIFIED}
-          onChange={(e) =>
-            setAssetClass(
-              e.target.value === UNCLASSIFIED ? null : (e.target.value as AssetClass),
-            )
-          }
-        >
-          {/* The default, because a profile made by hand is usually a variant
-              of something the library already covers — and two profiles of one
-              class make which one a ticker lands on a coin toss. */}
-          <option value={UNCLASSIFIED}>Unclassified — never auto-selected</option>
-          {ASSET_CLASSES.map((c) => (
-            <option key={c} value={c}>
-              {CLASS_LABEL[c]}
-            </option>
-          ))}
-        </Select>
+          onChange={(value) => setAssetClass(value === UNCLASSIFIED ? null : value)}
+          options={[
+            // Hand-made profiles default to unclassified so they do not compete
+            // with the library's existing class when matching a ticker.
+            { value: UNCLASSIFIED, label: "Unclassified — never auto-selected" },
+            ...ASSET_CLASSES.map((value) => ({ value, label: CLASS_LABEL[value] })),
+          ]}
+        />
       </Field>
       <Field label="Distribution">
-        <Select
+        <Dropdown<DistributionKind>
+          className="dd-field"
+          ariaLabel="Distribution"
           value={dist.kind}
-          onChange={(e) => setDist((d) => ({ ...d, kind: e.target.value as DistributionKind }))}
-        >
-          {DISTRIBUTIONS.map((kind) => (
-            <option key={kind} value={kind}>
-              {KIND_LABEL[kind]}
-            </option>
-          ))}
-        </Select>
+          onChange={(kind) => setDist((d) => ({ ...d, kind }))}
+          options={DISTRIBUTIONS.map((value) => ({ value, label: KIND_LABEL[value] }))}
+        />
       </Field>
 
       <DistributionTerms

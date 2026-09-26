@@ -1,6 +1,6 @@
 "use client";
 
-import { DragHandle, DropLine, Kbd, Tag } from "@/components/ui";
+import { DragHandle, DropLine, Tag } from "@/components/ui";
 import { useReorder } from "@/lib/hooks/useReorder";
 import type { EventId, PlanEvent } from "@/lib/types";
 import { NO_AMOUNT } from "@/lib/view/events";
@@ -116,18 +116,6 @@ export function EventRail({
         })}
       </div>
       <div style={{ borderTop: "1px solid var(--color-divider)" }} />
-
-      <div
-        style={{
-          marginTop: "auto",
-          padding: "12px 16px 14px",
-          fontSize: 11.5,
-          color: MUTED,
-        }}
-      >
-        <Kbd>⠿</Kbd> reorders the list you read, not the order the engine fires
-        them in.
-      </div>
     </div>
   );
 }

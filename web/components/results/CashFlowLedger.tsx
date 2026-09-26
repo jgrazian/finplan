@@ -301,10 +301,6 @@ export function CashFlowLedger({
         </div>
       </Blueprint>
 
-      <div style={{ fontSize: 11, marginTop: 6, color: MUTED }}>
-        Withdraw, contrib and spending are the sums of every effect that fired that
-        year — expand a row to itemise them. The filter chips scope the nested ledger.
-      </div>
     </Blueprint>
   );
 }

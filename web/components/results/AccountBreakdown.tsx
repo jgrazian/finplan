@@ -97,8 +97,7 @@ export function AccountBreakdown({
       </Blueprint>
 
       <div style={{ fontSize: 11, marginTop: 6, color: MUTED }}>
-        {hint} · bars are share of the year&rsquo;s largest position, figures to the
-        right are the change from the prior year
+        {hint}
       </div>
     </div>
   );

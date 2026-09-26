@@ -3,12 +3,9 @@ import { fmtInt } from "@/lib/format";
 
 /** Funding across the path and terminal wealth are different measurements. */
 export function SuccessRate({
-  successRate,
   fundingSuccessRate,
   iterations,
 }: {
-  /** The legacy metric: fraction with positive final net worth. */
-  successRate: number;
   /** Absent on runs that predate checkpoint funding checks. */
   fundingSuccessRate?: number;
   iterations: number;
@@ -73,7 +70,6 @@ export function SuccessRate({
           </div>
         </div>}
       </div>
-      <p style={{ fontSize: 13 }}>Positive ending net worth: {(successRate * 100).toFixed(1)}%. Cash funding checks modeled cash balances and event-processing warnings. It does not detect omitted spending or guarantee future outcomes.</p>
       {!measured && (
         <p style={{ fontSize: 13, margin: "10px 0 0", maxWidth: 850 }}>
           Not measured — rerun to measure cash funding.

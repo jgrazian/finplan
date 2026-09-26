@@ -17,12 +17,6 @@ const SECTIONS: ReadonlyArray<SegmentOption<PortfolioSection>> = [
   { value: "returns", label: "Assets" },
 ];
 
-const CAPTIONS: Record<PortfolioSection, string | undefined> = {
-  accounts: undefined,
-  returns:
-    "Holdings are the list. A return profile is what a holding points at, so it is a column — and a library of its own further down.",
-};
-
 /** Portfolio tab: the scenario's accounts, and the assets they hold. */
 export function PortfolioScreen({
   scenarioId,
@@ -59,7 +53,6 @@ export function PortfolioScreen({
         options={SECTIONS}
         value={section}
         onChange={nav.setSection}
-        caption={CAPTIONS[section]}
       />
       {section === "accounts" ? (
         <AccountsScreen
