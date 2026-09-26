@@ -119,6 +119,21 @@ pub enum WithdrawalOrder {
     /// Before age 59.5: Taxable → `TaxFree` → `TaxDeferred` (avoid 10% penalty)
     /// After age 59.5: Falls back to `TaxEfficientEarly` behavior
     PenaltyAware,
+
+    /// Bracket filling: from age 59.5, draw `TaxDeferred` first but only until
+    /// the year's ordinary income reaches the top of the `ceiling_rate`
+    /// bracket, then continue as `PenaltyAware`. Spends the low brackets on
+    /// pre-tax money that would otherwise be taxed higher later (RMDs).
+    /// Before 59.5 it is `PenaltyAware`: that income would carry the penalty.
+    BracketFilling {
+        /// The highest marginal rate to fill to, e.g. 0.12.
+        ceiling_rate: f64,
+    },
+}
+
+impl WithdrawalOrder {
+    /// The ceiling a `BracketFilling` order uses when none is given.
+    pub const DEFAULT_BRACKET_CEILING: f64 = 0.12;
 }
 
 /// Source configuration for Sweep withdrawals

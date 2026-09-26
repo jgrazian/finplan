@@ -219,6 +219,9 @@ pub struct WithdrawalSourceRow {
     pub account_id: Option<i64>,
     pub asset_id: Option<i64>,
     pub strategy: Option<String>,
+    /// Skipped when unset so plans without it keep their input hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bracket_ceiling: Option<f64>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -492,7 +495,7 @@ impl ScenarioGraph {
         .await?;
 
         let ws_rows: Vec<WithdrawalSourceRow> = sqlx::query_as(
-            "SELECT w.effect_id, w.mode, w.account_id, w.asset_id, w.strategy
+            "SELECT w.effect_id, w.mode, w.account_id, w.asset_id, w.strategy, w.bracket_ceiling
                FROM effect_withdrawal_sources w JOIN effects e ON e.id = w.effect_id
               WHERE e.scenario_id = ?1",
         )

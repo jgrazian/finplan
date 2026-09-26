@@ -592,8 +592,8 @@ fn copy_effect<'a>(
         if let Some(ws) = graph.withdrawal_sources.get(&effect_id) {
             sqlx::query(
                 "INSERT INTO effect_withdrawal_sources
-                    (effect_id, mode, account_id, asset_id, strategy)
-                 VALUES (?1,?2,?3,?4,?5)",
+                    (effect_id, mode, account_id, asset_id, strategy, bracket_ceiling)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
             )
             .bind(id)
             .bind(&ws.mode)
@@ -604,6 +604,7 @@ fn copy_effect<'a>(
             )
             .bind(ws.asset_id.map(|a| remap(assets, a, "asset")).transpose()?)
             .bind(&ws.strategy)
+            .bind(ws.bracket_ceiling)
             .execute(&mut **tx)
             .await?;
         }

@@ -417,8 +417,10 @@ fn read_withdrawal_sources(
                 Some("TaxFreeFirst") => WithdrawalStrategy::TaxFreeFirst,
                 Some("ProRata") => WithdrawalStrategy::ProRata,
                 Some("PenaltyAware") => WithdrawalStrategy::PenaltyAware,
+                Some("BracketFilling") => WithdrawalStrategy::BracketFilling,
                 _ => WithdrawalStrategy::TaxEfficientEarly,
             },
+            bracket_ceiling: row.bracket_ceiling,
             exclude_accounts: items
                 .into_iter()
                 .flatten()

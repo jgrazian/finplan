@@ -83,6 +83,7 @@ export const FAMILY: Record<EffectForm, { label: string; tone: TagTone }> = {
 };
 
 export const STRATEGIES: WithdrawalStrategy[] = [
+  "BracketFilling",
   "TaxEfficientEarly",
   "TaxDeferredFirst",
   "TaxFreeFirst",
@@ -136,6 +137,8 @@ export interface EffectDraft {
   /** Which of the four event-control effects the one form is standing in for. */
   verb: Verb;
   strategy: WithdrawalStrategy;
+  /** Highest marginal bracket rate, expressed as a percentage in the form. */
+  bracketCeiling: number;
   /** A sweep's sources where they are not a plain strategy — held verbatim. */
   rawSources?: WithdrawalSourcesSpec;
   /** Which lots a sale reaches for. */
@@ -178,7 +181,8 @@ export function emptyEffect(accountId: number, assetId: number): EffectDraft {
     sellToCover: false,
     targetEventId: 0,
     verb: "TriggerEvent",
-    strategy: "TaxEfficientEarly",
+    strategy: "BracketFilling",
+    bracketCeiling: 12,
     lotMethod: "Fifo",
     taxFree: false,
     // No account is a sensible default for these three: a property or a loan
@@ -421,6 +425,7 @@ function sourcesSpec(draft: EffectDraft): WithdrawalSourcesSpec {
       mode: "Strategy",
       strategy: draft.strategy,
       exclude_accounts: [],
+      ...(draft.strategy === "BracketFilling" ? { bracket_ceiling: draft.bracketCeiling / 100 } : {}),
     }
   );
 }
@@ -527,7 +532,8 @@ export function toEffectSpec(draft: EffectDraft): EffectSpec {
 /** A `Fixed`, alone or wrapped in one `InflationAdjusted` — what the form asks. */
 /** A plain strategy, or nothing — a named account or a custom list is neither. */
 function readStrategy(sources: WithdrawalSourcesSpec | null): WithdrawalStrategy | null {
-  return sources?.mode === "Strategy" && sources.exclude_accounts.length === 0
+  return sources?.mode === "Strategy" && sources.exclude_accounts.length === 0 &&
+    (sources.strategy === "BracketFilling" || sources.bracket_ceiling == null)
     ? sources.strategy
     : null;
 }
@@ -612,16 +618,20 @@ export function draftOfEffect(
         amountMode: effect.amount_mode,
         lotMethod: effect.lot_method,
         taxFree: effect.income_type === "TaxFree",
-        // A null source list compiles to the engine's own default, which is
-        // this draft's default strategy — so it shows as TaxEfficientEarly and
-        // saves as the same thing. A list the picker cannot draw — a named
-        // account, a custom order, a strategy with exclusions — is held as it
-        // stands rather than flattened to the strategy alone.
+        // A null source list compiles to TaxEfficientEarly, even though new
+        // drafts default to BracketFilling. Preserve that saved behavior.
+        // Sources the picker cannot draw (such as account exclusions) are
+        // held verbatim rather than flattened to the strategy alone.
         ...(strategy
-          ? { strategy }
+          ? {
+              strategy,
+              bracketCeiling: effect.sources?.mode === "Strategy"
+                ? (effect.sources.bracket_ceiling ?? 0.12) * 100
+                : base.bracketCeiling,
+            }
           : effect.sources
             ? { rawSources: effect.sources }
-            : {}),
+            : { strategy: "TaxEfficientEarly" }),
         ...withAmount(effect.amount),
       };
     }

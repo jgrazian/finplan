@@ -1220,6 +1220,11 @@ fn build_withdrawal_sources(
                 Some("TaxFreeFirst") => WithdrawalOrder::TaxFreeFirst,
                 Some("ProRata") => WithdrawalOrder::ProRata,
                 Some("PenaltyAware") => WithdrawalOrder::PenaltyAware,
+                Some("BracketFilling") => WithdrawalOrder::BracketFilling {
+                    ceiling_rate: row
+                        .bracket_ceiling
+                        .unwrap_or(WithdrawalOrder::DEFAULT_BRACKET_CEILING),
+                },
                 other => {
                     return Err(ApiError::unprocessable(format!(
                         "unknown withdrawal strategy '{}'",

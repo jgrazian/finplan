@@ -565,6 +565,9 @@ pub enum WithdrawalStrategy {
     TaxFreeFirst,
     ProRata,
     PenaltyAware,
+    /// Tax-deferred first up to the top of `bracket_ceiling`'s bracket, from
+    /// 59.5; otherwise as `PenaltyAware`.
+    BracketFilling,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -582,6 +585,11 @@ pub enum WithdrawalSourcesSpec {
         strategy: WithdrawalStrategy,
         #[serde(default)]
         exclude_accounts: Vec<i64>,
+        /// `BracketFilling` only: the highest marginal rate to fill to, as a
+        /// fraction. Absent means 12%.
+        #[serde(default)]
+        #[ts(optional)]
+        bracket_ceiling: Option<f64>,
     },
     Custom {
         /// Ordered (account, asset) pairs to draw from.
@@ -1140,20 +1148,39 @@ async fn insert_withdrawal_sources(
                 WithdrawalStrategy::TaxFreeFirst => "TaxFreeFirst",
                 WithdrawalStrategy::ProRata => "ProRata",
                 WithdrawalStrategy::PenaltyAware => "PenaltyAware",
+                WithdrawalStrategy::BracketFilling => "BracketFilling",
             }),
         ),
         WithdrawalSourcesSpec::Custom { .. } => ("Custom", None, None, None),
     };
+    // Only bracket filling reads a ceiling; anything else would be dead weight.
+    let bracket_ceiling = match spec {
+        WithdrawalSourcesSpec::Strategy {
+            strategy: WithdrawalStrategy::BracketFilling,
+            bracket_ceiling,
+            ..
+        } => *bracket_ceiling,
+        _ => None,
+    };
+    if let Some(rate) = bracket_ceiling
+        && !(0.0..1.0).contains(&rate)
+    {
+        return Err(ApiError::unprocessable(
+            "bracket_ceiling must be a rate from 0 up to (not including) 1",
+        ));
+    }
 
     sqlx::query(
-        "INSERT INTO effect_withdrawal_sources (effect_id, mode, account_id, asset_id, strategy)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO effect_withdrawal_sources
+            (effect_id, mode, account_id, asset_id, strategy, bracket_ceiling)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
     .bind(effect_id)
     .bind(mode)
     .bind(account_id)
     .bind(asset_id)
     .bind(strategy)
+    .bind(bracket_ceiling)
     .execute(&mut **tx)
     .await?;
 

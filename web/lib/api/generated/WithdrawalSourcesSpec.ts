@@ -2,18 +2,13 @@
 import type { AssetRef } from "./AssetRef";
 import type { WithdrawalStrategy } from "./WithdrawalStrategy";
 
-export type WithdrawalSourcesSpec =
-  | { "mode": "SingleAsset"; account_id: number; asset_id: number }
-  | { "mode": "SingleAccount"; account_id: number }
-  | {
-    "mode": "Strategy";
-    strategy: WithdrawalStrategy;
-    exclude_accounts: Array<number>;
-  }
-  | {
-    "mode": "Custom";
-    /**
-     * Ordered (account, asset) pairs to draw from.
-     */
-    entries: Array<AssetRef>;
-  };
+export type WithdrawalSourcesSpec = { "mode": "SingleAsset", account_id: number, asset_id: number, } | { "mode": "SingleAccount", account_id: number, } | { "mode": "Strategy", strategy: WithdrawalStrategy, exclude_accounts: Array<number>, 
+/**
+ * `BracketFilling` only: the highest marginal rate to fill to, as a
+ * fraction. Absent means 12%.
+ */
+bracket_ceiling?: number, } | { "mode": "Custom", 
+/**
+ * Ordered (account, asset) pairs to draw from.
+ */
+entries: Array<AssetRef>, };

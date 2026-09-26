@@ -7,6 +7,7 @@
 //! - `simulation_result` - Result structure and methods
 //! - `builder_dsl` - Builder DSL for fluent simulation setup
 //! - `contribution_limits` - Contribution limit enforcement tests
+//! - `withdrawal_strategy` - Strategy sweep source order and bracket filling
 //!
 //! Legacy tests (disabled - use old API):
 //! - `event_effects` - Event system tests (Transfer, Sweep, triggers)
@@ -27,3 +28,4 @@ mod rsu;
 mod simulation_result;
 mod snapshots;
 mod solve;
+mod withdrawal_strategy;

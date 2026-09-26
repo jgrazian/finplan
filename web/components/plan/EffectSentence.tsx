@@ -628,20 +628,6 @@ function EffectDetails({
       </Field>,
     );
   }
-  if (fields.strategy && !effect.rawSources) {
-    grid.push(
-      <Field key="strategy" label="Source order">
-        <Dropdown
-          className="dd-field"
-          options={STRATEGIES.map((s) => ({ value: s, label: s }))}
-          value={effect.strategy}
-          ariaLabel="Source order"
-          disabled={disabled}
-          onChange={(strategy) => onChange({ strategy })}
-        />
-      </Field>,
-    );
-  }
   if (fields.lots) {
     grid.push(
       <Field key="lots" label="Sell lots">
@@ -669,6 +655,37 @@ function EffectDetails({
           onChange={(picked) => onChange({ taxFree: picked === "TaxFree" })}
         />
       </Field>,
+    );
+  }
+
+  if (fields.strategy && !effect.rawSources) {
+    grid.push(
+      <div key="strategy" style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px, 1fr))", gap: 12 }}>
+        <Field label="Source order">
+          <Dropdown
+            className="dd-field"
+            options={STRATEGIES.map((s) => ({ value: s, label: s === "BracketFilling" ? "Bracket Filling" : s }))}
+            value={effect.strategy}
+            ariaLabel="Source order"
+            disabled={disabled}
+            onChange={(strategy) => onChange({ strategy })}
+          />
+        </Field>
+        {effect.strategy === "BracketFilling" && (
+          <Field label="Bracket ceiling">
+            <NumberInput
+              value={effect.bracketCeiling}
+              onValueChange={(bracketCeiling) => onChange({ bracketCeiling })}
+              min={0}
+              max={99.99}
+              decimals={2}
+              suffix="%"
+              aria-label="Bracket ceiling"
+              disabled={disabled}
+            />
+          </Field>
+        )}
+      </div>,
     );
   }
 

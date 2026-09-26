@@ -686,35 +686,26 @@ pub fn evaluate_effect_into(
             lot_method,
             income_type: _, // No longer used - taxation happens during liquidation
         } => {
-            // Step 1: Determine source account(s) to liquidate from
-            let source_accounts: Vec<AccountId> = match sources {
-                WithdrawalSources::SingleAsset(coord) => vec![coord.account_id],
-                WithdrawalSources::SingleAccount(id) => vec![*id],
+            // Step 1: Determine source account(s) to liquidate from, in order.
+            // A `Some` ceiling caps the ordinary income that step may add.
+            let source_accounts: Vec<(AccountId, Option<f64>)> = match sources {
+                WithdrawalSources::SingleAsset(coord) => vec![(coord.account_id, None)],
+                WithdrawalSources::SingleAccount(id) => vec![(*id, None)],
                 WithdrawalSources::Custom(list) => {
                     // Inline dedup: for small N, linear search is faster than sort+dedup
-                    let mut accounts: Vec<AccountId> = Vec::with_capacity(list.len());
+                    let mut accounts: Vec<(AccountId, Option<f64>)> =
+                        Vec::with_capacity(list.len());
                     for coord in list {
-                        if !accounts.contains(&coord.account_id) {
-                            accounts.push(coord.account_id);
+                        if !accounts.iter().any(|(id, _)| *id == coord.account_id) {
+                            accounts.push((coord.account_id, None));
                         }
                     }
                     accounts
                 }
                 WithdrawalSources::Strategy {
-                    exclude_accounts, ..
-                } => state
-                    .portfolio
-                    .accounts
-                    .iter()
-                    .filter(|(id, _)| !exclude_accounts.contains(id))
-                    .filter_map(|(_, acc)| {
-                        if matches!(acc.flavor, AccountFlavor::Investment(_)) {
-                            Some(acc.account_id)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect(),
+                    order,
+                    exclude_accounts,
+                } => strategy_sources(*order, exclude_accounts, state),
             };
 
             // Track start index so we can analyze only the new effects for Sweep logic
@@ -740,15 +731,18 @@ pub fn evaluate_effect_into(
                 .evaluate(&context)
                 .map_err(TransferEvaluationError::Expression)?;
 
+            // Ordinary income this sweep has added so far: each sale reads the
+            // year-to-date total from `state`, which only moves once applied.
+            let mut added_income = 0.0;
+
             // Step 2: Liquidate from source accounts until target is met
-            for from_account in source_accounts {
+            for (from_account, income_ceiling) in source_accounts {
                 if remaining < 0.01 {
                     break;
                 }
 
-                let before_len = out.len();
-                evaluate_effect_into(
-                    &EventEffect::AssetSale {
+                let sale = match income_ceiling {
+                    None => EventEffect::AssetSale {
                         from: from_account,
                         asset_id: match sources {
                             WithdrawalSources::SingleAsset(coord) => Some(coord.asset_id),
@@ -758,9 +752,43 @@ pub fn evaluate_effect_into(
                         amount_mode: *amount_mode,
                         lot_method: *lot_method,
                     },
-                    state,
-                    out,
-                )?;
+                    Some(ceiling) => {
+                        let ytd = state.taxes.ytd_tax.ordinary_income + added_income;
+                        let room = ceiling - ytd;
+                        if room < 0.01 {
+                            continue;
+                        }
+                        let wanted = match amount_mode {
+                            AmountMode::Gross => remaining,
+                            AmountMode::Net => calculate_gross_from_net(
+                                remaining,
+                                ytd,
+                                &state.taxes.config.federal_brackets,
+                                state.taxes.config.state_rate,
+                            ),
+                        };
+                        EventEffect::AssetSale {
+                            from: from_account,
+                            asset_id: None,
+                            amount: TransferAmount::fixed(wanted.min(room)),
+                            amount_mode: AmountMode::Gross,
+                            lot_method: *lot_method,
+                        }
+                    }
+                };
+
+                let before_len = out.len();
+                evaluate_effect_into(&sale, state, out)?;
+                added_income += out[before_len..]
+                    .iter()
+                    .filter_map(|ev| match ev {
+                        EvalEvent::IncomeTax {
+                            gross_income_amount,
+                            ..
+                        } => Some(*gross_income_amount),
+                        _ => None,
+                    })
+                    .sum::<f64>();
 
                 // Sum up what was liquidated from this account (only new effects)
                 let liquidated_from_account: f64 = out[before_len..]
@@ -1234,111 +1262,73 @@ pub fn evaluate_effect_into(
     }
 }
 
-/// Resolve withdrawal sources based on strategy or custom list
-/// Only Investment accounts (with `InvestmentContainer`) are considered for withdrawals
-pub fn resolve_withdrawal_sources(
-    sources: &WithdrawalSources,
+/// The accounts a strategy sweep sells from, in the order it sells them.
+///
+/// Only Investment accounts hold positions to sell. Ties within a tax status
+/// go by account id, so a run does not depend on hash-map order. A `Some`
+/// ceiling marks bracket filling's first pass over a tax-deferred account:
+/// it may add ordinary income only up to that year-to-date total.
+pub fn strategy_sources(
+    order: WithdrawalOrder,
+    exclude_accounts: &[AccountId],
     state: &SimulationState,
-) -> Vec<AssetCoord> {
-    match sources {
-        WithdrawalSources::SingleAsset(asset_coord) => vec![*asset_coord],
-        WithdrawalSources::SingleAccount(account_id) => {
-            // Get all positions from this account if it's an Investment account
-            if let Some(account) = state.portfolio.accounts.get(account_id)
-                && let AccountFlavor::Investment(inv) = &account.flavor
-            {
-                inv.positions
-                    .iter()
-                    .map(|lot| AssetCoord {
-                        account_id: *account_id,
-                        asset_id: lot.asset_id,
-                    })
-                    .collect()
-            } else {
-                vec![]
-            }
-        }
-        WithdrawalSources::Custom(list) => list.clone(),
-        WithdrawalSources::Strategy {
-            order,
-            exclude_accounts,
-        } => {
-            // Filter to only Investment accounts (the only ones with positions to sell)
-            let mut investment_accounts: Vec<_> = state
-                .portfolio
-                .accounts
-                .iter()
-                .filter(|(id, _)| !exclude_accounts.contains(id))
-                .filter_map(|(id, acc)| {
-                    if let AccountFlavor::Investment(inv) = &acc.flavor {
-                        Some((id, acc, inv))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+) -> Vec<(AccountId, Option<f64>)> {
+    let mut accounts: Vec<(AccountId, TaxStatus)> = state
+        .portfolio
+        .accounts
+        .iter()
+        .filter(|(id, _)| !exclude_accounts.contains(id))
+        .filter_map(|(id, acc)| match &acc.flavor {
+            AccountFlavor::Investment(inv) => Some((*id, inv.tax_status)),
+            _ => None,
+        })
+        .collect();
 
-            // Sort by tax status according to the withdrawal strategy
-            match order {
-                WithdrawalOrder::TaxEfficientEarly => {
-                    investment_accounts.sort_by_key(|(_, _, inv)| match inv.tax_status {
-                        TaxStatus::Taxable => 0,
-                        TaxStatus::TaxDeferred => 1,
-                        TaxStatus::TaxFree => 2,
-                    });
-                }
-                WithdrawalOrder::TaxDeferredFirst => {
-                    investment_accounts.sort_by_key(|(_, _, inv)| match inv.tax_status {
-                        TaxStatus::TaxDeferred => 0,
-                        TaxStatus::Taxable => 1,
-                        TaxStatus::TaxFree => 2,
-                    });
-                }
-                WithdrawalOrder::TaxFreeFirst => {
-                    investment_accounts.sort_by_key(|(_, _, inv)| match inv.tax_status {
-                        TaxStatus::TaxFree => 0,
-                        TaxStatus::Taxable => 1,
-                        TaxStatus::TaxDeferred => 2,
-                    });
-                }
-                WithdrawalOrder::ProRata => {
-                    // Pro-rata: return all accounts (proportional withdrawal handled in caller)
-                }
-                WithdrawalOrder::PenaltyAware => {
-                    // Before 59.5: Taxable → TaxFree → TaxDeferred (avoid 10% penalty)
-                    // After 59.5: Same as TaxEfficientEarly
-                    if state.timeline.is_below_early_withdrawal_age() {
-                        investment_accounts.sort_by_key(|(_, _, inv)| match inv.tax_status {
-                            TaxStatus::Taxable => 0,
-                            TaxStatus::TaxFree => 1,
-                            TaxStatus::TaxDeferred => 2, // Last to avoid penalty
-                        });
-                    } else {
-                        // After 59.5, use TaxEfficientEarly order
-                        investment_accounts.sort_by_key(|(_, _, inv)| match inv.tax_status {
-                            TaxStatus::Taxable => 0,
-                            TaxStatus::TaxDeferred => 1,
-                            TaxStatus::TaxFree => 2,
-                        });
-                    }
-                }
-            }
-
-            // Flatten to AssetCoord pairs from positions in each investment account
-            investment_accounts
-                .iter()
-                .flat_map(|(_acc_id, acc, inv)| {
-                    inv.positions
-                        .iter()
-                        .map(|lot| AssetCoord {
-                            account_id: acc.account_id,
-                            asset_id: lot.asset_id,
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect()
+    let early = state.timeline.is_below_early_withdrawal_age();
+    // Rank of each tax status: taxable, tax-deferred, tax-free.
+    let rank: [u8; 3] = match order {
+        WithdrawalOrder::TaxEfficientEarly => [0, 1, 2],
+        WithdrawalOrder::TaxDeferredFirst => [1, 0, 2],
+        WithdrawalOrder::TaxFreeFirst => [1, 2, 0],
+        // Proportional draws are not implemented; this is account order.
+        WithdrawalOrder::ProRata => [0, 0, 0],
+        // Before 59.5 the tax-deferred accounts go last, to avoid the penalty.
+        WithdrawalOrder::PenaltyAware | WithdrawalOrder::BracketFilling { .. } if early => {
+            [0, 2, 1]
         }
+        WithdrawalOrder::PenaltyAware | WithdrawalOrder::BracketFilling { .. } => [0, 1, 2],
+    };
+    let rank_of = |status: TaxStatus| match status {
+        TaxStatus::Taxable => rank[0],
+        TaxStatus::TaxDeferred => rank[1],
+        TaxStatus::TaxFree => rank[2],
+    };
+    accounts.sort_by_key(|(id, status)| (rank_of(*status), *id));
+
+    let mut sources: Vec<(AccountId, Option<f64>)> = Vec::with_capacity(accounts.len() * 2);
+    if let WithdrawalOrder::BracketFilling { ceiling_rate } = order
+        && !early
+    {
+        let ceiling = bracket_ceiling(&state.taxes.config.federal_brackets, ceiling_rate);
+        sources.extend(
+            accounts
+                .iter()
+                .filter(|(_, status)| *status == TaxStatus::TaxDeferred)
+                .map(|(id, _)| (*id, Some(ceiling))),
+        );
     }
+    sources.extend(accounts.iter().map(|(id, _)| (*id, None)));
+    sources
+}
+
+/// The ordinary income at which the marginal rate first exceeds
+/// `ceiling_rate`: the top of the highest bracket taxed at or below it.
+/// Unbounded when no bracket is taxed above the ceiling.
+fn bracket_ceiling(brackets: &[crate::model::TaxBracket], ceiling_rate: f64) -> f64 {
+    brackets
+        .iter()
+        .find(|bracket| bracket.rate > ceiling_rate + 1e-9)
+        .map_or(f64::INFINITY, |bracket| bracket.threshold)
 }
 
 /// Refuse an effect aimed at the wrong kind of account, rather than let it
