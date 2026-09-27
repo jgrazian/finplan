@@ -45,10 +45,13 @@ export function SensitivityPanel({
   const band = Math.round(results.fraction * 100);
 
   return (
-    <div style={{ padding: "18px 20px 22px" }}>
+    <div className="an-sens" style={{ padding: "18px 20px 22px" }}>
       <Dropdown ariaLabel="Sensitivity outcome" value={metric} onChange={setMetric} options={[{ value: "funding", label: "Cash funding check" }, { value: "success", label: "Positive ending net worth" }]} />
       {rows.length < results.rows.length && <p>Not measured — rerun to rank all parameters by this outcome.</p>}
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+      <div
+        className="an-wrap"
+        style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}
+      >
         <h4 style={{ margin: 0 }}>What changes the outcome</h4>
         <span
           style={{
@@ -62,6 +65,7 @@ export function SensitivityPanel({
       </div>
 
       <div
+        className="an-sens-head"
         style={{
           display: "grid",
           gridTemplateColumns: COLUMNS,
@@ -90,6 +94,7 @@ export function SensitivityPanel({
         return (
           <div
             key={row.parameterId}
+            className="an-sens-row"
             style={{
               display: "grid",
               gridTemplateColumns: COLUMNS,
@@ -170,7 +175,10 @@ export function SensitivityPanel({
         );
       })}
 
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 16 }}>
+      <div
+        className="an-wrap"
+        style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 16 }}
+      >
         <span style={{ flex: 1, fontSize: 12.5 }}>
           {swept.size > 0 ? (
             <>

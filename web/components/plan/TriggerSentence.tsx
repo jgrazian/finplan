@@ -126,7 +126,7 @@ export function TriggerSentence({
   if (trigger.raw) {
     return (
       <>
-        <div className="sentence"><span>Fires</span>{first}</div>
+        <div className="sentence trigger-sentence"><span>Fires</span>{first}</div>
         <Note>
           {detailTrigger(trigger.raw, namesOf(context))}. Nested deeper than this form draws,
           so it is saved back exactly as it stands — pick another shape to replace it.
@@ -138,7 +138,7 @@ export function TriggerSentence({
   if (isManual(trigger.form)) {
     return (
       <>
-        <div className="sentence"><span>Fires</span>{first}<span className="punct">.</span></div>
+        <div className="sentence trigger-sentence"><span>Fires</span>{first}<span className="punct">.</span></div>
         <ManualNote context={context} />
       </>
     );
@@ -149,7 +149,7 @@ export function TriggerSentence({
     const condition = { ...trigger.condition, form: leaf };
     return (
       <>
-        <div className="sentence">
+        <div className="sentence trigger-sentence">
           <span>Fires</span>
           {first}
           <ConditionSlots
@@ -170,10 +170,10 @@ export function TriggerSentence({
       onChange({ ...trigger, children: trigger.children.map((c, i) => (i === index ? next : c)) });
     return (
       <>
-        <div className="sentence"><span>Fires</span>{first}<span className="punct">:</span></div>
+        <div className="sentence trigger-sentence"><span>Fires</span>{first}<span className="punct">:</span></div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingLeft: 18 }}>
           {trigger.children.map((condition, index) => (
-            <div key={index} className="sentence">
+            <div key={index} className="sentence trigger-sentence">
               <span className="stat-l">{index + 1}</span>
               <ConditionFormSlot
                 value={condition.form}
@@ -255,7 +255,7 @@ export function TriggerSentence({
 
   return (
     <>
-      <div className="sentence">
+      <div className="sentence trigger-sentence">
         <span>Fires</span>
         {first}
         <span>up to</span>
@@ -269,7 +269,7 @@ export function TriggerSentence({
           placeholder="∞"
           aria-label="At most, occurrences — empty for no limit"
         />
-        <span>{trigger.maxOccurrences === 1 ? "time" : "times"}</span>
+        <span className="sentence-unit">{trigger.maxOccurrences === 1 ? "time" : "times"}</span>
         {bound("start", "starting", "at plan start")}
         {bound("end", "ending", "never")}
         <span className="punct">.</span>

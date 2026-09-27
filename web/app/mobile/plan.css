@@ -1,0 +1,357 @@
+/* Phone layout for the plan tab — see app/mobile/shell.css for the shared rules. */
+
+/* ── Desktop (the values PlanScreen used to carry inline) ─────────────────── */
+
+.plan-body {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  align-items: stretch;
+  min-height: 460px;
+}
+
+.plan-rail {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  align-self: start;
+  height: min(78vh, 780px);
+  min-height: 430px;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--color-divider);
+}
+
+.plan-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 18px 12px;
+}
+
+.plan-rail-list {
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Only a phone opens a row as a page, so only a phone shows the chevron. */
+.event-row-chev {
+  display: none;
+}
+
+@media (max-width: 639px) {
+  /* ── 1b · Scenario strip: two lines and Edit ─────────────────────────── */
+
+  .scenario-strip-row {
+    flex-wrap: nowrap !important;
+    padding: 10px 16px !important;
+  }
+
+  .scenario-strip-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .scenario-strip-row .btn {
+    min-height: 44px;
+  }
+
+  .scenario-strip-fields {
+    padding: 0 16px 14px !important;
+  }
+
+  /* ── 1b · The rail becomes the page ──────────────────────────────────── */
+
+  .plan-body {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .plan-rail {
+    display: block;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    border-right: 0;
+  }
+
+  .plan-rail-head {
+    gap: 8px;
+    padding: 12px 16px;
+  }
+
+  .plan-rail-head .seg {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .plan-rail-head .seg-opt {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+
+  .plan-rail-head > .btn {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    font-size: 22px;
+  }
+
+  .plan-rail-list {
+    overflow: visible;
+  }
+
+  /* Event rows: name and tag, the summary under them, a chevron right. */
+  .event-row {
+    align-items: center !important;
+    min-height: 64px;
+    padding: 10px 12px 10px 16px !important;
+  }
+
+  .event-row.rowsel[aria-selected="true"] {
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+  }
+
+  /* Reordering is a desktop gesture; on a phone the grip only eats width. */
+  .event-row .grip {
+    display: none;
+  }
+
+  .event-row-head {
+    flex-wrap: wrap;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    gap: 4px 8px !important;
+  }
+
+  .event-row-name {
+    font-family: var(--font-body) !important;
+    font-size: 16px !important;
+    font-weight: 500;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .event-row-summary {
+    font-size: 13px !important;
+    line-height: 1.45;
+    margin-top: 4px !important;
+    color: var(--color-text) !important;
+    opacity: .62;
+    overflow-wrap: anywhere;
+  }
+
+  .event-row-chev {
+    display: block;
+    flex: none;
+    padding-left: 8px;
+    font-size: 22px;
+    line-height: 1;
+    color: var(--color-accent);
+  }
+
+  .plan-body .rowsel[role="option"] {
+    min-height: 44px;
+  }
+
+  /* The lanes need a width a phone does not have. */
+  .plan-timeline {
+    display: none;
+  }
+
+  /* ── 1c · The event as a pushed page ─────────────────────────────────── */
+
+  .plan-body .btn {
+    min-height: 44px;
+  }
+
+  /* Inputs at 16px, so iOS does not zoom into them; 44px to hit. */
+  .plan-body input:not([type="checkbox"]):not([type="radio"]),
+  .plan-body textarea,
+  .plan-body .input,
+  .plan-body .dd-trigger,
+  .scenario-strip input,
+  .scenario-strip .input,
+  .scenario-strip .dd-trigger {
+    font-size: 16px;
+  }
+
+  .plan-body .input,
+  .plan-body .dd-trigger,
+  .scenario-strip .input,
+  .scenario-strip .dd-trigger {
+    min-height: 44px !important;
+  }
+
+  .plan-body .dp-well,
+  .plan-body .numfield {
+    min-height: 44px !important;
+  }
+
+  .event-identity {
+    padding: 16px !important;
+    gap: 14px !important;
+  }
+
+  .event-name,
+  .event-note {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .event-identity .field > label {
+    font-size: 13px;
+  }
+
+  /* "Enabled" as a row, the toggle at its right edge. */
+  .event-toggle {
+    flex: 1 1 100%;
+    flex-direction: row-reverse;
+    justify-content: space-between;
+    min-height: 44px;
+    font-size: 16px !important;
+  }
+
+  .event-toggle .dot {
+    width: 22px;
+    height: 22px;
+  }
+
+  .event-notes {
+    padding: 10px 16px 0 !important;
+  }
+
+  .event-section {
+    padding: 18px 16px !important;
+  }
+
+  .event-foot {
+    padding: 14px 16px !important;
+    gap: 10px 24px !important;
+  }
+
+  .event-foot > :last-child {
+    margin-left: 0 !important;
+    align-items: flex-start !important;
+    text-align: left !important;
+  }
+
+  .event-foot > :last-child > div {
+    justify-content: flex-start !important;
+  }
+
+  .parameter-editor {
+    padding: 16px !important;
+  }
+
+  /* Duplicate | Delete, or Revert | Apply while there is something to apply. */
+  .event-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-divider);
+  }
+
+  .event-actions .btn {
+    min-height: 48px;
+  }
+
+  .event-actions-status {
+    grid-column: 1 / -1;
+    font-size: 13px;
+    opacity: .6;
+  }
+
+  .event-actions-dirty {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    background: var(--color-surface);
+  }
+
+  /* When, as label / field rows: the words in an 84px column, every slot
+     the full width beside them. */
+  .trigger-sentence {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px 10px;
+    padding-left: 0;
+    font-size: 15px;
+  }
+
+  .trigger-sentence > * {
+    grid-column: 2;
+    min-width: 0;
+  }
+
+  .trigger-sentence > :first-child {
+    margin-left: 0;
+  }
+
+  .trigger-sentence > span:not([class]),
+  .trigger-sentence > .stat-l {
+    grid-column: 1;
+    opacity: .7;
+    font-size: 13px;
+  }
+
+  .trigger-sentence > .punct {
+    display: none;
+  }
+
+  /* "times" reads as the count's unit, under it. */
+  .trigger-sentence > .sentence-unit {
+    margin-top: -6px;
+    font-size: 12px;
+    opacity: .6;
+  }
+
+  .trigger-sentence > .dd-inline,
+  .trigger-sentence > .numfield,
+  .trigger-sentence > .dp {
+    display: flex;
+    width: 100%;
+  }
+
+  .trigger-sentence > .dd-inline .dd-trigger {
+    width: 100%;
+  }
+
+  .trigger-sentence > .dd-inline .dd-menu {
+    max-width: 100%;
+  }
+
+  .trigger-sentence > .btn {
+    justify-self: start;
+    margin-left: 0 !important;
+  }
+
+  /* A compound trigger's conditions sit flush, not indented under "Fires". */
+  .event-section .trigger-sentence + div {
+    padding-left: 0 !important;
+  }
+
+  /* What: effect sentences keep wrapping, but a long slot (an expression)
+     breaks rather than pushing the card wider than the screen. */
+  .event-section .sentence:not(.trigger-sentence) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .event-section .slot.x {
+    max-width: 100%;
+  }
+
+  .event-section .dd-inline .dd-menu {
+    max-width: calc(100vw - 32px);
+  }
+}

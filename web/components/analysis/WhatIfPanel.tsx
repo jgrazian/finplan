@@ -10,8 +10,9 @@ import type {
   WhatIfEntry,
   WhatIfOutcome,
 } from "@/lib/api/types";
-import { fmtInt } from "@/lib/format";
+import { fmtInt, fmtPercent } from "@/lib/format";
 import { useAnalysis } from "@/lib/hooks/useAnalysis";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { useWhatIfStack } from "@/lib/hooks/useWhatIf";
 import { planAxis } from "@/lib/view/axis";
@@ -298,9 +299,44 @@ export function WhatIfPanel({
   }, [shown, entries, ctx]);
   const fan = useMemo(() => (outcome ? fanView(outcome) : null), [outcome]);
 
+  // On a phone the page-level actions leave the status row for a sticky bar
+  // above the tab bar, where a thumb reaches them.
+  const mobile = useIsMobile();
+  const actions = (
+    <>
+      <Button
+        variant="ghost"
+        disabled={!entries || entries.length === 0}
+        onClick={() => edit([])}
+      >
+        Reset
+      </Button>
+      <Button
+        variant="secondary"
+        disabled={!canWrite}
+        title={canWrite ? undefined : "Switch an override on first"}
+        onClick={() => {
+          setCopyName(`${scenario.name} — what-if`);
+          setDialog("save");
+        }}
+      >
+        Save as scenario
+      </Button>
+      <Button
+        variant="primary"
+        disabled={!canWrite}
+        title={canWrite ? undefined : "Switch an override on first"}
+        onClick={() => setDialog("apply")}
+      >
+        Apply to plan
+      </Button>
+    </>
+  );
+
   return (
     <>
       <div
+        className="wi-bar"
         style={{
           display: "flex",
           alignItems: "center",
@@ -327,38 +363,23 @@ export function WhatIfPanel({
               : ""}
           </span>
         )}
-        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-          <Button
-            variant="ghost"
-            disabled={!entries || entries.length === 0}
-            onClick={() => edit([])}
-          >
-            Reset
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={!canWrite}
-            title={canWrite ? undefined : "Switch an override on first"}
-            onClick={() => {
-              setCopyName(`${scenario.name} — what-if`);
-              setDialog("save");
-            }}
-          >
-            Save as scenario
-          </Button>
-          <Button
-            variant="primary"
-            disabled={!canWrite}
-            title={canWrite ? undefined : "Switch an override on first"}
-            onClick={() => setDialog("apply")}
-          >
-            Apply to plan
-          </Button>
-        </div>
+        {!mobile && <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>{actions}</div>}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "380px minmax(0, 1fr)" }}>
+      {mobile && shown && (
+        <PlanCompare
+          plan={fmtPercent(shown.outcome.steps[0].point.success_rate)}
+          after={fmtPercent(shown.outcome.steps[shown.outcome.steps.length - 1].point.success_rate)}
+          count={shown.ranFor.length}
+        />
+      )}
+
+      <div
+        className="mobile-stack"
+        style={{ display: "grid", gridTemplateColumns: "380px minmax(0, 1fr)" }}
+      >
         <aside
+          className="wi-aside"
           style={{
             padding: "16px 18px 18px",
             borderRight: "1px solid var(--color-divider)",
@@ -405,6 +426,7 @@ export function WhatIfPanel({
         </aside>
 
         <div
+          className="wi-results"
           style={{
             padding: "16px 20px 20px",
             display: "flex",
@@ -448,7 +470,10 @@ export function WhatIfPanel({
               }}
               aria-busy={!current}
             >
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}>
+              <div
+                className="wi-figures"
+                style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 16 }}
+              >
                 <Figure label="success" value={stats.success} delta={stats.successDelta} accent />
                 <Figure label={stats.endLabel} value={stats.end} delta={stats.endDelta} />
                 <Figure label="P10 runs dry" value={stats.dry} delta={stats.dryDelta} />
@@ -475,6 +500,8 @@ export function WhatIfPanel({
           )}
         </div>
       </div>
+
+      {mobile && <div className="mobile-sticky-actions wi-sticky">{actions}</div>}
 
       {dialog === "apply" && (
         <Dialog
@@ -519,6 +546,29 @@ export function WhatIfPanel({
         </Dialog>
       )}
     </>
+  );
+}
+
+/** Phone only: the plan's success rate against the stack's, in one line. */
+function PlanCompare({ plan, after, count }: { plan: string; after: string; count: number }) {
+  return (
+    <div className="wi-compare">
+      <div>
+        <div className="stat-l">Plan</div>
+        <div className="wi-compare-v">{plan}</div>
+      </div>
+      <span aria-hidden="true" className="wi-compare-arrow">
+        →
+      </span>
+      <div>
+        <div className="stat-l">
+          With {count} {count === 1 ? "override" : "overrides"}
+        </div>
+        <div className="wi-compare-v" style={{ color: "var(--color-accent-800)" }}>
+          {after}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -611,7 +661,7 @@ function AddOverride({
   );
 
   return (
-    <div ref={root} className="dd" style={{ alignSelf: "flex-start" }} data-open={open ? "true" : undefined}>
+    <div ref={root} className="dd wi-add" style={{ alignSelf: "flex-start" }} data-open={open ? "true" : undefined}>
       <Button
         variant="add"
         disabled={disabled}

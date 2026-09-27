@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 /**
  * The framed application window. Every screen renders inside one of these,
@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
-    <div className="app blueprint" style={{ width: "100%", maxWidth: 1440, margin: "0 auto" }}>
+    <div className="app app-shell blueprint">
       <i className="corner tl" />
       <i className="corner tr" />
       <i className="corner bl" />
@@ -18,7 +18,8 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 /**
  * The two-column split both screens use: a main pane with a hairline on its
- * right edge and a fixed-width rail beside it.
+ * right edge and a fixed-width rail beside it. On a phone the rail drops
+ * below the main pane.
  */
 export function SplitPane({
   main,
@@ -31,14 +32,11 @@ export function SplitPane({
 }) {
   return (
     <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: `1fr ${railWidth}px`,
-        alignItems: "stretch",
-      }}
+      className="split-pane"
+      style={{ "--rail-width": `${railWidth}px` } as CSSProperties}
     >
-      <div style={{ borderRight: "1px solid var(--color-divider)", minWidth: 0 }}>{main}</div>
-      <aside>{rail}</aside>
+      <div className="split-pane-main">{main}</div>
+      <aside className="split-pane-rail">{rail}</aside>
     </div>
   );
 }

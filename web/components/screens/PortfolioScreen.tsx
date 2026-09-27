@@ -48,12 +48,14 @@ export function PortfolioScreen({
 
   return (
     <>
-      <SubTabBar
-        ariaLabel="Portfolio section"
-        options={SECTIONS}
-        value={section}
-        onChange={nav.setSection}
-      />
+      <div className="portfolio-subtabs">
+        <SubTabBar
+          ariaLabel="Portfolio section"
+          options={SECTIONS}
+          value={section}
+          onChange={nav.setSection}
+        />
+      </div>
       {section === "accounts" ? (
         <AccountsScreen
           scenarioId={scenarioId}

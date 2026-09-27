@@ -50,7 +50,7 @@ export function EventRail({
             <div
               key={event.id}
               ref={attachRow(serverId)}
-              className="rowsel griprow"
+              className="rowsel griprow event-row"
               role="option"
               tabIndex={0}
               aria-selected={selected}
@@ -79,6 +79,7 @@ export function EventRail({
               <DragHandle label={event.id} props={handleProps(serverId)} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
+                  className="event-row-head"
                   style={{
                     display: "flex",
                     alignItems: "baseline",
@@ -87,6 +88,7 @@ export function EventRail({
                   }}
                 >
                   <span
+                    className="event-row-name"
                     style={{
                       fontFamily: "ui-monospace, Menlo, monospace",
                       fontSize: 12.5,
@@ -107,10 +109,12 @@ export function EventRail({
                 {/* When it fires, and — where there is one — for how much. An
                     event with no figure of its own is a marker other events are
                     timed against, so it says when instead. */}
-                <div style={{ fontSize: 12, marginTop: 3, color: MUTED }}>
+                <div className="event-row-summary" style={{ fontSize: 12, marginTop: 3, color: MUTED }}>
                   {event.trigger} · {event.amount === NO_AMOUNT ? event.next : event.amount}
                 </div>
               </div>
+              {/* A phone opens the row as a page; the chevron says so. */}
+              <span className="event-row-chev" aria-hidden="true">›</span>
             </div>
           );
         })}

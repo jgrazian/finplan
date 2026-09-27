@@ -52,7 +52,8 @@ export function Dialog({
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 50,
+        // Above a phone's pushed page (.mobile-pushed, 50).
+        zIndex: 60,
         display: "flex",
         alignItems: "flex-start",
         justifyContent: "center",
@@ -106,6 +107,8 @@ export function Dialog({
 /** Two controls on one row, the dialogs' default rhythm. */
 export function DialogRow({ children }: { children: ReactNode }) {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>{children}</div>
+    <div className="mobile-stack" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+      {children}
+    </div>
   );
 }

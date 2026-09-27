@@ -13,6 +13,7 @@ import {
 } from "@/components/ui";
 import type { EffectSpec, Event as ApiEvent } from "@/lib/api/types";
 import { fmtClock } from "@/lib/format";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import type { PlanEvent } from "@/lib/types";
 import { eventRefs } from "@/lib/view/refs";
 import { namesOf } from "@/lib/view/events";
@@ -93,6 +94,9 @@ export function EventEditor({
   const seed = () =>
     draftOfEvent(raw, context.accounts[0]?.id ?? 0, context.assets[0]?.id ?? 0, namesOf(context));
   const [draft, setDraft] = useState<EventDraft>(seed);
+  // On a phone the editor is a page of its own: labelled fields, and the
+  // actions moved from the identity row to the foot of the page.
+  const isMobile = useIsMobile();
   const previousParameters = useRef(new Map((context.parameters ?? []).map((p) => [p.id, p.name])));
   useEffect(() => {
     const next = new Map((context.parameters ?? []).map((p) => [p.id, p.name]));
@@ -156,6 +160,7 @@ export function EventEditor({
       {/* 1 · Identity — across the top, so both columns below are about the
           same event without either having to say which. */}
       <div
+        className="event-identity"
         style={{
           display: "flex",
           alignItems: "center",
@@ -168,7 +173,11 @@ export function EventEditor({
         {/* Unlabelled, and marked dirty by the accent rule alone: the name is
             the heading of the screen below it, and a label appearing only when
             the field is edited would shift the whole row down a line. */}
-        <Field className={cx(changed.name && "field-dirty")} style={{ width: 220 }}>
+        <Field
+          label={isMobile ? "Name" : undefined}
+          className={cx("event-name", changed.name && "field-dirty")}
+          style={{ width: 220 }}
+        >
           <CompactInput
             value={draft.name}
             readOnly={offline}
@@ -183,7 +192,8 @@ export function EventEditor({
           />
         </Field>
         <Field
-          className={cx(changed.description && "field-dirty")}
+          label={isMobile ? "Note" : undefined}
+          className={cx("event-note", changed.description && "field-dirty")}
           style={{ flex: 1, minWidth: 160 }}
         >
           <CompactInput
@@ -199,7 +209,7 @@ export function EventEditor({
         {/* Time triggers already fire once per due day and schedules ignore
             the flag; a hidden flag keeps its saved value. */}
         {firesOnceMatters(draft.trigger) && (
-          <label className="radio" style={{ fontSize: 12.5 }}>
+          <label className="radio event-toggle" style={{ fontSize: 12.5 }}>
             <input
               type="checkbox"
               checked={draft.firesOnce}
@@ -210,7 +220,7 @@ export function EventEditor({
             Fires once
           </label>
         )}
-        <label className="radio" style={{ fontSize: 12.5 }}>
+        <label className="radio event-toggle" style={{ fontSize: 12.5 }}>
           <input
             type="checkbox"
             checked={draft.enabled}
@@ -223,11 +233,11 @@ export function EventEditor({
 
         {/* Only where something follows it: offline and unedited, the row ends
             at Enabled, and a rule against nothing reads as a missing control. */}
-        {(dirty || savedAt != null || onDuplicate || onDelete) && (
+        {!isMobile && (dirty || savedAt != null || onDuplicate || onDelete) && (
           <span style={{ opacity: 0.35 }}>|</span>
         )}
 
-        {dirty ? (
+        {!isMobile && (dirty ? (
           <>
             <span style={{ fontSize: 11.5, color: MUTED }}>{pending} unsaved</span>
             <Button shortcut="esc" onClick={revert}>
@@ -261,11 +271,11 @@ export function EventEditor({
               </Button>
             )}
           </>
-        )}
+        ))}
       </div>
 
       {(error || !draft.enabled) && (
-        <div style={{ padding: "10px 28px 0" }}>
+        <div className="event-notes" style={{ padding: "10px 28px 0" }}>
           {error && (
             <p style={{ margin: 0, fontSize: 12, color: "var(--color-accent-900)" }}>
               {error}
@@ -309,6 +319,7 @@ export function EventEditor({
           drives it — pinned under both sections so it reads as the result of
           them. */}
       <div
+        className="event-foot"
         style={{
           borderTop: "1px solid var(--color-divider)",
           padding: "14px 28px",
@@ -355,6 +366,43 @@ export function EventEditor({
           </div>
         </div>
       </div>
+
+      {/* A phone's actions: Revert and Apply held at the foot of the screen
+          while there is something to apply, Duplicate and Delete otherwise. */}
+      {isMobile && (dirty ? (
+        <div className="event-actions event-actions-dirty">
+          <span className="event-actions-status">{pending} unsaved</span>
+          <Button onClick={revert}>Revert</Button>
+          <Button
+            variant="primary"
+            disabled={!canApply}
+            title={offline ? "No connection to the server." : undefined}
+            onClick={() => onApply(draft)}
+          >
+            Apply
+          </Button>
+        </div>
+      ) : (
+        (savedAt != null || onDuplicate || onDelete) && (
+          <div className="event-actions">
+            {savedAt != null && (
+              <span className="event-actions-status">
+                Saved {fmtClock(savedAt)} · results marked stale
+              </span>
+            )}
+            {onDuplicate && (
+              <Button onClick={onDuplicate} disabled={offline}>
+                Duplicate
+              </Button>
+            )}
+            {onDelete && (
+              <Button onClick={onDelete} disabled={offline}>
+                Delete
+              </Button>
+            )}
+          </div>
+        )
+      ))}
     </div>
   );
 }
@@ -363,6 +411,7 @@ export function EventEditor({
 function Section({ children, border }: { children: ReactNode; border?: boolean }) {
   return (
     <div
+      className="event-section"
       style={{
         padding: "18px 28px",
         display: "flex",

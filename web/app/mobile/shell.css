@@ -1,0 +1,232 @@
+/* ── Shell: phone layout ───────────────────────────────────────────────────
+   Design: "Mobile" canvas (402 × 874, one column). Below 640px every
+   two-column grid collapses, tabs move to a fixed bottom bar and the header
+   keeps the wordmark and scenario picker. The breakpoint matches
+   `MOBILE_QUERY` in lib/hooks/useIsMobile.ts. */
+
+.app-main {
+  padding: 24px;
+}
+
+.app-shell {
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+
+.split-pane {
+  display: grid;
+  grid-template-columns: 1fr var(--rail-width, 296px);
+  align-items: stretch;
+}
+
+.split-pane-main {
+  min-width: 0;
+  border-right: 1px solid var(--color-divider);
+}
+
+.mobile-tabbar {
+  display: none;
+}
+
+@media (max-width: 639px) {
+  .app-main {
+    padding: 0 0 calc(53px + env(safe-area-inset-bottom));
+  }
+
+  /* Sign-in and loading have no tab bar to clear. */
+  .app-main-plain {
+    padding: 16px;
+  }
+
+  /* Full-bleed: the blueprint frame is chrome a phone has no room for.
+     Doubled class to outrank `.app` in globals.css, which loads after this. */
+  .app.app-shell {
+    border: 0;
+    box-shadow: none;
+  }
+
+  .app-shell > .corner {
+    display: none;
+  }
+
+  .split-pane {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .split-pane-main {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+
+  .app-header {
+    gap: 8px !important;
+    padding: 6px 16px !important;
+  }
+
+  .app-header .nav-brand {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+
+  .app-header-tabs {
+    display: none !important;
+  }
+
+  .app-header-scenario {
+    width: auto !important;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 180px;
+    margin-left: auto;
+  }
+
+  .app-header .tag {
+    display: none;
+  }
+
+  .mobile-tabbar {
+    position: fixed;
+    z-index: 40;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    padding-bottom: env(safe-area-inset-bottom);
+    border-top: 1px solid var(--color-divider);
+    background: var(--color-bg);
+  }
+
+  .mobile-tabbar button {
+    min-height: 52px;
+    margin-top: -1px;
+    padding: 0;
+    border: 0;
+    border-top: 2px solid transparent;
+    background: transparent;
+    color: var(--color-text);
+    opacity: .55;
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 14px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+
+  .mobile-tabbar button[aria-current="page"] {
+    opacity: 1;
+    border-top-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+
+  /* Page-level action bars (Apply, Save) stick above the tab bar. */
+  .mobile-sticky-actions {
+    position: sticky;
+    z-index: 30;
+    bottom: calc(53px + env(safe-area-inset-bottom));
+    padding: 10px 16px;
+    border-top: 1px solid var(--color-divider);
+    background: var(--color-surface);
+  }
+
+  /* A drawer turned into a full-screen page pushed over its list. */
+  .mobile-pushed {
+    position: fixed;
+    z-index: 50;
+    inset: 0;
+    overflow-y: auto;
+    background: var(--color-bg);
+  }
+
+  .mobile-pushed-bar {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: 1fr minmax(0, auto) 1fr;
+    align-items: center;
+    min-height: 52px;
+    padding: 0 8px;
+    border-bottom: 1px solid var(--color-divider);
+    background: var(--color-bg);
+  }
+
+  .mobile-pushed-bar > :first-child { justify-self: start; }
+  .mobile-pushed-bar > :last-child { justify-self: end; }
+
+  /* 44px to hit, anywhere inside a pushed page. */
+  .mobile-pushed input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  .mobile-pushed select,
+  .mobile-pushed textarea,
+  .mobile-pushed .btn {
+    min-height: 44px;
+  }
+
+  /* Field boxes carry inline 32px heights from the desktop rail. */
+  .mobile-pushed .input,
+  .mobile-pushed .dd-trigger {
+    min-height: 44px !important;
+  }
+
+  /* A number field is an .input wrapping a bare <input>: the wrapper takes the
+     44px, or the inner field's height stacks on the wrapper's padding. */
+  .mobile-pushed .numfield input:not([type="checkbox"]):not([type="radio"]):not([type="range"]) {
+    min-height: 0;
+  }
+
+  .mobile-pushed-btn {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 8px;
+    border: 0;
+    background: transparent;
+    color: var(--color-accent);
+    font: inherit;
+    font-size: 16px;
+    cursor: pointer;
+  }
+
+  .mobile-pushed-bar > .mobile-pushed-btn:last-child {
+    font-weight: 600;
+  }
+
+  .mobile-pushed-title {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .app-main .app-footer {
+    padding: 20px 16px 4px;
+  }
+
+  /* Inputs at 16px or iOS zooms the page into them on focus. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  select,
+  textarea,
+  .input,
+  .dd-trigger {
+    font-size: 16px !important;
+  }
+
+  /* Any inline two-column grid tagged for it collapses to one column. */
+  .mobile-stack {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .account-sections {
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--color-divider);
+  }
+
+  .dialog-backdrop,
+  [role="dialog"] {
+    max-width: 100%;
+  }
+}

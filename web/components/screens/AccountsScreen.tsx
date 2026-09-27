@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { SplitPane } from "@/components/layout";
+import { PushedPage, SplitPane } from "@/components/layout";
 import {
   AccountInspector,
+  AccountsList,
   AccountsTable,
   NewAccountDialog,
   PortfolioSummary,
@@ -22,6 +23,7 @@ import type {
 } from "@/lib/api/types";
 import { fmtClock, fmtCurrency } from "@/lib/format";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { useNav } from "@/lib/nav";
@@ -120,6 +122,7 @@ export function AccountsScreen({
   const editing = useSubmit();
   const lot = useSubmit();
   const saveOrder = useReorderWrite(onChanged);
+  const mobile = useIsMobile();
 
   const assets = useMemo(() => {
     const known = new Set(raw.assets.map((a) => a.id));
@@ -140,6 +143,9 @@ export function AccountsScreen({
   // id, and the first row is the right fallback whenever the pick is stale.
   const selected = accounts.find((a) => a.accountId === nav.selection) ?? accounts[0];
   const selectedRaw = raw.accounts.find((a) => a.id === selected?.serverId);
+  // A phone has no rail to fall back into: the page opens only on a row that
+  // was actually picked, and closing it clears the pick.
+  const opened = accounts.some((a) => a.accountId === nav.selection);
 
   const select = (id: AccountId) => {
     nav.setSelection(id);
@@ -198,156 +204,184 @@ export function AccountsScreen({
     );
   };
 
-  return (
-    <>
-      <SplitPane
-        railWidth={372}
-        main={
-          <div style={{ padding: "18px 22px 22px" }}>
-            {accounts.length > 0 && <PortfolioSummary summary={summary} />}
+  const main = (
+    <div className="portfolio-main portfolio-main-accounts">
+      {accounts.length > 0 && <PortfolioSummary summary={summary} />}
 
-            <div
-              style={{
-                display: "flex",
-                alignItems: "baseline",
-                justifyContent: "space-between",
-                marginBottom: 12,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
-                <h4 style={{ margin: 0 }}>
-                  <Tooltip content="Accounts hold your cash, investments, property, and debt. Their tax treatment and return profiles determine how balances grow and how withdrawals are taxed. Select an account to edit its details and holdings.">
-                    Accounts
-                  </Tooltip>
-                </h4>
-                <span
-                  style={{
-                    fontSize: 12,
-                    color: "color-mix(in srgb, var(--color-text) 50%, transparent)",
-                  }}
-                >
-                  {accounts.length}
-                  {accounts.length > 0 && ` · ${fmtCurrency(summary.netWorth)} net`}
-                </span>
-              </div>
-              <Button
-                variant="add"
-                onClick={() => setCreating(true)}
-                disabled={offline}
-                title={offline ? "No connection to the server." : undefined}
-              >
-                Add account
-              </Button>
-            </div>
-
-            {accounts.length === 0 ? (
-              <p style={{ fontSize: 13, maxWidth: 460, lineHeight: 1.5 }} className="text-muted">
-                No accounts yet. Accounts are the balances the engine grows, spends
-                from and taxes — a plan needs at least one to simulate.
-              </p>
-            ) : (
-              <>
-                <AccountsTable
-                  accounts={accounts}
-                  shares={shares}
-                  colors={colors}
-                  selectedId={selected?.accountId ?? ""}
-                  onSelect={select}
-                  onReorder={
-                    offline
-                      ? undefined
-                      : (ids) => saveOrder(() => api.accounts.reorder(scenarioId, ids))
-                  }
-                />
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 20,
-                    fontSize: 12,
-                    padding: "10px 8px 0",
-                    color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
-                  }}
-                >
-                  {offline ? (
-                    <span>
-                      Reading is untouched — this is the last state the server
-                      confirmed{lastContact ? `, at ${fmtClock(lastContact)}` : ""}. Editing
-                      is disabled because it cannot be held locally.
-                    </span>
-                  ) : (
-                    <span>Balances mark holdings at each asset&rsquo;s opening price.</span>
-                  )}
-                  <span style={{ flex: "none" }}>
-                    Total{" "}
-                    <strong style={{ fontWeight: 500, color: "var(--color-text)" }}>
-                      {fmtCurrency(summary.assets)}
-                    </strong>{" "}
-                    assets · {fmtCurrency(-summary.debt)} debt
-                  </span>
-                </div>
-              </>
+      <div
+        className="portfolio-section-bar"
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10 }}>
+          <h4 style={{ margin: 0 }}>
+            <Tooltip content="Accounts hold your cash, investments, property, and debt. Their tax treatment and return profiles determine how balances grow and how withdrawals are taxed. Select an account to edit its details and holdings.">
+              Accounts
+            </Tooltip>
+          </h4>
+          <span
+            style={{
+              fontSize: 12,
+              color: "color-mix(in srgb, var(--color-text) 50%, transparent)",
+            }}
+          >
+            {accounts.length}
+            {accounts.length > 0 && (
+              <span className="portfolio-hide-mobile">
+                {` · ${fmtCurrency(summary.netWorth)} net`}
+              </span>
             )}
-          </div>
-        }
-        rail={
-          selected ? (
-            <AccountInspector
-              key={selected.accountId}
-              account={selected}
-              profiles={raw.returnProfiles}
-              assets={assets}
-              payers={raw.accounts.filter((a) => a.flavor === "Bank" || a.flavor === "Investment")}
-              onApply={(draft) => apply(selected, draft)}
-              onSelectAccount={select}
-              onAddLot={
-                selected.flavor === "Investment"
-                  ? () => setLotEditor({ kind: "add" })
-                  : undefined
-              }
-              onEditLot={
-                selected.flavor === "Investment"
-                  ? (row) => setLotEditor({ kind: "edit", positionId: row.positionId })
-                  : undefined
-              }
-              editingLotId={lotEditor?.kind === "edit" ? lotEditor.positionId : undefined}
-              onReorderLots={
+          </span>
+        </div>
+        <Button
+          variant="add"
+          onClick={() => setCreating(true)}
+          disabled={offline}
+          title={offline ? "No connection to the server." : undefined}
+        >
+          Add account
+        </Button>
+      </div>
+
+      {accounts.length === 0 ? (
+        <p style={{ fontSize: 13, maxWidth: 460, lineHeight: 1.5 }} className="text-muted">
+          No accounts yet. Accounts are the balances the engine grows, spends
+          from and taxes — a plan needs at least one to simulate.
+        </p>
+      ) : (
+        <>
+          {mobile ? (
+            <AccountsList
+              accounts={accounts}
+              colors={colors}
+              selectedId={opened ? selected?.accountId : undefined}
+              onSelect={select}
+            />
+          ) : (
+            <AccountsTable
+              accounts={accounts}
+              shares={shares}
+              colors={colors}
+              selectedId={selected?.accountId ?? ""}
+              onSelect={select}
+              onReorder={
                 offline
                   ? undefined
-                  : (ids) =>
-                      saveOrder(() =>
-                        api.accounts.reorderPositions(scenarioId, selected.serverId, ids),
-                      )
+                  : (ids) => saveOrder(() => api.accounts.reorder(scenarioId, ids))
               }
-              lotForm={
-                selected.flavor === "Investment"
-                  ? lotForm(selected, lotEditor, {
-                      // Keyed by what it is open on, so clicking a second lot
-                      // starts a fresh draft on that lot rather than carrying
-                      // the first one's figures across.
-                      key: lotEditor?.kind === "edit" ? lotEditor.positionId : lotNonce,
-                      scenarioId,
-                      assets,
-                      profiles: raw.returnProfiles,
-                      busy: lot.busy,
-                      error: lot.error,
-                      onAssetCreated: assetCreated,
-                      onCancel: () => setLotEditor(undefined),
-                      onAdd: (body, again) => addPosition(selected, body, again),
-                      onSave: (positionId, body) => savePosition(selected, positionId, body),
-                      onDelete: (row) => removePosition(selected, row),
-                    })
-                  : undefined
-              }
-              onDelete={() => remove(selected)}
-              busy={editing.busy}
-              error={editing.error}
-              savedAt={savedAt.get(selected.accountId)}
-              offline={offline}
             />
-          ) : null
+          )}
+          <div
+            className="portfolio-table-foot"
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 20,
+              fontSize: 12,
+              padding: "10px 8px 0",
+              color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
+            }}
+          >
+            {offline ? (
+              <span>
+                Reading is untouched — this is the last state the server
+                confirmed{lastContact ? `, at ${fmtClock(lastContact)}` : ""}. Editing
+                is disabled because it cannot be held locally.
+              </span>
+            ) : (
+              <span>Balances mark holdings at each asset&rsquo;s opening price.</span>
+            )}
+            <span style={{ flex: "none" }}>
+              Total{" "}
+              <strong style={{ fontWeight: 500, color: "var(--color-text)" }}>
+                {fmtCurrency(summary.assets)}
+              </strong>{" "}
+              assets · {fmtCurrency(-summary.debt)} debt
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+
+  const inspector = selected ? (
+      <AccountInspector
+        key={selected.accountId}
+        account={selected}
+        profiles={raw.returnProfiles}
+        assets={assets}
+        payers={raw.accounts.filter((a) => a.flavor === "Bank" || a.flavor === "Investment")}
+        onApply={(draft) => apply(selected, draft)}
+        onSelectAccount={select}
+        onAddLot={
+          selected.flavor === "Investment"
+            ? () => setLotEditor({ kind: "add" })
+            : undefined
         }
+        onEditLot={
+          selected.flavor === "Investment"
+            ? (row) => setLotEditor({ kind: "edit", positionId: row.positionId })
+            : undefined
+        }
+        editingLotId={lotEditor?.kind === "edit" ? lotEditor.positionId : undefined}
+        onReorderLots={
+          offline
+            ? undefined
+            : (ids) =>
+                saveOrder(() =>
+                  api.accounts.reorderPositions(scenarioId, selected.serverId, ids),
+                )
+        }
+        lotForm={
+          selected.flavor === "Investment"
+            ? lotForm(selected, lotEditor, {
+                // Keyed by what it is open on, so clicking a second lot
+                // starts a fresh draft on that lot rather than carrying
+                // the first one's figures across.
+                key: lotEditor?.kind === "edit" ? lotEditor.positionId : lotNonce,
+                scenarioId,
+                assets,
+                profiles: raw.returnProfiles,
+                busy: lot.busy,
+                error: lot.error,
+                onAssetCreated: assetCreated,
+                onCancel: () => setLotEditor(undefined),
+                onAdd: (body, again) => addPosition(selected, body, again),
+                onSave: (positionId, body) => savePosition(selected, positionId, body),
+                onDelete: (row) => removePosition(selected, row),
+              })
+            : undefined
+        }
+        onDelete={() => remove(selected)}
+        busy={editing.busy}
+        error={editing.error}
+        savedAt={savedAt.get(selected.accountId)}
+        offline={offline}
       />
+    ) : null;
+
+  return (
+    <>
+      {mobile ? (
+        <>
+          {main}
+          {opened && selected && inspector && (
+            <PushedPage
+              back="Accounts"
+              title={selected.name}
+              onClose={() => nav.setSelection(undefined)}
+            >
+              {inspector}
+            </PushedPage>
+          )}
+        </>
+      ) : (
+        <SplitPane railWidth={372} main={main} rail={inspector} />
+      )}
 
       {creating && (
         <NewAccountDialog

@@ -71,12 +71,13 @@ export function AccountBreakdown({
       </div>
 
       <Blueprint style={{ padding: "10px 12px 11px" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div className="acct-rows" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {breakdown.standings.map((standing) => (
             <StandingRow key={standing.accountId} standing={standing} />
           ))}
         </div>
         <div
+          className="acct-total"
           style={{
             display: "flex",
             alignItems: "baseline",
@@ -89,6 +90,7 @@ export function AccountBreakdown({
         >
           <StatLabel>net worth</StatLabel>
           <span
+            className="acct-total-value"
             style={{ fontFamily: "var(--font-heading)", fontWeight: 600, fontSize: 16 }}
           >
             {fmtCompactOrExact(breakdown.total)}
@@ -107,18 +109,14 @@ function StandingRow({ standing }: { standing: AccountStanding }) {
   const negative = standing.value < 0;
   const fill = negative ? HATCH : standing.color;
 
+  // Grid layout lives in app/mobile/results.css: the phone moves the delta up
+  // beside the value and runs the bar full width under the row.
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr auto",
-        gap: "3px 8px",
-        alignItems: "baseline",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+    <div className="acct-row">
+      <div className="acct-name" style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
         <span
           aria-hidden
+          className="acct-swatch"
           style={{
             width: 9,
             height: 9,
@@ -128,6 +126,7 @@ function StandingRow({ standing }: { standing: AccountStanding }) {
           }}
         />
         <span
+          className="acct-label"
           style={{
             fontSize: 12.5,
             whiteSpace: "nowrap",
@@ -139,6 +138,7 @@ function StandingRow({ standing }: { standing: AccountStanding }) {
         </span>
       </div>
       <span
+        className="acct-value"
         style={{
           fontFamily: "var(--font-heading)",
           fontWeight: 600,
@@ -148,16 +148,8 @@ function StandingRow({ standing }: { standing: AccountStanding }) {
       >
         {fmtCompactOrExact(standing.value)}
       </span>
-      <div
-        style={{
-          gridColumn: "1 / -1",
-          display: "grid",
-          gridTemplateColumns: "1fr auto",
-          gap: 8,
-          alignItems: "center",
-        }}
-      >
-        <span style={{ display: "block", height: 5, background: TRACK }} aria-hidden>
+      <div className="acct-sub">
+        <span className="acct-bar" style={{ display: "block", height: 5, background: TRACK }} aria-hidden>
           <i
             style={{
               display: "block",
@@ -182,6 +174,7 @@ function Delta({ value }: { value: number | undefined }) {
   const flat = value != null && Math.abs(value) < 1000;
   return (
     <span
+      className="acct-delta"
       style={{
         fontSize: 11,
         whiteSpace: "nowrap",

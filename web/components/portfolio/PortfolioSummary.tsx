@@ -1,5 +1,8 @@
+"use client";
+
 import { Blueprint, StatLabel } from "@/components/ui";
 import { fmtCompactOrExact, fmtCurrency, fmtShare } from "@/lib/format";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import type { PortfolioSummary as SummaryData } from "@/lib/view/accounts";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
@@ -13,6 +16,8 @@ const TRACK = "color-mix(in srgb, var(--color-text) 8%, transparent)";
  * row at once — the rail is about whichever one is selected.
  */
 export function PortfolioSummary({ summary }: { summary: SummaryData }) {
+  const mobile = useIsMobile();
+  if (mobile) return <CompactSummary summary={summary} />;
   return (
     <div
       style={{
@@ -169,6 +174,53 @@ function TaxTreatmentCard({ summary }: { summary: SummaryData }) {
         }}
       >
         <span style={{ color: MUTED }}>Cash / invested</span>
+        <span>
+          {pool > 0
+            ? `${fmtShare(summary.cash / pool)} / ${fmtShare(summary.invested / pool)}`
+            : "—"}
+        </span>
+      </div>
+    </Blueprint>
+  );
+}
+
+/**
+ * The phone's version: net worth and tax treatment merged into one card. The
+ * legend goes — each account row carries its own colour bar — and the tax
+ * bands become three figures side by side rather than three bars.
+ */
+function CompactSummary({ summary }: { summary: SummaryData }) {
+  const pool = summary.cash + summary.invested;
+  return (
+    <Blueprint className="portfolio-summary-card">
+      <StatLabel>Net worth</StatLabel>
+      <div className="portfolio-summary-value">{fmtCurrency(summary.netWorth)}</div>
+      <div className="portfolio-summary-meta">
+        Assets {fmtCurrency(summary.assets)} · Debt {fmtCurrency(-summary.debt)}
+      </div>
+
+      {summary.slices.length > 0 && (
+        <div className="portfolio-summary-strip" aria-hidden>
+          {summary.slices.map((slice) => (
+            <i
+              key={slice.accountId}
+              style={{ width: `${slice.share * 100}%`, background: slice.color }}
+            />
+          ))}
+        </div>
+      )}
+
+      <div className="portfolio-summary-bands">
+        {summary.taxBands.map((band) => (
+          <div key={band.label}>
+            <span>{band.label}</span>
+            <strong>{fmtCompactOrExact(band.value)}</strong>
+          </div>
+        ))}
+      </div>
+
+      <div className="portfolio-summary-foot">
+        <span>Cash / invested</span>
         <span>
           {pool > 0
             ? `${fmtShare(summary.cash / pool)} / ${fmtShare(summary.invested / pool)}`

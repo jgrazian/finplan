@@ -24,6 +24,9 @@ const PATH_OPTIONS = [
   { value: "p90" as const, label: "P90" },
 ];
 
+/** On a phone: no per-account stack and no log axis, which need the width. */
+const COMPACT_VIEWS = new Set<ChartView>(["fan", "bar"]);
+
 /** Title, subtitle, view and axis switches, and the selected-path picker. */
 export function ChartToolbar({
   title,
@@ -35,6 +38,7 @@ export function ChartToolbar({
   logDisabledReason,
   percentile,
   onPercentileChange,
+  compact = false,
 }: {
   title: string;
   subtitle: string;
@@ -45,9 +49,12 @@ export function ChartToolbar({
   onScaleKindChange: (kind: ScaleKind) => void;
   percentile: Percentile;
   onPercentileChange: (percentile: Percentile) => void;
+  /** Phone width: envelope and bars only, linear axis only. */
+  compact?: boolean;
 }) {
   return (
     <div
+      className="chart-toolbar"
       style={{
         display: "flex",
         flexWrap: "wrap",
@@ -77,7 +84,10 @@ export function ChartToolbar({
           {subtitle}
         </span>
       </div>
+      {/* On a phone the switches share one row that scrolls sideways
+          rather than wrapping mid-control. */}
       <div
+        className="chart-toolbar-controls"
         style={{
           display: "flex",
           gap: 10,
@@ -88,20 +98,26 @@ export function ChartToolbar({
       >
         <SegmentedControl
           ariaLabel="Chart view"
-          options={VIEW_OPTIONS}
+          options={
+            compact
+              ? VIEW_OPTIONS.filter((o) => COMPACT_VIEWS.has(o.value))
+              : VIEW_OPTIONS
+          }
           value={view}
           onChange={onViewChange}
         />
-        <SegmentedControl
-          ariaLabel="Value axis"
-          options={SCALE_OPTIONS.map((option) => ({
-            ...option,
-            disabled: option.value === "log" && logDisabledReason != null,
-            title: option.value === "log" ? logDisabledReason : undefined,
-          }))}
-          value={scaleKind}
-          onChange={onScaleKindChange}
-        />
+        {!compact && (
+          <SegmentedControl
+            ariaLabel="Value axis"
+            options={SCALE_OPTIONS.map((option) => ({
+              ...option,
+              disabled: option.value === "log" && logDisabledReason != null,
+              title: option.value === "log" ? logDisabledReason : undefined,
+            }))}
+            value={scaleKind}
+            onChange={onScaleKindChange}
+          />
+        )}
         <SegmentedControl
           ariaLabel="Selected path"
           options={PATH_OPTIONS}

@@ -95,6 +95,7 @@ export function VariableStrip({
         type="button"
         onClick={onToggleOpen}
         aria-expanded={open}
+        className="an-vars-toggle"
         style={{
           display: "flex",
           alignItems: "center",
@@ -135,7 +136,7 @@ export function VariableStrip({
       </button>
 
       {open && (
-        <div style={{ padding: "4px 20px 14px" }}>
+        <div className="an-vars" style={{ padding: "4px 20px 14px" }}>
           <Table compact>
             <thead>
               <tr>
@@ -240,7 +241,10 @@ export function VariableStrip({
             </tbody>
           </Table>
 
-          <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 8 }}>
+          <div
+            className="an-wrap"
+            style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 8 }}
+          >
             <Button variant="add" disabled={disabled || free.length === 0} onClick={onAdd}>
               Add variable
             </Button>

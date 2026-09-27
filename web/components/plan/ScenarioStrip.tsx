@@ -3,6 +3,7 @@
 import { type ReactNode, useState } from "react";
 import { UnsavedNote } from "@/components/status/UnsavedNote";
 import { Button, DateInput, Dropdown, Field, Input, NumberInput } from "@/components/ui";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import type { AssumptionChoice, AssumptionChoices, ScenarioParams } from "@/lib/types";
 
 /** Everything this strip can save. */
@@ -53,6 +54,7 @@ export function ScenarioStrip({
   const [refused, setRefused] = useState<Partial<Record<Editable, string>>>({});
   const [savedAt, setSavedAt] = useState<string>();
   const [open, setOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   const shown = { ...params, ...pending };
   const unsaved = Object.keys(pending).length;
@@ -109,8 +111,9 @@ export function ScenarioStrip({
   };
 
   return (
-    <div style={{ borderBottom: "1px solid var(--color-divider)" }}>
+    <div className="scenario-strip" style={{ borderBottom: "1px solid var(--color-divider)" }}>
       <div
+        className="scenario-strip-row"
         style={{
           display: "flex",
           alignItems: "center",
@@ -120,18 +123,34 @@ export function ScenarioStrip({
           fontSize: 12.5,
         }}
       >
-        <span className="stat-l" style={{ color: "var(--color-text)" }}>
-          Scenario — {shown.name}
-        </span>
-        <span>
-          {shown.start} · {shown.durationYears} yrs
-        </span>
-        <Bar />
-        <span>{shown.birthDate ? `born ${shown.birthDate}` : "no birth date"}</span>
-        <Bar />
-        <span>{inflation?.name ?? params.inflationProfile}</span>
-        <Bar />
-        <span>{tax?.name ?? params.taxConfig}</span>
+        {isMobile ? (
+          // Two lines on a phone: the horizon, then the assumptions. The
+          // scenario's name is already in the header's picker.
+          <div className="scenario-strip-summary">
+            <div>
+              {shown.start} · {shown.durationYears} yrs ·{" "}
+              {shown.birthDate ? `born ${shown.birthDate}` : "no birth date"}
+            </div>
+            <div style={{ opacity: 0.6 }}>
+              {inflation?.name ?? params.inflationProfile} · {tax?.name ?? params.taxConfig}
+            </div>
+          </div>
+        ) : (
+          <>
+            <span className="stat-l" style={{ color: "var(--color-text)" }}>
+              Scenario — {shown.name}
+            </span>
+            <span>
+              {shown.start} · {shown.durationYears} yrs
+            </span>
+            <Bar />
+            <span>{shown.birthDate ? `born ${shown.birthDate}` : "no birth date"}</span>
+            <Bar />
+            <span>{inflation?.name ?? params.inflationProfile}</span>
+            <Bar />
+            <span>{tax?.name ?? params.taxConfig}</span>
+          </>
+        )}
 
         <div
           style={{
@@ -156,13 +175,14 @@ export function ScenarioStrip({
               unsaved > 0 ? "Sort the unsaved fields out before closing." : undefined
             }
           >
-            {expanded ? "Done" : "Edit scenario"}
+            {expanded ? "Done" : isMobile ? "Edit" : "Edit scenario"}
           </Button>
         </div>
       </div>
 
       {expanded && (
         <div
+          className="mobile-stack scenario-strip-fields"
           style={{
             padding: "0 20px 14px",
             display: "grid",

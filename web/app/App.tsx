@@ -57,11 +57,11 @@ export function App() {
   const session = useSession();
 
   if (session.user === undefined) {
-    return <main style={{ padding: 24 }}>Loading…</main>;
+    return <main className="app-main app-main-plain">Loading…</main>;
   }
   if (session.user === null) {
     return (
-      <main style={{ padding: 24 }}>
+      <main className="app-main app-main-plain">
         <LoginForm session={session} />
       </main>
     );
@@ -206,7 +206,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   );
 
   return (
-    <main style={{ padding: 24 }}>
+    <main className="app-main">
       <AppShell>
         <AppHeader
           tabs={TABS}

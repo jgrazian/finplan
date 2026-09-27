@@ -258,7 +258,10 @@ export function SweepPanel({
             (sweep.job?.elapsed_ms != null ? ` · ${(sweep.job.elapsed_ms / 1000).toFixed(1)}s` : "")
           : "Every combination is simulated once; the graphs below read the result."}
       </span>
-      <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
+      <div
+        className="an-sweep-actions"
+        style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}
+      >
         {over && (
           <span style={{ fontSize: 11.5 }} role="alert">
             {fmtInt(points)} combinations is past the {fmtInt(MAX_POINTS)} a sweep will
@@ -349,6 +352,7 @@ export function SweepPanel({
         main={
           <div style={{ padding: "14px 18px 20px" }}>
             <div
+              className="mobile-stack"
               style={{
                 display: "grid",
                 gridTemplateColumns: "1fr 1fr",
@@ -507,7 +511,7 @@ function Empty({
           The ranking did not finish: {sensitivity.error}
         </p>
       )}
-      <div style={{ display: "flex", gap: 8 }}>
+      <div className="an-wrap" style={{ display: "flex", gap: 8 }}>
         <Button variant="primary" onClick={onRank}>
           Rank the parameters
         </Button>

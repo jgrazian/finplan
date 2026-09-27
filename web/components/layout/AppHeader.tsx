@@ -18,7 +18,8 @@ const NEW_SCENARIO = "\u0000new-scenario";
 /**
  * Header grammar 6b — one row: brand, inline tabs, scenario switcher, Run,
  * avatar. Buys back the ~38px of vertical space that a two-row header
- * spends, which the Results charts use.
+ * spends, which the Results charts use. On a phone the inline tabs hide and
+ * a fixed bottom bar carries them instead.
  */
 export function AppHeader<T extends string>({
   tabs,
@@ -73,7 +74,9 @@ export function AppHeader<T extends string>({
   }, [offline, onNewScenario, scenarios]);
 
   return (
+    <>
     <header
+      className="app-header"
       style={{
         display: "flex",
         alignItems: "center",
@@ -86,7 +89,7 @@ export function AppHeader<T extends string>({
         FINPLAN
       </span>
 
-      <nav style={{ display: "flex", gap: 2, marginRight: "auto" }} aria-label="Sections">
+      <nav className="app-header-tabs" style={{ display: "flex", gap: 2, marginRight: "auto" }} aria-label="Sections">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -101,6 +104,7 @@ export function AppHeader<T extends string>({
       </nav>
 
       <Dropdown
+        className="app-header-scenario"
         style={{ width: 170 }}
         ariaLabel="Scenario"
         placeholder="No scenario"
@@ -143,5 +147,20 @@ export function AppHeader<T extends string>({
         {userInitials}
       </button>
     </header>
+
+    {/* Phones: the same tabs, as a fixed bar along the bottom edge. */}
+    <nav className="mobile-tabbar" aria-label="Sections">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          aria-current={tab.id === activeTab ? "page" : undefined}
+          onClick={() => onTabChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </nav>
+    </>
   );
 }

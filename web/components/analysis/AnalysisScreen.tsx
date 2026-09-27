@@ -118,13 +118,17 @@ export function AnalysisScreen({
 
   return (
     <>
-      <SubTabBar
-        ariaLabel="Analysis mode"
-        options={MODES}
-        value={mode}
-        onChange={nav.setSection}
-        caption={CAPTIONS[mode]}
-      />
+      {/* The wrapper is a hook for app/mobile/analysis.css: on a phone the
+          mode switch goes full width and the caption drops under it. */}
+      <div className="an-modes">
+        <SubTabBar
+          ariaLabel="Analysis mode"
+          options={MODES}
+          value={mode}
+          onChange={nav.setSection}
+          caption={CAPTIONS[mode]}
+        />
+      </div>
       {body}
     </>
   );

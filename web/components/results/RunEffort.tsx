@@ -129,3 +129,31 @@ export function EffortPanel({
     </div>
   );
 }
+
+/**
+ * The same dial folded behind a button, for the phone: the rail it sits at the
+ * top of on desktop is stacked below the chart there, so it rides beside the
+ * success figure it governs instead. A `<details>` keeps it a plain disclosure
+ * with no open/close state to hold.
+ */
+export function EffortMenu({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: RunEffort;
+  onChange: (effort: RunEffort) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <details className="effort-menu">
+      <summary className="sbtn" aria-label="Monte Carlo iterations for the next run">
+        {value.converge ? effortLabel(value) : `${effortLabel(value)} runs`}{" "}
+        <span aria-hidden>▾</span>
+      </summary>
+      <div className="effort-menu-panel">
+        <EffortPanel value={value} onChange={onChange} disabled={disabled} />
+      </div>
+    </details>
+  );
+}

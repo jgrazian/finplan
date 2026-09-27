@@ -1,5 +1,6 @@
 export { DISTRIBUTIONS, DistributionTerms, KIND_LABEL } from "./DistributionTerms";
 export { InflationProfilesTable } from "./InflationProfilesTable";
+export { InflationCards, ProfileCards } from "./ProfileCards";
 export { NewProfileDialog } from "./NewProfileDialog";
 export { ProfileInspector } from "./ProfileInspector";
 export { ProfileLibraryTable, kindTone } from "./ProfileLibraryTable";

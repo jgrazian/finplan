@@ -1,0 +1,332 @@
+/* Phone layout for the portfolio tab — see app/mobile/shell.css for the shared rules. */
+
+.portfolio-main-accounts {
+  padding: 18px 22px 22px;
+}
+
+.portfolio-main-assets {
+  padding: 14px 20px 18px;
+}
+
+@media (max-width: 639px) {
+  /* Accounts / Assets: one full-width control, two equal 44px cells. */
+  .portfolio-subtabs > div {
+    padding: 12px 16px 0 !important;
+  }
+
+  .portfolio-subtabs .seg {
+    display: flex;
+    flex: 1;
+  }
+
+  .portfolio-subtabs .seg-opt {
+    flex: 1;
+    justify-content: center;
+    min-height: 44px;
+    font-size: 15px;
+  }
+
+  .portfolio-main-accounts,
+  .portfolio-main-assets {
+    padding: 16px;
+  }
+
+  .portfolio-hide-mobile {
+    display: none;
+  }
+
+  /* Section heading + its add button: the button clears 44px. */
+  .portfolio-section-bar {
+    align-items: center !important;
+  }
+
+  .portfolio-main .btn-add {
+    min-height: 44px;
+  }
+
+  .portfolio-table-foot {
+    flex-direction: column;
+    gap: 6px !important;
+    padding: 12px 0 0 !important;
+  }
+
+  /* ── Net worth card (merged with tax treatment) ── */
+  .portfolio-summary-card {
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+
+  .portfolio-summary-card .stat-l {
+    font-size: 11px;
+    text-transform: uppercase;
+  }
+
+  .portfolio-summary-value {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    font-size: 40px;
+    line-height: 1.05;
+    margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
+
+  .portfolio-summary-meta {
+    font-size: 13px;
+    opacity: .6;
+    margin-top: 4px;
+  }
+
+  .portfolio-summary-strip {
+    display: flex;
+    gap: 1px;
+    height: 8px;
+    margin-top: 14px;
+  }
+
+  .portfolio-summary-strip > i {
+    display: block;
+  }
+
+  .portfolio-summary-bands {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  .portfolio-summary-bands > div {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .portfolio-summary-bands span {
+    font-size: 12px;
+    opacity: .6;
+  }
+
+  .portfolio-summary-bands strong {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .portfolio-summary-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 13px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--color-divider);
+  }
+
+  .portfolio-summary-foot > :first-child {
+    opacity: .6;
+  }
+
+  /* ── Two-line account rows ── */
+  .portfolio-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border-top: 1px solid var(--color-divider);
+  }
+
+  .portfolio-list-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 64px;
+    padding: 10px 0;
+    border: 0;
+    border-bottom: 1px solid var(--color-divider);
+    background: transparent;
+    color: var(--color-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .portfolio-list-row[aria-current="true"] {
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  }
+
+  .portfolio-list-swatch {
+    display: block;
+    flex: none;
+    align-self: stretch;
+    width: 4px;
+  }
+
+  .portfolio-list-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .portfolio-list-name {
+    font-size: 16px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .portfolio-list-meta {
+    font-size: 13px;
+    opacity: .6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .portfolio-list-figure {
+    flex: none;
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 18px;
+  }
+
+  .portfolio-list-chevron {
+    flex: none;
+    color: var(--color-accent);
+    font-size: 22px;
+    line-height: 1;
+  }
+
+  /* ── Assets: wide grids scroll inside their own box, never the page ── */
+  .portfolio-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .portfolio-scroll > * {
+    min-width: max-content;
+  }
+
+  .portfolio-mix-head {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
+
+  .portfolio-main-assets .sbar {
+    flex-wrap: wrap;
+  }
+
+  /* ── Assets and profiles: row cards, no sideways scroll ── */
+  .row-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .row-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 72px;
+    padding: 12px 14px;
+    border: 1px solid var(--color-divider);
+    background: transparent;
+    color: var(--color-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .row-card[aria-current="true"],
+  .row-card:has(input:checked) {
+    border-color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  }
+
+  .row-card[data-disabled] {
+    cursor: default;
+  }
+
+  .row-card-swatch {
+    display: block;
+    flex: none;
+    align-self: stretch;
+    width: 4px;
+    margin: -2px 0;
+  }
+
+  .row-card-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .row-card-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .row-card-ticker {
+    flex: none;
+    font: 600 15px ui-monospace, Menlo, monospace;
+  }
+
+  .row-card-name,
+  .row-card-name-strong {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .row-card-name {
+    font-size: 14px;
+    opacity: .75;
+  }
+
+  .row-card-name-strong {
+    font-size: 16px;
+    font-weight: 500;
+  }
+
+  .row-card-meta {
+    font-size: 13px;
+    opacity: .6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .row-card-figure {
+    flex: none;
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 18px;
+    text-align: right;
+  }
+
+  .row-card-meta[data-faint],
+  .row-card-figure[data-faint] {
+    opacity: .4;
+  }
+
+  .row-card-chevron {
+    flex: none;
+    color: var(--color-accent);
+    font-size: 22px;
+    line-height: 1;
+  }
+}

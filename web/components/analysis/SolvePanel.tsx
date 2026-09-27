@@ -111,6 +111,7 @@ export function SolvePanel({
 
   const sidebar = (
     <aside
+      className="an-solve-side"
       style={{
         padding: "16px 18px 18px",
         borderRight: "1px solid var(--color-divider)",
@@ -241,7 +242,10 @@ export function SolvePanel({
   );
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", alignItems: "stretch" }}>
+    <div
+      className="mobile-stack"
+      style={{ display: "grid", gridTemplateColumns: "340px 1fr", alignItems: "stretch" }}
+    >
       {sidebar}
       <div style={{ minWidth: 0 }}>
         {solve.active ? (
@@ -330,38 +334,40 @@ function Answer({
         )}
       </div>
 
-      <Table compact>
-        <thead>
-          <tr>
-            <Th />
-            <Th align="right">Plan</Th>
-            <Th align="right">Solved</Th>
-            <Th align="right">Δ</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.label}>
-              <Td
-                style={
-                  row.mono
-                    ? { fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }
-                    : undefined
-                }
-              >
-                {row.label}
-              </Td>
-              <Td align="right">{row.plan}</Td>
-              <Td align="right" style={{ fontWeight: 500 }}>
-                {row.best}
-              </Td>
-              <Td align="right" muted>
-                {row.delta}
-              </Td>
+      <div className="an-scroll-x">
+        <Table compact>
+          <thead>
+            <tr>
+              <Th />
+              <Th align="right">Plan</Th>
+              <Th align="right">Solved</Th>
+              <Th align="right">Δ</Th>
             </tr>
-          ))}
-        </tbody>
-      </Table>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label}>
+                <Td
+                  style={
+                    row.mono
+                      ? { fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }
+                      : undefined
+                  }
+                >
+                  {row.label}
+                </Td>
+                <Td align="right">{row.plan}</Td>
+                <Td align="right" style={{ fontWeight: 500 }}>
+                  {row.best}
+                </Td>
+                <Td align="right" muted>
+                  {row.delta}
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </div>
 
       {outcome.method === "bisection" && (
         <div>

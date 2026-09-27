@@ -8,6 +8,7 @@ import {
   CashFlowLedger,
   type ChartView,
   ChartToolbar,
+  EffortMenu,
   EffortPanel,
   NetWorthChart,
   type RunEffort,
@@ -22,6 +23,7 @@ import { Button, Hr } from "@/components/ui";
 import type { Percentile, ResultsData } from "@/lib/types";
 import type { Run } from "@/lib/api/types";
 import { accountBreakdown } from "@/lib/view/results";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { EmptyState } from "./EmptyState";
 
 function chartCopy(
@@ -91,6 +93,9 @@ export function ResultsScreen({
 }) {
   const [view, setView] = useState<ChartView>("fan");
   const [scaleKind, setScaleKind] = useState<ScaleKind>("linear");
+  // The phone stacks the rail under the chart, so the iteration dial that
+  // heads it moves up beside the success figure as a menu.
+  const mobile = useIsMobile();
   // Hooks run before the early returns below, so the focus is taken against
   // whatever horizon is loaded — zero while there is none.
   const focus = useYearFocus(results?.bands.years.length ?? 0);
@@ -106,7 +111,7 @@ export function ResultsScreen({
   }
   if (!results) {
     return (
-      <div style={{ padding: "40px 24px", maxWidth: 520 }}>
+      <div className="results-empty" style={{ padding: "40px 24px", maxWidth: 520 }}>
         <h4 style={{ margin: "0 0 6px" }}>No results yet</h4>
         <p
           style={{
@@ -131,21 +136,29 @@ export function ResultsScreen({
     bands.ages.length > 0
       ? `${bands.ages[0]}–${bands.ages[bands.ages.length - 1]}`
       : "no horizon";
+  // A phone offers only the envelope and bars on a linear axis; a view or
+  // scale picked at desktop width falls back rather than being lost.
+  const shownView = mobile && view === "stack" ? "fan" : view;
   // Label real base dates (or nominal legacy units) and the axis explicitly.
-  const chartScale = resolveScaleKind(scaleKind, view);
+  const chartScale = resolveScaleKind(mobile ? "linear" : scaleKind, shownView);
   const dollars = `${results.dollarLabel}${chartScale.kind === "log" ? " · log scale" : ""}`;
-  const copy = chartCopy(view, results.pathLabel, span, dollars, results.hasEnvelope);
+  const copy = chartCopy(shownView, results.pathLabel, span, dollars, results.hasEnvelope);
   const breakdown = accountBreakdown(results.accountSeries, focus.index);
 
   return (
     <SplitPane
       railWidth={296}
       main={
-        <div style={{ padding: "22px 24px" }}>
+        <div className="results-main" style={{ padding: "22px 24px" }}>
           {active && <RunProgress run={run} onCancel={onCancel} />}
           <SuccessRate
             fundingSuccessRate={stats.fundingSuccessRate}
             iterations={stats.numIterations}
+            action={
+              mobile ? (
+                <EffortMenu value={effort} onChange={onEffortChange} disabled={offline} />
+              ) : undefined
+            }
           />
 
           <PlanDiagnostics warnings={results.warnings} pathLabel={results.pathLabel} onReviewPlan={onReviewPlan} />
@@ -157,8 +170,9 @@ export function ResultsScreen({
           <ChartToolbar
             title={copy.title}
             subtitle={copy.subtitle}
-            view={view}
+            view={shownView}
             onViewChange={setView}
+            compact={mobile}
             scaleKind={chartScale.kind}
             logDisabledReason={chartScale.reason}
             onScaleKindChange={setScaleKind}
@@ -169,27 +183,32 @@ export function ResultsScreen({
           <NetWorthChart
             bands={bands}
             accountSeries={results.accountSeries}
-            view={view}
+            view={shownView}
             pathValues={results.pathValues}
             pathLabel={results.pathLabel}
             scaleKind={chartScale.kind}
             focus={focus}
           />
 
-          <div style={{ marginTop: 24 }}>
-            <CashFlowLedger
-              rows={results.cashFlows}
-              key={`${results.runId}:${results.pathId}`}
-              series={results.pathId}
-              pathLabel={results.pathLabel}
-              runId={results.runId}
-              dollarLabel={results.dollarLabel}
-            />
-          </div>
+          {/* The ledger is a desktop instrument: ten columns of figures that
+              a phone can only show by scrolling sideways. */}
+          {!mobile && (
+            <div style={{ marginTop: 24 }}>
+              <CashFlowLedger
+                rows={results.cashFlows}
+                key={`${results.runId}:${results.pathId}`}
+                series={results.pathId}
+                pathLabel={results.pathLabel}
+                runId={results.runId}
+                dollarLabel={results.dollarLabel}
+              />
+            </div>
+          )}
         </div>
       }
       rail={
         <div
+          className="results-rail"
           style={{
             padding: "22px 20px",
             display: "flex",
@@ -197,8 +216,12 @@ export function ResultsScreen({
             gap: 20,
           }}
         >
-          <EffortPanel value={effort} onChange={onEffortChange} disabled={offline} />
-          <Hr flush />
+          {!mobile && (
+            <>
+              <EffortPanel value={effort} onChange={onEffortChange} disabled={offline} />
+              <Hr flush />
+            </>
+          )}
           <p style={{ margin: 0, fontSize: 12 }}>{results.pathLabel} · {results.dollarLabel}</p>
           <AccountBreakdown
             breakdown={breakdown}
@@ -239,7 +262,7 @@ function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => 
   const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
 
   return (
-    <div style={{ padding: "12px 24px", maxWidth: 520 }}>
+    <div className="results-progress" style={{ padding: "12px 24px", maxWidth: 520 }}>
       <h4 style={{ margin: "0 0 4px" }}>
         {run?.status === "queued" ? "Queued…" : "Simulating…"}
       </h4>

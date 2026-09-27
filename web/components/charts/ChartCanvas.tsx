@@ -49,7 +49,9 @@ export function ChartCanvas({
 }) {
   const geo = scale.geo ?? DEFAULT_GEOMETRY;
   const vTicks = valueTicks(scale);
-  const xTicks = yearTicks(years, scale);
+  // A narrow (phone) frame has half the room per year, so it labels every
+  // tenth year instead of every fifth.
+  const xTicks = yearTicks(years, scale, geo.w < 600 ? 10 : 5);
 
   return (
     <Blueprint style={{ position: "relative", padding: "10px 12px 4px" }}>
@@ -60,16 +62,32 @@ export function ChartCanvas({
           display: "block",
           overflow: "visible",
           cursor: onSelect ? "crosshair" : undefined,
+          // Vertical swipes still scroll the page; a sideways drag is left to
+          // the handlers below, which is what makes touch scrubbing work.
+          touchAction: "pan-y",
         }}
         onClick={() => {
           if (hoverIndex != null) onSelect?.(hoverIndex);
         }}
-        onMouseMove={(e) => {
+        onPointerDown={(e) => {
+          if (e.pointerType === "mouse") return;
+          // Keep receiving moves while the finger drags past the frame.
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const next = indexFromPointer(e.clientX, e.currentTarget.getBoundingClientRect(), scale);
+          if (next !== hoverIndex) onHoverChange(next);
+        }}
+        onPointerMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const next = indexFromPointer(e.clientX, rect, scale);
           if (next !== hoverIndex) onHoverChange(next);
         }}
-        onMouseLeave={() => onHoverChange(null)}
+        onPointerUp={(e) => {
+          // A touch has no hover to fall back to once it lifts, so the year
+          // it was scrubbed to is pinned rather than lost.
+          if (e.pointerType !== "mouse" && hoverIndex != null) onSelect?.(hoverIndex);
+        }}
+        onPointerLeave={() => onHoverChange(null)}
+        onPointerCancel={() => onHoverChange(null)}
       >
         {vTicks.map((t, i) => (
           <line

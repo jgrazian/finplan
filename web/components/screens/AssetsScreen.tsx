@@ -1,8 +1,9 @@
 "use client";
 
 import { type ReactNode, useMemo, useState } from "react";
-import { SplitPane } from "@/components/layout";
+import { PushedPage, SplitPane } from "@/components/layout";
 import {
+  AssetCards,
   AssetInspector,
   AssetMixCard,
   AssetsTable,
@@ -12,8 +13,10 @@ import {
   profileOptions,
 } from "@/components/portfolio";
 import {
+  InflationCards,
   InflationProfilesTable,
   NewProfileDialog,
+  ProfileCards,
   ProfileInspector,
   ProfileLibraryTable,
 } from "@/components/profiles";
@@ -22,6 +25,7 @@ import { api } from "@/lib/api/client";
 import type { Profile, UpdateAsset, UpdateProfile } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import { useAsync } from "@/lib/hooks/useAsync";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
@@ -93,6 +97,7 @@ export function AssetsScreen({
   const editingProfile = useSubmit();
   const filling = useSubmit();
   const saveOrder = useReorderWrite(onChanged);
+  const mobile = useIsMobile();
 
   // The histories a Bootstrap profile resamples, series and all. A static
   // table the server owns, fetched once on mount rather than threaded through
@@ -125,7 +130,12 @@ export function AssetsScreen({
 
   // Derived rather than reset in an effect: switching scenarios replaces every
   // asset id, and the first row is the right fallback for a stale pick.
-  const selection = resolve(decodeAssetsSelection(nav.selection), rows, returnProfiles);
+  const picked = decodeAssetsSelection(nav.selection);
+  const selection = resolve(picked, rows, returnProfiles);
+  // A phone opens its pushed page only on a row that was actually picked, not
+  // on the first-row fallback a rail would show.
+  const opened =
+    picked != null && picked.kind === selection?.kind && picked.id === selection.id;
   const selectedAsset =
     selection?.kind === "asset"
       ? rows.find((r) => r.serverId === selection.id)
@@ -242,242 +252,284 @@ export function AssetsScreen({
       onChanged,
     );
 
-  return (
-    <>
-      <SplitPane
-        railWidth={360}
-        main={
-          <div style={{ padding: "14px 20px 18px" }}>
-            {mix.total > 0 && (
-              <AssetMixCard
-                mix={mix}
-                selectedProfileId={selectedProfile?.id}
-                onSelect={(id) => select({ kind: "profile", id })}
-              />
-            )}
+  const main = (
+    <div className="portfolio-main portfolio-main-assets">
+      {mix.total > 0 && (
+        <AssetMixCard
+          mix={mix}
+          selectedProfileId={selectedProfile?.id}
+          onSelect={(id) => select({ kind: "profile", id })}
+        />
+      )}
 
-            <SectionBar
-              title={
-                <Tooltip content="Assets represent the investments held in your accounts. Each asset points to a return profile that supplies its growth assumptions. Select an asset to edit its details, or select multiple rows to change their return profile together.">
-                  Assets
-                </Tooltip>
-              }
-              count={`${rows.length}${rows.length > 0 ? ` · ${fmtCurrency(mix.total)}` : ""}`}
-              action={
-                <Button
-                  variant="add"
-                  onClick={() => setAddingAsset(true)}
-                  disabled={offline}
-                  title={offline ? "No connection to the server." : undefined}
-                >
-                  Add asset
-                </Button>
-              }
-            />
-
-            {/* The offer stands down while rows are ticked: that is a selection
-                waiting on an action, and two bars stacked in one slot read as
-                two pending things rather than one. */}
-            {fills.length > 0 && checked.size === 0 && !offline && (
-              <div className="sbar sbar-notice" style={{ marginBottom: -1 }}>
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 16 16"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  style={{ flex: "none" }}
-                  aria-hidden
-                >
-                  <circle cx="8" cy="8" r="6.2" />
-                  <path d="M8 7.4v3.4" />
-                  <circle cx="8" cy="5.2" r="0.6" fill="currentColor" stroke="none" />
-                </svg>
-                <span>
-                  {fillSummary(fills)}
-                  <span className="sbar-note" style={{ marginLeft: 8 }}>
-                    Only blanks are filled; anything already set is left alone.
-                  </span>
-                </span>
-                <div className="sact">
-                  <button
-                    type="button"
-                    className="sbtn"
-                    disabled={filling.busy}
-                    onClick={fillFromTickers}
-                  >
-                    {filling.busy ? "Filling…" : "Fill them in"}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {checked.size > 0 && (
-              <div
-                className="sbar"
-                style={{
-                  border: "1px solid var(--color-accent)",
-                  background: "color-mix(in srgb, var(--color-accent) 10%, transparent)",
-                  marginBottom: -1,
-                }}
-              >
-                <span>
-                  {checked.size} asset{checked.size === 1 ? "" : "s"} selected
-                </span>
-                <div className="sact">
-                  {/* A command, not a field: it names no standing value, so it
-                      keeps its placeholder and the pick is the whole act. */}
-                  <Dropdown
-                    className="dd-bar"
-                    inline
-                    options={profileOptions(raw.returnProfiles)}
-                    value={null}
-                    placeholder={remapping.busy ? "Remapping…" : "Set profile…"}
-                    disabled={remapping.busy || offline}
-                    maxMenuHeight={300}
-                    ariaLabel="Set profile for the selected assets"
-                    onChange={(id) => bulkRemap(id === UNMAPPED ? null : id)}
-                  />
-                  <button type="button" className="sbtn" onClick={() => setChecked(new Set())}>
-                    Clear
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {rows.length === 0 ? (
-              <p style={{ ...NOTE, margin: "4px 0 0", maxWidth: 460, lineHeight: 1.5 }}>
-                No assets yet. An asset is a price series — a fund, a house, the
-                cash in a savings account — and the profile it points at is what
-                makes it move.
-              </p>
-            ) : (
-              <AssetsTable
-                rows={rows}
-                mix={mix}
-                selectedId={selectedAsset?.serverId}
-                checked={checked}
-                onSelect={(row) => select({ kind: "asset", id: row.serverId })}
-                onReorder={
-                  offline
-                    ? undefined
-                    : (ids) => saveOrder(() => api.assets.reorder(scenarioId, ids))
-                }
-                onCheck={
-                  remapping.busy || offline
-                    ? undefined
-                    : (row, on) =>
-                        setChecked((current) => {
-                          const next = new Set(current);
-                          if (on) next.add(row.serverId);
-                          else next.delete(row.serverId);
-                          return next;
-                        })
-                }
-              />
-            )}
-
-            {(remapping.error ?? filling.error) && (
-              <p style={{ ...NOTE, color: "var(--color-accent-700)" }}>
-                {remapping.error ?? filling.error}
-              </p>
-            )}
-
-            <p style={NOTE}>
-              Select rows to remap several holdings at once.
-            </p>
-
-            <div style={{ marginTop: 26 }}>
-              <SectionBar
-                title={
-                  <Tooltip content="Return profiles define growth assumptions, including expected returns, volatility, or historical returns. Assign them to holdings or directly to an account's cash or property value. Profiles are shared across scenarios, so editing one affects every plan that uses it.">
-                    Return profile library
-                  </Tooltip>
-                }
-                count={String(returnProfiles.length)}
-                action={
-                  <Button
-                    variant="add"
-                    onClick={() => setAddingProfile(true)}
-                    disabled={offline}
-                    title={offline ? "No connection to the server." : undefined}
-                  >
-                    New profile
-                  </Button>
-                }
-              />
-              <ProfileLibraryTable
-                profiles={returnProfiles}
-                selectedId={selectedProfile?.id}
-                onSelect={(p) => select({ kind: "profile", id: p.id })}
-                onReorder={
-                  offline
-                    ? undefined
-                    : (ids) => saveOrder(() => api.returnProfiles.reorder(ids))
-                }
-              />
-            </div>
-
-            <div style={{ marginTop: 26 }}>
-              <SectionBar
-                title={
-                  <Tooltip content="Inflation profiles define how prices change over time in the simulation. The active profile supplies the inflation rate for amounts marked to grow with inflation. Choose one profile for this scenario; amounts without inflation adjustment keep their specified values.">
-                    Inflation
-                  </Tooltip>
-                }
-                count={activeInflationProfile ? "one is in use" : "none in use"}
-              />
-              {inflationProfiles.length === 0 ? (
-                <p style={{ ...NOTE, margin: 0 }}>
-                  None defined — the scenario runs without inflation adjustment.
-                </p>
-              ) : (
-                <InflationProfilesTable
-                  profiles={inflationProfiles}
-                  activeId={activeInflationProfile ?? ""}
-                  onActivate={offline ? undefined : onActivateInflation}
-                  onReorder={
-                    offline
-                      ? undefined
-                      : (ids) => saveOrder(() => api.inflationProfiles.reorder(ids))
-                  }
-                />
-              )}
-            </div>
-          </div>
+      <SectionBar
+        title={
+          <Tooltip content="Assets represent the investments held in your accounts. Each asset points to a return profile that supplies its growth assumptions. Select an asset to edit its details, or select multiple rows to change their return profile together.">
+            Assets
+          </Tooltip>
         }
-        rail={
-          selectedAsset ? (
-            <AssetInspector
-              key={selectedAsset.serverId}
-              asset={selectedAsset}
-              profile={inherited}
-              profiles={raw.returnProfiles}
-              onApply={(draft) => applyAsset(selectedAsset, draft)}
-              onEditProfile={
-                inherited && (() => select({ kind: "profile", id: inherited.id }))
-              }
-              busy={editingAsset.busy}
-              error={editingAsset.error}
-              offline={offline}
-            />
-          ) : selectedProfile ? (
-            <ProfileInspector
-              key={selectedProfile.id}
-              profile={selectedProfile}
-              presets={histories}
-              onApply={(body) => applyProfile(selectedProfile, body)}
-              onDuplicate={() => duplicateProfile(selectedProfile)}
-              busy={editingProfile.busy}
-              error={editingProfile.error}
-              offline={offline}
-            />
-          ) : null
+        count={`${rows.length}${rows.length > 0 ? ` · ${fmtCurrency(mix.total)}` : ""}`}
+        action={
+          <Button
+            variant="add"
+            onClick={() => setAddingAsset(true)}
+            disabled={offline}
+            title={offline ? "No connection to the server." : undefined}
+          >
+            Add asset
+          </Button>
         }
       />
+
+      {/* The offer stands down while rows are ticked: that is a selection
+          waiting on an action, and two bars stacked in one slot read as
+          two pending things rather than one. */}
+      {fills.length > 0 && checked.size === 0 && !offline && (
+        <div className="sbar sbar-notice" style={{ marginBottom: -1 }}>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ flex: "none" }}
+            aria-hidden
+          >
+            <circle cx="8" cy="8" r="6.2" />
+            <path d="M8 7.4v3.4" />
+            <circle cx="8" cy="5.2" r="0.6" fill="currentColor" stroke="none" />
+          </svg>
+          <span>
+            {fillSummary(fills)}
+            <span className="sbar-note" style={{ marginLeft: 8 }}>
+              Only blanks are filled; anything already set is left alone.
+            </span>
+          </span>
+          <div className="sact">
+            <button
+              type="button"
+              className="sbtn"
+              disabled={filling.busy}
+              onClick={fillFromTickers}
+            >
+              {filling.busy ? "Filling…" : "Fill them in"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {checked.size > 0 && (
+        <div
+          className="sbar"
+          style={{
+            border: "1px solid var(--color-accent)",
+            background: "color-mix(in srgb, var(--color-accent) 10%, transparent)",
+            marginBottom: -1,
+          }}
+        >
+          <span>
+            {checked.size} asset{checked.size === 1 ? "" : "s"} selected
+          </span>
+          <div className="sact">
+            {/* A command, not a field: it names no standing value, so it
+                keeps its placeholder and the pick is the whole act. */}
+            <Dropdown
+              className="dd-bar"
+              inline
+              options={profileOptions(raw.returnProfiles)}
+              value={null}
+              placeholder={remapping.busy ? "Remapping…" : "Set profile…"}
+              disabled={remapping.busy || offline}
+              maxMenuHeight={300}
+              ariaLabel="Set profile for the selected assets"
+              onChange={(id) => bulkRemap(id === UNMAPPED ? null : id)}
+            />
+            <button type="button" className="sbtn" onClick={() => setChecked(new Set())}>
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <p style={{ ...NOTE, margin: "4px 0 0", maxWidth: 460, lineHeight: 1.5 }}>
+          No assets yet. An asset is a price series — a fund, a house, the
+          cash in a savings account — and the profile it points at is what
+          makes it move.
+        </p>
+      ) : mobile ? (
+        <AssetCards
+          rows={rows}
+          mix={mix}
+          selectedId={opened ? selectedAsset?.serverId : undefined}
+          onSelect={(row) => select({ kind: "asset", id: row.serverId })}
+        />
+      ) : (
+        <div className="portfolio-scroll">
+          <AssetsTable
+            rows={rows}
+            mix={mix}
+            selectedId={selectedAsset?.serverId}
+            checked={checked}
+            onSelect={(row) => select({ kind: "asset", id: row.serverId })}
+            onReorder={
+              offline
+                ? undefined
+                : (ids) => saveOrder(() => api.assets.reorder(scenarioId, ids))
+            }
+            onCheck={
+              remapping.busy || offline
+                ? undefined
+                : (row, on) =>
+                    setChecked((current) => {
+                      const next = new Set(current);
+                      if (on) next.add(row.serverId);
+                      else next.delete(row.serverId);
+                      return next;
+                    })
+            }
+          />
+        </div>
+      )}
+
+      {(remapping.error ?? filling.error) && (
+        <p style={{ ...NOTE, color: "var(--color-accent-700)" }}>
+          {remapping.error ?? filling.error}
+        </p>
+      )}
+
+      {!mobile && (
+        <p style={NOTE}>
+          Select rows to remap several holdings at once.
+        </p>
+      )}
+
+      <div style={{ marginTop: 26 }}>
+        <SectionBar
+          title={
+            <Tooltip content="Return profiles define growth assumptions, including expected returns, volatility, or historical returns. Assign them to holdings or directly to an account's cash or property value. Profiles are shared across scenarios, so editing one affects every plan that uses it.">
+              Return profile library
+            </Tooltip>
+          }
+          count={String(returnProfiles.length)}
+          action={
+            <Button
+              variant="add"
+              onClick={() => setAddingProfile(true)}
+              disabled={offline}
+              title={offline ? "No connection to the server." : undefined}
+            >
+              New profile
+            </Button>
+          }
+        />
+        {mobile ? (
+          <ProfileCards
+            profiles={returnProfiles}
+            selectedId={opened ? selectedProfile?.id : undefined}
+            onSelect={(p) => select({ kind: "profile", id: p.id })}
+          />
+        ) : (
+          <div className="portfolio-scroll">
+            <ProfileLibraryTable
+              profiles={returnProfiles}
+              selectedId={selectedProfile?.id}
+              onSelect={(p) => select({ kind: "profile", id: p.id })}
+              onReorder={
+                offline
+                  ? undefined
+                  : (ids) => saveOrder(() => api.returnProfiles.reorder(ids))
+              }
+            />
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: 26 }}>
+        <SectionBar
+          title={
+            <Tooltip content="Inflation profiles define how prices change over time in the simulation. The active profile supplies the inflation rate for amounts marked to grow with inflation. Choose one profile for this scenario; amounts without inflation adjustment keep their specified values.">
+              Inflation
+            </Tooltip>
+          }
+          count={activeInflationProfile ? "one is in use" : "none in use"}
+        />
+        {inflationProfiles.length === 0 ? (
+          <p style={{ ...NOTE, margin: 0 }}>
+            None defined — the scenario runs without inflation adjustment.
+          </p>
+        ) : mobile ? (
+          <InflationCards
+            profiles={inflationProfiles}
+            activeId={activeInflationProfile ?? ""}
+            onActivate={offline ? undefined : onActivateInflation}
+          />
+        ) : (
+          <div className="portfolio-scroll">
+            <InflationProfilesTable
+              profiles={inflationProfiles}
+              activeId={activeInflationProfile ?? ""}
+              onActivate={offline ? undefined : onActivateInflation}
+              onReorder={
+                offline
+                  ? undefined
+                  : (ids) => saveOrder(() => api.inflationProfiles.reorder(ids))
+              }
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const inspector = selectedAsset ? (
+      <AssetInspector
+        key={selectedAsset.serverId}
+        asset={selectedAsset}
+        profile={inherited}
+        profiles={raw.returnProfiles}
+        onApply={(draft) => applyAsset(selectedAsset, draft)}
+        onEditProfile={
+          inherited && (() => select({ kind: "profile", id: inherited.id }))
+        }
+        busy={editingAsset.busy}
+        error={editingAsset.error}
+        offline={offline}
+      />
+    ) : selectedProfile ? (
+      <ProfileInspector
+        key={selectedProfile.id}
+        profile={selectedProfile}
+        presets={histories}
+        onApply={(body) => applyProfile(selectedProfile, body)}
+        onDuplicate={() => duplicateProfile(selectedProfile)}
+        busy={editingProfile.busy}
+        error={editingProfile.error}
+        offline={offline}
+      />
+    ) : null;
+
+  return (
+    <>
+      {mobile ? (
+        <>
+          {main}
+          {opened && inspector && (
+            <PushedPage
+              back="Assets"
+              title={selectedAsset?.ticker ?? selectedProfile?.id ?? ""}
+              onClose={() => nav.setSelection(undefined)}
+            >
+              {inspector}
+            </PushedPage>
+          )}
+        </>
+      ) : (
+        <SplitPane railWidth={360} main={main} rail={inspector} />
+      )}
 
       {addingAsset && (
         <NewAssetDialog

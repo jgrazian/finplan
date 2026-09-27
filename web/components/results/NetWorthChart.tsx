@@ -11,12 +11,27 @@ import {
   makeScale,
 } from "@/components/charts";
 import { fmtAxis } from "@/lib/format";
-import { linePath } from "@/components/charts/geometry";
+import { type ChartGeometry, linePath } from "@/components/charts/geometry";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { resolveScaleKind, stackSeries } from "@/components/charts/stack";
 import type { AccountSeries, NetWorthBands } from "@/lib/types";
 import { ChartReadout } from "./ChartReadout";
 import type { ChartView } from "./types";
 import type { YearFocus } from "./useYearFocus";
+
+/**
+ * The phone frame. The viewBox scales to the card's width, so the desktop
+ * 920-unit frame would shrink its 10px ticks to under 4px on a 375px screen;
+ * a frame near the phone's own width keeps them readable.
+ */
+const PHONE_GEOMETRY: ChartGeometry = {
+  w: 360,
+  h: 250,
+  left: 46,
+  right: 8,
+  top: 8,
+  bottom: 26,
+};
 
 /**
  * The single chart frame, in whichever of the three treatments is selected.
@@ -42,6 +57,7 @@ export function NetWorthChart({
   focus: YearFocus;
 }) {
   const { hoverIndex, pinnedIndex } = focus;
+  const mobile = useIsMobile();
 
   const stack = useMemo(
     () => stackSeries(accountSeries, bands.years.length),
@@ -68,8 +84,9 @@ export function NetWorthChart({
     return makeScale(bands.years.length, domainFor(kind, plotted), {
       mode: view === "bar" ? "band" : "point",
       kind,
+      geo: mobile ? PHONE_GEOMETRY : undefined,
     });
-  }, [bands.years.length, plotted, scaleKind, view]);
+  }, [bands.years.length, plotted, scaleKind, view, mobile]);
 
   const index = focus.index;
   const cursorValue = pathValues[index] ?? 0;

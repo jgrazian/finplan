@@ -1,6 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;700&family=Barlow+Condensed:wght@400;600&display=swap');
 @import "tailwindcss";
 @import "./design-system.css";
+@import "./mobile/shell.css";
+@import "./mobile/portfolio.css";
+@import "./mobile/plan.css";
+@import "./mobile/results.css";
+@import "./mobile/analysis.css";
 
 /* Expose the Industry tokens to Tailwind utilities, so `text-accent-700`,
    `border-divider`, `font-heading` etc. resolve to the same values the

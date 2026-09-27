@@ -24,18 +24,8 @@ export function ChartReadout({
   accountSeries: AccountSeries[];
 }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 20,
-        marginTop: 14,
-        minHeight: 52,
-      }}
-    >
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 26 }}>
+    <div className="chart-readout">
+      <div className="chart-readout-stats">
         <InlineStat
           label={isHovering ? "year / age" : "end of plan"}
           value={bands.years[index] == null ? "—" : `${bands.years[index]}${bands.ages[index] === bands.years[index] ? "" : ` · age ${bands.ages[index]}`}`}
@@ -45,13 +35,19 @@ export function ChartReadout({
           label={`pointwise p${bands.outer[0]}–p${bands.outer[1]}`}
           value={range(bands.low[index], bands.high[index])}
         />
+        {/* The phone keeps three cells — year, path, outer band — and drops
+            the two below, which the envelope itself already draws. */}
         {bands.upperQuartile.length > 0 && (
-          <InlineStat
-            label="pointwise p25–p75"
-            value={range(bands.lowerQuartile[index], bands.upperQuartile[index])}
-          />
+          <div className="chart-readout-extra">
+            <InlineStat
+              label="pointwise p25–p75"
+              value={range(bands.lowerQuartile[index], bands.upperQuartile[index])}
+            />
+          </div>
         )}
-        <InlineStat label="pointwise p50" value={fmtCompact(bands.p50[index])} emphasis />
+        <div className="chart-readout-extra">
+          <InlineStat label="pointwise p50" value={fmtCompact(bands.p50[index])} emphasis />
+        </div>
       </div>
       <Legend items={accountSeries.map((s) => ({ label: s.label, color: s.color }))} />
     </div>

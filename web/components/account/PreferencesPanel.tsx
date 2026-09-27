@@ -59,7 +59,7 @@ export function PreferencesPanel({
 
   return (
     <div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, maxWidth: 520 }}>
+      <div className="mobile-stack" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, maxWidth: 520 }}>
         <Field label="Default Monte Carlo iterations">
           <NumberInput
             value={draft.iterations}

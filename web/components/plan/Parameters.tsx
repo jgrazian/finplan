@@ -118,7 +118,7 @@ export function ParameterEditor({ parameter, scenarioId, onSaved, onDeleted, onS
     catch (err) { setDeleteError(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
   };
-  return <div style={{ padding: "18px 24px", minWidth: 0 }}>
+  return <div className="parameter-editor" style={{ padding: "18px 24px", minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", borderBottom: "1px solid var(--color-divider)", paddingBottom: 16 }}>
       <h4 style={{ margin: 0 }}>Parameter</h4>
       <span style={{ color: muted, fontSize: 12 }}>Used in this scenario</span>

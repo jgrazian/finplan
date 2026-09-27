@@ -43,6 +43,7 @@ export function OverrideCard({
           disabled={disabled}
           onChange={onToggle}
           aria-label={`Apply ${view.short}`}
+          className="wi-toggle"
           style={{ accentColor: "var(--color-accent)", margin: 0, cursor: "pointer" }}
         />
         <span className="stat-l">{view.kind}</span>
@@ -63,6 +64,7 @@ export function OverrideCard({
           disabled={disabled}
           aria-label={`Remove ${view.short}`}
           title="Remove this override"
+          className="wi-remove"
           style={{
             border: 0,
             background: "none",
@@ -77,6 +79,7 @@ export function OverrideCard({
         </button>
       </div>
       <div
+        className="wi-parts"
         style={{
           display: "flex",
           alignItems: "center",

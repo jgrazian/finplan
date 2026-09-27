@@ -51,7 +51,10 @@ export function AssetMixCard({
         marginBottom: 18,
       }}
     >
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+      <div
+        className="portfolio-mix-head"
+        style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}
+      >
         <div>
           <StatLabel>Portfolio value by return profile</StatLabel>
           <div

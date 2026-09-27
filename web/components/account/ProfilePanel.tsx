@@ -54,6 +54,7 @@ export function ProfilePanel({
   return (
     <div>
       <div
+        className="mobile-stack"
         style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr",

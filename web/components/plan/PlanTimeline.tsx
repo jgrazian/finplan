@@ -34,6 +34,7 @@ export function PlanTimeline({
 
   return (
     <div
+      className="plan-timeline"
       style={{
         borderTop: "1px solid var(--color-divider)",
         padding: "10px 20px 12px",

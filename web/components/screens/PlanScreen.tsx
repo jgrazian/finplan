@@ -14,6 +14,7 @@ import { Button, Dialog, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Event as ApiEvent, EventBody, UpdateScenario } from "@/lib/api/types";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
+import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
@@ -116,6 +117,19 @@ export function PlanScreen({
       setEmptyParameters(true);
     }
   };
+  // On a phone the editor is a page pushed over the rail rather than a pane
+  // beside it, open only once a row is tapped. Closing hides it without
+  // unmounting, so an unapplied draft is still there when the row reopens.
+  const isMobile = useIsMobile();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const openEvent = (name: string) => {
+    selectEvent(name);
+    setMobileOpen(true);
+  };
+  const openParameter = (id: number) => {
+    selectParameter(id);
+    setMobileOpen(true);
+  };
   const saveOrder = useReorderWrite(onChanged);
   // The pickers' choices, plus the two things that let a condition explain
   // itself: the plan's birth date, and which event is being edited.
@@ -186,7 +200,7 @@ export function PlanScreen({
     editing.run(
       () => api.events.create(scenarioId, blankEvent(name)),
       () => {
-        selectEvent(name);
+        openEvent(name);
         onChanged();
       },
     );
@@ -235,6 +249,7 @@ export function PlanScreen({
     try {
       await api.events.remove(scenarioId, event.serverId);
       setDeleting(undefined);
+      setMobileOpen(false);
       onChanged();
     } catch (err) {
       setRemoveError(err instanceof Error ? err.message : String(err));
@@ -251,11 +266,40 @@ export function PlanScreen({
     editing.run(
       async () => { createdId = (await api.parameters.create(scenarioId, { name, value: blankParameterValue(kind) })).id; },
       () => {
-        if (createdId != null) selectParameter(createdId);
+        if (createdId != null) openParameter(createdId);
         onChanged();
       },
     );
   };
+
+  const pushed =
+    isMobile && mobileOpen && (railMode === "parameters" ? !!selectedParameter : !!(selected && selectedRaw));
+  // What the editor pane says when the rail's list is empty — under the list
+  // on a phone, where there is no pane beside it.
+  const empty = (
+    <>
+      {railMode === "parameters" && !selectedParameter && (
+        <Empty
+          title="No parameters"
+          body="A parameter is a named value — a retirement age, a spending level — that amounts and triggers refer to by name, and that Analysis offers as an axis to sweep or solve for. Change it once and every event using it follows."
+          action="Add parameter"
+          onAction={() => addParameter("Money")}
+          disabled={offline || editing.busy}
+          error={editing.error}
+        />
+      )}
+      {railMode === "events" && events.length === 0 && (
+        <Empty
+          title="No events"
+          body="Events are what makes the plan move: income arriving, spending leaving, a retirement age pausing one and starting another. Without any, the simulation just compounds the opening balances."
+          action="Add event"
+          onAction={add}
+          disabled={offline || editing.busy}
+          error={editing.error}
+        />
+      )}
+    </>
+  );
 
   return (
     <>
@@ -266,17 +310,10 @@ export function PlanScreen({
         offline={offline}
       />
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "300px 1fr",
-          alignItems: "stretch",
-          minHeight: 460,
-        }}
-      >
-        <div style={{ borderRight: "1px solid var(--color-divider)", minWidth: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr)", height: "min(78vh, 780px)", minHeight: 430, alignSelf: "start", overflow: "hidden" }}>
+      <div className="plan-body">
+        <div className="plan-rail">
           {/* Artboard 17a — one rail, two lists, at the same weight. */}
-          <div style={{ padding: "14px 18px 12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div className="plan-rail-head">
             <SegmentedControl<RailMode>
               ariaLabel="Rail"
               value={railMode}
@@ -293,54 +330,53 @@ export function PlanScreen({
               aria-label={railMode === "events" ? "Add event" : "Add parameter"}
               title={offline ? "No connection to the server." : undefined}
             >
-              Add
+              {isMobile ? "+" : "Add"}
             </Button>
           </div>
-          <div style={{ minHeight: 0, overflow: "auto" }}>
+          <div className="plan-rail-list">
             {railMode === "events" ? (
               <EventRail
                 events={events}
                 selectedId={selected?.id ?? ""}
-                onSelect={selectEvent}
-                onReorder={offline ? undefined : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))}
+                onSelect={openEvent}
+                onReorder={offline || isMobile ? undefined : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))}
               />
             ) : (
               <ParameterRail parameters={parameters} selectedId={parameterId}
-                onSelect={selectParameter} error={editing.error} />
+                onSelect={openParameter} error={editing.error} />
             )}
+            {isMobile && empty}
           </div>
         </div>
-        <div style={{ minWidth: 0 }}>
+        <div
+          className={pushed ? "mobile-pushed" : undefined}
+          style={{ minWidth: 0, display: isMobile && !pushed ? "none" : undefined }}
+        >
+          {pushed && (
+            <div className="mobile-pushed-bar">
+              <Button variant="ghost" className="mobile-pushed-btn" onClick={() => setMobileOpen(false)}>
+                ‹ Plan
+              </Button>
+              <span className="mobile-pushed-title">
+                {railMode === "parameters" ? selectedParameter?.name : selected?.id}
+              </span>
+              <Button variant="ghost" className="mobile-pushed-btn" onClick={() => setMobileOpen(false)}>
+                Done
+              </Button>
+            </div>
+          )}
           {selectedParameter && <ParameterEditor key={`${scenarioId}:${selectedParameter.id}`}
             parameter={selectedParameter} scenarioId={scenarioId}
             onSaved={onChanged}
             onDeleted={() => {
               const next = parameters.find((p) => p.id !== selectedParameter.id);
+              setMobileOpen(false);
               if (next) selectParameter(next.id);
               else { setEmptyParameters(true); nav.setSelection(lastEventId ?? selected?.id); }
               onChanged();
             }}
             onSelectEvent={selectEvent} offline={offline} />}
-          {railMode === "parameters" && !selectedParameter && (
-            <Empty
-              title="No parameters"
-              body="A parameter is a named value — a retirement age, a spending level — that amounts and triggers refer to by name, and that Analysis offers as an axis to sweep or solve for. Change it once and every event using it follows."
-              action="Add parameter"
-              onAction={() => addParameter("Money")}
-              disabled={offline || editing.busy}
-              error={editing.error}
-            />
-          )}
-          {railMode === "events" && events.length === 0 && (
-            <Empty
-              title="No events"
-              body="Events are what makes the plan move: income arriving, spending leaving, a retirement age pausing one and starting another. Without any, the simulation just compounds the opening balances."
-              action="Add event"
-              onAction={add}
-              disabled={offline || editing.busy}
-              error={editing.error}
-            />
-          )}
+          {!isMobile && empty}
           {selected && selectedRaw && (
             // Kept mounted under a parameter, so an unsaved draft survives a
             // look at the parameter it uses.
