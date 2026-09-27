@@ -1,4 +1,5 @@
 mod accounts;
+mod diagnostics;
 mod events;
 mod ids;
 mod market;
@@ -14,6 +15,7 @@ pub use accounts::{
     ContributionLimit, ContributionLimitPeriod, FixedAsset, InvestmentContainer, LoanDetail,
     PaymentSchedule, Repayment, TaxStatus, amortized_payment,
 };
+pub use diagnostics::{FundingAccumulator, FundingDiagnostics, PathDiagnostics, ShortfallStart};
 pub use events::{
     AmountMode, BalanceThreshold, Event, EventEffect, EventTrigger, Financing, FlowLimits,
     IncomeType, LimitPeriod, LotMethod, RepeatInterval, TransferAmount, TransferEndpoint,

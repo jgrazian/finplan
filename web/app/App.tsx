@@ -17,7 +17,7 @@ import { SessionExpiredDialog, StatusBar } from "@/components/status";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { historyApi } from "@/lib/api/history";
-import type { Scenario as ApiScenario, UserResponse } from "@/lib/api/types";
+import type { Scenario as ApiScenario, PreflightIssue, UserResponse } from "@/lib/api/types";
 import { useAsync } from "@/lib/hooks/useAsync";
 import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
@@ -28,6 +28,7 @@ import { useServerStatus } from "@/lib/status/useServerStatus";
 import { useAppearance } from "@/lib/theme";
 import type { InflationProfile, Scenario } from "@/lib/types";
 import { BETA_ACCESS_NOTICE } from "@/lib/view/access";
+import { clockTime, pathChecks, summarizeIssues } from "@/lib/view/issues";
 
 /** The four tabs that describe the scenario; account settings is not one. */
 type ScreenTab = Exclude<TabId, "account">;
@@ -135,6 +136,69 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   const run = useRun(workspace.scenario);
   const status = useServerStatus();
 
+  // What would stop the next run. Re-read on every accepted edit, so fixing
+  // an issue clears it from the strip without a reload.
+  const preflight = useAsync(
+    async () => (scenarioId == null ? undefined : api.scenarios.preflight(scenarioId)),
+    [scenarioId, workspace.scenario?.updated_at],
+  );
+  const loadedRun = run.history.find((r) => r.id === run.selectedRunId);
+  // Names for the rows warnings refer to, and each account's kind for the
+  // path checks. Both come from the live plan, so an account deleted since the
+  // run is left unnamed rather than guessed at.
+  const accounts = workspace.accounts;
+  const events = workspace.events;
+  const results = run.results;
+  const issues = useMemo(() => {
+    const accountById = new Map(accounts.map((a) => [a.serverId, a]));
+    const eventById = new Map(events.map((e) => [e.serverId, e.id]));
+    return summarizeIssues({
+      run: run.run,
+      // A superseded scenario's report must not describe this one.
+      preflight: preflight.loading ? undefined : preflight.data,
+      stale: run.stale,
+      lastRunAt: clockTime(loadedRun?.created_at),
+      fundingSuccessRate: results?.stats.fundingSuccessRate,
+      iterations: results?.stats.numIterations,
+      warnings: results?.warnings ?? [],
+      pathLabel: results?.pathLabel,
+      checks: results
+        ? pathChecks({
+            years: results.bands.years,
+            cashFlows: results.cashFlows,
+            accountSeries: results.accountSeries,
+            flavorOf: (id) => accountById.get(Number(id))?.flavor,
+          })
+        : [],
+      names: {
+        event: (id) => eventById.get(id),
+        account: (id) => accountById.get(id)?.name,
+      },
+    });
+  }, [run.run, run.stale, results, preflight.loading, preflight.data, loadedRun?.created_at, accounts, events]);
+
+  const reviewEvent = useCallback(
+    (eventId: number) => {
+      const event = events.find((e) => e.serverId === eventId);
+      if (scenarioSlug == null) nav.setTab("plan");
+      else nav.openScenario(scenarioSlug, "plan", event?.id);
+    },
+    [nav, scenarioSlug, events],
+  );
+
+  // An issue names its section; one about a single event opens on that event.
+  // Portfolio rows are picked by account, which an asset issue does not name.
+  const reviewIssue = useCallback(
+    (issue: PreflightIssue) => {
+      const tab = issue.section === "portfolio" ? "portfolio" : "plan";
+      const event =
+        tab === "plan" ? workspace.events.find((e) => e.serverId === issue.record_id) : undefined;
+      if (scenarioSlug == null) nav.setTab(tab);
+      else nav.openScenario(scenarioSlug, tab, event?.id);
+    },
+    [nav, scenarioSlug, workspace.events],
+  );
+
   const start = useCallback(() => {
     nav.setTab("results");
     void run.start(effort);
@@ -234,6 +298,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           onRetry={refresh}
           onRunAgain={start}
           onSignIn={() => void session.signOut()}
+          exclude={nav.tab === "results" ? "run" : undefined}
         />
 
         {access.data?.access_mode === "beta" && (
@@ -275,7 +340,9 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 offline={status.offline}
                 onRun={start}
                 onCancel={run.cancel}
-                onReviewPlan={() => nav.setTab("plan")}
+                issues={issues}
+                onReviewIssue={reviewIssue}
+                onReviewEvent={reviewEvent}
               />
             )}
             {nav.tab === "portfolio" && (

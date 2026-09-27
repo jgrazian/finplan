@@ -25,6 +25,11 @@ pub struct SimulationWarning {
     pub message: String,
     /// Category of the warning
     pub kind: WarningKind,
+    /// The account the warning is about, when the engine knows it: the
+    /// overdrawn account for a shortfall, or the account an effect could not
+    /// find or use. Engine ids appear in `message` only as debug text.
+    #[serde(default)]
+    pub account_id: Option<AccountId>,
 }
 
 /// Categories of simulation warnings
@@ -109,6 +114,9 @@ pub struct SimulationResult {
     /// Used to convert nominal values to real (inflation-adjusted) values
     #[serde(default)]
     pub cumulative_inflation: Vec<f64>,
+    /// When, where and how badly this path went short of cash.
+    #[serde(default)]
+    pub diagnostics: super::PathDiagnostics,
 }
 
 impl SimulationResult {
@@ -754,6 +762,7 @@ impl MeanAccumulators {
             ledger: Vec::new(),   // No meaningful ledger for averaged results
             warnings: Vec::new(), // No warnings for averaged results
             cumulative_inflation: self.inflation.build_mean_inflation(),
+            diagnostics: super::PathDiagnostics::default(),
         }
     }
 }
@@ -818,6 +827,10 @@ pub struct MonteCarloSummary {
     pub real_net_worth: Option<RealNetWorthSummary>,
     /// Accumulators for computing mean (if requested)
     pub mean_accumulators: Option<MeanAccumulators>,
+    /// How the iterations that failed the funding check failed. Absent on
+    /// summaries produced before it was measured.
+    #[serde(default)]
+    pub funding: Option<super::FundingDiagnostics>,
 }
 
 impl MonteCarloSummary {

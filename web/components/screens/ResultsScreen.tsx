@@ -1,7 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { PlanDiagnostics } from "@/components/results/PlanDiagnostics";
+import { useCallback, useState } from "react";
 import { SplitPane } from "@/components/layout";
 import {
   AccountBreakdown,
@@ -10,6 +9,8 @@ import {
   ChartToolbar,
   EffortMenu,
   EffortPanel,
+  IssueStrip,
+  IssuesDrawer,
   NetWorthChart,
   type RunEffort,
   RunSummary,
@@ -21,7 +22,8 @@ import type { ScaleKind } from "@/components/charts";
 import { resolveScaleKind } from "@/components/charts/stack";
 import { Button, Hr } from "@/components/ui";
 import type { Percentile, ResultsData } from "@/lib/types";
-import type { Run } from "@/lib/api/types";
+import type { PreflightIssue, Run } from "@/lib/api/types";
+import type { IssueSummary } from "@/lib/view/issues";
 import { accountBreakdown } from "@/lib/view/results";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { EmptyState } from "./EmptyState";
@@ -54,8 +56,52 @@ function chartCopy(
   };
 }
 
-/** Results tab: the run's success rate, its net-worth paths and its warnings. */
+type ContentProps = Parameters<typeof ResultsContent>[0];
+
+/**
+ * Results tab: the issue strip over the run's success rate, its net-worth
+ * paths and its warnings. The strip sits above every state the screen can be
+ * in — a failed or never-run plan needs it most — and opens the Issues
+ * drawer over the right of whatever is below it.
+ */
 export function ResultsScreen({
+  issues,
+  onReviewIssue,
+  onReviewEvent,
+  ...props
+}: ContentProps & {
+  issues: IssueSummary;
+  onReviewIssue: (issue: PreflightIssue) => void;
+  onReviewEvent: (eventId: number) => void;
+}) {
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const close = useCallback(() => setDrawerOpen(false), []);
+  const open = drawerOpen && issues.strip != null;
+
+  return (
+    <>
+      {issues.strip && (
+        <IssueStrip strip={issues.strip} open={open} onToggle={() => setDrawerOpen((v) => !v)} />
+      )}
+      <div style={{ position: "relative" }}>
+        <ResultsContent {...props} />
+        {open && (
+          <IssuesDrawer
+            summary={issues}
+            percentile={props.percentile}
+            onClose={close}
+            onRun={props.onRun}
+            onReviewIssue={onReviewIssue}
+            onReviewEvent={onReviewEvent}
+            onPercentileChange={props.onPercentileChange}
+          />
+        )}
+      </div>
+    </>
+  );
+}
+
+function ResultsContent({
   results,
   run,
   active,
@@ -68,7 +114,6 @@ export function ResultsScreen({
   offline,
   onRun,
   onCancel,
-  onReviewPlan,
 }: {
   results: ResultsData | undefined;
   run: Run | undefined;
@@ -89,7 +134,6 @@ export function ResultsScreen({
   offline?: boolean;
   onRun: () => void;
   onCancel: () => void;
-  onReviewPlan?: () => void;
 }) {
   const [view, setView] = useState<ChartView>("fan");
   const [scaleKind, setScaleKind] = useState<ScaleKind>("linear");
@@ -161,7 +205,6 @@ export function ResultsScreen({
             }
           />
 
-          <PlanDiagnostics warnings={results.warnings} pathLabel={results.pathLabel} onReviewPlan={onReviewPlan} />
           {!results.hasEnvelope && (
             <p role="status">Real envelope unavailable for this result. Rerun to measure all-path real quantiles; only the selected path is shown.</p>
           )}

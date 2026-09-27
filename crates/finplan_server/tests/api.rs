@@ -442,7 +442,9 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|w| w["kind"] == "CashShortfall" && w["date"] == "2026-02-01")
+                .any(|w| w["kind"] == "CashShortfall"
+                    && w["date"] == "2026-02-01"
+                    && w["account_id"] == checking)
         );
     }
 

@@ -65,6 +65,61 @@ impl<'a> Names<'a> {
             .and_then(|db| self.compiled.event_names.get(&db))
             .map_or("a deleted event", String::as_str)
     }
+
+    /// Rewrite the engine's debug ids in a warning message as names. The
+    /// engine only knows dense indices, so its errors read `account
+    /// AccountId(3) not found`; users should see the account they named.
+    pub fn readable(&self, message: &str) -> String {
+        let text = replace_ids(message, "AssetCoord { account_id: AccountId(", |n, rest| {
+            // `AssetCoord { account_id: AccountId(3), asset_id: AssetId(1) }`
+            let end = rest.find('}').map_or(0, |i| i + 1);
+            (
+                format!("a holding in “{}”", self.account(AccountId(n))),
+                end,
+            )
+        });
+        let text = replace_ids(&text, "AccountId(", |n, _| {
+            (format!("“{}”", self.account(AccountId(n))), 0)
+        });
+        let text = replace_ids(&text, "EventId(", |n, _| {
+            (format!("“{}”", self.event(EventId(n))), 0)
+        });
+        let text = replace_ids(&text, "AssetId(", |_, _| ("an asset".into(), 0));
+        let text = replace_ids(&text, "ReturnProfileId(", |_, _| {
+            ("a return profile".into(), 0)
+        });
+        replace_ids(&text, "ParameterId(", |_, _| ("a parameter".into(), 0))
+    }
+
+    pub fn account_row(&self, id: AccountId) -> Option<i64> {
+        self.account_db_id(id)
+    }
+}
+
+/// Replace each `prefix<digits>)` with `render(n, rest)`, where `rest` is the
+/// text after the `)` and the returned count is how much of it to consume too.
+fn replace_ids(text: &str, prefix: &str, render: impl Fn(u16, &str) -> (String, usize)) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(prefix) {
+        let after = &rest[start + prefix.len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let id = after[..digits].parse::<u16>().ok();
+        match (id, after[digits..].strip_prefix(')')) {
+            (Some(n), Some(tail)) => {
+                let (name, consumed) = render(n, tail);
+                out.push_str(&rest[..start]);
+                out.push_str(&name);
+                rest = &tail[consumed..];
+            }
+            _ => {
+                out.push_str(&rest[..start + prefix.len()]);
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// The label a cash credit reads under. `CashFlowKind` distinguishes money
@@ -369,4 +424,32 @@ pub fn flatten(entry: &LedgerEntry, names: &Names<'_>) -> Option<LedgerRow> {
         .and_then(|id| names.event_db_id(id));
 
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replace_ids;
+
+    #[test]
+    fn debug_ids_in_messages_are_replaced_and_malformed_ones_kept() {
+        let name = |n: u16, _: &str| (format!("#{n}"), 0);
+        assert_eq!(
+            replace_ids("account AccountId(3) not found", "AccountId(", name),
+            "account #3 not found"
+        );
+        assert_eq!(
+            replace_ids("AccountId(1) and AccountId(22)", "AccountId(", name),
+            "#1 and #22"
+        );
+        assert_eq!(
+            replace_ids("AccountId(x) AccountId(", "AccountId(", name),
+            "AccountId(x) AccountId("
+        );
+        let coord = replace_ids(
+            "asset AssetCoord { account_id: AccountId(4), asset_id: AssetId(1) } not found",
+            "AssetCoord { account_id: AccountId(",
+            |n, rest| (format!("a holding in #{n}"), rest.find('}').unwrap() + 1),
+        );
+        assert_eq!(coord, "asset a holding in #4 not found");
+    }
 }

@@ -484,12 +484,14 @@ pub struct CashFlow {
     pub taxes: f64,
 }
 
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Serialize, sqlx::FromRow, TS)]
 #[ts(export)]
 pub struct Warning {
     pub kind: String,
     pub date: Option<String>,
     pub event_id: Option<i64>,
+    /// The account the warning is about, when the engine knew it.
+    pub account_id: Option<i64>,
     pub message: String,
 }
 
@@ -739,8 +741,8 @@ pub(crate) async fn results(
         )
         .collect();
 
-    let warning_rows: Vec<(String, Option<String>, Option<i64>, String)> = sqlx::query_as(
-        "SELECT kind, as_of_date, event_id, message FROM run_warnings
+    let warnings: Vec<Warning> = sqlx::query_as(
+        "SELECT kind, as_of_date AS date, event_id, account_id, message FROM run_warnings
           WHERE run_id = ?1 AND percentile IS ?2 ORDER BY position",
     )
     .bind(id)
@@ -785,15 +787,7 @@ pub(crate) async fn results(
         account_series,
         series_percentile,
         cash_flows,
-        warnings: warning_rows
-            .into_iter()
-            .map(|(kind, date, event_id, message)| Warning {
-                kind,
-                date,
-                event_id,
-                message,
-            })
-            .collect(),
+        warnings,
         inflation,
         ledger_years: ledger_years(&state, id, series_percentile).await?,
     }))

@@ -29,6 +29,8 @@ pub struct SimulationState {
 
     /// Non-fatal warnings collected during simulation
     pub warnings: Vec<SimulationWarning>,
+    /// Funding facts about this path, returned on its result.
+    pub diagnostics: crate::model::PathDiagnostics,
 
     /// Random number generator for stochastic effects (e.g., Random `EventEffect`)
     /// Uses `RefCell` for interior mutability since `evaluate_effect` takes &`SimulationState`
@@ -531,6 +533,7 @@ impl SimulationState {
             history: SimHistory { ledger: Vec::new() },
             pending_triggers: Vec::new(),
             warnings: Vec::new(),
+            diagnostics: crate::model::PathDiagnostics::default(),
             rng: RefCell::new(effect_rng),
             collect_ledger: params.collect_ledger,
         })

@@ -5,6 +5,8 @@ export { ColumnPicker, useStoredColumns } from "./ColumnPicker";
 export type { ColumnOption } from "./ColumnPicker";
 export { ChartToolbar } from "./ChartToolbar";
 export { NetWorthChart } from "./NetWorthChart";
+export { IssueStrip } from "./IssueStrip";
+export { IssuesDrawer } from "./IssuesDrawer";
 export { EffortMenu, EffortPanel, EFFORT_STOPS, effortLabel, nearestStop } from "./RunEffort";
 export type { RunEffort } from "./RunEffort";
 export { RunSummary } from "./RunSummary";

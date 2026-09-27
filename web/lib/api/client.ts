@@ -36,6 +36,7 @@ import type {
   LedgerPage,
   LedgerQuery,
   PasswordChange,
+  PreflightReport,
   Position,
   Profile,
   QuickWhatIf,
@@ -100,6 +101,8 @@ export const api = {
       http.post<Scenario>(`${scenario(id)}/duplicate`, { name }),
     /** Lower the scenario without running it, to surface config errors early. */
     compile: (id: number) => http.post<CompileReport>(`${scenario(id)}/compile`),
+    /** What would stop the next run, and what is worth a second look. */
+    preflight: (id: number) => http.get<PreflightReport>(`${scenario(id)}/preflight`),
   },
 
   assets: {

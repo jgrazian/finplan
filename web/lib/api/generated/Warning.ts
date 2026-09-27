@@ -4,5 +4,9 @@ export type Warning = {
   kind: string;
   date: string | null;
   event_id: number | null;
+  /**
+   * The account the warning is about, when the engine knew it.
+   */
+  account_id: number | null;
   message: string;
 };

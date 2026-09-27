@@ -675,6 +675,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                         event_id: Some(event_id),
                         message: format!("failed to evaluate trigger: {error}"),
                         kind: WarningKind::EvaluationFailed,
+                        account_id: error.account_id(),
                     });
                     continue;
                 }
@@ -800,6 +801,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                                     event_id: Some(event_id),
                                     message: format!("failed to apply effect: {e}"),
                                     kind: WarningKind::EffectSkipped,
+                                    account_id: e.account_id(),
                                 });
                             }
                         }
@@ -810,6 +812,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                             event_id: Some(event_id),
                             message: format!("failed to evaluate effect: {e}"),
                             kind: WarningKind::EvaluationFailed,
+                            account_id: e.account_id(),
                         });
                     }
                 }
@@ -831,6 +834,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                     event_id: Some(event_id),
                     message: "cannot trigger an event that does not exist".into(),
                     kind: WarningKind::EvaluationFailed,
+                    account_id: None,
                 });
                 continue;
             };
@@ -887,6 +891,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                                     event_id: Some(event_id),
                                     message: format!("failed to apply effect: {error}"),
                                     kind: WarningKind::EffectSkipped,
+                                    account_id: error.account_id(),
                                 });
                             }
                         }
@@ -896,6 +901,7 @@ pub fn process_events_with_scratch(state: &mut SimulationState, scratch: &mut Si
                         event_id: Some(event_id),
                         message: format!("failed to evaluate effect: {error}"),
                         kind: WarningKind::EvaluationFailed,
+                        account_id: error.account_id(),
                     }),
                 }
             }
@@ -963,6 +969,7 @@ pub fn pay_scheduled_loans(state: &mut SimulationState) {
                         event_id: None,
                         message: format!("loan payment failed: {error}"),
                         kind: WarningKind::EvaluationFailed,
+                        account_id: error.account_id(),
                     });
                     break;
                 }

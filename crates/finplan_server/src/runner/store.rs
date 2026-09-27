@@ -365,9 +365,11 @@ async fn write_path(
         let event_db_id = warning
             .event_id
             .and_then(|id| compiled.id_map.event_db_id(id));
+        let account_db_id = warning.account_id.and_then(|id| names.account_row(id));
         sqlx::query(
-            "INSERT INTO run_warnings (run_id, percentile, position, kind, as_of_date, event_id, message)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO run_warnings (run_id, percentile, position, kind, as_of_date, event_id,
+                                       account_id, message)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         )
         .bind(run_id)
         .bind(percentile)
@@ -375,7 +377,8 @@ async fn write_path(
         .bind(warning_kind_name(warning.kind))
         .bind(warning.date.to_string())
         .bind(event_db_id)
-        .bind(&warning.message)
+        .bind(account_db_id)
+        .bind(names.readable(&warning.message))
         .execute(&mut **tx)
         .await?;
     }

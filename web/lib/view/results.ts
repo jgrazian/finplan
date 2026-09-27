@@ -298,5 +298,9 @@ function toWarnings(results: Results): SimulationWarning[] {
     kind: warning.kind,
     title: WARNING_TITLES[warning.kind] ?? warning.kind,
     detail: warning.date ? `${warning.date} — ${warning.message}` : warning.message,
+    eventId: warning.event_id ?? undefined,
+    accountId: warning.account_id ?? undefined,
+    date: warning.date ?? undefined,
+    message: warning.message,
   }));
 }

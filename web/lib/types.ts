@@ -217,6 +217,14 @@ export interface SimulationWarning {
   kind: string;
   title: string;
   detail: string;
+  /** Row id of the event being processed, when there was one. */
+  eventId?: number;
+  /** Row id of the account the warning is about, when the engine knew it. */
+  accountId?: number;
+  /** `YYYY-MM-DD`, when the warning is dated. */
+  date?: string;
+  /** The message without the date prefix `detail` carries. */
+  message?: string;
 }
 
 export interface ResultsData {

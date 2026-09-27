@@ -158,14 +158,19 @@ fn build_simulation_result(state: &mut SimulationState) -> SimulationResult {
     let yearly_cash_flows = build_yearly_cash_flows(&state.history.ledger);
     let cumulative_inflation = state.portfolio.market.get_cumulative_inflation_factors();
 
-    SimulationResult {
+    let mut result = SimulationResult {
         wealth_snapshots: std::mem::take(&mut state.portfolio.wealth_snapshots),
         yearly_taxes: std::mem::take(&mut state.taxes.yearly_taxes),
         yearly_cash_flows,
         ledger: std::mem::take(&mut state.history.ledger),
         warnings: std::mem::take(&mut state.warnings),
         cumulative_inflation,
-    }
+        diagnostics: std::mem::take(&mut state.diagnostics),
+    };
+    let mut diagnostics = std::mem::take(&mut result.diagnostics);
+    diagnostics.observe_snapshots(&result);
+    result.diagnostics = diagnostics;
+    result
 }
 
 pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult, SimulationError> {
@@ -211,6 +216,7 @@ fn simulate_inner(
     let mut state = SimulationState::from_parameters(params, seed)?;
     state.snapshot_wealth();
     let mut cash_shortfall_recorded = false;
+    let mut last_shortfall_year = None;
 
     while state.timeline.current_date < state.timeline.end_date {
         // Loan payments fall before the day's events, so an event reading a
@@ -236,6 +242,7 @@ fn simulate_inner(
                         "iteration limit ({max_iterations}) reached, possible infinite loop"
                     ),
                     kind: WarningKind::IterationLimitHit,
+                    account_id: None,
                 });
                 break;
             }
@@ -268,31 +275,57 @@ fn simulate_inner(
 
         // Expense and funding events may fire in separate same-date passes.
         // Test only once they have all settled, not between individual effects.
-        record_cash_shortfall(&mut state, &mut cash_shortfall_recorded);
+        record_cash_shortfall(
+            &mut state,
+            &mut cash_shortfall_recorded,
+            &mut last_shortfall_year,
+        );
         advance_time(&mut state);
     }
 
     // The final advance can change balances even when there are no more events.
-    record_cash_shortfall(&mut state, &mut cash_shortfall_recorded);
+    record_cash_shortfall(
+        &mut state,
+        &mut cash_shortfall_recorded,
+        &mut last_shortfall_year,
+    );
     state.snapshot_wealth();
     state.finalize_year_taxes();
 
     Ok(build_simulation_result(&mut state))
 }
 
-/// Record the first settled cash deficit, independently of ledger collection.
-/// Keep one warning per path so an unfunded monthly expense cannot flood results.
-fn record_cash_shortfall(state: &mut SimulationState, recorded: &mut bool) {
-    if *recorded {
-        return;
-    }
+/// Record settled cash deficits, independently of ledger collection.
+/// Every checkpoint feeds the path's diagnostics, but only the first deficit
+/// becomes a warning, so an unfunded monthly expense cannot flood results.
+fn record_cash_shortfall(
+    state: &mut SimulationState,
+    recorded: &mut bool,
+    last_year: &mut Option<i16>,
+) {
     let lowest = state
         .portfolio
         .accounts
-        .values()
-        .filter_map(crate::model::Account::cash_balance)
-        .min_by(f64::total_cmp);
-    if let Some(balance) = lowest
+        .iter()
+        .filter_map(|(id, account)| account.cash_balance().map(|balance| (*id, balance)))
+        // Ties go to the lower id, so the account named does not depend on
+        // hash-map iteration order.
+        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
+    // The last check falls on the end date, the first day after the plan;
+    // its deficit belongs to the plan's final year.
+    let date = state.timeline.current_date;
+    let year_of = if date >= state.timeline.end_date {
+        date.yesterday().unwrap_or(date)
+    } else {
+        date
+    };
+    state
+        .diagnostics
+        .observe_cash(date, year_of, lowest, last_year);
+    if *recorded {
+        return;
+    }
+    if let Some((account_id, balance)) = lowest
         && balance < -0.005
     {
         *recorded = true;
@@ -306,6 +339,7 @@ fn record_cash_shortfall(state: &mut SimulationState, recorded: &mut bool) {
                 -balance
             ),
             kind: WarningKind::CashShortfall,
+            account_id: Some(account_id),
         });
     }
 }
@@ -856,6 +890,7 @@ struct MonteCarloInternalResult {
     mean_accumulators: Option<MeanAccumulators>,
     real_net_worth: Option<crate::model::RealNetWorthSummary>,
     percentile_seeds: Vec<(f64, u64)>,
+    funding: crate::model::FundingDiagnostics,
 }
 
 /// Core Monte Carlo engine. All three public MC functions delegate here.
@@ -913,6 +948,7 @@ fn monte_carlo_core(
     let mut seed_results: Vec<(u64, f64)> = Vec::new();
     let mut online_stats = OnlineStats::new();
     let mut mean_accumulators: Option<MeanAccumulators> = None;
+    let mut funding = crate::model::FundingAccumulator::default();
     let mut batch_seed: u64 = config.seed.unwrap_or_else(|| rand::rng().next_u64());
     let mut converged = false;
     let mut final_convergence_value: Option<f64> = None;
@@ -959,6 +995,7 @@ fn monte_carlo_core(
             OnlineStats,
             Option<MeanAccumulators>,
             Option<RealAccumulator>,
+            crate::model::FundingAccumulator,
         );
         let batch_outputs: Result<Vec<BatchOutput>, SimulationError> = (0..num_batches)
             .into_par_iter()
@@ -973,6 +1010,7 @@ fn monte_carlo_core(
                 let mut local_stats = OnlineStats::new();
                 let mut local_acc: Option<MeanAccumulators> = None;
                 let mut local_real = options.run_phase2.then(|| RealAccumulator::new(&template));
+                let mut local_funding = crate::model::FundingAccumulator::default();
 
                 // Distribute remainder across first `extra` batches
                 let this_batch_size = per_batch + if local_batch_idx < extra { 1 } else { 0 };
@@ -1002,6 +1040,7 @@ fn monte_carlo_core(
                         }
                         // A skipped/failed effect is not evidence that the plan was funded.
                         local_stats.add(fnw, result.warnings.is_empty());
+                        local_funding.add(seed, &result, fnw);
                         local_results.push((seed, fnw));
 
                         if compute_means {
@@ -1020,12 +1059,19 @@ fn monte_carlo_core(
                     }
                 }
 
-                Ok((local_results, local_stats, local_acc, local_real))
+                Ok((
+                    local_results,
+                    local_stats,
+                    local_acc,
+                    local_real,
+                    local_funding,
+                ))
             })
             .collect();
 
         // Merge results from all batches (single-threaded, fast)
-        for (results, stats, local_acc, local_real) in batch_outputs? {
+        for (results, stats, local_acc, local_real, local_funding) in batch_outputs? {
+            funding.merge(local_funding);
             if let (Some(acc), Some(local)) = (&mut real_accumulator, local_real) {
                 acc.merge(local);
             }
@@ -1132,6 +1178,7 @@ fn monte_carlo_core(
         mean_accumulators,
         real_net_worth: real_accumulator.map(RealAccumulator::finish).transpose()?,
         percentile_seeds,
+        funding: funding.finish(),
     })
 }
 
@@ -1158,6 +1205,7 @@ pub fn monte_carlo_simulate_with_config(
         percentile_runs: result.percentile_runs,
         mean_accumulators: result.mean_accumulators,
         real_net_worth: result.real_net_worth,
+        funding: Some(result.funding),
     })
 }
 
@@ -1197,6 +1245,7 @@ pub fn monte_carlo_simulate_with_progress(
         percentile_runs: result.percentile_runs,
         mean_accumulators: result.mean_accumulators,
         real_net_worth: result.real_net_worth,
+        funding: Some(result.funding),
     })
 }
 

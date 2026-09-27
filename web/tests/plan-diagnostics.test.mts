@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fundingDiagnostics } from "../components/results/diagnostics.ts";
+import { fundingDiagnostics } from "../lib/view/issues.ts";
 
 test("diagnostics use stored warning kinds, including processing failures, without parsing prose", () => {
   const shortfall = { id: "1", kind: "CashShortfall", title: "", detail: "Any localized message" };

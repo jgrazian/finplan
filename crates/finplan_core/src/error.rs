@@ -32,6 +32,20 @@ impl fmt::Display for LookupError {
 
 impl std::error::Error for LookupError {}
 
+impl LookupError {
+    /// The account the lookup was for, when it was for one.
+    #[must_use]
+    pub fn account_id(&self) -> Option<AccountId> {
+        match self {
+            LookupError::AccountNotFound(id) => Some(*id),
+            LookupError::AssetNotFound(coord) | LookupError::AssetPriceNotFound(coord) => {
+                Some(coord.account_id)
+            }
+            LookupError::AssetIdNotFound(_) | LookupError::ReturnProfileNotFound(_) => None,
+        }
+    }
+}
+
 /// Errors related to account type mismatches
 #[derive(Debug, Clone)]
 pub enum AccountTypeError {
@@ -57,6 +71,17 @@ impl fmt::Display for AccountTypeError {
 }
 
 impl std::error::Error for AccountTypeError {}
+
+impl AccountTypeError {
+    #[must_use]
+    pub fn account_id(&self) -> Option<AccountId> {
+        match self {
+            AccountTypeError::NotACashAccount(id)
+            | AccountTypeError::NotAnInvestmentAccount(id)
+            | AccountTypeError::InvalidAccountType(id) => Some(*id),
+        }
+    }
+}
 
 /// Errors from market data generation (distribution sampling, historical data).
 #[derive(Debug, Clone)]
@@ -186,6 +211,16 @@ impl std::error::Error for TransferEvaluationError {
     }
 }
 
+impl TransferEvaluationError {
+    #[must_use]
+    pub fn account_id(&self) -> Option<AccountId> {
+        match self {
+            TransferEvaluationError::Expression(_) => None,
+            TransferEvaluationError::Lookup(e) => e.account_id(),
+        }
+    }
+}
+
 impl From<LookupError> for TransferEvaluationError {
     fn from(err: LookupError) -> Self {
         TransferEvaluationError::Lookup(err)
@@ -222,6 +257,17 @@ impl std::error::Error for TriggerEventError {
             TriggerEventError::TransferEvaluation(e) => Some(e),
             TriggerEventError::DateError(e) => Some(e),
             TriggerEventError::UnboundParameter(_) => None,
+        }
+    }
+}
+
+impl TriggerEventError {
+    #[must_use]
+    pub fn account_id(&self) -> Option<AccountId> {
+        match self {
+            TriggerEventError::Lookup(e) => e.account_id(),
+            TriggerEventError::TransferEvaluation(e) => e.account_id(),
+            TriggerEventError::DateError(_) | TriggerEventError::UnboundParameter(_) => None,
         }
     }
 }
@@ -271,6 +317,17 @@ impl std::error::Error for StateEventError {
     }
 }
 
+impl StateEventError {
+    #[must_use]
+    pub fn account_id(&self) -> Option<AccountId> {
+        match self {
+            StateEventError::Lookup(e) => e.account_id(),
+            StateEventError::AccountType(e) => e.account_id(),
+            StateEventError::TransferEvaluation(e) => e.account_id(),
+        }
+    }
+}
+
 impl From<LookupError> for StateEventError {
     fn from(err: LookupError) -> Self {
         StateEventError::Lookup(err)
@@ -309,6 +366,16 @@ impl std::error::Error for ApplyError {
         match self {
             ApplyError::Lookup(e) => Some(e),
             ApplyError::AccountType(e) => Some(e),
+        }
+    }
+}
+
+impl ApplyError {
+    #[must_use]
+    pub fn account_id(&self) -> Option<AccountId> {
+        match self {
+            ApplyError::Lookup(e) => e.account_id(),
+            ApplyError::AccountType(e) => e.account_id(),
         }
     }
 }

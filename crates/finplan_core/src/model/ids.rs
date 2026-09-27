@@ -21,7 +21,7 @@ pub struct AssetCoord {
 }
 
 /// Unique identifier for an Event within a simulation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EventId(pub u16);
 
 /// Unique identifier for an Event within a simulation

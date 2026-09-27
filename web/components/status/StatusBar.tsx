@@ -17,15 +17,21 @@ export function StatusBar({
   onRetry,
   onRunAgain,
   onSignIn,
+  exclude,
 }: {
   /** Refresh whatever the outage left stale, alongside the reconnect probe. */
   onRetry?: () => void;
   onRunAgain?: () => void;
   onSignIn?: () => void;
+  /** A kind some screen is already reporting in place, e.g. the run on Results. */
+  exclude?: StatusIssue["kind"];
 }) {
   const status = useServerStatus();
   const [expanded, setExpanded] = useState(false);
-  const { issue, others, confirmation, retryIn } = status;
+  const { confirmation, retryIn } = status;
+  const [issue, ...others] = [status.issue, ...status.others].filter(
+    (live): live is StatusIssue => live != null && live.kind !== exclude,
+  );
 
   if (!issue) {
     return confirmation ? (

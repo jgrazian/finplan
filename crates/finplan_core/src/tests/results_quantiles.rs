@@ -24,6 +24,7 @@ fn fixture(values: [f64; 3], inflation: f64) -> SimulationResult {
         yearly_cash_flows: vec![],
         ledger: vec![],
         warnings: vec![],
+        diagnostics: PathDiagnostics::default(),
     }
 }
 
@@ -37,6 +38,7 @@ fn crossing_paths_real_ranks_interpolation_and_warning_paths() {
         event_id: None,
         message: "shortfall".into(),
         kind: WarningKind::CashShortfall,
+        account_id: None,
     });
     let mut acc = RealAccumulator::new(&a);
     acc.accumulate(&a).unwrap();
