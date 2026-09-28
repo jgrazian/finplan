@@ -4,9 +4,4 @@
  * Every field of a lot is resizable in place. Absent means unchanged, so a
  * client that only wants to resize a holding sends `units` alone.
  */
-export type UpdatePosition = {
-  asset_id?: number | null;
-  purchase_date?: string | null;
-  units?: number | null;
-  cost_basis?: number | null;
-};
+export type UpdatePosition = { asset_id?: number | null, purchase_date?: string | null, units?: number | null, cost_basis?: number | null, };

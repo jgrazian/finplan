@@ -3,19 +3,17 @@
 /**
  * One axis of a requested sweep, or one parameter a solve may vary.
  */
-export type AxisRequest = {
-  /**
-   * An id from `GET /scenarios/{id}/analysis/parameters`.
-   */
-  parameter_id: string;
-  /**
-   * Range to cover. Omitted, the parameter's own suggested range is used.
-   */
-  min?: number | null;
-  max?: number | null;
-  /**
-   * Points along the axis. Ignored by a bisecting solve, which chooses its
-   * own probes.
-   */
-  steps?: number | null;
-};
+export type AxisRequest = { 
+/**
+ * An id from `GET /scenarios/{id}/analysis/parameters`.
+ */
+parameter_id: string, 
+/**
+ * Range to cover. Omitted, the parameter's own suggested range is used.
+ */
+min?: number | null, max?: number | null, 
+/**
+ * Points along the axis. Ignored by a bisecting solve, which chooses its
+ * own probes.
+ */
+steps?: number | null, };

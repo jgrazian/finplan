@@ -2,17 +2,16 @@
 import type { RealQuantilePoint } from "./RealQuantilePoint";
 import type { RealTerminalStats } from "./RealTerminalStats";
 
-export type RealNetWorthSummary = {
-  /**
-   * Each iteration is deflated before aggregation. Annual factors relative
-   * to base_date; no within-year interpolation. Includes warning paths;
-   * hard simulation errors or invalid numbers fail the entire run.
-   */
-  terminal: RealTerminalStats;
-  /**
-   * Plan start, Dec 31 checkpoints, terminal date; duplicate dates collapsed.
-   * Exact type-7 quantiles: linear interpolation at (N - 1) * p.
-   * This envelope has no path ID, account decomposition or ledger.
-   */
-  points: Array<RealQuantilePoint>;
-};
+export type RealNetWorthSummary = { 
+/**
+ * Each iteration is deflated before aggregation. Annual factors relative
+ * to base_date; no within-year interpolation. Includes warning paths;
+ * hard simulation errors or invalid numbers fail the entire run.
+ */
+terminal: RealTerminalStats, 
+/**
+ * Plan start, Dec 31 checkpoints, terminal date; duplicate dates collapsed.
+ * Exact type-7 quantiles: linear interpolation at (N - 1) * p.
+ * This envelope has no path ID, account decomposition or ledger.
+ */
+points: Array<RealQuantilePoint>, };

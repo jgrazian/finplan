@@ -203,3 +203,155 @@ async fn guided_setup_can_start_401k_contributions_without_an_opening_balance() 
         .await;
     assert_eq!(status, StatusCode::OK, "{report}");
 }
+
+/// The plan a setup produced, with row ids replaced by the names they point at,
+/// so two runs (or two implementations) can be compared.
+async fn dumped_plan(app: &mut TestApp, sid: i64) -> Value {
+    let (_, accounts) = app.get(&format!("/api/scenarios/{sid}/accounts")).await;
+    let (_, assets) = app.get(&format!("/api/scenarios/{sid}/assets")).await;
+    let (_, events) = app.get(&format!("/api/scenarios/{sid}/events")).await;
+    let (_, scenario) = app.get(&format!("/api/scenarios/{sid}")).await;
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let (_, inflation) = app.get("/api/inflation-profiles").await;
+    let name_of = |list: &Value, id: &Value| {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == *id)
+            .map(|row| row["name"].clone())
+            .unwrap_or_else(|| id.clone())
+    };
+    fn walk(value: &mut Value, lists: &[&Value; 3], name_of: &dyn Fn(&Value, &Value) -> Value) {
+        let [accounts, assets, profiles] = lists;
+        match value {
+            Value::Object(object) => {
+                object.remove("id");
+                for (key, child) in object.iter_mut() {
+                    if key.ends_with("account_id") {
+                        *child = name_of(accounts, child);
+                    } else if key == "asset_id" {
+                        *child = name_of(assets, child);
+                    } else if key.ends_with("return_profile_id") {
+                        *child = name_of(profiles, child);
+                    } else {
+                        walk(child, lists, name_of);
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| walk(item, lists, name_of)),
+            _ => {}
+        }
+    }
+    let mut plan = json!({
+        "scenario": {
+            "name": scenario["name"], "start_date": scenario["start_date"],
+            "birth_date": scenario["birth_date"], "duration_years": scenario["duration_years"],
+            "inflation": name_of(&inflation, &scenario["inflation_profile_id"]),
+            "tax_config_id": scenario["tax_config_id"], "description": scenario["description"],
+        },
+        "accounts": accounts.clone(),
+        "assets": assets,
+        "events": events,
+    });
+    for account in plan["accounts"].as_array_mut().unwrap() {
+        let id = account["id"].clone();
+        let (_, positions) = app
+            .get(&format!("/api/scenarios/{sid}/accounts/{id}/positions"))
+            .await;
+        account["positions"] = positions;
+    }
+    walk(&mut plan, &[&accounts, &assets, &profiles], &name_of);
+    plan
+}
+
+/// Guided setup lowers to the same change model the AI drafting uses; its
+/// plans must not drift. Fixtures hold the plans the original SQL lowering
+/// wrote (`UPDATE_GOLDEN=1` rewrites them).
+#[tokio::test]
+async fn guided_setup_plans_match_the_recorded_lowering() {
+    let mut app = TestApp::new().await;
+    let base = json!({
+        "request_id": "golden-0", "name": "Golden", "start_date": "2026-01-01",
+        "birth_date": "1981-01-01", "duration_years": 50, "retirement_age": 65,
+        "cash": 50000, "retirement_401k": 350000, "investments": 150000, "stock_percent": 60,
+        "investment_tax_status": "Taxable", "annual_income": 100000,
+        "retirement_401k_contribution_percent": 50, "annual_spending": 40000,
+        "retirement_spending": 30000, "inflation_profile_id": null, "tax_config_id": null,
+        "fund_from_investments": true, "assumptions_confirmed": true,
+    });
+    let variants: Vec<(&str, Vec<(&str, Value)>)> = vec![
+        ("full", vec![]),
+        (
+            "cash_only",
+            vec![
+                ("retirement_401k", json!(0)),
+                ("investments", json!(0)),
+                ("retirement_401k_contribution_percent", json!(0)),
+                ("fund_from_investments", json!(false)),
+            ],
+        ),
+        (
+            "start_401k_all_stock",
+            vec![
+                ("retirement_401k", json!(0)),
+                ("investments", json!(0)),
+                ("retirement_401k_contribution_percent", json!(6)),
+                ("stock_percent", json!(100)),
+                ("inflation_profile_id", json!("first")),
+                ("investment_tax_status", json!("TaxFree")),
+            ],
+        ),
+        (
+            "no_salary_over_limit",
+            vec![
+                ("annual_income", json!(0)),
+                ("retirement_401k_contribution_percent", json!(0)),
+                ("investments", json!(80000)),
+                ("stock_percent", json!(0)),
+                ("investment_tax_status", json!("TaxDeferred")),
+            ],
+        ),
+        (
+            "capped_contribution",
+            vec![
+                ("annual_income", json!(400000)),
+                ("retirement_401k_contribution_percent", json!(20)),
+                ("stock_percent", json!(35.5)),
+            ],
+        ),
+    ];
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases/onboarding_golden");
+    for (i, (label, edits)) in variants.into_iter().enumerate() {
+        // One editable plan per user on the free tier, and profiles are per user.
+        app.login_as(&format!("golden-setup-{i}@example.com")).await;
+        let (_, profiles) = app.get("/api/return-profiles").await;
+        let (_, inflation) = app.get("/api/inflation-profiles").await;
+        let inflation = inflation[0]["id"].as_i64().unwrap();
+        let mut body = base.clone();
+        body["cash_profile_id"] = profiles[0]["id"].clone();
+        body["stock_profile_id"] = profiles[1]["id"].clone();
+        body["bond_profile_id"] = profiles[2]["id"].clone();
+        body["request_id"] = json!(format!("golden-{i}-{label}"));
+        for (key, value) in edits {
+            body[key] = value;
+        }
+        if body["inflation_profile_id"] == "first" {
+            body["inflation_profile_id"] = json!(inflation);
+        }
+        let (status, created) = app.post("/api/scenarios/setup", body).await;
+        assert_eq!(status, StatusCode::OK, "{label}: {created}");
+        let plan = dumped_plan(&mut app, created["scenario_id"].as_i64().unwrap()).await;
+        let path = dir.join(format!("{label}.json"));
+        let text = serde_json::to_string_pretty(&plan).unwrap() + "\n";
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(&path, &text).unwrap();
+        }
+        let expected: Value = serde_json::from_str(
+            &std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("missing {path:?}")),
+        )
+        .unwrap();
+        assert_eq!(plan, expected, "{label}");
+    }
+}

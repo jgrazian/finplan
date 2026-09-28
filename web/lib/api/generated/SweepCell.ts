@@ -4,21 +4,17 @@
  * One evaluated combination. `indices` positions it on the axes above, in the
  * same order, and carries one entry per swept variable.
  */
-export type SweepCell = {
-  indices: Array<number>;
-  /**
-   * Fraction of runs ending solvent, 0–1.
-   */
-  success_rate: number;
-  /**
-   * Fraction of runs that met every cash need on time; `null` where the run
-   * predates the check.
-   */
-  funding_success_rate: number | null;
-  /**
-   * Terminal net worth at the 5th, 50th and 95th percentile, nominal.
-   */
-  p5: number;
-  p50: number;
-  p95: number;
-};
+export type SweepCell = { indices: Array<number>, 
+/**
+ * Fraction of runs ending solvent, 0–1.
+ */
+success_rate: number, 
+/**
+ * Fraction of runs that met every cash need on time; `null` where the run
+ * predates the check.
+ */
+funding_success_rate: number | null, 
+/**
+ * Terminal net worth at the 5th, 50th and 95th percentile, nominal.
+ */
+p5: number, p50: number, p95: number, };

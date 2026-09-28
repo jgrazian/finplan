@@ -3,13 +3,8 @@
 /**
  * What the draft holds so far, for the live "3 accounts, 6 events" line.
  */
-export type DraftCounts = {
-  accounts: number;
-  assets: number;
-  events: number;
-  parameters: number;
-  /**
-   * Notes still open on the draft.
-   */
-  open_suggestions: number;
-};
+export type DraftCounts = { accounts: number, assets: number, events: number, parameters: number, 
+/**
+ * Notes still open on the draft.
+ */
+open_suggestions: number, };

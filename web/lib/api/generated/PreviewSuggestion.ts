@@ -3,15 +3,14 @@
 /**
  * Body of `POST /suggestions/{id}/preview`.
  */
-export type PreviewSuggestion = {
-  /**
-   * The key of the path to simulate.
-   */
-  path: string;
-  /**
-   * Simulate the path's steps up to and including this one; null
-   * simulates every step, and only that result is stored as the path's
-   * check.
-   */
-  through_step: string | null;
-};
+export type PreviewSuggestion = { 
+/**
+ * The key of the path to simulate.
+ */
+path: string, 
+/**
+ * Simulate the path's steps up to and including this one; null
+ * simulates every step, and only that result is stored as the path's
+ * check.
+ */
+through_step: string | null, };

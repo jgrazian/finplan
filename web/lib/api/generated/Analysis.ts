@@ -3,25 +3,20 @@
 /**
  * A queued or finished analysis.
  */
-export type Analysis = {
-  id: number;
-  scenario_id: number;
-  /**
-   * `"sweep"`, `"sensitivity"`, `"solve"` or `"what-if"`.
-   */
-  kind: string;
-  /**
-   * `"queued"`, `"running"`, `"succeeded"`, `"failed"` or `"canceled"`.
-   */
-  status: string;
-  /**
-   * Simulations finished, against the number budgeted for.
-   */
-  completed: number;
-  total: number;
-  error_message: string | null;
-  /**
-   * Wall-clock time once it has finished, for the run footer.
-   */
-  elapsed_ms: number | null;
-};
+export type Analysis = { id: number, scenario_id: number, 
+/**
+ * `"sweep"`, `"sensitivity"`, `"solve"` or `"what-if"`.
+ */
+kind: string, 
+/**
+ * `"queued"`, `"running"`, `"succeeded"`, `"failed"` or `"canceled"`.
+ */
+status: string, 
+/**
+ * Simulations finished, against the number budgeted for.
+ */
+completed: number, total: number, error_message: string | null, 
+/**
+ * Wall-clock time once it has finished, for the run footer.
+ */
+elapsed_ms: number | null, };

@@ -1,7 +1,12 @@
 //! Guided setup writes the same account, position and event records as advanced editing.
-use super::row_batch::RowBatch;
-use super::specs::*;
 use crate::observability::{EventFields, Operation, Resource};
+use crate::suggest::{
+    Change, Created, apply_steps_sql,
+    templates::{
+        Allocation, Employee401k, RecurringExpenseParams, RowRef, SalaryParams, Template, When,
+        allocation_asset, bank_account, expand_template, investment_account, position,
+    },
+};
 use crate::{
     auth::session::CurrentUser,
     compile::rows::ScenarioGraph,
@@ -115,6 +120,143 @@ fn validate(p: &SetupPlan) -> ApiResult<()> {
     }
     Ok(())
 }
+/// The plan a setup describes, as changes to the empty scenario row: accounts,
+/// the allocation assets and opening lots, then salary and spending events.
+/// The same builders back the drafting agent's templates.
+pub(crate) fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> ApiResult<Vec<Change>> {
+    let cash_profile = RowRef::Id(p.cash_profile_id);
+    let mut changes = vec![bank_account(
+        "checking",
+        "Checking",
+        p.cash,
+        cash_profile.clone(),
+        Some(0),
+    )];
+    let checking = RowRef::new("checking");
+    let mut investment_accounts = Vec::new();
+    let mut retirement_account = None;
+    if p.retirement_401k > 0. || annual_401k_contribution > 0. {
+        retirement_account = Some(RowRef::new("401k"));
+        investment_accounts.push(("401k", "401(k)", "TaxDeferred", 1, p.retirement_401k));
+    }
+    if p.investments > 0. {
+        investment_accounts.push((
+            "other",
+            "Other investments",
+            p.investment_tax_status.as_str(),
+            2,
+            p.investments,
+        ));
+    }
+    let allocation: Vec<(RowRef, f64)> = if investment_accounts.is_empty() {
+        vec![]
+    } else {
+        vec![
+            (RowRef::new("stock"), p.stock_percent / 100.),
+            (RowRef::new("bond"), 1. - p.stock_percent / 100.),
+        ]
+    };
+    for (key, name, profile, sort_order) in [
+        ("stock", "Stock allocation", p.stock_profile_id, 0),
+        ("bond", "Bond allocation", p.bond_profile_id, 0),
+    ] {
+        if !investment_accounts.is_empty() {
+            changes.push(allocation_asset(
+                key,
+                name,
+                RowRef::Id(profile),
+                Some(sort_order),
+            ));
+        }
+    }
+    for (key, name, tax_status, sort_order, value) in &investment_accounts {
+        let positions = if *value > 0. {
+            allocation
+                .iter()
+                .map(|(asset, fraction)| position(asset, value * fraction, value * fraction))
+                .collect()
+        } else {
+            vec![]
+        };
+        changes.push(investment_account(
+            key,
+            name,
+            tax_status,
+            cash_profile.clone(),
+            Some(*sort_order),
+            positions,
+        ));
+    }
+
+    let age = || When::age(p.retirement_age);
+    let allocations: Vec<Allocation> = allocation
+        .iter()
+        .map(|(asset, fraction)| Allocation {
+            asset_id: asset.clone(),
+            fraction: *fraction,
+        })
+        .collect();
+    let mut templates = Vec::new();
+    if p.annual_income > 0. {
+        templates.push((
+            "",
+            Template::Salary(SalaryParams {
+                name: Some("Salary until retirement".into()),
+                to_account_id: checking.clone(),
+                annual_amount: p.annual_income,
+                start: None,
+                end: Some(age()),
+                employee_401k: retirement_account
+                    .filter(|_| annual_401k_contribution > 0.)
+                    .map(|account_id| Employee401k {
+                        account_id,
+                        annual_amount: annual_401k_contribution,
+                        allocation: allocations,
+                    }),
+                sort_order: Some(0),
+            }),
+        ));
+    }
+    for (prefix, name, amount, sort_order, start, end) in [
+        (
+            "before_",
+            "Spending before retirement",
+            p.annual_spending,
+            1,
+            None,
+            Some(age()),
+        ),
+        (
+            "after_",
+            "Retirement spending",
+            p.retirement_spending,
+            2,
+            Some(age()),
+            None,
+        ),
+    ] {
+        if amount > 0. {
+            templates.push((
+                prefix,
+                Template::RecurringExpense(RecurringExpenseParams {
+                    name: name.into(),
+                    from_account_id: checking.clone(),
+                    amount,
+                    interval: None,
+                    inflation_adjusted: None,
+                    start,
+                    end,
+                    fund_from_investments: p.fund_from_investments,
+                    sort_order: Some(sort_order),
+                }),
+            ));
+        }
+    }
+    for (prefix, template) in templates {
+        changes.extend(expand_template(prefix, &template)?.changes);
+    }
+    Ok(changes)
+}
 async fn create(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -222,157 +364,13 @@ async fn create(
     let id: i64 = sqlx::query_scalar("INSERT INTO scenarios(user_id,name,start_date,birth_date,duration_years,inflation_profile_id,tax_config_id,description) VALUES(?,?,?,?,?,?,?,?) RETURNING id")
         .bind(&user.id).bind(p.name.trim()).bind(&p.start_date).bind(&p.birth_date).bind(p.duration_years).bind(p.inflation_profile_id).bind(p.tax_config_id)
         .bind(if p.fund_from_investments {"Guided setup: investment withdrawals explicitly authorized; assumptions reviewed."} else {"Guided setup: spending funded by checking only; assumptions reviewed."}).fetch_one(&mut *tx).await?;
-    let checking: i64 = sqlx::query_scalar(
-        "INSERT INTO accounts(scenario_id,name,flavor) VALUES(?,'Checking','Bank') RETURNING id",
-    )
-    .bind(id)
-    .fetch_one(&mut *tx)
-    .await?;
-    sqlx::query("INSERT INTO account_bank(account_id,cash_value,return_profile_id) VALUES(?,?,?)")
-        .bind(checking)
-        .bind(p.cash)
-        .bind(p.cash_profile_id)
-        .execute(&mut *tx)
-        .await?;
-    let mut investment_accounts = Vec::new();
-    let mut retirement_account = None;
-    if p.retirement_401k > 0. || annual_401k_contribution > 0. {
-        let account: i64 = sqlx::query_scalar("INSERT INTO accounts(scenario_id,name,flavor,sort_order) VALUES(?,'401(k)','Investment',1) RETURNING id").bind(id).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO account_investment(account_id,tax_status,cash_value,cash_return_profile_id) VALUES(?,'TaxDeferred',0,?)").bind(account).bind(p.cash_profile_id).execute(&mut *tx).await?;
-        retirement_account = Some(account);
-        investment_accounts.push((account, p.retirement_401k));
-    }
-    if p.investments > 0. {
-        let account: i64 = sqlx::query_scalar("INSERT INTO accounts(scenario_id,name,flavor,sort_order) VALUES(?,'Other investments','Investment',2) RETURNING id").bind(id).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO account_investment(account_id,tax_status,cash_value,cash_return_profile_id) VALUES(?,?,0,?)").bind(account).bind(&p.investment_tax_status).bind(p.cash_profile_id).execute(&mut *tx).await?;
-        investment_accounts.push((account, p.investments));
-    }
-    let mut allocation_assets = Vec::new();
-    for (name, profile, fraction) in [
-        (
-            "Stock allocation",
-            p.stock_profile_id,
-            p.stock_percent / 100.,
-        ),
-        (
-            "Bond allocation",
-            p.bond_profile_id,
-            1. - p.stock_percent / 100.,
-        ),
-    ] {
-        if investment_accounts.is_empty() {
-            break;
-        }
-        let asset: i64 = sqlx::query_scalar("INSERT INTO assets(scenario_id,name,initial_price,return_profile_id) VALUES(?,?,1,?) RETURNING id").bind(id).bind(name).bind(profile).fetch_one(&mut *tx).await?;
-        allocation_assets.push((asset, fraction));
-        for (account, value) in &investment_accounts {
-            if *value > 0. {
-                sqlx::query("INSERT INTO positions(account_id,asset_id,purchase_date,units,cost_basis) VALUES(?,?,?,?,?)").bind(account).bind(asset).bind(&p.start_date).bind(value*fraction).bind(value*fraction).execute(&mut *tx).await?;
-            }
-        }
-    }
-    let adjusted = |value| AmountSpec::InflationAdjusted {
-        inner: Box::new(AmountSpec::Fixed { value }),
-    };
-    let age = || {
-        Some(Box::new(TriggerSpec::Age {
-            years: p.retirement_age,
-            months: None,
-        }))
-    };
-    for (order, name, value, income, retired) in [
-        (0, "Salary until retirement", p.annual_income, true, false),
-        (
-            1,
-            "Spending before retirement",
-            p.annual_spending,
-            false,
-            false,
-        ),
-        (2, "Retirement spending", p.retirement_spending, false, true),
-    ] {
-        if value == 0. {
-            continue;
-        }
-        let event: i64 = sqlx::query_scalar("INSERT INTO events(scenario_id,name,fires_once,enabled,sort_order) VALUES(?,?,0,1,?) RETURNING id").bind(id).bind(name).bind(order).fetch_one(&mut *tx).await?;
-        let mut batch = RowBatch::for_scenario(&mut tx, id).await?;
-        TriggerSpec::Repeating {
-            interval: Interval::Yearly,
-            start_condition: if retired { age() } else { None },
-            end_condition: if retired { None } else { age() },
-            max_occurrences: None,
-        }
-        .lower(&mut batch, TriggerParent::Event(event), 0)?;
-        let mut effects = vec![];
-        if income {
-            let taxable_salary = value - annual_401k_contribution;
-            if taxable_salary > 0. {
-                effects.push(EffectSpec::Income {
-                    to_account_id: checking,
-                    amount: adjusted(taxable_salary),
-                    amount_mode: AmountMode::Gross,
-                    income_type: IncomeType::Taxable,
-                });
-            }
-            if let Some(retirement_account) = retirement_account
-                && annual_401k_contribution > 0.
-            {
-                effects.push(EffectSpec::Income {
-                    to_account_id: retirement_account,
-                    amount: adjusted(annual_401k_contribution),
-                    amount_mode: AmountMode::Gross,
-                    income_type: IncomeType::TaxFree,
-                });
-                for (asset_id, fraction) in &allocation_assets {
-                    if *fraction > 0. {
-                        effects.push(EffectSpec::AssetPurchase {
-                            from_account_id: retirement_account,
-                            to_account_id: retirement_account,
-                            asset_id: *asset_id,
-                            amount: adjusted(annual_401k_contribution * fraction),
-                        });
-                    }
-                }
-            }
-        } else {
-            if p.fund_from_investments {
-                effects.push(EffectSpec::Sweep {
-                    to_account_id: checking,
-                    amount: AmountSpec::Max {
-                        left: Box::new(AmountSpec::Fixed { value: 0. }),
-                        right: Box::new(AmountSpec::Sub {
-                            left: Box::new(adjusted(value)),
-                            right: Box::new(AmountSpec::AccountCashBalance {
-                                account_id: checking,
-                            }),
-                        }),
-                    },
-                    sources: Some(WithdrawalSourcesSpec::Strategy {
-                        strategy: WithdrawalStrategy::TaxEfficientEarly,
-                        exclude_accounts: vec![],
-                        bracket_ceiling: None,
-                    }),
-                    amount_mode: AmountMode::Net,
-                    lot_method: LotMethod::Fifo,
-                    income_type: IncomeType::TaxFree,
-                });
-            }
-            effects.push(EffectSpec::Expense {
-                from_account_id: checking,
-                amount: adjusted(value),
-            });
-        }
-        for (position, effect) in effects.iter().enumerate() {
-            effect.lower(
-                &mut batch,
-                EffectParent::Event {
-                    event_id: event,
-                    position: position as i64,
-                },
-                0,
-            )?;
-        }
-        batch.insert(&mut tx, id).await?;
+    let changes = lower(&p, annual_401k_contribution)?;
+    if let Err(problems) =
+        apply_steps_sql(&mut tx, id, &user.id, &[changes], &Created::new()).await?
+    {
+        return Err(ApiError::internal(format!(
+            "guided setup did not apply: {problems:?}"
+        )));
     }
     sqlx::query(
         "INSERT INTO setup_receipts(user_id,request_id,request_json,scenario_id) VALUES(?,?,?,?)",

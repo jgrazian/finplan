@@ -3,36 +3,15 @@ import type { ContributionPeriod } from "./ContributionPeriod";
 import type { RepaymentSpec } from "./RepaymentSpec";
 import type { TaxStatus } from "./TaxStatus";
 
-export type CreateAccount =
-  & {
-    name: string;
-    description?: string | null;
-    /**
-     * Omitted appends to the end of the scenario's list, which is where a new
-     * account belongs — pinning it at 0 would put it in front of every row the
-     * user has already dragged into place.
-     */
-    sort_order?: number | null;
-  }
-  & (
-    | { "flavor": "Bank"; cash_value: number; return_profile_id: number }
-    | {
-      "flavor": "Investment";
-      tax_status: TaxStatus;
-      cash_value: number;
-      cash_return_profile_id: number;
-      contribution_limit: number | null;
-      contribution_period: ContributionPeriod | null;
-    }
-    | { "flavor": "Property"; asset_id: number; value: number }
-    | {
-      "flavor": "Liability";
-      principal: number;
-      interest_rate: number;
-      /**
-       * A fixed monthly payment that pays the loan off; absent, it is paid
-       * down only by explicit transfers.
-       */
-      repayment: RepaymentSpec | null;
-    }
-  );
+export type CreateAccount = { name: string, description?: string | null, 
+/**
+ * Omitted appends to the end of the scenario's list, which is where a new
+ * account belongs — pinning it at 0 would put it in front of every row the
+ * user has already dragged into place.
+ */
+sort_order?: number | null, } & ({ "flavor": "Bank", cash_value: number, return_profile_id: number, } | { "flavor": "Investment", tax_status: TaxStatus, cash_value: number, cash_return_profile_id: number, contribution_limit: number | null, contribution_period: ContributionPeriod | null, } | { "flavor": "Property", asset_id: number, value: number, } | { "flavor": "Liability", principal: number, interest_rate: number, 
+/**
+ * A fixed monthly payment that pays the loan off; absent, it is paid
+ * down only by explicit transfers.
+ */
+repayment: RepaymentSpec | null, });

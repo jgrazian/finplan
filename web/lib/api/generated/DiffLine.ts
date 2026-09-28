@@ -4,8 +4,4 @@
  * One line of a server-rendered diff: `from` is absent for an addition, `to`
  * for a removal.
  */
-export type DiffLine = {
-  label: string;
-  from: string | null;
-  to: string | null;
-};
+export type DiffLine = { label: string, from: string | null, to: string | null, };

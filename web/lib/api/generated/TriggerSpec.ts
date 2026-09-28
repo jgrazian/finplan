@@ -3,38 +3,4 @@ import type { Comparison } from "./Comparison";
 import type { Interval } from "./Interval";
 import type { OffsetUnit } from "./OffsetUnit";
 
-export type TriggerSpec =
-  | { "kind": "DateParameter"; parameter_id: number }
-  | { "kind": "AgeParameter"; parameter_id: number }
-  | { "kind": "Date"; on_date: string }
-  | { "kind": "Age"; years: number; months: number | null }
-  | {
-    "kind": "RelativeToEvent";
-    event_id: number;
-    unit: OffsetUnit;
-    value: number;
-  }
-  | {
-    "kind": "AccountBalance";
-    account_id: number;
-    comparison: Comparison;
-    threshold: number;
-  }
-  | {
-    "kind": "AssetBalance";
-    account_id: number;
-    asset_id: number;
-    comparison: Comparison;
-    threshold: number;
-  }
-  | { "kind": "NetWorth"; comparison: Comparison; threshold: number }
-  | { "kind": "And"; children: Array<TriggerSpec> }
-  | { "kind": "Or"; children: Array<TriggerSpec> }
-  | {
-    "kind": "Repeating";
-    interval: Interval;
-    start_condition: TriggerSpec | null;
-    end_condition: TriggerSpec | null;
-    max_occurrences: number | null;
-  }
-  | { "kind": "Manual" };
+export type TriggerSpec = { "kind": "DateParameter", parameter_id: number, } | { "kind": "AgeParameter", parameter_id: number, } | { "kind": "Date", on_date: string, } | { "kind": "Age", years: number, months: number | null, } | { "kind": "RelativeToEvent", event_id: number, unit: OffsetUnit, value: number, } | { "kind": "AccountBalance", account_id: number, comparison: Comparison, threshold: number, } | { "kind": "AssetBalance", account_id: number, asset_id: number, comparison: Comparison, threshold: number, } | { "kind": "NetWorth", comparison: Comparison, threshold: number, } | { "kind": "And", children: Array<TriggerSpec>, } | { "kind": "Or", children: Array<TriggerSpec>, } | { "kind": "Repeating", interval: Interval, start_condition: TriggerSpec | null, end_condition: TriggerSpec | null, max_occurrences: number | null, } | { "kind": "Manual" };

@@ -4,33 +4,9 @@ import type { Position } from "./Position";
 import type { RepaymentSpec } from "./RepaymentSpec";
 import type { TaxStatus } from "./TaxStatus";
 
-export type Account =
-  & {
-    id: number;
-    name: string;
-    description: string | null;
-    sort_order: number;
-    positions: Array<Position>;
-  }
-  & (
-    | { "flavor": "Bank"; cash_value: number; return_profile_id: number }
-    | {
-      "flavor": "Investment";
-      tax_status: TaxStatus;
-      cash_value: number;
-      cash_return_profile_id: number;
-      contribution_limit: number | null;
-      contribution_period: ContributionPeriod | null;
-    }
-    | { "flavor": "Property"; asset_id: number; value: number }
-    | {
-      "flavor": "Liability";
-      principal: number;
-      interest_rate: number;
-      /**
-       * A fixed monthly payment that pays the loan off; absent, it is paid
-       * down only by explicit transfers.
-       */
-      repayment: RepaymentSpec | null;
-    }
-  );
+export type Account = { id: number, name: string, description: string | null, sort_order: number, positions: Array<Position>, } & ({ "flavor": "Bank", cash_value: number, return_profile_id: number, } | { "flavor": "Investment", tax_status: TaxStatus, cash_value: number, cash_return_profile_id: number, contribution_limit: number | null, contribution_period: ContributionPeriod | null, } | { "flavor": "Property", asset_id: number, value: number, } | { "flavor": "Liability", principal: number, interest_rate: number, 
+/**
+ * A fixed monthly payment that pays the loan off; absent, it is paid
+ * down only by explicit transfers.
+ */
+repayment: RepaymentSpec | null, });

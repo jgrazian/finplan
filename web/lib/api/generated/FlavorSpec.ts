@@ -6,24 +6,9 @@ import type { TaxStatus } from "./TaxStatus";
 /**
  * The flavor-specific half of an account.
  */
-export type FlavorSpec =
-  | { "flavor": "Bank"; cash_value: number; return_profile_id: number }
-  | {
-    "flavor": "Investment";
-    tax_status: TaxStatus;
-    cash_value: number;
-    cash_return_profile_id: number;
-    contribution_limit: number | null;
-    contribution_period: ContributionPeriod | null;
-  }
-  | { "flavor": "Property"; asset_id: number; value: number }
-  | {
-    "flavor": "Liability";
-    principal: number;
-    interest_rate: number;
-    /**
-     * A fixed monthly payment that pays the loan off; absent, it is paid
-     * down only by explicit transfers.
-     */
-    repayment: RepaymentSpec | null;
-  };
+export type FlavorSpec = { "flavor": "Bank", cash_value: number, return_profile_id: number, } | { "flavor": "Investment", tax_status: TaxStatus, cash_value: number, cash_return_profile_id: number, contribution_limit: number | null, contribution_period: ContributionPeriod | null, } | { "flavor": "Property", asset_id: number, value: number, } | { "flavor": "Liability", principal: number, interest_rate: number, 
+/**
+ * A fixed monthly payment that pays the loan off; absent, it is paid
+ * down only by explicit transfers.
+ */
+repayment: RepaymentSpec | null, };

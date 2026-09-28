@@ -12,14 +12,4 @@
  * has said what the profile is for, so nothing picks it automatically — which
  * is exactly right for a profile someone built by hand.
  */
-export type AssetClass =
-  | "UsEquity"
-  | "UsSmallCap"
-  | "GlobalEquity"
-  | "IntlEquity"
-  | "Bonds"
-  | "Reit"
-  | "Cash"
-  | "Commodity"
-  | "Crypto"
-  | "Balanced";
+export type AssetClass = "UsEquity" | "UsSmallCap" | "GlobalEquity" | "IntlEquity" | "Bonds" | "Reit" | "Cash" | "Commodity" | "Crypto" | "Balanced";

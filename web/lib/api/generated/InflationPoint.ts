@@ -4,4 +4,4 @@
  * Cumulative inflation for one plan year. Factor 1.0 is the plan's base
  * year; the engine uses annual factors without within-year interpolation.
  */
-export type InflationPoint = { year: number; factor: number };
+export type InflationPoint = { year: number, factor: number, };

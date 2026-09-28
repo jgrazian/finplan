@@ -205,3 +205,31 @@ fn invalid_mc_observations_fail_instead_of_retrying_or_dropping() {
     };
     assert!(monte_carlo_simulate_with_config(&params, &config).is_err());
 }
+
+/// Paths that agree exactly (a fully deterministic plan) must report exactly
+/// that value at every quantile: interpolating `a * (1 - f) + a * f` can land
+/// an ulp either side of `a`, which broke `p5 <= p50 <= p95`.
+#[test]
+fn identical_paths_report_identical_quantiles() {
+    for (value, inflation) in [(70_000.1, 1.03), (123_456.789, 1.0271), (0.1 + 0.2, 1.7)] {
+        let path = fixture([value, value, value], inflation);
+        let mut acc = RealAccumulator::new(&path);
+        for _ in 0..7 {
+            acc.accumulate(&path).unwrap();
+        }
+        let real = acc.finish().unwrap();
+        for point in &real.points {
+            let all = [
+                point.p5, point.p10, point.p25, point.p50, point.p75, point.p90, point.p95,
+            ];
+            assert!(
+                all.windows(2).all(|w| w[0] <= w[1]),
+                "quantiles must not decrease: {all:?}"
+            );
+            assert!(
+                all.iter().all(|q| *q == all[0]),
+                "identical paths, identical quantiles: {all:?}"
+            );
+        }
+    }
+}

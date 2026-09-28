@@ -76,10 +76,12 @@ pub struct PreviewRequest {
 #[ts(export)]
 pub struct Preview {
     /// The run the preview was paired against; null for a draft, which has
-    /// none. Such a preview only checks the batch and renders its diff: it
-    /// simulates nothing, so `base` and `edited` are null.
+    /// none. Such a preview is unpaired: `base` is null and `edited` is a
+    /// whole-plan simulation of the draft with the batch applied (see
+    /// [`simulate_draft`]).
     pub base_run_id: Option<i64>,
-    /// Iterations behind both `base` and `edited`.
+    /// Iterations behind both `base` and `edited`; 0 when nothing was
+    /// simulated.
     pub iterations: usize,
     /// The base and the edited plan saw the same simulated markets, so their
     /// difference is the edit's. False when the edit changes the market
@@ -169,7 +171,7 @@ pub(crate) async fn run_preview(
     }
 
     if base_run_id.is_none() && super::is_draft(&state.db, scenario_id).await? {
-        return draft_preview(state, user, scenario_id, changes).await;
+        return draft_preview(state, user, scenario_id, changes, iterations).await;
     }
 
     let run = base_run(&state.db, scenario_id, base_run_id).await?;
@@ -292,14 +294,16 @@ pub(crate) async fn run_preview(
     Ok(outcome)
 }
 
-/// A preview of a draft: there is no run to pair against (whole-plan draft
-/// simulation is a later step), so this resolves the batch, renders its diff
-/// and checks that the edited plan compiles, and reports problems the same way.
+/// A preview of a draft: there is no run to pair against, so this resolves the
+/// batch, renders its diff, checks that the edited plan compiles, and
+/// simulates it whole — an unpaired result in `edited`, with no `base` —
+/// reporting problems the same way the paired preview does.
 async fn draft_preview(
     state: &AppState,
     user: &CurrentUser,
     scenario_id: i64,
     changes: &[Change],
+    iterations: Option<usize>,
 ) -> ApiResult<Preview> {
     let mut graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
     let mut outcome = Preview {
@@ -328,10 +332,156 @@ async fn draft_preview(
     let (tax, inflation) = suggest::assumptions_named(changes);
     load_assumptions(&state.db, &user.id, &mut graph, tax, inflation).await?;
     outcome.diff = resolved.diff(&Names::from_graph(&graph));
-    if let Err(problem) = edited(&graph, &resolved, changes)? {
-        outcome.problems.push(problem);
+    match edited(&graph, &resolved, changes)? {
+        Ok((_, compiled)) => {
+            let iterations = draft_iterations(iterations);
+            outcome.iterations = iterations;
+            outcome.edited = Some(simulate_unpaired(state, user, &compiled, iterations).await?);
+        }
+        Err(problem) => outcome.problems.push(problem),
     }
     Ok(outcome)
+}
+
+/// Iterations a draft's whole-plan simulation runs by default. Drafts are
+/// re-simulated after every edit while a model or a user is waiting, so this
+/// is a fraction of a run's 1,000 and of a review check's 2,000: enough to
+/// tell 60% from 90%, not to split hairs.
+pub const DRAFT_SIMULATION_ITERATIONS: usize = 400;
+
+/// The seed of every draft simulation. Fixed so that re-simulating the same
+/// plan gives the same answer, and two drafts (or a draft and a path applied
+/// to it) see the same simulated markets wherever their market inputs agree.
+const DRAFT_SEED: u64 = 0xD2AF_7C0D_E5EE_D001;
+
+fn draft_iterations(requested: Option<usize>) -> usize {
+    requested
+        .unwrap_or(DRAFT_SIMULATION_ITERATIONS)
+        .clamp(1, MAX_PREVIEW_ITERATIONS)
+}
+
+/// Why a draft cannot be simulated as it stands.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum DraftBlocked {
+    /// A step of the path cannot be applied. `step` indexes the steps passed;
+    /// each problem's `change` indexes that step's changes.
+    Steps {
+        step: usize,
+        problems: Vec<ChangeProblem>,
+    },
+    /// The plan, with the steps applied, does not compile: the reason its
+    /// preflight reports as `invalid_plan`.
+    Compile { message: String },
+}
+
+/// A whole-plan, unpaired simulation of a draft: no base run, nothing to
+/// compare against. Exactly one of `stats` and `blocked` is set.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct DraftSimulation {
+    /// Simulations run; 0 when the plan was blocked.
+    pub iterations: usize,
+    /// Success and funding rates, final real net worth and funding diagnostics.
+    pub stats: Option<PreviewStats>,
+    pub blocked: Option<DraftBlocked>,
+}
+
+/// Simulate the plan `scenario_id` holds with `steps` applied in order, in
+/// memory (nothing is written): each step is resolved against the plan the
+/// steps before it left, exactly as applying them one by one would, so a path
+/// from a suggestion or a template expansion can be passed as it is.
+///
+/// A plan that cannot run is a result, not an error: `blocked` says which
+/// step failed to apply, or why the plan does not compile. `iterations`
+/// defaults to [`DRAFT_SIMULATION_ITERATIONS`] and is capped at
+/// [`MAX_PREVIEW_ITERATIONS`]. Any scenario of the user's will do, but a draft
+/// is what it is for.
+pub async fn simulate_draft(
+    state: &AppState,
+    user: &CurrentUser,
+    scenario_id: i64,
+    steps: &[Vec<Change>],
+    iterations: Option<usize>,
+) -> ApiResult<DraftSimulation> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+    let mut graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let all = || steps.iter().flatten();
+    load_profiles(
+        &state.db,
+        &user.id,
+        &mut graph,
+        suggest::profiles_named(all()).into_iter().collect(),
+    )
+    .await?;
+    let (tax, inflation) = suggest::assumptions_named(all());
+    load_assumptions(&state.db, &user.id, &mut graph, tax, inflation).await?;
+
+    let blocked = |blocked| DraftSimulation {
+        iterations: 0,
+        stats: None,
+        blocked: Some(blocked),
+    };
+    let stepped = match suggest::resolve_steps(&graph, steps, &Created::new())? {
+        Ok(stepped) => stepped,
+        Err(suggest::StepProblems { step, problems }) => {
+            return Ok(blocked(DraftBlocked::Steps { step, problems }));
+        }
+    };
+    let compiled = match compile::compile(&stepped.graph) {
+        Ok(compiled) => compiled,
+        // A database or internal failure is the server's; anything else is
+        // the plan's.
+        Err(err @ (ApiError::Database(_) | ApiError::Internal(_))) => return Err(err),
+        Err(err) => {
+            return Ok(blocked(DraftBlocked::Compile {
+                message: err.to_string(),
+            }));
+        }
+    };
+    let iterations = draft_iterations(iterations);
+    Ok(DraftSimulation {
+        iterations,
+        stats: Some(simulate_unpaired(state, user, &compiled, iterations).await?),
+        blocked: None,
+    })
+}
+
+/// Monte Carlo over a compiled plan with the draft settings: fixed seed, and
+/// only the summary figures a preview shows.
+async fn simulate_unpaired(
+    state: &AppState,
+    user: &CurrentUser,
+    compiled: &CompiledScenario,
+    iterations: usize,
+) -> ApiResult<PreviewStats> {
+    let mc_config = MonteCarloConfig {
+        iterations,
+        percentiles: Vec::new(),
+        compute_mean: false,
+        convergence: None,
+        batch_size: 100,
+        parallel_batches: 4,
+        seed: Some(DRAFT_SEED),
+    };
+    let permit =
+        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let guard = CancelOnDrop(cancel.clone());
+    let config = compiled.config.clone();
+    let simulated = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let progress =
+            MonteCarloProgress::from_atomics_accumulating(Arc::new(AtomicUsize::new(0)), cancel);
+        monte_carlo_simulate_with_progress(&config, &mc_config, &progress)
+            .map_err(|e| ApiError::unprocessable(format!("the plan failed to simulate: {e}")))
+    })
+    .await;
+    drop(guard);
+    let summary =
+        simulated.map_err(|_| ApiError::Internal("draft simulation panicked".into()))??;
+    Ok(stats(compiled, &summary))
 }
 
 /// The succeeded run `run_id` names (or the scenario's latest success) and
@@ -629,3 +779,6 @@ impl Drop for CancelOnDrop {
         self.0.store(true, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -3,27 +3,18 @@
 /**
  * One flattened ledger entry.
  */
-export type LedgerEntry = {
-  position: number;
-  date: string;
-  year: number;
-  /**
-   * `cash` | `asset` | `tax` | `event`.
-   */
-  category: string;
-  kind: string;
-  /**
-   * Prose naming the accounts and events involved. Deliberately free of
-   * dollar figures, so the client can restate `amount` and `basis` in real
-   * dollars without rewriting it.
-   */
-  detail: string;
-  /**
-   * Signed against the plan: money in is positive, money out negative.
-   */
-  amount: number | null;
-  basis: number | null;
-  basis_label: string | null;
-  account_id: number | null;
-  event_id: number | null;
-};
+export type LedgerEntry = { position: number, date: string, year: number, 
+/**
+ * `cash` | `asset` | `tax` | `event`.
+ */
+category: string, kind: string, 
+/**
+ * Prose naming the accounts and events involved. Deliberately free of
+ * dollar figures, so the client can restate `amount` and `basis` in real
+ * dollars without rewriting it.
+ */
+detail: string, 
+/**
+ * Signed against the plan: money in is positive, money out negative.
+ */
+amount: number | null, basis: number | null, basis_label: string | null, account_id: number | null, event_id: number | null, };

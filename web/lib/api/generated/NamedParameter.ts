@@ -2,10 +2,4 @@
 import type { ParameterUsage } from "./ParameterUsage";
 import type { ParameterValueSpec } from "./ParameterValueSpec";
 
-export type NamedParameter = {
-  id: number;
-  scenario_id: number;
-  name: string;
-  value: ParameterValueSpec;
-  uses: Array<ParameterUsage>;
-};
+export type NamedParameter = { id: number, scenario_id: number, name: string, value: ParameterValueSpec, uses: Array<ParameterUsage>, };

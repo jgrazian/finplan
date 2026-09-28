@@ -5,20 +5,17 @@ import type { ChangeTarget } from "./ChangeTarget";
 /**
  * One edit to one resource.
  */
-export type Change = {
-  op: ChangeOp;
-  target: ChangeTarget;
-  /**
-   * RFC 6901 pointer into the target's GET body; `""` is the whole resource.
-   */
-  path: string;
-  /**
-   * The value currently at `path`, as the author read it. Absent skips the
-   * staleness check; an explicit `null` expects null.
-   */
-  expect?: unknown;
-  /**
-   * The new value for `replace` and `add`; an explicit `null` writes null.
-   */
-  value?: unknown;
-};
+export type Change = { op: ChangeOp, target: ChangeTarget, 
+/**
+ * RFC 6901 pointer into the target's GET body; `""` is the whole resource.
+ */
+path: string, 
+/**
+ * The value currently at `path`, as the author read it. Absent skips the
+ * staleness check; an explicit `null` expects null.
+ */
+expect?: unknown, 
+/**
+ * The new value for `replace` and `add`; an explicit `null` writes null.
+ */
+value?: unknown, };

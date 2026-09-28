@@ -3050,6 +3050,12 @@ mod history_cases;
 #[path = "cases/onboarding.rs"]
 mod onboarding_cases;
 
+#[path = "cases/runs.rs"]
+mod runs_cases;
+
+#[path = "cases/draft_preview.rs"]
+mod draft_preview_cases;
+
 #[path = "cases/archives.rs"]
 mod archives_cases;
 
@@ -5164,7 +5170,7 @@ async fn a_draft_takes_notes_without_a_run_and_becomes_a_plan_when_created() {
     assert_eq!(status_now["counts"]["open_suggestions"], 1);
 
     // Previewing checks the batch and its diff; with no run there is nothing
-    // to simulate against.
+    // to pair against, so the edited draft is simulated whole, unpaired.
     let (status, preview) = app
         .post(
             &format!("/api/suggestions/{note_id}/preview"),
@@ -5174,9 +5180,11 @@ async fn a_draft_takes_notes_without_a_run_and_becomes_a_plan_when_created() {
     assert_eq!(status, StatusCode::OK, "{preview}");
     assert_eq!(preview["base_run_id"], Value::Null);
     assert_eq!(preview["problems"], json!([]));
-    assert_eq!(
-        (&preview["base"], &preview["edited"]),
-        (&Value::Null, &Value::Null)
+    assert_eq!(preview["base"], Value::Null);
+    assert_eq!(preview["paired"], false);
+    assert!(
+        preview["edited"]["success_rate"].as_f64().is_some(),
+        "{preview}"
     );
     assert!(!preview["diff"].as_array().unwrap().is_empty());
 

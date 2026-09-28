@@ -3,8 +3,4 @@
 /**
  * Pointwise real-dollar net worth quantiles, one value per fan point.
  */
-export type WhatIfFan = {
-  p25: Array<number>;
-  p50: Array<number>;
-  p75: Array<number>;
-};
+export type WhatIfFan = { p25: Array<number>, p50: Array<number>, p75: Array<number>, };

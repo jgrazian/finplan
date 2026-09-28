@@ -8,18 +8,15 @@ import type { SweepResults } from "./SweepResults";
  * Analysis screen that may be older than the plan it describes: the screen
  * says so in its footer instead of passing it off as this session's answer.
  */
-export type CachedSweep = {
-  scenario_id: number;
-  /**
-   * When the sweep finished, UTC, `YYYY-MM-DD HH:MM:SS`.
-   */
-  created_at: string;
-  results: SweepResults;
-  /**
-   * The graphs arranged over this grid, exactly as the client stored them,
-   * or `null` where nobody has arranged any. Opaque here: what a graph is
-   * drawn as, against what, and sliced where are the client's choices, and
-   * typing them server-side would mean a deploy to add a chart kind.
-   */
-  layout: unknown;
-};
+export type CachedSweep = { scenario_id: number, 
+/**
+ * When the sweep finished, UTC, `YYYY-MM-DD HH:MM:SS`.
+ */
+created_at: string, results: SweepResults, 
+/**
+ * The graphs arranged over this grid, exactly as the client stored them,
+ * or `null` where nobody has arranged any. Opaque here: what a graph is
+ * drawn as, against what, and sliced where are the client's choices, and
+ * typing them server-side would mean a deploy to add a chart kind.
+ */
+layout: unknown, };

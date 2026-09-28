@@ -1,0 +1,120 @@
+{
+  "accounts": [
+    {
+      "cash_value": 50000.0,
+      "description": null,
+      "flavor": "Bank",
+      "name": "Checking",
+      "positions": [],
+      "return_profile_id": "Cash / T-Bills",
+      "sort_order": 0
+    }
+  ],
+  "assets": [],
+  "events": [
+    {
+      "description": null,
+      "effects": [
+        {
+          "amount": {
+            "inner": {
+              "kind": "Fixed",
+              "value": 100000.0
+            },
+            "kind": "InflationAdjusted"
+          },
+          "amount_mode": "Gross",
+          "income_type": "Taxable",
+          "kind": "Income",
+          "to_account_id": "Checking"
+        }
+      ],
+      "enabled": true,
+      "fires_once": false,
+      "name": "Salary until retirement",
+      "sort_order": 0,
+      "trigger": {
+        "end_condition": {
+          "kind": "Age",
+          "months": null,
+          "years": 65
+        },
+        "interval": "Yearly",
+        "kind": "Repeating",
+        "max_occurrences": null,
+        "start_condition": null
+      }
+    },
+    {
+      "description": null,
+      "effects": [
+        {
+          "amount": {
+            "inner": {
+              "kind": "Fixed",
+              "value": 40000.0
+            },
+            "kind": "InflationAdjusted"
+          },
+          "from_account_id": "Checking",
+          "kind": "Expense"
+        }
+      ],
+      "enabled": true,
+      "fires_once": false,
+      "name": "Spending before retirement",
+      "sort_order": 1,
+      "trigger": {
+        "end_condition": {
+          "kind": "Age",
+          "months": null,
+          "years": 65
+        },
+        "interval": "Yearly",
+        "kind": "Repeating",
+        "max_occurrences": null,
+        "start_condition": null
+      }
+    },
+    {
+      "description": null,
+      "effects": [
+        {
+          "amount": {
+            "inner": {
+              "kind": "Fixed",
+              "value": 30000.0
+            },
+            "kind": "InflationAdjusted"
+          },
+          "from_account_id": "Checking",
+          "kind": "Expense"
+        }
+      ],
+      "enabled": true,
+      "fires_once": false,
+      "name": "Retirement spending",
+      "sort_order": 2,
+      "trigger": {
+        "end_condition": null,
+        "interval": "Yearly",
+        "kind": "Repeating",
+        "max_occurrences": null,
+        "start_condition": {
+          "kind": "Age",
+          "months": null,
+          "years": 65
+        }
+      }
+    }
+  ],
+  "scenario": {
+    "birth_date": "1981-01-01",
+    "description": "Guided setup: spending funded by checking only; assumptions reviewed.",
+    "duration_years": 50,
+    "inflation": null,
+    "name": "Golden",
+    "start_date": "2026-01-01",
+    "tax_config_id": null
+  }
+}

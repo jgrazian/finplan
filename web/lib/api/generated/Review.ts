@@ -6,13 +6,9 @@ import type { Suggestion } from "./Suggestion";
  * A scenario's latest review: the run it read and the notes still standing
  * (open or applied) against that run.
  */
-export type Review = {
-  run_id: number;
-  reviewed_at: string;
-  suggestions: Array<Suggestion>;
-  /**
-   * The model-written pass over the same run, which lands after the rule
-   * notes; null when the server has no review model configured.
-   */
-  ai: ReviewAi | null;
-};
+export type Review = { run_id: number, reviewed_at: string, suggestions: Array<Suggestion>, 
+/**
+ * The model-written pass over the same run, which lands after the rule
+ * notes; null when the server has no review model configured.
+ */
+ai: ReviewAi | null, };

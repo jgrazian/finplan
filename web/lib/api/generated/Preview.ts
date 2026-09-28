@@ -3,32 +3,31 @@ import type { ChangeProblem } from "./ChangeProblem";
 import type { DiffLine } from "./DiffLine";
 import type { PreviewStats } from "./PreviewStats";
 
-export type Preview = {
-  /**
-   * The run the preview was paired against; null for a draft, which has
-   * none. Such a preview only checks the batch and renders its diff: it
-   * simulates nothing, so `base` and `edited` are null.
-   */
-  base_run_id: number | null;
-  /**
-   * Iterations behind both `base` and `edited`.
-   */
-  iterations: number;
-  /**
-   * The base and the edited plan saw the same simulated markets, so their
-   * difference is the edit's. False when the edit changes the market
-   * inputs (a newly used or no longer used return profile, the inflation
-   * profile, the horizon, tracking error).
-   */
-  paired: boolean;
-  /**
-   * What the batch changes, rendered by the server.
-   */
-  diff: Array<DiffLine>;
-  /**
-   * Why the batch cannot be applied. Non-empty means nothing was simulated.
-   */
-  problems: Array<ChangeProblem>;
-  base: PreviewStats | null;
-  edited: PreviewStats | null;
-};
+export type Preview = { 
+/**
+ * The run the preview was paired against; null for a draft, which has
+ * none. Such a preview is unpaired: `base` is null and `edited` is a
+ * whole-plan simulation of the draft with the batch applied (see
+ * [`simulate_draft`]).
+ */
+base_run_id: number | null, 
+/**
+ * Iterations behind both `base` and `edited`; 0 when nothing was
+ * simulated.
+ */
+iterations: number, 
+/**
+ * The base and the edited plan saw the same simulated markets, so their
+ * difference is the edit's. False when the edit changes the market
+ * inputs (a newly used or no longer used return profile, the inflation
+ * profile, the horizon, tracking error).
+ */
+paired: boolean, 
+/**
+ * What the batch changes, rendered by the server.
+ */
+diff: Array<DiffLine>, 
+/**
+ * Why the batch cannot be applied. Non-empty means nothing was simulated.
+ */
+problems: Array<ChangeProblem>, base: PreviewStats | null, edited: PreviewStats | null, };

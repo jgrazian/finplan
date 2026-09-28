@@ -3,13 +3,4 @@
 /**
  * Where a number in a note came from.
  */
-export type Evidence =
-  | {
-    "ref": "ledger";
-    year: number;
-    event_id: number | null;
-    account_id: number | null;
-  }
-  | { "ref": "account_series"; account_id: number; date: string; value: number }
-  | { "ref": "stat"; name: string; value: number }
-  | { "ref": "diagnostic"; field: string; value: number };
+export type Evidence = { "ref": "ledger", year: number, event_id: number | null, account_id: number | null, } | { "ref": "account_series", account_id: number, date: string, value: number, } | { "ref": "stat", name: string, value: number, } | { "ref": "diagnostic", field: string, value: number, };

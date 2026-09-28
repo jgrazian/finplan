@@ -5,18 +5,14 @@
  * pointwise quantile. Null percentile is the synthetic nominal mean, which
  * has no coherent ledger and must not be deflated using mean inflation.
  */
-export type Band = {
-  /**
-   * Run-local identity, also accepted by results/ledger `series` queries.
-   */
-  path_id: string;
-  percentile: number | null;
-  dates: Array<string>;
-  net_worth: Array<number>;
-  /**
-   * Cumulative inflation at each of `dates`, on this path's own realised
-   * inflation: `real = net_worth[i] / inflation[i]`. All ones for a run
-   * stored before inflation was recorded.
-   */
-  inflation: Array<number>;
-};
+export type Band = { 
+/**
+ * Run-local identity, also accepted by results/ledger `series` queries.
+ */
+path_id: string, percentile: number | null, dates: Array<string>, net_worth: Array<number>, 
+/**
+ * Cumulative inflation at each of `dates`, on this path's own realised
+ * inflation: `real = net_worth[i] / inflation[i]`. All ones for a run
+ * stored before inflation was recorded.
+ */
+inflation: Array<number>, };

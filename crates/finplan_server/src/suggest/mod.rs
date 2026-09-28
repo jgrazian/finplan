@@ -56,6 +56,7 @@ mod diff;
 mod pointer;
 mod read;
 pub mod rules;
+pub mod templates;
 
 #[cfg(test)]
 mod tests;

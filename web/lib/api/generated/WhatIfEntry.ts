@@ -4,4 +4,4 @@ import type { WhatIfLayer } from "./WhatIfLayer";
 /**
  * One row of the stored stack. `id` is a client-generated stable key.
  */
-export type WhatIfEntry = { id: string; enabled: boolean; layer: WhatIfLayer };
+export type WhatIfEntry = { id: string, enabled: boolean, layer: WhatIfLayer, };

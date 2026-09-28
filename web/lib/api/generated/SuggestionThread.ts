@@ -2,15 +2,12 @@
 import type { ChatMessage } from "./ChatMessage";
 import type { ThreadStatus } from "./ThreadStatus";
 
-export type SuggestionThread = {
-  suggestion_id: number;
-  status: ThreadStatus;
-  /**
-   * Why the last turn did not finish; null unless `failed`.
-   */
-  error: string | null;
-  /**
-   * Oldest first.
-   */
-  messages: Array<ChatMessage>;
-};
+export type SuggestionThread = { suggestion_id: number, status: ThreadStatus, 
+/**
+ * Why the last turn did not finish; null unless `failed`.
+ */
+error: string | null, 
+/**
+ * Oldest first.
+ */
+messages: Array<ChatMessage>, };

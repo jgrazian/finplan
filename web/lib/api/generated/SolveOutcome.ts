@@ -6,35 +6,33 @@ import type { SolveStep } from "./SolveStep";
 /**
  * A finished goal seek.
  */
-export type SolveOutcome = {
-  /**
-   * Metric actually used by the solver.
-   */
-  constraint: string;
-  /**
-   * `"bisection"` or `"grid-search"` — the method the selection implied.
-   */
-  method: string;
-  /**
-   * The varied parameters, in the order every `values` array follows.
-   */
-  parameters: Array<AnalysisParameter>;
-  /**
-   * The plan as it stands.
-   */
-  plan: AnalysisPoint;
-  /**
-   * Every probe, in the order taken.
-   */
-  steps: Array<SolveStep>;
-  /**
-   * The answer, or `null` when nothing in range clears the constraint.
-   */
-  best: SolveStep | null;
-  /**
-   * Standard error of the selected constraint at the answer, as a fraction. Says
-   * whether the last digit of the answer means anything.
-   */
-  std_error: number | null;
-  iterations: number;
-};
+export type SolveOutcome = { 
+/**
+ * Metric actually used by the solver.
+ */
+constraint: string, 
+/**
+ * `"bisection"` or `"grid-search"` — the method the selection implied.
+ */
+method: string, 
+/**
+ * The varied parameters, in the order every `values` array follows.
+ */
+parameters: Array<AnalysisParameter>, 
+/**
+ * The plan as it stands.
+ */
+plan: AnalysisPoint, 
+/**
+ * Every probe, in the order taken.
+ */
+steps: Array<SolveStep>, 
+/**
+ * The answer, or `null` when nothing in range clears the constraint.
+ */
+best: SolveStep | null, 
+/**
+ * Standard error of the selected constraint at the answer, as a fraction. Says
+ * whether the last digit of the answer means anything.
+ */
+std_error: number | null, iterations: number, };

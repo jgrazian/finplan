@@ -3,16 +3,12 @@ import type { DraftCounts } from "./DraftCounts";
 import type { DraftState } from "./DraftState";
 import type { Scenario } from "./Scenario";
 
-export type DraftStatus = {
-  /**
-   * The draft's scenario id.
-   */
-  id: number;
-  state: DraftState;
-  scenario: Scenario;
-  /**
-   * When the sweeper deletes the draft unless it is touched first.
-   */
-  expires_at: string;
-  counts: DraftCounts;
-};
+export type DraftStatus = { 
+/**
+ * The draft's scenario id.
+ */
+id: number, state: DraftState, scenario: Scenario, 
+/**
+ * When the sweeper deletes the draft unless it is touched first.
+ */
+expires_at: string, counts: DraftCounts, };

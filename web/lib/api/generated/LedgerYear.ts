@@ -5,19 +5,13 @@
  * for the cash-flow table to say how much is behind each row before anyone
  * expands it.
  */
-export type LedgerYear = {
-  year: number;
-  /**
-   * Entry counts per filter bucket, and in total.
-   */
-  cash: number;
-  asset: number;
-  tax: number;
-  event: number;
-  total: number;
-  /**
-   * The name of the event that fired this year — retiring, a pension
-   * starting — or null for a year that only did the ordinary things.
-   */
-  tag: string | null;
-};
+export type LedgerYear = { year: number, 
+/**
+ * Entry counts per filter bucket, and in total.
+ */
+cash: number, asset: number, tax: number, event: number, total: number, 
+/**
+ * The name of the event that fired this year — retiring, a pension
+ * starting — or null for a year that only did the ordinary things.
+ */
+tag: string | null, };

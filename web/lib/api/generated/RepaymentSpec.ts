@@ -3,14 +3,13 @@
 /**
  * How a loan pays itself off: a level monthly payment from a cash account.
  */
-export type RepaymentSpec = {
-  /**
-   * Bank or investment account the payment is drawn from.
-   */
-  from_account_id: number;
-  /**
-   * Months remaining at plan start — 360 for a new 30-year mortgage. A
-   * loan drawn by a BuyProperty takes the term that effect names instead.
-   */
-  term_months: number;
-};
+export type RepaymentSpec = { 
+/**
+ * Bank or investment account the payment is drawn from.
+ */
+from_account_id: number, 
+/**
+ * Months remaining at plan start — 360 for a new 30-year mortgage. A
+ * loan drawn by a BuyProperty takes the term that effect names instead.
+ */
+term_months: number, };

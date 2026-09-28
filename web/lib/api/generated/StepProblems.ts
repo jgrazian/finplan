@@ -4,8 +4,4 @@ import type { ChangeProblem } from "./ChangeProblem";
 /**
  * The problems with one step's changes.
  */
-export type StepProblems = {
-  path: string;
-  step: string;
-  problems: Array<ChangeProblem>;
-};
+export type StepProblems = { path: string, step: string, problems: Array<ChangeProblem>, };

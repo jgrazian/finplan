@@ -2,12 +2,8 @@
 import type { FundingDiagnostics } from "./FundingDiagnostics";
 import type { RealFinal } from "./RealFinal";
 
-export type PreviewStats = {
-  success_rate: number;
-  funding_success_rate: number | null;
-  /**
-   * Final net worth in today's dollars, over all iterations.
-   */
-  real_final: RealFinal | null;
-  funding: FundingDiagnostics | null;
-};
+export type PreviewStats = { success_rate: number, funding_success_rate: number | null, 
+/**
+ * Final net worth in today's dollars, over all iterations.
+ */
+real_final: RealFinal | null, funding: FundingDiagnostics | null, };

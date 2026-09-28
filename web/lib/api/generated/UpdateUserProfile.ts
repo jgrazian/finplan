@@ -7,7 +7,4 @@
  * absent value means "clear this" rather than "leave it alone" — which is the
  * only way an emptied birth date or display name can ever be sent.
  */
-export type UpdateUserProfile = {
-  display_name?: string | null;
-  birth_date?: string | null;
-};
+export type UpdateUserProfile = { display_name?: string | null, birth_date?: string | null, };

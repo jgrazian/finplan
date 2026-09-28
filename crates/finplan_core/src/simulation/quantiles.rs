@@ -110,7 +110,17 @@ impl RealAccumulator {
 #[path = "../tests/results_quantiles.rs"]
 mod results_quantiles;
 
+/// Linear interpolation between the two order statistics around `p`.
+///
+/// Written as `lo + (hi - lo) * f` and clamped to `[lo, hi]`: the two-product
+/// form `lo * (1 - f) + hi * f` rounds an ulp outside the bracket even when
+/// `lo == hi`, which breaks the monotonicity of quantiles (`p5 <= p50 <= p95`)
+/// that a fully deterministic plan should satisfy exactly.
 fn quantile(sorted: &[f64], p: f64) -> f64 {
     let h = (sorted.len() - 1) as f64 * p;
-    sorted[h.floor() as usize] * (1.0 - h.fract()) + sorted[h.ceil() as usize] * h.fract()
+    let (lo, hi) = (sorted[h.floor() as usize], sorted[h.ceil() as usize]);
+    if lo == hi {
+        return lo;
+    }
+    (lo + (hi - lo) * h.fract()).clamp(lo, hi)
 }

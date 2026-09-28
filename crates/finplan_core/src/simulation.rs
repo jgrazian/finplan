@@ -748,7 +748,10 @@ impl OnlineStats {
             0.0
         } else {
             let mean = self.mean();
-            (self.sum_sq / self.count as f64) - (mean * mean)
+            // E[x^2] - mean^2 cancels catastrophically when the samples agree
+            // (a deterministic plan) and can land just below zero, whose
+            // square root is NaN.
+            ((self.sum_sq / self.count as f64) - (mean * mean)).max(0.0)
         }
     }
 

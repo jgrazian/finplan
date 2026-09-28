@@ -7,15 +7,8 @@ import type { SuggestionSection } from "./SuggestionSection";
 /**
  * A suggestion as a client (usually a model) writes it.
  */
-export type SuggestionDraft = {
-  /**
-   * The run it was written against; defaults to the latest succeeded run.
-   */
-  run_id: number | null;
-  kind: SuggestionKind;
-  section: SuggestionSection;
-  title: string;
-  reasoning: string;
-  evidence: Array<Evidence>;
-  paths: Array<SuggestionPathDraft>;
-};
+export type SuggestionDraft = { 
+/**
+ * The run it was written against; defaults to the latest succeeded run.
+ */
+run_id: number | null, kind: SuggestionKind, section: SuggestionSection, title: string, reasoning: string, evidence: Array<Evidence>, paths: Array<SuggestionPathDraft>, };

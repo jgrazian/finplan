@@ -3,17 +3,13 @@
 /**
  * One axis of a sweep: which parameter, and the values it was stepped over.
  */
-export type SweepAxis = {
-  parameter_id: string;
-  /**
-   * The event and what varies — "Retirement spending · amount".
-   */
-  label: string;
-  /**
-   * Just what varies — "amount". Short enough for a table header or a
-   * stat label, where the surrounding heading already names the event.
-   */
-  role: string;
-  kind: string;
-  values: Array<number>;
-};
+export type SweepAxis = { parameter_id: string, 
+/**
+ * The event and what varies — "Retirement spending · amount".
+ */
+label: string, 
+/**
+ * Just what varies — "amount". Short enough for a table header or a
+ * stat label, where the surrounding heading already names the event.
+ */
+role: string, kind: string, values: Array<number>, };

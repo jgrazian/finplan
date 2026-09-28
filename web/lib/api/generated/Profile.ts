@@ -2,20 +2,15 @@
 import type { AssetClass } from "./AssetClass";
 import type { DistributionSpec } from "./DistributionSpec";
 
-export type Profile = {
-  id: number;
-  name: string;
-  description: string | null;
-  /**
-   * What the profile is for, where anyone has said. Null is the normal
-   * state for a hand-made profile and simply means nothing auto-selects it.
-   */
-  asset_class: AssetClass | null;
-  distribution: DistributionSpec;
-  /**
-   * Names of assets and accounts pointing at this profile. Always present,
-   * empty when nothing references it: an omitted key would make the
-   * generated TypeScript claim a field the wire format does not carry.
-   */
-  used_by: Array<string>;
-};
+export type Profile = { id: number, name: string, description: string | null, 
+/**
+ * What the profile is for, where anyone has said. Null is the normal
+ * state for a hand-made profile and simply means nothing auto-selects it.
+ */
+asset_class: AssetClass | null, distribution: DistributionSpec, 
+/**
+ * Names of assets and accounts pointing at this profile. Always present,
+ * empty when nothing references it: an omitted key would make the
+ * generated TypeScript claim a field the wire format does not carry.
+ */
+used_by: Array<string>, };

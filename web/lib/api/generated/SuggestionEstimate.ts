@@ -3,7 +3,4 @@
 /**
  * What the author expects the changes to do, before anything is simulated.
  */
-export type SuggestionEstimate = {
-  success_rate: number | null;
-  funding_success_rate: number | null;
-};
+export type SuggestionEstimate = { success_rate: number | null, funding_success_rate: number | null, };

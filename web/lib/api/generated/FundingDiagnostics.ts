@@ -10,63 +10,61 @@ import type { YearCount } from "./YearCount";
  * once. Year histograms are sorted by year; account and event histograms by
  * count, most frequent first.
  */
-export type FundingDiagnostics = {
-  iterations: number;
-  /**
-   * Failed the funding check: any cash shortfall or event warning.
-   */
-  failed: number;
-  /**
-   * Had at least one settled cash shortfall.
-   */
-  cash_shortfall: number;
-  /**
-   * Had an effect skipped or an evaluation fail.
-   */
-  event_failure: number;
-  /**
-   * Hit the same-date iteration limit — almost always a trigger loop.
-   */
-  iteration_limit: number;
-  /**
-   * Failed, yet finished with positive net worth: a liquidity or funding
-   * rule problem rather than too little wealth.
-   */
-  failed_solvent: number;
-  /**
-   * Year of each shortfall path's first deficit.
-   */
-  first_shortfall_years: Array<YearCount>;
-  /**
-   * Median of `first_shortfall_years`; null when no path ran short.
-   */
-  median_first_shortfall_year: number | null;
-  /**
-   * Account most overdrawn at each shortfall path's first deficit.
-   */
-  shortfall_accounts: Array<AccountCount>;
-  /**
-   * Iterations in which each event had an effect skipped or fail to evaluate.
-   */
-  event_failures: Array<EventCount>;
-  /**
-   * Year liquid (bank and investment) balances first ran out, over paths
-   * where they did.
-   */
-  liquid_depleted_years: Array<YearCount>;
-  /**
-   * Median over shortfall paths of each path's largest deficit, nominal.
-   */
-  median_max_deficit: number | null;
-  /**
-   * Median over shortfall paths of the calendar years spent short.
-   */
-  median_shortfall_years: number | null;
-  /**
-   * Seed of the failing iteration that failed earliest (larger deficit
-   * breaks ties). Re-simulating it against the run's inputs reproduces the
-   * worst path. A decimal string: seeds span the full `u64` range, which a
-   * JSON number would round.
-   */
-  worst_seed: string | null;
-};
+export type FundingDiagnostics = { iterations: number, 
+/**
+ * Failed the funding check: any cash shortfall or event warning.
+ */
+failed: number, 
+/**
+ * Had at least one settled cash shortfall.
+ */
+cash_shortfall: number, 
+/**
+ * Had an effect skipped or an evaluation fail.
+ */
+event_failure: number, 
+/**
+ * Hit the same-date iteration limit — almost always a trigger loop.
+ */
+iteration_limit: number, 
+/**
+ * Failed, yet finished with positive net worth: a liquidity or funding
+ * rule problem rather than too little wealth.
+ */
+failed_solvent: number, 
+/**
+ * Year of each shortfall path's first deficit.
+ */
+first_shortfall_years: Array<YearCount>, 
+/**
+ * Median of `first_shortfall_years`; null when no path ran short.
+ */
+median_first_shortfall_year: number | null, 
+/**
+ * Account most overdrawn at each shortfall path's first deficit.
+ */
+shortfall_accounts: Array<AccountCount>, 
+/**
+ * Iterations in which each event had an effect skipped or fail to evaluate.
+ */
+event_failures: Array<EventCount>, 
+/**
+ * Year liquid (bank and investment) balances first ran out, over paths
+ * where they did.
+ */
+liquid_depleted_years: Array<YearCount>, 
+/**
+ * Median over shortfall paths of each path's largest deficit, nominal.
+ */
+median_max_deficit: number | null, 
+/**
+ * Median over shortfall paths of the calendar years spent short.
+ */
+median_shortfall_years: number | null, 
+/**
+ * Seed of the failing iteration that failed earliest (larger deficit
+ * breaks ties). Re-simulating it against the run's inputs reproduces the
+ * worst path. A decimal string: seeds span the full `u64` range, which a
+ * JSON number would round.
+ */
+worst_seed: string | null, };

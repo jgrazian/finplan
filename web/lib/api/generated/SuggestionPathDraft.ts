@@ -5,14 +5,8 @@ import type { SuggestionStepDraft } from "./SuggestionStepDraft";
 /**
  * One path as a client writes it; the server renders each step's diff.
  */
-export type SuggestionPathDraft = {
-  key: string;
-  label: string;
-  reasoning: string | null;
-  recommended: boolean;
-  /**
-   * What every step together is expected to do.
-   */
-  estimate: SuggestionEstimate | null;
-  steps: Array<SuggestionStepDraft>;
-};
+export type SuggestionPathDraft = { key: string, label: string, reasoning: string | null, recommended: boolean, 
+/**
+ * What every step together is expected to do.
+ */
+estimate: SuggestionEstimate | null, steps: Array<SuggestionStepDraft>, };
