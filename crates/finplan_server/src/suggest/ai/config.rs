@@ -264,3 +264,285 @@ impl AiConfig {
         Ok(())
     }
 }
+
+/// One tier's limits on AI-guided drafts (`api::drafts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DraftLimits {
+    /// Drafts a user may start per calendar month (UTC).
+    pub drafts_per_month: u32,
+    /// Files, bytes and pages (PDF pages plus images) one draft may take in.
+    pub max_files: u32,
+    pub max_bytes: u64,
+    pub max_pages: u32,
+}
+
+const MB: u64 = 1024 * 1024;
+
+/// Operator settings for AI-guided scenario drafts: the per-tier limits, how
+/// long an abandoned draft lives, and the model budget of one drafting pass
+/// (its own values, in the shape of the review settings above).
+///
+/// Every limit is validated at startup and reported to the web through
+/// `Entitlements::ai_drafts`.
+#[derive(Debug, Clone, Args)]
+pub struct DraftConfig {
+    /// AI drafts a Free user may start per calendar month (UTC).
+    #[arg(
+        long = "draft-free-per-month",
+        env = "FINPLAN_DRAFT_FREE_PER_MONTH",
+        default_value_t = 2
+    )]
+    pub free_per_month: u32,
+    /// AI drafts a Pro user may start per calendar month (UTC).
+    #[arg(
+        long = "draft-pro-per-month",
+        env = "FINPLAN_DRAFT_PRO_PER_MONTH",
+        default_value_t = 20
+    )]
+    pub pro_per_month: u32,
+
+    /// Files one draft may attach, per tier.
+    #[arg(
+        long = "draft-free-max-files",
+        env = "FINPLAN_DRAFT_FREE_MAX_FILES",
+        default_value_t = 10
+    )]
+    pub free_max_files: u32,
+    #[arg(
+        long = "draft-pro-max-files",
+        env = "FINPLAN_DRAFT_PRO_MAX_FILES",
+        default_value_t = 25
+    )]
+    pub pro_max_files: u32,
+
+    /// Bytes one draft may attach, per tier.
+    #[arg(
+        long = "draft-free-max-bytes",
+        env = "FINPLAN_DRAFT_FREE_MAX_BYTES",
+        default_value_t = 25 * MB
+    )]
+    pub free_max_bytes: u64,
+    #[arg(
+        long = "draft-pro-max-bytes",
+        env = "FINPLAN_DRAFT_PRO_MAX_BYTES",
+        default_value_t = 100 * MB
+    )]
+    pub pro_max_bytes: u64,
+
+    /// Pages (PDF pages plus images) one draft may attach, per tier.
+    #[arg(
+        long = "draft-free-max-pages",
+        env = "FINPLAN_DRAFT_FREE_MAX_PAGES",
+        default_value_t = 60
+    )]
+    pub free_max_pages: u32,
+    #[arg(
+        long = "draft-pro-max-pages",
+        env = "FINPLAN_DRAFT_PRO_MAX_PAGES",
+        default_value_t = 200
+    )]
+    pub pro_max_pages: u32,
+
+    /// Hours an untouched draft lives before the sweeper deletes it. Covers a
+    /// closed tab or a crash; cancelling deletes a draft at once.
+    #[arg(
+        long = "draft-ttl-hours",
+        env = "FINPLAN_DRAFT_TTL_HOURS",
+        default_value_t = 24
+    )]
+    pub ttl_hours: u32,
+
+    /// Most model requests one drafting pass may make.
+    #[arg(
+        id = "draft_max_turns",
+        long = "draft-max-turns",
+        env = "FINPLAN_DRAFT_MAX_TURNS",
+        default_value_t = 20
+    )]
+    pub max_turns: u32,
+
+    /// Most simulated previews one drafting pass may ask for.
+    #[arg(
+        id = "draft_max_previews",
+        long = "draft-max-previews",
+        env = "FINPLAN_DRAFT_MAX_PREVIEWS",
+        default_value_t = 12
+    )]
+    pub max_previews: u32,
+
+    /// Output token ceiling per drafting request, thinking included.
+    #[arg(
+        id = "draft_max_tokens",
+        long = "draft-max-tokens",
+        env = "FINPLAN_DRAFT_MAX_TOKENS",
+        default_value_t = 32_000
+    )]
+    pub max_tokens: u32,
+}
+
+impl Default for DraftConfig {
+    fn default() -> Self {
+        Self {
+            free_per_month: 2,
+            pro_per_month: 20,
+            free_max_files: 10,
+            pro_max_files: 25,
+            free_max_bytes: 25 * MB,
+            pro_max_bytes: 100 * MB,
+            free_max_pages: 60,
+            pro_max_pages: 200,
+            ttl_hours: 24,
+            max_turns: 20,
+            max_previews: 12,
+            max_tokens: 32_000,
+        }
+    }
+}
+
+impl DraftConfig {
+    /// The limits that apply to a Pro or a Free user.
+    pub fn limits(&self, pro: bool) -> DraftLimits {
+        if pro {
+            DraftLimits {
+                drafts_per_month: self.pro_per_month,
+                max_files: self.pro_max_files,
+                max_bytes: self.pro_max_bytes,
+                max_pages: self.pro_max_pages,
+            }
+        } else {
+            DraftLimits {
+                drafts_per_month: self.free_per_month,
+                max_files: self.free_max_files,
+                max_bytes: self.free_max_bytes,
+                max_pages: self.free_max_pages,
+            }
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let limits: [(&str, u64, u64, u64); 4] = [
+            (
+                "draft drafts per month",
+                self.free_per_month.into(),
+                self.pro_per_month.into(),
+                1_000,
+            ),
+            (
+                "draft max files",
+                self.free_max_files.into(),
+                self.pro_max_files.into(),
+                200,
+            ),
+            (
+                "draft max pages",
+                self.free_max_pages.into(),
+                self.pro_max_pages.into(),
+                5_000,
+            ),
+            (
+                "draft max bytes",
+                self.free_max_bytes,
+                self.pro_max_bytes,
+                1_024 * MB,
+            ),
+        ];
+        for (name, free, pro, max) in limits {
+            if free == 0 || pro == 0 || free > max || pro > max {
+                return Err(format!("{name} must be between 1 and {max}"));
+            }
+            if pro < free {
+                return Err(format!("{name} for Pro must not be below Free"));
+            }
+        }
+        if self.ttl_hours == 0 || self.ttl_hours > 24 * 30 {
+            return Err("draft ttl hours must be between 1 and 720".into());
+        }
+        if self.max_turns == 0 || self.max_turns > 100 {
+            return Err("draft max turns must be between 1 and 100".into());
+        }
+        if self.max_previews > 100 {
+            return Err("draft max previews must be at most 100".into());
+        }
+        if !(1_024..=128_000).contains(&self.max_tokens) {
+            return Err("draft max tokens must be between 1024 and 128000".into());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod draft_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        review: AiConfig,
+        #[command(flatten)]
+        draft: DraftConfig,
+    }
+
+    #[test]
+    fn the_defaults_are_the_documented_limits_and_valid() {
+        let config = Cli::parse_from(["test"]).draft;
+        config.validate().unwrap();
+        assert_eq!(
+            config.limits(false),
+            DraftLimits {
+                drafts_per_month: 2,
+                max_files: 10,
+                max_bytes: 25 * 1024 * 1024,
+                max_pages: 60,
+            }
+        );
+        assert_eq!(
+            config.limits(true),
+            DraftLimits {
+                drafts_per_month: 20,
+                max_files: 25,
+                max_bytes: 100 * 1024 * 1024,
+                max_pages: 200,
+            }
+        );
+        assert_eq!(config.ttl_hours, 24);
+        // Its own model budget, beside the review's rather than shared with it.
+        assert_eq!((config.max_turns, config.max_previews), (20, 12));
+        assert_eq!(Cli::parse_from(["test"]).review.max_turns, 12);
+    }
+
+    #[test]
+    fn flags_override_and_bad_limits_are_refused_at_startup() {
+        let config = Cli::parse_from([
+            "test",
+            "--draft-free-per-month",
+            "5",
+            "--draft-pro-max-files",
+            "40",
+            "--draft-max-turns",
+            "9",
+            "--review-max-turns",
+            "7",
+        ]);
+        assert_eq!(config.draft.limits(false).drafts_per_month, 5);
+        assert_eq!(config.draft.limits(true).max_files, 40);
+        assert_eq!((config.draft.max_turns, config.review.max_turns), (9, 7));
+        config.draft.validate().unwrap();
+
+        let broken: [fn(&mut DraftConfig); 8] = [
+            |c| c.free_per_month = 0,
+            |c| c.pro_per_month = 1,
+            |c| c.free_max_files = 0,
+            |c| c.free_max_bytes = 2 * 1024 * 1024 * 1024,
+            |c| c.free_max_pages = 0,
+            |c| c.ttl_hours = 0,
+            |c| c.max_turns = 0,
+            |c| c.max_tokens = 10,
+        ];
+        for break_it in broken {
+            let mut config = DraftConfig::default();
+            break_it(&mut config);
+            assert!(config.validate().is_err(), "{config:?}");
+        }
+    }
+}

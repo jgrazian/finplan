@@ -28,9 +28,20 @@
 //! |           |                               | fields; the whole flavor if any of it moved)  |
 //! |           | `…/positions/*`               | `CreatePosition`/`UpdatePosition`/delete, by  |
 //! |           |                               | position `id`                                 |
+//! | new_parameter | `ParameterBody` (the `add` value) | `ParameterBody` (POST)                    |
+//! | parameter | `id` + `ParameterBody`        | `ParameterBody` (PATCH: whole parameter)      |
+//! | scenario  | the scenario's settings       | `UpdateScenario` (PATCH: changed fields only) |
+//! | new_return_profile | `CreateProfile` (the `add` value) | `CreateProfile` (POST, user-level) |
+//! | new_tax_config | `CreateTaxConfig` (the `add` value) | `CreateTaxConfig` (POST, user-level) |
 //!
-//! `id` fields are read-only, as is an account's `flavor` tag. `remove` at the
-//! root deletes the resource.
+//! `id` fields are read-only, as is an account's `flavor` tag and a scenario's
+//! `name` and `start_date` (the server owns a plan's start date). `remove` at
+//! the root deletes the resource, except for the scenario, which cannot go.
+//!
+//! The two user-level kinds are rows of the caller's libraries rather than of
+//! the plan: they are written when the batch is applied, and are referred to
+//! by `{"$new": key}` from `return_profile_id` / `cash_return_profile_id` (and
+//! a scenario's `tax_config_id`) like anything else a batch creates.
 //!
 //! Entities the batch creates are named by a key (`{"new_asset": "vti"}`), and
 //! any id field of any body in the batch may point at one with
@@ -60,11 +71,15 @@ use crate::api::accounts::{
 };
 use crate::api::assets::{CreateAsset, UpdateAsset};
 use crate::api::events::EventBody;
+use crate::api::parameters::ParameterBody;
+use crate::api::profiles::CreateProfile;
+use crate::api::scenarios::UpdateScenario;
+use crate::api::taxes::CreateTaxConfig;
 use crate::compile::rows::ScenarioGraph;
 
 pub use apply::{
-    Step, StepProblems, Stepped, apply_steps_sql, apply_to_graph, apply_to_sql, plan_problem,
-    profiles_named, resolve_steps,
+    Step, StepProblems, Stepped, apply_steps_sql, apply_to_graph, apply_to_sql, assumptions_named,
+    plan_problem, profiles_named, resolve_steps,
 };
 pub use diff::Names;
 
@@ -79,11 +94,15 @@ pub enum ChangeOp {
     Remove,
 }
 
-/// The resource a change edits. `new_event`, `new_asset` and `new_account`
-/// name a resource the same batch creates: its first change must be `add` at
-/// `""` with the whole body, and later changes sharing the key patch that
-/// body. Keys are unique across the three kinds, and `{"$new": "<key>"}` in
-/// any id field of the batch refers to the resource created under that key.
+/// The resource a change edits. The `new_*` targets name a resource the same
+/// batch creates: its first change must be `add` at `""` with the whole body,
+/// and later changes sharing the key patch that body. Keys are unique across
+/// all the kinds, and `{"$new": "<key>"}` in any id field of the batch refers
+/// to the resource created under that key.
+///
+/// `scenario` is the plan's own settings (birth date, duration, inflation
+/// profile, tax config). `new_return_profile` and `new_tax_config` create rows
+/// in the caller's libraries, which no later batch can edit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -91,9 +110,14 @@ pub enum ChangeTarget {
     Event(i64),
     Asset(i64),
     Account(i64),
+    Parameter(i64),
     NewEvent(String),
     NewAsset(String),
     NewAccount(String),
+    NewParameter(String),
+    Scenario,
+    NewReturnProfile(String),
+    NewTaxConfig(String),
 }
 
 /// What a `$new` key names, or an id field holds.
@@ -104,6 +128,9 @@ pub enum RefKind {
     Event,
     Asset,
     Account,
+    Parameter,
+    ReturnProfile,
+    TaxConfig,
 }
 
 impl ChangeTarget {
@@ -113,6 +140,9 @@ impl ChangeTarget {
             ChangeTarget::NewEvent(key) => Some((key, RefKind::Event)),
             ChangeTarget::NewAsset(key) => Some((key, RefKind::Asset)),
             ChangeTarget::NewAccount(key) => Some((key, RefKind::Account)),
+            ChangeTarget::NewParameter(key) => Some((key, RefKind::Parameter)),
+            ChangeTarget::NewReturnProfile(key) => Some((key, RefKind::ReturnProfile)),
+            ChangeTarget::NewTaxConfig(key) => Some((key, RefKind::TaxConfig)),
             _ => None,
         }
     }
@@ -268,6 +298,30 @@ pub enum ResolvedChange {
     },
     DeleteAccount {
         id: i64,
+    },
+    CreateParameter {
+        key: String,
+        body: ParameterBody,
+    },
+    ReplaceParameter {
+        id: i64,
+        body: ParameterBody,
+    },
+    DeleteParameter {
+        id: i64,
+    },
+    UpdateScenario {
+        body: UpdateScenario,
+    },
+    /// A row of the caller's return profile library.
+    CreateReturnProfile {
+        key: String,
+        body: CreateProfile,
+    },
+    /// A row of the caller's tax config library.
+    CreateTaxConfig {
+        key: String,
+        body: CreateTaxConfig,
     },
     CreatePosition {
         account_id: i64,
@@ -450,11 +504,19 @@ pub fn resolve_with(
                 continue;
             }
         };
-        let before = existing.and_then(|(kind, id)| match kind {
-            RefKind::Event => read::event(graph, id),
-            RefKind::Asset => read::asset(graph, id),
-            RefKind::Account => read::account(graph, id),
-        });
+        let before = if target == ChangeTarget::Scenario {
+            Some(read::scenario(graph))
+        } else {
+            existing.and_then(|(kind, id)| match kind {
+                RefKind::Event => read::event(graph, id),
+                RefKind::Asset => read::asset(graph, id),
+                RefKind::Account => read::account(graph, id),
+                RefKind::Parameter => read::parameter(graph, id),
+                // Library rows are not part of the plan: a later batch cannot
+                // edit what an earlier one created there.
+                RefKind::ReturnProfile | RefKind::TaxConfig => None,
+            })
+        };
         if existing.is_some() && before.is_none() {
             problems.push(ChangeProblem::UnknownTarget {
                 change: first,
@@ -513,6 +575,9 @@ pub fn resolve_with(
                 ChangeTarget::NewAsset(_) | ChangeTarget::NewAccount(_)
             )
     });
+    // Expressions may name a parameter the batch creates (`$cash_floor`): they
+    // are checked against the plan with those parameters added.
+    let expression_graph = with_new_parameters(graph, &deltas, seeded);
     let mut resolved = Resolved {
         changes: Vec::new(),
         deltas: Vec::new(),
@@ -539,6 +604,14 @@ pub fn resolve_with(
                         .find(|a| a.id == created.id)?
                         .name
                         .clone(),
+                    RefKind::Parameter => graph
+                        .parameters
+                        .iter()
+                        .find(|p| p.id == created.id)?
+                        .name
+                        .clone(),
+                    RefKind::ReturnProfile => graph.return_profiles.get(&created.id)?.name.clone(),
+                    RefKind::TaxConfig => graph.tax_configs.get(&created.id)?.config.name.clone(),
                 };
                 Some((key.clone(), name))
             })
@@ -608,7 +681,7 @@ pub fn resolve_with(
         let after = delta.after.as_ref().map(|a| substitute(a, &stand_in));
         let target = effective_target(&delta.target, seeded);
         match lower(
-            graph,
+            &expression_graph,
             &target,
             delta.before.as_ref(),
             after.as_ref(),
@@ -642,6 +715,29 @@ pub fn resolve_with(
     }
 }
 
+/// `graph`, with the parameters the batch creates added, for checking the
+/// expressions that may name them. Borrowed unchanged when it creates none.
+fn with_new_parameters<'a>(
+    graph: &'a ScenarioGraph,
+    deltas: &[Delta],
+    seeded: &Created,
+) -> std::borrow::Cow<'a, ScenarioGraph> {
+    let mut with = std::borrow::Cow::Borrowed(graph);
+    for delta in deltas {
+        let (ChangeTarget::NewParameter(_), Some(after)) = (&delta.target, &delta.after) else {
+            continue;
+        };
+        if existing_id(&delta.target, seeded) != Ok(None) {
+            continue;
+        }
+        // A body that does not lower is reported by its own delta.
+        if let Ok(body) = serde_json::from_value::<ParameterBody>(project(after, |k| k != "id")) {
+            let _ = crate::domain::edit::create_parameter(with.to_mut(), &body);
+        }
+    }
+    with
+}
+
 /// The existing row a target edits, if any: `Ok(None)` for a resource the
 /// batch creates, `Err` for a `new_*` key an earlier batch created as another
 /// kind.
@@ -650,6 +746,8 @@ fn existing_id(target: &ChangeTarget, seeded: &Created) -> Result<Option<(RefKin
         ChangeTarget::Event(id) => Some((RefKind::Event, *id)),
         ChangeTarget::Asset(id) => Some((RefKind::Asset, *id)),
         ChangeTarget::Account(id) => Some((RefKind::Account, *id)),
+        ChangeTarget::Parameter(id) => Some((RefKind::Parameter, *id)),
+        ChangeTarget::Scenario => None,
         _ => {
             let (key, kind) = target.created().expect("the new_* targets");
             match seeded.get(key) {
@@ -668,6 +766,7 @@ fn effective_target(target: &ChangeTarget, created: &Created) -> ChangeTarget {
         Ok(Some((RefKind::Event, id))) => ChangeTarget::Event(id),
         Ok(Some((RefKind::Asset, id))) => ChangeTarget::Asset(id),
         Ok(Some((RefKind::Account, id))) => ChangeTarget::Account(id),
+        Ok(Some((RefKind::Parameter, id))) => ChangeTarget::Parameter(id),
         _ => target.clone(),
     }
 }
@@ -695,6 +794,12 @@ impl FoundRef {
 fn field_kind(field: &str) -> Option<RefKind> {
     if field == "asset_id" {
         Some(RefKind::Asset)
+    } else if field == "parameter_id" {
+        Some(RefKind::Parameter)
+    } else if field == "tax_config_id" {
+        Some(RefKind::TaxConfig)
+    } else if field.ends_with("return_profile_id") {
+        Some(RefKind::ReturnProfile)
     } else if field.ends_with("account_id") || field == "exclude_accounts" {
         Some(RefKind::Account)
     } else if field.ends_with("event_id") {
@@ -782,19 +887,24 @@ fn origin(changes: &[Change], target: &ChangeTarget, key: &str) -> usize {
 fn stage(delta: &Delta, seeded: &Created) -> u8 {
     let creates = existing_id(&delta.target, seeded) == Ok(None);
     match (&delta.target, &delta.after) {
-        (ChangeTarget::NewAsset(_), Some(_)) if creates => 0,
-        (ChangeTarget::NewAccount(_), Some(_)) if creates => 1,
-        (_, None) => 5,
-        (ChangeTarget::NewEvent(_), Some(_)) if creates => 3,
-        (ChangeTarget::Event(_) | ChangeTarget::NewEvent(_), Some(_)) => 4,
-        _ => 2,
+        (ChangeTarget::NewReturnProfile(_) | ChangeTarget::NewTaxConfig(_), Some(_)) if creates => {
+            0
+        }
+        (ChangeTarget::NewParameter(_), Some(_)) if creates => 1,
+        (ChangeTarget::NewAsset(_), Some(_)) if creates => 2,
+        (ChangeTarget::NewAccount(_), Some(_)) if creates => 3,
+        (_, None) => 7,
+        (ChangeTarget::NewEvent(_), Some(_)) if creates => 5,
+        (ChangeTarget::Event(_) | ChangeTarget::NewEvent(_), Some(_)) => 6,
+        _ => 4,
     }
 }
 
-/// The order to write the deltas in: by stage — new assets, new accounts,
-/// edits to assets and accounts, new events, edits to events, deletes — and
-/// within a stage, the batch's order except that a new resource follows the
-/// new resources it refers to.
+/// The order to write the deltas in: by stage — new library rows (return
+/// profiles, tax configs), new parameters, new assets, new accounts, edits to
+/// assets, accounts, parameters and the scenario, new events, edits to events,
+/// deletes — and within a stage, the batch's order except that a new resource
+/// follows the new resources it refers to.
 fn write_order(
     deltas: &[Delta],
     depends: &[Vec<String>],
@@ -808,7 +918,7 @@ fn write_order(
             .map(|(k, _)| k.to_string())
     };
     let mut order = Vec::with_capacity(deltas.len());
-    for current in 0..=5 {
+    for current in 0..=7 {
         let mut pending: Vec<usize> = (0..deltas.len())
             .filter(|i| stage(&deltas[*i], seeded) == current)
             .collect();
@@ -883,6 +993,9 @@ fn patch(
                 RefKind::Event => "event",
                 RefKind::Asset => "asset",
                 RefKind::Account => "account",
+                RefKind::Parameter => "parameter",
+                RefKind::ReturnProfile => "return profile",
+                RefKind::TaxConfig => "tax config",
             };
             if !(change.op == ChangeOp::Add && tokens.is_empty()) {
                 return Err(unsupported(&format!(
@@ -938,8 +1051,7 @@ fn patch(
                 }
                 ChangeOp::Add => {
                     return Err(unsupported(
-                        "add at \"\" creates a resource; target new_event, new_asset or \
-                         new_account instead",
+                        "add at \"\" creates a resource; target the matching new_* kind instead",
                     ));
                 }
             }
@@ -967,6 +1079,12 @@ fn read_only(target: &ChangeTarget, tokens: &[String]) -> Option<&'static str> {
     );
     match (token(0), tokens.len()) {
         (Some("id"), 1) => Some("id is read-only"),
+        (Some("name"), _) if *target == ChangeTarget::Scenario => {
+            Some("a plan's name is not edited here")
+        }
+        (Some("start_date"), _) if *target == ChangeTarget::Scenario => {
+            Some("a plan's start date is set by the server")
+        }
         (Some("flavor"), 1) if account => {
             Some("an account's flavor cannot change; create a new account instead")
         }
@@ -996,9 +1114,55 @@ fn lower(
     let event = |value: &Value| event_body(graph, value, check_expressions);
     Ok(match (target, after) {
         (
-            ChangeTarget::NewEvent(_) | ChangeTarget::NewAsset(_) | ChangeTarget::NewAccount(_),
+            ChangeTarget::NewEvent(_)
+            | ChangeTarget::NewAsset(_)
+            | ChangeTarget::NewAccount(_)
+            | ChangeTarget::NewParameter(_)
+            | ChangeTarget::NewReturnProfile(_)
+            | ChangeTarget::NewTaxConfig(_),
             None,
         ) => Vec::new(),
+        (ChangeTarget::NewParameter(key), Some(after)) => vec![ResolvedChange::CreateParameter {
+            key: key.clone(),
+            body: serde_json::from_value(project(after, |k| k != "id"))
+                .map_err(|e| e.to_string())?,
+        }],
+        (ChangeTarget::Parameter(id), None) => vec![ResolvedChange::DeleteParameter { id: *id }],
+        (ChangeTarget::Parameter(id), Some(after)) => vec![ResolvedChange::ReplaceParameter {
+            id: *id,
+            body: serde_json::from_value(project(after, |k| k != "id"))
+                .map_err(|e| e.to_string())?,
+        }],
+        (ChangeTarget::Scenario, None) => return Err("a plan cannot be removed here".into()),
+        (ChangeTarget::Scenario, Some(after)) => {
+            let before = before.expect("the scenario exists");
+            for field in ["name", "start_date"] {
+                if before.get(field) != after.get(field) {
+                    return Err(format!("{field} cannot change here"));
+                }
+            }
+            let fields = changed_fields(before, after, &["id", "name", "start_date"])?;
+            let body = serde_json::from_value(Value::Object(fields)).map_err(|e| e.to_string())?;
+            vec![ResolvedChange::UpdateScenario { body }]
+        }
+        (ChangeTarget::NewReturnProfile(key), Some(after)) => {
+            let body: CreateProfile =
+                serde_json::from_value(project(after, |k| k != "id")).map_err(|e| e.to_string())?;
+            body.distribution.validate(0).map_err(|e| e.to_string())?;
+            vec![ResolvedChange::CreateReturnProfile {
+                key: key.clone(),
+                body,
+            }]
+        }
+        (ChangeTarget::NewTaxConfig(key), Some(after)) => {
+            let body: CreateTaxConfig =
+                serde_json::from_value(project(after, |k| k != "id")).map_err(|e| e.to_string())?;
+            crate::api::taxes::checked(&body).map_err(|e| e.to_string())?;
+            vec![ResolvedChange::CreateTaxConfig {
+                key: key.clone(),
+                body,
+            }]
+        }
         (ChangeTarget::NewEvent(key), Some(after)) => vec![ResolvedChange::CreateEvent {
             key: key.clone(),
             body: event(after)?,

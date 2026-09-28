@@ -148,7 +148,11 @@ async fn post_message(
     // Everything the model reads, before the thread is claimed: a note whose
     // run is gone fails here, with nothing written.
     let (run_id, graph) =
-        preview::base_snapshot(&state.db, note.scenario_id, Some(note.run_id)).await?;
+        preview::base_snapshot(&state.db, note.scenario_id, &user.id, note.run_id).await?;
+    // The model reads a run's results; a draft has none yet.
+    let run_id = run_id.ok_or_else(|| {
+        ApiError::Conflict("a note on a draft cannot be chatted about until it has a run".into())
+    })?;
     let axum::Json(results) = runs::results(
         State(state.clone()),
         user.clone(),

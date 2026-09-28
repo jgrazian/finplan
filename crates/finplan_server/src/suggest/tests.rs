@@ -666,3 +666,560 @@ fn profiles_named_finds_every_profile_a_change_points_at() {
     ])));
     assert_eq!(named, vec![5, 7]);
 }
+
+// ── parameters, scenario settings, library rows and deletes ─────────────────
+
+/// A new parameter, an event whose schedule and amount both use it, by
+/// `{"$new": key}` in `parameter_id` and by `$name` in an expression.
+fn retirement_batch() -> Value {
+    json!([
+        {"op": "add", "target": {"new_event": "retire"}, "path": "", "value": {
+            "name": "Retire at target age", "fires_once": true,
+            "trigger": {"kind": "AgeParameter", "parameter_id": {"$new": "age"}},
+            "effects": [{"kind": "Expense", "from_account_id": 6,
+                         "amount": {"kind": "Expression", "source": "$cash_floor / 12"}}]
+        }},
+        {"op": "add", "target": {"new_parameter": "floor"}, "path": "", "value": {
+            "name": "cash_floor", "value": {"kind": "Money", "value": 24000.0}}},
+        {"op": "add", "target": {"new_parameter": "age"}, "path": "", "value": {
+            "name": "retirement_age", "value": {"kind": "Age", "years": 55, "months": 0}}},
+    ])
+}
+
+#[test]
+fn a_new_parameter_is_written_before_the_event_that_uses_it() {
+    let r = resolved(retirement_batch());
+    // Named in the batch's order, with temporary ids standing in.
+    match r.changes.as_slice() {
+        [
+            ResolvedChange::CreateEvent { body, .. },
+            ResolvedChange::CreateParameter { key: floor, .. },
+            ResolvedChange::CreateParameter { key: age, .. },
+        ] => {
+            assert_eq!((floor.as_str(), age.as_str()), ("floor", "age"));
+            assert!(matches!(
+                body.trigger,
+                crate::api::specs::TriggerSpec::AgeParameter { parameter_id: -3 }
+            ));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+
+    let diff = r.diff(&Names::from_graph(&graph()));
+    let line = |label: &str| {
+        diff.iter()
+            .find(|l| l.label == label)
+            .unwrap_or_else(|| panic!("no {label} in {diff:?}"))
+    };
+    assert_eq!(
+        line("Parameters › + $cash_floor").to.as_deref(),
+        Some("$24,000")
+    );
+    assert_eq!(
+        line("Parameters › + $retirement_age").to.as_deref(),
+        Some("55 years")
+    );
+    let event = line("Plan › + Retire at target age").to.clone().unwrap();
+    assert!(event.contains("retirement_age"), "{event}");
+
+    let mut plan = graph();
+    let mut created = Created::new();
+    apply_to_graph(&mut plan, &r, &mut created)
+        .unwrap()
+        .unwrap();
+    assert_eq!(created["floor"].kind, RefKind::Parameter);
+    assert_eq!(plan.parameters.len(), 2);
+    let trigger = plan
+        .triggers
+        .values()
+        .find(|t| t.parameter_id == Some(created["age"].id))
+        .expect("the trigger points at the created parameter");
+    assert_eq!(trigger.kind, "Age");
+    crate::compile::compile(&plan).expect("the edited plan compiles");
+}
+
+#[test]
+fn an_expression_naming_a_parameter_nothing_creates_is_refused() {
+    let found = problems(json!([
+        {"op": "add", "target": {"new_event": "spend"}, "path": "", "value": {
+            "name": "Spend", "fires_once": true, "trigger": {"kind": "Manual"},
+            "effects": [{"kind": "Expense", "from_account_id": 6,
+                         "amount": {"kind": "Expression", "source": "$nope"}}]}},
+    ]));
+    assert!(
+        matches!(&found[..], [ChangeProblem::InvalidBody { message, .. }] if message.contains("nope")),
+        "{found:?}"
+    );
+
+    // The same expression is fine once the batch creates it, and a reference
+    // to a parameter key nothing creates names nothing.
+    resolved(json!([
+        {"op": "add", "target": {"new_event": "spend"}, "path": "", "value": {
+            "name": "Spend", "fires_once": true, "trigger": {"kind": "Manual"},
+            "effects": [{"kind": "Expense", "from_account_id": 6,
+                         "amount": {"kind": "Expression", "source": "$nope"}}]}},
+        {"op": "add", "target": {"new_parameter": "p"}, "path": "", "value": {
+            "name": "nope", "value": {"kind": "Money", "value": 1.0}}},
+    ]));
+    let found = problems(json!([
+        {"op": "add", "target": {"new_event": "when"}, "path": "", "value": {
+            "name": "When", "trigger": {"kind": "DateParameter", "parameter_id": {"$new": "ghost"}}}},
+    ]));
+    assert!(matches!(&found[..], [ChangeProblem::UnknownReference { key, .. }] if key == "ghost"));
+}
+
+#[test]
+fn a_parameter_reference_must_name_a_parameter() {
+    let found = problems(json!([
+        {"op": "add", "target": {"new_asset": "a"}, "path": "", "value": {
+            "name": "A", "initial_price": 1.0, "return_profile_id": 1}},
+        {"op": "add", "target": {"new_event": "when"}, "path": "", "value": {
+            "name": "When", "trigger": {"kind": "DateParameter", "parameter_id": {"$new": "a"}}}},
+    ]));
+    assert!(
+        matches!(
+            &found[..],
+            [ChangeProblem::WrongReferenceKind {
+                expected: Some(RefKind::Parameter),
+                found: RefKind::Asset,
+                ..
+            }]
+        ),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_created_parameter_is_edited_and_removed_by_its_key_in_later_steps() {
+    let steps = vec![
+        changes(
+            json!([{"op": "add", "target": {"new_parameter": "p"}, "path": "", "value": {
+            "name": "floor", "value": {"kind": "Money", "value": 1000.0}}}]),
+        ),
+        changes(json!([
+            {"op": "replace", "target": {"new_parameter": "p"}, "path": "/value/value",
+             "expect": 1000.0, "value": 2500.0},
+            {"op": "replace", "target": {"new_parameter": "p"}, "path": "/name", "value": "reserve"},
+        ])),
+    ];
+    let stepped = resolve_steps(&graph(), &steps, &Created::new())
+        .unwrap()
+        .unwrap();
+    let row = &stepped.graph.parameters[0];
+    assert_eq!(
+        (row.name.as_str(), row.number_value),
+        ("reserve", Some(2500.0))
+    );
+    let diff = stepped.steps[1].diff([]);
+    assert!(
+        diff.iter()
+            .any(|l| l.label == "Parameters › $floor › name" && l.to.as_deref() == Some("reserve")),
+        "{diff:?}"
+    );
+    assert!(
+        diff.iter().any(|l| l.label == "Parameters › $floor › value"
+            && l.from.as_deref() == Some("$1,000")
+            && l.to.as_deref() == Some("$2,500")),
+        "{diff:?}"
+    );
+
+    // Removed by its id once it exists; an unused parameter can go.
+    let id = stepped.created["p"].id;
+    let gone = resolve_steps(
+        &stepped.graph,
+        &[changes(
+            json!([{"op": "remove", "target": {"parameter": id}, "path": ""}]),
+        )],
+        &Created::new(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(gone.graph.parameters.is_empty());
+    let diff = gone.steps[0].diff([]);
+    assert_eq!(diff[0].label, "Parameters › $reserve");
+    assert_eq!(diff[0].from.as_deref(), Some("$2,500"));
+    assert_eq!(diff[0].to, None);
+}
+
+#[test]
+fn a_parameter_a_schedule_uses_cannot_change_type_or_go() {
+    let plan = resolve_steps(&graph(), &[changes(retirement_batch())], &Created::new())
+        .unwrap()
+        .unwrap();
+    let age = plan.created["age"].id;
+    let floor = plan.created["floor"].id;
+    for batch in [
+        // A new kind of value while the schedule reads it as an age.
+        json!([{"op": "replace", "target": {"parameter": age}, "path": "/value",
+                "value": {"kind": "Money", "value": 1.0}}]),
+        json!([{"op": "remove", "target": {"parameter": age}, "path": ""}]),
+        json!([{"op": "remove", "target": {"parameter": floor}, "path": ""}]),
+    ] {
+        let failed = resolve_steps(&plan.graph, &[changes(batch)], &Created::new())
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(&failed.problems[..], [ChangeProblem::InvalidBody { .. }]),
+            "{failed:?}"
+        );
+    }
+
+    // A rename rewrites the expression that names it.
+    let renamed = resolve_steps(
+        &plan.graph,
+        &[changes(
+            json!([{"op": "replace", "target": {"parameter": floor}, "path": "/name",
+                    "value": "reserve"}]),
+        )],
+        &Created::new(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(renamed.graph.amounts.values().any(|a| {
+        a.expression_source
+            .as_deref()
+            .is_some_and(|s| s.contains("$reserve"))
+    }));
+}
+
+#[test]
+fn scenario_settings_change_but_the_start_date_is_the_servers() {
+    let r = resolved(json!([
+        {"op": "replace", "target": "scenario", "path": "/birth_date",
+         "expect": "1996-01-01", "value": "1990-05-05"},
+        {"op": "replace", "target": "scenario", "path": "/duration_years",
+         "expect": 70, "value": 45},
+    ]));
+    match r.changes.as_slice() {
+        [ResolvedChange::UpdateScenario { body }] => {
+            assert_eq!(body.birth_date.as_deref(), Some("1990-05-05"));
+            assert_eq!(body.duration_years, Some(45));
+            assert!(body.start_date.is_none() && body.name.is_none());
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let diff = r.diff(&Names::from_graph(&graph()));
+    assert_eq!(
+        diff,
+        vec![
+            DiffLine {
+                label: "Scenario › birth date".into(),
+                from: Some("1996-01-01".into()),
+                to: Some("1990-05-05".into()),
+            },
+            DiffLine {
+                label: "Scenario › duration (years)".into(),
+                from: Some("70".into()),
+                to: Some("45".into()),
+            },
+        ]
+    );
+    let mut plan = graph();
+    apply_to_graph(&mut plan, &r, &mut Created::new())
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.scenario.birth_date.as_deref(), Some("1990-05-05"));
+    assert_eq!(plan.scenario.duration_years, 45);
+    assert_eq!(plan.scenario.start_date, graph().scenario.start_date);
+
+    for (path, value) in [
+        ("/start_date", json!("2030-01-01")),
+        ("/name", json!("Other")),
+    ] {
+        let found = problems(json!([{"op": "replace", "target": "scenario", "path": path,
+                                     "value": value}]));
+        assert!(
+            matches!(&found[..], [ChangeProblem::BadPath { .. }]),
+            "{found:?}"
+        );
+    }
+    // Replacing the whole body may not slip either past.
+    let mut body = read::scenario(&graph());
+    body["start_date"] = json!("2030-01-01");
+    let found = problems(json!([{"op": "replace", "target": "scenario", "path": "",
+                                 "value": body}]));
+    assert!(
+        matches!(&found[..], [ChangeProblem::InvalidBody { message, .. }]
+        if message.contains("start_date"))
+    );
+    let found = problems(json!([{"op": "remove", "target": "scenario", "path": ""}]));
+    assert!(matches!(&found[..], [ChangeProblem::InvalidBody { .. }]));
+    // A birth date must be a date.
+    let mut plan = graph();
+    let bad = resolved(
+        json!([{"op": "replace", "target": "scenario", "path": "/birth_date",
+                               "value": "next tuesday"}]),
+    );
+    assert!(matches!(
+        apply_to_graph(&mut plan, &bad, &mut Created::new()).unwrap(),
+        Err(ChangeProblem::InvalidBody { .. })
+    ));
+}
+
+#[test]
+fn a_scenario_switches_onto_a_tax_config_the_batch_creates() {
+    let batch = json!([
+        {"op": "replace", "target": "scenario", "path": "/tax_config_id",
+         "expect": 1, "value": {"$new": "single-co"}},
+        {"op": "add", "target": {"new_tax_config": "single-co"}, "path": "", "value": {
+            "name": "Single, Colorado", "state_rate": 0.044, "capital_gains_rate": 0.15,
+            "early_withdrawal_penalty_rate": 0.1,
+            "federal_brackets": [{"threshold": 0.0, "rate": 0.1}, {"threshold": 11000.0, "rate": 0.12}]}},
+    ]);
+    let r = resolved(batch.clone());
+    // The library row is written first, whatever order the batch names them.
+    assert!(matches!(
+        r.changes.as_slice(),
+        [
+            ResolvedChange::UpdateScenario { .. },
+            ResolvedChange::CreateTaxConfig { .. }
+        ]
+    ));
+    let diff = r.diff(&Names::from_graph(&graph()));
+    assert!(
+        diff.iter()
+            .any(|l| l.label == "Assumptions › + Single, Colorado"
+                && l.to.as_deref() == Some("state 4.4% · capital gains 15% · 2 brackets")),
+        "{diff:?}"
+    );
+    assert!(
+        diff.iter().any(|l| l.label == "Scenario › tax config"
+            && l.from.as_deref() == Some("US Federal 2024 (single)")
+            && l.to.as_deref() == Some("Single, Colorado")),
+        "{diff:?}"
+    );
+    let mut plan = graph();
+    let mut created = Created::new();
+    apply_to_graph(&mut plan, &r, &mut created)
+        .unwrap()
+        .unwrap();
+    assert_eq!(created["single-co"].kind, RefKind::TaxConfig);
+    assert_eq!(plan.scenario.tax_config_id, Some(created["single-co"].id));
+    assert_eq!(plan.tax_config.as_ref().unwrap().state_rate, 0.044);
+    assert_eq!(plan.tax_brackets.len(), 2);
+    crate::compile::compile(&plan).expect("the edited plan compiles");
+
+    // A bracket table the engine could not walk is a problem with the batch.
+    let mut bad = batch.clone();
+    bad[1]["value"]["federal_brackets"] = json!([{"threshold": 500.0, "rate": 0.1}]);
+    let found = problems(bad);
+    assert!(
+        matches!(&found[..], [ChangeProblem::InvalidBody { .. }]),
+        "{found:?}"
+    );
+    let mut bad = batch;
+    bad[1]["value"]["state_rate"] = json!(4.4);
+    assert!(matches!(
+        &problems(bad)[..],
+        [ChangeProblem::InvalidBody { .. }]
+    ));
+}
+
+#[test]
+fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
+    let batch = changes(json!([
+        {"op": "replace", "target": "scenario", "path": "/tax_config_id", "value": 9},
+        {"op": "replace", "target": "scenario", "path": "/inflation_profile_id", "value": 8},
+    ]));
+    assert_eq!(assumptions_named(&batch), (vec![9], vec![8]));
+
+    // A snapshot's graph has no library: the edit says so.
+    let mut plan = graph();
+    let r = resolve(&plan, &batch).unwrap();
+    assert!(matches!(
+        apply_to_graph(&mut plan, &r, &mut Created::new()).unwrap(),
+        Err(ChangeProblem::InvalidBody { .. })
+    ));
+    assert_eq!(plan.scenario.tax_config_id, Some(1), "nothing changed");
+
+    plan.tax_configs.insert(
+        9,
+        crate::compile::rows::TaxConfigEntry {
+            config: crate::compile::rows::TaxConfigRow {
+                id: 9,
+                name: "Flat".into(),
+                state_rate: 0.0,
+                capital_gains_rate: 0.2,
+                early_withdrawal_penalty_rate: 0.1,
+            },
+            brackets: vec![crate::compile::rows::TaxBracketRow {
+                threshold: 0.0,
+                rate: 0.2,
+            }],
+        },
+    );
+    plan.inflation_profiles.insert(
+        8,
+        crate::compile::rows::InflationEntry {
+            name: "Three percent".into(),
+            distribution_id: plan.inflation_distribution_id.unwrap(),
+        },
+    );
+    let r = resolve(&plan, &batch).unwrap();
+    let diff = r.diff(&Names::from_graph(&plan));
+    assert!(
+        diff.iter()
+            .any(|l| l.label == "Scenario › inflation profile"
+                && l.from.as_deref() == Some("US Historical (stochastic)")
+                && l.to.as_deref() == Some("Three percent")),
+        "{diff:?}"
+    );
+    apply_to_graph(&mut plan, &r, &mut Created::new())
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.scenario.tax_config_id, Some(9));
+    assert_eq!(plan.tax_config.as_ref().unwrap().name, "Flat");
+    assert_eq!(
+        plan.inflation_profile_name.as_deref(),
+        Some("Three percent")
+    );
+    crate::compile::compile(&plan).expect("the edited plan compiles");
+}
+
+#[test]
+fn an_asset_maps_onto_a_return_profile_the_batch_creates() {
+    let batch = json!([
+        {"op": "add", "target": {"new_asset": "vti"}, "path": "", "value": {
+            "name": "VTI", "initial_price": 250.0, "return_profile_id": {"$new": "us-broad"}}},
+        {"op": "add", "target": {"new_return_profile": "us-broad"}, "path": "", "value": {
+            "name": "US broad market", "asset_class": "UsEquity",
+            "distribution": {"kind": "Bootstrap", "preset": "sp500", "block_size": null}}},
+        {"op": "replace", "target": {"account": 6}, "path": "/return_profile_id",
+         "expect": 6, "value": {"$new": "us-broad"}},
+    ]);
+    let r = resolved(batch.clone());
+    assert!(
+        matches!(
+            r.changes.as_slice(),
+            [
+                ResolvedChange::CreateReturnProfile { .. },
+                ResolvedChange::CreateAsset { .. },
+                ResolvedChange::UpdateAccount { .. }
+            ]
+        ) || matches!(
+            r.changes.as_slice(),
+            [
+                ResolvedChange::CreateAsset { .. },
+                ResolvedChange::CreateReturnProfile { .. },
+                ResolvedChange::UpdateAccount { .. }
+            ]
+        )
+    );
+    let diff = r.diff(&Names::from_graph(&graph()));
+    let line = |label: &str| {
+        diff.iter()
+            .find(|l| l.label == label)
+            .unwrap_or_else(|| panic!("no {label} in {diff:?}"))
+    };
+    assert_eq!(
+        line("Assumptions › + US broad market").to.as_deref(),
+        Some("history: sp500")
+    );
+    assert_eq!(
+        line("Portfolio › + VTI").to.as_deref(),
+        Some("$250.00 · US broad market")
+    );
+
+    let mut plan = graph();
+    let mut created = Created::new();
+    apply_to_graph(&mut plan, &r, &mut created)
+        .unwrap()
+        .unwrap();
+    let profile = created["us-broad"];
+    assert_eq!(profile.kind, RefKind::ReturnProfile);
+    assert_eq!(plan.return_profiles[&profile.id].name, "US broad market");
+    let vti = plan.assets.iter().find(|a| a.name == "VTI").unwrap();
+    assert_eq!(vti.return_profile_id, Some(profile.id));
+    assert_eq!(plan.bank[&6].return_profile_id, profile.id);
+    crate::compile::compile(&plan).expect("the edited plan compiles");
+
+    // Nothing later can edit a library row, and a preset that does not exist
+    // is a problem with the batch.
+    let found = resolve_with(
+        &plan,
+        &changes(
+            json!([{"op": "replace", "target": {"new_return_profile": "us-broad"},
+                          "path": "/name", "value": "x"}]),
+        ),
+        &created,
+    )
+    .unwrap_err();
+    assert!(matches!(&found[..], [ChangeProblem::UnknownTarget { .. }]));
+    let mut bad = batch;
+    bad[1]["value"]["distribution"]["preset"] = json!("nonsense");
+    let found = problems(bad);
+    assert!(
+        matches!(&found[..], [ChangeProblem::InvalidBody { message, .. }]
+        if message.contains("preset")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn assets_and_accounts_can_be_deleted_once_nothing_uses_them() {
+    // What a step created can go in the next.
+    let steps = vec![
+        changes(json!([
+            {"op": "add", "target": {"new_asset": "x"}, "path": "", "value": {
+                "name": "X", "initial_price": 10.0, "return_profile_id": 1}},
+            {"op": "add", "target": {"new_account": "b"}, "path": "", "value": {
+                "name": "Spare", "flavor": "Bank", "cash_value": 0.0, "return_profile_id": 6}},
+        ])),
+        changes(json!([
+            {"op": "remove", "target": {"new_asset": "x"}, "path": ""},
+            {"op": "remove", "target": {"new_account": "b"}, "path": ""},
+        ])),
+    ];
+    let stepped = resolve_steps(&graph(), &steps, &Created::new())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&stepped.graph.assets).unwrap(),
+        serde_json::to_value(&graph().assets).unwrap()
+    );
+    assert_eq!(stepped.graph.accounts.len(), graph().accounts.len());
+    assert!(!stepped.graph.bank.contains_key(&stepped.created["b"].id));
+    let diff = stepped.steps[1].diff([]);
+    assert!(
+        diff.iter()
+            .any(|l| l.label == "Portfolio › X" && l.to.is_none()),
+        "{diff:?}"
+    );
+
+    // What plan still points at is refused, and says what.
+    for (target, needle) in [
+        (json!({"account": 6}), "event"),
+        (json!({"asset": 1}), "account"),
+        (json!({"asset": 2}), "House"),
+    ] {
+        let failed = resolve_steps(
+            &graph(),
+            &[changes(
+                json!([{"op": "remove", "target": target, "path": ""}]),
+            )],
+            &Created::new(),
+        )
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            matches!(&failed.problems[..], [ChangeProblem::InvalidBody { message, .. }]
+                if message.contains(needle)),
+            "{target}: {failed:?}"
+        );
+    }
+}
+
+#[test]
+fn the_new_targets_round_trip_as_json() {
+    let batch = json!([
+        {"op": "replace", "target": "scenario", "path": "/duration_years", "value": 40},
+        {"op": "remove", "target": {"parameter": 3}, "path": ""},
+        {"op": "add", "target": {"new_parameter": "p"}, "path": "", "value": {"name": "p"}},
+        {"op": "add", "target": {"new_return_profile": "r"}, "path": "", "value": {"name": "r"}},
+        {"op": "add", "target": {"new_tax_config": "t"}, "path": "", "value": {"name": "t"}},
+    ]);
+    let parsed = changes(batch.clone());
+    assert_eq!(parsed[0].target, ChangeTarget::Scenario);
+    assert_eq!(parsed[1].target, ChangeTarget::Parameter(3));
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), batch);
+}

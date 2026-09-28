@@ -800,10 +800,13 @@ function article(kind: string): string {
 
 /** Keyed loosely: a target kind this build does not know yet reads as its own name. */
 function targetNoun(target: ChangeTarget | Record<string, unknown>): string {
+  // The plan's own settings are a bare string, not a one-key object.
+  if (typeof target === "string") return target === "scenario" ? "plan setting" : String(target).replace(/_/g, " ");
   const kind = Object.keys(target)[0] ?? "";
   if (kind === "event" || kind === "new_event") return "event";
   if (kind === "asset" || kind === "new_asset") return "asset";
   if (kind === "account" || kind === "new_account") return "account";
+  if (kind === "parameter" || kind === "new_parameter") return "parameter";
   return kind.replace(/^new_/, "").replace(/_/g, " ") || "item";
 }
 

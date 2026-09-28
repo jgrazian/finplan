@@ -190,6 +190,8 @@ pub(crate) async fn walk(
 ) -> ApiResult<Result<Walked, StepFailure>> {
     let named = suggest::profiles_named(steps.iter().flat_map(|s| s.changes.iter()));
     preview::load_profiles(db, user_id, &mut graph, named.into_iter().collect()).await?;
+    let (tax, inflation) = suggest::assumptions_named(steps.iter().flat_map(|s| s.changes.iter()));
+    preview::load_assumptions(db, user_id, &mut graph, tax, inflation).await?;
     let batches: Vec<Vec<Change>> = steps.iter().map(|s| s.changes.to_vec()).collect();
     let stepped = match suggest::resolve_steps(&graph, &batches, seeded)? {
         Ok(stepped) => stepped,

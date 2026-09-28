@@ -9,6 +9,7 @@ fn config() -> ServerConfig {
     ServerConfig {
         mail: Default::default(),
         review_ai: Default::default(),
+        draft: Default::default(),
         log_format: Default::default(),
         metrics_bind: None,
         hosted: true,
@@ -477,4 +478,235 @@ async fn beta_direct_requests_cannot_bypass_compute_limits() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+}
+
+// ── AI drafts on a hosted, Free account ─────────────────────────────────────
+
+mod drafts {
+    use super::*;
+    use finplan_server::suggest::ai::{
+        AiClient, BoxFuture, DEFAULT_MODEL, Reply, Request as ModelRequest, Settings, Transport,
+        TransportError,
+    };
+    use std::sync::Arc;
+
+    /// A model that is never asked: the draft lifecycle does not call it.
+    struct Idle;
+    impl Transport for Idle {
+        fn send<'a>(&'a self, _: &'a ModelRequest) -> BoxFuture<'a, Result<Reply, TransportError>> {
+            Box::pin(async { Err(TransportError::Network("unused".into())) })
+        }
+    }
+
+    async fn fixture() -> (axum::Router, finplan_server::state::AppState, String) {
+        let settings = Settings {
+            model: DEFAULT_MODEL.into(),
+            max_turns: 2,
+            max_suggestions: 1,
+            max_previews: 1,
+            max_tokens: 1_024,
+            thinking: false,
+            effort: "high",
+            max_retries: 0,
+            retry_base: std::time::Duration::from_millis(1),
+            retry_cap: std::time::Duration::from_millis(1),
+            materiality: Default::default(),
+        };
+        let client = Arc::new(AiClient::new(settings, Arc::new(Idle), None));
+        let (router, state) = finplan_server::build_with(config(), Some(client))
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO users(id,email,password_hash) VALUES ('owner','owner@example.com','unused')")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let token = finplan_server::auth::session::issue(&state.db, "owner", None)
+            .await
+            .unwrap();
+        (router, state, format!("finplan_session={token}"))
+    }
+
+    async fn used(state: &finplan_server::state::AppState) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COALESCE(SUM(used),0) FROM monthly_ai_drafts WHERE user_id='owner'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap()
+    }
+
+    async fn draft_ids(state: &finplan_server::state::AppState) -> Vec<i64> {
+        sqlx::query_scalar("SELECT id FROM scenarios WHERE user_id='owner' AND status='draft'")
+            .fetch_all(&state.db)
+            .await
+            .unwrap()
+    }
+
+    fn post(path: &str) -> (&str, &str, serde_json::Value) {
+        ("POST", path, serde_json::json!({}))
+    }
+
+    async fn call(
+        router: &axum::Router,
+        cookie: &str,
+        (method, path, body): (&str, &str, serde_json::Value),
+    ) -> StatusCode {
+        send(router.clone(), cookie, method, path, body).await
+    }
+
+    #[tokio::test]
+    async fn a_free_user_with_a_plan_is_refused_before_a_draft_is_spent() {
+        let (router, state, cookie) = fixture().await;
+        let plan = serde_json::json!({"name":"Mine","start_date":"2026-01-01"});
+        assert_eq!(
+            send(router.clone(), &cookie, "POST", "/api/scenarios", plan).await,
+            StatusCode::CREATED
+        );
+        assert_eq!(
+            call(&router, &cookie, post("/api/drafts")).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(used(&state).await, 0, "nothing was spent");
+        assert!(draft_ids(&state).await.is_empty());
+        // The web is told a draft cannot be started, and why not by a number.
+        let e = finplan_server::billing::entitlements_for(&state, "owner")
+            .await
+            .unwrap();
+        let ai = e.ai_drafts.unwrap();
+        assert!(!ai.enabled);
+        assert_eq!((ai.remaining, ai.max_files, ai.max_pages), (2, 10, 60));
+    }
+
+    #[tokio::test]
+    async fn a_draft_spends_the_monthly_allowance_and_never_takes_the_plan_slot() {
+        let (router, state, cookie) = fixture().await;
+        assert_eq!(
+            call(&router, &cookie, post("/api/drafts")).await,
+            StatusCode::CREATED
+        );
+        let first = draft_ids(&state).await;
+        assert_eq!(first.len(), 1);
+        // A draft is no saved plan: the one Free plan can still be made, and
+        // the draft can be edited without being the "editable plan".
+        assert_eq!(
+            send(
+                router.clone(),
+                &cookie,
+                "PATCH",
+                &format!("/api/scenarios/{}", first[0]),
+                serde_json::json!({"birth_date": "1990-01-01"})
+            )
+            .await,
+            StatusCode::OK
+        );
+        let plan = serde_json::json!({"name":"Mine","start_date":"2026-01-01"});
+        assert_eq!(
+            send(router.clone(), &cookie, "POST", "/api/scenarios", plan).await,
+            StatusCode::CREATED
+        );
+        let e = finplan_server::billing::entitlements_for(&state, "owner")
+            .await
+            .unwrap();
+        assert!(e.editable_scenario_id.is_some_and(|id| id != first[0]));
+
+        // With the slot taken, the draft cannot become a plan, and stays one.
+        assert_eq!(
+            call(
+                &router,
+                &cookie,
+                (
+                    "POST",
+                    &format!("/api/drafts/{}/create", first[0]),
+                    serde_json::json!({})
+                )
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(draft_ids(&state).await, first);
+
+        // Free her plan's slot; the draft may be created, and starting again
+        // is refused once the two allowed drafts are spent.
+        sqlx::query("DELETE FROM scenarios WHERE user_id='owner' AND status='active'")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(
+            call(&router, &cookie, post("/api/drafts")).await,
+            StatusCode::CREATED
+        );
+        assert_eq!(used(&state).await, 2);
+        assert_eq!(
+            call(&router, &cookie, post("/api/drafts")).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(used(&state).await, 2, "a refusal spends nothing");
+        // The refused start left the draft it would have replaced alone.
+        assert_eq!(draft_ids(&state).await.len(), 1);
+        let e = finplan_server::billing::entitlements_for(&state, "owner")
+            .await
+            .unwrap();
+        let ai = e.ai_drafts.unwrap();
+        assert_eq!((ai.enabled, ai.remaining), (false, 0));
+    }
+
+    #[tokio::test]
+    async fn concurrent_starts_leave_one_draft_and_spend_what_they_started() {
+        let (router, state, cookie) = fixture().await;
+        let (a, b) = tokio::join!(
+            call(&router, &cookie, post("/api/drafts")),
+            call(&router, &cookie, post("/api/drafts"))
+        );
+        // Whichever start finished second replaced the other's draft; the
+        // first may find its draft already gone.
+        assert!([a, b].contains(&StatusCode::CREATED), "{a} {b}");
+        assert!(
+            [a, b]
+                .iter()
+                .all(|s| [StatusCode::CREATED, StatusCode::CONFLICT].contains(s))
+        );
+        assert_eq!(draft_ids(&state).await.len(), 1);
+        assert_eq!(used(&state).await, 2);
+    }
+
+    #[tokio::test]
+    async fn the_sweeper_deletes_only_stale_drafts() {
+        let (router, state, cookie) = fixture().await;
+        assert_eq!(
+            call(&router, &cookie, post("/api/drafts")).await,
+            StatusCode::CREATED
+        );
+        let draft = draft_ids(&state).await[0];
+        let plan: i64 = sqlx::query_scalar(
+            "INSERT INTO scenarios(user_id,name,start_date,updated_at)
+             VALUES ('owner','Old plan','2026-01-01','2000-01-01 00:00:00') RETURNING id",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+        // Fresh: kept. An old plan is never a draft, so it is kept too.
+        assert_eq!(
+            finplan_server::api::drafts::sweep_stale(&state.db, 24)
+                .await
+                .unwrap(),
+            0
+        );
+        sqlx::query("UPDATE scenarios SET updated_at = datetime('now', '-25 hours') WHERE id = ?")
+            .bind(draft)
+            .execute(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(
+            finplan_server::api::drafts::sweep_stale(&state.db, 24)
+                .await
+                .unwrap(),
+            1
+        );
+        assert!(draft_ids(&state).await.is_empty());
+        let plans: Vec<i64> = sqlx::query_scalar("SELECT id FROM scenarios WHERE user_id='owner'")
+            .fetch_all(&state.db)
+            .await
+            .unwrap();
+        assert_eq!(plans, vec![plan]);
+    }
 }

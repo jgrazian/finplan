@@ -75,6 +75,11 @@ pub(super) fn edits(changes: &[Change]) -> BTreeSet<String> {
                 ChangeTarget::NewEvent(_) => "new_event".to_owned(),
                 ChangeTarget::NewAsset(_) => "new_asset".to_owned(),
                 ChangeTarget::NewAccount(_) => "new_account".to_owned(),
+                ChangeTarget::Parameter(id) => format!("parameter:{id}"),
+                ChangeTarget::NewParameter(_) => "new_parameter".to_owned(),
+                ChangeTarget::Scenario => "scenario".to_owned(),
+                ChangeTarget::NewReturnProfile(_) => "new_return_profile".to_owned(),
+                ChangeTarget::NewTaxConfig(_) => "new_tax_config".to_owned(),
             };
             format!("{target}{}", c.path)
         })

@@ -68,6 +68,33 @@ impl ObservabilityRuntime {
             }
             .with_current_subscriber(),
         );
+        // Drafts abandoned by a closed tab or a crash (api::drafts): swept on
+        // start, then every ten minutes.
+        let db = state.db.clone();
+        let ttl_hours = state.config.draft.ttl_hours;
+        let mut shutdown = receive.clone();
+        tasks.spawn(
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(600));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        _ = interval.tick() => {
+                            tokio::select! {
+                                _ = shutdown.changed() => return Ok(()),
+                                swept = crate::api::drafts::sweep_stale(&db, ttl_hours) => {
+                                    if swept.is_err() {
+                                        tracing::warn!(event = "draft.sweep_failed");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .with_current_subscriber(),
+        );
         let db = state.db.clone();
         let telemetry = state.telemetry.clone();
         let mut shutdown = receive;
@@ -190,6 +217,7 @@ mod tests {
         ServerConfig {
             mail: Default::default(),
             review_ai: Default::default(),
+            draft: Default::default(),
             log_format: Default::default(),
             metrics_bind,
             hosted: false,

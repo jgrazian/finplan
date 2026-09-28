@@ -22,6 +22,8 @@ pub struct Names {
     events: HashMap<i64, String>,
     profiles: HashMap<i64, String>,
     parameters: HashMap<i64, String>,
+    tax_configs: HashMap<i64, String>,
+    inflation_profiles: HashMap<i64, String>,
 }
 
 impl Names {
@@ -52,7 +54,44 @@ impl Names {
                 .iter()
                 .map(|p| (p.id, p.name.clone()))
                 .collect(),
+            // The scenario's own, then the rest of the library where the
+            // graph carries it.
+            tax_configs: graph
+                .tax_config
+                .iter()
+                .map(|c| (c.id, c.name.clone()))
+                .chain(
+                    graph
+                        .tax_configs
+                        .values()
+                        .map(|c| (c.config.id, c.config.name.clone())),
+                )
+                .collect(),
+            inflation_profiles: graph
+                .scenario
+                .inflation_profile_id
+                .zip(graph.inflation_profile_name.clone())
+                .into_iter()
+                .chain(
+                    graph
+                        .inflation_profiles
+                        .iter()
+                        .map(|(id, p)| (*id, p.name.clone())),
+                )
+                .collect(),
         }
+    }
+
+    /// Add tax config and inflation profile names the graph lacks — a run
+    /// snapshot keeps only the scenario's own.
+    pub fn with_assumptions(
+        mut self,
+        tax_configs: impl IntoIterator<Item = (i64, String)>,
+        inflation_profiles: impl IntoIterator<Item = (i64, String)>,
+    ) -> Self {
+        self.tax_configs.extend(tax_configs);
+        self.inflation_profiles.extend(inflation_profiles);
+        self
     }
 
     /// Add return profile names the graph lacks — a run snapshot keeps only
@@ -85,6 +124,12 @@ pub(super) fn lines(delta: &Delta, names: &Names) -> Vec<DiffLine> {
             .map(str::to_string)
     };
     let (section, fallback) = match &delta.target {
+        ChangeTarget::Parameter(id) => ("Parameters", names.parameters.get(id).cloned()),
+        ChangeTarget::NewParameter(key) => ("Parameters", Some(key.clone())),
+        ChangeTarget::Scenario => ("Scenario", None),
+        ChangeTarget::NewReturnProfile(key) | ChangeTarget::NewTaxConfig(key) => {
+            ("Assumptions", Some(key.clone()))
+        }
         ChangeTarget::Event(id) => ("Plan", names.events.get(id).cloned()),
         ChangeTarget::NewEvent(key) => ("Plan", Some(key.clone())),
         ChangeTarget::Asset(id) => ("Portfolio", names.assets.get(id).cloned()),
@@ -97,15 +142,32 @@ pub(super) fn lines(delta: &Delta, names: &Names) -> Vec<DiffLine> {
         .or_else(|| name_of(&delta.after))
         .or(fallback)
         .unwrap_or_default();
-    // A resource the batch brings into being reads as an addition.
-    let root = if delta.before.is_none() && delta.after.is_some() {
+    // Parameters read as they are written in an expression.
+    let name = match &delta.target {
+        ChangeTarget::Parameter(_) | ChangeTarget::NewParameter(_) => format!("${name}"),
+        _ => name,
+    };
+    // A resource the batch brings into being reads as an addition; the
+    // scenario's settings are the plan itself, so they need no name.
+    let root = if delta.target == ChangeTarget::Scenario {
+        section.to_string()
+    } else if delta.before.is_none() && delta.after.is_some() {
         format!("{section} › + {name}")
     } else {
         format!("{section} › {name}")
     };
 
+    // A parameter's value is a tagged object; show it as one figure.
+    let flatten = |v: &Option<Value>| match (&delta.target, v) {
+        (ChangeTarget::Parameter(_) | ChangeTarget::NewParameter(_), Some(v)) => {
+            Some(flatten_parameter(v))
+        }
+        _ => v.clone(),
+    };
+    let (before, after) = (flatten(&delta.before), flatten(&delta.after));
+
     let mut out = Vec::new();
-    match (&delta.before, &delta.after) {
+    match (&before, &after) {
         (Some(before), Some(after)) => walk(before, after, &root, "", names, &mut out),
         (before, after) => out.push(DiffLine {
             label: root,
@@ -114,6 +176,77 @@ pub(super) fn lines(delta: &Delta, names: &Names) -> Vec<DiffLine> {
         }),
     }
     out
+}
+
+/// A parameter body with its tagged `value` rendered as the one figure it is:
+/// `$10,000`, `4%`, `2031-06-01`, `67 years`.
+fn flatten_parameter(body: &Value) -> Value {
+    let mut body = body.clone();
+    if let Some(object) = body.as_object_mut()
+        && let Some(value) = object.get("value")
+    {
+        let text = match value.get("kind").and_then(Value::as_str) {
+            Some("Money") => money(field(value, "value").as_f64().unwrap_or_default()),
+            Some("Rate") => percent(field(value, "value").as_f64().unwrap_or_default()),
+            Some("Date") => field(value, "value")
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            Some("Age") => {
+                let years = field(value, "years").as_i64().unwrap_or_default();
+                match field(value, "months").as_i64().unwrap_or_default() {
+                    0 => format!("{years} years"),
+                    months => format!("{years} years {months} months"),
+                }
+            }
+            _ => value.to_string(),
+        };
+        object.insert("value".into(), Value::String(text));
+    }
+    body
+}
+
+/// A new return profile's distribution, in a line: `Bootstrap sp500`,
+/// `Normal 7% ± 15%`.
+fn distribution(value: &Value) -> String {
+    let number = |key: &str| field(value, key).as_f64().unwrap_or_default();
+    match value
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "Fixed" => format!("fixed {}", percent(number("rate"))),
+        kind @ ("Normal" | "LogNormal") => format!(
+            "{} {} ± {}",
+            kind.to_lowercase(),
+            percent(number("mean")),
+            percent(number("std_dev"))
+        ),
+        "StudentT" => format!(
+            "Student t {} (scale {})",
+            percent(number("mean")),
+            percent(number("scale"))
+        ),
+        "RegimeSwitching" => "bull/bear regimes".to_string(),
+        "Bootstrap" => format!(
+            "history: {}",
+            field(value, "preset").as_str().unwrap_or_default()
+        ),
+        _ => "no return".to_string(),
+    }
+}
+
+/// A new tax config, in a line: `state 5% · capital gains 15% · 7 brackets`.
+fn new_tax_config(value: &Value) -> String {
+    let rate = |key: &str| percent(field(value, key).as_f64().unwrap_or_default());
+    let brackets = field(value, "federal_brackets")
+        .as_array()
+        .map_or(0, Vec::len);
+    format!(
+        "state {} · capital gains {} · {brackets} brackets",
+        rate("state_rate"),
+        rate("capital_gains_rate")
+    )
 }
 
 /// A whole resource, for a line that creates or deletes one.
@@ -126,6 +259,14 @@ fn summary(target: &ChangeTarget, value: &Value, names: &Names) -> String {
         // A creation's label already names it: describe what it is.
         ChangeTarget::NewAsset(_) => new_asset(value, names),
         ChangeTarget::NewAccount(_) => new_account(value, names),
+        ChangeTarget::NewReturnProfile(_) => distribution(field(value, "distribution")),
+        ChangeTarget::NewTaxConfig(_) => new_tax_config(value),
+        // The body already carries its figure, rendered by `flatten_parameter`.
+        ChangeTarget::Parameter(_) | ChangeTarget::NewParameter(_) => field(value, "value")
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+        ChangeTarget::Scenario => name.to_string(),
         ChangeTarget::Event(_) | ChangeTarget::NewEvent(_) => {
             let effects = value
                 .get("effects")
@@ -404,6 +545,10 @@ fn key_label(key: &str) -> String {
         "cash_value" => "cash",
         "term_months" => "term",
         "exclude_accounts" => "excluded accounts",
+        "tax_config_id" => "tax config",
+        "inflation_profile_id" => "inflation profile",
+        "duration_years" => "duration (years)",
+        "birth_date" => "birth date",
         other => return other.replace('_', " "),
     };
     label.to_string()
@@ -419,6 +564,8 @@ enum Format {
     Event,
     Profile,
     Parameter,
+    TaxConfig,
+    Inflation,
     Plain,
 }
 
@@ -436,6 +583,8 @@ fn format_of(key: &str) -> Format {
         "event_id" | "target_event_id" => Format::Event,
         "return_profile_id" | "cash_return_profile_id" => Format::Profile,
         "parameter_id" => Format::Parameter,
+        "tax_config_id" => Format::TaxConfig,
+        "inflation_profile_id" => Format::Inflation,
         "threshold" | "cash_value" | "principal" | "cost_basis" | "initial_price"
         | "contribution_limit" | "gain_exclusion" => Format::Money,
         "interest_rate" | "drop" | "probability" | "selling_cost_rate" | "tracking_error"
@@ -486,6 +635,8 @@ fn render_scalar(key: &str, value: &Value, names: &Names) -> String {
         Format::Event => Names::name(&names.events, value, "event"),
         Format::Profile => Names::name(&names.profiles, value, "profile"),
         Format::Parameter => Names::name(&names.parameters, value, "parameter"),
+        Format::TaxConfig => Names::name(&names.tax_configs, value, "tax config"),
+        Format::Inflation => Names::name(&names.inflation_profiles, value, "inflation profile"),
         Format::Plain => number(x),
     }
 }

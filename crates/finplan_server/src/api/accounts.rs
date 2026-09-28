@@ -666,24 +666,9 @@ async fn destroy(
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let graph = crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
-    if graph.accounts.iter().any(|a| a.id == id)
-        && super::expression_refs::used_by(&graph, super::expression_refs::Entity::Account(id))?
-    {
-        return Err(ApiError::Conflict(
-            "account is referenced by an amount expression".into(),
-        ));
-    }
-
-    let affected = sqlx::query("DELETE FROM accounts WHERE id = ?1 AND scenario_id = ?2")
-        .bind(id)
-        .bind(scenario_id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("account"));
-    }
+    let mut conn = state.db.acquire().await?;
+    destroy_in(&mut conn, &graph, scenario_id, id).await?;
+    drop(conn);
 
     state.telemetry.mutation(
         Resource::Account,
@@ -697,6 +682,36 @@ async fn destroy(
     );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete an account, as `DELETE /scenarios/{id}/accounts/{account}` does.
+/// `live` is the plan as stored, for the expression check. The suggestion path
+/// writes through this too, inside its transaction.
+pub(crate) async fn destroy_in(
+    conn: &mut sqlx::SqliteConnection,
+    live: &crate::compile::rows::ScenarioGraph,
+    scenario_id: i64,
+    id: i64,
+) -> ApiResult<()> {
+    if live.accounts.iter().any(|a| a.id == id)
+        && super::expression_refs::used_by(live, super::expression_refs::Entity::Account(id))?
+    {
+        return Err(ApiError::Conflict(
+            "account is referenced by an amount expression".into(),
+        ));
+    }
+
+    let affected = sqlx::query("DELETE FROM accounts WHERE id = ?1 AND scenario_id = ?2")
+        .bind(id)
+        .bind(scenario_id)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("account"));
+    }
+    Ok(())
 }
 
 // ── positions ───────────────────────────────────────────────────────────────

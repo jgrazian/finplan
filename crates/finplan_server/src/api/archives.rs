@@ -122,10 +122,12 @@ async fn export_all(
     user: CurrentUser,
 ) -> ApiResult<Json<PlanArchive>> {
     let mut tx = state.db.begin().await?;
-    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM scenarios WHERE user_id=? ORDER BY id")
-        .bind(&user.id)
-        .fetch_all(&mut *tx)
-        .await?;
+    let ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM scenarios WHERE user_id=? AND status='active' ORDER BY id",
+    )
+    .bind(&user.id)
+    .fetch_all(&mut *tx)
+    .await?;
     let mut graphs = Vec::new();
     for id in ids {
         graphs.push(ScenarioGraph::load_connection(&mut tx, id, &user.id).await?);
@@ -496,10 +498,12 @@ async fn import(
         return Ok(Json(result));
     }
     if let Some(limit) = access.saved_plan_limit {
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM scenarios WHERE user_id=?")
-            .bind(&user.id)
-            .fetch_one(&mut *tx)
-            .await?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM scenarios WHERE user_id=? AND status='active'",
+        )
+        .bind(&user.id)
+        .fetch_one(&mut *tx)
+        .await?;
         if count as usize + graphs.len() > limit {
             return Err(ApiError::Forbidden("Free includes one saved plan. Export or read existing plans at any time; importing additional plans requires Pro.".into()));
         }

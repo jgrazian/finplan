@@ -40,6 +40,7 @@ impl TestApp {
         let config = ServerConfig {
             mail: Default::default(),
             review_ai: Default::default(),
+            draft: Default::default(),
             log_format: Default::default(),
             metrics_bind: None,
             bind: "127.0.0.1:0".into(),
@@ -4945,4 +4946,367 @@ async fn a_restart_fails_a_chat_turn_left_running() {
     assert_eq!(thread["status"], "failed", "{thread}");
     assert_eq!(thread["error"], "interrupted by a server restart");
     assert_eq!(roles(&thread), ["user"]);
+}
+
+// ── AI-guided drafts ────────────────────────────────────────────────────────
+
+impl TestApp {
+    async fn start_draft(&self) -> Value {
+        let (status, draft) = self.post("/api/drafts", json!({})).await;
+        assert_eq!(status, StatusCode::CREATED, "{draft}");
+        draft
+    }
+
+    async fn ai_drafts(&self) -> Value {
+        let (status, entitlements) = self.get("/api/billing/entitlements").await;
+        assert_eq!(status, StatusCode::OK);
+        entitlements["ai_drafts"].clone()
+    }
+}
+
+fn today_utc() -> String {
+    jiff::Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+        .to_string()
+}
+
+#[tokio::test]
+async fn drafts_are_offered_only_when_the_server_has_a_review_model() {
+    let mut app = TestApp::new().await;
+    app.login_as("no-drafts@example.com").await;
+    assert_eq!(app.ai_drafts().await, Value::Null);
+    let (status, body) = app.post("/api/drafts", json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn a_draft_is_hidden_replaced_and_deleted_and_spends_a_draft_once() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("drafts@example.com").await;
+    // A self-hosted server is Pro: the Pro limits, all of them reported.
+    assert_eq!(
+        app.ai_drafts().await,
+        json!({"enabled": true, "remaining": 20, "max_files": 25,
+               "max_bytes": 104_857_600u64, "max_pages": 200})
+    );
+
+    let first = app.start_draft().await;
+    let first_id = first["id"].as_i64().unwrap();
+    assert_eq!(first["state"], "ready");
+    assert_eq!(first["scenario"]["status"], "draft");
+    assert_eq!(first["scenario"]["id"], first["id"]);
+    // The start date is the server's: today, not anything the caller said.
+    assert_eq!(first["scenario"]["start_date"], today_utc());
+    assert_eq!(
+        first["counts"],
+        json!({"accounts": 0, "assets": 0, "events": 0, "parameters": 0, "open_suggestions": 0})
+    );
+    assert!(first["expires_at"].as_str().is_some());
+    assert_eq!(app.ai_drafts().await["remaining"], 19);
+
+    // Not a plan yet: out of the list, though it reads like any scenario.
+    let (_, listed) = app.get("/api/scenarios").await;
+    assert_eq!(listed, json!([]));
+    let (status, scenario) = app.get(&format!("/api/scenarios/{first_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(scenario["status"], "draft");
+    let (status, _) = app.get(&format!("/api/drafts/{first_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // A second draft replaces the first and spends another.
+    let second = app.start_draft().await;
+    let second_id = second["id"].as_i64().unwrap();
+    assert_ne!(first_id, second_id);
+    let (status, _) = app.get(&format!("/api/drafts/{first_id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = app.get(&format!("/api/scenarios/{first_id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(app.ai_drafts().await["remaining"], 18);
+
+    // Cancelling deletes it at once, and does not give the draft back.
+    let (status, _) = app.delete(&format!("/api/drafts/{second_id}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = app.get(&format!("/api/drafts/{second_id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = app.delete(&format!("/api/drafts/{second_id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(app.ai_drafts().await["remaining"], 18);
+
+    // A plan is not a draft: the draft routes leave it alone.
+    let (plan_id, _, _) = app.seed_scenario().await;
+    for (method, path) in [
+        ("GET", format!("/api/drafts/{plan_id}")),
+        ("DELETE", format!("/api/drafts/{plan_id}")),
+        ("POST", format!("/api/drafts/{plan_id}/create")),
+    ] {
+        let (status, _) = app.send(method, &path, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+    }
+    let (status, _) = app.get(&format!("/api/scenarios/{plan_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_draft_belongs_to_the_user_who_started_it() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("owner-of-draft@example.com").await;
+    let id = app.start_draft().await["id"].as_i64().unwrap();
+    app.login_as("someone-else@example.com").await;
+    for (method, path) in [
+        ("GET", format!("/api/drafts/{id}")),
+        ("DELETE", format!("/api/drafts/{id}")),
+        ("POST", format!("/api/drafts/{id}/create")),
+    ] {
+        let (status, _) = app.send(method, &path, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {path}");
+    }
+}
+
+/// One step that describes a whole plan: settings, a tax config and a return
+/// profile that do not exist yet, a parameter, an account, an asset and an
+/// event that use them.
+fn draft_plan_changes(cash_profile: i64, inflation: i64) -> Value {
+    json!([
+        {"op": "replace", "target": "scenario", "path": "/inflation_profile_id",
+         "value": inflation},
+        {"op": "replace", "target": "scenario", "path": "/birth_date", "value": "1988-04-01"},
+        {"op": "replace", "target": "scenario", "path": "/duration_years", "value": 40},
+        {"op": "replace", "target": "scenario", "path": "/tax_config_id",
+         "value": {"$new": "tax"}},
+        {"op": "add", "target": {"new_tax_config": "tax"}, "path": "", "value": {
+            "name": "Single, Colorado", "state_rate": 0.044,
+            "federal_brackets": [{"threshold": 0.0, "rate": 0.10},
+                                 {"threshold": 11000.0, "rate": 0.12}]}},
+        {"op": "add", "target": {"new_return_profile": "broad"}, "path": "", "value": {
+            "name": "US broad market", "asset_class": "UsEquity",
+            "distribution": {"kind": "Bootstrap", "preset": "sp500"}}},
+        {"op": "add", "target": {"new_asset": "vti"}, "path": "", "value": {
+            "name": "VTI", "initial_price": 250.0, "return_profile_id": {"$new": "broad"}}},
+        {"op": "add", "target": {"new_account": "checking"}, "path": "", "value": {
+            "name": "Checking", "flavor": "Bank", "cash_value": 12000.0,
+            "return_profile_id": cash_profile}},
+        {"op": "add", "target": {"new_account": "brokerage"}, "path": "", "value": {
+            "name": "Brokerage", "flavor": "Investment", "tax_status": "Taxable",
+            "cash_value": 0.0, "cash_return_profile_id": cash_profile,
+            "positions": [{"asset_id": {"$new": "vti"}, "units": 100.0, "cost_basis": 20000.0}]}},
+        {"op": "add", "target": {"new_parameter": "age"}, "path": "", "value": {
+            "name": "retirement_age", "value": {"kind": "Age", "years": 55, "months": 0}}},
+        {"op": "add", "target": {"new_event": "retire"}, "path": "", "value": {
+            "name": "Retirement spending", "fires_once": true,
+            "trigger": {"kind": "AgeParameter", "parameter_id": {"$new": "age"}},
+            "effects": [{"kind": "Expense", "from_account_id": {"$new": "checking"},
+                         "amount": {"kind": "Fixed", "value": 3000.0}}]}},
+    ])
+}
+
+#[tokio::test]
+async fn a_draft_takes_notes_without_a_run_and_becomes_a_plan_when_created() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("draft-flow@example.com").await;
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let cash = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "Savings Account")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let (_, inflation) = app.get("/api/inflation-profiles").await;
+    let inflation = inflation[0]["id"].as_i64().unwrap();
+    let id = app.start_draft().await["id"].as_i64().unwrap();
+
+    // A note with no run to be written against.
+    let (status, note) = app
+        .suggest(
+            id,
+            json!({
+                "run_id": null, "kind": "fix", "section": "plan",
+                "title": "Describe the whole plan",
+                "reasoning": "From the description: age, savings, retirement at 55.",
+                "evidence": [],
+                "paths": [{"key": "a", "label": "Add it", "recommended": true,
+                           "steps": [{"key": "a", "title": "Describe the plan",
+                                      "changes": draft_plan_changes(cash, inflation)}]}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{note}");
+    assert_eq!(note["run_id"], Value::Null);
+    let labels: Vec<String> = note["paths"][0]["steps"][0]["diff"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| l["label"].as_str().unwrap().to_string())
+        .collect();
+    for expected in [
+        "Scenario › birth date",
+        "Scenario › inflation profile",
+        "Scenario › tax config",
+        "Assumptions › + Single, Colorado",
+        "Assumptions › + US broad market",
+        "Portfolio › + VTI",
+        "Portfolio › + Checking",
+        "Parameters › + $retirement_age",
+        "Plan › + Retirement spending",
+    ] {
+        assert!(
+            labels.iter().any(|l| l == expected),
+            "{expected} in {labels:?}"
+        );
+    }
+    let note_id = note["id"].as_i64().unwrap();
+    let (_, status_now) = app.get(&format!("/api/drafts/{id}")).await;
+    assert_eq!(status_now["counts"]["open_suggestions"], 1);
+
+    // Previewing checks the batch and its diff; with no run there is nothing
+    // to simulate against.
+    let (status, preview) = app
+        .post(
+            &format!("/api/suggestions/{note_id}/preview"),
+            json!({"path": "a", "through_step": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["base_run_id"], Value::Null);
+    assert_eq!(preview["problems"], json!([]));
+    assert_eq!(
+        (&preview["base"], &preview["edited"]),
+        (&Value::Null, &Value::Null)
+    );
+    assert!(!preview["diff"].as_array().unwrap().is_empty());
+
+    // A broken batch is reported the same way.
+    let (_, broken) = app
+        .post(
+            &format!("/api/scenarios/{id}/preview"),
+            json!({"changes": [{"op": "replace", "target": "scenario", "path": "/start_date",
+                                "value": "2030-01-01"}]}),
+        )
+        .await;
+    assert_eq!(broken["problems"][0]["kind"], "bad_path");
+
+    // Chat needs a run's results, so it says so rather than failing.
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{note_id}/chat"),
+            json!({"message": "why?"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Applying writes the whole batch through the routes' SQL halves.
+    let (status, applied) = app
+        .post(
+            &format!("/api/suggestions/{note_id}/apply"),
+            json!({"path": "a", "through_step": null, "to": "plan"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let (_, drafted) = app.get(&format!("/api/drafts/{id}")).await;
+    assert_eq!(
+        drafted["counts"],
+        json!({"accounts": 2, "assets": 1, "events": 1, "parameters": 1, "open_suggestions": 0})
+    );
+    let scenario = &drafted["scenario"];
+    assert_eq!(scenario["birth_date"], "1988-04-01");
+    assert_eq!(scenario["duration_years"], 40);
+    assert_eq!(scenario["start_date"], today_utc());
+    let (_, taxes) = app.get("/api/tax-configs").await;
+    let tax = taxes
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Single, Colorado")
+        .expect("the tax config was created");
+    assert_eq!(scenario["tax_config_id"], tax["id"]);
+    assert_eq!(scenario["inflation_profile_id"], inflation);
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let broad = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "US broad market")
+        .expect("the return profile was created");
+    let (_, assets) = app.get(&format!("/api/scenarios/{id}/assets")).await;
+    assert_eq!(assets[0]["return_profile_id"], broad["id"]);
+    let (_, parameters) = app.get(&format!("/api/scenarios/{id}/parameters")).await;
+    assert_eq!(parameters[0]["name"], "retirement_age");
+    assert_eq!(
+        parameters[0]["uses"][0]["event_name"],
+        "Retirement spending"
+    );
+
+    // Create & run: the draft becomes a plan and its run is queued.
+    let (status, created) = app
+        .post(&format!("/api/drafts/{id}/create"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["scenario"]["status"], "active");
+    assert_eq!(created["scenario"]["id"], id);
+    let run_id = created["run"]["id"].as_i64().unwrap();
+    let finished = app.await_run(run_id).await;
+    let (_, run) = app.get(&format!("/api/runs/{run_id}")).await;
+    assert_eq!(finished, "succeeded", "{run}");
+    let (status, _) = app.get(&format!("/api/drafts/{id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, listed) = app.get("/api/scenarios").await;
+    assert_eq!(names(&listed).len(), 1);
+
+    // The rule review works as for any plan, and its notes carry the run; the
+    // draft's own note keeps the null it was written with.
+    let review = app.review(id).await;
+    assert_eq!(review["run_id"], run_id);
+    let (_, all) = app.get(&format!("/api/scenarios/{id}/suggestions")).await;
+    let mine = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == note_id)
+        .unwrap();
+    assert_eq!(mine["run_id"], Value::Null);
+    assert_eq!(mine["status"], "applied");
+}
+
+#[tokio::test]
+async fn a_draft_that_cannot_run_stays_a_draft() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("draft-broken@example.com").await;
+    let id = app.start_draft().await["id"].as_i64().unwrap();
+    // An age trigger needs a birth date the draft does not have yet: the
+    // event is stored, but the plan cannot be compiled to run.
+    let (status, event) = app
+        .post(
+            &format!("/api/scenarios/{id}/events"),
+            json!({"name": "Retire", "trigger": {"kind": "Age", "years": 60}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{event}");
+    let (status, created) = app
+        .post(&format!("/api/drafts/{id}/create"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{created}");
+    let (status, draft) = app.get(&format!("/api/drafts/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{draft}");
+    assert_eq!(draft["scenario"]["status"], "draft");
+    let (_, listed) = app.get("/api/scenarios").await;
+    assert_eq!(listed, json!([]));
+
+    // Once it can run, the same draft is created.
+    let (status, _) = app
+        .patch(
+            &format!("/api/scenarios/{id}"),
+            json!({"birth_date": "1990-01-01"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, created) = app
+        .post(&format!("/api/drafts/{id}/create"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
 }

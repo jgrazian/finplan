@@ -1318,3 +1318,513 @@ async fn a_batch_with_references_writes_the_same_rows_to_sql_and_memory() {
     assert_eq!(stored.investment[&brokerage].cash_value, 750.0);
     assert_eq!(stored.positions[&brokerage][0].asset_id, created["vti"].id);
 }
+
+// ── parameters ──────────────────────────────────────────────────────────────
+
+fn parameter(value: Value) -> crate::api::parameters::ParameterBody {
+    serde_json::from_value(value).expect("parameter body")
+}
+
+impl Plan {
+    async fn create_parameter(
+        &self,
+        body: &crate::api::parameters::ParameterBody,
+    ) -> ApiResult<i64> {
+        let mut conn = self.db.acquire().await?;
+        crate::api::parameters::create_in(&mut conn, self.id, body).await
+    }
+
+    async fn update_parameter(
+        &self,
+        id: i64,
+        body: &crate::api::parameters::ParameterBody,
+    ) -> ApiResult<()> {
+        let live = self.load().await;
+        let mut tx = self.db.begin().await?;
+        crate::api::parameters::update_in(&mut tx, &live, self.id, id, body).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn delete_parameter(&self, id: i64) -> ApiResult<()> {
+        let live = self.load().await;
+        let mut conn = self.db.acquire().await?;
+        crate::api::parameters::destroy_in(&mut conn, &live, self.id, id).await
+    }
+}
+
+#[tokio::test]
+async fn parameter_edits_match_the_route() {
+    let plan = Plan::new().await;
+    // Uses `$Spending` in an expression and RetireAge in its schedule.
+    plan.create(&plan.branching()).await.unwrap();
+    let mut mem = plan.load().await;
+    let ids = &plan.ids;
+
+    let floor = parameter(json!({"name": " Floor ", "value": {"kind": "Money", "value": 5000.0}}));
+    let sql_id = plan.create_parameter(&floor).await.unwrap();
+    let mem_id = create_parameter(&mut mem, &floor).unwrap();
+    assert_eq!(sql_id, mem_id);
+    assert_same(&plan, &mem, "create parameter").await;
+
+    // Renaming rewrites the expression that names it; an unused parameter may
+    // change type freely.
+    let spending = plan.load().await.parameters[0].id;
+    for (id, body) in [
+        (
+            spending,
+            json!({"name": "Living", "value": {"kind": "Money", "value": 65000.0}}),
+        ),
+        (
+            sql_id,
+            json!({"name": "Floor", "value": {"kind": "Rate", "value": 0.04}}),
+        ),
+        (
+            ids.retire_date,
+            json!({"name": "RetireDate", "value": {"kind": "Date", "value": "2052-06-01"}}),
+        ),
+        (
+            ids.retire_age,
+            json!({"name": "RetireAge", "value": {"kind": "Age", "years": 62, "months": 6}}),
+        ),
+    ] {
+        let body = parameter(body);
+        plan.update_parameter(id, &body).await.unwrap();
+        update_parameter(&mut mem, id, &body).unwrap();
+        assert_same(&plan, &mem, &format!("update {id}")).await;
+    }
+    let source = mem
+        .amounts
+        .values()
+        .find_map(|a| a.expression_source.clone())
+        .unwrap();
+    assert!(source.contains("$Living"), "{source}");
+
+    // Refused alike: a duplicate name, a type change under a user, deleting a
+    // parameter that is used, an unknown id, an invalid value.
+    let refused: Vec<(i64, Value)> = vec![
+        (
+            sql_id,
+            json!({"name": "Living", "value": {"kind": "Money", "value": 1.0}}),
+        ),
+        (
+            ids.retire_age,
+            json!({"name": "RetireAge", "value": {"kind": "Money", "value": 1.0}}),
+        ),
+        (
+            spending,
+            json!({"name": "Living", "value": {"kind": "Age", "years": 1, "months": 0}}),
+        ),
+        (
+            9999,
+            json!({"name": "Ghost", "value": {"kind": "Money", "value": 1.0}}),
+        ),
+        (
+            sql_id,
+            json!({"name": "Floor", "value": {"kind": "Age", "years": 1, "months": 12}}),
+        ),
+        (
+            sql_id,
+            json!({"name": "  ", "value": {"kind": "Rate", "value": 0.1}}),
+        ),
+    ];
+    for (id, body) in refused {
+        let body = parameter(body);
+        let sql = plan.update_parameter(id, &body).await.unwrap_err();
+        let err = update_parameter(&mut mem, id, &body).unwrap_err();
+        assert_eq!(status(sql), status(err), "{id}");
+    }
+    let dup = parameter(json!({"name": "Living", "value": {"kind": "Money", "value": 1.0}}));
+    assert_eq!(
+        status(plan.create_parameter(&dup).await.unwrap_err()),
+        status(create_parameter(&mut mem, &dup).unwrap_err())
+    );
+    for id in [spending, ids.retire_age, 9999] {
+        let sql = plan.delete_parameter(id).await.unwrap_err();
+        let err = delete_parameter(&mut mem, id).unwrap_err();
+        assert_eq!(sql.to_string(), err.to_string(), "{id}");
+    }
+    assert_same(&plan, &mem, "after refusals").await;
+
+    plan.delete_parameter(sql_id).await.unwrap();
+    delete_parameter(&mut mem, sql_id).unwrap();
+    assert_same(&plan, &mem, "delete unused").await;
+}
+
+// ── deleting assets and accounts ────────────────────────────────────────────
+
+#[tokio::test]
+async fn deleting_an_unused_asset_or_account_matches_the_route() {
+    let plan = Plan::new().await;
+    plan.create(&plan.branching()).await.unwrap();
+    let ids = &plan.ids;
+    let mut mem = plan.load().await;
+
+    let asset: CreateAsset =
+        serde_json::from_value(json!({"name": "Spare", "initial_price": 10.0})).unwrap();
+    let account: CreateAccount = serde_json::from_value(
+        json!({"name": "Spare bank", "flavor": "Bank", "cash_value": 5.0,
+               "return_profile_id": ids.cash}),
+    )
+    .unwrap();
+    let (asset_id, account_id) = {
+        let mut tx = plan.db.begin().await.unwrap();
+        let a = assets::create_in(&mut tx, plan.id, &asset).await.unwrap();
+        let b = accounts::create_in(&mut tx, plan.id, &account)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        (a, b)
+    };
+    assert_eq!(asset_id, create_asset(&mut mem, &asset).unwrap());
+    assert_eq!(account_id, create_account(&mut mem, &account).unwrap());
+    assert_same(&plan, &mem, "created").await;
+
+    let live = plan.load().await;
+    {
+        let mut conn = plan.db.acquire().await.unwrap();
+        assets::destroy_in(&mut conn, &live, plan.id, asset_id)
+            .await
+            .unwrap();
+        accounts::destroy_in(&mut conn, &live, plan.id, account_id)
+            .await
+            .unwrap();
+    }
+    delete_asset(&mut mem, asset_id).unwrap();
+    delete_account(&mut mem, account_id).unwrap();
+    assert_same(&plan, &mem, "deleted").await;
+
+    // A loan loses the payer that goes, as `ON DELETE SET NULL` does.
+    let payer: CreateAccount = serde_json::from_value(
+        json!({"name": "Payer", "flavor": "Bank", "cash_value": 0.0, "return_profile_id": ids.cash}),
+    )
+    .unwrap();
+    let payer_id = {
+        let mut tx = plan.db.begin().await.unwrap();
+        let id = accounts::create_in(&mut tx, plan.id, &payer).await.unwrap();
+        tx.commit().await.unwrap();
+        id
+    };
+    create_account(&mut mem, &payer).unwrap();
+    let repaid = account_update(json!({"flavor": "Liability", "principal": 1000.0,
+        "interest_rate": 0.05, "repayment": {"from_account_id": payer_id, "term_months": 60}}));
+    plan.update_account(ids.mortgage, &repaid).await.unwrap();
+    update_account(&mut mem, ids.mortgage, &repaid).unwrap();
+    assert_same(&plan, &mem, "loan repaid from the payer").await;
+    let live = plan.load().await;
+    {
+        let mut conn = plan.db.acquire().await.unwrap();
+        accounts::destroy_in(&mut conn, &live, plan.id, payer_id)
+            .await
+            .unwrap();
+    }
+    delete_account(&mut mem, payer_id).unwrap();
+    assert_same(&plan, &mem, "payer deleted").await;
+    assert_eq!(mem.liability[&ids.mortgage].repay_from_account_id, None);
+
+    // Unknown ids are not found by both.
+    let mut conn = plan.db.acquire().await.unwrap();
+    assert_eq!(
+        status(
+            assets::destroy_in(&mut conn, &live, plan.id, 9999)
+                .await
+                .unwrap_err()
+        ),
+        status(delete_asset(&mut mem, 9999).unwrap_err())
+    );
+    assert_eq!(
+        status(
+            accounts::destroy_in(&mut conn, &live, plan.id, 9999)
+                .await
+                .unwrap_err()
+        ),
+        status(delete_account(&mut mem, 9999).unwrap_err())
+    );
+}
+
+/// The in-memory delete is stricter than the route, which lets the schema's
+/// cascades take events, lots and amounts with the row: a change batch may
+/// only delete what nothing points at, so nothing disappears unseen.
+#[tokio::test]
+async fn deleting_something_still_in_use_is_refused_and_says_what() {
+    let plan = Plan::new().await;
+    plan.create(&plan.branching()).await.unwrap();
+    let ids = &plan.ids;
+    let mut mem = plan.load().await;
+    let before = serde_json::to_value(&mem).unwrap();
+
+    for (result, needle) in [
+        // An expression names them, as the route also refuses.
+        (delete_account(&mut mem, ids.usaa), "amount expression"),
+        (delete_asset(&mut mem, ids.vfiax), "amount expression"),
+        // The route would cascade these away; the mirror refuses and names them.
+        (delete_account(&mut mem, ids.roth), "event Windfall"),
+        (delete_account(&mut mem, ids.home), "event Home Purchase"),
+        (delete_asset(&mut mem, ids.bnd), "account Roth"),
+        (delete_asset(&mut mem, ids.house), "account Home"),
+    ] {
+        let err = result.unwrap_err();
+        assert_eq!(status_of(&err), axum::http::StatusCode::CONFLICT, "{err}");
+        assert!(err.to_string().contains(needle), "{needle}: {err}");
+    }
+    assert_eq!(serde_json::to_value(&mem).unwrap(), before);
+}
+
+fn status_of(err: &ApiError) -> axum::http::StatusCode {
+    match err {
+        ApiError::Conflict(_) => axum::http::StatusCode::CONFLICT,
+        ApiError::NotFound(_) => axum::http::StatusCode::NOT_FOUND,
+        _ => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+// ── scenario settings ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn scenario_settings_match_the_route() {
+    let plan = Plan::new().await;
+    let u = json!(plan.user);
+    let dist = scalar(
+        &plan.db,
+        "INSERT INTO distributions(user_id,kind,rate) VALUES (?,'Fixed',0.025) RETURNING id",
+        std::slice::from_ref(&u),
+    )
+    .await;
+    let inflation = scalar(
+        &plan.db,
+        "INSERT INTO inflation_profiles(user_id,name,distribution_id) VALUES (?,'Steady',?) RETURNING id",
+        &[u.clone(), json!(dist)],
+    )
+    .await;
+    let tax = scalar(
+        &plan.db,
+        "INSERT INTO tax_configs(user_id,name,state_rate) VALUES (?,'Flat',0.03) RETURNING id",
+        std::slice::from_ref(&u),
+    )
+    .await;
+    scalar(
+        &plan.db,
+        "INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES (?,0,0.10) RETURNING id",
+        &[json!(tax)],
+    )
+    .await;
+    scalar(
+        &plan.db,
+        "INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES (?,20000,0.22) RETURNING id",
+        &[json!(tax)],
+    )
+    .await;
+    let mut mem = plan.load().await;
+    assert!(mem.tax_configs.contains_key(&tax) && mem.inflation_profiles.contains_key(&inflation));
+
+    let update = |value: Value| -> crate::api::scenarios::UpdateScenario {
+        serde_json::from_value(value).unwrap()
+    };
+    for edit in [
+        json!({"birth_date": "1990-02-03", "duration_years": 45}),
+        json!({"tax_config_id": tax}),
+        json!({"inflation_profile_id": inflation, "description": "Steady prices"}),
+        json!({"collect_ledger": false}),
+        json!({"name": " Renamed ", "start_date": "2026-03-01"}),
+    ] {
+        let body = update(edit.clone());
+        {
+            let mut conn = plan.db.acquire().await.unwrap();
+            crate::api::scenarios::update_in(&mut conn, &plan.user, plan.id, &body)
+                .await
+                .unwrap();
+        }
+        update_scenario(&mut mem, &body).unwrap();
+        // Bookkeeping is not modelled.
+        mem.scenario.updated_at = plan.load().await.scenario.updated_at;
+        assert_same(&plan, &mem, &edit.to_string()).await;
+    }
+    assert_eq!(mem.tax_brackets.len(), 2);
+    assert_eq!(mem.inflation_profile_name.as_deref(), Some("Steady"));
+
+    // Refused alike (the assumption case differs in kind, not in outcome).
+    for edit in [
+        json!({"birth_date": "the fourth"}),
+        json!({"duration_years": 0}),
+        json!({"duration_years": 500}),
+        json!({"name": "  "}),
+        json!({"tax_config_id": 9999}),
+        json!({"inflation_profile_id": 9999}),
+    ] {
+        let body = update(edit.clone());
+        let mut conn = plan.db.acquire().await.unwrap();
+        crate::api::scenarios::update_in(&mut conn, &plan.user, plan.id, &body)
+            .await
+            .unwrap_err();
+        let before = serde_json::to_value(&mem).unwrap();
+        update_scenario(&mut mem, &body).unwrap_err();
+        assert_eq!(serde_json::to_value(&mem).unwrap(), before, "{edit}");
+    }
+}
+
+// ── the caller's return profiles and tax configs ────────────────────────────
+
+/// A distribution's parameters as a tree without ids, to compare across the
+/// database's ids and the in-memory ones.
+fn shape(graph: &ScenarioGraph, id: i64) -> Value {
+    let row = &graph.distributions[&id];
+    let mut out = json!({
+        "kind": row.kind, "rate": row.rate, "mean": row.mean, "std_dev": row.std_dev,
+        "scale": row.scale, "df": row.df, "up": row.bull_to_bear_prob,
+        "down": row.bear_to_bull_prob, "preset": row.history_preset, "block": row.block_size,
+    });
+    if let (Some(bull), Some(bear)) = (row.bull_id, row.bear_id) {
+        out["bull"] = shape(graph, bull);
+        out["bear"] = shape(graph, bear);
+    }
+    out
+}
+
+#[tokio::test]
+async fn created_return_profiles_match_the_route() {
+    use crate::api::profiles::{self, CreateProfile};
+    let plan = Plan::new().await;
+    let mut mem = plan.load().await;
+    let profile = |value: Value| -> CreateProfile { serde_json::from_value(value).unwrap() };
+
+    for body in [
+        json!({"name": " US broad ", "asset_class": "UsEquity", "description": "index funds",
+               "distribution": {"kind": "Bootstrap", "preset": "sp500", "block_size": 3}}),
+        json!({"name": "Regimes",
+               "distribution": {"kind": "RegimeSwitching", "bull_to_bear_prob": 0.1,
+                   "bear_to_bull_prob": 0.3,
+                   "bull": {"kind": "Normal", "mean": 0.1, "std_dev": 0.12},
+                   "bear": {"kind": "StudentT", "mean": -0.05, "scale": 0.2, "df": 4.0}}}),
+        json!({"name": "Savings", "asset_class": "Cash", "distribution": {"kind": "Fixed", "rate": 0.02}}),
+    ] {
+        let body = profile(body);
+        let sql_id = {
+            let mut tx = plan.db.begin().await.unwrap();
+            let id = profiles::create_return_in(&mut tx, &plan.user, &body)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            id
+        };
+        let mem_id = create_return_profile(&mut mem, &body).unwrap();
+        let stored = plan.load().await;
+        let (a, b) = (
+            &stored.return_profiles[&sql_id],
+            &mem.return_profiles[&mem_id],
+        );
+        assert_eq!(
+            (&a.name, &a.description, &a.asset_class),
+            (&b.name, &b.description, &b.asset_class)
+        );
+        assert_eq!(
+            shape(&stored, a.distribution_id),
+            shape(&mem, b.distribution_id),
+            "{}",
+            b.name
+        );
+        assert!(
+            mem_id > 1_000_000_000,
+            "in-memory ids stay clear of real ones"
+        );
+    }
+
+    // A profile made in memory can be held by what the batch creates.
+    let id = mem
+        .return_profiles
+        .values()
+        .find(|p| p.name == "Savings")
+        .unwrap()
+        .id;
+    let bank: CreateAccount = serde_json::from_value(
+        json!({"name": "Held", "flavor": "Bank", "cash_value": 1.0, "return_profile_id": id}),
+    )
+    .unwrap();
+    create_account(&mut mem, &bank).unwrap();
+    compile::compile(&mem).expect("compiles with the created profile");
+
+    // Refused alike: a taken name, a bad preset, a negative spread, an empty name.
+    for body in [
+        json!({"name": "Cash", "distribution": {"kind": "None"}}),
+        json!({"name": "Bad", "distribution": {"kind": "Bootstrap", "preset": "nonsense"}}),
+        json!({"name": "Bad", "distribution": {"kind": "Normal", "mean": 0.1, "std_dev": -1.0}}),
+    ] {
+        let body = profile(body);
+        let mut tx = plan.db.begin().await.unwrap();
+        let sql = profiles::create_return_in(&mut tx, &plan.user, &body)
+            .await
+            .unwrap_err();
+        drop(tx);
+        let before = serde_json::to_value(&mem).unwrap();
+        let err = create_return_profile(&mut mem, &body).unwrap_err();
+        assert_eq!(serde_json::to_value(&mem).unwrap(), before);
+        assert_eq!(status(sql), status(err), "{}", body.name);
+    }
+
+    // The route takes a blank name; a change batch may not.
+    let blank = profile(json!({"name": "  ", "distribution": {"kind": "None"}}));
+    assert!(matches!(
+        create_return_profile(&mut mem, &blank),
+        Err(ApiError::BadRequest(_))
+    ));
+}
+
+#[tokio::test]
+async fn created_tax_configs_match_the_route() {
+    use crate::api::taxes::{self, CreateTaxConfig};
+    let plan = Plan::new().await;
+    let mut mem = plan.load().await;
+    let config = |value: Value| -> CreateTaxConfig { serde_json::from_value(value).unwrap() };
+
+    let body = config(json!({
+        "name": " Single, CO ", "state_rate": 0.044,
+        "federal_brackets": [{"threshold": 11000.0, "rate": 0.12}, {"threshold": 0.0, "rate": 0.10}]
+    }));
+    let sql_id = {
+        let mut tx = plan.db.begin().await.unwrap();
+        let id = taxes::create_in(&mut tx, &plan.user, &body).await.unwrap();
+        tx.commit().await.unwrap();
+        id
+    };
+    let mem_id = create_tax_config(&mut mem, &body).unwrap();
+    let stored = plan.load().await;
+    let (a, b) = (&stored.tax_configs[&sql_id], &mem.tax_configs[&mem_id]);
+    assert_eq!(
+        serde_json::to_value((
+            &a.config.name,
+            a.config.state_rate,
+            a.config.capital_gains_rate,
+            a.config.early_withdrawal_penalty_rate
+        ))
+        .unwrap(),
+        serde_json::to_value((
+            &b.config.name,
+            b.config.state_rate,
+            b.config.capital_gains_rate,
+            b.config.early_withdrawal_penalty_rate
+        ))
+        .unwrap(),
+    );
+    assert_eq!(
+        serde_json::to_value(&a.brackets).unwrap(),
+        serde_json::to_value(&b.brackets).unwrap()
+    );
+    assert_eq!(a.config.name, "Single, CO");
+    assert_eq!(a.config.capital_gains_rate, 0.15);
+
+    for body in [
+        json!({"name": "Single, CO", "federal_brackets": [{"threshold": 0.0, "rate": 0.1}]}),
+        json!({"name": "None", "federal_brackets": []}),
+        json!({"name": "Gap", "federal_brackets": [{"threshold": 5.0, "rate": 0.1}]}),
+        json!({"name": "Percent", "federal_brackets": [{"threshold": 0.0, "rate": 10.0}]}),
+        json!({"name": "Rates", "state_rate": 4.4, "federal_brackets": [{"threshold": 0.0, "rate": 0.1}]}),
+    ] {
+        let body = config(body);
+        let mut tx = plan.db.begin().await.unwrap();
+        let sql = taxes::create_in(&mut tx, &plan.user, &body)
+            .await
+            .unwrap_err();
+        drop(tx);
+        let err = create_tax_config(&mut mem, &body).unwrap_err();
+        assert_eq!(status(sql), status(err), "{}", body.name);
+    }
+}

@@ -585,7 +585,7 @@ pub(super) fn draft_suggestion(
         })
         .collect();
     NewSuggestion {
-        run_id,
+        run_id: Some(run_id),
         source: SuggestionSource::Ai,
         rule: None,
         kind: draft.kind,
@@ -651,6 +651,16 @@ impl<'a> Tools<'a> {
             profiles.iter().map(|(id, _)| *id).collect(),
         )
         .await?;
+        let tax: Vec<i64> = sqlx::query_scalar("SELECT id FROM tax_configs WHERE user_id = ?1")
+            .bind(&user.id)
+            .fetch_all(&state.db)
+            .await?;
+        let inflation: Vec<i64> =
+            sqlx::query_scalar("SELECT id FROM inflation_profiles WHERE user_id = ?1")
+                .bind(&user.id)
+                .fetch_all(&state.db)
+                .await?;
+        preview::load_assumptions(&state.db, &user.id, &mut graph, tax, inflation).await?;
         Ok(Self {
             state,
             user,

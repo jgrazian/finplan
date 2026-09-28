@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod archives;
 pub mod assets;
 pub mod contact;
+pub mod drafts;
 pub mod events;
 pub(crate) mod expression_refs;
 pub mod expressions;
@@ -58,6 +59,7 @@ pub fn router() -> Router<AppState> {
         .merge(archives::router())
         .merge(onboarding::router())
         .merge(contact::router())
+        .merge(drafts::router())
         .nest("/billing", crate::billing::router())
 }
 
@@ -94,6 +96,17 @@ pub async fn owned_scenario(db: &Db, scenario_id: i64, user_id: &str) -> ApiResu
             .await?;
 
     exists.map(|_| ()).ok_or(ApiError::NotFound("scenario"))
+}
+
+/// Whether the scenario is an AI-guided draft (see `drafts`): a plan still
+/// being written, which has no run to write suggestions or previews against.
+pub(crate) async fn is_draft(db: &Db, scenario_id: i64) -> ApiResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM scenarios WHERE id = ?1 AND status = 'draft')",
+    )
+    .bind(scenario_id)
+    .fetch_one(db)
+    .await?)
 }
 
 /// The body every reorder route takes: the collection's row ids, in the order

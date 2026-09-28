@@ -55,6 +55,7 @@ impl Fixture {
         let config = ServerConfig {
             mail: Default::default(),
             review_ai: Default::default(),
+            draft: Default::default(),
             hosted: false,
             access_mode: Default::default(),
             registration_open: true,

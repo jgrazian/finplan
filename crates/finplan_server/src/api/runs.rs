@@ -76,6 +76,21 @@ pub struct CreateRun {
     pub converge: bool,
 }
 
+impl Default for CreateRun {
+    /// A run as if the body were `{}`: every field its serde default.
+    fn default() -> Self {
+        Self {
+            iterations: default_iterations(),
+            percentiles: default_percentiles(),
+            seed: None,
+            batch_size: default_batch(),
+            parallel_batches: default_parallel(),
+            compute_mean: yes(),
+            converge: false,
+        }
+    }
+}
+
 /// Ceiling on a converging run, before `--max-iterations` is applied.
 ///
 /// A converging run is asked for by someone who does not want to pick a count,
@@ -150,7 +165,7 @@ async fn create(
     result
 }
 
-async fn create_run(
+pub(crate) async fn create_run(
     state: &AppState,
     user: &CurrentUser,
     scenario_id: i64,

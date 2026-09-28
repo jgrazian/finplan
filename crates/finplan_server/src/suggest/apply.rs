@@ -19,7 +19,7 @@ use super::{
     Change, ChangeProblem, ChangeTarget, Created, CreatedRef, Names, RefKind, Resolved,
     ResolvedChange, effective_target, lower, resolve_with, substitute,
 };
-use crate::api::{accounts, assets, events};
+use crate::api::{accounts, assets, events, parameters, profiles, scenarios, taxes};
 use crate::compile::rows::ScenarioGraph;
 use crate::domain::edit;
 use crate::error::{ApiError, ApiResult};
@@ -40,20 +40,6 @@ pub fn plan_problem(
         }),
     }
 }
-
-/// A write that cannot be made.
-enum Refusal {
-    Plan(ApiError),
-    Unsupported(&'static str),
-}
-
-impl From<ApiError> for Refusal {
-    fn from(err: ApiError) -> Self {
-        Refusal::Plan(err)
-    }
-}
-
-const NO_DELETES: &str = "deleting an asset or account cannot be previewed or applied yet";
 
 /// The writes for one target, lowered with `created`'s real ids.
 fn writes_for(
@@ -97,14 +83,8 @@ pub fn apply_to_graph(
                     keys.insert(key, CreatedRef { kind, id });
                 }
                 Ok(None) => {}
-                Err(Refusal::Plan(err)) => {
+                Err(err) => {
                     return plan_problem(err, delta.last, delta.target.clone()).map(Err);
-                }
-                Err(Refusal::Unsupported(reason)) => {
-                    return Ok(Err(ChangeProblem::UnsupportedOp {
-                        change: delta.last,
-                        reason: reason.into(),
-                    }));
                 }
             }
         }
@@ -118,7 +98,7 @@ pub fn apply_to_graph(
 fn write_graph(
     g: &mut ScenarioGraph,
     write: &ResolvedChange,
-) -> Result<Option<(String, RefKind, i64)>, Refusal> {
+) -> ApiResult<Option<(String, RefKind, i64)>> {
     Ok(match write {
         ResolvedChange::CreateEvent { key, body } => {
             Some((key.clone(), RefKind::Event, edit::create_event(g, body)?))
@@ -172,9 +152,41 @@ fn write_graph(
             edit::delete_position(g, *account_id, *position_id)?;
             None
         }
-        ResolvedChange::DeleteAsset { .. } | ResolvedChange::DeleteAccount { .. } => {
-            return Err(Refusal::Unsupported(NO_DELETES));
+        ResolvedChange::DeleteAsset { id } => {
+            edit::delete_asset(g, *id)?;
+            None
         }
+        ResolvedChange::DeleteAccount { id } => {
+            edit::delete_account(g, *id)?;
+            None
+        }
+        ResolvedChange::CreateParameter { key, body } => Some((
+            key.clone(),
+            RefKind::Parameter,
+            edit::create_parameter(g, body)?,
+        )),
+        ResolvedChange::ReplaceParameter { id, body } => {
+            edit::update_parameter(g, *id, body)?;
+            None
+        }
+        ResolvedChange::DeleteParameter { id } => {
+            edit::delete_parameter(g, *id)?;
+            None
+        }
+        ResolvedChange::UpdateScenario { body } => {
+            edit::update_scenario(g, body)?;
+            None
+        }
+        ResolvedChange::CreateReturnProfile { key, body } => Some((
+            key.clone(),
+            RefKind::ReturnProfile,
+            edit::create_return_profile(g, body)?,
+        )),
+        ResolvedChange::CreateTaxConfig { key, body } => Some((
+            key.clone(),
+            RefKind::TaxConfig,
+            edit::create_tax_config(g, body)?,
+        )),
     })
 }
 
@@ -268,9 +280,41 @@ async fn write_sql(
             accounts::delete_position_in(tx, scenario_id, *account_id, *position_id).await?;
             None
         }
-        ResolvedChange::DeleteAsset { .. } | ResolvedChange::DeleteAccount { .. } => {
-            return Err(ApiError::internal(NO_DELETES));
+        ResolvedChange::DeleteAsset { id } => {
+            assets::destroy_in(tx, live, scenario_id, *id).await?;
+            None
         }
+        ResolvedChange::DeleteAccount { id } => {
+            accounts::destroy_in(tx, live, scenario_id, *id).await?;
+            None
+        }
+        ResolvedChange::CreateParameter { key, body } => Some((
+            key.clone(),
+            RefKind::Parameter,
+            parameters::create_in(tx, scenario_id, body).await?,
+        )),
+        ResolvedChange::ReplaceParameter { id, body } => {
+            parameters::update_in(tx, live, scenario_id, *id, body).await?;
+            None
+        }
+        ResolvedChange::DeleteParameter { id } => {
+            parameters::destroy_in(tx, live, scenario_id, *id).await?;
+            None
+        }
+        ResolvedChange::UpdateScenario { body } => {
+            scenarios::update_in(tx, &live.scenario.user_id, scenario_id, body).await?;
+            None
+        }
+        ResolvedChange::CreateReturnProfile { key, body } => Some((
+            key.clone(),
+            RefKind::ReturnProfile,
+            profiles::create_return_in(tx, &live.scenario.user_id, body).await?,
+        )),
+        ResolvedChange::CreateTaxConfig { key, body } => Some((
+            key.clone(),
+            RefKind::TaxConfig,
+            taxes::create_in(tx, &live.scenario.user_id, body).await?,
+        )),
     })
 }
 
@@ -412,4 +456,47 @@ pub fn profiles_named<'a>(changes: impl IntoIterator<Item = &'a Change>) -> Vec<
     out.sort_unstable();
     out.dedup();
     out
+}
+
+/// Every tax config id and inflation profile id the changes' values name, as
+/// `(tax configs, inflation profiles)`, for loading them into a snapshot
+/// before [`resolve_steps`] (see [`profiles_named`]).
+pub fn assumptions_named<'a>(
+    changes: impl IntoIterator<Item = &'a Change>,
+) -> (Vec<i64>, Vec<i64>) {
+    fn walk(value: &Value, tax: &mut Vec<i64>, inflation: &mut Vec<i64>) {
+        match value {
+            Value::Object(object) => {
+                for (key, child) in object {
+                    match (key.as_str(), child.as_i64()) {
+                        ("tax_config_id", Some(id)) => tax.push(id),
+                        ("inflation_profile_id", Some(id)) => inflation.push(id),
+                        _ => {}
+                    }
+                    walk(child, tax, inflation);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|v| walk(v, tax, inflation)),
+            _ => {}
+        }
+    }
+    let (mut tax, mut inflation) = (Vec::new(), Vec::new());
+    for change in changes {
+        if let Some(value) = &change.value {
+            // A path ending at the field carries the id bare.
+            if let Some(id) = value.as_i64() {
+                if change.path.ends_with("/tax_config_id") {
+                    tax.push(id);
+                } else if change.path.ends_with("/inflation_profile_id") {
+                    inflation.push(id);
+                }
+            }
+            walk(value, &mut tax, &mut inflation);
+        }
+    }
+    for ids in [&mut tax, &mut inflation] {
+        ids.sort_unstable();
+        ids.dedup();
+    }
+    (tax, inflation)
 }

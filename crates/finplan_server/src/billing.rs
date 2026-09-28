@@ -49,6 +49,24 @@ pub struct Entitlements {
     pub editable_scenario_id: Option<i64>,
     pub annual_price_usd: u32,
     pub monthly_price_usd: u32,
+    /// AI-guided drafts (`api::drafts`); null when the server has no review
+    /// model, so the web hides the option entirely. Filled in by
+    /// [`entitlements_for`], which knows whether a model is configured;
+    /// [`entitlements`] alone leaves it null.
+    pub ai_drafts: Option<AiDrafts>,
+}
+
+/// What a user may do with AI-guided drafts right now.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct AiDrafts {
+    /// The user can start a draft: quota remains and a plan slot is free.
+    pub enabled: bool,
+    /// Drafts left this calendar month (UTC).
+    pub remaining: u32,
+    pub max_files: u32,
+    pub max_bytes: u64,
+    pub max_pages: u32,
 }
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -59,9 +77,35 @@ async fn get_entitlements(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> ApiResult<Json<Entitlements>> {
-    Ok(Json(
-        entitlements(&state.db, &user.id, &state.config).await?,
-    ))
+    Ok(Json(entitlements_for(&state, &user.id).await?))
+}
+
+/// [`entitlements`] with the AI draft limits and quota, which need to know
+/// whether the server has a review model.
+pub async fn entitlements_for(state: &AppState, user: &str) -> ApiResult<Entitlements> {
+    let mut out = entitlements(&state.db, user, &state.config).await?;
+    if state.review_ai.is_some() {
+        let limits = state.config.draft.limits(out.pro);
+        let used = ai_drafts_used(&state.db, user).await?;
+        let remaining = limits.drafts_per_month.saturating_sub(used);
+        let mut conn = state.db.acquire().await?;
+        let slot = check_plan_slot(&mut conn, user, &state.config, 1)
+            .await
+            .is_ok();
+        out.ai_drafts = Some(AiDrafts {
+            enabled: remaining > 0 && slot,
+            remaining,
+            max_files: limits.max_files,
+            max_bytes: limits.max_bytes,
+            max_pages: limits.max_pages,
+        });
+    }
+    Ok(out)
+}
+
+async fn ai_drafts_used(db: &Db, user: &str) -> ApiResult<u32> {
+    let used: i64 = sqlx::query_scalar("SELECT COALESCE((SELECT used FROM monthly_ai_drafts WHERE user_id=? AND month=strftime('%Y-%m','now')),0)").bind(user).fetch_one(db).await?;
+    Ok(used.clamp(0, i64::from(u32::MAX)) as u32)
 }
 pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<Entitlements> {
     let access_mode = AccessMode::from_config(config);
@@ -69,7 +113,7 @@ pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResu
     let editable = if pro {
         None
     } else {
-        sqlx::query_scalar::<_, Option<i64>>("SELECT COALESCE((SELECT scenario_id FROM editable_plans WHERE user_id = ?1), (SELECT MIN(id) FROM scenarios WHERE user_id = ?1))").bind(user).fetch_one(db).await?
+        sqlx::query_scalar::<_, Option<i64>>("SELECT COALESCE((SELECT scenario_id FROM editable_plans WHERE user_id = ?1), (SELECT MIN(id) FROM scenarios WHERE user_id = ?1 AND status = 'active'))").bind(user).fetch_one(db).await?
     };
     let used:i64=sqlx::query_scalar("SELECT COALESCE((SELECT used FROM monthly_goal_seeks WHERE user_id=? AND month=strftime('%Y-%m','now')),0)").bind(user).fetch_one(db).await?;
     Ok(Entitlements {
@@ -87,6 +131,7 @@ pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResu
         editable_scenario_id: editable,
         annual_price_usd: 80,
         monthly_price_usd: 10,
+        ai_drafts: None,
     })
 }
 pub async fn require_pro(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<()> {
@@ -105,7 +150,16 @@ pub async fn require_editable(
     config: &ServerConfig,
 ) -> ApiResult<()> {
     let e = entitlements(db, user, config).await?;
-    if e.pro || e.editable_scenario_id == Some(scenario) {
+    // A draft is being written, not saved: the plan-slot rule applies when it
+    // becomes a plan (`check_plan_slot` at Create), not while it is edited.
+    let draft: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM scenarios WHERE id = ? AND user_id = ? AND status = 'draft')",
+    )
+    .bind(scenario)
+    .bind(user)
+    .fetch_one(db)
+    .await?;
+    if e.pro || draft || e.editable_scenario_id == Some(scenario) {
         Ok(())
     } else {
         Err(ApiError::Forbidden(
@@ -124,6 +178,25 @@ pub async fn reserve_goal_seek(db: &Db, user: &str, config: &ServerConfig) -> Ap
         .bind(user).execute(db).await?.rows_affected();
     if accepted == 0 {
         return Err(ApiError::Forbidden("Free includes one goal seek per calendar month (UTC). Try next month or upgrade to Pro.".into()));
+    }
+    Ok(())
+}
+
+/// Call once after request validation, before starting an AI draft, and after
+/// the plan slot has been checked so a draft is never spent on a plan that
+/// cannot be created. Runs on the caller's write transaction, so the count and
+/// the increment cannot race. A started draft counts even if it is discarded.
+pub async fn reserve_ai_draft(
+    connection: &mut sqlx::SqliteConnection,
+    user: &str,
+    limit: u32,
+) -> ApiResult<()> {
+    let accepted = sqlx::query("INSERT INTO monthly_ai_drafts(user_id,month,used) VALUES (?1,strftime('%Y-%m','now'),1) ON CONFLICT(user_id,month) DO UPDATE SET used=used+1 WHERE used < ?2")
+        .bind(user).bind(i64::from(limit)).execute(&mut *connection).await?.rows_affected();
+    if accepted == 0 {
+        return Err(ApiError::Forbidden(
+            "You have used this month's AI drafts (calendar month, UTC). Try next month or upgrade to Pro.".into(),
+        ));
     }
     Ok(())
 }
@@ -312,7 +385,7 @@ async fn select_editable(
     user: CurrentUser,
     Json(body): Json<EditablePlan>,
 ) -> ApiResult<Json<Entitlements>> {
-    let updated=sqlx::query("INSERT INTO editable_plans(user_id,scenario_id) SELECT ?1,id FROM scenarios WHERE id=?2 AND user_id=?1 ON CONFLICT(user_id) DO UPDATE SET scenario_id=excluded.scenario_id")
+    let updated=sqlx::query("INSERT INTO editable_plans(user_id,scenario_id) SELECT ?1,id FROM scenarios WHERE id=?2 AND user_id=?1 AND status='active' ON CONFLICT(user_id) DO UPDATE SET scenario_id=excluded.scenario_id")
         .bind(&user.id).bind(body.scenario_id).execute(&state.db).await?.rows_affected();
     if updated == 0 {
         return Err(ApiError::NotFound("scenario"));
@@ -376,9 +449,9 @@ pub async fn mutation_entitlements(
             if !e.pro {
                 let id=segments[1].parse::<i64>().unwrap();
                 let sql=match segments[0] {
-                    "tax-configs"=>"SELECT EXISTS(SELECT 1 FROM scenarios WHERE user_id=?1 AND id<>COALESCE(?2,-1) AND tax_config_id=?3)",
-                    "inflation-profiles"=>"SELECT EXISTS(SELECT 1 FROM scenarios WHERE user_id=?1 AND id<>COALESCE(?2,-1) AND inflation_profile_id=?3)",
-                    _=>"SELECT EXISTS(SELECT 1 FROM scenarios s WHERE s.user_id=?1 AND s.id<>COALESCE(?2,-1) AND (EXISTS(SELECT 1 FROM assets a WHERE a.scenario_id=s.id AND a.return_profile_id=?3) OR EXISTS(SELECT 1 FROM accounts a JOIN account_bank c ON c.account_id=a.id WHERE a.scenario_id=s.id AND c.return_profile_id=?3) OR EXISTS(SELECT 1 FROM accounts a JOIN account_investment i ON i.account_id=a.id WHERE a.scenario_id=s.id AND i.cash_return_profile_id=?3)))",
+                    "tax-configs"=>"SELECT EXISTS(SELECT 1 FROM scenarios WHERE user_id=?1 AND status='active' AND id<>COALESCE(?2,-1) AND tax_config_id=?3)",
+                    "inflation-profiles"=>"SELECT EXISTS(SELECT 1 FROM scenarios WHERE user_id=?1 AND status='active' AND id<>COALESCE(?2,-1) AND inflation_profile_id=?3)",
+                    _=>"SELECT EXISTS(SELECT 1 FROM scenarios s WHERE s.user_id=?1 AND s.status='active' AND s.id<>COALESCE(?2,-1) AND (EXISTS(SELECT 1 FROM assets a WHERE a.scenario_id=s.id AND a.return_profile_id=?3) OR EXISTS(SELECT 1 FROM accounts a JOIN account_bank c ON c.account_id=a.id WHERE a.scenario_id=s.id AND c.return_profile_id=?3) OR EXISTS(SELECT 1 FROM accounts a JOIN account_investment i ON i.account_id=a.id WHERE a.scenario_id=s.id AND i.cash_return_profile_id=?3)))",
                 };
                 let locked:bool=sqlx::query_scalar(sql).bind(&user.id).bind(e.editable_scenario_id).bind(id).fetch_one(&state.db).await?;
                 if locked { return Err(ApiError::Forbidden("This definition is used by a read-only plan. Create a separate definition for your editable plan.".into())); }
@@ -483,10 +556,11 @@ pub async fn check_plan_slot(
     if pro {
         return Ok(());
     }
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM scenarios WHERE user_id=?")
-        .bind(user)
-        .fetch_one(&mut *connection)
-        .await?;
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM scenarios WHERE user_id=? AND status='active'")
+            .bind(user)
+            .fetch_one(&mut *connection)
+            .await?;
     if count.saturating_add(additional) > 1 {
         return Err(ApiError::Forbidden(
             "Free includes one saved plan. Existing plans remain readable and exportable.".into(),

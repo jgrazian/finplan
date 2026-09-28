@@ -135,6 +135,69 @@ pub enum DistributionSpec {
 }
 
 impl DistributionSpec {
+    /// What the `distributions` table's CHECKs and the preset list would
+    /// refuse, as a bad request rather than a database error. `depth` counts
+    /// nested regimes.
+    pub(crate) fn validate(&self, depth: usize) -> ApiResult<()> {
+        if depth > 8 {
+            return Err(ApiError::bad_request(
+                "distribution nests too deeply; regime models may not be recursive beyond 8 levels",
+            ));
+        }
+        let finite = |values: &[f64]| {
+            if values.iter().all(|v| v.is_finite()) {
+                Ok(())
+            } else {
+                Err(ApiError::bad_request("distribution figures must be finite"))
+            }
+        };
+        match self {
+            DistributionSpec::None => {}
+            DistributionSpec::Fixed { rate } => finite(&[*rate])?,
+            DistributionSpec::Normal { mean, std_dev }
+            | DistributionSpec::LogNormal { mean, std_dev } => {
+                finite(&[*mean, *std_dev])?;
+                if *std_dev < 0.0 {
+                    return Err(ApiError::bad_request("std_dev cannot be negative"));
+                }
+            }
+            DistributionSpec::StudentT { mean, scale, df } => {
+                finite(&[*mean, *scale, *df])?;
+                if *df <= 0.0 {
+                    return Err(ApiError::bad_request("df must be positive"));
+                }
+            }
+            DistributionSpec::RegimeSwitching {
+                bull,
+                bear,
+                bull_to_bear_prob,
+                bear_to_bull_prob,
+            } => {
+                for p in [bull_to_bear_prob, bear_to_bull_prob] {
+                    if !(0.0..=1.0).contains(p) {
+                        return Err(ApiError::bad_request(
+                            "regime switching probabilities are between 0 and 1",
+                        ));
+                    }
+                }
+                bull.validate(depth + 1)?;
+                bear.validate(depth + 1)?;
+            }
+            DistributionSpec::Bootstrap { preset, block_size } => {
+                if !HISTORY_PRESETS.contains(&preset.as_str()) {
+                    return Err(ApiError::bad_request(format!(
+                        "unknown history preset '{preset}'; expected one of {}",
+                        HISTORY_PRESETS.join(", ")
+                    )));
+                }
+                if block_size.is_some_and(|b| b < 1) {
+                    return Err(ApiError::bad_request("block_size must be at least 1"));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn insert<'a>(
         &'a self,
         tx: &'a mut Transaction<'_, Sqlite>,
@@ -529,25 +592,7 @@ async fn create_return(
     Json(Submitted { body, fields }): Json<Submitted<CreateProfile>>,
 ) -> ApiResult<(StatusCode, Json<Profile>)> {
     let mut tx = state.db.begin().await?;
-    let distribution_id = body.distribution.insert(&mut tx, &user.id, 0).await?;
-
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO return_profiles
-            (user_id, name, description, asset_class, distribution_id, sort_order)
-         VALUES (?1,?2,?3,?4,?5,
-                 (SELECT COALESCE(MAX(sort_order), -1) + 1
-                    FROM return_profiles WHERE user_id = ?1))
-         RETURNING id",
-    )
-    .bind(&user.id)
-    .bind(body.name.trim())
-    .bind(&body.description)
-    .bind(body.asset_class.map(AssetClass::as_str))
-    .bind(distribution_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "a return profile with that name already exists"))?;
-
+    let id = create_return_in(&mut tx, &user.id, &body).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(
@@ -572,6 +617,35 @@ async fn create_return(
             used_by: Vec::new(),
         }),
     ))
+}
+
+/// Insert a return profile and its distribution, as `POST /return-profiles`
+/// does; returns its id. The suggestion path writes through this too, inside
+/// its transaction.
+pub(crate) async fn create_return_in(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: &str,
+    body: &CreateProfile,
+) -> ApiResult<i64> {
+    body.distribution.validate(0)?;
+    let distribution_id = body.distribution.insert(tx, user_id, 0).await?;
+
+    sqlx::query_scalar(
+        "INSERT INTO return_profiles
+            (user_id, name, description, asset_class, distribution_id, sort_order)
+         VALUES (?1,?2,?3,?4,?5,
+                 (SELECT COALESCE(MAX(sort_order), -1) + 1
+                    FROM return_profiles WHERE user_id = ?1))
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(body.asset_class.map(AssetClass::as_str))
+    .bind(distribution_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, "a return profile with that name already exists"))
 }
 
 async fn update_return(

@@ -30,7 +30,10 @@ use ts_rs::TS;
 
 use crate::api::funding::{FundingDiagnostics, funding_view};
 use crate::auth::session::CurrentUser;
-use crate::compile::rows::{DistributionRow, ReturnProfileRow, ScenarioGraph};
+use crate::compile::rows::{
+    DistributionRow, InflationEntry, ReturnProfileRow, ScenarioGraph, TaxBracketRow,
+    TaxConfigEntry, TaxConfigRow,
+};
 use crate::compile::{self, CompiledScenario};
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
@@ -72,7 +75,10 @@ pub struct PreviewRequest {
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct Preview {
-    pub base_run_id: i64,
+    /// The run the preview was paired against; null for a draft, which has
+    /// none. Such a preview only checks the batch and renders its diff: it
+    /// simulates nothing, so `base` and `edited` are null.
+    pub base_run_id: Option<i64>,
     /// Iterations behind both `base` and `edited`.
     pub iterations: usize,
     /// The base and the edited plan saw the same simulated markets, so their
@@ -162,6 +168,10 @@ pub(crate) async fn run_preview(
         return Err(ApiError::bad_request("iterations must be at least 1"));
     }
 
+    if base_run_id.is_none() && super::is_draft(&state.db, scenario_id).await? {
+        return draft_preview(state, user, scenario_id, changes).await;
+    }
+
     let run = base_run(&state.db, scenario_id, base_run_id).await?;
     if run.model_version.as_deref() != Some(MODEL_VERSION) {
         return Err(ApiError::Conflict(format!(
@@ -182,7 +192,7 @@ pub(crate) async fn run_preview(
         .unwrap_or(run.iterations.max(1) as usize)
         .min(MAX_PREVIEW_ITERATIONS);
     let mut outcome = Preview {
-        base_run_id: run.id,
+        base_run_id: Some(run.id),
         iterations,
         paired: false,
         diff: Vec::new(),
@@ -207,6 +217,8 @@ pub(crate) async fn run_preview(
         resolved.referenced_profiles(),
     )
     .await?;
+    let (tax, inflation) = suggest::assumptions_named(changes);
+    load_assumptions(&state.db, &user.id, &mut graph, tax, inflation).await?;
     outcome.diff = resolved.diff(&Names::from_graph(&graph));
 
     let edited_compiled = match edited(&graph, &resolved, changes)? {
@@ -280,21 +292,69 @@ pub(crate) async fn run_preview(
     Ok(outcome)
 }
 
+/// A preview of a draft: there is no run to pair against (whole-plan draft
+/// simulation is a later step), so this resolves the batch, renders its diff
+/// and checks that the edited plan compiles, and reports problems the same way.
+async fn draft_preview(
+    state: &AppState,
+    user: &CurrentUser,
+    scenario_id: i64,
+    changes: &[Change],
+) -> ApiResult<Preview> {
+    let mut graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let mut outcome = Preview {
+        base_run_id: None,
+        iterations: 0,
+        paired: false,
+        diff: Vec::new(),
+        problems: Vec::new(),
+        base: None,
+        edited: None,
+    };
+    let resolved = match suggest::resolve(&graph, changes) {
+        Ok(resolved) => resolved,
+        Err(problems) => {
+            outcome.problems = problems;
+            return Ok(outcome);
+        }
+    };
+    load_profiles(
+        &state.db,
+        &user.id,
+        &mut graph,
+        resolved.referenced_profiles(),
+    )
+    .await?;
+    let (tax, inflation) = suggest::assumptions_named(changes);
+    load_assumptions(&state.db, &user.id, &mut graph, tax, inflation).await?;
+    outcome.diff = resolved.diff(&Names::from_graph(&graph));
+    if let Err(problem) = edited(&graph, &resolved, changes)? {
+        outcome.problems.push(problem);
+    }
+    Ok(outcome)
+}
+
 /// The succeeded run `run_id` names (or the scenario's latest success) and
-/// its input snapshot: what suggestions are written and checked against.
+/// its input snapshot: what suggestions are written and checked against. A
+/// draft, asked for no particular run, has none: its notes are written against
+/// the plan as it stands (run id `None`).
 /// The caller has already checked the scenario is the user's.
 pub(crate) async fn base_snapshot(
     db: &Db,
     scenario_id: i64,
+    user_id: &str,
     run_id: Option<i64>,
-) -> ApiResult<(i64, ScenarioGraph)> {
+) -> ApiResult<(Option<i64>, ScenarioGraph)> {
+    if run_id.is_none() && super::is_draft(db, scenario_id).await? {
+        return Ok((None, ScenarioGraph::load(db, scenario_id, user_id).await?));
+    }
     let run = base_run(db, scenario_id, run_id).await?;
     let graph = run
         .snapshot_json
         .as_deref()
         .and_then(|json| serde_json::from_str(json).ok())
         .ok_or_else(|| ApiError::Conflict(format!("run {} has no readable inputs", run.id)))?;
-    Ok((run.id, graph))
+    Ok((Some(run.id), graph))
 }
 
 /// The run to preview against: the one named, or the scenario's latest success.
@@ -362,6 +422,17 @@ pub(crate) async fn load_profiles(
             graph.return_profiles.insert(row.id, row);
         }
     }
+    load_distributions(db, user_id, graph, pending).await
+}
+
+/// Add the distributions `pending` names, and their regime children, that
+/// `graph` lacks.
+async fn load_distributions(
+    db: &Db,
+    user_id: &str,
+    graph: &mut ScenarioGraph,
+    mut pending: Vec<i64>,
+) -> ApiResult<()> {
     while let Some(id) = pending.pop() {
         if graph.distributions.contains_key(&id) {
             continue;
@@ -382,6 +453,69 @@ pub(crate) async fn load_profiles(
         }
     }
     Ok(())
+}
+
+/// Add the caller's tax configs and inflation profiles in `tax` and
+/// `inflation` that `graph` lacks from its library (a run snapshot keeps only
+/// the scenario's own), so a change that switches the plan onto one finds it.
+/// One that is not the caller's is left out; the edit that names it then fails
+/// the way the route would.
+pub(crate) async fn load_assumptions(
+    db: &Db,
+    user_id: &str,
+    graph: &mut ScenarioGraph,
+    tax: impl IntoIterator<Item = i64>,
+    inflation: impl IntoIterator<Item = i64>,
+) -> ApiResult<()> {
+    for id in tax {
+        if graph.tax_configs.contains_key(&id) {
+            continue;
+        }
+        let config: Option<TaxConfigRow> = sqlx::query_as(
+            "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate
+               FROM tax_configs WHERE id = ?1 AND user_id = ?2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+        if let Some(config) = config {
+            let brackets: Vec<TaxBracketRow> = sqlx::query_as(
+                "SELECT threshold, rate FROM tax_brackets
+                  WHERE tax_config_id = ?1 ORDER BY threshold ASC",
+            )
+            .bind(id)
+            .fetch_all(db)
+            .await?;
+            graph
+                .tax_configs
+                .insert(id, TaxConfigEntry { config, brackets });
+        }
+    }
+    let mut distributions = Vec::new();
+    for id in inflation {
+        if graph.inflation_profiles.contains_key(&id) {
+            continue;
+        }
+        let row: Option<(String, i64)> = sqlx::query_as(
+            "SELECT name, distribution_id FROM inflation_profiles WHERE id = ?1 AND user_id = ?2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+        if let Some((name, distribution_id)) = row {
+            distributions.push(distribution_id);
+            graph.inflation_profiles.insert(
+                id,
+                InflationEntry {
+                    name,
+                    distribution_id,
+                },
+            );
+        }
+    }
+    load_distributions(db, user_id, graph, distributions).await
 }
 
 /// Apply `resolved` to a copy of `graph` and compile it, returning both. The

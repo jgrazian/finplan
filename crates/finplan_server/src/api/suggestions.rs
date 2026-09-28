@@ -222,8 +222,9 @@ impl SuggestionPath {
 pub struct Suggestion {
     pub id: i64,
     pub scenario_id: i64,
-    /// The run whose inputs and results the suggestion was written against.
-    pub run_id: i64,
+    /// The run whose inputs and results the suggestion was written against;
+    /// null on a note written for a draft, which has no run yet.
+    pub run_id: Option<i64>,
     pub source: SuggestionSource,
     /// The rule that wrote it; null for model-written suggestions.
     pub rule: Option<String>,
@@ -530,7 +531,7 @@ const ORDER: &str = "CASE s.kind WHEN 'fix' THEN 0 WHEN 'check' THEN 1 WHEN 'str
 pub(super) struct SuggestionRow {
     id: i64,
     scenario_id: i64,
-    run_id: i64,
+    run_id: Option<i64>,
     source: String,
     rule: Option<String>,
     kind: String,
@@ -594,7 +595,7 @@ impl SuggestionRow {
 
 /// A suggestion ready to insert.
 pub(super) struct NewSuggestion {
-    pub run_id: i64,
+    pub run_id: Option<i64>,
     pub source: SuggestionSource,
     pub rule: Option<String>,
     pub kind: Kind,
@@ -776,7 +777,11 @@ async fn review(
     Json(body): Json<ReviewRequest>,
 ) -> Out<Json<Review>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    let (run_id, graph) = preview::base_snapshot(&state.db, scenario_id, body.run_id).await?;
+    let (run_id, graph) =
+        preview::base_snapshot(&state.db, scenario_id, &user.id, body.run_id).await?;
+    let run_id = run_id.ok_or_else(|| {
+        ApiError::Conflict("a draft has no run to review; create and run the plan first".into())
+    })?;
     let Json(results) = runs::results(
         State(state.clone()),
         user.clone(),
@@ -879,7 +884,7 @@ async fn review(
             continue;
         }
         prepared.push(NewSuggestion {
-            run_id,
+            run_id: Some(run_id),
             source: SuggestionSource::Rules,
             rule: Some(draft.rule.to_string()),
             kind: draft.kind,
@@ -1189,7 +1194,8 @@ async fn create(
         }
     }
 
-    let (run_id, graph) = preview::base_snapshot(&state.db, scenario_id, draft.run_id).await?;
+    let (run_id, graph) =
+        preview::base_snapshot(&state.db, scenario_id, &user.id, draft.run_id).await?;
     validate_evidence(&graph, &draft.evidence)?;
 
     // Every path is walked, and every path's problems reported at once.
@@ -1453,13 +1459,13 @@ async fn preview_suggestion(
         &state,
         &user,
         row.scenario_id,
-        Some(row.run_id),
+        row.run_id,
         &changes,
         None,
         Some(&mut decision),
     )
     .await;
-    if matches!(result, Err(ApiError::NotFound("run"))) {
+    if row.run_id.is_some() && matches!(result, Err(ApiError::NotFound("run"))) {
         result = preview::run_preview(
             &state,
             &user,
@@ -1595,6 +1601,20 @@ async fn apply(
             if body.through_step.is_some() || row.applied_path.is_some() {
                 return Err(ApiError::unprocessable(
                     "a path goes to a copy whole, before any of its steps is applied",
+                )
+                .into());
+            }
+            // A copy shares the user's library rows as they are; a path that
+            // adds to the library has nothing yet to point the copy at.
+            if batches.iter().flatten().any(|c| {
+                matches!(
+                    c.target,
+                    suggest::ChangeTarget::NewReturnProfile(_)
+                        | suggest::ChangeTarget::NewTaxConfig(_)
+                )
+            }) {
+                return Err(ApiError::unprocessable(
+                    "a path that creates return profiles or tax configs can only be applied to the plan",
                 )
                 .into());
             }

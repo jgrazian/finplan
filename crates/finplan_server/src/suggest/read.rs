@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::api::accounts::{Account, ContributionPeriod, FlavorSpec, Position, TaxStatus};
 use crate::api::assets::Asset;
+use crate::api::parameters::ParameterValueSpec;
 use crate::compile::rows::ScenarioGraph;
 
 /// `GET /scenarios/{id}/events/{event}`, or `None` when the graph has no such
@@ -27,6 +28,30 @@ pub(crate) fn asset(graph: &ScenarioGraph, id: i64) -> Option<Value> {
         sort_order: row.sort_order,
     })
     .ok()
+}
+
+/// `GET /scenarios/{id}/parameters`, one entry: the parameter as the body its
+/// write route takes, plus its `id`.
+pub(crate) fn parameter(graph: &ScenarioGraph, id: i64) -> Option<Value> {
+    let row = graph.parameters.iter().find(|p| p.id == id)?;
+    let value = ParameterValueSpec::try_from(row).ok()?;
+    Some(serde_json::json!({ "id": row.id, "name": row.name, "value": value }))
+}
+
+/// The scenario's settings, as `GET /scenarios/{id}` returns them (less the
+/// bookkeeping columns): what a change to the `scenario` target points into.
+pub(crate) fn scenario(graph: &ScenarioGraph) -> Value {
+    let s = &graph.scenario;
+    serde_json::json!({
+        "id": s.id,
+        "name": s.name,
+        "description": s.description,
+        "start_date": s.start_date,
+        "birth_date": s.birth_date,
+        "duration_years": s.duration_years,
+        "inflation_profile_id": s.inflation_profile_id,
+        "tax_config_id": s.tax_config_id,
+    })
 }
 
 /// `GET /scenarios/{id}/accounts/{account}`: the account, its flavor fields

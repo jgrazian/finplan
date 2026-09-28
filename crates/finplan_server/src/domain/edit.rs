@@ -24,10 +24,15 @@ use crate::api::assets::{CreateAsset, UpdateAsset};
 use crate::api::events::{EventBody, lower_tree};
 use crate::api::expression_refs::{self, Entity};
 use crate::api::expressions::validate_tree;
+use crate::api::parameters::{self, ParameterBody};
+use crate::api::profiles::{CreateProfile, DistributionSpec};
 use crate::api::row_batch::RowBatch;
+use crate::api::scenarios::UpdateScenario;
+use crate::api::taxes::{self, CreateTaxConfig};
 use crate::compile::rows::{
-    AccountRow, AssetRow, BankRow, EventRow, InvestmentRow, LiabilityRow, PositionRow, PropertyRow,
-    ScenarioGraph,
+    AccountRow, AssetRow, BankRow, DistributionRow, EventRow, InflationEntry, InvestmentRow,
+    LiabilityRow, ParameterRow, PositionRow, PropertyRow, ReturnProfileRow, ScenarioGraph,
+    TaxBracketRow, TaxConfigEntry, TaxConfigRow,
 };
 use crate::error::{ApiError, ApiResult};
 
@@ -479,6 +484,531 @@ fn replace_detail(
         }
     }
     Ok(())
+}
+
+/// Delete an asset, as `DELETE /scenarios/{id}/assets/{asset}` would.
+///
+/// Stricter than the route, which lets the schema's cascades quietly delete the
+/// lots, events and amounts that name the asset: a change batch that deletes it
+/// must first remove what still points at it, so nothing disappears unseen.
+pub(crate) fn delete_asset(graph: &mut ScenarioGraph, asset_id: i64) -> ApiResult<()> {
+    atomically(graph, |g| {
+        if !g.assets.iter().any(|a| a.id == asset_id) {
+            return Err(ApiError::NotFound("asset"));
+        }
+        if expression_refs::used_by(g, Entity::Asset(asset_id))? {
+            return Err(ApiError::Conflict(
+                "asset is referenced by an amount expression".into(),
+            ));
+        }
+        let referrers = referrers(g, Held::Asset(asset_id));
+        if !referrers.is_empty() {
+            return Err(ApiError::Conflict(format!(
+                "asset is still used by: {}",
+                referrers.join(", ")
+            )));
+        }
+        g.assets.retain(|a| a.id != asset_id);
+        Ok(())
+    })
+}
+
+/// Delete an account, as `DELETE /scenarios/{id}/accounts/{account}` would,
+/// with the same extra strictness as [`delete_asset`]. A loan repaid from the
+/// account loses its payer, as the schema's `SET NULL` does.
+pub(crate) fn delete_account(graph: &mut ScenarioGraph, account_id: i64) -> ApiResult<()> {
+    atomically(graph, |g| {
+        if !g.accounts.iter().any(|a| a.id == account_id) {
+            return Err(ApiError::NotFound("account"));
+        }
+        if expression_refs::used_by(g, Entity::Account(account_id))? {
+            return Err(ApiError::Conflict(
+                "account is referenced by an amount expression".into(),
+            ));
+        }
+        let referrers = referrers(g, Held::Account(account_id));
+        if !referrers.is_empty() {
+            return Err(ApiError::Conflict(format!(
+                "account is still used by: {}",
+                referrers.join(", ")
+            )));
+        }
+        g.accounts.retain(|a| a.id != account_id);
+        g.bank.remove(&account_id);
+        g.investment.remove(&account_id);
+        g.property.remove(&account_id);
+        g.liability.remove(&account_id);
+        g.positions.remove(&account_id);
+        for loan in g.liability.values_mut() {
+            if loan.repay_from_account_id == Some(account_id) {
+                loan.repay_from_account_id = None;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// An account or asset a delete is about.
+#[derive(Clone, Copy)]
+enum Held {
+    Account(i64),
+    Asset(i64),
+}
+
+/// What still points at the account or asset, as display names: the events
+/// whose triggers, effects, amounts or withdrawal sources name it, and the
+/// accounts that hold it. Empty when it can be deleted without taking anything
+/// else with it.
+fn referrers(graph: &ScenarioGraph, held: Held) -> Vec<String> {
+    let is = |account: Option<i64>, asset: Option<i64>| match held {
+        Held::Account(id) => account == Some(id),
+        Held::Asset(id) => asset == Some(id),
+    };
+    let account_name = |id: i64| {
+        graph
+            .accounts
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| format!("account {}", a.name))
+    };
+    let mut events: HashSet<i64> = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+
+    for t in graph.triggers.values() {
+        if is(t.account_id, t.asset_id)
+            && let Some(event) = trigger_event(graph, t.id)
+        {
+            events.insert(event);
+        }
+    }
+    for f in graph.effects.values() {
+        let named = match held {
+            Held::Account(id) => {
+                [f.from_account_id, f.to_account_id, f.loan_account_id].contains(&Some(id))
+            }
+            Held::Asset(id) => f.asset_id == Some(id),
+        };
+        if named && let Some(event) = effect_event(graph, f.id) {
+            events.insert(event);
+        }
+    }
+    for a in graph.amounts.values() {
+        if is(a.account_id, a.asset_id) {
+            amount_events(graph, a.id, &mut events, 0);
+        }
+    }
+    for w in graph.withdrawal_sources.values() {
+        if is(w.account_id, w.asset_id)
+            && let Some(event) = effect_event(graph, w.effect_id)
+        {
+            events.insert(event);
+        }
+    }
+    for (effect, items) in &graph.withdrawal_items {
+        if items.iter().any(|i| is(Some(i.account_id), i.asset_id))
+            && let Some(event) = effect_event(graph, *effect)
+        {
+            events.insert(event);
+        }
+    }
+    let mut named: Vec<String> = graph
+        .events
+        .iter()
+        .filter(|e| events.contains(&e.id))
+        .map(|e| format!("event {}", e.name))
+        .collect();
+    named.sort();
+    out.extend(named);
+
+    if let Held::Asset(id) = held {
+        let mut holders: Vec<String> = graph
+            .positions
+            .iter()
+            .filter(|(_, lots)| lots.iter().any(|p| p.asset_id == id))
+            .filter_map(|(account, _)| account_name(*account))
+            .chain(
+                graph
+                    .property
+                    .values()
+                    .filter(|p| p.asset_id == id)
+                    .filter_map(|p| account_name(p.account_id)),
+            )
+            .collect();
+        holders.sort();
+        holders.dedup();
+        out.extend(holders);
+    }
+    out
+}
+
+/// The event an effect belongs to, climbing out of `Random` branches.
+fn effect_event(graph: &ScenarioGraph, mut id: i64) -> Option<i64> {
+    for _ in 0..64 {
+        let row = graph.effects.get(&id)?;
+        if let Some(event) = row.event_id {
+            return Some(event);
+        }
+        id = row.parent_id?;
+    }
+    None
+}
+
+/// The event a trigger belongs to, climbing out of `And`/`Or` members and the
+/// start and end conditions of a repeating trigger.
+fn trigger_event(graph: &ScenarioGraph, mut id: i64) -> Option<i64> {
+    for _ in 0..64 {
+        let row = graph.triggers.get(&id)?;
+        if let Some(event) = row.event_id {
+            return Some(event);
+        }
+        id = match row.parent_id {
+            Some(parent) => parent,
+            None => {
+                graph
+                    .triggers
+                    .values()
+                    .find(|p| p.start_trigger_id == Some(id) || p.end_trigger_id == Some(id))?
+                    .id
+            }
+        };
+    }
+    None
+}
+
+/// The events whose effects use the amount, directly or inside another amount.
+fn amount_events(graph: &ScenarioGraph, id: i64, out: &mut HashSet<i64>, depth: usize) {
+    if depth > 64 {
+        return;
+    }
+    for f in graph.effects.values() {
+        if (f.amount_id == Some(id) || f.down_payment_amount_id == Some(id))
+            && let Some(event) = effect_event(graph, f.id)
+        {
+            out.insert(event);
+        }
+    }
+    for a in graph.amounts.values() {
+        if a.left_id == Some(id) || a.right_id == Some(id) {
+            amount_events(graph, a.id, out, depth + 1);
+        }
+    }
+}
+
+// ── named parameters ─────────────────────────────────────────────────────────
+
+/// Add a named parameter, as `POST /scenarios/{id}/parameters` would. Returns
+/// its new id.
+pub(crate) fn create_parameter(graph: &mut ScenarioGraph, body: &ParameterBody) -> ApiResult<i64> {
+    let name = parameters::validate(body)?.to_owned();
+    atomically(graph, |g| {
+        if g.parameters.iter().any(|p| p.name == name) {
+            return Err(ApiError::Conflict(
+                "a parameter with that name already exists".into(),
+            ));
+        }
+        let id = g.parameters.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        g.parameters.push(parameter_row(id, name, body));
+        Ok(id)
+    })
+}
+
+/// Rewrite a parameter, as `PATCH /scenarios/{id}/parameters/{parameter}`
+/// would: a rename rewrites the expressions that use it, and a change of type
+/// is refused while anything does.
+pub(crate) fn update_parameter(
+    graph: &mut ScenarioGraph,
+    parameter_id: i64,
+    body: &ParameterBody,
+) -> ApiResult<()> {
+    let name = parameters::validate(body)?.to_owned();
+    atomically(graph, |g| {
+        let old = g
+            .parameters
+            .iter()
+            .find(|p| p.id == parameter_id)
+            .ok_or(ApiError::NotFound("parameter"))?;
+        let (kind, ..) = body.value.fields();
+        if old.kind != kind
+            && (!parameters::usages(g, parameter_id)?.is_empty()
+                || expression_refs::used_by(g, Entity::Parameter(parameter_id))?)
+        {
+            return Err(ApiError::Conflict(
+                "remove references before changing parameter type".into(),
+            ));
+        }
+        if g.parameters
+            .iter()
+            .any(|p| p.id != parameter_id && p.name == name)
+        {
+            return Err(ApiError::Conflict(
+                "a parameter with that name already exists".into(),
+            ));
+        }
+        let renamed = if name != old.name {
+            expression_refs::rerendered(g, Entity::Parameter(parameter_id), &name)?
+        } else {
+            Vec::new()
+        };
+        let row = g
+            .parameters
+            .iter_mut()
+            .find(|p| p.id == parameter_id)
+            .ok_or(ApiError::NotFound("parameter"))?;
+        *row = parameter_row(parameter_id, name, body);
+        set_sources(g, renamed);
+        Ok(())
+    })
+}
+
+/// Delete a parameter nothing uses, as `DELETE /scenarios/{id}/parameters/{parameter}`.
+pub(crate) fn delete_parameter(graph: &mut ScenarioGraph, parameter_id: i64) -> ApiResult<()> {
+    parameters::delete_refusal(graph, parameter_id)?;
+    graph.parameters.retain(|p| p.id != parameter_id);
+    Ok(())
+}
+
+fn parameter_row(id: i64, name: String, body: &ParameterBody) -> ParameterRow {
+    let (kind, number, date, years, months) = body.value.fields();
+    ParameterRow {
+        id,
+        name,
+        kind: kind.to_string(),
+        number_value: number,
+        date_value: date.map(str::to_string),
+        age_years: years,
+        age_months: months,
+    }
+}
+
+// ── scenario settings ────────────────────────────────────────────────────────
+
+/// Apply a settings update, as `PATCH /scenarios/{id}` would: fields the body
+/// omits are left alone. Switching the tax config or inflation profile needs
+/// the target in the graph's library ([`ScenarioGraph::tax_configs`]), which a
+/// live load has and a run snapshot has only for what the caller loaded.
+pub(crate) fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> ApiResult<()> {
+    if body
+        .name
+        .as_deref()
+        .is_some_and(|name| name.trim().is_empty())
+    {
+        return Err(ApiError::bad_request("scenario name cannot be empty"));
+    }
+    let date = |text: &str, field: &str| {
+        text.parse::<jiff::civil::Date>()
+            .map(|d| d.to_string())
+            .map_err(|e| ApiError::bad_request(format!("invalid {field} '{text}': {e}")))
+    };
+    let start_date = body
+        .start_date
+        .as_deref()
+        .map(|d| date(d, "start_date"))
+        .transpose()?;
+    let birth_date = body
+        .birth_date
+        .as_deref()
+        .map(|d| date(d, "birth_date"))
+        .transpose()?;
+    // CHECK constraint on the table.
+    if body.duration_years.is_some_and(|y| !(1..=120).contains(&y)) {
+        return Err(ApiError::bad_request(
+            "duration_years must be between 1 and 120",
+        ));
+    }
+    atomically(graph, |g| {
+        if let Some(id) = body.tax_config_id
+            && g.scenario.tax_config_id != Some(id)
+        {
+            let TaxConfigEntry { config, brackets } = g
+                .tax_configs
+                .get(&id)
+                .cloned()
+                .ok_or(ApiError::NotFound("tax config"))?;
+            g.scenario.tax_config_id = Some(id);
+            g.tax_config = Some(config);
+            g.tax_brackets = brackets;
+        }
+        if let Some(id) = body.inflation_profile_id
+            && g.scenario.inflation_profile_id != Some(id)
+        {
+            let InflationEntry {
+                name,
+                distribution_id,
+            } = g
+                .inflation_profiles
+                .get(&id)
+                .cloned()
+                .ok_or(ApiError::NotFound("inflation profile"))?;
+            g.scenario.inflation_profile_id = Some(id);
+            g.inflation_distribution_id = Some(distribution_id);
+            g.inflation_profile_name = Some(name);
+        }
+        if let Some(name) = body.name.as_deref() {
+            g.scenario.name = name.trim().to_string();
+        }
+        if let Some(description) = &body.description {
+            g.scenario.description = Some(description.clone());
+        }
+        if let Some(start_date) = start_date {
+            g.scenario.start_date = start_date;
+        }
+        if let Some(birth_date) = birth_date {
+            g.scenario.birth_date = Some(birth_date);
+        }
+        if let Some(years) = body.duration_years {
+            g.scenario.duration_years = years;
+        }
+        if let Some(ledger) = body.collect_ledger {
+            g.scenario.collect_ledger = i64::from(ledger);
+        }
+        Ok(())
+    })
+}
+
+// ── the caller's return profiles and tax configs ─────────────────────────────
+
+/// Ids for rows that exist only in memory start above every real id a run
+/// snapshot (which keeps just the library rows a run used) could be missing.
+const IN_MEMORY_ID_FLOOR: i64 = 1_000_000_000;
+
+fn next_library_id(existing: impl Iterator<Item = i64>) -> i64 {
+    existing.max().unwrap_or(0).max(IN_MEMORY_ID_FLOOR) + 1
+}
+
+/// Add a return profile to the caller's library, as `POST /return-profiles`
+/// would. Returns its id, which exists only in this graph.
+pub(crate) fn create_return_profile(
+    graph: &mut ScenarioGraph,
+    body: &CreateProfile,
+) -> ApiResult<i64> {
+    body.distribution.validate(0)?;
+    atomically(graph, |g| {
+        let name = body.name.trim();
+        if name.is_empty() {
+            return Err(ApiError::bad_request("a return profile needs a name"));
+        }
+        if g.return_profiles.values().any(|p| p.name == name) {
+            return Err(ApiError::Conflict(
+                "a return profile with that name already exists".into(),
+            ));
+        }
+        let distribution_id = add_distribution(g, &body.distribution);
+        let id = next_library_id(g.return_profiles.keys().copied());
+        g.return_profiles.insert(
+            id,
+            ReturnProfileRow {
+                asset_class: body.asset_class.map(|c| c.as_str().to_string()),
+                id,
+                name: name.to_string(),
+                description: body.description.clone(),
+                distribution_id,
+            },
+        );
+        Ok(id)
+    })
+}
+
+/// The `distributions` rows for `spec`, children first; returns the root's id.
+fn add_distribution(graph: &mut ScenarioGraph, spec: &DistributionSpec) -> i64 {
+    let (bull_id, bear_id) = match spec {
+        DistributionSpec::RegimeSwitching { bull, bear, .. } => (
+            Some(add_distribution(graph, bull)),
+            Some(add_distribution(graph, bear)),
+        ),
+        _ => (None, None),
+    };
+    let mut row = DistributionRow {
+        id: next_library_id(graph.distributions.keys().copied()),
+        kind: String::new(),
+        rate: None,
+        mean: None,
+        std_dev: None,
+        scale: None,
+        df: None,
+        bull_id,
+        bear_id,
+        bull_to_bear_prob: None,
+        bear_to_bull_prob: None,
+        history_preset: None,
+        block_size: None,
+    };
+    match spec {
+        DistributionSpec::None => row.kind = "None".into(),
+        DistributionSpec::Fixed { rate } => {
+            row.kind = "Fixed".into();
+            row.rate = Some(*rate);
+        }
+        DistributionSpec::Normal { mean, std_dev } => {
+            row.kind = "Normal".into();
+            (row.mean, row.std_dev) = (Some(*mean), Some(*std_dev));
+        }
+        DistributionSpec::LogNormal { mean, std_dev } => {
+            row.kind = "LogNormal".into();
+            (row.mean, row.std_dev) = (Some(*mean), Some(*std_dev));
+        }
+        DistributionSpec::StudentT { mean, scale, df } => {
+            row.kind = "StudentT".into();
+            (row.mean, row.scale, row.df) = (Some(*mean), Some(*scale), Some(*df));
+        }
+        DistributionSpec::RegimeSwitching {
+            bull_to_bear_prob,
+            bear_to_bull_prob,
+            ..
+        } => {
+            row.kind = "RegimeSwitching".into();
+            row.bull_to_bear_prob = Some(*bull_to_bear_prob);
+            row.bear_to_bull_prob = Some(*bear_to_bull_prob);
+        }
+        DistributionSpec::Bootstrap { preset, block_size } => {
+            row.kind = "Bootstrap".into();
+            row.history_preset = Some(preset.clone());
+            row.block_size = *block_size;
+        }
+    }
+    let id = row.id;
+    graph.distributions.insert(id, row);
+    id
+}
+
+/// Add a tax config to the caller's library, as `POST /tax-configs` would.
+/// Returns its id, which exists only in this graph.
+pub(crate) fn create_tax_config(
+    graph: &mut ScenarioGraph,
+    body: &CreateTaxConfig,
+) -> ApiResult<i64> {
+    let brackets = taxes::checked(body)?;
+    atomically(graph, |g| {
+        let name = body.name.trim();
+        if name.is_empty() {
+            return Err(ApiError::bad_request("a tax config needs a name"));
+        }
+        if g.tax_configs.values().any(|c| c.config.name == name) {
+            return Err(ApiError::Conflict(
+                "a tax config with that name already exists".into(),
+            ));
+        }
+        let id = next_library_id(g.tax_configs.keys().copied());
+        g.tax_configs.insert(
+            id,
+            TaxConfigEntry {
+                config: TaxConfigRow {
+                    id,
+                    name: name.to_string(),
+                    state_rate: body.state_rate,
+                    capital_gains_rate: body.capital_gains_rate,
+                    early_withdrawal_penalty_rate: body.early_withdrawal_penalty_rate,
+                },
+                brackets: brackets
+                    .iter()
+                    .map(|b| TaxBracketRow {
+                        threshold: b.threshold,
+                        rate: b.rate,
+                    })
+                    .collect(),
+            },
+        );
+        Ok(id)
+    })
 }
 
 // ── positions ────────────────────────────────────────────────────────────────

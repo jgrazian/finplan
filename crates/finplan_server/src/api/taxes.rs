@@ -187,34 +187,8 @@ async fn create(
     user: CurrentUser,
     Json(Submitted { body, fields }): Json<Submitted<CreateTaxConfig>>,
 ) -> ApiResult<(StatusCode, Json<TaxConfig>)> {
-    let brackets = validate_brackets(&body.federal_brackets)?;
-
     let mut tx = state.db.begin().await?;
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO tax_configs
-            (user_id, name, description, state_rate, capital_gains_rate,
-             early_withdrawal_penalty_rate)
-         VALUES (?1,?2,?3,?4,?5,?6) RETURNING id",
-    )
-    .bind(&user.id)
-    .bind(body.name.trim())
-    .bind(&body.description)
-    .bind(body.state_rate)
-    .bind(body.capital_gains_rate)
-    .bind(body.early_withdrawal_penalty_rate)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?;
-
-    for bracket in &brackets {
-        sqlx::query("INSERT INTO tax_brackets (tax_config_id, threshold, rate) VALUES (?1,?2,?3)")
-            .bind(id)
-            .bind(bracket.threshold)
-            .bind(bracket.rate)
-            .execute(&mut *tx)
-            .await?;
-    }
-
+    let id = create_in(&mut tx, &user.id, &body).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(
@@ -229,6 +203,62 @@ async fn create(
     );
 
     Ok((StatusCode::CREATED, Json(load(&state, id, &user.id).await?)))
+}
+
+/// Insert a tax config and its bracket table, as `POST /tax-configs` does;
+/// returns its id. The suggestion path writes through this too, inside its
+/// transaction.
+pub(crate) async fn create_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    user_id: &str,
+    body: &CreateTaxConfig,
+) -> ApiResult<i64> {
+    let brackets = checked(body)?;
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO tax_configs
+            (user_id, name, description, state_rate, capital_gains_rate,
+             early_withdrawal_penalty_rate)
+         VALUES (?1,?2,?3,?4,?5,?6) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(body.state_rate)
+    .bind(body.capital_gains_rate)
+    .bind(body.early_withdrawal_penalty_rate)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?;
+
+    for bracket in &brackets {
+        sqlx::query("INSERT INTO tax_brackets (tax_config_id, threshold, rate) VALUES (?1,?2,?3)")
+            .bind(id)
+            .bind(bracket.threshold)
+            .bind(bracket.rate)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(id)
+}
+
+/// What creating `body` would refuse: rates outside 0..1 (the table's CHECKs)
+/// and a bad bracket table. Returns the brackets, sorted.
+pub(crate) fn checked(body: &CreateTaxConfig) -> ApiResult<Vec<Bracket>> {
+    for (name, rate) in [
+        ("state_rate", body.state_rate),
+        ("capital_gains_rate", body.capital_gains_rate),
+        (
+            "early_withdrawal_penalty_rate",
+            body.early_withdrawal_penalty_rate,
+        ),
+    ] {
+        if !(0.0..=1.0).contains(&rate) {
+            return Err(ApiError::bad_request(format!(
+                "{name} is a fraction between 0 and 1"
+            )));
+        }
+    }
+    validate_brackets(&body.federal_brackets)
 }
 
 async fn update(

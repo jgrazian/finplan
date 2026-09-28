@@ -248,6 +248,21 @@ pub struct TaxBracketRow {
     pub rate: f64,
 }
 
+/// A tax config of the caller's library with its bracket table.
+#[derive(Debug, Clone)]
+pub struct TaxConfigEntry {
+    pub config: TaxConfigRow,
+    pub brackets: Vec<TaxBracketRow>,
+}
+
+/// An inflation profile of the caller's library: its name and the
+/// distribution (in [`ScenarioGraph::distributions`]) that drives it.
+#[derive(Debug, Clone)]
+pub struct InflationEntry {
+    pub name: String,
+    pub distribution_id: i64,
+}
+
 /// Every row backing one scenario, indexed for in-memory tree assembly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioGraph {
@@ -270,6 +285,15 @@ pub struct ScenarioGraph {
 
     pub tax_config: Option<TaxConfigRow>,
     pub tax_brackets: Vec<TaxBracketRow>,
+    /// The caller's whole tax config and inflation profile libraries, so an
+    /// in-memory edit can switch the scenario onto another (`domain::edit`).
+    /// Filled by a live load only: they are not part of a run's input
+    /// snapshot, which keeps just the ones the run used, so whoever edits a
+    /// snapshot loads the ones its changes name first.
+    #[serde(skip)]
+    pub tax_configs: HashMap<i64, TaxConfigEntry>,
+    #[serde(skip)]
+    pub inflation_profiles: HashMap<i64, InflationEntry>,
 
     pub events: Vec<EventRow>,
     #[serde(default)]
@@ -448,6 +472,43 @@ impl ScenarioGraph {
             None => (None, Vec::new()),
         };
 
+        let mut tax_configs = HashMap::new();
+        let config_rows: Vec<TaxConfigRow> = sqlx::query_as(
+            "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate
+               FROM tax_configs WHERE user_id = ?1",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *db)
+        .await?;
+        for config in config_rows {
+            let brackets: Vec<TaxBracketRow> = sqlx::query_as(
+                "SELECT threshold, rate FROM tax_brackets
+                  WHERE tax_config_id = ?1 ORDER BY threshold ASC",
+            )
+            .bind(config.id)
+            .fetch_all(&mut *db)
+            .await?;
+            tax_configs.insert(config.id, TaxConfigEntry { config, brackets });
+        }
+        let inflation_profiles: HashMap<i64, InflationEntry> =
+            sqlx::query_as::<_, (i64, String, i64)>(
+                "SELECT id, name, distribution_id FROM inflation_profiles WHERE user_id = ?1",
+            )
+            .bind(user_id)
+            .fetch_all(&mut *db)
+            .await?
+            .into_iter()
+            .map(|(id, name, distribution_id)| {
+                (
+                    id,
+                    InflationEntry {
+                        name,
+                        distribution_id,
+                    },
+                )
+            })
+            .collect();
+
         let events: Vec<EventRow> = sqlx::query_as(
             "SELECT id, name, description, fires_once, enabled, sort_order
                FROM events WHERE scenario_id = ?1 ORDER BY sort_order, id",
@@ -538,6 +599,8 @@ impl ScenarioGraph {
             inflation_profile_name,
             tax_config,
             tax_brackets,
+            tax_configs,
+            inflation_profiles,
             events,
             parameters,
             triggers: trigger_rows.into_iter().map(|r| (r.id, r)).collect(),

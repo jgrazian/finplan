@@ -4,7 +4,12 @@ import type { DiffLine } from "./DiffLine";
 import type { PreviewStats } from "./PreviewStats";
 
 export type Preview = {
-  base_run_id: number;
+  /**
+   * The run the preview was paired against; null for a draft, which has
+   * none. Such a preview only checks the batch and renders its diff: it
+   * simulates nothing, so `base` and `edited` are null.
+   */
+  base_run_id: number | null;
   /**
    * Iterations behind both `base` and `edited`.
    */

@@ -10,9 +10,10 @@ export type Suggestion = {
   id: number;
   scenario_id: number;
   /**
-   * The run whose inputs and results the suggestion was written against.
+   * The run whose inputs and results the suggestion was written against;
+   * null on a note written for a draft, which has no run yet.
    */
-  run_id: number;
+  run_id: number | null;
   source: SuggestionSource;
   /**
    * The rule that wrote it; null for model-written suggestions.

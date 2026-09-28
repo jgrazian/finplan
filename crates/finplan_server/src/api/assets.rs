@@ -333,40 +333,9 @@ async fn destroy(
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let graph = crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
-    if graph.assets.iter().any(|a| a.id == id)
-        && super::expression_refs::used_by(&graph, super::expression_refs::Entity::Asset(id))?
-    {
-        return Err(ApiError::Conflict(
-            "asset is referenced by an amount expression".into(),
-        ));
-    }
-
-    // `account_property.asset_id` is ON DELETE RESTRICT, so deleting an asset a
-    // property account is built on fails at the database. Report that clearly.
-    let held_by: Option<String> = sqlx::query_scalar(
-        "SELECT a.name FROM account_property p JOIN accounts a ON a.id = p.account_id
-          WHERE p.asset_id = ?1 LIMIT 1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
-
-    if let Some(account) = held_by {
-        return Err(ApiError::Conflict(format!(
-            "asset is the underlying value of property account '{account}'; delete that account first"
-        )));
-    }
-
-    let affected = sqlx::query("DELETE FROM assets WHERE id = ?1 AND scenario_id = ?2")
-        .bind(id)
-        .bind(scenario_id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("asset"));
-    }
+    let mut conn = state.db.acquire().await?;
+    destroy_in(&mut conn, &graph, scenario_id, id).await?;
+    drop(conn);
 
     state.telemetry.mutation(
         Resource::Asset,
@@ -380,6 +349,52 @@ async fn destroy(
     );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete an asset, as `DELETE /scenarios/{id}/assets/{asset}` does. `live` is
+/// the plan as stored, for the expression check. The suggestion path writes
+/// through this too, inside its transaction.
+pub(crate) async fn destroy_in(
+    conn: &mut sqlx::SqliteConnection,
+    live: &crate::compile::rows::ScenarioGraph,
+    scenario_id: i64,
+    id: i64,
+) -> ApiResult<()> {
+    if live.assets.iter().any(|a| a.id == id)
+        && super::expression_refs::used_by(live, super::expression_refs::Entity::Asset(id))?
+    {
+        return Err(ApiError::Conflict(
+            "asset is referenced by an amount expression".into(),
+        ));
+    }
+
+    // `account_property.asset_id` is ON DELETE RESTRICT, so deleting an asset a
+    // property account is built on fails at the database. Report that clearly.
+    let held_by: Option<String> = sqlx::query_scalar(
+        "SELECT a.name FROM account_property p JOIN accounts a ON a.id = p.account_id
+          WHERE p.asset_id = ?1 LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+
+    if let Some(account) = held_by {
+        return Err(ApiError::Conflict(format!(
+            "asset is the underlying value of property account '{account}'; delete that account first"
+        )));
+    }
+
+    let affected = sqlx::query("DELETE FROM assets WHERE id = ?1 AND scenario_id = ?2")
+        .bind(id)
+        .bind(scenario_id)
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("asset"));
+    }
+    Ok(())
 }
 
 impl ActivityFields for CreateAsset {

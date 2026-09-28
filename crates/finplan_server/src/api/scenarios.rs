@@ -22,6 +22,17 @@ pub fn router() -> Router<AppState> {
         .route("/scenarios/{id}/compile", post(compile_check))
 }
 
+/// Whether a scenario is a plan or an AI-guided draft still being written
+/// (see `drafts`). Drafts never appear in the scenario list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type, TS)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
+#[ts(export)]
+pub enum ScenarioStatus {
+    Draft,
+    Active,
+}
+
 #[derive(Debug, Serialize, sqlx::FromRow, TS)]
 #[ts(export)]
 pub struct Scenario {
@@ -35,6 +46,7 @@ pub struct Scenario {
     pub inflation_profile_id: Option<i64>,
     pub tax_config_id: Option<i64>,
     pub collect_ledger: bool,
+    pub status: ScenarioStatus,
     pub created_at: String,
     pub updated_at: String,
     /// When this scenario last produced results, and what they said. Carried
@@ -48,7 +60,7 @@ pub struct Scenario {
 /// Failed or pending runs do not replace the last successful result.
 pub(crate) const SCENARIO_COLUMNS: &str =
     "id, slug, name, description, start_date, birth_date, duration_years,
-     inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at,
+     inflation_profile_id, tax_config_id, collect_ledger, status, created_at, updated_at,
      (SELECT r.finished_at FROM runs r
        WHERE r.scenario_id = scenarios.id AND r.status = 'succeeded'
        ORDER BY r.finished_at DESC LIMIT 1) AS last_run_at,
@@ -106,7 +118,8 @@ fn validate_date(text: &str, field: &str) -> ApiResult<String> {
 
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<Scenario>>> {
     let rows: Vec<Scenario> = sqlx::query_as(&format!(
-        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE user_id = ?1 ORDER BY updated_at DESC"
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios
+          WHERE user_id = ?1 AND status = 'active' ORDER BY updated_at DESC"
     ))
     .bind(&user.id)
     .fetch_all(&state.db)
@@ -134,13 +147,15 @@ async fn create(
     user: CurrentUser,
     Json(Submitted { body, fields }): Json<Submitted<CreateScenario>>,
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
+    let mut conn = state.db.acquire().await?;
     owned_assumptions(
-        &state,
+        &mut conn,
         &user.id,
         body.inflation_profile_id,
         body.tax_config_id,
     )
     .await?;
+    drop(conn);
     let start_date = validate_date(&body.start_date, "start_date")?;
     let birth_date = body
         .birth_date
@@ -203,6 +218,39 @@ async fn update(
     Json(Submitted { body, fields }): Json<Submitted<UpdateScenario>>,
 ) -> ApiResult<Json<Scenario>> {
     super::owned_scenario(&state.db, id, &user.id).await?;
+    let mut conn = state.db.acquire().await?;
+    update_in(&mut conn, &user.id, id, &body).await?;
+    drop(conn);
+
+    state.telemetry.mutation(
+        Resource::Scenario,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+    let row: Scenario = sqlx::query_as(&format!(
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
+    ))
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(row))
+}
+
+/// Apply a settings update, as `PATCH /scenarios/{id}` does: name, dates,
+/// horizon and the assumptions the plan uses. Fields the body omits are left
+/// alone. The suggestion path writes through this too, inside its transaction.
+pub(crate) async fn update_in(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    id: i64,
+    body: &UpdateScenario,
+) -> ApiResult<()> {
     if body
         .name
         .as_deref()
@@ -210,13 +258,13 @@ async fn update(
     {
         return Err(ApiError::bad_request("scenario name cannot be empty"));
     }
-    owned_assumptions(
-        &state,
-        &user.id,
-        body.inflation_profile_id,
-        body.tax_config_id,
-    )
-    .await?;
+    // CHECK constraint on the table.
+    if body.duration_years.is_some_and(|y| !(1..=120).contains(&y)) {
+        return Err(ApiError::bad_request(
+            "duration_years must be between 1 and 120",
+        ));
+    }
+    owned_assumptions(conn, user_id, body.inflation_profile_id, body.tax_config_id).await?;
 
     let start_date = body
         .start_date
@@ -252,7 +300,7 @@ async fn update(
     .bind(body.inflation_profile_id)
     .bind(body.tax_config_id)
     .bind(body.collect_ledger.map(i64::from))
-    .execute(&state.db)
+    .execute(&mut *conn)
     .await
     .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?
     .rows_affected();
@@ -260,25 +308,7 @@ async fn update(
     if affected == 0 {
         return Err(ApiError::NotFound("scenario"));
     }
-
-    state.telemetry.mutation(
-        Resource::Scenario,
-        Operation::Updated,
-        &EventFields {
-            user_id: Some(&user.id),
-            scenario_id: Some(id),
-            resource_id: Some(id),
-            fields: &fields,
-            ..Default::default()
-        },
-    );
-    let row: Scenario = sqlx::query_as(&format!(
-        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
-    ))
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
-    Ok(Json(row))
+    Ok(())
 }
 
 async fn destroy(
@@ -391,7 +421,7 @@ async fn compile_check(
 }
 
 async fn owned_assumptions(
-    state: &AppState,
+    conn: &mut sqlx::SqliteConnection,
     user: &str,
     inflation: Option<i64>,
     tax: Option<i64>,
@@ -403,7 +433,7 @@ async fn owned_assumptions(
             ))
             .bind(id)
             .bind(user)
-            .fetch_one(&state.db)
+            .fetch_one(&mut *conn)
             .await?;
             if !found {
                 return Err(ApiError::bad_request(
