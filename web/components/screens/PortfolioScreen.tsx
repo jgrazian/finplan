@@ -4,6 +4,7 @@ import { SubTabBar } from "@/components/layout";
 import type { SegmentOption } from "@/components/ui";
 import type { RawWorkspace } from "@/lib/hooks/useWorkspace";
 import { useNav } from "@/lib/nav";
+import { noteLink } from "@/lib/view/review";
 import type { Account, InflationProfile, ReturnProfile } from "@/lib/types";
 import { AccountsScreen } from "./AccountsScreen";
 import { AssetsScreen } from "./AssetsScreen";
@@ -28,6 +29,8 @@ export function PortfolioScreen({
   onActivateInflation,
   onChanged,
   offline,
+  reviewNotes,
+  onOpenReview,
 }: {
   scenarioId: number;
   accounts: Account[];
@@ -39,6 +42,9 @@ export function PortfolioScreen({
   onChanged: () => void;
   /** Writes are being refused: add and delete cannot be offered. */
   offline?: boolean;
+  /** Open review notes written about the portfolio. */
+  reviewNotes?: number;
+  onOpenReview?: () => void;
 }) {
   // The sub-tab is in the query, so a refresh comes back to the same half of
   // the tab. Anything else in `sec` reads as the default rather than as an
@@ -56,6 +62,19 @@ export function PortfolioScreen({
           onChange={nav.setSection}
         />
       </div>
+      {onOpenReview && noteLink(reviewNotes) && (
+        <div style={{ padding: "6px 16px", fontSize: 12, borderBottom: "1px solid var(--color-divider)" }}>
+          <a
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              onOpenReview();
+            }}
+          >
+            {noteLink(reviewNotes)}
+          </a>
+        </div>
+      )}
       {section === "accounts" ? (
         <AccountsScreen
           scenarioId={scenarioId}

@@ -8,6 +8,7 @@ use tower::ServiceExt;
 fn config() -> ServerConfig {
     ServerConfig {
         mail: Default::default(),
+        review_ai: Default::default(),
         log_format: Default::default(),
         metrics_bind: None,
         hosted: true,

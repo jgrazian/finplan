@@ -6,6 +6,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
+use crate::api::funding::FundingDiagnostics;
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult};
@@ -368,6 +369,7 @@ struct StatsRow {
     converged: Option<i64>,
     convergence_metric: Option<String>,
     convergence_value: Option<f64>,
+    funding_diagnostics: Option<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -563,6 +565,10 @@ pub struct Results {
     pub inflation: Vec<InflationPoint>,
     /// Per-year ledger index, for the years the ledger covers.
     pub ledger_years: Vec<LedgerYear>,
+    /// When, where and how the iterations that failed the funding check
+    /// failed, over the whole run rather than the shown path. Kept for
+    /// superseded runs too. Null for runs stored before it was measured.
+    pub funding_diagnostics: Option<FundingDiagnostics>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -592,7 +598,7 @@ pub(crate) async fn results(
     let stats_row: StatsRow = sqlx::query_as(
         "SELECT num_iterations, success_rate, funding_success_rate, mean_final_net_worth, std_dev_final_net_worth,
                 min_final_net_worth, max_final_net_worth, lifetime_taxes,
-                converged, convergence_metric, convergence_value
+                converged, convergence_metric, convergence_value, funding_diagnostics
            FROM run_stats WHERE run_id = ?1",
     )
     .bind(id)
@@ -607,6 +613,18 @@ pub(crate) async fn results(
     .bind(id)
     .fetch_all(&state.db)
     .await?;
+
+    let funding_diagnostics = stats_row.funding_diagnostics.as_deref().and_then(|json| {
+        serde_json::from_str::<FundingDiagnostics>(json)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    event = "run.funding_diagnostics_unreadable",
+                    run_id = id,
+                    %error
+                );
+            })
+            .ok()
+    });
 
     let stats = Stats {
         num_iterations: stats_row.num_iterations,
@@ -790,6 +808,7 @@ pub(crate) async fn results(
         warnings,
         inflation,
         ledger_years: ledger_years(&state, id, series_percentile).await?,
+        funding_diagnostics,
     }))
 }
 

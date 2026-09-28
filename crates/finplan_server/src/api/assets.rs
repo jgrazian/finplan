@@ -41,7 +41,7 @@ pub struct Asset {
 const COLUMNS: &str =
     "id, name, description, initial_price, return_profile_id, tracking_error, sort_order";
 
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct CreateAsset {
     pub name: String,
@@ -142,6 +142,37 @@ async fn create(
         owned_profile(&state, profile_id, &user.id).await?;
     }
 
+    let mut tx = state.db.begin().await?;
+    let id = create_in(&mut tx, scenario_id, &body).await?;
+    tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Asset,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+    super::touch_scenario(&state.db, scenario_id).await?;
+
+    let row: Asset = sqlx::query_as(&format!("SELECT {COLUMNS} FROM assets WHERE id = ?1"))
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// Add an asset to the scenario; the SQL half of `POST .../assets`. The
+/// caller has already checked any return profile is the user's.
+pub(crate) async fn create_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    body: &CreateAsset,
+) -> ApiResult<i64> {
     if body.initial_price <= 0.0 {
         return Err(ApiError::bad_request("initial_price must be positive"));
     }
@@ -162,28 +193,10 @@ async fn create(
     .bind(body.return_profile_id)
     .bind(body.tracking_error)
     .bind(body.sort_order)
-    .fetch_one(&state.db)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?;
-
-    state.telemetry.mutation(
-        Resource::Asset,
-        Operation::Created,
-        &EventFields {
-            user_id: Some(&user.id),
-            scenario_id: Some(scenario_id),
-            resource_id: Some(id),
-            fields: &fields,
-            ..Default::default()
-        },
-    );
-    super::touch_scenario(&state.db, scenario_id).await?;
-
-    let row: Asset = sqlx::query_as(&format!("SELECT {COLUMNS} FROM assets WHERE id = ?1"))
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
-    Ok((StatusCode::CREATED, Json(row)))
+    Ok(id)
 }
 
 /// Put the scenario's assets in the order the body names.
@@ -232,51 +245,12 @@ async fn update(
     } else {
         None
     };
-    // `Some(None)` is a deliberate unmap, `None` is silence about the mapping.
-    let remap = body.return_profile_id.is_some();
-    let profile_id = body.return_profile_id.flatten();
-    if let Some(profile_id) = profile_id {
+    if let Some(Some(profile_id)) = body.return_profile_id {
         owned_profile(&state, profile_id, &user.id).await?;
     }
 
     let mut tx = state.db.begin().await?;
-    let affected = sqlx::query(
-        "UPDATE assets SET
-            name              = COALESCE(?3, name),
-            description       = COALESCE(?4, description),
-            initial_price     = COALESCE(?5, initial_price),
-            return_profile_id = CASE WHEN ?9 THEN ?6 ELSE return_profile_id END,
-            tracking_error    = COALESCE(?7, tracking_error),
-            sort_order        = COALESCE(?8, sort_order),
-            updated_at        = datetime('now')
-          WHERE id = ?1 AND scenario_id = ?2",
-    )
-    .bind(id)
-    .bind(scenario_id)
-    .bind(body.name.as_deref().map(str::trim))
-    .bind(&body.description)
-    .bind(body.initial_price)
-    .bind(profile_id)
-    .bind(body.tracking_error)
-    .bind(body.sort_order)
-    .bind(remap)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?
-    .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("asset"));
-    }
-    if let (Some(graph), Some(name)) = (&rename_graph, &body.name) {
-        super::expression_refs::rerender(
-            &mut tx,
-            graph,
-            super::expression_refs::Entity::Asset(id),
-            name.trim(),
-        )
-        .await?;
-    }
+    update_in(&mut tx, rename_graph.as_ref(), scenario_id, id, &body).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(
@@ -297,6 +271,59 @@ async fn update(
         .fetch_one(&state.db)
         .await?;
     Ok(Json(row))
+}
+
+/// Apply `body` to asset `id`; the SQL half of `PATCH .../assets/{id}`, after
+/// the profile has been checked as the caller's. `rename_graph` is the plan
+/// before the change, needed only when `body` renames the asset.
+pub(crate) async fn update_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    rename_graph: Option<&crate::compile::rows::ScenarioGraph>,
+    scenario_id: i64,
+    id: i64,
+    body: &UpdateAsset,
+) -> ApiResult<()> {
+    // `Some(None)` is a deliberate unmap, `None` is silence about the mapping.
+    let remap = body.return_profile_id.is_some();
+    let profile_id = body.return_profile_id.flatten();
+    let affected = sqlx::query(
+        "UPDATE assets SET
+            name              = COALESCE(?3, name),
+            description       = COALESCE(?4, description),
+            initial_price     = COALESCE(?5, initial_price),
+            return_profile_id = CASE WHEN ?9 THEN ?6 ELSE return_profile_id END,
+            tracking_error    = COALESCE(?7, tracking_error),
+            sort_order        = COALESCE(?8, sort_order),
+            updated_at        = datetime('now')
+          WHERE id = ?1 AND scenario_id = ?2",
+    )
+    .bind(id)
+    .bind(scenario_id)
+    .bind(body.name.as_deref().map(str::trim))
+    .bind(&body.description)
+    .bind(body.initial_price)
+    .bind(profile_id)
+    .bind(body.tracking_error)
+    .bind(body.sort_order)
+    .bind(remap)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?
+    .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("asset"));
+    }
+    if let (Some(graph), Some(name)) = (rename_graph, &body.name) {
+        super::expression_refs::rerender(
+            tx,
+            graph,
+            super::expression_refs::Entity::Asset(id),
+            name.trim(),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 async fn destroy(

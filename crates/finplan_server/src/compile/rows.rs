@@ -518,38 +518,12 @@ impl ScenarioGraph {
             positions.entry(row.account_id).or_default().push(row);
         }
 
-        let mut triggers = HashMap::new();
-        let mut trigger_children: HashMap<i64, Vec<i64>> = HashMap::new();
-        let mut event_trigger = HashMap::new();
-        for row in trigger_rows {
-            if let Some(parent) = row.parent_id {
-                trigger_children.entry(parent).or_default().push(row.id);
-            }
-            if let Some(event_id) = row.event_id {
-                event_trigger.insert(event_id, row.id);
-            }
-            triggers.insert(row.id, row);
-        }
-
-        let mut effects = HashMap::new();
-        let mut event_effects: HashMap<i64, Vec<i64>> = HashMap::new();
-        let mut effect_children = HashMap::new();
-        for row in effect_rows {
-            if let Some(event_id) = row.event_id {
-                event_effects.entry(event_id).or_default().push(row.id);
-            }
-            if let (Some(parent), Some(slot)) = (row.parent_id, row.parent_slot.clone()) {
-                effect_children.insert((parent, slot), row.id);
-            }
-            effects.insert(row.id, row);
-        }
-
         let mut withdrawal_items: HashMap<i64, Vec<WithdrawalItemRow>> = HashMap::new();
         for row in wi_rows {
             withdrawal_items.entry(row.effect_id).or_default().push(row);
         }
 
-        Ok(ScenarioGraph {
+        let mut graph = ScenarioGraph {
             scenario,
             assets,
             accounts,
@@ -566,16 +540,60 @@ impl ScenarioGraph {
             tax_brackets,
             events,
             parameters,
-            triggers,
-            trigger_children,
-            event_trigger,
+            triggers: trigger_rows.into_iter().map(|r| (r.id, r)).collect(),
+            trigger_children: HashMap::new(),
+            event_trigger: HashMap::new(),
             amounts: amount_rows.into_iter().map(|r| (r.id, r)).collect(),
-            effects,
-            event_effects,
-            effect_children,
+            effects: effect_rows.into_iter().map(|r| (r.id, r)).collect(),
+            event_effects: HashMap::new(),
+            effect_children: HashMap::new(),
             withdrawal_sources: ws_rows.into_iter().map(|r| (r.effect_id, r)).collect(),
             withdrawal_items,
-        })
+        };
+        graph.reindex();
+        Ok(graph)
+    }
+
+    /// Rebuild the lookup indexes from the trigger and effect rows.
+    ///
+    /// The indexes are derived data: after rows are added or removed in memory,
+    /// this puts them back exactly as a fresh [`load`](Self::load) would —
+    /// children and top-level effects in `(position, id)` order, withdrawal
+    /// items by position.
+    pub(crate) fn reindex(&mut self) {
+        let mut triggers: Vec<&TriggerRow> = self.triggers.values().collect();
+        triggers.sort_by_key(|r| (r.parent_id, r.position, r.id));
+        self.trigger_children.clear();
+        self.event_trigger.clear();
+        for row in triggers {
+            if let Some(parent) = row.parent_id {
+                self.trigger_children
+                    .entry(parent)
+                    .or_default()
+                    .push(row.id);
+            }
+            if let Some(event_id) = row.event_id {
+                self.event_trigger.insert(event_id, row.id);
+            }
+        }
+
+        let mut effects: Vec<&EffectRow> = self.effects.values().collect();
+        effects.sort_by_key(|r| (r.event_id, r.position, r.id));
+        self.event_effects.clear();
+        self.effect_children.clear();
+        for row in effects {
+            if let Some(event_id) = row.event_id {
+                self.event_effects.entry(event_id).or_default().push(row.id);
+            }
+            if let (Some(parent), Some(slot)) = (row.parent_id, row.parent_slot.clone()) {
+                self.effect_children.insert((parent, slot), row.id);
+            }
+        }
+
+        self.withdrawal_items.retain(|_, items| !items.is_empty());
+        for items in self.withdrawal_items.values_mut() {
+            items.sort_by_key(|r| r.position);
+        }
     }
 }
 

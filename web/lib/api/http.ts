@@ -13,6 +13,8 @@ export class ApiError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** The whole response body, for routes that explain a refusal in fields. */
+    readonly body?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -92,7 +94,7 @@ async function request<T>(
 async function toApiError(response: Response): Promise<ApiError> {
   try {
     const body = (await response.json()) as ErrorBody;
-    return new ApiError(response.status, body.error.code, body.error.message);
+    return new ApiError(response.status, body.error.code, body.error.message, body);
   } catch {
     // A proxy or a panic can answer with something that is not our error shape.
     return new ApiError(response.status, "unknown", response.statusText);

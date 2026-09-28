@@ -14,7 +14,7 @@
  * is the same behaviour a hand-edited URL should get.
  */
 
-export type TabId = "portfolio" | "plan" | "results" | "analysis" | "account";
+export type TabId = "portfolio" | "plan" | "results" | "analysis" | "review" | "account";
 
 /** Every path the app answers on, in the order the route enumerates them. */
 export const TAB_IDS: ReadonlyArray<TabId> = [
@@ -22,6 +22,7 @@ export const TAB_IDS: ReadonlyArray<TabId> = [
   "plan",
   "results",
   "analysis",
+  "review",
   "account",
 ];
 

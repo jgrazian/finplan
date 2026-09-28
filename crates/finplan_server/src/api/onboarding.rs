@@ -1,4 +1,5 @@
 //! Guided setup writes the same account, position and event records as advanced editing.
+use super::row_batch::RowBatch;
 use super::specs::*;
 use crate::observability::{EventFields, Operation, Resource};
 use crate::{
@@ -294,14 +295,14 @@ async fn create(
             continue;
         }
         let event: i64 = sqlx::query_scalar("INSERT INTO events(scenario_id,name,fires_once,enabled,sort_order) VALUES(?,?,0,1,?) RETURNING id").bind(id).bind(name).bind(order).fetch_one(&mut *tx).await?;
+        let mut batch = RowBatch::for_scenario(&mut tx, id).await?;
         TriggerSpec::Repeating {
             interval: Interval::Yearly,
             start_condition: if retired { age() } else { None },
             end_condition: if retired { None } else { age() },
             max_occurrences: None,
         }
-        .insert(&mut tx, id, TriggerParent::Event(event), 0)
-        .await?;
+        .lower(&mut batch, TriggerParent::Event(event), 0)?;
         let mut effects = vec![];
         if income {
             let taxable_salary = value - annual_401k_contribution;
@@ -362,18 +363,16 @@ async fn create(
             });
         }
         for (position, effect) in effects.iter().enumerate() {
-            effect
-                .insert(
-                    &mut tx,
-                    id,
-                    EffectParent::Event {
-                        event_id: event,
-                        position: position as i64,
-                    },
-                    0,
-                )
-                .await?;
+            effect.lower(
+                &mut batch,
+                EffectParent::Event {
+                    event_id: event,
+                    position: position as i64,
+                },
+                0,
+            )?;
         }
+        batch.insert(&mut tx, id).await?;
     }
     sqlx::query(
         "INSERT INTO setup_receipts(user_id,request_id,request_json,scenario_id) VALUES(?,?,?,?)",

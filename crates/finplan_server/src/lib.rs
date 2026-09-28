@@ -8,6 +8,7 @@
 //!   compile/   stored rows  ->  finplan_core::SimulationConfig
 //!   runner/    background Monte Carlo execution and result persistence
 //!   analysis/  sweeps, sensitivity and goal seeks, held in memory
+//!   suggest/   structured plan edits (`Change`) resolved over a graph, pure
 //! ```
 //!
 //! The database schema is normalized around the *domain*, not around the
@@ -29,6 +30,7 @@ pub mod observability;
 pub mod runner;
 pub mod seed;
 pub mod state;
+pub mod suggest;
 
 use std::sync::Arc;
 
@@ -39,6 +41,7 @@ use tower_http::cors::CorsLayer;
 
 use config::ServerConfig;
 use state::AppState;
+use suggest::ai::AiClient;
 
 /// Build the application state and router, run migrations, and recover any run
 /// left in flight by a previous process.
@@ -46,10 +49,38 @@ use state::AppState;
 /// This takes an initial queue snapshot but opens no network listeners. The
 /// executable owns an `ObservabilityRuntime` for sampling and session maintenance.
 pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn std::error::Error>> {
+    build_with(config, None).await
+}
+
+/// [`build`], with a review model client in place of the one the config
+/// describes — a scripted transport in tests, say.
+pub async fn build_with(
+    config: ServerConfig,
+    review_ai: Option<Arc<AiClient>>,
+) -> Result<(Router, AppState), Box<dyn std::error::Error>> {
     config.validate().inspect_err(|reason| {
         // validate() returns only application-owned static explanations.
         tracing::error!(event = "server.configuration_invalid", reason);
     })?;
+    let review_ai = match review_ai {
+        Some(client) => Some(client),
+        None => AiClient::from_config(&config.review_ai)?.map(Arc::new),
+    };
+    if config.review_ai.missing_key() {
+        tracing::warn!(
+            event = "server.configuration_warning",
+            reason = "review_ai_missing_key",
+            hint = "set FINPLAN_OPENROUTER_API_KEY; reviews stay rules-only until then"
+        );
+    }
+    let review_ai = review_ai.map(api::review_ai::AiReviews::new);
+    if let Some(reviews) = &review_ai {
+        tracing::info!(
+            event = "review_ai.enabled",
+            provider = "openrouter",
+            model = reviews.model()
+        );
+    }
     let telemetry = observability::Telemetry::new(config.sim_workers);
     let db = db::connect(&config.database_url, config.db_pool_size)
         .await
@@ -64,6 +95,8 @@ pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn s
 
     let runs = runner::spawn_with_telemetry(db.clone(), config.sim_workers, telemetry.clone());
     runner::requeue_orphans(&db, &runs).await?;
+    api::review_ai::recover(&db).await?;
+    api::suggestion_chat::recover(&db).await?;
 
     let analyses = analysis::AnalysisJobs::new_with_telemetry(
         db.clone(),
@@ -77,6 +110,7 @@ pub async fn build(config: ServerConfig) -> Result<(Router, AppState), Box<dyn s
         config: Arc::new(config),
         runs,
         analyses,
+        review_ai,
     };
 
     observability::sample(&state).await;

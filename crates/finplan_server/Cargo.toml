@@ -35,6 +35,11 @@ sha2 = "0.10"
 # with `#[ts(...)]`, so ts-rs ignoring that serde attribute is expected.
 ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+# Review notes through OpenRouter (suggest::ai), the only model provider.
+# openrouter-rs speaks reqwest 0.12 + rustls, the same TLS stack lettre pulls
+# in; reqwest is named directly only to hand it a client with our timeout.
+openrouter-rs = "0.16"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [features]
 # Pretty-prints the generated TypeScript. Only wanted while regenerating the

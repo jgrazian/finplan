@@ -6,15 +6,22 @@ pub mod archives;
 pub mod assets;
 pub mod contact;
 pub mod events;
-mod expression_refs;
+pub(crate) mod expression_refs;
 pub mod expressions;
+pub mod funding;
 pub mod onboarding;
 pub mod parameters;
+pub mod preview;
 pub mod profiles;
 pub mod reports;
+pub mod review_ai;
+pub(crate) mod row_batch;
 pub mod runs;
 pub mod scenarios;
 pub mod specs;
+pub mod suggestion_chat;
+pub(crate) mod suggestion_paths;
+pub mod suggestions;
 pub mod taxes;
 pub mod what_if;
 
@@ -45,6 +52,9 @@ pub fn router() -> Router<AppState> {
         .merge(reports::router())
         .merge(analysis::router())
         .merge(what_if::router())
+        .merge(preview::router())
+        .merge(suggestions::router())
+        .merge(suggestion_chat::router())
         .merge(archives::router())
         .merge(onboarding::router())
         .merge(contact::router())

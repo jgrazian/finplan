@@ -8,6 +8,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use super::ReorderRequest;
+use super::row_batch::RowBatch;
 use super::specs::{
     AmountSpec, Comparison, EffectParent, EffectSpec, Interval, OffsetUnit, TriggerParent,
     TriggerSpec,
@@ -431,7 +432,7 @@ fn read_withdrawal_sources(
     })
 }
 
-fn read_event(graph: &ScenarioGraph, event_id: i64) -> ApiResult<Event> {
+pub(crate) fn read_event(graph: &ScenarioGraph, event_id: i64) -> ApiResult<Event> {
     let row = graph
         .events
         .iter()
@@ -529,24 +530,7 @@ async fn create(
     super::expressions::validate_tree(&current, &body.effects)?;
 
     let mut tx = state.db.begin().await?;
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO events (scenario_id, name, description, fires_once, enabled, sort_order)
-         VALUES (?1,?2,?3,?4,?5,
-                 COALESCE(?6, (SELECT COALESCE(MAX(sort_order), -1) + 1
-                                 FROM events WHERE scenario_id = ?1)))
-         RETURNING id",
-    )
-    .bind(scenario_id)
-    .bind(body.name.trim())
-    .bind(&body.description)
-    .bind(i64::from(body.fires_once))
-    .bind(i64::from(body.enabled))
-    .bind(body.sort_order)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?;
-
-    write_tree(&mut tx, scenario_id, id, &body).await?;
+    let id = create_in(&mut tx, scenario_id, &body).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(
@@ -590,41 +574,7 @@ async fn replace(
     exists.ok_or(ApiError::NotFound("event"))?;
 
     let mut tx = state.db.begin().await?;
-
-    let affected = sqlx::query(
-        "UPDATE events SET name = ?3, description = ?4, fires_once = ?5, enabled = ?6,
-                           sort_order = COALESCE(?7, sort_order),
-                           updated_at = datetime('now')
-          WHERE id = ?1 AND scenario_id = ?2",
-    )
-    .bind(id)
-    .bind(scenario_id)
-    .bind(body.name.trim())
-    .bind(&body.description)
-    .bind(i64::from(body.fires_once))
-    .bind(i64::from(body.enabled))
-    .bind(body.sort_order)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?
-    .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("event"));
-    }
-    // Child triggers cascade from the root; effects cascade from the event and
-    // take their `Random` branches and withdrawal-source rows with them.
-    sqlx::query("DELETE FROM triggers WHERE event_id = ?1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query("DELETE FROM effects WHERE event_id = ?1")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
-
-    write_tree(&mut tx, scenario_id, id, &body).await?;
-    collect_orphans(&mut tx, scenario_id).await?;
+    replace_in(&mut tx, scenario_id, id, &body).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(
@@ -705,39 +655,115 @@ async fn collect_orphans(
     Ok(())
 }
 
+/// Lower `body`'s trigger and effects into `batch`, hung on event `event_id`.
+pub(crate) fn lower_tree(batch: &mut RowBatch, event_id: i64, body: &EventBody) -> ApiResult<()> {
+    body.trigger
+        .lower(batch, TriggerParent::Event(event_id), 0)?;
+
+    for (position, effect) in body.effects.iter().enumerate() {
+        effect.lower(
+            batch,
+            EffectParent::Event {
+                event_id,
+                position: position as i64,
+            },
+            0,
+        )?;
+    }
+    Ok(())
+}
+
+/// Write `body`'s trigger and effect trees for an event that has none.
 pub(crate) async fn write_tree(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     scenario_id: i64,
     event_id: i64,
     body: &EventBody,
 ) -> ApiResult<()> {
-    body.trigger
-        .insert(tx, scenario_id, TriggerParent::Event(event_id), 0)
-        .await?;
-
-    for (position, effect) in body.effects.iter().enumerate() {
-        effect
-            .insert(
-                tx,
-                scenario_id,
-                EffectParent::Event {
-                    event_id,
-                    position: position as i64,
-                },
-                0,
-            )
-            .await?;
-    }
+    let mut batch = RowBatch::for_scenario(tx, scenario_id).await?;
+    lower_tree(&mut batch, event_id, body)?;
+    batch.insert(tx, scenario_id).await?;
     Ok(())
 }
 
-async fn destroy(
-    State(state): State<AppState>,
-    user: CurrentUser,
-    Path((scenario_id, id)): Path<(i64, i64)>,
-) -> ApiResult<StatusCode> {
-    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+/// Insert a new event and its trees; the SQL half of `POST .../events`.
+pub(crate) async fn create_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    body: &EventBody,
+) -> ApiResult<i64> {
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO events (scenario_id, name, description, fires_once, enabled, sort_order)
+         VALUES (?1,?2,?3,?4,?5,
+                 COALESCE(?6, (SELECT COALESCE(MAX(sort_order), -1) + 1
+                                 FROM events WHERE scenario_id = ?1)))
+         RETURNING id",
+    )
+    .bind(scenario_id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(i64::from(body.fires_once))
+    .bind(i64::from(body.enabled))
+    .bind(body.sort_order)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?;
 
+    write_tree(tx, scenario_id, id, body).await?;
+    Ok(id)
+}
+
+/// Rewrite an event and its trees in place; the SQL half of `PUT .../events/{id}`.
+pub(crate) async fn replace_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    id: i64,
+    body: &EventBody,
+) -> ApiResult<()> {
+    let affected = sqlx::query(
+        "UPDATE events SET name = ?3, description = ?4, fires_once = ?5, enabled = ?6,
+                           sort_order = COALESCE(?7, sort_order),
+                           updated_at = datetime('now')
+          WHERE id = ?1 AND scenario_id = ?2",
+    )
+    .bind(id)
+    .bind(scenario_id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(i64::from(body.fires_once))
+    .bind(i64::from(body.enabled))
+    .bind(body.sort_order)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?
+    .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("event"));
+    }
+    // Child triggers cascade from the root; effects cascade from the event and
+    // take their `Random` branches and withdrawal-source rows with them.
+    sqlx::query("DELETE FROM triggers WHERE event_id = ?1")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+    sqlx::query("DELETE FROM effects WHERE event_id = ?1")
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
+
+    write_tree(tx, scenario_id, id, body).await?;
+    collect_orphans(tx, scenario_id).await?;
+    Ok(())
+}
+
+/// Delete an event unless another event points at it; the SQL half of
+/// `DELETE .../events/{id}`.
+pub(crate) async fn destroy_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    id: i64,
+) -> ApiResult<()> {
     // Another event may point here via RelativeToEvent or a *Event effect;
     // those rows cascade-delete, which would silently drop a trigger condition.
     // Refuse instead and let the caller decide.
@@ -749,7 +775,7 @@ async fn destroy(
           WHERE f.target_event_id = ?1 AND f.event_id <> ?1",
     )
     .bind(id)
-    .fetch_all(&state.db)
+    .fetch_all(&mut **tx)
     .await?;
 
     if !referrers.is_empty() {
@@ -759,18 +785,28 @@ async fn destroy(
         )));
     }
 
-    let mut tx = state.db.begin().await?;
     let affected = sqlx::query("DELETE FROM events WHERE id = ?1 AND scenario_id = ?2")
         .bind(id)
         .bind(scenario_id)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?
         .rows_affected();
 
     if affected == 0 {
         return Err(ApiError::NotFound("event"));
     }
-    collect_orphans(&mut tx, scenario_id).await?;
+    collect_orphans(tx, scenario_id).await
+}
+
+async fn destroy(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((scenario_id, id)): Path<(i64, i64)>,
+) -> ApiResult<StatusCode> {
+    super::owned_scenario(&state.db, scenario_id, &user.id).await?;
+
+    let mut tx = state.db.begin().await?;
+    destroy_in(&mut tx, scenario_id, id).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(

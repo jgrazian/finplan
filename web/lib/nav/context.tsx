@@ -18,6 +18,8 @@ export interface Nav extends NavState {
   /** Records the scenario actually opened, without a history entry. */
   adoptScenario: (slug: string) => void;
   setTab: (tab: TabId) => void;
+  /** A tab, straight to one of its sub-tabs and rows — how a link elsewhere lands. */
+  openTab: (tab: TabId, target?: { section?: string; selection?: string }) => void;
   setSection: (section: string) => void;
   setSelection: (selection: string | undefined) => void;
 }
@@ -71,6 +73,13 @@ export function NavProvider({ children }: { children: ReactNode }) {
       // A tab change starts its section over: the sub-tab and the row belong to
       // the tab that was open, and mean nothing to the one arriving.
       setTab: (tab) => go({ scenario: state.scenario, tab, section: DEFAULT_SECTION[tab] }, true),
+      openTab: (tab, target = {}) =>
+        go({
+          scenario: state.scenario,
+          tab,
+          section: DEFAULT_SECTION[tab] == null ? undefined : (target.section ?? DEFAULT_SECTION[tab]),
+          selection: target.selection,
+        }, true),
       setSection: (section) => go({ ...state, section, selection: undefined }, true),
       setSelection: (selection) => go({ ...state, selection }, false),
     }),

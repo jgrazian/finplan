@@ -42,6 +42,26 @@ pub(crate) async fn rerender(
     entity: Entity,
     new_name: &str,
 ) -> ApiResult<()> {
+    for (amount_id, source) in rerendered(graph, entity, new_name)? {
+        sqlx::query("UPDATE transfer_amounts SET expression_source=?1 WHERE id=?2")
+            .bind(source)
+            .bind(amount_id)
+            .execute(&mut **tx)
+            .await?;
+    }
+    Ok(())
+}
+
+/// The expression sources a rename rewrites, as `(amount id, new source)`.
+///
+/// `graph` is the plan before the rename. Only expressions that reference the
+/// renamed entity are returned; the rest keep their text.
+pub(crate) fn rerendered(
+    graph: &ScenarioGraph,
+    entity: Entity,
+    new_name: &str,
+) -> ApiResult<Vec<(i64, String)>> {
+    let mut out = Vec::new();
     let (ids, old_metadata, parameters) = compile::expression_context(graph)?;
     let mut metadata = old_metadata.clone();
     match entity {
@@ -79,11 +99,7 @@ pub(crate) async fn rerender(
             Some(finplan_core::model::AmountMode::Net) => format!("net({rendered})"),
             None => rendered,
         };
-        sqlx::query("UPDATE transfer_amounts SET expression_source=?1 WHERE id=?2")
-            .bind(rendered)
-            .bind(row.id)
-            .execute(&mut **tx)
-            .await?;
+        out.push((row.id, rendered));
     }
-    Ok(())
+    Ok(out)
 }

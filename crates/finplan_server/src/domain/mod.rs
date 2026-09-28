@@ -1,5 +1,7 @@
 //! Cross-table operations that do not belong to a single route module.
 
+pub(crate) mod edit;
+
 use std::collections::HashMap;
 use std::pin::Pin;
 

@@ -54,18 +54,47 @@ bounded_enum!(AuthOutcome {
 bounded_enum!(Component {
     Http => "http", Auth => "auth", Session => "session", Run => "run",
     Analysis => "analysis", Recovery => "recovery", QueueSampler => "queue_sampler",
-    Billing => "billing", Metrics => "metrics", Server => "server"
+    Billing => "billing", Metrics => "metrics", Server => "server", ReviewAi => "review_ai"
 });
 bounded_enum!(ErrorClass {
     Database => "database", Internal => "internal", Preparation => "preparation",
     Engine => "engine", EnginePanic => "engine_panic", Persistence => "persistence",
     QueueClosed => "queue_closed", Unavailable => "unavailable", Clock => "clock",
-    TaskPanic => "task_panic"
+    TaskPanic => "task_panic", Upstream => "upstream"
 });
-bounded_enum!(JobKind { Run => "run", Sweep => "sweep", Sensitivity => "sensitivity", Solve => "solve", WhatIf => "what_if" });
+bounded_enum!(JobKind { Run => "run", Sweep => "sweep", Sensitivity => "sensitivity", Solve => "solve", WhatIf => "what_if", Preview => "preview", ReviewAi => "review_ai", ReviewChat => "review_chat" });
 bounded_enum!(Outcome { Succeeded => "succeeded", Failed => "failed", Canceled => "canceled", Interrupted => "interrupted" });
 bounded_enum!(Origin { Request => "request", Recovery => "recovery" });
 bounded_enum!(SubmissionResult { Accepted => "accepted", Invalid => "invalid", CapacityRejected => "capacity_rejected", InternalError => "internal_error" });
 bounded_enum!(RejectionReason { GlobalLimit => "global_limit", UserLimit => "user_limit", QueueFull => "queue_full", QueueClosed => "queue_closed" });
 bounded_enum!(Phase { Prepare => "prepare", BlockingWait => "blocking_wait", Engine => "engine", Persist => "persist" });
 bounded_enum!(QueueExit { Started => "started", Canceled => "canceled", Deleted => "deleted" });
+
+// Review AI (api::review_ai, suggest::ai). The model label is not an enum: it
+// is the operator's configured OpenRouter slug, one value per process, never
+// anything a caller or the model sends.
+bounded_enum!(AiPassOutcome {
+    Finished => "finished", TurnLimit => "turn_limit", SuggestionLimit => "suggestion_limit",
+    MaxTokens => "max_tokens", Refused => "refused", Interrupted => "interrupted",
+    Unexpected => "unexpected", Failed => "failed", Superseded => "superseded"
+});
+bounded_enum!(AiTool { Preview => "preview_changes", Submit => "submit_suggestion", Unknown => "unknown" });
+bounded_enum!(AiToolOutcome {
+    Ok => "ok", Problems => "problems", Error => "error", Invalid => "invalid",
+    BudgetExhausted => "budget_exhausted", Accepted => "accepted", Rejected => "rejected"
+});
+bounded_enum!(AiTokenType {
+    Input => "input", Output => "output", CacheRead => "cache_read", CacheWrite => "cache_write"
+});
+bounded_enum!(AiRetryReason {
+    RateLimit => "rate_limit", Server => "server", Provider => "provider", Network => "network",
+    Timeout => "timeout"
+});
+bounded_enum!(AiSuggestionOutcome {
+    Accepted => "accepted", Rejected => "rejected", Stored => "stored", Discarded => "discarded"
+});
+bounded_enum!(AiCostSource { Reported => "reported", Estimated => "estimated" });
+bounded_enum!(AiMotive {
+    Correctness => "correctness", Realism => "realism", Risk => "risk",
+    Optimization => "optimization", Missing => "missing"
+});

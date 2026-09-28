@@ -14,6 +14,7 @@ use super::*;
 
 type Labels = Vec<(String, String)>;
 type FloatGauge = Gauge<f64, AtomicU64>;
+type FloatCounter = Counter<f64, AtomicU64>;
 type Histograms = Family<Labels, Histogram, fn() -> Histogram>;
 const HTTP_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
@@ -21,6 +22,15 @@ const HTTP_BUCKETS: &[f64] = &[
 const JOB_BUCKETS: &[f64] = &[
     0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0,
     3600.0, 7200.0,
+];
+/// A review pass: a few seconds when the model answers at once, up to the
+/// configured caps (turns × request timeout) otherwise.
+const AI_PASS_BUCKETS: &[f64] = &[
+    1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 180.0, 300.0, 600.0, 900.0, 1800.0, 3600.0,
+];
+/// One model request, or one tool call.
+const AI_CALL_BUCKETS: &[f64] = &[
+    0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0, 300.0,
 ];
 const SPEED_BUCKETS: &[f64] = &[
     1.0, 10.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0, 25000.0, 50000.0,
@@ -44,6 +54,12 @@ fn job_histogram() -> Histogram {
 }
 fn http_histogram() -> Histogram {
     Histogram::new(HTTP_BUCKETS.iter().copied())
+}
+fn ai_pass_histogram() -> Histogram {
+    Histogram::new(AI_PASS_BUCKETS.iter().copied())
+}
+fn ai_call_histogram() -> Histogram {
+    Histogram::new(AI_CALL_BUCKETS.iter().copied())
 }
 
 #[derive(Default)]
@@ -90,6 +106,20 @@ struct Metrics {
     speed_min: FloatGauge,
     speed_max: FloatGauge,
     speed_count: Gauge,
+    ai_passes: Family<Labels, Counter>,
+    ai_pass_duration: Histograms,
+    ai_turn_duration: Histograms,
+    ai_tokens: Family<Labels, Counter>,
+    ai_cost: Family<Labels, FloatCounter>,
+    ai_tool_calls: Family<Labels, Counter>,
+    ai_tool_duration: Histograms,
+    ai_suggestions: Family<Labels, Counter>,
+    ai_motives: Family<Labels, Counter>,
+    ai_retries: Family<Labels, Counter>,
+    ai_chat_turns: Family<Labels, Counter>,
+    ai_chat_turn_duration: Histograms,
+    ai_chat_tokens: Family<Labels, Counter>,
+    ai_chat_cost: Family<Labels, FloatCounter>,
     windows: Mutex<Windows>,
     log_windows: Mutex<HashMap<(&'static str, &'static str), LogWindow>>,
 }
@@ -205,6 +235,9 @@ impl Telemetry {
             JobKind::Sensitivity,
             JobKind::Solve,
             JobKind::WhatIf,
+            JobKind::Preview,
+            JobKind::ReviewAi,
+            JobKind::ReviewChat,
         ] {
             queued.get_or_create(&job_labels(kind)).set(0);
             oldest.get_or_create(&job_labels(kind)).set(0.0);
@@ -317,6 +350,90 @@ impl Telemetry {
             "Run speed observations in current and previous 299 monotonic seconds",
             Gauge::default()
         );
+        let ai_passes = metric!(
+            "review_ai_passes",
+            "Finished review AI passes by why they ended",
+            Family::<Labels, Counter>::default()
+        );
+        let ai_pass_duration = metric!(
+            "review_ai_pass_duration_seconds",
+            "Review AI pass wall time from taking a pass slot to its end, in seconds",
+            Histograms::new_with_constructor(ai_pass_histogram)
+        );
+        let ai_turn_duration = metric!(
+            "review_ai_turn_duration_seconds",
+            "Latency of each answered model request in a review AI pass, in seconds",
+            Histograms::new_with_constructor(ai_call_histogram)
+        );
+        let ai_tokens = metric!(
+            "review_ai_tokens",
+            "Model tokens reported for review AI requests, by type",
+            Family::<Labels, Counter>::default()
+        );
+        let ai_cost = metric!(
+            "review_ai_cost_usd",
+            "Review AI spend in US dollars; source=reported is OpenRouter's figure, estimated is tokens times the model's listed prices",
+            Family::<Labels, FloatCounter>::default()
+        );
+        let ai_tool_calls = metric!(
+            "review_ai_tool_calls",
+            "Tool calls the review model made, by outcome",
+            Family::<Labels, Counter>::default()
+        );
+        let ai_tool_duration = metric!(
+            "review_ai_tool_duration_seconds",
+            "Time serving one review model tool call, in seconds",
+            Histograms::new_with_constructor(ai_call_histogram)
+        );
+        let ai_suggestions = metric!(
+            "review_ai_suggestions",
+            "Review AI notes: accepted or rejected by the checks, then stored or discarded",
+            Family::<Labels, Counter>::default()
+        );
+        let ai_motives = metric!(
+            "review_ai_motives",
+            "Review AI note submissions by the motive the model gave, accepted or rejected by the checks",
+            Family::<Labels, Counter>::default()
+        );
+        let ai_retries = metric!(
+            "review_ai_retries",
+            "Retried review model requests, by reason",
+            Family::<Labels, Counter>::default()
+        );
+        // Chat turns ("Chat about this") also report into the review_ai
+        // families above, which total every review-model request; these are
+        // the chat share of them, plus how each turn ended.
+        let ai_chat_turns = metric!(
+            "review_chat_turns",
+            "Finished review chat turns by why they ended",
+            Family::<Labels, Counter>::default()
+        );
+        let ai_chat_turn_duration = metric!(
+            "review_chat_turn_duration_seconds",
+            "Review chat turn wall time from taking a model slot to its end, in seconds",
+            Histograms::new_with_constructor(ai_pass_histogram)
+        );
+        let ai_chat_tokens = metric!(
+            "review_chat_tokens",
+            "Model tokens spent on review chat turns, by type (included in review_ai_tokens)",
+            Family::<Labels, Counter>::default()
+        );
+        let ai_chat_cost = metric!(
+            "review_chat_cost_usd",
+            "Review chat spend in US dollars (included in review_ai_cost_usd), by source",
+            Family::<Labels, FloatCounter>::default()
+        );
+        for tool in [AiTool::Preview, AiTool::Submit] {
+            drop(ai_tool_duration.get_or_create(&labels([("tool", tool.as_str())])));
+        }
+        for outcome in [
+            AiSuggestionOutcome::Accepted,
+            AiSuggestionOutcome::Rejected,
+            AiSuggestionOutcome::Stored,
+            AiSuggestionOutcome::Discarded,
+        ] {
+            drop(ai_suggestions.get_or_create(&labels([("outcome", outcome.as_str())])));
+        }
         let mut windows = Windows::default();
         // Fixed job populations need a zero baseline so the first sparse
         // completion can be included in a Prometheus rate/quantile window.
@@ -326,6 +443,9 @@ impl Telemetry {
             JobKind::Sensitivity,
             JobKind::Solve,
             JobKind::WhatIf,
+            JobKind::Preview,
+            JobKind::ReviewAi,
+            JobKind::ReviewChat,
         ] {
             drop(canceled_before_start.get_or_create(&job_labels(kind)));
             for outcome in [
@@ -404,6 +524,20 @@ impl Telemetry {
             speed_min,
             speed_max,
             speed_count,
+            ai_passes,
+            ai_pass_duration,
+            ai_turn_duration,
+            ai_tokens,
+            ai_cost,
+            ai_tool_calls,
+            ai_tool_duration,
+            ai_suggestions,
+            ai_motives,
+            ai_retries,
+            ai_chat_turns,
+            ai_chat_turn_duration,
+            ai_chat_tokens,
+            ai_chat_cost,
             windows: Mutex::new(windows),
             log_windows: Mutex::new(HashMap::new()),
         }))
@@ -596,6 +730,97 @@ impl Telemetry {
         self.0.db_connections.set(connections as i64);
         self.0.db_idle.set(idle as i64);
         self.0.snapshot_timestamp.set(unix_seconds());
+    }
+
+    // ── review AI ───────────────────────────────────────────────────────────
+
+    pub fn review_ai_pass(&self, model: &str, outcome: AiPassOutcome, seconds: f64) {
+        let labels = labels([("model", model), ("outcome", outcome.as_str())]);
+        self.0.ai_passes.get_or_create(&labels).inc();
+        self.0
+            .ai_pass_duration
+            .get_or_create(&labels)
+            .observe(seconds.max(0.0));
+    }
+    pub fn review_ai_turn(&self, model: &str, seconds: f64) {
+        self.0
+            .ai_turn_duration
+            .get_or_create(&labels([("model", model)]))
+            .observe(seconds.max(0.0));
+    }
+    pub fn review_ai_tokens(&self, model: &str, kind: AiTokenType, tokens: u64) {
+        let counter = self
+            .0
+            .ai_tokens
+            .get_or_create(&labels([("model", model), ("type", kind.as_str())]))
+            .clone();
+        counter.inc_by(tokens);
+    }
+    pub fn review_ai_cost(&self, model: &str, source: AiCostSource, usd: f64) {
+        if usd.is_finite() && usd > 0.0 {
+            self.0
+                .ai_cost
+                .get_or_create(&labels([("model", model), ("source", source.as_str())]))
+                .inc_by(usd);
+        }
+    }
+    pub fn review_ai_tool(&self, tool: AiTool, outcome: AiToolOutcome, seconds: f64) {
+        self.0
+            .ai_tool_calls
+            .get_or_create(&labels([
+                ("tool", tool.as_str()),
+                ("outcome", outcome.as_str()),
+            ]))
+            .inc();
+        self.0
+            .ai_tool_duration
+            .get_or_create(&labels([("tool", tool.as_str())]))
+            .observe(seconds.max(0.0));
+    }
+    pub fn review_ai_suggestions(&self, outcome: AiSuggestionOutcome, count: u64) {
+        self.0
+            .ai_suggestions
+            .get_or_create(&labels([("outcome", outcome.as_str())]))
+            .inc_by(count);
+    }
+    pub fn review_ai_motive(&self, motive: AiMotive, outcome: AiSuggestionOutcome) {
+        self.0
+            .ai_motives
+            .get_or_create(&labels([
+                ("motive", motive.as_str()),
+                ("outcome", outcome.as_str()),
+            ]))
+            .inc();
+    }
+    pub fn review_ai_retry(&self, model: &str, reason: AiRetryReason) {
+        self.0
+            .ai_retries
+            .get_or_create(&labels([("model", model), ("reason", reason.as_str())]))
+            .inc();
+    }
+    pub fn review_chat_turn(&self, model: &str, outcome: AiPassOutcome, seconds: f64) {
+        let labels = labels([("model", model), ("outcome", outcome.as_str())]);
+        self.0.ai_chat_turns.get_or_create(&labels).inc();
+        self.0
+            .ai_chat_turn_duration
+            .get_or_create(&labels)
+            .observe(seconds.max(0.0));
+    }
+    pub fn review_chat_tokens(&self, model: &str, kind: AiTokenType, tokens: u64) {
+        let counter = self
+            .0
+            .ai_chat_tokens
+            .get_or_create(&labels([("model", model), ("type", kind.as_str())]))
+            .clone();
+        counter.inc_by(tokens);
+    }
+    pub fn review_chat_cost(&self, model: &str, source: AiCostSource, usd: f64) {
+        if usd.is_finite() && usd > 0.0 {
+            self.0
+                .ai_chat_cost
+                .get_or_create(&labels([("model", model), ("source", source.as_str())]))
+                .inc_by(usd);
+        }
     }
 
     /// Count every failure; emit the first and a summary at most once a minute.

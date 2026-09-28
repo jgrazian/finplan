@@ -38,6 +38,7 @@ import type {
   PasswordChange,
   PreflightReport,
   Position,
+  Preview,
   Profile,
   QuickWhatIf,
   RegisterCredentials,
@@ -59,6 +60,17 @@ import type {
   WhatIfOutcome,
   WhatIfStack,
 } from "./types";
+import type {
+  AppliedSuggestion,
+  ApplySuggestion,
+  ChatRequest,
+  DismissSuggestion,
+  PreviewSuggestion,
+  Review,
+  Suggestion,
+  SuggestionStatus,
+  SuggestionThread,
+} from "./suggestions";
 
 const scenario = (id: number) => `/scenarios/${id}`;
 
@@ -260,6 +272,50 @@ export const api = {
      */
     quick: (scenarioId: number, body: QuickWhatIf, signal?: AbortSignal) =>
       http.post<WhatIfOutcome>(`${scenario(scenarioId)}/what-if/quick`, body, signal),
+  },
+
+  /**
+   * The Review tab: notes written about one run, each carrying the plan
+   * changes it proposes. `run` writes a fresh review of the named run (the
+   * latest succeeded one when `null`); `get` reads the last one written.
+   */
+  review: {
+    get: (scenarioId: number) => http.get<Review | null>(`${scenario(scenarioId)}/review`),
+    run: (scenarioId: number, runId: number | null = null) =>
+      http.post<Review>(`${scenario(scenarioId)}/review`, { run_id: runId }),
+  },
+
+  suggestions: {
+    list: (scenarioId: number, status?: SuggestionStatus) =>
+      http.get<Suggestion[]>(
+        `${scenario(scenarioId)}/suggestions${status ? `?status=${status}` : ""}`,
+      ),
+    /**
+     * Simulates a path's steps (all of them, or through one) against the
+     * note's run and keeps the result as that path's check; the plan is not
+     * written.
+     */
+    preview: (id: number, body: PreviewSuggestion) =>
+      http.post<Preview>(`/suggestions/${id}/preview`, body),
+    /**
+     * Applies a path's remaining steps, or those through one step. 409 when
+     * the plan moved since the note was written; the body lists why.
+     */
+    apply: (id: number, body: ApplySuggestion) =>
+      http.post<AppliedSuggestion>(`/suggestions/${id}/apply`, body),
+    dismiss: (id: number, body: DismissSuggestion) =>
+      http.post<Suggestion>(`/suggestions/${id}/dismiss`, body),
+    /**
+     * The follow-up thread about a note. Sending starts a model turn and
+     * answers at once with the thread `running`; read it again until the
+     * reply lands. 409 when AI review is off, a turn is already running, or
+     * the thread is full.
+     */
+    chat: {
+      get: (id: number) => http.get<SuggestionThread>(`/suggestions/${id}/chat`),
+      send: (id: number, message: string) =>
+        http.post<SuggestionThread>(`/suggestions/${id}/chat`, { message } satisfies ChatRequest),
+    },
   },
 
   runs: {

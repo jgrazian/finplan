@@ -48,7 +48,7 @@ pub enum TaxStatus {
 }
 
 impl TaxStatus {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             TaxStatus::Taxable => "Taxable",
             TaxStatus::TaxDeferred => "TaxDeferred",
@@ -65,7 +65,7 @@ pub enum ContributionPeriod {
 }
 
 impl ContributionPeriod {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             ContributionPeriod::Monthly => "Monthly",
             ContributionPeriod::Yearly => "Yearly",
@@ -122,7 +122,7 @@ pub struct RepaymentSpec {
 }
 
 impl FlavorSpec {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             FlavorSpec::Bank { .. } => "Bank",
             FlavorSpec::Investment { .. } => "Investment",
@@ -131,7 +131,7 @@ impl FlavorSpec {
         }
     }
 
-    fn validate(&self) -> ApiResult<()> {
+    pub(crate) fn validate(&self) -> ApiResult<()> {
         if let FlavorSpec::Investment {
             contribution_limit,
             contribution_period,
@@ -186,7 +186,7 @@ pub struct Position {
     pub cost_basis: f64,
 }
 
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct CreateAccount {
     pub name: String,
@@ -497,26 +497,8 @@ async fn create(
     Json(Submitted { body, fields }): Json<Submitted<CreateAccount>>,
 ) -> ApiResult<(StatusCode, Json<Account>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    body.flavor.validate()?;
-
     let mut tx = state.db.begin().await?;
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO accounts (scenario_id, name, description, flavor, sort_order)
-         VALUES (?1,?2,?3,?4,
-                 COALESCE(?5, (SELECT COALESCE(MAX(sort_order), -1) + 1
-                                 FROM accounts WHERE scenario_id = ?1)))
-         RETURNING id",
-    )
-    .bind(scenario_id)
-    .bind(body.name.trim())
-    .bind(&body.description)
-    .bind(body.flavor.name())
-    .bind(body.sort_order)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "an account with that name already exists"))?;
-
-    insert_detail(&mut tx, id, &body.flavor).await?;
+    let id = create_in(&mut tx, scenario_id, &body).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(
@@ -537,6 +519,33 @@ async fn create(
     ))
 }
 
+/// Add an account and its detail row; the SQL half of `POST .../accounts`.
+pub(crate) async fn create_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    body: &CreateAccount,
+) -> ApiResult<i64> {
+    body.flavor.validate()?;
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO accounts (scenario_id, name, description, flavor, sort_order)
+         VALUES (?1,?2,?3,?4,
+                 COALESCE(?5, (SELECT COALESCE(MAX(sort_order), -1) + 1
+                                 FROM accounts WHERE scenario_id = ?1)))
+         RETURNING id",
+    )
+    .bind(scenario_id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(body.flavor.name())
+    .bind(body.sort_order)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, "an account with that name already exists"))?;
+
+    insert_detail(tx, id, &body.flavor).await?;
+    Ok(id)
+}
+
 async fn update(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -550,11 +559,40 @@ async fn update(
         None
     };
 
+    let mut tx = state.db.begin().await?;
+    update_in(&mut tx, rename_graph.as_ref(), scenario_id, id, &body).await?;
+    tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Account,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+    super::touch_scenario(&state.db, scenario_id).await?;
+    Ok(Json(load_account(&state, scenario_id, id).await?))
+}
+
+/// Apply `body` to account `id`; the SQL half of `PATCH .../accounts/{id}`.
+/// `rename_graph` is the plan before the change, needed only when `body`
+/// renames the account.
+pub(crate) async fn update_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    rename_graph: Option<&crate::compile::rows::ScenarioGraph>,
+    scenario_id: i64,
+    id: i64,
+    body: &UpdateAccount,
+) -> ApiResult<()> {
     let existing_flavor: Option<String> =
         sqlx::query_scalar("SELECT flavor FROM accounts WHERE id = ?1 AND scenario_id = ?2")
             .bind(id)
             .bind(scenario_id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&mut **tx)
             .await?;
     let existing_flavor = existing_flavor.ok_or(ApiError::NotFound("account"))?;
 
@@ -575,8 +613,6 @@ async fn update(
         }
     }
 
-    let mut tx = state.db.begin().await?;
-
     let affected = sqlx::query(
         "UPDATE accounts SET
             name        = COALESCE(?3, name),
@@ -590,7 +626,7 @@ async fn update(
     .bind(body.name.as_deref().map(str::trim))
     .bind(&body.description)
     .bind(body.sort_order)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, "an account with that name already exists"))?
     .rows_affected();
@@ -607,35 +643,20 @@ async fn update(
         };
         sqlx::query(&format!("DELETE FROM {table} WHERE account_id = ?1"))
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
-        insert_detail(&mut tx, id, flavor).await?;
+        insert_detail(tx, id, flavor).await?;
     }
-    if let (Some(graph), Some(name)) = (&rename_graph, &body.name) {
+    if let (Some(graph), Some(name)) = (rename_graph, &body.name) {
         super::expression_refs::rerender(
-            &mut tx,
+            tx,
             graph,
             super::expression_refs::Entity::Account(id),
             name.trim(),
         )
         .await?;
     }
-
-    tx.commit().await?;
-
-    state.telemetry.mutation(
-        Resource::Account,
-        Operation::Updated,
-        &EventFields {
-            user_id: Some(&user.id),
-            scenario_id: Some(scenario_id),
-            resource_id: Some(id),
-            fields: &fields,
-            ..Default::default()
-        },
-    );
-    super::touch_scenario(&state.db, scenario_id).await?;
-    Ok(Json(load_account(&state, scenario_id, id).await?))
+    Ok(())
 }
 
 async fn destroy(
@@ -680,7 +701,7 @@ async fn destroy(
 
 // ── positions ───────────────────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct CreatePosition {
     pub asset_id: i64,
@@ -774,13 +795,40 @@ async fn add_position(
 ) -> ApiResult<(StatusCode, Json<Position>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
+    let mut tx = state.db.begin().await?;
+    let position = add_position_in(&mut tx, scenario_id, id, &body).await?;
+    tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Position,
+        Operation::Created,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(position.id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+    super::touch_scenario(&state.db, scenario_id).await?;
+
+    Ok((StatusCode::CREATED, Json(position)))
+}
+
+/// Add a lot to account `id`; the SQL half of `POST .../accounts/{id}/positions`.
+pub(crate) async fn add_position_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    id: i64,
+    body: &CreatePosition,
+) -> ApiResult<Position> {
     // Lots only exist inside investment accounts; the engine has nowhere to put
     // them on a bank, property or liability account.
     let flavor: Option<String> =
         sqlx::query_scalar("SELECT flavor FROM accounts WHERE id = ?1 AND scenario_id = ?2")
             .bind(id)
             .bind(scenario_id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&mut **tx)
             .await?;
 
     match flavor.as_deref() {
@@ -801,7 +849,7 @@ async fn add_position(
         None => {
             sqlx::query_scalar::<_, String>("SELECT start_date FROM scenarios WHERE id = ?1")
                 .bind(scenario_id)
-                .fetch_one(&state.db)
+                .fetch_one(&mut **tx)
                 .await?
         }
     };
@@ -823,32 +871,16 @@ async fn add_position(
     .bind(&purchase_date)
     .bind(body.units)
     .bind(body.cost_basis)
-    .fetch_one(&state.db)
+    .fetch_one(&mut **tx)
     .await?;
 
-    state.telemetry.mutation(
-        Resource::Position,
-        Operation::Created,
-        &EventFields {
-            user_id: Some(&user.id),
-            scenario_id: Some(scenario_id),
-            resource_id: Some(position_id),
-            fields: &fields,
-            ..Default::default()
-        },
-    );
-    super::touch_scenario(&state.db, scenario_id).await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(Position {
-            id: position_id,
-            asset_id: body.asset_id,
-            purchase_date,
-            units: body.units,
-            cost_basis: body.cost_basis,
-        }),
-    ))
+    Ok(Position {
+        id: position_id,
+        asset_id: body.asset_id,
+        purchase_date,
+        units: body.units,
+        cost_basis: body.cost_basis,
+    })
 }
 
 async fn update_position(
@@ -859,6 +891,42 @@ async fn update_position(
 ) -> ApiResult<Json<Position>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
+    let mut tx = state.db.begin().await?;
+    update_position_in(&mut tx, scenario_id, id, position_id, &body).await?;
+    tx.commit().await?;
+
+    state.telemetry.mutation(
+        Resource::Position,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(scenario_id),
+            resource_id: Some(position_id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+    super::touch_scenario(&state.db, scenario_id).await?;
+
+    let row: Position = sqlx::query_as(
+        "SELECT id, asset_id, purchase_date, units, cost_basis
+           FROM positions WHERE id = ?1",
+    )
+    .bind(position_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(row))
+}
+
+/// Resize or re-date lot `position_id` of account `id`; the SQL half of
+/// `PATCH .../accounts/{id}/positions/{position}`.
+pub(crate) async fn update_position_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    id: i64,
+    position_id: i64,
+    body: &UpdatePosition,
+) -> ApiResult<()> {
     // Same rule as the insert: a lot is non-negative in both figures, and a
     // date has to be a date before it reaches the engine's timeline.
     if body.units.is_some_and(|u| u < 0.0) || body.cost_basis.is_some_and(|b| b < 0.0) {
@@ -893,35 +961,14 @@ async fn update_position(
     .bind(purchase_date)
     .bind(body.units)
     .bind(body.cost_basis)
-    .execute(&state.db)
+    .execute(&mut **tx)
     .await?
     .rows_affected();
 
     if affected == 0 {
         return Err(ApiError::NotFound("position"));
     }
-
-    state.telemetry.mutation(
-        Resource::Position,
-        Operation::Updated,
-        &EventFields {
-            user_id: Some(&user.id),
-            scenario_id: Some(scenario_id),
-            resource_id: Some(position_id),
-            fields: &fields,
-            ..Default::default()
-        },
-    );
-    super::touch_scenario(&state.db, scenario_id).await?;
-
-    let row: Position = sqlx::query_as(
-        "SELECT id, asset_id, purchase_date, units, cost_basis
-           FROM positions WHERE id = ?1",
-    )
-    .bind(position_id)
-    .fetch_one(&state.db)
-    .await?;
-    Ok(Json(row))
+    Ok(())
 }
 
 async fn delete_position(
@@ -931,21 +978,9 @@ async fn delete_position(
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
-    let affected = sqlx::query(
-        "DELETE FROM positions
-          WHERE id = ?1 AND account_id = ?2
-            AND account_id IN (SELECT id FROM accounts WHERE scenario_id = ?3)",
-    )
-    .bind(position_id)
-    .bind(id)
-    .bind(scenario_id)
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("position"));
-    }
+    let mut tx = state.db.begin().await?;
+    delete_position_in(&mut tx, scenario_id, id, position_id).await?;
+    tx.commit().await?;
 
     state.telemetry.mutation(
         Resource::Position,
@@ -959,6 +994,32 @@ async fn delete_position(
     );
     super::touch_scenario(&state.db, scenario_id).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Remove lot `position_id` from account `id`; the SQL half of
+/// `DELETE .../accounts/{id}/positions/{position}`.
+pub(crate) async fn delete_position_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    scenario_id: i64,
+    id: i64,
+    position_id: i64,
+) -> ApiResult<()> {
+    let affected = sqlx::query(
+        "DELETE FROM positions
+          WHERE id = ?1 AND account_id = ?2
+            AND account_id IN (SELECT id FROM accounts WHERE scenario_id = ?3)",
+    )
+    .bind(position_id)
+    .bind(id)
+    .bind(scenario_id)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("position"));
+    }
+    Ok(())
 }
 
 impl ActivityFields for CreateAccount {

@@ -7,6 +7,7 @@
 
 use finplan_core::model::{MonteCarloSummary, SimulationResult, WarningKind, final_net_worth};
 
+use crate::api::funding::funding_view;
 use crate::compile::CompiledScenario;
 use crate::db::{CURRENT_RUN_ONLY_TABLES, Db};
 use crate::runner::ledger;
@@ -108,12 +109,21 @@ pub async fn persist(
         .map(|(_, result)| lifetime_taxes(result))
         .unwrap_or(0.0);
 
+    // Stored already translated to row ids, the shape the API serves.
+    let funding_json = summary
+        .funding
+        .as_ref()
+        .map(|funding| funding_view(&compiled.id_map, funding))
+        .map(|view| serde_json::to_string(&view))
+        .transpose()
+        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+
     sqlx::query(
         "INSERT INTO run_stats (run_id, num_iterations, success_rate, mean_final_net_worth,
                                 std_dev_final_net_worth, min_final_net_worth, max_final_net_worth,
                                 lifetime_taxes, converged, convergence_metric, convergence_value,
-                                funding_success_rate)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                                funding_success_rate, funding_diagnostics)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )
     .bind(run_id)
     .bind(stats.num_iterations as i64)
@@ -127,6 +137,7 @@ pub async fn persist(
     .bind(stats.convergence_metric.as_ref().map(|m| format!("{m:?}")))
     .bind(stats.convergence_value)
     .bind(stats.funding_success_rate)
+    .bind(funding_json)
     .execute(&mut *tx)
     .await?;
 

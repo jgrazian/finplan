@@ -22,6 +22,9 @@ pub enum HostedAccessMode {
 pub struct ServerConfig {
     #[command(flatten)]
     pub mail: crate::mail::MailConfig,
+    /// AI review notes (`suggest::ai`).
+    #[command(flatten)]
+    pub review_ai: crate::suggest::ai::AiConfig,
     /// Structured JSON in hosted mode, readable text locally when set to auto.
     #[arg(long, env = "FINPLAN_LOG_FORMAT", value_enum, default_value = "auto")]
     pub log_format: LogFormat,
@@ -93,6 +96,7 @@ impl ServerConfig {
     pub fn validate(&self) -> Result<(), String> {
         self.mail
             .validate(self.hosted, self.local_mail_sink.as_deref())?;
+        self.review_ai.validate()?;
         if self.hosted
             && (!self.secure_cookies
                 || self.local_mail_sink.is_some()

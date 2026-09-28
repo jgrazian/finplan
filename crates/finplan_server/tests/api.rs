@@ -7,7 +7,9 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
 use finplan_server::config::ServerConfig;
+use finplan_server::suggest::ai::AiClient;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tower::ServiceExt;
 
 struct TestApp {
@@ -18,11 +20,26 @@ struct TestApp {
 
 impl TestApp {
     async fn new() -> Self {
+        Self::with_review_ai(None).await
+    }
+
+    /// An app whose review model is `review_ai` (a scripted client), or none.
+    async fn with_review_ai(review_ai: Option<Arc<AiClient>>) -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
+        let router = Self::router(&dir, review_ai).await;
+        TestApp {
+            router,
+            cookie: None,
+            _dir: dir,
+        }
+    }
+
+    async fn router(dir: &tempfile::TempDir, review_ai: Option<Arc<AiClient>>) -> Router {
         let db_path = dir.path().join("test.db");
 
         let config = ServerConfig {
             mail: Default::default(),
+            review_ai: Default::default(),
             log_format: Default::default(),
             metrics_bind: None,
             bind: "127.0.0.1:0".into(),
@@ -38,12 +55,16 @@ impl TestApp {
             cors_origins: vec!["http://localhost:3000".into()],
         };
 
-        let (router, _state) = finplan_server::build(config).await.expect("build app");
-        TestApp {
-            router,
-            cookie: None,
-            _dir: dir,
-        }
+        let (router, _state) = finplan_server::build_with(config, review_ai)
+            .await
+            .expect("build app");
+        router
+    }
+
+    /// A new process over the same database, as after a restart; the session
+    /// cookie survives because sessions live in the database.
+    async fn restart(&mut self) {
+        self.router = Self::router(&self._dir, None).await;
     }
 
     async fn send(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -374,8 +395,14 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
     assert_eq!(status, StatusCode::ACCEPTED);
     let run_id = run["id"].as_i64().unwrap();
     assert_eq!(app.await_run(run_id).await, "succeeded");
+    let healthy_run = run_id;
     let (_, healthy) = app.get(&format!("/api/runs/{run_id}/results")).await;
     assert_eq!(healthy["stats"]["funding_success_rate"], 1.0);
+    let clean = &healthy["funding_diagnostics"];
+    assert_eq!(clean["iterations"], 4);
+    assert_eq!(clean["failed"], 0);
+    assert_eq!(clean["shortfall_accounts"], json!([]));
+    assert_eq!(clean["worst_seed"], Value::Null);
 
     // A single expense overdraws checking, even though brokerage keeps net worth positive.
     let (status, _) = app
@@ -448,6 +475,40 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
         );
     }
 
+    // The run-wide diagnostics say where every failing path ran short, in row ids.
+    let (_, results) = app.get(&format!("/api/runs/{run_id}/results")).await;
+    let funding = &results["funding_diagnostics"];
+    assert_eq!(funding["iterations"], 4);
+    assert_eq!(funding["failed"], 4);
+    assert_eq!(funding["cash_shortfall"], 4);
+    assert_eq!(funding["event_failure"], 0);
+    assert_eq!(funding["failed_solvent"], 4);
+    assert_eq!(
+        funding["first_shortfall_years"],
+        json!([{"year": 2026, "count": 4}])
+    );
+    assert_eq!(funding["median_first_shortfall_year"], 2026);
+    assert_eq!(
+        funding["shortfall_accounts"],
+        json!([{"account_id": checking, "count": 4}])
+    );
+    assert!(funding["median_max_deficit"].as_f64().unwrap() > 0.0);
+    // A u64 seed, carried as a string so JavaScript cannot round it.
+    assert!(
+        funding["worst_seed"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .is_ok()
+    );
+    // The report embeds the same results.
+    let (_, report) = app.get(&format!("/api/runs/{run_id}/report")).await;
+    assert_eq!(report["results"]["funding_diagnostics"], *funding);
+    // Superseded runs lose their paths but keep the diagnostics.
+    let (_, superseded) = app.get(&format!("/api/runs/{healthy_run}/results")).await;
+    assert_eq!(superseded["path_details"], false);
+    assert_eq!(superseded["funding_diagnostics"]["failed"], 0);
+
     // Historical rows must remain explicitly unmeasured, not inferred from success_rate.
     let pool = sqlx::SqlitePool::connect(&format!(
         "sqlite://{}",
@@ -455,11 +516,14 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
     ))
     .await
     .unwrap();
-    sqlx::query("UPDATE run_stats SET funding_success_rate = NULL WHERE run_id = ?1")
-        .bind(run_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "UPDATE run_stats SET funding_success_rate = NULL, funding_diagnostics = NULL
+          WHERE run_id = ?1",
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .unwrap();
     sqlx::query("DELETE FROM run_real_stats WHERE run_id = ?1")
         .bind(run_id)
         .execute(&pool)
@@ -469,6 +533,7 @@ async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() 
     assert_eq!(legacy["real_net_worth"], Value::Null);
     assert!(!legacy["bands"].as_array().unwrap().is_empty());
     assert_eq!(legacy["stats"]["funding_success_rate"], Value::Null);
+    assert_eq!(legacy["funding_diagnostics"], Value::Null);
     assert_eq!(legacy["stats"]["success_rate"], 1.0);
     // The engine's persisted statistics also accept old serialized results.
     let mut stats = legacy["stats"].clone();
@@ -3080,4 +3145,1804 @@ async fn baseline_assigns_unique_scenario_slugs() {
             .await
             .is_err()
     );
+}
+
+// ── preview ─────────────────────────────────────────────────────────────────
+
+impl TestApp {
+    /// A seeded plan whose checking account runs dry in every iteration, and a
+    /// finished run of it. Returns (scenario, run, spending event, brokerage).
+    async fn previewable_plan(&self) -> (i64, i64, i64, i64) {
+        let (scenario_id, checking, brokerage) = self.seed_scenario().await;
+        let (status, event) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/events"),
+                json!({
+                    "name": "Spending",
+                    "trigger": {"kind": "Repeating", "interval": "Monthly"},
+                    "effects": [{
+                        "kind": "Expense", "from_account_id": checking,
+                        "amount": {"kind": "Fixed", "value": 1000.0}
+                    }]
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{event}");
+        let (status, run) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/runs"),
+                json!({"iterations": 40, "seed": 7}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+        let run_id = run["id"].as_i64().unwrap();
+        assert_eq!(self.await_run(run_id).await, "succeeded");
+        (
+            scenario_id,
+            run_id,
+            event["id"].as_i64().unwrap(),
+            brokerage,
+        )
+    }
+
+    async fn preview(&self, scenario_id: i64, body: Value) -> (StatusCode, Value) {
+        self.post(&format!("/api/scenarios/{scenario_id}/preview"), body)
+            .await
+    }
+}
+
+#[tokio::test]
+async fn a_preview_simulates_the_edit_against_its_run() {
+    let mut app = TestApp::new().await;
+    app.login_as("preview@example.com").await;
+    let (scenario_id, run_id, spending, _) = app.previewable_plan().await;
+
+    let (status, preview) = app
+        .preview(
+            scenario_id,
+            json!({"changes": [
+                {"op": "remove", "target": {"event": spending}, "path": "/effects/0"}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["base_run_id"], run_id);
+    assert_eq!(preview["iterations"], 40);
+    assert_eq!(preview["paired"], true);
+    assert_eq!(preview["problems"], json!([]));
+    let labels: Vec<&str> = preview["diff"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["label"].as_str().unwrap())
+        .collect();
+    assert!(
+        labels.iter().any(|l| l.contains("Spending")),
+        "diff: {labels:?}"
+    );
+
+    // Checking empties within a year with spending on; without it, never.
+    let base = &preview["base"];
+    let edited = &preview["edited"];
+    assert!(
+        base["funding_success_rate"].as_f64().unwrap() < 0.5,
+        "{base}"
+    );
+    assert_eq!(edited["funding_success_rate"], 1.0, "{edited}");
+    assert!(
+        base["funding"]["cash_shortfall"].as_i64().unwrap() > 0,
+        "{base}"
+    );
+    assert_eq!(edited["funding"]["cash_shortfall"], 0, "{edited}");
+    assert!(
+        edited["real_final"]["p50"].as_f64().unwrap() > base["real_final"]["p50"].as_f64().unwrap()
+    );
+
+    // Nothing was written: the plan still spends, and no run was added.
+    let (_, event) = app
+        .get(&format!("/api/scenarios/{scenario_id}/events/{spending}"))
+        .await;
+    assert_eq!(event["effects"].as_array().unwrap().len(), 1);
+    let (_, runs) = app.get(&format!("/api/scenarios/{scenario_id}/runs")).await;
+    assert_eq!(runs.as_array().unwrap().len(), 1, "{runs}");
+}
+
+#[tokio::test]
+async fn a_preview_can_create_an_asset_an_account_holding_it_and_an_event_funding_it() {
+    let mut app = TestApp::new().await;
+    app.login_as("create-preview@example.com").await;
+    let (scenario_id, _, spending, _) = app.previewable_plan().await;
+    let (_, event) = app
+        .get(&format!("/api/scenarios/{scenario_id}/events/{spending}"))
+        .await;
+    let checking = event["effects"][0]["from_account_id"].as_i64().unwrap();
+    let (_, assets) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    let equity = assets[0]["return_profile_id"].as_i64().unwrap();
+    let (_, accounts) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+    let cash = accounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["flavor"] == "Bank")
+        .unwrap()["return_profile_id"]
+        .as_i64()
+        .unwrap();
+
+    let (status, preview) = app
+        .preview(
+            scenario_id,
+            json!({"changes": [
+                {"op": "add", "target": {"new_asset": "etf"}, "path": "", "value": {
+                    "name": "Total World ETF", "initial_price": 120.0,
+                    "return_profile_id": equity}},
+                {"op": "add", "target": {"new_account": "ira"}, "path": "", "value": {
+                    "name": "New IRA", "flavor": "Investment", "tax_status": "TaxFree",
+                    "cash_value": 500.0, "cash_return_profile_id": cash,
+                    "positions": [{"asset_id": {"$new": "etf"}, "units": 50.0,
+                                   "cost_basis": 6000.0}]}},
+                {"op": "add", "target": {"new_event": "fund"}, "path": "", "value": {
+                    "name": "Fund the IRA", "fires_once": true,
+                    "trigger": {"kind": "Date", "on_date": "2027-01-01"},
+                    "effects": [{"kind": "CashTransfer", "from_account_id": checking,
+                                 "to_account_id": {"$new": "ira"},
+                                 "amount": {"kind": "Fixed", "value": 1000.0}}]}}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["problems"], json!([]), "{preview}");
+    // New rows on profiles the run already sampled draw the same markets.
+    assert_eq!(preview["paired"], true);
+    let lines: Vec<(String, String)> = preview["diff"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            (
+                l["label"].as_str().unwrap().to_string(),
+                l["to"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+    let to = |label: &str| {
+        lines
+            .iter()
+            .find(|(l, _)| l == label)
+            .unwrap_or_else(|| panic!("no {label} in {lines:?}"))
+            .1
+            .clone()
+    };
+    assert!(to("Portfolio › + Total World ETF").starts_with("$120.00 · "));
+    assert_eq!(
+        to("Portfolio › + New IRA"),
+        "Tax-free investment · $500 cash · 1 lot"
+    );
+    assert!(to("Plan › + Fund the IRA").contains("New IRA"), "{lines:?}");
+    assert!(preview["edited"]["success_rate"].is_number(), "{preview}");
+
+    // Nothing was written.
+    let (_, after) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    assert_eq!(
+        after.as_array().unwrap().len(),
+        assets.as_array().unwrap().len()
+    );
+
+    // A reference to nothing is a problem with the batch, not a failure.
+    let (status, preview) = app
+        .preview(
+            scenario_id,
+            json!({"changes": [
+                {"op": "replace", "target": {"event": spending},
+                 "path": "/effects/0/from_account_id", "value": {"$new": "nowhere"}}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(
+        preview["problems"][0]["kind"], "unknown_reference",
+        "{preview}"
+    );
+    assert!(preview["edited"].is_null());
+}
+
+#[tokio::test]
+async fn an_unchanged_preview_reproduces_its_run() {
+    let mut app = TestApp::new().await;
+    app.login_as("noop@example.com").await;
+    let (scenario_id, _, spending, _) = app.previewable_plan().await;
+
+    // Read back from the stored run on one side, simulated on the other: the
+    // same markets from the same seed give the same answer, to the bit.
+    // A change that rewrites a value to itself resolves to no write at all.
+    for changes in [
+        json!([]),
+        json!([{"op": "replace", "target": {"event": spending},
+                "path": "/effects/0/amount/value", "expect": 1000.0, "value": 1000.0}]),
+    ] {
+        let (status, preview) = app.preview(scenario_id, json!({"changes": changes})).await;
+        assert_eq!(status, StatusCode::OK, "{preview}");
+        assert_eq!(preview["paired"], true);
+        assert_eq!(preview["diff"], json!([]));
+        assert_eq!(preview["base"], preview["edited"], "{preview}");
+    }
+
+    // A different sample size simulates the base too, and still agrees.
+    let (status, preview) = app
+        .preview(scenario_id, json!({"changes": [], "iterations": 25}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["iterations"], 25);
+    assert_eq!(preview["base"], preview["edited"], "{preview}");
+    assert_ne!(preview["base"]["funding"]["iterations"], 40);
+}
+
+#[tokio::test]
+async fn a_stale_or_broken_change_is_reported_without_simulating() {
+    let mut app = TestApp::new().await;
+    app.login_as("stale@example.com").await;
+    let (scenario_id, _, spending, brokerage) = app.previewable_plan().await;
+
+    let (status, preview) = app
+        .preview(
+            scenario_id,
+            json!({"changes": [
+                {"op": "replace", "target": {"event": spending},
+                 "path": "/effects/0/amount/value", "expect": 999.0, "value": 500.0},
+                {"op": "replace", "target": {"account": brokerage},
+                 "path": "/no_such_field", "value": 1}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    let kinds: Vec<&str> = preview["problems"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["kind"].as_str().unwrap())
+        .collect();
+    assert!(kinds.contains(&"stale"), "{preview}");
+    assert_eq!(preview["problems"][0]["actual"], 1000.0, "{preview}");
+    assert_eq!(kinds.len(), 2, "{preview}");
+    assert_eq!(preview["base"], Value::Null);
+    assert_eq!(preview["edited"], Value::Null);
+
+    // An edit the plan refuses — a lot with a negative basis — is a problem
+    // with the batch, not a server error.
+    let (status, preview) = app
+        .preview(
+            scenario_id,
+            json!({"changes": [
+                {"op": "replace", "target": {"account": brokerage},
+                 "path": "/positions/0/cost_basis", "value": -1.0}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["problems"][0]["kind"], "invalid_body", "{preview}");
+    assert_eq!(preview["edited"], Value::Null);
+}
+
+#[tokio::test]
+async fn a_preview_can_edit_a_lot_or_map_an_asset_onto_a_profile_the_run_never_used() {
+    let mut app = TestApp::new().await;
+    app.login_as("remap@example.com").await;
+    let (scenario_id, _, _, brokerage) = app.previewable_plan().await;
+
+    // A cost-basis edit leaves the markets alone.
+    let (status, preview) = app
+        .preview(
+            scenario_id,
+            json!({"changes": [
+                {"op": "replace", "target": {"account": brokerage},
+                 "path": "/positions/0/cost_basis", "expect": 40000.0, "value": 50000.0}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["problems"], json!([]), "{preview}");
+    assert_eq!(preview["paired"], true);
+    assert_eq!(preview["diff"].as_array().unwrap().len(), 1, "{preview}");
+
+    // The run's snapshot only holds the profiles it used; bonds were not one.
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let bonds = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "US Aggregate Bonds")
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let (_, assets) = app
+        .get(&format!("/api/scenarios/{scenario_id}/assets"))
+        .await;
+    let vti = assets[0]["id"].as_i64().unwrap();
+    let (status, preview) = app
+        .preview(
+            scenario_id,
+            json!({"changes": [
+                {"op": "replace", "target": {"asset": vti}, "path": "/return_profile_id",
+                 "value": bonds}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["problems"], json!([]), "{preview}");
+    assert_eq!(preview["paired"], false, "a new profile draws new markets");
+    assert_eq!(preview["diff"][0]["to"], "US Aggregate Bonds", "{preview}");
+    assert!(preview["edited"]["real_final"].is_object(), "{preview}");
+}
+
+#[tokio::test]
+async fn a_preview_needs_a_finished_run_of_the_callers_own_plan() {
+    let mut owner = TestApp::new().await;
+    owner.login_as("preview-owner@example.com").await;
+    let (unrun, _, _) = owner.seed_scenario().await;
+    owner
+        .patch(
+            &format!("/api/scenarios/{unrun}"),
+            json!({"name": "Never run"}),
+        )
+        .await;
+    let (status, body) = owner.preview(unrun, json!({"changes": []})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (scenario_id, run_id, _, _) = owner.previewable_plan().await;
+    // A run of another scenario is not this one's to preview against.
+    let (status, body) = owner
+        .preview(unrun, json!({"changes": [], "base_run_id": run_id}))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let mut intruder = TestApp {
+        router: owner.router.clone(),
+        cookie: None,
+        _dir: tempfile::tempdir().unwrap(),
+    };
+    intruder.login_as("preview-intruder@example.com").await;
+    let (status, _) = intruder.preview(scenario_id, json!({"changes": []})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_preview_caps_its_sample() {
+    let mut app = TestApp::new().await;
+    app.login_as("cap@example.com").await;
+    // No events: the cheapest plan there is, so the cap costs little to hit.
+    let (scenario_id, _, _) = app.seed_scenario().await;
+    let (_, run) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/runs"),
+            json!({"iterations": 10, "seed": 3}),
+        )
+        .await;
+    assert_eq!(
+        app.await_run(run["id"].as_i64().unwrap()).await,
+        "succeeded"
+    );
+
+    let (status, preview) = app
+        .preview(scenario_id, json!({"changes": [], "iterations": 1_000_000}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["iterations"], 5000);
+    assert_eq!(preview["edited"]["funding"]["iterations"], 5000);
+    assert_eq!(preview["base"], preview["edited"]);
+
+    let (status, _) = app
+        .preview(scenario_id, json!({"changes": [], "iterations": 0}))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+// ── suggestions ─────────────────────────────────────────────────────────────
+
+impl TestApp {
+    /// A seeded plan with a loan paid by an inflation-adjusted transfer (which
+    /// the liability rule flags), and a finished run. Returns (scenario, run,
+    /// payment event).
+    async fn reviewable_plan(&self) -> (i64, i64, i64) {
+        let (scenario_id, checking, _) = self.seed_scenario().await;
+        let (status, loan) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/accounts"),
+                json!({"name": "Car loan", "flavor": "Liability",
+                       "principal": 5000.0, "interest_rate": 0.05}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{loan}");
+        let (status, event) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/events"),
+                json!({
+                    "name": "Loan payment",
+                    "trigger": {"kind": "Repeating", "interval": "Monthly"},
+                    "effects": [{
+                        "kind": "CashTransfer", "from_account_id": checking,
+                        "to_account_id": loan["id"],
+                        "amount": {"kind": "InflationAdjusted",
+                                   "inner": {"kind": "Fixed", "value": 200.0}}
+                    }]
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{event}");
+        let (_, run) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/runs"),
+                json!({"iterations": 40, "seed": 7}),
+            )
+            .await;
+        let run_id = run["id"].as_i64().unwrap();
+        assert_eq!(self.await_run(run_id).await, "succeeded");
+        (scenario_id, run_id, event["id"].as_i64().unwrap())
+    }
+
+    async fn review(&self, scenario_id: i64) -> Value {
+        let (status, review) = self
+            .post(
+                &format!("/api/scenarios/{scenario_id}/review"),
+                json!({"run_id": null}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{review}");
+        review
+    }
+
+    /// A model-written suggestion that drops the plan's spending.
+    async fn suggest(&self, scenario_id: i64, body: Value) -> (StatusCode, Value) {
+        self.post(&format!("/api/scenarios/{scenario_id}/suggestions"), body)
+            .await
+    }
+}
+
+fn by_rule<'a>(review: &'a Value, rule: &str) -> Vec<&'a Value> {
+    review["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["rule"] == rule)
+        .collect()
+}
+
+fn drop_spending(spending: i64) -> Value {
+    json!({
+        "run_id": null, "kind": "fix", "section": "plan",
+        "title": "Spending empties checking within the year",
+        "reasoning": "Checking starts at $10,000 and pays $1,000 a month with nothing coming in.",
+        "evidence": [{"ref": "ledger", "year": 2026, "event_id": spending, "account_id": null}],
+        "paths": [{
+            "key": "a", "label": "Stop the spending", "reasoning": null, "recommended": true,
+            "estimate": {"success_rate": null, "funding_success_rate": 1.0},
+            "steps": [{"key": "a", "title": "Remove its expense", "reasoning": null,
+                       "changes": [{"op": "remove", "target": {"event": spending},
+                                    "path": "/effects/0"}]}]
+        }]
+    })
+}
+
+/// Apply every remaining step of `path` to the plan.
+fn apply_path(path: &str) -> Value {
+    json!({"path": path, "through_step": null, "to": "plan", "name": null})
+}
+
+#[tokio::test]
+async fn a_review_stores_checked_notes_and_remembers_dismissals() {
+    let mut app = TestApp::new().await;
+    app.login_as("review@example.com").await;
+    let (scenario_id, run_id, payment) = app.reviewable_plan().await;
+
+    let (status, none) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(none, Value::Null);
+
+    let review = app.review(scenario_id).await;
+    assert_eq!(review["run_id"], run_id);
+    let notes = by_rule(&review, "liability_payment_inflation_adjusted");
+    assert_eq!(notes.len(), 1, "{review}");
+    let note = notes[0];
+    assert_eq!(note["source"], "rules");
+    assert_eq!(note["kind"], "fix");
+    assert_eq!(note["section"], "plan");
+    assert_eq!(note["status"], "open");
+    assert_eq!(note["applied_path"], Value::Null);
+    // Keep today's figure (recommended, checked), or the loan's 30-year
+    // amortizing payment.
+    let keys: Vec<&str> = note["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["fixed", "amortizing"], "{note}");
+    let fixed = &note["paths"][0];
+    assert_eq!(fixed["recommended"], true);
+    assert_eq!(fixed["steps"][0]["changes"][0]["target"]["event"], payment);
+    assert_eq!(fixed["steps"][0]["applied"], false);
+    assert!(
+        fixed["steps"][0]["diff"][0]["label"]
+            .as_str()
+            .unwrap()
+            .contains("Loan payment"),
+        "{note}"
+    );
+    assert_eq!(note["paths"][1]["check"], Value::Null, "one check per note");
+    let check = &fixed["check"];
+    assert_eq!(check["iterations"], 40, "{note}");
+    assert_eq!(check["paired"], true);
+    assert!(check["base"]["success_rate"].is_number());
+    assert!(check["edited"]["real_final"].is_object());
+
+    let (_, latest) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    assert_eq!(latest["suggestions"], review["suggestions"]);
+
+    // Reviewing again replaces the open notes rather than adding to them.
+    let again = app.review(scenario_id).await;
+    assert_eq!(
+        again["suggestions"].as_array().unwrap().len(),
+        review["suggestions"].as_array().unwrap().len()
+    );
+    let (_, all) = app
+        .get(&format!("/api/scenarios/{scenario_id}/suggestions"))
+        .await;
+    assert_eq!(
+        all.as_array().unwrap().len(),
+        review["suggestions"].as_array().unwrap().len()
+    );
+
+    // "It's correct" keeps the note out of later reviews.
+    let id = by_rule(&again, "liability_payment_inflation_adjusted")[0]["id"]
+        .as_i64()
+        .unwrap();
+    let (status, confirmed) = app
+        .post(
+            &format!("/api/suggestions/{id}/dismiss"),
+            json!({"as": "confirmed"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{confirmed}");
+    assert_eq!(confirmed["status"], "confirmed");
+    assert!(confirmed["resolved_at"].is_string());
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{id}/dismiss"),
+            json!({"as": "dismissed"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let third = app.review(scenario_id).await;
+    assert!(by_rule(&third, "liability_payment_inflation_adjusted").is_empty());
+    let (_, confirmed) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=confirmed"
+        ))
+        .await;
+    assert_eq!(confirmed.as_array().unwrap().len(), 1);
+    let (status, _) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=maybe"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_written_suggestion_is_checked_before_it_is_stored() {
+    let mut app = TestApp::new().await;
+    app.login_as("draft@example.com").await;
+    let (scenario_id, run_id, spending, _) = app.previewable_plan().await;
+
+    let (status, stored) = app.suggest(scenario_id, drop_spending(spending)).await;
+    assert_eq!(status, StatusCode::CREATED, "{stored}");
+    assert_eq!(stored["source"], "ai");
+    assert_eq!(stored["rule"], Value::Null);
+    assert_eq!(stored["run_id"], run_id);
+    assert_eq!(stored["status"], "open");
+    assert_eq!(stored["paths"][0]["check"], Value::Null);
+    assert_eq!(stored["paths"][0]["estimate"]["funding_success_rate"], 1.0);
+    assert!(
+        stored["paths"][0]["steps"][0]["diff"][0]["label"]
+            .as_str()
+            .unwrap()
+            .contains("Spending"),
+        "{stored}"
+    );
+
+    // The same proposal twice is one suggestion.
+    let (status, _) = app.suggest(scenario_id, drop_spending(spending)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Changes that do not fit the run's plan come back with their problems.
+    let mut stale = drop_spending(spending);
+    stale["title"] = json!("Halve the spending");
+    stale["paths"][0]["steps"][0]["changes"] = json!([{"op": "replace", "target": {"event": spending},
+        "path": "/effects/0/amount/value", "expect": 999.0, "value": 500.0}]);
+    let (status, body) = app.suggest(scenario_id, stale).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["problems"][0]["kind"], "stale", "{body}");
+    assert_eq!(body["by_step"][0]["path"], "a", "{body}");
+    assert_eq!(body["by_step"][0]["step"], "a", "{body}");
+    assert_eq!(body["by_step"][0]["problems"][0]["kind"], "stale", "{body}");
+    assert_eq!(body["error"]["code"], "unprocessable");
+
+    // Evidence must point at what the run has.
+    for evidence in [
+        json!({"ref": "ledger", "year": 1900, "event_id": null, "account_id": null}),
+        json!({"ref": "account_series", "account_id": 999_999, "date": "2027-12-31", "value": 1.0}),
+        json!({"ref": "diagnostic", "field": "no_such_field", "value": 1.0}),
+    ] {
+        let mut draft = drop_spending(spending);
+        draft["title"] = json!("Other");
+        draft["evidence"] = json!([evidence]);
+        let (status, body) = app.suggest(scenario_id, draft).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+    let mut odd = drop_spending(spending);
+    odd["title"] = json!("Other");
+    odd["paths"][0]["estimate"] = json!({"success_rate": 1.5, "funding_success_rate": null});
+    let (status, _) = app.suggest(scenario_id, odd).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A preview simulates the stored changes and keeps the result.
+    let id = stored["id"].as_i64().unwrap();
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{id}/preview"),
+            json!({"path": "nope"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, preview) = app
+        .post(
+            &format!("/api/suggestions/{id}/preview"),
+            json!({"path": "a", "through_step": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["edited"]["funding_success_rate"], 1.0, "{preview}");
+    let (_, open) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=open"
+        ))
+        .await;
+    let check = &open[0]["paths"][0]["check"];
+    assert_eq!(check["edited"]["funding_success_rate"], 1.0, "{open}");
+    assert_eq!(check["paired"], true);
+}
+
+#[tokio::test]
+async fn applying_a_suggestion_writes_the_plan_once_and_refuses_a_stale_one() {
+    let mut app = TestApp::new().await;
+    app.login_as("apply@example.com").await;
+    let (scenario_id, _, spending, _) = app.previewable_plan().await;
+
+    let halve = |title: &str, value: f64| {
+        let mut draft = drop_spending(spending);
+        draft["title"] = json!(title);
+        draft["paths"][0]["steps"][0]["changes"] = json!([{"op": "replace", "target": {"event": spending},
+            "path": "/effects/0/amount/value", "expect": 1000.0, "value": value}]);
+        draft
+    };
+    let (status, first) = app.suggest(scenario_id, halve("Spend $500", 500.0)).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let first = first["id"].as_i64().unwrap();
+
+    let (_, before) = app.get(&format!("/api/scenarios/{scenario_id}")).await;
+    let (status, applied) = app
+        .post(&format!("/api/suggestions/{first}/apply"), apply_path("a"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    assert_eq!(applied["scenario_id"], scenario_id);
+    assert_eq!(applied["suggestion"]["status"], "applied");
+    assert_eq!(applied["suggestion"]["applied_path"], "a");
+    assert_eq!(
+        applied["suggestion"]["paths"][0]["steps"][0]["applied"],
+        true
+    );
+    assert!(applied["suggestion"]["resolved_at"].is_string());
+    let (_, event) = app
+        .get(&format!("/api/scenarios/{scenario_id}/events/{spending}"))
+        .await;
+    assert_eq!(event["effects"][0]["amount"]["value"], 500.0, "{event}");
+    let (_, after) = app.get(&format!("/api/scenarios/{scenario_id}")).await;
+    assert!(after["updated_at"].as_str() >= before["updated_at"].as_str());
+    // Nothing is run on the user's behalf.
+    let (_, runs) = app.get(&format!("/api/scenarios/{scenario_id}/runs")).await;
+    assert_eq!(runs.as_array().unwrap().len(), 1);
+
+    let (status, _) = app
+        .post(&format!("/api/suggestions/{first}/apply"), apply_path("a"))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // Written against the run (spending 1000), applied to a plan that now
+    // spends 500: stale.
+    let (status, second) = app.suggest(scenario_id, halve("Spend $750", 750.0)).await;
+    assert_eq!(status, StatusCode::CREATED, "{second}");
+    let second = second["id"].as_i64().unwrap();
+    let (status, body) = app
+        .post(&format!("/api/suggestions/{second}/apply"), apply_path("a"))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["problems"][0]["kind"], "stale", "{body}");
+    assert_eq!(body["problems"][0]["actual"], 500.0, "{body}");
+    let (_, event) = app
+        .get(&format!("/api/scenarios/{scenario_id}/events/{spending}"))
+        .await;
+    assert_eq!(event["effects"][0]["amount"]["value"], 500.0);
+    let (_, still) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=open"
+        ))
+        .await;
+    assert_eq!(still[0]["id"], second);
+}
+
+#[tokio::test]
+async fn applying_to_a_copy_leaves_the_plan_alone() {
+    let mut app = TestApp::new().await;
+    app.login_as("copy@example.com").await;
+    let (scenario_id, _, spending, _) = app.previewable_plan().await;
+    let (_, stored) = app.suggest(scenario_id, drop_spending(spending)).await;
+    let id = stored["id"].as_i64().unwrap();
+
+    let (status, applied) = app
+        .post(
+            &format!("/api/suggestions/{id}/apply"),
+            json!({"path": "a", "through_step": null, "to": "copy", "name": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let copy = applied["scenario_id"].as_i64().unwrap();
+    assert_ne!(copy, scenario_id);
+    assert_eq!(applied["suggestion"]["status"], "applied");
+
+    let (_, scenario) = app.get(&format!("/api/scenarios/{copy}")).await;
+    assert_eq!(
+        scenario["name"],
+        "Test plan — Spending empties checking within the year"
+    );
+    let (_, events) = app.get(&format!("/api/scenarios/{copy}/events")).await;
+    let copied = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Spending")
+        .unwrap();
+    assert_eq!(copied["effects"], json!([]), "{copied}");
+    let (_, original) = app
+        .get(&format!("/api/scenarios/{scenario_id}/events/{spending}"))
+        .await;
+    assert_eq!(original["effects"].as_array().unwrap().len(), 1);
+}
+
+/// The Checking account's id and its return profile, from the plan.
+async fn checking_of(app: &TestApp, scenario_id: i64) -> (i64, i64) {
+    let (_, accounts) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+    let checking = accounts
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "Checking")
+        .unwrap()
+        .clone();
+    (
+        checking["id"].as_i64().unwrap(),
+        checking["return_profile_id"].as_i64().unwrap(),
+    )
+}
+
+/// A two-path fix: open a buffer account and fund it (two steps, the second
+/// naming what the first creates), or stop the spending (one step).
+fn buffer_or_stop(spending: i64, checking: i64, cash_profile: i64) -> Value {
+    json!({
+        "run_id": null, "kind": "fix", "section": "plan",
+        "title": "Checking pays $1,000 a month with nothing coming in",
+        "reasoning": "Either hold a buffer or stop the spending.",
+        "evidence": [],
+        "paths": [
+            {
+                "key": "buffer", "label": "Open a savings buffer and fund it",
+                "reasoning": null, "recommended": true, "estimate": null,
+                "steps": [
+                    {"key": "open", "title": "Open a savings account", "reasoning": null,
+                     "changes": [{"op": "add", "target": {"new_account": "buffer"}, "path": "",
+                                  "value": {"name": "Buffer", "flavor": "Bank",
+                                            "cash_value": 0.0,
+                                            "return_profile_id": cash_profile}}]},
+                    {"key": "fund", "title": "Move $500 a month into it", "reasoning": null,
+                     "changes": [{"op": "add", "target": {"new_event": "fund"}, "path": "",
+                                  "value": {"name": "Fund buffer",
+                                            "trigger": {"kind": "Repeating", "interval": "Monthly"},
+                                            "effects": [{"kind": "CashTransfer",
+                                                         "from_account_id": checking,
+                                                         "to_account_id": {"$new": "buffer"},
+                                                         "amount": {"kind": "Fixed", "value": 500.0}}]}}]}
+                ]
+            },
+            {
+                "key": "stop", "label": "Stop the spending", "reasoning": null,
+                "recommended": false, "estimate": null,
+                "steps": [{"key": "a", "title": "Remove its expense", "reasoning": null,
+                           "changes": [{"op": "remove", "target": {"event": spending},
+                                        "path": "/effects/0"}]}]
+            }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn a_path_is_followed_step_by_step_and_later_steps_use_what_earlier_ones_created() {
+    let mut app = TestApp::new().await;
+    app.login_as("paths@example.com").await;
+    let (scenario_id, _, spending, _) = app.previewable_plan().await;
+    let (checking, cash_profile) = checking_of(&app, scenario_id).await;
+
+    let (status, stored) = app
+        .suggest(
+            scenario_id,
+            buffer_or_stop(spending, checking, cash_profile),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{stored}");
+    let id = stored["id"].as_i64().unwrap();
+    let buffer = &stored["paths"][0];
+    assert_eq!(buffer["key"], "buffer");
+    assert!(
+        buffer["steps"][0]["diff"][0]["label"]
+            .as_str()
+            .unwrap()
+            .contains("Buffer"),
+        "{stored}"
+    );
+    assert!(
+        buffer["steps"][1]["diff"][0]["label"]
+            .as_str()
+            .unwrap()
+            .contains("Fund buffer"),
+        "{stored}"
+    );
+    assert_eq!(stored["paths"][1]["key"], "stop");
+
+    // Previewing part of a path shows it without keeping it as the check.
+    let (status, partial) = app
+        .post(
+            &format!("/api/suggestions/{id}/preview"),
+            json!({"path": "buffer", "through_step": "open"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{partial}");
+    assert!(
+        partial["problems"].as_array().unwrap().is_empty(),
+        "{partial}"
+    );
+    let (status, whole) = app
+        .post(
+            &format!("/api/suggestions/{id}/preview"),
+            json!({"path": "buffer", "through_step": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{whole}");
+    assert!(whole["problems"].as_array().unwrap().is_empty(), "{whole}");
+    let (_, listed) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=open"
+        ))
+        .await;
+    assert!(listed[0]["paths"][0]["check"].is_object(), "{listed}");
+    assert_eq!(listed[0]["paths"][1]["check"], Value::Null);
+
+    // Step one: the account exists; the path is started, the note still open.
+    let (status, applied) = app
+        .post(
+            &format!("/api/suggestions/{id}/apply"),
+            json!({"path": "buffer", "through_step": "open", "to": "plan", "name": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let note = &applied["suggestion"];
+    assert_eq!(note["status"], "open");
+    assert_eq!(note["applied_path"], "buffer");
+    assert_eq!(note["paths"][0]["steps"][0]["applied"], true);
+    assert!(note["paths"][0]["steps"][0]["applied_at"].is_string());
+    assert_eq!(note["paths"][0]["steps"][1]["applied"], false);
+    assert_eq!(note["paths"][0]["steps"][1]["applied_at"], Value::Null);
+    assert_eq!(note["resolved_at"], Value::Null);
+    let buffer_id = app.account_named(scenario_id, "Buffer").await;
+    let (_, events) = app
+        .get(&format!("/api/scenarios/{scenario_id}/events"))
+        .await;
+    assert!(
+        !events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == "Fund buffer")
+    );
+
+    // The other path is closed; a step already applied is not applied again.
+    let (status, _) = app
+        .post(&format!("/api/suggestions/{id}/apply"), apply_path("stop"))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{id}/apply"),
+            json!({"path": "buffer", "through_step": "open", "to": "plan", "name": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{id}/apply"),
+            json!({"path": "buffer", "through_step": null, "to": "copy", "name": null}),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a started path goes to no copy"
+    );
+
+    // A new review keeps the part-applied note on the board.
+    let review = app.review(scenario_id).await;
+    assert!(
+        review["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == id),
+        "{review}"
+    );
+
+    // Step two, in a later request: its `$new` names the account step one
+    // created, by the id it was written under.
+    let (status, applied) = app
+        .post(
+            &format!("/api/suggestions/{id}/apply"),
+            apply_path("buffer"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{applied}");
+    let note = &applied["suggestion"];
+    assert_eq!(note["status"], "applied");
+    assert!(note["resolved_at"].is_string());
+    assert_eq!(note["paths"][0]["steps"][1]["applied"], true);
+    assert_eq!(
+        note["paths"][0]["steps"][1]["applied_at"],
+        note["resolved_at"]
+    );
+    let (_, events) = app
+        .get(&format!("/api/scenarios/{scenario_id}/events"))
+        .await;
+    let fund = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "Fund buffer")
+        .expect("the funding event")
+        .clone();
+    assert_eq!(fund["effects"][0]["to_account_id"], buffer_id, "{fund}");
+    assert_eq!(fund["effects"][0]["from_account_id"], checking);
+
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{id}/apply"),
+            apply_path("buffer"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn paths_are_checked_for_shape_and_problems_name_their_path_and_step() {
+    let mut app = TestApp::new().await;
+    app.login_as("shapes@example.com").await;
+    let (scenario_id, _, spending, _) = app.previewable_plan().await;
+    let (checking, cash_profile) = checking_of(&app, scenario_id).await;
+    let base = buffer_or_stop(spending, checking, cash_profile);
+    let set_value = |from: f64, to: f64| {
+        json!({"op": "replace", "target": {"event": spending},
+               "path": "/effects/0/amount/value", "expect": from, "value": to})
+    };
+
+    let mut refused: Vec<(&str, Value)> = Vec::new();
+    let mut many = base.clone();
+    let path = many["paths"][1].clone();
+    for key in ["c", "d", "e"] {
+        let mut extra = path.clone();
+        extra["key"] = json!(key);
+        extra["steps"][0]["changes"] = json!([set_value(1000.0, 900.0)]);
+        many["paths"].as_array_mut().unwrap().push(extra);
+    }
+    refused.push(("five paths", many));
+    let mut dup = base.clone();
+    dup["paths"][1]["key"] = json!("buffer");
+    refused.push(("duplicate path keys", dup));
+    let mut twins = base.clone();
+    twins["paths"][1]["steps"] = twins["paths"][0]["steps"].clone();
+    refused.push(("identical paths", twins));
+    let mut two = base.clone();
+    two["paths"][1]["recommended"] = json!(true);
+    refused.push(("two recommended", two));
+    let mut bad_key = base.clone();
+    bad_key["paths"][0]["steps"][0]["key"] = json!("Open");
+    refused.push(("bad step key", bad_key));
+    let mut long = base.clone();
+    long["paths"][1]["steps"] = json!(
+        (0..5)
+            .map(|i| json!({"key": format!("s{i}"), "title": "Step",
+                        "changes": [set_value(1000.0, 900.0)]}))
+            .collect::<Vec<_>>()
+    );
+    refused.push(("five steps", long));
+    let mut read = base.clone();
+    read["kind"] = json!("read");
+    refused.push(("a read note with paths", read));
+    let mut bare = base.clone();
+    bare["paths"] = json!([]);
+    refused.push(("a fix without paths", bare));
+    for (why, draft) in refused {
+        let (status, body) = app.suggest(scenario_id, draft).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{why}: {body}");
+    }
+
+    // Steps read the plan as the earlier ones leave it: the second step's
+    // `expect` is the first one's value.
+    let mut sequential = base.clone();
+    sequential["paths"][1]["steps"] = json!([
+        {"key": "cut", "title": "Cut to $800", "changes": [set_value(1000.0, 800.0)]},
+        {"key": "more", "title": "Then to $600", "changes": [set_value(800.0, 600.0)]}
+    ]);
+    let (status, body) = app.suggest(scenario_id, sequential.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // A step that reads the plan wrong is named, with its path.
+    let mut stale = base.clone();
+    stale["title"] = json!("Another note");
+    stale["paths"][1]["steps"] = json!([
+        {"key": "cut", "title": "Cut to $800", "changes": [set_value(1000.0, 800.0)]},
+        {"key": "more", "title": "Then to $600", "changes": [set_value(1000.0, 600.0)]}
+    ]);
+    let (status, body) = app.suggest(scenario_id, stale).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["by_step"][0]["path"], "stop", "{body}");
+    assert_eq!(body["by_step"][0]["step"], "more", "{body}");
+    assert_eq!(body["by_step"][0]["problems"][0]["kind"], "stale", "{body}");
+    assert_eq!(body["problems"], body["by_step"][0]["problems"]);
+
+    // The same courses of action in another order, keys and labels are one
+    // suggestion.
+    let mut shuffled = sequential;
+    shuffled["title"] = json!("A differently worded title");
+    let paths = shuffled["paths"].as_array_mut().unwrap();
+    paths.reverse();
+    paths[0]["key"] = json!("first");
+    paths[0]["label"] = json!("Other words");
+    let (status, body) = app.suggest(scenario_id, shuffled).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn suggestions_belong_to_the_plans_owner() {
+    let mut owner = TestApp::new().await;
+    owner.login_as("suggest-owner@example.com").await;
+    let (scenario_id, _, spending, _) = owner.previewable_plan().await;
+    let (_, stored) = owner.suggest(scenario_id, drop_spending(spending)).await;
+    let id = stored["id"].as_i64().unwrap();
+
+    let mut intruder = TestApp {
+        router: owner.router.clone(),
+        cookie: None,
+        _dir: tempfile::tempdir().unwrap(),
+    };
+    intruder.login_as("suggest-intruder@example.com").await;
+    let (status, _) = intruder
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = intruder
+        .post(
+            &format!("/api/scenarios/{scenario_id}/review"),
+            json!({"run_id": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = intruder
+        .get(&format!("/api/scenarios/{scenario_id}/suggestions"))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = intruder.suggest(scenario_id, drop_spending(spending)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    for (path, body) in [
+        ("preview", json!({"path": "a", "through_step": null})),
+        ("apply", apply_path("a")),
+        ("dismiss", json!({"as": "dismissed"})),
+    ] {
+        let (status, _) = intruder
+            .post(&format!("/api/suggestions/{id}/{path}"), body)
+            .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+    }
+    let (_, mine) = owner
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=open"
+        ))
+        .await;
+    assert_eq!(mine[0]["id"], id);
+}
+
+// ── model-written review notes ──────────────────────────────────────────────
+
+mod review_model {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use finplan_server::suggest::ai::{
+        AiClient, BoxFuture, DEFAULT_MODEL, Reply as ModelReply, Request, Settings, Transport,
+        TransportError,
+    };
+    use serde_json::{Value, json};
+    use tokio::sync::Semaphore;
+
+    /// What the scripted API does with the next request.
+    pub enum Reply {
+        Message(Value),
+        /// Waits for the test to open the gate, then answers.
+        Gated(Value),
+        Fail(TransportError),
+        /// Never answers.
+        Hang,
+    }
+
+    /// A Messages API that plays back a script, one reply per request.
+    pub struct Script {
+        replies: Mutex<VecDeque<Reply>>,
+        gate: Semaphore,
+        pub requests: Mutex<Vec<Value>>,
+    }
+
+    impl Script {
+        pub fn new(replies: Vec<Reply>) -> Arc<Self> {
+            Arc::new(Self {
+                replies: Mutex::new(replies.into()),
+                gate: Semaphore::new(0),
+                requests: Mutex::new(Vec::new()),
+            })
+        }
+
+        /// Queue more replies behind any already scripted.
+        pub fn push(&self, replies: Vec<Reply>) {
+            self.replies.lock().unwrap().extend(replies);
+        }
+
+        pub fn open_gate(&self) {
+            self.gate.add_permits(1);
+        }
+
+        pub fn client(self: &Arc<Self>) -> Option<Arc<AiClient>> {
+            let settings = Settings {
+                model: DEFAULT_MODEL.into(),
+                max_turns: 6,
+                max_suggestions: 3,
+                max_previews: 3,
+                max_tokens: 2_000,
+                thinking: true,
+                effort: "high",
+                max_retries: 0,
+                retry_base: Duration::from_millis(1),
+                retry_cap: Duration::from_millis(1),
+                materiality: Default::default(),
+            };
+            Some(Arc::new(AiClient::new(settings, self.clone(), None)))
+        }
+    }
+
+    /// Scripted replies are written as JSON and read as Messages replies;
+    /// requests are recorded as the JSON that would go on the wire.
+    impl Transport for Script {
+        fn send<'a>(
+            &'a self,
+            request: &'a Request,
+        ) -> BoxFuture<'a, Result<ModelReply, TransportError>> {
+            Box::pin(async move {
+                self.requests
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::to_value(request).unwrap());
+                let next = self.replies.lock().unwrap().pop_front();
+                let reply = match next {
+                    Some(Reply::Message(reply)) => reply,
+                    Some(Reply::Gated(reply)) => {
+                        self.gate.acquire().await.unwrap().forget();
+                        reply
+                    }
+                    Some(Reply::Fail(error)) => return Err(error),
+                    Some(Reply::Hang) => std::future::pending().await,
+                    None => return Err(TransportError::Network("script ran out".into())),
+                };
+                Ok(serde_json::from_value(reply).expect("scripted reply is a Messages reply"))
+            })
+        }
+    }
+
+    fn message(stop_reason: &str, content: Value) -> Value {
+        json!({
+            "id": "msg", "type": "message", "role": "assistant", "model": DEFAULT_MODEL,
+            "stop_reason": stop_reason, "content": content,
+            "usage": {"input_tokens": 100, "output_tokens": 20}
+        })
+    }
+
+    pub fn call(id: &str, tool: &str, input: Value) -> Value {
+        message(
+            "tool_use",
+            json!([{"type": "tool_use", "id": id, "name": tool, "input": input}]),
+        )
+    }
+
+    pub fn end() -> Value {
+        message(
+            "end_turn",
+            json!([{"type": "text", "text": "One note added."}]),
+        )
+    }
+
+    /// The model's changes for its one note: more cash in checking.
+    pub fn raise_checking(checking: i64) -> Value {
+        json!([{
+            "op": "replace", "target": {"account": checking}, "path": "/cash_value",
+            "expect": 10_000.0, "value": 20_000.0
+        }])
+    }
+
+    /// One full pass: preview the changes, submit the note, end.
+    pub fn pass(checking: i64) -> Vec<Reply> {
+        let changes = raise_checking(checking);
+        vec![
+            Reply::Message(call("t1", "preview_changes", json!({"changes": changes}))),
+            Reply::Message(call(
+                "t2",
+                "submit_suggestion",
+                json!({
+                    "kind": "fix", "section": "portfolio", "motive": "realism",
+                    "title": "Checking starts too thin for the loan payments",
+                    "reasoning": "Checking opens at $10,000 and the loan takes $200 a month.",
+                    "evidence": [],
+                    "paths": [{"key": "a", "label": "Start checking at $20,000",
+                               "recommended": true,
+                               "steps": [{"key": "a", "title": "Raise checking",
+                                          "changes": changes}]}]
+                }),
+            )),
+            Reply::Message(end()),
+        ]
+    }
+}
+
+use review_model::{Reply, Script};
+
+impl TestApp {
+    async fn account_named(&self, scenario_id: i64, name: &str) -> i64 {
+        let (_, accounts) = self
+            .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+            .await;
+        accounts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == name)
+            .unwrap()["id"]
+            .as_i64()
+            .unwrap()
+    }
+
+    /// Poll the review until its model pass is no longer running.
+    async fn await_review_model(&self, scenario_id: i64) -> Value {
+        for _ in 0..200 {
+            let (_, review) = self
+                .get(&format!("/api/scenarios/{scenario_id}/review"))
+                .await;
+            if review["ai"]["status"] != "running" {
+                return review;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("the review model never finished");
+    }
+}
+
+fn model_notes(review: &Value) -> Vec<&Value> {
+    review["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["source"] == "ai")
+        .collect()
+}
+
+#[tokio::test]
+async fn a_review_without_a_model_reports_no_model_pass() {
+    let mut app = TestApp::new().await;
+    app.login_as("no-model@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+    let review = app.review(scenario_id).await;
+    assert_eq!(review["ai"], Value::Null, "{review}");
+    assert!(!review["suggestions"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn the_model_adds_checked_notes_after_the_rule_notes() {
+    // Two passes: the first writes a note the user then dismisses; the second
+    // proposes it again and is kept quiet.
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("model-review@example.com").await;
+    let (scenario_id, run_id, _) = app.reviewable_plan().await;
+    let checking = app.account_named(scenario_id, "Checking").await;
+    {
+        let mut replies = review_model::pass(checking);
+        // Hold the first request until the rule notes have been answered.
+        let Reply::Message(first) = replies.remove(0) else {
+            unreachable!()
+        };
+        replies.insert(0, Reply::Gated(first));
+        replies.extend(review_model::pass(checking));
+        script.push(replies);
+    }
+
+    let review = app.review(scenario_id).await;
+    assert_eq!(review["ai"]["status"], "running", "{review}");
+    assert!(review["ai"]["started_at"].is_string());
+    assert!(model_notes(&review).is_empty());
+    assert!(!by_rule(&review, "liability_payment_inflation_adjusted").is_empty());
+    script.open_gate();
+
+    let review = app.await_review_model(scenario_id).await;
+    assert_eq!(review["ai"]["status"], "done", "{review}");
+    assert_eq!(review["ai"]["stop"], "finished");
+    assert_eq!(review["ai"]["error"], Value::Null);
+    assert!(review["ai"]["finished_at"].is_string());
+    let notes = model_notes(&review);
+    assert_eq!(notes.len(), 1, "{review}");
+    let note = notes[0];
+    assert_eq!(note["rule"], Value::Null);
+    assert_eq!(note["run_id"], run_id);
+    assert_eq!(note["kind"], "fix");
+    assert_eq!(note["status"], "open");
+    assert!(
+        note["paths"][0]["steps"][0]["diff"][0]["label"]
+            .as_str()
+            .unwrap()
+            .contains("Checking"),
+        "{note}"
+    );
+    // The model's own preview became the note's check.
+    assert_eq!(note["paths"][0]["check"]["iterations"], 40, "{note}");
+    assert_eq!(note["paths"][0]["check"]["paired"], true);
+    assert!(note["paths"][0]["check"]["edited"]["success_rate"].is_number());
+    // The rule notes are still there.
+    assert!(!by_rule(&review, "liability_payment_inflation_adjusted").is_empty());
+
+    // The model read the plan and the rule notes, never the API key.
+    let requests = script.requests.lock().unwrap().clone();
+    let first = requests[0].to_string();
+    assert!(first.contains("Checking"));
+    assert!(first.contains("preview_changes"));
+
+    // Dismissed, the note stays gone when the next pass proposes it again.
+    let id = note["id"].as_i64().unwrap();
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{id}/dismiss"),
+            json!({"as": "dismissed"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    app.review(scenario_id).await;
+    let review = app.await_review_model(scenario_id).await;
+    assert_eq!(review["ai"]["status"], "done", "{review}");
+    assert!(model_notes(&review).is_empty(), "{review}");
+    let (_, dismissed) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=dismissed"
+        ))
+        .await;
+    assert_eq!(dismissed.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_failed_model_pass_leaves_the_rule_notes() {
+    let script = Script::new(vec![Reply::Fail(
+        finplan_server::suggest::ai::TransportError::Status {
+            status: 400,
+            error_type: None,
+            message: "bad request".into(),
+        },
+    )]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("model-fails@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+
+    app.review(scenario_id).await;
+    let review = app.await_review_model(scenario_id).await;
+    assert_eq!(review["ai"]["status"], "failed", "{review}");
+    assert_eq!(
+        review["ai"]["error"],
+        "the review model could not be reached"
+    );
+    // The public message never carries the API's own text.
+    assert!(!review["ai"].to_string().contains("bad request"));
+    assert!(model_notes(&review).is_empty());
+    assert!(!by_rule(&review, "liability_payment_inflation_adjusted").is_empty());
+}
+
+#[tokio::test]
+async fn a_new_review_supersedes_a_running_model_pass() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("model-supersede@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+    let checking = app.account_named(scenario_id, "Checking").await;
+    {
+        // Pass one finishes; pass two hangs; pass three replaces both.
+        let mut replies = review_model::pass(checking);
+        replies.push(Reply::Hang);
+        replies.extend(review_model::pass(checking));
+        script.push(replies);
+    }
+
+    app.review(scenario_id).await;
+    let first = app.await_review_model(scenario_id).await;
+    let first_notes = model_notes(&first);
+    assert_eq!(first_notes.len(), 1, "{first}");
+    let first_id = first_notes[0]["id"].clone();
+
+    let running = app.review(scenario_id).await;
+    assert_eq!(running["ai"]["status"], "running");
+    // Wait until pass two has sent its (hanging) request.
+    for _ in 0..200 {
+        if script.requests.lock().unwrap().len() >= 4 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(script.requests.lock().unwrap().len(), 4);
+
+    app.review(scenario_id).await;
+    let last = app.await_review_model(scenario_id).await;
+    assert_eq!(last["ai"]["status"], "done", "{last}");
+    let notes = model_notes(&last);
+    assert_eq!(notes.len(), 1, "{last}");
+    // Pass three's note replaced pass one's open one.
+    assert_ne!(notes[0]["id"], first_id);
+    let (_, open) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=open"
+        ))
+        .await;
+    let open_model_notes = open
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["source"] == "ai")
+        .count();
+    assert_eq!(open_model_notes, 1);
+}
+
+#[tokio::test]
+async fn a_restart_fails_a_model_pass_left_running() {
+    let script = Script::new(vec![Reply::Hang]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("model-restart@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+
+    let review = app.review(scenario_id).await;
+    assert_eq!(review["ai"]["status"], "running");
+
+    app.restart().await;
+    let (_, review) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    assert_eq!(review["ai"]["status"], "failed", "{review}");
+    assert_eq!(review["ai"]["error"], "interrupted by a server restart");
+    assert!(!review["suggestions"].as_array().unwrap().is_empty());
+}
+
+// ── "Chat about this" ───────────────────────────────────────────────────────
+
+/// The model ending its turn with `text`.
+fn chat_answer(text: &str) -> Value {
+    json!({
+        "id": "msg", "type": "message", "role": "assistant",
+        "model": finplan_server::suggest::ai::DEFAULT_MODEL,
+        "stop_reason": "end_turn", "content": [{"type": "text", "text": text}],
+        "usage": {"input_tokens": 100, "output_tokens": 20}
+    })
+}
+
+/// A chat turn that previews a change, submits it as a note, then answers.
+fn chat_turn_adding_a_note(checking: i64) -> Vec<Reply> {
+    let mut replies = review_model::pass(checking);
+    replies.pop();
+    replies.push(Reply::Message(chat_answer(
+        "## Why\nChecking runs short in the first year. I added a suggestion to start it at $20,000.",
+    )));
+    replies
+}
+
+impl TestApp {
+    /// A reviewed plan whose model pass added nothing: its scenario, one of
+    /// its rule notes, and its checking account.
+    async fn chat_ready(&mut self, email: &str, script: &Script) -> (i64, i64, i64) {
+        self.login_as(email).await;
+        let (scenario_id, _, _) = self.reviewable_plan().await;
+        let checking = self.account_named(scenario_id, "Checking").await;
+        script.push(vec![Reply::Message(chat_answer("Nothing to add."))]);
+        self.review(scenario_id).await;
+        let review = self.await_review_model(scenario_id).await;
+        assert_eq!(review["ai"]["status"], "done", "{review}");
+        let note = by_rule(&review, "liability_payment_inflation_adjusted")[0]["id"]
+            .as_i64()
+            .unwrap();
+        (scenario_id, note, checking)
+    }
+
+    async fn chat(&self, note: i64, message: &str) -> (StatusCode, Value) {
+        self.post(
+            &format!("/api/suggestions/{note}/chat"),
+            json!({"message": message}),
+        )
+        .await
+    }
+
+    /// Poll a thread until its turn is no longer running.
+    async fn await_chat(&self, note: i64) -> Value {
+        for _ in 0..200 {
+            let (status, thread) = self.get(&format!("/api/suggestions/{note}/chat")).await;
+            assert_eq!(status, StatusCode::OK, "{thread}");
+            if thread["status"] != "running" {
+                return thread;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("the chat turn never finished");
+    }
+}
+
+fn roles(thread: &Value) -> Vec<&str> {
+    thread["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_chat_turn_answers_and_adds_a_linked_suggestion() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    let (scenario_id, note, checking) = app.chat_ready("chat@example.com", &script).await;
+
+    let (status, thread) = app.get(&format!("/api/suggestions/{note}/chat")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(thread["status"], "idle");
+    assert_eq!(thread["messages"], json!([]));
+
+    let mut replies = chat_turn_adding_a_note(checking);
+    let Reply::Message(first) = replies.remove(0) else {
+        unreachable!()
+    };
+    replies.insert(0, Reply::Gated(first));
+    script.push(replies);
+    let (status, thread) = app.chat(note, "  Why is this a problem?  ").await;
+    assert_eq!(status, StatusCode::OK, "{thread}");
+    assert_eq!(thread["suggestion_id"], note);
+    assert_eq!(thread["status"], "running");
+    assert_eq!(roles(&thread), ["user"]);
+    assert_eq!(thread["messages"][0]["text"], "Why is this a problem?");
+    script.open_gate();
+
+    let thread = app.await_chat(note).await;
+    assert_eq!(thread["status"], "idle", "{thread}");
+    assert_eq!(thread["error"], Value::Null);
+    assert_eq!(roles(&thread), ["user", "assistant"]);
+    let answer = &thread["messages"][1];
+    // Plain text: the heading marker is gone.
+    assert_eq!(
+        answer["text"],
+        "Why\nChecking runs short in the first year. I added a suggestion to start it at $20,000."
+    );
+    let added = answer["suggestion_ids"].as_array().unwrap();
+    assert_eq!(added.len(), 1, "{thread}");
+    let child = added[0].as_i64().unwrap();
+
+    // The note it added is in the review, linked to the one discussed.
+    let (_, review) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    let linked = review["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == child)
+        .unwrap_or_else(|| panic!("the chat's note is not in the review: {review}"));
+    assert_eq!(linked["parent_id"], note);
+    assert_eq!(linked["source"], "ai");
+    assert_eq!(linked["status"], "open");
+    assert_eq!(linked["paths"][0]["check"]["paired"], true, "{linked}");
+    // Every other note has no parent.
+    let (_, rule_note) = app
+        .get(&format!(
+            "/api/scenarios/{scenario_id}/suggestions?status=open"
+        ))
+        .await;
+    assert!(
+        rule_note
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["id"] != child)
+            .all(|s| s["parent_id"].is_null())
+    );
+
+    // The model read the note and the question.
+    let asked = script.requests.lock().unwrap().clone();
+    let first_chat_request = asked
+        .iter()
+        .find(|r| r.to_string().contains("The note being discussed"))
+        .expect("a chat request")
+        .to_string();
+    assert!(first_chat_request.contains("Why is this a problem?"));
+
+    // A follow-up carries the thread so far.
+    script.push(vec![Reply::Message(chat_answer(
+        "Because the loan starts at once.",
+    ))]);
+    let (status, _) = app.chat(note, "And after that?").await;
+    assert_eq!(status, StatusCode::OK);
+    let thread = app.await_chat(note).await;
+    assert_eq!(roles(&thread), ["user", "assistant", "user", "assistant"]);
+    assert_eq!(thread["messages"][3]["suggestion_ids"], json!([]));
+    let last = script.requests.lock().unwrap().last().unwrap().to_string();
+    assert!(last.contains("Checking runs short in the first year"));
+    assert!(last.contains("And after that?"));
+}
+
+#[tokio::test]
+async fn chat_needs_a_review_model() {
+    let mut app = TestApp::new().await;
+    app.login_as("chat-no-model@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+    let review = app.review(scenario_id).await;
+    let note = review["suggestions"][0]["id"].as_i64().unwrap();
+
+    let (status, body) = app.chat(note, "Why?").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.to_string().contains("not enabled"));
+    // Reading a thread still works; there is none.
+    let (status, thread) = app.get(&format!("/api/suggestions/{note}/chat")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(thread["status"], "idle");
+    assert_eq!(thread["messages"], json!([]));
+}
+
+#[tokio::test]
+async fn chat_turns_are_checked_one_at_a_time_and_owner_scoped() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    let (_, note, _) = app.chat_ready("chat-rules@example.com", &script).await;
+
+    for message in ["", "   ", &"x".repeat(2_001)] {
+        let (status, body) = app.chat(note, message).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+    let (status, thread) = app.get(&format!("/api/suggestions/{note}/chat")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        thread["messages"],
+        json!([]),
+        "a refused message is not kept"
+    );
+
+    script.push(vec![Reply::Hang]);
+    let (status, thread) = app.chat(note, "First question").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(thread["status"], "running");
+    let (status, body) = app.chat(note, "Second question").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (_, thread) = app.get(&format!("/api/suggestions/{note}/chat")).await;
+    assert_eq!(roles(&thread), ["user"]);
+
+    // Someone else's note reads as not found.
+    app.login_as("chat-intruder@example.com").await;
+    let (status, _) = app.get(&format!("/api/suggestions/{note}/chat")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = app.chat(note, "Let me in").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = app.get("/api/suggestions/999999/chat").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_thread_takes_a_bounded_number_of_questions() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    let (_, note, _) = app.chat_ready("chat-cap@example.com", &script).await;
+    for i in 0..20 {
+        script.push(vec![Reply::Message(chat_answer("An answer."))]);
+        let (status, body) = app.chat(note, &format!("Question {i}")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let thread = app.await_chat(note).await;
+        assert_eq!(thread["status"], "idle", "{thread}");
+    }
+    let (status, body) = app.chat(note, "One more").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (_, thread) = app.get(&format!("/api/suggestions/{note}/chat")).await;
+    assert_eq!(thread["messages"].as_array().unwrap().len(), 40);
+}
+
+#[tokio::test]
+async fn a_failed_chat_turn_says_so_and_can_be_retried() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    let (_, note, _) = app.chat_ready("chat-fails@example.com", &script).await;
+
+    script.push(vec![Reply::Fail(
+        finplan_server::suggest::ai::TransportError::Status {
+            status: 400,
+            error_type: None,
+            message: "bad request".into(),
+        },
+    )]);
+    let (status, _) = app.chat(note, "Why?").await;
+    assert_eq!(status, StatusCode::OK);
+    let thread = app.await_chat(note).await;
+    assert_eq!(thread["status"], "failed", "{thread}");
+    assert_eq!(thread["error"], "the model could not be reached");
+    assert!(!thread.to_string().contains("bad request"));
+    assert_eq!(roles(&thread), ["user"]);
+
+    // Asking again reads both questions and answers.
+    script.push(vec![Reply::Message(chat_answer("Here is why."))]);
+    let (status, _) = app.chat(note, "Why, again?").await;
+    assert_eq!(status, StatusCode::OK);
+    let thread = app.await_chat(note).await;
+    assert_eq!(thread["status"], "idle", "{thread}");
+    assert_eq!(thread["error"], Value::Null);
+    assert_eq!(roles(&thread), ["user", "user", "assistant"]);
+    let last = script.requests.lock().unwrap().last().unwrap().to_string();
+    assert!(last.contains("The user writes:\\nWhy?") && last.contains("Why, again?"));
+}
+
+#[tokio::test]
+async fn a_restart_fails_a_chat_turn_left_running() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    let (_, note, _) = app.chat_ready("chat-restart@example.com", &script).await;
+    script.push(vec![Reply::Hang]);
+    let (_, thread) = app.chat(note, "Why?").await;
+    assert_eq!(thread["status"], "running");
+
+    app.restart().await;
+    let (status, thread) = app.get(&format!("/api/suggestions/{note}/chat")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(thread["status"], "failed", "{thread}");
+    assert_eq!(thread["error"], "interrupted by a server restart");
+    assert_eq!(roles(&thread), ["user"]);
 }

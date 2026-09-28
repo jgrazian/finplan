@@ -2,6 +2,7 @@
 import type { AccountSeries } from "./AccountSeries";
 import type { Band } from "./Band";
 import type { CashFlow } from "./CashFlow";
+import type { FundingDiagnostics } from "./FundingDiagnostics";
 import type { InflationPoint } from "./InflationPoint";
 import type { LedgerYear } from "./LedgerYear";
 import type { RealNetWorthSummary } from "./RealNetWorthSummary";
@@ -45,4 +46,10 @@ export type Results = {
    * Per-year ledger index, for the years the ledger covers.
    */
   ledger_years: Array<LedgerYear>;
+  /**
+   * When, where and how the iterations that failed the funding check
+   * failed, over the whole run rather than the shown path. Kept for
+   * superseded runs too. Null for runs stored before it was measured.
+   */
+  funding_diagnostics: FundingDiagnostics | null;
 };

@@ -200,6 +200,19 @@ recoverable work; it does not imply a persisted terminal run status.
 | `finplan_queue_snapshot_timestamp_seconds` | Gauge | Unix time of last successful queue snapshot, to make sampler staleness visible. |
 | `finplan_db_pool_connections`, `finplan_db_pool_idle_connections` | Gauges | Cheap pool snapshots; do not instrument every SQL query initially. |
 | `finplan_build_info`, `finplan_process_start_time_seconds` | Gauges | Version/model version information and process lifetime. Host CPU/RSS monitoring can use the deployment's host/container exporter. |
+| `finplan_review_ai_passes_total` | Counter; model, outcome | Finished review AI passes: finished, turn_limit, suggestion_limit, max_tokens, refused, interrupted, unexpected, failed, or superseded (aborted by a newer review). `model` is the configured OpenRouter slug, one value per process. The pass is also a `review_ai` job in the `finplan_job_*` families. |
+| `finplan_review_ai_pass_duration_seconds` | Histogram; model, outcome | Pass wall time from taking one of the process's pass slots to its end; queueing for a slot is `finplan_job_queue_wait_seconds{kind="review_ai"}`. |
+| `finplan_review_ai_turn_duration_seconds` | Histogram; model | Latency of each answered model request; failed attempts before a retry are not observed. |
+| `finplan_review_ai_tokens_total` | Counter; model, type=input/output/cache_read/cache_write | Tokens as the provider reported them per answered request; `input` excludes cache reads and writes. |
+| `finplan_review_ai_cost_usd_total` | Float counter; model, source=reported/estimated | Spend in US dollars: OpenRouter's `usage.cost` when a reply carries it, otherwise tokens × the model's listed OpenRouter prices (looked up once, cached six hours). Requests with neither are counted in logs as unpriced, not here. |
+| `finplan_review_ai_tool_calls_total` | Counter; tool=preview_changes/submit_suggestion/unknown, outcome | ok, problems, error, invalid, budget_exhausted (previews); accepted, rejected, invalid, budget_exhausted (submissions). |
+| `finplan_review_ai_tool_duration_seconds` | Histogram; tool | Time serving one tool call, including a preview's simulation. |
+| `finplan_review_ai_suggestions_total` | Counter; outcome=accepted/rejected/stored/discarded | Notes the checks accepted or sent back, then of the accepted, stored or discarded (duplicates of silenced notes, or a superseded pass). |
+| `finplan_review_ai_retries_total` | Counter; model, reason=rate_limit/server/provider/network/timeout | Model requests sent again after a retryable failure. |
+| `finplan_review_chat_turns_total` | Counter; model, outcome | Finished "Chat about this" turns, with the pass outcomes (`superseded` here means the note, and so its thread, was deleted mid-turn). A turn is also a `review_chat` job in the `finplan_job_*` families. Chat turns report into the `finplan_review_ai_*` families above too, which therefore total every review-model request. |
+| `finplan_review_chat_turn_duration_seconds` | Histogram; model, outcome | Turn wall time from taking a model slot (shared with review passes) to its end. |
+| `finplan_review_chat_tokens_total` | Counter; model, type=input/output/cache_read/cache_write | The chat share of `finplan_review_ai_tokens_total`. |
+| `finplan_review_chat_cost_usd_total` | Float counter; model, source=reported/estimated | The chat share of `finplan_review_ai_cost_usd_total`. |
 
 Sample queue counts and oldest age every five seconds, with an initial sample
 before reporting ready. Use SQLite status rows for runs, including recovery

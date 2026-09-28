@@ -189,6 +189,7 @@ mod tests {
     fn config(metrics_bind: Option<SocketAddr>) -> ServerConfig {
         ServerConfig {
             mail: Default::default(),
+            review_ai: Default::default(),
             log_format: Default::default(),
             metrics_bind,
             hosted: false,

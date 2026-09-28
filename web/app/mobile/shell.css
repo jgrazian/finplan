@@ -93,7 +93,9 @@
     right: 0;
     bottom: 0;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    /* One column per tab, however many the header lists. */
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
     padding-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--color-divider);
     background: var(--color-bg);
@@ -110,8 +112,9 @@
     opacity: .55;
     font-family: var(--font-heading);
     font-weight: 600;
-    font-size: 14px;
-    letter-spacing: .06em;
+    /* Five tabs across a 360px phone: 12px keeps "ANALYSIS" on one line. */
+    font-size: 12px;
+    letter-spacing: .04em;
     text-transform: uppercase;
     cursor: pointer;
   }

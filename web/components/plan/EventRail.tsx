@@ -4,6 +4,7 @@ import { DragHandle, DropLine, Tag } from "@/components/ui";
 import { useReorder } from "@/lib/hooks/useReorder";
 import type { EventId, PlanEvent } from "@/lib/types";
 import { NO_AMOUNT } from "@/lib/view/events";
+import { noteLink } from "@/lib/view/review";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
 
@@ -24,10 +25,16 @@ export function EventRail({
   selectedId,
   onSelect,
   onReorder,
+  notes,
+  onOpenNotes,
 }: {
   events: PlanEvent[];
   selectedId: EventId;
   onSelect: (id: EventId) => void;
+  /** Open review notes that edit each event, by server id. */
+  notes?: ReadonlyMap<number, number>;
+  /** Opens the Review tab, from a row's "review note" link. */
+  onOpenNotes?: () => void;
   /** Server ids in their new order. Omitted where writes are refused. */
   onReorder?: (ids: number[]) => void | Promise<unknown>;
 }) {
@@ -112,6 +119,20 @@ export function EventRail({
                 <div className="event-row-summary" style={{ fontSize: 12, marginTop: 3, color: MUTED }}>
                   {event.trigger} · {event.amount === NO_AMOUNT ? event.next : event.amount}
                 </div>
+                {onOpenNotes && noteLink(notes?.get(serverId)) && (
+                  <a
+                    href="#"
+                    style={{ display: "inline-block", fontSize: 12, marginTop: 3 }}
+                    onClick={(e) => {
+                      // The row is a button of its own; this link is not a pick.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onOpenNotes();
+                    }}
+                  >
+                    {noteLink(notes?.get(serverId))}
+                  </a>
+                )}
               </div>
               {/* A phone opens the row as a page; the chevron says so. */}
               <span className="event-row-chev" aria-hidden="true">›</span>

@@ -67,6 +67,8 @@ export function PlanScreen({
   raw,
   onChanged,
   offline,
+  reviewNotes,
+  onOpenReview,
 }: {
   scenarioId: number;
   params: ScenarioParams;
@@ -77,6 +79,9 @@ export function PlanScreen({
   onChanged: () => void;
   /** Writes are being refused, so add and delete cannot be offered. */
   offline?: boolean;
+  /** Open review notes that edit each event, by server id. */
+  reviewNotes?: ReadonlyMap<number, number>;
+  onOpenReview?: () => void;
 }) {
   const [savedAt, setSavedAt] = useState<Map<number, number>>(new Map());
   const [lastEventId, setLastEventId] = useState<string>();
@@ -340,6 +345,8 @@ export function PlanScreen({
                 selectedId={selected?.id ?? ""}
                 onSelect={openEvent}
                 onReorder={offline || isMobile ? undefined : (ids) => saveOrder(() => api.events.reorder(scenarioId, ids))}
+                notes={reviewNotes}
+                onOpenNotes={onOpenReview}
               />
             ) : (
               <ParameterRail parameters={parameters} selectedId={parameterId}

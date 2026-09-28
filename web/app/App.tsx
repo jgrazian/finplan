@@ -12,6 +12,7 @@ import {
   PortfolioScreen,
   ResultsScreen,
 } from "@/components/screens";
+import { ReviewScreen } from "@/components/review";
 import { NewScenarioDialog } from "@/components/scenario/NewScenarioDialog";
 import { SessionExpiredDialog, StatusBar } from "@/components/status";
 import { Button } from "@/components/ui";
@@ -19,6 +20,7 @@ import { api } from "@/lib/api/client";
 import { historyApi } from "@/lib/api/history";
 import type { Scenario as ApiScenario, PreflightIssue, UserResponse } from "@/lib/api/types";
 import { useAsync } from "@/lib/hooks/useAsync";
+import { useReview } from "@/lib/hooks/useReview";
 import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
@@ -29,8 +31,9 @@ import { useAppearance } from "@/lib/theme";
 import type { InflationProfile, Scenario } from "@/lib/types";
 import { BETA_ACCESS_NOTICE } from "@/lib/view/access";
 import { clockTime, pathChecks, summarizeIssues } from "@/lib/view/issues";
+import { type Destination, noteCounts } from "@/lib/view/review";
 
-/** The four tabs that describe the scenario; account settings is not one. */
+/** The tabs that describe the scenario; account settings is not one. */
 type ScreenTab = Exclude<TabId, "account">;
 
 const TABS: ReadonlyArray<TabDef<ScreenTab>> = [
@@ -38,6 +41,7 @@ const TABS: ReadonlyArray<TabDef<ScreenTab>> = [
   { id: "plan", label: "Plan" },
   { id: "results", label: "Results" },
   { id: "analysis", label: "Analysis" },
+  { id: "review", label: "Review" },
 ];
 
 /**
@@ -134,6 +138,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
 
   const workspace = useWorkspace(scenarioId);
   const run = useRun(workspace.scenario);
+  const review = useReview(scenarioId);
   const status = useServerStatus();
 
   // What would stop the next run. Re-read on every accepted edit, so fixing
@@ -199,6 +204,51 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     [nav, scenarioSlug, workspace.events],
   );
 
+  // Review notes name rows by id; these put names on them and open them.
+  const reviewNames = useMemo(() => {
+    const accountById = new Map(accounts.map((a) => [a.serverId, a.name]));
+    const eventById = new Map(events.map((e) => [e.serverId, e.id]));
+    return {
+      account: (id: number) => accountById.get(id),
+      event: (id: number) => eventById.get(id),
+    };
+  }, [accounts, events]);
+  const openSuggestions = review.review?.suggestions;
+  const reviewCounts = useMemo(() => noteCounts(openSuggestions ?? []), [openSuggestions]);
+  const portfolioNotes = useMemo(
+    () => (openSuggestions ?? []).filter((s) => s.status === "open" && s.section === "portfolio").length,
+    [openSuggestions],
+  );
+  const openReview = useCallback(() => nav.setTab("review"), [nav]);
+
+  const followEvidence = useCallback(
+    (to: Destination) => {
+      if (to.tab === "portfolio") {
+        const account = accounts.find((a) => a.serverId === to.accountId);
+        nav.openTab("portfolio", { section: "accounts", selection: account?.accountId });
+      } else if (to.tab === "plan") {
+        const event = events.find((e) => e.serverId === to.eventId);
+        nav.openTab("plan", { selection: event?.id });
+      } else {
+        nav.setTab("results");
+      }
+    },
+    [nav, accounts, events],
+  );
+
+  // A stress note applied to a copy: open the copy on its plan, the way a new
+  // scenario is bridged into the list before the reload lands. It is not run;
+  // the copy's own Run button does that.
+  const openCopy = useCallback(
+    async (copyId: number) => {
+      const created = await api.scenarios.get(copyId);
+      setRecentlyCreated(created);
+      nav.openScenario(created.slug, "plan");
+      scenarios.reload();
+    },
+    [nav, scenarios],
+  );
+
   const start = useCallback(() => {
     nav.setTab("results");
     void run.start(effort);
@@ -221,8 +271,9 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   // so it counts what the server actually accepted. The first sighting of a
   // scenario is not an edit — otherwise opening the app would start a run —
   // and the run is left in the background rather than pulling the screen to
-  // Results out from under whatever is being edited.
-  const autoRun = user.auto_run && !status.offline;
+  // Results out from under whatever is being edited. Not on Review: applying
+  // notes there batches edits for one deliberate re-run, which its banner offers.
+  const autoRun = user.auto_run && !status.offline && nav.tab !== "review";
   const updatedAt = workspace.scenario?.updated_at;
   const seen = useRef<{ id?: number; at?: string }>({});
   const startQuietly = useRef(() => run.start(effort));
@@ -352,6 +403,8 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 accounts={workspace.accounts}
                 raw={workspace.raw}
                 onChanged={saved}
+                reviewNotes={portfolioNotes}
+                onOpenReview={openReview}
                 returnProfiles={workspace.returnProfiles}
                 inflationProfiles={workspace.inflationProfiles}
                 activeInflationProfile={workspace.activeInflationProfile}
@@ -368,6 +421,22 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 events={workspace.events}
                 raw={workspace.raw}
                 onChanged={saved}
+                reviewNotes={reviewCounts.events}
+                onOpenReview={openReview}
+              />
+            )}
+            {nav.tab === "review" && (
+              <ReviewScreen
+                state={review}
+                runs={run.history}
+                planChanged={run.stale}
+                running={run.active}
+                names={reviewNames}
+                offline={status.offline}
+                onPlanChanged={saved}
+                onRerun={() => void run.start(effort)}
+                onOpenCopy={(id) => void openCopy(id)}
+                onNavigate={followEvidence}
               />
             )}
             {nav.tab === "analysis" && (

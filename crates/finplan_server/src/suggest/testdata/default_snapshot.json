@@ -1,0 +1,1384 @@
+{
+  "accounts": [
+    {
+      "description": null,
+      "flavor": "Investment",
+      "id": 1,
+      "name": "Vanguard",
+      "sort_order": 0
+    },
+    {
+      "description": null,
+      "flavor": "Investment",
+      "id": 2,
+      "name": "Vanguard Roth IRA",
+      "sort_order": 1
+    },
+    {
+      "description": null,
+      "flavor": "Investment",
+      "id": 3,
+      "name": "Fidelity 401(k)",
+      "sort_order": 2
+    },
+    {
+      "description": null,
+      "flavor": "Investment",
+      "id": 4,
+      "name": "Fidelity Roth",
+      "sort_order": 3
+    },
+    {
+      "description": null,
+      "flavor": "Investment",
+      "id": 5,
+      "name": "Robinhood",
+      "sort_order": 4
+    },
+    {
+      "description": null,
+      "flavor": "Bank",
+      "id": 6,
+      "name": "USAA",
+      "sort_order": 5
+    },
+    {
+      "description": null,
+      "flavor": "Liability",
+      "id": 7,
+      "name": "Mortgage",
+      "sort_order": 6
+    },
+    {
+      "description": null,
+      "flavor": "Property",
+      "id": 8,
+      "name": "House",
+      "sort_order": 7
+    }
+  ],
+  "amounts": {
+    "1": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 1,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 5000.0
+    },
+    "10": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 10,
+      "kind": "InflationAdjusted",
+      "left_id": 9,
+      "right_id": null,
+      "value": null
+    },
+    "11": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 11,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 1000000.0
+    },
+    "12": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 12,
+      "kind": "InflationAdjusted",
+      "left_id": 11,
+      "right_id": null,
+      "value": null
+    },
+    "13": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 13,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 1200000.0
+    },
+    "14": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 14,
+      "kind": "InflationAdjusted",
+      "left_id": 13,
+      "right_id": null,
+      "value": null
+    },
+    "15": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 15,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 20000.0
+    },
+    "16": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 16,
+      "kind": "InflationAdjusted",
+      "left_id": 15,
+      "right_id": null,
+      "value": null
+    },
+    "17": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 17,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 6000.0
+    },
+    "18": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 18,
+      "kind": "InflationAdjusted",
+      "left_id": 17,
+      "right_id": null,
+      "value": null
+    },
+    "2": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 2,
+      "kind": "InflationAdjusted",
+      "left_id": 1,
+      "right_id": null,
+      "value": null
+    },
+    "3": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 3,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 6000.0
+    },
+    "4": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 4,
+      "kind": "InflationAdjusted",
+      "left_id": 3,
+      "right_id": null,
+      "value": null
+    },
+    "5": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 5,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 1000.0
+    },
+    "6": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 6,
+      "kind": "InflationAdjusted",
+      "left_id": 5,
+      "right_id": null,
+      "value": null
+    },
+    "7": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 7,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 200000.0
+    },
+    "8": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 8,
+      "kind": "InflationAdjusted",
+      "left_id": 7,
+      "right_id": null,
+      "value": null
+    },
+    "9": {
+      "account_id": null,
+      "asset_id": null,
+      "expression_source": null,
+      "id": 9,
+      "kind": "Fixed",
+      "left_id": null,
+      "right_id": null,
+      "value": 200000.0
+    }
+  },
+  "assets": [
+    {
+      "description": "Vanguard 500 Index Fund Admiral Shares",
+      "id": 1,
+      "initial_price": 708.6,
+      "name": "VFIAX",
+      "return_profile_id": 9,
+      "sort_order": 0,
+      "tracking_error": null
+    },
+    {
+      "description": null,
+      "id": 2,
+      "initial_price": 100.0,
+      "name": "House",
+      "return_profile_id": null,
+      "sort_order": 0,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard Global Capital Cycles",
+      "id": 3,
+      "initial_price": 24.59,
+      "name": "VGPMX",
+      "return_profile_id": 9,
+      "sort_order": 1,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard Morningstar Mid-Cap Index",
+      "id": 4,
+      "initial_price": 404.26,
+      "name": "VIMAX",
+      "return_profile_id": 1,
+      "sort_order": 2,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard FTSE Emerging Markets ETF",
+      "id": 5,
+      "initial_price": 60.77,
+      "name": "VWO",
+      "return_profile_id": 4,
+      "sort_order": 3,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard Total International Stock Index Fund Admiral Shares",
+      "id": 6,
+      "initial_price": 46.75,
+      "name": "VTIAX",
+      "return_profile_id": 4,
+      "sort_order": 4,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard Developed Markets Index",
+      "id": 7,
+      "initial_price": 100.0,
+      "name": "VTMGX",
+      "return_profile_id": 4,
+      "sort_order": 5,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard Total Bond Market Index Fund Admiral Shares",
+      "id": 8,
+      "initial_price": 9.47,
+      "name": "VBTLX",
+      "return_profile_id": 3,
+      "sort_order": 6,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard Small-Cap Index Fund Admiral Shares",
+      "id": 9,
+      "initial_price": 142.59,
+      "name": "VSMAX",
+      "return_profile_id": 2,
+      "sort_order": 7,
+      "tracking_error": null
+    },
+    {
+      "description": "Vanguard Target Retirement 2050 Fund",
+      "id": 10,
+      "initial_price": 66.83,
+      "name": "VFIFX",
+      "return_profile_id": 1,
+      "sort_order": 8,
+      "tracking_error": null
+    },
+    {
+      "description": "Fidelity 500 Index Fund",
+      "id": 11,
+      "initial_price": 100.0,
+      "name": "FXAIX",
+      "return_profile_id": 9,
+      "sort_order": 9,
+      "tracking_error": null
+    },
+    {
+      "description": "JPMorgan Large Cap Growth",
+      "id": 12,
+      "initial_price": 100.0,
+      "name": "JLGMX",
+      "return_profile_id": 1,
+      "sort_order": 10,
+      "tracking_error": null
+    },
+    {
+      "description": "SPDR S&P 500 ETF Trust",
+      "id": 13,
+      "initial_price": 100.0,
+      "name": "SPY",
+      "return_profile_id": 9,
+      "sort_order": 11,
+      "tracking_error": null
+    },
+    {
+      "description": "Alphabet Inc. Class C",
+      "id": 14,
+      "initial_price": 337.12,
+      "name": "GOOG",
+      "return_profile_id": 1,
+      "sort_order": 12,
+      "tracking_error": null
+    }
+  ],
+  "bank": {
+    "6": {
+      "account_id": 6,
+      "cash_value": 250000.0,
+      "return_profile_id": 6
+    }
+  },
+  "distributions": {
+    "1": {
+      "bear_id": null,
+      "bear_to_bull_prob": null,
+      "block_size": null,
+      "bull_id": null,
+      "bull_to_bear_prob": null,
+      "df": null,
+      "history_preset": null,
+      "id": 1,
+      "kind": "Normal",
+      "mean": 0.0990829,
+      "rate": null,
+      "scale": null,
+      "std_dev": 0.1962
+    },
+    "10": {
+      "bear_id": null,
+      "bear_to_bull_prob": null,
+      "block_size": null,
+      "bull_id": null,
+      "bull_to_bear_prob": null,
+      "df": null,
+      "history_preset": null,
+      "id": 10,
+      "kind": "Normal",
+      "mean": 0.0347068,
+      "rate": null,
+      "scale": null,
+      "std_dev": 0.0279436
+    },
+    "11": {
+      "bear_id": null,
+      "bear_to_bull_prob": null,
+      "block_size": 5,
+      "bull_id": null,
+      "bull_to_bear_prob": null,
+      "df": null,
+      "history_preset": "sp500",
+      "id": 11,
+      "kind": "Bootstrap",
+      "mean": null,
+      "rate": null,
+      "scale": null,
+      "std_dev": null
+    },
+    "2": {
+      "bear_id": null,
+      "bear_to_bull_prob": null,
+      "block_size": null,
+      "bull_id": null,
+      "bull_to_bear_prob": null,
+      "df": null,
+      "history_preset": null,
+      "id": 2,
+      "kind": "Normal",
+      "mean": 0.112028,
+      "rate": null,
+      "scale": null,
+      "std_dev": 0.2988
+    },
+    "3": {
+      "bear_id": null,
+      "bear_to_bull_prob": null,
+      "block_size": null,
+      "bull_id": null,
+      "bull_to_bear_prob": null,
+      "df": null,
+      "history_preset": null,
+      "id": 3,
+      "kind": "Normal",
+      "mean": 0.0301011,
+      "rate": null,
+      "scale": null,
+      "std_dev": 0.0574
+    },
+    "4": {
+      "bear_id": null,
+      "bear_to_bull_prob": null,
+      "block_size": null,
+      "bull_id": null,
+      "bull_to_bear_prob": null,
+      "df": null,
+      "history_preset": null,
+      "id": 4,
+      "kind": "Normal",
+      "mean": 0.0602527,
+      "rate": null,
+      "scale": null,
+      "std_dev": 0.2251
+    },
+    "6": {
+      "bear_id": null,
+      "bear_to_bull_prob": null,
+      "block_size": null,
+      "bull_id": null,
+      "bull_to_bear_prob": null,
+      "df": null,
+      "history_preset": null,
+      "id": 6,
+      "kind": "Normal",
+      "mean": 0.0337398,
+      "rate": null,
+      "scale": null,
+      "std_dev": 0.0308
+    }
+  },
+  "effect_children": [],
+  "effects": {
+    "1": {
+      "amount_id": 2,
+      "amount_mode": "Net",
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 1,
+      "from_account_id": null,
+      "gain_exclusion": null,
+      "id": 1,
+      "income_type": "Taxable",
+      "kind": "Income",
+      "loan_account_id": null,
+      "lot_method": null,
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 0,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": 6,
+      "units": null
+    },
+    "2": {
+      "amount_id": 4,
+      "amount_mode": null,
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 2,
+      "from_account_id": 6,
+      "gain_exclusion": null,
+      "id": 2,
+      "income_type": null,
+      "kind": "Expense",
+      "loan_account_id": null,
+      "lot_method": null,
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 0,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": null,
+      "units": null
+    },
+    "3": {
+      "amount_id": 6,
+      "amount_mode": null,
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 4,
+      "from_account_id": 6,
+      "gain_exclusion": null,
+      "id": 3,
+      "income_type": null,
+      "kind": "Expense",
+      "loan_account_id": null,
+      "lot_method": null,
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 0,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": null,
+      "units": null
+    },
+    "4": {
+      "amount_id": 8,
+      "amount_mode": "Net",
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 5,
+      "from_account_id": null,
+      "gain_exclusion": null,
+      "id": 4,
+      "income_type": "Taxable",
+      "kind": "Sweep",
+      "loan_account_id": null,
+      "lot_method": "Fifo",
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 0,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": 6,
+      "units": null
+    },
+    "5": {
+      "amount_id": 10,
+      "amount_mode": null,
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 5,
+      "from_account_id": 6,
+      "gain_exclusion": null,
+      "id": 5,
+      "income_type": null,
+      "kind": "Expense",
+      "loan_account_id": null,
+      "lot_method": null,
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 1,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": null,
+      "units": null
+    },
+    "6": {
+      "amount_id": 12,
+      "amount_mode": null,
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 5,
+      "from_account_id": null,
+      "gain_exclusion": null,
+      "id": 6,
+      "income_type": null,
+      "kind": "AdjustBalance",
+      "loan_account_id": null,
+      "lot_method": null,
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 2,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": 7,
+      "units": null
+    },
+    "7": {
+      "amount_id": 14,
+      "amount_mode": null,
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 5,
+      "from_account_id": null,
+      "gain_exclusion": null,
+      "id": 7,
+      "income_type": null,
+      "kind": "AdjustBalance",
+      "loan_account_id": null,
+      "lot_method": null,
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 3,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": 8,
+      "units": null
+    },
+    "8": {
+      "amount_id": 16,
+      "amount_mode": "Net",
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 6,
+      "from_account_id": null,
+      "gain_exclusion": null,
+      "id": 8,
+      "income_type": "Taxable",
+      "kind": "Sweep",
+      "loan_account_id": null,
+      "lot_method": "Fifo",
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 0,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": 6,
+      "units": null
+    },
+    "9": {
+      "amount_id": 18,
+      "amount_mode": null,
+      "asset_id": null,
+      "down_payment_amount_id": null,
+      "event_id": 7,
+      "from_account_id": 6,
+      "gain_exclusion": null,
+      "id": 9,
+      "income_type": null,
+      "kind": "CashTransfer",
+      "loan_account_id": null,
+      "lot_method": null,
+      "parent_id": null,
+      "parent_slot": null,
+      "position": 0,
+      "probability": null,
+      "sell_to_cover": null,
+      "selling_cost_rate": null,
+      "shock_drop": null,
+      "target_event_id": null,
+      "term_months": null,
+      "to_account_id": 7,
+      "units": null
+    }
+  },
+  "event_effects": {
+    "1": [
+      1
+    ],
+    "2": [
+      2
+    ],
+    "4": [
+      3
+    ],
+    "5": [
+      4,
+      5,
+      6,
+      7
+    ],
+    "6": [
+      8
+    ],
+    "7": [
+      9
+    ]
+  },
+  "event_trigger": {
+    "1": 2,
+    "2": 3,
+    "3": 4,
+    "4": 6,
+    "5": 7,
+    "6": 8,
+    "7": 11
+  },
+  "events": [
+    {
+      "description": null,
+      "enabled": 1,
+      "fires_once": 0,
+      "id": 1,
+      "name": "Salary",
+      "sort_order": 0
+    },
+    {
+      "description": null,
+      "enabled": 1,
+      "fires_once": 0,
+      "id": 2,
+      "name": "Expenses",
+      "sort_order": 1
+    },
+    {
+      "description": null,
+      "enabled": 1,
+      "fires_once": 1,
+      "id": 3,
+      "name": "Retirement",
+      "sort_order": 2
+    },
+    {
+      "description": null,
+      "enabled": 1,
+      "fires_once": 0,
+      "id": 4,
+      "name": "Health Care",
+      "sort_order": 3
+    },
+    {
+      "description": null,
+      "enabled": 1,
+      "fires_once": 1,
+      "id": 5,
+      "name": "Home Purchase",
+      "sort_order": 4
+    },
+    {
+      "description": null,
+      "enabled": 1,
+      "fires_once": 0,
+      "id": 6,
+      "name": "Sweep",
+      "sort_order": 5
+    },
+    {
+      "description": null,
+      "enabled": 1,
+      "fires_once": 0,
+      "id": 7,
+      "name": "Morgtage Paydown",
+      "sort_order": 6
+    }
+  ],
+  "inflation_distribution_id": 10,
+  "inflation_profile_name": "US Historical (stochastic)",
+  "investment": {
+    "1": {
+      "account_id": 1,
+      "cash_return_profile_id": 6,
+      "cash_value": 10000.0,
+      "contribution_limit": null,
+      "contribution_period": null,
+      "tax_status": "Taxable"
+    },
+    "2": {
+      "account_id": 2,
+      "cash_return_profile_id": 6,
+      "cash_value": 0.0,
+      "contribution_limit": 7500.0,
+      "contribution_period": "Yearly",
+      "tax_status": "TaxFree"
+    },
+    "3": {
+      "account_id": 3,
+      "cash_return_profile_id": 6,
+      "cash_value": 0.0,
+      "contribution_limit": 24500.0,
+      "contribution_period": "Yearly",
+      "tax_status": "TaxDeferred"
+    },
+    "4": {
+      "account_id": 4,
+      "cash_return_profile_id": 6,
+      "cash_value": 0.0,
+      "contribution_limit": 72000.0,
+      "contribution_period": "Yearly",
+      "tax_status": "TaxFree"
+    },
+    "5": {
+      "account_id": 5,
+      "cash_return_profile_id": 6,
+      "cash_value": 50000.0,
+      "contribution_limit": null,
+      "contribution_period": null,
+      "tax_status": "Taxable"
+    }
+  },
+  "liability": {
+    "7": {
+      "account_id": 7,
+      "interest_rate": 0.06,
+      "principal": 0.0,
+      "repay_from_account_id": null,
+      "term_months": null
+    }
+  },
+  "parameters": [],
+  "positions": {
+    "1": [
+      {
+        "account_id": 1,
+        "asset_id": 8,
+        "cost_basis": 5000.0,
+        "id": 1,
+        "purchase_date": "2026-09-03",
+        "units": 100.0
+      },
+      {
+        "account_id": 1,
+        "asset_id": 1,
+        "cost_basis": 10000.0,
+        "id": 2,
+        "purchase_date": "2026-09-03",
+        "units": 200.0
+      },
+      {
+        "account_id": 1,
+        "asset_id": 3,
+        "cost_basis": 15000.0,
+        "id": 3,
+        "purchase_date": "2026-09-03",
+        "units": 300.0
+      },
+      {
+        "account_id": 1,
+        "asset_id": 4,
+        "cost_basis": 20000.0,
+        "id": 4,
+        "purchase_date": "2026-09-03",
+        "units": 400.0
+      },
+      {
+        "account_id": 1,
+        "asset_id": 9,
+        "cost_basis": 25000.0,
+        "id": 5,
+        "purchase_date": "2026-09-03",
+        "units": 500.0
+      },
+      {
+        "account_id": 1,
+        "asset_id": 6,
+        "cost_basis": 30000.0,
+        "id": 6,
+        "purchase_date": "2026-09-03",
+        "units": 600.0
+      },
+      {
+        "account_id": 1,
+        "asset_id": 5,
+        "cost_basis": 35000.0,
+        "id": 7,
+        "purchase_date": "2026-09-03",
+        "units": 700.0
+      },
+      {
+        "account_id": 1,
+        "asset_id": 14,
+        "cost_basis": 40000.0,
+        "id": 8,
+        "purchase_date": "2026-09-03",
+        "units": 800.0
+      }
+    ],
+    "2": [
+      {
+        "account_id": 2,
+        "asset_id": 1,
+        "cost_basis": 45000.0,
+        "id": 9,
+        "purchase_date": "2026-09-03",
+        "units": 900.0
+      },
+      {
+        "account_id": 2,
+        "asset_id": 10,
+        "cost_basis": 50000.0,
+        "id": 10,
+        "purchase_date": "2026-09-03",
+        "units": 1000.0
+      }
+    ],
+    "3": [
+      {
+        "account_id": 3,
+        "asset_id": 11,
+        "cost_basis": 55000.0,
+        "id": 11,
+        "purchase_date": "2026-09-03",
+        "units": 1100.0
+      },
+      {
+        "account_id": 3,
+        "asset_id": 12,
+        "cost_basis": 60000.0,
+        "id": 12,
+        "purchase_date": "2026-09-03",
+        "units": 1200.0
+      },
+      {
+        "account_id": 3,
+        "asset_id": 7,
+        "cost_basis": 65000.0,
+        "id": 13,
+        "purchase_date": "2026-09-03",
+        "units": 1300.0
+      }
+    ],
+    "4": [
+      {
+        "account_id": 4,
+        "asset_id": 7,
+        "cost_basis": 70000.0,
+        "id": 14,
+        "purchase_date": "2026-09-03",
+        "units": 1400.0
+      },
+      {
+        "account_id": 4,
+        "asset_id": 7,
+        "cost_basis": 75000.0,
+        "id": 15,
+        "purchase_date": "2026-09-03",
+        "units": 1500.0
+      },
+      {
+        "account_id": 4,
+        "asset_id": 11,
+        "cost_basis": 80000.0,
+        "id": 16,
+        "purchase_date": "2026-09-03",
+        "units": 1600.0
+      },
+      {
+        "account_id": 4,
+        "asset_id": 11,
+        "cost_basis": 85000.0,
+        "id": 17,
+        "purchase_date": "2026-09-03",
+        "units": 1700.0
+      },
+      {
+        "account_id": 4,
+        "asset_id": 12,
+        "cost_basis": 90000.0,
+        "id": 18,
+        "purchase_date": "2026-09-03",
+        "units": 1800.0
+      }
+    ],
+    "5": [
+      {
+        "account_id": 5,
+        "asset_id": 13,
+        "cost_basis": 95000.0,
+        "id": 19,
+        "purchase_date": "2026-09-03",
+        "units": 1900.0
+      }
+    ]
+  },
+  "property": {
+    "8": {
+      "account_id": 8,
+      "asset_id": 2,
+      "value": 0.0
+    }
+  },
+  "return_profiles": {
+    "1": {
+      "asset_class": "UsEquity",
+      "description": "S&P 500, 1928-2024: 9.9% mean, 19.6% sd",
+      "distribution_id": 1,
+      "id": 1,
+      "name": "US Total Market"
+    },
+    "2": {
+      "asset_class": "UsSmallCap",
+      "description": "US small cap, 1928-2024: 11.2% mean",
+      "distribution_id": 2,
+      "id": 2,
+      "name": "US Small Cap"
+    },
+    "3": {
+      "asset_class": "Bonds",
+      "description": "US aggregate bonds: 3.0% mean",
+      "distribution_id": 3,
+      "id": 3,
+      "name": "US Aggregate Bonds"
+    },
+    "4": {
+      "asset_class": "IntlEquity",
+      "description": "Developed ex-US equities: 6.0% mean",
+      "distribution_id": 4,
+      "id": 4,
+      "name": "International Developed"
+    },
+    "6": {
+      "asset_class": "Cash",
+      "description": "US Treasury bills: 3.4% mean",
+      "distribution_id": 6,
+      "id": 6,
+      "name": "Cash / T-Bills"
+    },
+    "9": {
+      "asset_class": null,
+      "description": "S&P 500 Historical Data",
+      "distribution_id": 11,
+      "id": 9,
+      "name": "S&P 500 Bootstrap"
+    }
+  },
+  "scenario": {
+    "birth_date": "1996-01-01",
+    "collect_ledger": 1,
+    "created_at": "2026-09-28 00:12:00",
+    "description": null,
+    "duration_years": 70,
+    "id": 1,
+    "inflation_profile_id": 2,
+    "name": "Default",
+    "start_date": "2026-09-03",
+    "tax_config_id": 1,
+    "updated_at": "2026-09-28 00:12:00",
+    "user_id": "00000000-0000-0000-0000-000000000000"
+  },
+  "tax_brackets": [
+    {
+      "rate": 0.1,
+      "threshold": 0.0
+    },
+    {
+      "rate": 0.12,
+      "threshold": 11600.0
+    },
+    {
+      "rate": 0.22,
+      "threshold": 47150.0
+    },
+    {
+      "rate": 0.24,
+      "threshold": 100525.0
+    },
+    {
+      "rate": 0.32,
+      "threshold": 191950.0
+    },
+    {
+      "rate": 0.35,
+      "threshold": 243725.0
+    },
+    {
+      "rate": 0.37,
+      "threshold": 609350.0
+    }
+  ],
+  "tax_config": {
+    "capital_gains_rate": 0.15,
+    "early_withdrawal_penalty_rate": 0.1,
+    "id": 1,
+    "name": "US Federal 2024 (single)",
+    "state_rate": 0.05
+  },
+  "trigger_children": {},
+  "triggers": {
+    "1": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": null,
+      "event_id": null,
+      "id": 1,
+      "interval": null,
+      "kind": "RelativeToEvent",
+      "max_occurrences": null,
+      "offset_unit": "Years",
+      "offset_value": 0,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": 3,
+      "start_trigger_id": null,
+      "threshold": null
+    },
+    "10": {
+      "account_id": 7,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": "GreaterThanOrEqual",
+      "end_trigger_id": null,
+      "event_id": null,
+      "id": 10,
+      "interval": null,
+      "kind": "AccountBalance",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": null,
+      "threshold": 0.0
+    },
+    "11": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": 10,
+      "event_id": 7,
+      "id": 11,
+      "interval": "Monthly",
+      "kind": "Repeating",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": 9,
+      "threshold": null
+    },
+    "2": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": 1,
+      "event_id": 1,
+      "id": 2,
+      "interval": "BiWeekly",
+      "kind": "Repeating",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": null,
+      "threshold": null
+    },
+    "3": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": null,
+      "event_id": 2,
+      "id": 3,
+      "interval": "Monthly",
+      "kind": "Repeating",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": null,
+      "threshold": null
+    },
+    "4": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": 40,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": null,
+      "event_id": 3,
+      "id": 4,
+      "interval": null,
+      "kind": "Age",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": null,
+      "threshold": null
+    },
+    "5": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": null,
+      "event_id": null,
+      "id": 5,
+      "interval": null,
+      "kind": "RelativeToEvent",
+      "max_occurrences": null,
+      "offset_unit": "Days",
+      "offset_value": 0,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": 3,
+      "start_trigger_id": null,
+      "threshold": null
+    },
+    "6": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": null,
+      "event_id": 4,
+      "id": 6,
+      "interval": "Monthly",
+      "kind": "Repeating",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": 5,
+      "threshold": null
+    },
+    "7": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": 35,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": null,
+      "event_id": 5,
+      "id": 7,
+      "interval": null,
+      "kind": "Age",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": null,
+      "threshold": null
+    },
+    "8": {
+      "account_id": 6,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": "LessThanOrEqual",
+      "end_trigger_id": null,
+      "event_id": 6,
+      "id": 8,
+      "interval": null,
+      "kind": "AccountBalance",
+      "max_occurrences": null,
+      "offset_unit": null,
+      "offset_value": null,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": null,
+      "start_trigger_id": null,
+      "threshold": 5000.0
+    },
+    "9": {
+      "account_id": null,
+      "age_months": null,
+      "age_years": null,
+      "asset_id": null,
+      "comparison": null,
+      "end_trigger_id": null,
+      "event_id": null,
+      "id": 9,
+      "interval": null,
+      "kind": "RelativeToEvent",
+      "max_occurrences": null,
+      "offset_unit": "Months",
+      "offset_value": 1,
+      "on_date": null,
+      "parameter_id": null,
+      "parent_id": null,
+      "position": 0,
+      "ref_event_id": 5,
+      "start_trigger_id": null,
+      "threshold": null
+    }
+  },
+  "withdrawal_items": {},
+  "withdrawal_sources": {
+    "4": {
+      "account_id": null,
+      "asset_id": null,
+      "effect_id": 4,
+      "mode": "Strategy",
+      "strategy": "PenaltyAware"
+    },
+    "8": {
+      "account_id": null,
+      "asset_id": null,
+      "effect_id": 8,
+      "mode": "Strategy",
+      "strategy": "PenaltyAware"
+    }
+  }
+}
