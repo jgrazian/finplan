@@ -43,7 +43,6 @@ use openrouter_rs::api::messages::{
     AnthropicOutputEffort, AnthropicRole, AnthropicSystemPrompt, AnthropicSystemTextBlock,
     AnthropicThinking, AnthropicTool,
 };
-use openrouter_rs::types::{DataCollectionPolicy, ProviderPreferences};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -370,6 +369,8 @@ pub struct AiClient {
     transport: Arc<dyn Transport>,
     /// Kept only to scrub it out of error text.
     secret: Option<String>,
+    /// Route only to zero-data-retention providers (a drafting client).
+    zdr: bool,
     /// The model's listed prices, when last looked up.
     prices: tokio::sync::Mutex<Option<(Instant, Option<ModelPrice>)>>,
 }
@@ -409,8 +410,21 @@ impl AiClient {
             settings,
             transport,
             secret,
+            zdr: false,
             prices: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// This client's requests may only be served by zero-data-retention
+    /// providers. Drafting clients (documents in the context) turn it on; the
+    /// review client does not, so review routing is unchanged.
+    pub fn with_zero_data_retention(mut self, zdr: bool) -> Self {
+        self.zdr = zdr;
+        self
+    }
+
+    pub fn zero_data_retention(&self) -> bool {
+        self.zdr
     }
 
     pub fn settings(&self) -> &Settings {
@@ -518,12 +532,7 @@ impl AiClient {
         // The static instructions stay cached whatever happens after them.
         reference.cache_control = Some(CacheControl::ephemeral());
 
-        let mut provider = ProviderPreferences::default();
-        // Only providers that honour every parameter: a provider that drops
-        // `tools` would answer in prose the loop cannot use.
-        provider.require_parameters = Some(true);
-        // The context is a user's financial plan.
-        provider.data_collection = Some(DataCollectionPolicy::Deny);
+        let provider = transport::provider_preferences(self.zdr);
 
         let mut builder = Request::builder();
         builder

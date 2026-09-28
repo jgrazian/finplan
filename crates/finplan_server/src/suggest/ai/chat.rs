@@ -73,6 +73,7 @@ impl AiClient {
             settings,
             transport: self.transport.clone(),
             secret: self.secret.clone(),
+            zdr: self.zdr,
             prices: tokio::sync::Mutex::new(prices),
         }
     }

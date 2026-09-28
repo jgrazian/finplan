@@ -352,6 +352,26 @@ pub struct DraftConfig {
     )]
     pub ttl_hours: u32,
 
+    /// Where a draft's images and scanned PDFs (files with no text layer)
+    /// wait for the model, in one folder per draft. They are the only original
+    /// files ever written down, are never in the database, and go with the
+    /// draft (cancel, create, replace or sweep). Defaults to a `finplan-draft-files`
+    /// folder under the OS temp directory.
+    #[arg(long = "draft-temp-dir", env = "FINPLAN_DRAFT_TEMP_DIR")]
+    pub temp_dir: Option<std::path::PathBuf>,
+
+    /// Route drafting requests only to zero-data-retention providers, on top
+    /// of the no-data-collection rule. Drafts carry statements and tax
+    /// returns, so this is on by default; turn it off only when no ZDR
+    /// endpoint serves the drafting model.
+    #[arg(
+        long = "draft-require-zdr",
+        env = "FINPLAN_DRAFT_REQUIRE_ZDR",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    pub require_zdr: bool,
+
     /// Most model requests one drafting pass may make.
     #[arg(
         id = "draft_max_turns",
@@ -392,6 +412,8 @@ impl Default for DraftConfig {
             free_max_pages: 60,
             pro_max_pages: 200,
             ttl_hours: 24,
+            temp_dir: None,
+            require_zdr: true,
             max_turns: 20,
             max_previews: 12,
             max_tokens: 32_000,

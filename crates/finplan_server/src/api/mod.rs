@@ -5,6 +5,7 @@ pub mod analysis;
 pub mod archives;
 pub mod assets;
 pub mod contact;
+pub mod documents;
 pub mod drafts;
 pub mod events;
 pub(crate) mod expression_refs;
@@ -37,7 +38,7 @@ use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
-pub fn router() -> Router<AppState> {
+pub fn router(config: &crate::config::ServerConfig) -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .nest("/auth", crate::auth::routes::router())
@@ -60,6 +61,7 @@ pub fn router() -> Router<AppState> {
         .merge(onboarding::router())
         .merge(contact::router())
         .merge(drafts::router())
+        .merge(documents::router(config))
         .nest("/billing", crate::billing::router())
 }
 

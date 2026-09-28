@@ -25,8 +25,23 @@ impl TestApp {
 
     /// An app whose review model is `review_ai` (a scripted client), or none.
     async fn with_review_ai(review_ai: Option<Arc<AiClient>>) -> Self {
+        Self::with_draft_config(review_ai, |_| {}).await
+    }
+
+    /// [`with_review_ai`](Self::with_review_ai), with the draft settings
+    /// adjusted (limits, say). Held originals go under the app's own temp
+    /// directory, so a test can look at what is on disk.
+    async fn with_draft_config(
+        review_ai: Option<Arc<AiClient>>,
+        adjust: impl FnOnce(&mut finplan_server::suggest::ai::DraftConfig),
+    ) -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
-        let router = Self::router(&dir, review_ai).await;
+        let mut draft = finplan_server::suggest::ai::DraftConfig {
+            temp_dir: Some(dir.path().join("draft-files")),
+            ..Default::default()
+        };
+        adjust(&mut draft);
+        let router = Self::router(&dir, review_ai, draft).await;
         TestApp {
             router,
             cookie: None,
@@ -34,13 +49,17 @@ impl TestApp {
         }
     }
 
-    async fn router(dir: &tempfile::TempDir, review_ai: Option<Arc<AiClient>>) -> Router {
+    async fn router(
+        dir: &tempfile::TempDir,
+        review_ai: Option<Arc<AiClient>>,
+        draft: finplan_server::suggest::ai::DraftConfig,
+    ) -> Router {
         let db_path = dir.path().join("test.db");
 
         let config = ServerConfig {
             mail: Default::default(),
             review_ai: Default::default(),
-            draft: Default::default(),
+            draft,
             log_format: Default::default(),
             metrics_bind: None,
             bind: "127.0.0.1:0".into(),
@@ -65,7 +84,11 @@ impl TestApp {
     /// A new process over the same database, as after a restart; the session
     /// cookie survives because sessions live in the database.
     async fn restart(&mut self) {
-        self.router = Self::router(&self._dir, None).await;
+        let draft = finplan_server::suggest::ai::DraftConfig {
+            temp_dir: Some(self._dir.path().join("draft-files")),
+            ..Default::default()
+        };
+        self.router = Self::router(&self._dir, None, draft).await;
     }
 
     async fn send(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -3055,6 +3078,9 @@ mod runs_cases;
 
 #[path = "cases/draft_preview.rs"]
 mod draft_preview_cases;
+
+#[path = "cases/documents.rs"]
+mod documents_cases;
 
 #[path = "cases/archives.rs"]
 mod archives_cases;

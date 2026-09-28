@@ -72,6 +72,7 @@ impl ObservabilityRuntime {
         // start, then every ten minutes.
         let db = state.db.clone();
         let ttl_hours = state.config.draft.ttl_hours;
+        let draft_files = crate::documents::images::root(&state.config);
         let mut shutdown = receive.clone();
         tasks.spawn(
             async move {
@@ -83,7 +84,7 @@ impl ObservabilityRuntime {
                         _ = interval.tick() => {
                             tokio::select! {
                                 _ = shutdown.changed() => return Ok(()),
-                                swept = crate::api::drafts::sweep_stale(&db, ttl_hours) => {
+                                swept = crate::api::drafts::sweep(&db, ttl_hours, &draft_files) => {
                                     if swept.is_err() {
                                         tracing::warn!(event = "draft.sweep_failed");
                                     }

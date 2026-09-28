@@ -23,6 +23,7 @@ pub mod billing;
 pub mod compile;
 pub mod config;
 pub mod db;
+pub mod documents;
 pub mod domain;
 pub mod error;
 pub mod mail;
@@ -118,7 +119,7 @@ pub async fn build_with(
     let cors = build_cors(&state.config.cors_origins);
 
     let router = Router::new()
-        .nest("/api", api::router())
+        .nest("/api", api::router(&state.config))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             billing::mutation_entitlements,

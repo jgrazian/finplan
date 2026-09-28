@@ -11,4 +11,9 @@ id: number, state: DraftState, scenario: Scenario,
 /**
  * When the sweeper deletes the draft unless it is touched first.
  */
-expires_at: string, counts: DraftCounts, };
+expires_at: string, counts: DraftCounts, 
+/**
+ * Whether the documents are kept with the plan once it is created,
+ * instead of deleted (2a's retention choice).
+ */
+retain_documents: boolean, document_count: number, };

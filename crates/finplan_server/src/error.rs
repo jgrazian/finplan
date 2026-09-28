@@ -23,6 +23,14 @@ pub enum ApiError {
     #[error("{0}")]
     Conflict(String),
 
+    /// An upload beyond a size or count limit.
+    #[error("{0}")]
+    PayloadTooLarge(String),
+
+    /// An upload of a kind of file the server does not read.
+    #[error("{0}")]
+    UnsupportedMedia(String),
+
     #[error("{message}")]
     RateLimited {
         message: String,
@@ -77,6 +85,8 @@ impl ApiError {
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Conflict(_) => StatusCode::CONFLICT,
+            ApiError::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+            ApiError::UnsupportedMedia(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ApiError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::Database(_) | ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -93,6 +103,8 @@ impl ApiError {
             ApiError::Forbidden(_) => "forbidden",
             ApiError::NotFound(_) => "not_found",
             ApiError::Conflict(_) => "conflict",
+            ApiError::PayloadTooLarge(_) => "payload_too_large",
+            ApiError::UnsupportedMedia(_) => "unsupported_media",
             ApiError::RateLimited { .. } => "rate_limited",
             ApiError::Unprocessable(_) => "unprocessable",
             ApiError::Database(_) | ApiError::Internal(_) => "internal",

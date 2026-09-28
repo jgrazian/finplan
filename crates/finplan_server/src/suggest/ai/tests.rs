@@ -1857,3 +1857,34 @@ fn the_submit_tool_requires_a_motive_and_offers_a_no_change_reason() {
         assert!(prompt::SYSTEM_PROMPT.contains(needle), "{needle}");
     }
 }
+
+// ── routing privacy ─────────────────────────────────────────────────────────
+
+/// A drafting client (documents in its context) requires zero-data-retention
+/// providers on top of the review rules; the review client's routing is
+/// exactly what it was.
+#[test]
+fn a_drafting_client_requires_zero_data_retention_and_review_does_not() {
+    let wire = |client: &AiClient| {
+        let request = client
+            .request(&[AnthropicMessage::user("hello")])
+            .expect("request builds");
+        serde_json::to_value(&request).unwrap()
+    };
+    let review = AiClient::new(settings(), Script::new(vec![]), None);
+    let provider = &wire(&review)["provider"];
+    assert_eq!(provider["require_parameters"], true);
+    assert_eq!(provider["data_collection"], "deny");
+    assert!(
+        provider.get("zdr").is_none(),
+        "review routing is unchanged: {provider}"
+    );
+    assert!(!review.zero_data_retention());
+
+    let draft = AiClient::new(settings(), Script::new(vec![]), None).with_zero_data_retention(true);
+    assert!(draft.zero_data_retention());
+    let provider = &wire(&draft)["provider"];
+    assert_eq!(provider["zdr"], true);
+    assert_eq!(provider["require_parameters"], true);
+    assert_eq!(provider["data_collection"], "deny");
+}

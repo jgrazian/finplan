@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use openrouter_rs::OpenRouterClient;
 use openrouter_rs::error::{ApiErrorKind, OpenRouterError};
+use openrouter_rs::types::{DataCollectionPolicy, ProviderPreferences};
 
 pub use openrouter_rs::api::messages::{
     AnthropicMessagesRequest as Request, AnthropicMessagesResponse as Reply,
@@ -100,6 +101,23 @@ impl From<OpenRouterError> for TransportError {
             OpenRouterError::UninitializedFieldError(e) => TransportError::Request(e.to_string()),
         }
     }
+}
+
+/// OpenRouter's provider routing for a request. Every request asks only for
+/// providers that honour every parameter (one that dropped `tools` would
+/// answer in prose the loop cannot use) and that do not collect data.
+///
+/// A draft's request carries statements and tax returns (already redacted, but
+/// images may not be), so it also sets `zdr`: only zero-data-retention
+/// endpoints may serve it. Review requests keep the plain rule.
+pub fn provider_preferences(zero_data_retention: bool) -> ProviderPreferences {
+    let mut provider = ProviderPreferences::default();
+    provider.require_parameters = Some(true);
+    provider.data_collection = Some(DataCollectionPolicy::Deny);
+    if zero_data_retention {
+        provider.zdr = Some(true);
+    }
+    provider
 }
 
 /// A model's listed prices, in US dollars per token. Used to estimate a

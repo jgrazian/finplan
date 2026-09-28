@@ -14,7 +14,7 @@ jiff = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "compression-gzip"] }
@@ -40,6 +40,9 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # in; reqwest is named directly only to hand it a client with our timeout.
 openrouter-rs = "0.16"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Text layers of PDF uploads (documents::pdf); nothing else of the crate is used.
+lopdf = { version = "0.45", default-features = false }
+regex = "1"
 
 [features]
 # Pretty-prints the generated TypeScript. Only wanted while regenerating the

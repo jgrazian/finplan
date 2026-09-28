@@ -12,6 +12,11 @@
 //! untouched for the configured TTL (a closed tab, a crash). Its id in these
 //! routes is its scenario's id.
 //!
+//! A draft's documents (`api::documents`) live and die with it: deleting the
+//! draft deletes them (a foreign-key cascade) and every path that deletes a
+//! draft also removes its held originals (`documents::images`). Create & run
+//! deletes them too unless the draft's `retain_documents` is set.
+//!
 //! Later steps extend [`DraftStatus`] (documents, questions, blocked notes) and
 //! fill the draft through `apply_steps_sql`; this module owns only the
 //! lifecycle and the quota.
@@ -20,7 +25,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::runs::{self, Run};
@@ -28,6 +33,7 @@ use super::scenarios::{SCENARIO_COLUMNS, Scenario};
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::db::Db;
+use crate::documents;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::runner::telemetry::Submission;
@@ -36,7 +42,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/drafts", post(start))
-        .route("/drafts/{id}", get(status).delete(discard))
+        .route("/drafts/{id}", get(status).patch(update).delete(discard))
         .route("/drafts/{id}/create", post(create_and_run))
 }
 
@@ -71,6 +77,25 @@ pub struct DraftStatus {
     /// When the sweeper deletes the draft unless it is touched first.
     pub expires_at: String,
     pub counts: DraftCounts,
+    /// Whether the documents are kept with the plan once it is created,
+    /// instead of deleted (2a's retention choice).
+    pub retain_documents: bool,
+    pub document_count: i64,
+}
+
+/// The body of `POST /drafts`, all of it optional.
+#[derive(Debug, Default, Deserialize, TS)]
+#[ts(export)]
+pub struct StartDraft {
+    /// Keep the documents with the plan created from this draft. Default: delete them.
+    #[serde(default)]
+    pub retain_documents: bool,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct UpdateDraft {
+    pub retain_documents: Option<bool>,
 }
 
 /// `POST /drafts` — start a draft. Checks the plan slot first, so no draft is
@@ -80,7 +105,9 @@ pub struct DraftStatus {
 async fn start(
     State(state): State<AppState>,
     user: CurrentUser,
+    body: Option<Json<StartDraft>>,
 ) -> ApiResult<(StatusCode, Json<DraftStatus>)> {
+    let retain_documents = body.is_some_and(|Json(b)| b.retain_documents);
     if state.review_ai.is_none() {
         return Err(ApiError::Conflict(
             "AI drafts are not available on this server".into(),
@@ -95,21 +122,30 @@ async fn start(
     crate::billing::check_plan_slot(&mut tx, &user.id, &state.config, 1).await?;
     crate::billing::reserve_ai_draft(&mut tx, &user.id, limits.drafts_per_month).await?;
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO scenarios (user_id, name, start_date, status)
-         VALUES (?1, 'AI draft ' || lower(hex(randomblob(4))), date('now'), 'draft')
+        "INSERT INTO scenarios (user_id, name, start_date, status, retain_documents)
+         VALUES (?1, 'AI draft ' || lower(hex(randomblob(4))), date('now'), 'draft', ?2)
          RETURNING id",
     )
     .bind(&user.id)
+    .bind(i64::from(retain_documents))
     .fetch_one(&mut *tx)
     .await?;
     // After the insert, so the new draft never takes the old one's id: a tab
     // still holding that id finds nothing, not somebody else's draft.
-    sqlx::query("DELETE FROM scenarios WHERE user_id = ?1 AND status = 'draft' AND id <> ?2")
-        .bind(&user.id)
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    let replaced: Vec<i64> = sqlx::query_scalar(
+        "DELETE FROM scenarios WHERE user_id = ?1 AND status = 'draft' AND id <> ?2 RETURNING id",
+    )
+    .bind(&user.id)
+    .bind(id)
+    .fetch_all(&mut *tx)
+    .await?;
     tx.commit().await?;
+    // The old draft's documents went with its row; its held originals go now.
+    // The new id's folder is cleared too, in case an id was reused.
+    let files = documents::images::root(&state.config);
+    for old in replaced.iter().chain([&id]) {
+        documents::images::discard_draft(&files, *old);
+    }
 
     state.telemetry.mutation(
         Resource::Scenario,
@@ -170,17 +206,58 @@ async fn load_status(state: &AppState, id: i64, user_id: &str) -> ApiResult<Draf
     .bind(i64::from(state.config.draft.ttl_hours))
     .fetch_one(&state.db)
     .await?;
+    let (retain_documents, document_count): (i64, i64) = sqlx::query_as(
+        "SELECT retain_documents, (SELECT count(*) FROM documents WHERE scenario_id = ?1)
+           FROM scenarios WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(DraftStatus {
         id,
         state: DraftState::Ready,
         scenario,
         expires_at,
         counts,
+        retain_documents: retain_documents != 0,
+        document_count,
     })
 }
 
+/// `PATCH /drafts/{id}` — change the draft's retention choice: whether its
+/// documents are kept with the plan when it is created. Applies to documents
+/// already attached and to those attached later.
+async fn update(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateDraft>,
+) -> ApiResult<Json<DraftStatus>> {
+    // A draft that is not the caller's, or is no longer a draft, is not found.
+    load_status(&state, id, &user.id).await?;
+    if let Some(retain) = body.retain_documents {
+        let mut tx = state.db.begin().await?;
+        sqlx::query(
+            "UPDATE scenarios SET retain_documents = ?3, updated_at = datetime('now')
+              WHERE id = ?1 AND user_id = ?2 AND status = 'draft'",
+        )
+        .bind(id)
+        .bind(&user.id)
+        .bind(i64::from(retain))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE documents SET retain = ?2 WHERE scenario_id = ?1")
+            .bind(id)
+            .bind(i64::from(retain))
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+    }
+    Ok(Json(load_status(&state, id, &user.id).await?))
+}
+
 /// `DELETE /drafts/{id}` — cancel: delete the draft and everything under it
-/// (rows, suggestions, and later its documents) at once.
+/// (rows, suggestions, its documents and their held originals) at once.
 async fn discard(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -196,6 +273,7 @@ async fn discard(
     if affected == 0 {
         return Err(ApiError::NotFound("draft"));
     }
+    documents::images::discard_draft(&documents::images::root(&state.config), id);
     state.telemetry.mutation(
         Resource::Scenario,
         Operation::Deleted,
@@ -264,6 +342,9 @@ async fn create_and_run(
             return Err(err);
         }
     };
+    // The plan is made: its documents are deleted unless kept, and the held
+    // originals always are.
+    documents::finish_draft(&state.db, &state.config, id).await?;
     let scenario: Scenario = sqlx::query_as(&format!(
         "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
     ))
@@ -302,5 +383,13 @@ pub async fn sweep_stale(db: &Db, ttl_hours: u32) -> ApiResult<u64> {
     if swept > 0 {
         tracing::info!(event = "draft.swept", count = swept);
     }
+    Ok(swept)
+}
+
+/// [`sweep_stale`], then delete the held originals of every draft that no
+/// longer exists (the ones just swept, and any a crash left behind).
+pub async fn sweep(db: &Db, ttl_hours: u32, files: &std::path::Path) -> ApiResult<u64> {
+    let swept = sweep_stale(db, ttl_hours).await?;
+    documents::images::purge_orphans(db, files).await?;
     Ok(swept)
 }
