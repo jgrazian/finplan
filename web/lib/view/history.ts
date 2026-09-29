@@ -17,6 +17,7 @@ export function snapshotScenario(inputs: RunInputs, raw: Results): Scenario {
     inflation_profile_id: source?.inflation_profile_id ?? null,
     tax_config_id: source?.tax_config_id ?? null,
     collect_ledger: Boolean(source?.collect_ledger),
+    status: source?.status ?? "active",
     created_at: source?.created_at ?? "", updated_at: source?.updated_at ?? "",
     last_run_at: null, last_success_rate: null,
   };

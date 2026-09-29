@@ -26,6 +26,10 @@ import type {
   CreateTaxConfig,
   Credentials,
   DeleteAccount,
+  DocumentManifest,
+  DraftAnswers,
+  DraftCreated,
+  DraftStatus,
   Event,
   EventBody,
   NamedParameter,
@@ -47,9 +51,12 @@ import type {
   Run,
   Scenario,
   SessionInfo,
+  StartDraft,
+  StartDrafting,
   TaxConfig,
   UpdateAccountBody,
   UpdateAsset,
+  UpdateDraft,
   UpdatePosition,
   UpdatePreferences,
   UpdateProfile,
@@ -315,6 +322,38 @@ export const api = {
       get: (id: number) => http.get<SuggestionThread>(`/suggestions/${id}/chat`),
       send: (id: number, message: string) =>
         http.post<SuggestionThread>(`/suggestions/${id}/chat`, { message } satisfies ChatRequest),
+    },
+  },
+
+  /**
+   * AI-guided drafts (`api::drafts`): a draft is a scenario with
+   * `status: "draft"`, never listed with the plans. Creating one spends a
+   * draft from the month's quota.
+   */
+  drafts: {
+    create: (body: Partial<StartDraft> = {}) => http.post<DraftStatus>("/drafts", body),
+    get: (id: number) => http.get<DraftStatus>(`/drafts/${id}`),
+    update: (id: number, body: UpdateDraft) => http.patch<DraftStatus>(`/drafts/${id}`, body),
+    /** Deletes the draft, its notes and its documents. */
+    remove: (id: number) => http.delete(`/drafts/${id}`),
+    /** Starts the drafting agent; progress is read with `get`. */
+    start: (id: number, body: StartDrafting) =>
+      http.post<DraftStatus>(`/drafts/${id}/start`, body),
+    /** Answers the agent's open questions, by key; it resumes. */
+    answer: (id: number, body: DraftAnswers) =>
+      http.post<DraftStatus>(`/drafts/${id}/answers`, body),
+    /** Create & run: 409 while the agent is still writing. */
+    createAndRun: (id: number) => http.post<DraftCreated>(`/drafts/${id}/create`),
+    documents: {
+      list: (id: number) => http.get<DocumentManifest[]>(`/drafts/${id}/documents`),
+      /** 413 over the tier's file or size limit, 415 for a type it cannot read. */
+      upload: (id: number, files: readonly File[]) => {
+        const form = new FormData();
+        for (const file of files) form.append("file", file, file.name);
+        return http.upload<DocumentManifest[]>(`/drafts/${id}/documents`, form);
+      },
+      remove: (id: number, documentId: number) =>
+        http.delete(`/drafts/${id}/documents/${documentId}`),
     },
   },
 

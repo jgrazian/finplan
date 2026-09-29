@@ -11,4 +11,8 @@ enabled: boolean,
 /**
  * Drafts left this calendar month (UTC).
  */
-remaining: number, max_files: number, max_bytes: number, max_pages: number, };
+remaining: number, 
+/**
+ * Drafts the tier gets each calendar month, for "1 of 2 left".
+ */
+per_month: number, max_files: number, max_bytes: number, max_pages: number, };

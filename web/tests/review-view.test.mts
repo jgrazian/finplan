@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Change } from "../lib/api/generated/Change.ts";
+import type { DraftColumn } from "../lib/api/generated/DraftColumn.ts";
 import { clockTime } from "../lib/view/issues.ts";
 import {
   ACTION_LABEL,
@@ -99,6 +100,10 @@ function note(overrides: Record<string, unknown> = {}) {
     created_at: "2026-09-27 12:04:00",
     resolved_at: null as string | null,
     parent_id: null as number | null,
+    note_key: null as string | null,
+    blocked_by: [] as string[],
+    column: null as DraftColumn | null,
+    auto_added: false,
     ...rest,
   };
 }

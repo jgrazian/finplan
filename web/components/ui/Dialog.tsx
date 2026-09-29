@@ -18,6 +18,7 @@ export function Dialog({
   footer,
   busy,
   error,
+  width = 560,
   children,
 }: {
   title: string;
@@ -28,6 +29,8 @@ export function Dialog({
   footer?: ReactNode;
   busy?: boolean;
   error?: string;
+  /** The panel's widest, in px; a dialog with two columns asks for more. */
+  width?: number;
   children: ReactNode;
 }) {
   const panel = useRef<HTMLFormElement>(null);
@@ -72,7 +75,7 @@ export function Dialog({
           onSubmit();
         }}
         style={{
-          width: "min(560px, 100%)",
+          width: `min(${width}px, 100%)`,
           background: "var(--color-bg)",
           border: "1px solid var(--color-divider)",
           boxShadow: "var(--shadow-lg)",

@@ -5,7 +5,7 @@ import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/http";
-import type { Run } from "@/lib/api/types";
+import type { Run, Scenario } from "@/lib/api/types";
 import type { ReviewState } from "@/lib/hooks/useReview";
 import {
   aiLine,
@@ -22,6 +22,7 @@ import {
   stepProblemsIn,
 } from "@/lib/view/review";
 import { cardAnchor } from "@/lib/view/chat";
+import { DraftReview } from "./DraftReview";
 import { type CardOutcome, SuggestionCard } from "./SuggestionCard";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
@@ -31,18 +32,23 @@ const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
  * applying to the plan as an edit the server has already diffed and, where
  * it could, simulated.
  */
-export function ReviewScreen({
-  state,
-  runs,
-  planChanged,
-  running,
-  names,
-  offline,
-  onPlanChanged,
-  onRerun,
-  onOpenCopy,
-  onNavigate,
-}: {
+export function ReviewScreen({ draft, ...props }: ReviewScreenProps) {
+  return draft ? (
+    <DraftReview
+      scenario={draft.scenario}
+      names={props.names}
+      offline={props.offline}
+      onPlanChanged={props.onPlanChanged}
+      onCreated={draft.onCreated}
+      onDiscarded={draft.onDiscarded}
+      onNavigate={props.onNavigate}
+    />
+  ) : (
+    <PlanReview {...props} />
+  );
+}
+
+interface ReviewProps {
   state: ReviewState;
   /** The scenario's runs, newest first, as the run history holds them. */
   runs: readonly Run[];
@@ -59,7 +65,32 @@ export function ReviewScreen({
   /** Open a scenario a stress note was applied to. It is not run. */
   onOpenCopy: (scenarioId: number) => void;
   onNavigate: (to: Destination) => void;
-}) {
+}
+
+/** What a draft's Review (design 2c) needs beyond a plan's. */
+interface DraftProps {
+  scenario: Scenario;
+  onCreated: (created: Scenario) => void;
+  onDiscarded: () => void;
+}
+
+interface ReviewScreenProps extends ReviewProps {
+  /** Set when the open scenario is a draft (`status: "draft"`): it has no run to review. */
+  draft?: DraftProps;
+}
+
+function PlanReview({
+  state,
+  runs,
+  planChanged,
+  running,
+  names,
+  offline,
+  onPlanChanged,
+  onRerun,
+  onOpenCopy,
+  onNavigate,
+}: ReviewProps) {
   const { review, error, reload, reviewRun, reviewing } = state;
   const [busy, setBusy] = useState<number>();
   // What happened when a card's path was last acted on, by "id:path": a

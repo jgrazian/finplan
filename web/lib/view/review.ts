@@ -890,6 +890,8 @@ export function noteCounts(suggestions: readonly Suggestion[]): NoteCounts {
     // one note about it.
     const seen = new Set<string>();
     for (const { target } of suggestion.paths.flatMap((p) => p.steps.flatMap((s) => s.changes))) {
+      // `"scenario"` is the plan's own settings, a row of none of these maps.
+      if (typeof target === "string") continue;
       const [map, id] =
         "event" in target
           ? [counts.events, target.event]

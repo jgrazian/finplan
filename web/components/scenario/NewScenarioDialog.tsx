@@ -15,10 +15,12 @@ import {
 } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { http } from "@/lib/api/http";
+import type { Entitlements } from "@/lib/api/generated/Entitlements";
 import type { SetupPlan } from "@/lib/api/generated/SetupPlan";
 import type { Profile, Scenario, TaxConfig, UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { addYears, yearsBetween } from "@/lib/view/format";
+import { DescribeDialog } from "./DescribeDialog";
 
 const steps = [
   "Plan details",
@@ -105,14 +107,67 @@ function setupPlanOf(draft: SetupDraft): SetupPlan {
   return plan;
 }
 
-export function NewScenarioDialog(props: {
+interface NewScenarioProps {
   defaults: UserResponse;
   inflationProfiles: Profile[];
   taxConfigs: TaxConfig[];
   returnProfiles?: Profile[];
+  /** What the account may do; `ai_drafts` null (or absent) hides Describe & upload. */
+  access?: Entitlements;
   onClose: () => void;
   onCreated: (s: Scenario) => void;
-}) {
+  /** A draft is opened on Review; it stays a draft until Create & run. */
+  onReviewDraft?: (draft: Scenario) => void;
+  /** Create & run made a draft a plan and queued its run. */
+  onDraftCreated?: (created: Scenario) => void;
+}
+
+type Mode = "guided" | "describe";
+
+/**
+ * New scenario: Guided setup (with Blank on its first step), and, where the
+ * server has AI drafts on, Describe & upload next to them.
+ */
+export function NewScenarioDialog(props: NewScenarioProps) {
+  const [mode, setMode] = useState<Mode>("guided");
+  const access = props.access;
+  const drafts = access?.ai_drafts ?? null;
+  if (access && drafts && props.onReviewDraft && props.onDraftCreated && mode === "describe") {
+    return (
+      <DescribeDialog
+        access={access}
+        drafts={drafts}
+        modeSwitch={<ModeSwitch mode={mode} onChange={setMode} />}
+        onClose={props.onClose}
+        onCreated={props.onDraftCreated}
+        onReviewDraft={props.onReviewDraft}
+      />
+    );
+  }
+  return (
+    <GuidedDialog
+      {...props}
+      modeSwitch={drafts ? <ModeSwitch mode={mode} onChange={setMode} /> : undefined}
+    />
+  );
+}
+
+function ModeSwitch({ mode, onChange }: { mode: Mode; onChange: (mode: Mode) => void }) {
+  return (
+    <SegmentedControl
+      name="new-scenario-mode"
+      ariaLabel="How to start"
+      options={[
+        { value: "guided", label: "Guided" },
+        { value: "describe", label: "Describe & upload" },
+      ]}
+      value={mode}
+      onChange={onChange}
+    />
+  );
+}
+
+function GuidedDialog(props: NewScenarioProps & { modeSwitch?: ReactNode }) {
   const [profiles, setProfiles] = useState(props.returnProfiles ?? []);
   const [step, setStep] = useState(0);
   const [stepError, setStepError] = useState<string>();
@@ -391,6 +446,7 @@ export function NewScenarioDialog(props: {
       error={stepError ?? submit.error}
       footer={footer}
     >
+      {props.modeSwitch}
       <p role="status" style={{ margin: 0, fontSize: 12 }}>
         Step {step + 1} of {steps.length} · Draft saved on this device
       </p>

@@ -15,7 +15,7 @@ import {
 import { ReviewScreen } from "@/components/review";
 import { NewScenarioDialog } from "@/components/scenario/NewScenarioDialog";
 import { SessionExpiredDialog, StatusBar } from "@/components/status";
-import { Button } from "@/components/ui";
+import { Button, Tag } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { historyApi } from "@/lib/api/history";
 import type { Scenario as ApiScenario, PreflightIssue, UserResponse } from "@/lib/api/types";
@@ -117,6 +117,10 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   if (recentlyCreated && scenarios.data?.some((row) => row.id === recentlyCreated.id)) {
     setRecentlyCreated(undefined);
   }
+  // A draft (design 2c) is opened on Review but is never a plan in the list:
+  // the server does not list it, and it is looked up here, after the plans, so
+  // a stale link falls back to a plan rather than to the draft.
+  const [draft, setDraft] = useState<ApiScenario>();
   const list = useMemo(() => {
     const rows = scenarios.data ?? [];
     return recentlyCreated && !rows.some((row) => row.id === recentlyCreated.id)
@@ -127,7 +131,10 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   // until the query names something else. Derived, so a scenario deleted
   // elsewhere — or a stale id in a bookmarked URL — falls back rather than
   // leaving the screen pointed at nothing.
-  const selectedScenario = resolveScenario(list, nav.scenario);
+  const selectedScenario =
+    (draft != null && nav.scenario === draft.slug ? draft : undefined) ??
+    resolveScenario(list, nav.scenario);
+  const isDraft = selectedScenario?.status === "draft";
   const scenarioId = selectedScenario?.id;
   const scenarioSlug = selectedScenario?.slug;
 
@@ -250,9 +257,11 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   );
 
   const start = useCallback(() => {
+    // A draft has nothing to run until Create & run makes it a plan.
+    if (isDraft) return;
     nav.setTab("results");
     void run.start(effort);
-  }, [nav, run, effort]);
+  }, [nav, run, effort, isDraft]);
 
   const refresh = useCallback(() => {
     scenarios.reload();
@@ -273,7 +282,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   // and the run is left in the background rather than pulling the screen to
   // Results out from under whatever is being edited. Not on Review: applying
   // notes there batches edits for one deliberate re-run, which its banner offers.
-  const autoRun = user.auto_run && !status.offline && nav.tab !== "review";
+  const autoRun = user.auto_run && !status.offline && nav.tab !== "review" && !isDraft;
   const updatedAt = workspace.scenario?.updated_at;
   const seen = useRef<{ id?: number; at?: string }>({});
   const startQuietly = useRef(() => run.start(effort));
@@ -303,6 +312,26 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     return () => window.removeEventListener("keydown", onKey);
   }, [start]);
 
+  // Create & run made the draft a plan: it joins the list like any new one.
+  const draftCreated = useCallback(
+    (created: ApiScenario) => {
+      setDraft(undefined);
+      setRecentlyCreated(created);
+      nav.openScenario(created.slug, "results");
+      scenarios.reload();
+      access.reload();
+    },
+    [nav, scenarios, access],
+  );
+
+  // The draft was deleted: back to the plans.
+  const draftDiscarded = useCallback(() => {
+    setDraft(undefined);
+    if (list[0]) nav.openScenario(list[0].slug, "review");
+    else nav.setTab("review");
+    access.reload();
+  }, [nav, list, access]);
+
   const headerScenarios = useMemo(
     () => list.map((s) => ({
       ...toHeaderScenario(s),
@@ -328,7 +357,8 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           activeTab={nav.tab}
           onTabChange={nav.setTab}
           scenarios={headerScenarios}
-          activeScenarioId={scenarioSlug ?? ""}
+          activeScenarioId={isDraft ? "" : (scenarioSlug ?? "")}
+          trailing={isDraft ? <Tag tone="accent">AI draft</Tag> : undefined}
           onScenarioChange={nav.setScenario}
           onNewScenario={() => setCreating(true)}
           userInitials={initials(user.display_name ?? user.email)}
@@ -427,6 +457,11 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
             )}
             {nav.tab === "review" && (
               <ReviewScreen
+                draft={
+                  isDraft && selectedScenario
+                    ? { scenario: selectedScenario, onCreated: draftCreated, onDiscarded: draftDiscarded }
+                    : undefined
+                }
                 state={review}
                 runs={run.history}
                 planChanged={run.stale}
@@ -468,11 +503,25 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           defaults={user}
           inflationProfiles={inflationProfiles}
           taxConfigs={taxConfigs}
-          onClose={() => setCreating(false)}
+          access={access.data}
+          onClose={() => {
+            setCreating(false);
+            // A draft in the dialog spent one of the month's drafts.
+            access.reload();
+          }}
           onCreated={(created) => {
             setRecentlyCreated(created);
             nav.openScenario(created.slug, "plan");
             scenarios.reload();
+          }}
+          onDraftCreated={(created) => {
+            setCreating(false);
+            draftCreated(created);
+          }}
+          onReviewDraft={(created) => {
+            setCreating(false);
+            setDraft(created);
+            nav.openScenario(created.slug, "review");
           }}
         />
       )}

@@ -57,8 +57,17 @@ async function request<T>(
     response = await fetch(`/api${path}`, {
       method,
       credentials: "include",
-      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // A form sets its own Content-Type, with the multipart boundary.
+      headers:
+        body === undefined || body instanceof FormData
+          ? undefined
+          : { "Content-Type": "application/json" },
+      body:
+        body === undefined
+          ? undefined
+          : body instanceof FormData
+            ? body
+            : JSON.stringify(body),
       signal,
     });
   } catch (err) {
@@ -106,6 +115,8 @@ export const http = {
   /** `signal` aborts the request, for answers the caller may stop wanting. */
   post: <T>(path: string, body?: unknown, signal?: AbortSignal) =>
     request<T>("POST", path, body ?? {}, signal),
+  /** A multipart upload: one `file` part per file. */
+  upload: <T>(path: string, form: FormData) => request<T>("POST", path, form),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
   /** A body is optional, and only account deletion sends one (the password). */

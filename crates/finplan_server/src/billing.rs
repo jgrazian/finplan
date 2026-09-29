@@ -64,6 +64,8 @@ pub struct AiDrafts {
     pub enabled: bool,
     /// Drafts left this calendar month (UTC).
     pub remaining: u32,
+    /// Drafts the tier gets each calendar month, for "1 of 2 left".
+    pub per_month: u32,
     pub max_files: u32,
     pub max_bytes: u64,
     pub max_pages: u32,
@@ -95,6 +97,7 @@ pub async fn entitlements_for(state: &AppState, user: &str) -> ApiResult<Entitle
         out.ai_drafts = Some(AiDrafts {
             enabled: remaining > 0 && slot,
             remaining,
+            per_month: limits.drafts_per_month,
             max_files: limits.max_files,
             max_bytes: limits.max_bytes,
             max_pages: limits.max_pages,

@@ -95,6 +95,9 @@ export function SuggestionCard({
   onOpenCopy,
   offline = false,
   onChatSettled,
+  labels,
+  badge,
+  waiting,
 }: {
   card: Card;
   busy: boolean;
@@ -109,7 +112,14 @@ export function SuggestionCard({
   offline?: boolean;
   /** A chat reply finished: reload the board, for any suggestion it added. */
   onChatSettled?: () => void;
+  /** Button words that replace `ACTION_LABEL`'s, per action: a draft's "Add to draft". */
+  labels?: Partial<Record<CardAction, string>>;
+  /** A mark beside the kicker, e.g. "Added" for a note in a draft. */
+  badge?: string;
+  /** Why the note cannot be acted on yet, e.g. "waiting on question 1". */
+  waiting?: string;
 }) {
+  const label = (action: CardAction) => labels?.[action] ?? ACTION_LABEL[action];
   const [chatOpen, setChatOpen] = useState(false);
   const primary = card.actions.find((a) => a === "apply" || a === "apply-path" || a === "apply-copy");
   const secondary = card.actions.filter((a) => a !== primary);
@@ -123,12 +133,14 @@ export function SuggestionCard({
     >
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <div className="card-kicker">{card.kicker}</div>
-        {card.source && (
-          <span style={{ marginLeft: "auto" }}>
-            <Tag tone="outline">{card.source}</Tag>
+        {(card.source || badge) && (
+          <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {badge && <Tag tone="accent">{badge}</Tag>}
+            {card.source && <Tag tone="outline">{card.source}</Tag>}
           </span>
         )}
       </div>
+      {waiting && <div style={{ fontSize: 12, fontStyle: "italic", color: MUTED }}>{waiting}</div>}
       {card.applied && (
         <div style={{ fontSize: 12, fontWeight: 600, color: "var(--color-accent-800)" }}>{card.applied}</div>
       )}
@@ -347,7 +359,7 @@ export function SuggestionCard({
               <i className="corner tr" />
               <i className="corner bl" />
               <i className="corner br" />
-              {ACTION_LABEL[primary]}
+              {label(primary)}
             </button>
           )}
           {secondary.map((action) => (
@@ -359,7 +371,7 @@ export function SuggestionCard({
               disabled={busy}
               onClick={() => onAction(action)}
             >
-              {ACTION_LABEL[action]}
+              {label(action)}
             </button>
           ))}
           {card.chat && (card.chat === "quiet" || chatOpen) && (

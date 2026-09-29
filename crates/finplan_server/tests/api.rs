@@ -5023,7 +5023,7 @@ async fn a_draft_is_hidden_replaced_and_deleted_and_spends_a_draft_once() {
     // A self-hosted server is Pro: the Pro limits, all of them reported.
     assert_eq!(
         app.ai_drafts().await,
-        json!({"enabled": true, "remaining": 20, "max_files": 25,
+        json!({"enabled": true, "remaining": 20, "per_month": 20, "max_files": 25,
                "max_bytes": 104_857_600u64, "max_pages": 200})
     );
 
