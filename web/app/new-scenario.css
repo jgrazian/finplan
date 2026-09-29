@@ -157,6 +157,12 @@
   line-height: 1.1;
 }
 
+/* A choice keeps its own width rather than stretching across the column,
+   so its last option ends at a border of its own. */
+.ns-question .seg {
+  align-self: flex-start;
+}
+
 .ns-question p {
   margin: 0;
   font-size: 13.5px;
