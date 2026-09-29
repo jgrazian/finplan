@@ -223,6 +223,8 @@ struct Tools {
     previews: Mutex<u32>,
     /// The `base` and `edited` statistics every clean preview reports.
     stats: (Value, Value),
+    /// Goal seeks asked of the host, as `parameter/metric/target`.
+    goal_seeks: Mutex<Vec<String>>,
 }
 
 impl Tools {
@@ -238,6 +240,7 @@ impl Tools {
             graph: graph(),
             previews: Mutex::new(0),
             stats: (base, edited),
+            goal_seeks: Mutex::new(Vec::new()),
         }
     }
 }
@@ -258,6 +261,27 @@ impl ToolHost for Tools {
 
     fn preflight(&self) -> Result<Value, String> {
         Ok(json!({"issues": [{"code": "no_inflation", "severity": "warning"}], "can_run": true}))
+    }
+
+    fn goal_seek<'a>(
+        &'a self,
+        request: tools::goal_seek::GoalSeekRequest,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async move {
+            self.goal_seeks.lock().unwrap().push(format!(
+                "{}/{}/{}",
+                request.parameter,
+                request.metric.as_str(),
+                request.target
+            ));
+            if request.parameter == "nothing" {
+                return Err("there is no parameter `nothing`".into());
+            }
+            Ok(json!({
+                "found": true, "direction": "smallest",
+                "result": {"value": 43.0, "value_text": "age 43", "success_rate": 0.912}
+            }))
+        })
     }
 
     fn inspect_path<'a>(
@@ -2256,6 +2280,112 @@ async fn a_note_citing_a_tool_result_is_accepted_and_a_forged_call_is_not() {
 }
 
 #[tokio::test]
+async fn goal_seek_costs_previews_is_capped_and_its_answer_is_citable() {
+    let g = graph();
+    let changes = remove_sweep(&g);
+    let mut note = good_note(changes.clone());
+    note["evidence"] = json!([{"ref": "computed", "tool": "goal_seek", "call_id": "g1"}]);
+    let seek =
+        |parameter: &str| json!({"parameter": parameter, "metric": "success_rate", "target": 0.9});
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call("g1", "goal_seek", seek("Retirement age")),
+                // A malformed call is not a search and costs nothing.
+                call(
+                    "bad",
+                    "goal_seek",
+                    json!({"parameter": "x", "metric": "success_rate", "target": 1.5})
+                ),
+                call("g2", "goal_seek", seek("Spending")),
+                call("g3", "goal_seek", seek("Spending")),
+                call("f", "preview_changes", json!({"changes": changes.clone()})),
+            ]),
+        ),
+        reply("tool_use", json!([call("s1", "submit_suggestion", note)])),
+        reply("end_turn", json!([])),
+    ]);
+    let mut settings = settings();
+    settings.max_previews = 12;
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings, &context(&[]), &tools).await;
+    let requests = script.requests();
+
+    let found = json_result(&requests, 1, "g1");
+    assert_eq!(found["result"]["value_text"], "age 43");
+    let (invalid, is_error) = result_for(&requests, 1, "bad");
+    assert!(is_error && invalid.contains("fraction"), "{invalid}");
+    assert!(!result_for(&requests, 1, "g2").1);
+    let (capped, is_error) = result_for(&requests, 1, "g3");
+    assert!(is_error && capped.contains("2 times"), "{capped}");
+    assert_eq!(
+        *tools.goal_seeks.lock().unwrap(),
+        [
+            "Retirement age/success_rate/0.9",
+            "Spending/success_rate/0.9"
+        ],
+        "the host is asked only for the two allowed searches"
+    );
+    // Two searches at four previews each, and the preview after them.
+    assert_eq!(
+        outcome.usage.previews,
+        2 * tools::goal_seek::PREVIEW_COST + 1
+    );
+    assert_eq!(outcome.usage.goal_seeks, 2);
+    assert_eq!(
+        outcome.drafts[0].evidence,
+        vec![Evidence::Computed {
+            tool: "goal_seek".into(),
+            call_id: "g1".into()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn goal_seek_is_refused_without_the_previews_to_pay_for_it() {
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([call(
+                "g",
+                "goal_seek",
+                json!({"parameter": "Retirement age", "metric": "funding_success_rate", "target": 0.9})
+            )]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let mut settings = settings();
+    settings.max_previews = tools::goal_seek::PREVIEW_COST - 1;
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings, &context(&[]), &tools).await;
+    let (text, is_error) = result_for(&script.requests(), 1, "g");
+    assert!(is_error && text.contains("costs 4 previews"), "{text}");
+    assert!(tools.goal_seeks.lock().unwrap().is_empty());
+    assert_eq!((outcome.usage.previews, outcome.usage.goal_seeks), (0, 0));
+}
+
+#[tokio::test]
+async fn a_failed_goal_seek_still_counts_and_is_not_citable() {
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([call(
+                "g",
+                "goal_seek",
+                json!({"parameter": "nothing", "metric": "success_rate", "target": 0.9})
+            )]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let outcome = run_script(script.clone(), settings(), &context(&[]), &Tools::new()).await;
+    let (text, is_error) = result_for(&script.requests(), 1, "g");
+    assert!(is_error && text.contains("no parameter"), "{text}");
+    assert_eq!(outcome.usage.goal_seeks, 1);
+    assert_eq!(outcome.usage.previews, tools::goal_seek::PREVIEW_COST);
+}
+
+#[tokio::test]
 async fn failure_profile_and_inspect_path_ground_risk_notes_in_the_run() {
     let script = Script::new(vec![
         reply(
@@ -2567,6 +2697,12 @@ mod drafting {
         }
         fn preflight(&self) -> Result<Value, String> {
             self.tools.preflight()
+        }
+        fn goal_seek<'a>(
+            &'a self,
+            request: tools::goal_seek::GoalSeekRequest,
+        ) -> BoxFuture<'a, Result<Value, String>> {
+            self.tools.goal_seek(request)
         }
         fn resolve_steps(
             &self,
@@ -2945,6 +3081,7 @@ mod drafting {
             "finance_calc",
             "estimate_social_security",
             "estimate_taxes",
+            "goal_seek",
             "summarize_transactions",
             "match_account",
             "reconcile",
@@ -3359,6 +3496,76 @@ mod drafting {
         assert!(is_error && text.contains("budget"), "{text}");
         assert_eq!(host.simulations.lock().unwrap().len(), 1);
         assert_eq!(outcome.transcript.usage.previews, 1);
+    }
+
+    #[tokio::test]
+    async fn a_draft_may_goal_seek_twice_in_the_whole_job() {
+        let host = FakeDraft::new();
+        let seek = |id: &str| {
+            call(
+                id,
+                "goal_seek",
+                json!({"parameter": "Retirement age", "metric": "success_rate", "target": 0.9}),
+            )
+        };
+        // The first segment spends one and suspends; the resumed one has one left.
+        let first = Script::new(vec![
+            reply("tool_use", json!([seek("a")])),
+            reply(
+                "tool_use",
+                json!([call(
+                    "q",
+                    "ask_user",
+                    json!({"questions": [{"key": "bonus", "prompt": "Any bonus?",
+                        "answer_type": "choice",
+                        "options": [{"value": "no", "label": "No bonus"},
+                                    {"value": "yes", "label": "Yes"}]}]})
+                )]),
+            ),
+        ]);
+        let outcome = draft::run(
+            &client(&first),
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.stop, DraftStop::Suspended);
+        assert_eq!(outcome.transcript.usage.goal_seeks, 1);
+        assert_eq!(
+            json_result(&first.requests(), 1, "a")["result"]["value_text"],
+            "age 43"
+        );
+
+        let mut questions = outcome.questions.clone();
+        questions[0].answer = Some(validate_answer(&questions[0], &json!("no")).unwrap());
+        let second = Script::new(vec![
+            reply("tool_use", json!([seek("b"), seek("c")])),
+            reply("end_turn", json!([])),
+        ]);
+        let resumed = draft::run(
+            &client(&second),
+            &host,
+            &NoObserver,
+            input(questions),
+            outcome.transcript,
+            Some(Resume {
+                state: "The draft now holds nothing.".into(),
+                unblocked: Vec::new(),
+            }),
+        )
+        .await
+        .unwrap();
+        let requests = second.requests();
+        let last = requests.len() - 1;
+        assert!(!result_for(&requests, last, "b").1);
+        let (capped, is_error) = result_for(&requests, last, "c");
+        assert!(is_error && capped.contains("2 times"), "{capped}");
+        assert_eq!(resumed.transcript.usage.goal_seeks, 2);
+        assert_eq!(host.tools.goal_seeks.lock().unwrap().len(), 2);
     }
 
     #[tokio::test]

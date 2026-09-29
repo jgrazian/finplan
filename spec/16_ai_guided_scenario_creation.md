@@ -1,9 +1,97 @@
 # AI-guided scenario creation (design 2a) and AI tool additions
 
-Status: plan, not started. Design source: claude.ai/design project "FinPlan Web",
-`New Scenario.dc.html`, turn 2 (2a intake, 2b documents-first, 2c/2d reviewing
-the draft, 2e refreshing a plan from new statements). This document covers 2a and
-what it needs; 2b–2e reuse the same pieces and are noted where they differ.
+Status: implemented for 2a, a basic 2c and the shared tool registry (six
+commits, `f7f1082..101611b`, plus `goal_seek`). Design source: claude.ai/design
+project "FinPlan Web", `New Scenario.dc.html`, turn 2 (2a intake, 2b
+documents-first, 2c/2d reviewing the draft, 2e refreshing a plan from new
+statements). This document covers 2a and what it needs; 2b–2e reuse the same
+pieces and are noted where they differ. The sections below are the original
+plan; "Implementation status" says what became of it.
+
+## Implementation status
+
+Landed, by phase:
+
+- **0, drafts (G1, G11).** `scenarios.status` (`draft`/`active`, migration
+  0010). Drafts are excluded from the scenario list, plan-slot counts,
+  `editable_plans`, archive export and import. `POST /drafts` checks the plan
+  slot and spends `monthly_ai_drafts` in one `BEGIN IMMEDIATE` transaction and
+  replaces the user's existing draft; `GET`/`PATCH`/`DELETE /drafts/{id}`,
+  `POST /drafts/{id}/create`; a TTL sweeper (every ten minutes) also purges
+  orphaned temp folders. `suggestions.run_id` is nullable. Limits are
+  `FINPLAN_DRAFT_*` (`DraftConfig`), reported as `Entitlements.ai_drafts`
+  (null when the server has no review model).
+- **1, change model (G2–G4).** Targets `parameter`, `new_parameter`,
+  `scenario`, `new_return_profile`, `new_tax_config`; `$new` in
+  `parameter_id`, return-profile and tax-config fields and `$name` for new
+  parameters in expressions; asset and account delete; diff labels.
+- **2, templates (G10).** Guided setup lowers to `Vec<Change>` through
+  `suggest::templates` (salary and 401(k), employer match, recurring expense,
+  retirement, home purchase, Social Security, three stress events), pinned by
+  golden plans. `simulate_draft` (G9) is an unpaired whole-plan run, 400
+  iterations by default. A deterministic-plan persistence bug was fixed on
+  the way.
+- **3, documents (G5, G12).** Multipart upload under per-draft file, byte and
+  page limits; CSV, OFX/QFX, text and text-layer PDF are parsed and redacted
+  before storage and before the model sees them (free text inside OFX and
+  file names included); only redacted text, hash and parsed figures are stored
+  (migration 0011). Images and scanned PDFs are held unredacted in an
+  owner-only per-draft temp folder until the model transcribes them
+  (`read_document` with `extraction`, kept redacted); the folder goes with
+  the draft on every path (cancel, replace, create, sweep, delete). Draft
+  requests require zero-data-retention routing. `summarize_transactions`,
+  `match_account`, `reconcile` landed.
+- **4, drafting agent.** `suggest/ai/draft.rs`; one `draft_jobs` row per draft
+  (migration 0012, which also adds kind `add`, note keys, `blocked_by`,
+  `board_column`, `auto_added`); `ask_user` suspends the job with its
+  transcript (documents by reference) and `POST /drafts/{id}/answers`
+  resumes it; a restart fails `drafting` jobs, as review passes do.
+- **5, web.** Describe & upload in New Scenario (absent when
+  `ai_drafts` is null), consent text, polling panel, retention and quota
+  line; `DraftReview` on `ReviewScreen` with Portfolio / Plan / To confirm.
+- **6, tools.** `validate_changes`, `preview_paths`, `preflight`,
+  `inspect_path`, `failure_profile`, `reference_facts`, `finance_calc`,
+  `estimate_social_security`, `estimate_taxes`, `Evidence::Computed`
+  and, later, `goal_seek`: a parameter (by id or name) searched for the value
+  that reaches a success or funding-rate target, using the app's own solver
+  at 150 iterations a probe. It costs 4 previews from the loop's budget, is
+  capped at 2 calls per session (per drafting job across suspensions), and
+  never touches the user's monthly goal-seek quota. Ages and dates search a
+  yearly grid and answer in years or ISO dates.
+
+Deferred:
+
+- OCR (images are sent unredacted after consent, not redacted first); 2b
+  (documents-first), 2d (age-ruler timeline) and 2e (refresh from new
+  statements; retained documents have no reader yet).
+- The `sweep` tool and the `ledger(year, ...)` tool.
+- `inspect_path` reads only the percentile paths the run stored (worst is the
+  lowest stored percentile), and is unavailable on a draft.
+- Per-note simulated estimates on draft notes; only the draft-wide estimate
+  ("est. 81%") from `simulate_draft` is shown.
+- Reloading the page loses the draft handle: drafts are not resumable, so a
+  draft left behind waits for the sweeper.
+- A cheaper model for reading documents (one model, drafting budget).
+
+Decisions resolved in the implementation (the former "Still open" list):
+
+1. **Draft storage:** a scenario row with `status = 'draft'`.
+2. **Auto-add:** yes. A note the model marks `auto_add` (facts read from a
+   document, the description or an answer, and not blocked) is applied
+   through the ordinary apply route and shows as "Added".
+3. **First release:** 2a plus a basic 2c on `ReviewScreen`; a draft may start
+   from a description alone or from documents alone.
+4. **No plan slot:** refused before drafting; the slot check and the quota
+   spend share one transaction, so a refusal spends nothing.
+5. **Cost ceiling:** the review model with its own `FINPLAN_DRAFT_MAX_*`
+   turns (20), previews (12) and output tokens.
+6. **Create & run** checks the slot again, queues a run and stops there: no
+   review of either kind is started; Review is one click away once the run
+   succeeds. Open notes stay unshown (they carry no run) and unanswered
+   questions go with the draft job and its transcript; documents are deleted
+   unless retained.
+7. **Unknown cost basis:** a to-confirm note that says so, never a silent
+   basis equal to value (a prompt rule).
 
 ## What 2a is
 
@@ -312,19 +400,5 @@ Made (2026-09-28):
 - **No plan DSL for now.** Changes stay JSON-pointer `Change`s; Phases 1–2 as
   written.
 
-Still open (recommendation in brackets):
-
-1. Draft storage: hidden scenario row vs a separate draft store [row].
-2. Auto-add plain facts (2c's "7 added") vs the user adding every note
-   [auto-add].
-3. First release scope [2a plus a basic 2c on `ReviewScreen`; 2b/2d/2e later;
-   design turn 1's Guided rebuild separate]. Description-only drafts with no
-   files [allowed].
-4. Free user with no plan slot left [refuse before drafting, so no draft is
-   spent on a plan that cannot be created].
-5. Model and cost ceiling per draft [set a ceiling first; consider a cheaper
-   model for reading documents and the review model for writing notes].
-6. Create & run triggers which review [rule review only; AI review one click
-   away, on its own quota].
-7. Unknown cost basis [a to-confirm note with a suggested estimate, not a
-   silent basis = value].
+The items that were open at the time of writing are settled under
+"Implementation status" above.

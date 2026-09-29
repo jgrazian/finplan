@@ -1129,6 +1129,8 @@ impl Session<'_> {
                 .settings
                 .max_previews
                 .saturating_sub(self.usage.previews),
+            goal_seeks_left: super::tools::goal_seek::MAX_GOAL_SEEKS
+                .saturating_sub(self.usage.goal_seeks),
             failure_profile: None,
         };
         let Some((tool, out)) = self.client.registry.dispatch(name, input, &env).await else {
@@ -1139,6 +1141,7 @@ impl Session<'_> {
             );
         };
         self.usage.previews += out.previews_spent;
+        self.usage.goal_seeks += out.goal_seeks_spent;
         let mut served = if out.is_error {
             Served::error(self.client.scrub(&out.text), tool, out.outcome)
         } else {

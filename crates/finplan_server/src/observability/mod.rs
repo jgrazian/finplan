@@ -86,7 +86,8 @@ bounded_enum!(AiTool {
     Taxes => "estimate_taxes", AskUser => "ask_user", ReadDocument => "read_document",
     ExpandTemplate => "expand_template", FindReturnProfile => "find_return_profile",
     SimulateDraft => "simulate_draft", SummarizeTransactions => "summarize_transactions",
-    MatchAccount => "match_account", Reconcile => "reconcile", Unknown => "unknown"
+    MatchAccount => "match_account", Reconcile => "reconcile", GoalSeek => "goal_seek",
+    Unknown => "unknown"
 });
 bounded_enum!(AiToolOutcome {
     Ok => "ok", Problems => "problems", Error => "error", Invalid => "invalid",

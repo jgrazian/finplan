@@ -11,6 +11,8 @@
 //!   `preflight` — the plan and simulations of it, through a [`ToolHost`].
 //!   Simulation-backed tools spend the loop's preview budget, per simulation.
 //! - [`runs`]: `inspect_path`, `failure_profile` — what a stored run shows.
+//! - [`goal_seek`]: `goal_seek` — a parameter searched for the value that
+//!   reaches a target, paid for from the preview budget and capped per session.
 //! - [`facts`], [`calc`], [`social_security`], [`taxes`]: deterministic
 //!   calculators with no host at all, so the model quotes figures it did not
 //!   have to recall or work out.
@@ -23,6 +25,7 @@
 
 pub mod calc;
 pub mod facts;
+pub mod goal_seek;
 mod plan;
 mod runs;
 pub mod social_security;
@@ -52,6 +55,7 @@ Tools. Besides preview_changes and submit_suggestion you have:
 - finance_calc(op): loan payments, future and present value, pay period to annual and back, age to date and back. Never do this arithmetic yourself.
 - estimate_social_security(birth_year, claim_age, earnings or current_salary): the benefit by the statutory formula. Use it for every Social Security estimate, and state its method.
 - estimate_taxes(income, filing_status, state): one year of tax on one income, and what the plan's own tax settings would charge.
+- goal_seek(parameter, metric, target): searches one named plan parameter (a retirement age, a spending amount) for the value at which success_rate or funding_success_rate reaches the target (0.9 for 90%), and returns that value and the rate achieved. It runs about a dozen simulations, costs 4 previews, and may be used twice in a session: spend it on the one question where a value matters (\"retire at 43 reaches 90%\"), then turn the answer into a path and preview that. A name it does not know is answered with the plan's parameters.
 Every figure a tool returns is kept for the session and may be cited as evidence with ref \"computed\", the tool's name as `tool` and the tool_use id of the call as `call_id`. Quote figures from the tool that produced them; a number from nowhere is rejected."
     };
 }
@@ -100,6 +104,16 @@ pub trait ToolHost: Send + Sync {
     fn plan_tax_config(&self) -> Option<TaxConfig> {
         None
     }
+
+    /// Search a plan parameter for the value that reaches a target (see
+    /// [`goal_seek`]): the found value and the metric achieved, or why it
+    /// could not run. The plan is the one the host serves, as it stands.
+    fn goal_seek<'a>(
+        &'a self,
+        _request: goal_seek::GoalSeekRequest,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async { Err(unavailable("goal_seek")) })
+    }
 }
 
 /// What one dispatch is given besides the call.
@@ -107,6 +121,8 @@ pub struct ToolEnv<'a> {
     pub host: &'a dyn ToolHost,
     /// Previews the loop may still spend.
     pub previews_left: u32,
+    /// Goal seeks the session may still run.
+    pub goal_seeks_left: u32,
     /// The run's failure aggregates, rendered (see `ReviewContext`), when there
     /// is a run.
     pub failure_profile: Option<&'a Value>,
@@ -125,6 +141,8 @@ pub struct ToolOutput {
     pub problems: usize,
     /// Simulations run, to count against the loop's preview budget.
     pub previews_spent: u32,
+    /// Goal seeks run, to count against the session's few.
+    pub goal_seeks_spent: u32,
     /// Path batches whose preview came back clean, keyed by [`batch_key`], with
     /// what it returned: "exactly this was previewed" for the submission check.
     pub previewed: Vec<(String, Value)>,
@@ -139,6 +157,7 @@ impl ToolOutput {
             paired: None,
             problems: 0,
             previews_spent: 0,
+            goal_seeks_spent: 0,
             previewed: Vec::new(),
         }
     }
@@ -192,6 +211,7 @@ pub const REFERENCE_FACTS: &str = "reference_facts";
 pub const FINANCE_CALC: &str = "finance_calc";
 pub const ESTIMATE_SOCIAL_SECURITY: &str = "estimate_social_security";
 pub const ESTIMATE_TAXES: &str = "estimate_taxes";
+pub const GOAL_SEEK: &str = "goal_seek";
 
 /// Every shared tool, in the order the model sees them.
 pub const SPECS: &[ToolSpec] = &[
@@ -264,6 +284,13 @@ pub const SPECS: &[ToolSpec] = &[
         schema: taxes::schema,
         group: Group::Calculators,
         metric: AiTool::Taxes,
+    },
+    ToolSpec {
+        name: GOAL_SEEK,
+        description: "Search one named plan parameter for the value at which the success rate (or funding success rate) reaches a target: the earliest retirement age that reaches 90%, the most spending that still does. Runs the app's goal seek (about a dozen fixed-seed simulations) on the plan as it stands. Costs 4 previews from the same budget and may be called twice in a session, so ask the one question that matters. Returns the value found (with its units), the rate achieved there, the plan's rate as it stands, and, when nothing in range reaches the target, the closest value. Turn the answer into a path (change the parameter to that value) and preview that path before submitting it.",
+        schema: goal_seek::schema,
+        group: Group::Plan,
+        metric: AiTool::GoalSeek,
     },
 ];
 
@@ -345,6 +372,7 @@ impl Registry {
             PREFLIGHT => plan::preflight(env),
             INSPECT_PATH => runs::inspect_path(input, env).await,
             FAILURE_PROFILE => runs::failure_profile(env),
+            GOAL_SEEK => goal_seek::run(input, env).await,
             REFERENCE_FACTS => ToolOutput::from_result(facts::run(input)),
             FINANCE_CALC => ToolOutput::from_result(calc::run(input)),
             ESTIMATE_SOCIAL_SECURITY => ToolOutput::from_result(social_security::run(input)),

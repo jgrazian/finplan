@@ -498,6 +498,264 @@ pub(crate) async fn prepare(
     })
 }
 
+// ── the AI tool ─────────────────────────────────────────────────────────────
+
+/// Monte Carlo iterations behind each probe of a model's goal seek: fewer than
+/// the analysis screen's 250, since the tool is charged to a preview budget.
+const AI_GOAL_SEEK_ITERATIONS: usize = 150;
+/// Bisection probes after the two ends and the baseline.
+const AI_GOAL_SEEK_PROBES: usize = 10;
+/// Most values a grid search over an age or a date evaluates.
+const AI_GOAL_SEEK_GRID: usize = 16;
+
+/// `goal_seek` for the review and drafting loops: search one named parameter
+/// of `graph`'s plan for the value at which the metric reaches the target, as
+/// the analysis screen's goal seek does, but on fewer iterations and without
+/// spending the user's monthly goal-seek quota (a model's tool call is not the
+/// user's request; the loop's own cap and preview budget bound it). Errors are
+/// in words the model may read.
+pub(crate) async fn ai_goal_seek(
+    state: &AppState,
+    user: &CurrentUser,
+    graph: &ScenarioGraph,
+    request: crate::suggest::ai::tools::goal_seek::GoalSeekRequest,
+) -> ApiResult<serde_json::Value> {
+    use crate::suggest::ai::tools::goal_seek::{Direction, Metric};
+    use finplan_core::analysis::{SolveMethod, SolveProbe, SolveResults};
+    use serde_json::json;
+
+    let compiled = compile::compile(graph)?;
+    let available = parameters(&compiled);
+    if available.is_empty() {
+        return Err(ApiError::unprocessable(
+            "this plan has no named parameters to search; add one and reference it in an amount or trigger",
+        ));
+    }
+    let param = lookup(&available, &request.parameter)?.clone();
+    let min = request.min.unwrap_or(param.min);
+    let max = request.max.unwrap_or(param.max);
+    if !min.is_finite() || !max.is_finite() || max <= min {
+        return Err(ApiError::bad_request(format!(
+            "{} needs a range with max above min",
+            param.name
+        )));
+    }
+    // A grid search (ages and dates are discrete) evaluates every step, so it
+    // is set to about a step a year across the range, capped.
+    let steps = match param.kind {
+        crate::analysis::params::ParamKind::Age => (max - min).ceil() as usize + 1,
+        crate::analysis::params::ParamKind::Date => ((max - min) / 365.0).ceil() as usize + 1,
+        _ => 2,
+    }
+    .clamp(2, AI_GOAL_SEEK_GRID);
+    let sweep = param.sweep(min, max, steps)?;
+    let direction =
+        request
+            .direction
+            .unwrap_or(if param.kind == crate::analysis::params::ParamKind::Age {
+                Direction::Smallest
+            } else {
+                Direction::Largest
+            });
+    let metric = match request.metric {
+        Metric::SuccessRate => SolveConstraintMetric::SuccessRate,
+        Metric::FundingSuccessRate => SolveConstraintMetric::FundingSuccessRate,
+    };
+    let config = SolveConfig {
+        parameters: vec![sweep],
+        objective: match direction {
+            Direction::Smallest => SolveObjective::MinParameter,
+            Direction::Largest => SolveObjective::MaxParameter,
+        },
+        constraint: SolveConstraint {
+            metric,
+            min_value: request.target,
+        },
+        mc_iterations: AI_GOAL_SEEK_ITERATIONS,
+        parallel_batches: state.config.sim_workers.max(1),
+        seed: Some(ANALYSIS_SEED),
+        max_probes: AI_GOAL_SEEK_PROBES,
+        ..SolveConfig::default()
+    };
+    if config
+        .probe_budget()
+        .saturating_mul(config.mc_iterations)
+        .saturating_mul(compiled.config.duration_years)
+        > 20_000_000
+    {
+        return Err(ApiError::bad_request(
+            "this goal seek is too large for the plan's horizon",
+        ));
+    }
+
+    let permit =
+        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    let progress = finplan_core::analysis::SweepProgress::new(0);
+    let guard = CancelOnDrop(progress.clone());
+    let base = compiled.config.clone();
+    let solved: Result<SolveResults, _> = tokio::task::spawn_blocking({
+        let (config, progress) = (config.clone(), progress.clone());
+        move || {
+            let _permit = permit;
+            finplan_core::analysis::solve(&base, &config, Some(&progress))
+        }
+    })
+    .await
+    .map_err(|_| ApiError::internal("the goal seek panicked"))?;
+    drop(guard);
+    let mut results =
+        solved.map_err(|e| ApiError::unprocessable(format!("the plan failed to simulate: {e}")))?;
+    for probe in results.probes.iter_mut().chain(results.best.iter_mut()) {
+        for value in &mut probe.values {
+            *value = param.display_coordinate(&config.parameters[0], *value);
+        }
+    }
+
+    let achieved = |probe: &SolveProbe| match metric {
+        SolveConstraintMetric::SuccessRate => Some(probe.success_rate),
+        SolveConstraintMetric::FundingSuccessRate => probe.funding_success_rate,
+    };
+    let point = |probe: &SolveProbe| {
+        let value = probe.values.first().copied().unwrap_or(f64::NAN);
+        json!({
+            "value": value,
+            "value_text": value_text(param.kind, value),
+            "success_rate": probe.success_rate,
+            "funding_success_rate": probe.funding_success_rate,
+        })
+    };
+    let closest = results
+        .probes
+        .iter()
+        .filter(|p| achieved(p).is_some())
+        .max_by(|a, b| {
+            achieved(a)
+                .partial_cmp(&achieved(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    let mut out = json!({
+        "parameter": {
+            "id": param.id,
+            "name": param.name,
+            "kind": param.kind.as_str(),
+            "unit": unit_of(param.kind),
+            "current": param.current,
+            "current_text": value_text(param.kind, param.current),
+            "searched_range": [min, max],
+        },
+        "metric": request.metric.as_str(),
+        "target": request.target,
+        "direction": match direction {
+            Direction::Smallest => "smallest",
+            Direction::Largest => "largest",
+        },
+        "method": match results.method {
+            SolveMethod::Bisection => "bisection",
+            SolveMethod::GridSearch => "grid_search",
+        },
+        "plan_as_it_stands": {
+            "success_rate": results.baseline.success_rate,
+            "funding_success_rate": results.baseline.funding_success_rate,
+        },
+        "simulations": results.probes.len() + 1,
+        "iterations_each": results.mc_iterations,
+        "std_error": results.constraint_std_error(),
+        "note": "Fixed-seed simulation of the plan as it stands; the rates carry sampling error (std_error). A bisection assumes the metric rises or falls steadily with the parameter.",
+    });
+    match &results.best {
+        Some(best) => {
+            out["found"] = json!(true);
+            out["result"] = point(best);
+            if results.method == SolveMethod::Bisection && results.probes.len() == 1 {
+                out["at_range_edge"] = json!(true);
+                out["note"] = json!(
+                    "The target already holds at the edge of the searched range, so the range is what binds; widen min or max to look further."
+                );
+            }
+        }
+        None => {
+            out["found"] = json!(false);
+            if let Some(closest) = closest {
+                out["closest"] = point(closest);
+            }
+            out["note"] = json!(
+                "No value in the searched range reaches the target; `closest` is the best value tried. Widen the range or change another parameter."
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// A parameter by id (`parameter:5` or `5`) or by name (exact, ignoring case,
+/// else the one name that contains the text).
+fn lookup<'a>(available: &'a [PlanParameter], wanted: &str) -> ApiResult<&'a PlanParameter> {
+    let wanted = wanted.trim();
+    let bare = wanted.strip_prefix("parameter:").unwrap_or(wanted);
+    if let Some(found) = available
+        .iter()
+        .find(|p| p.id == wanted || p.parameter_id.to_string() == bare)
+    {
+        return Ok(found);
+    }
+    let lower = wanted.to_lowercase();
+    if let Some(found) = available.iter().find(|p| p.name.to_lowercase() == lower) {
+        return Ok(found);
+    }
+    let partial: Vec<&PlanParameter> = available
+        .iter()
+        .filter(|p| p.name.to_lowercase().contains(&lower))
+        .collect();
+    match partial.as_slice() {
+        [one] if !lower.is_empty() => Ok(one),
+        _ => Err(ApiError::bad_request(format!(
+            "there is no parameter `{wanted}`; the plan's parameters are: {}",
+            available
+                .iter()
+                .map(|p| format!("{} ({})", p.name, p.id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+fn unit_of(kind: crate::analysis::params::ParamKind) -> &'static str {
+    use crate::analysis::params::ParamKind;
+    match kind {
+        ParamKind::Age => "years of age",
+        ParamKind::Amount => "dollars",
+        ParamKind::Rate => "fraction (0.04 is 4%)",
+        ParamKind::Date => "days since 1970-01-01",
+    }
+}
+
+/// A parameter value in words: an age as years and months, a date as ISO.
+fn value_text(kind: crate::analysis::params::ParamKind, value: f64) -> String {
+    use crate::analysis::params::ParamKind;
+    match kind {
+        ParamKind::Age => {
+            let months = (value * 12.0).round() as i64;
+            match (months / 12, months % 12) {
+                (years, 0) => format!("age {years}"),
+                (years, months) => format!("age {years} and {months} months"),
+            }
+        }
+        ParamKind::Date => jiff::civil::Date::constant(1970, 1, 1)
+            .checked_add(jiff::Span::new().days(value.round() as i64))
+            .map_or_else(|_| value.to_string(), |d| d.to_string()),
+        ParamKind::Rate => format!("{:.2}%", value * 100.0),
+        ParamKind::Amount => format!("${value:.0}"),
+    }
+}
+
+/// Cancels the goal seek when its request is dropped.
+struct CancelOnDrop(finplan_core::analysis::SweepProgress);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 /// The scenario's most recent sweep, or `null` if it has never been swept.
 ///
 /// Jobs are held in memory and their ids do not survive a restart, so this is

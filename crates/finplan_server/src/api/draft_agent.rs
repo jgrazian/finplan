@@ -910,6 +910,19 @@ impl ToolHost for DraftTools {
         Box::pin(async { Err(unavailable("inspect_path")) })
     }
 
+    fn goal_seek<'a>(
+        &'a self,
+        request: crate::suggest::ai::tools::goal_seek::GoalSeekRequest,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async move {
+            // The draft as it stands, copied so no lock is held while it runs.
+            let graph = self.graph().clone();
+            super::analysis::ai_goal_seek(&self.state, &self.user, &graph, request)
+                .await
+                .map_err(public)
+        })
+    }
+
     fn plan_tax_config(&self) -> Option<TaxConfig> {
         let graph = self.graph();
         let config = graph.tax_config.as_ref()?;

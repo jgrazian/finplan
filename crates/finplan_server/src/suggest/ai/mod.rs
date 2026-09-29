@@ -198,6 +198,8 @@ pub struct Usage {
     /// Model requests made (retries not counted).
     pub turns: u32,
     pub previews: u32,
+    /// Goal seeks run (each is also charged to `previews`).
+    pub goal_seeks: u32,
     /// Submissions the checks sent back.
     pub rejected: u32,
     pub input_tokens: u64,
@@ -866,6 +868,7 @@ impl Session<'_> {
                 .settings
                 .max_previews
                 .saturating_sub(self.usage.previews),
+            goal_seeks_left: tools::goal_seek::MAX_GOAL_SEEKS.saturating_sub(self.usage.goal_seeks),
             failure_profile: self.context.failure_profile.as_ref(),
         };
         let Some((tool, out)) = self.client.registry.dispatch(name, input, &env).await else {
@@ -876,6 +879,7 @@ impl Session<'_> {
             );
         };
         self.usage.previews += out.previews_spent;
+        self.usage.goal_seeks += out.goal_seeks_spent;
         self.previewed.extend(out.previewed);
         let text = if out.is_error {
             // Not the model's to read: a key must never reach it.

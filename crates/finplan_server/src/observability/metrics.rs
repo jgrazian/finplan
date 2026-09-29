@@ -443,6 +443,7 @@ impl Telemetry {
             AiTool::SummarizeTransactions,
             AiTool::MatchAccount,
             AiTool::Reconcile,
+            AiTool::GoalSeek,
         ] {
             drop(ai_tool_duration.get_or_create(&labels([("tool", tool.as_str())])));
         }

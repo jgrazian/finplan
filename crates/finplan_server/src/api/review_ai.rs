@@ -756,6 +756,24 @@ impl ToolHost for Tools<'_> {
         serde_json::to_value(super::onboarding::review(&self.graph)).map_err(|e| e.to_string())
     }
 
+    fn goal_seek<'b>(
+        &'b self,
+        request: crate::suggest::ai::tools::goal_seek::GoalSeekRequest,
+    ) -> BoxFuture<'b, Result<Value, String>> {
+        Box::pin(async move {
+            super::analysis::ai_goal_seek(self.state, self.user, &self.graph, request)
+                .await
+                .map_err(|error| match error {
+                    // Not the model's to read: internal detail stays in the logs.
+                    ApiError::Database(_) | ApiError::Internal(_) => {
+                        tracing::warn!(event = "review_ai.goal_seek_failed", error = %error);
+                        "the goal seek could not run; use the results you have or stop".to_string()
+                    }
+                    other => other.to_string(),
+                })
+        })
+    }
+
     fn inspect_path<'b>(
         &'b self,
         rank: PathRank,
