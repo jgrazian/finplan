@@ -3082,6 +3082,9 @@ mod draft_preview_cases;
 #[path = "cases/documents.rs"]
 mod documents_cases;
 
+#[path = "cases/draft_agent.rs"]
+mod draft_agent_cases;
+
 #[path = "cases/archives.rs"]
 mod archives_cases;
 
@@ -5033,7 +5036,8 @@ async fn a_draft_is_hidden_replaced_and_deleted_and_spends_a_draft_once() {
     assert_eq!(first["scenario"]["start_date"], today_utc());
     assert_eq!(
         first["counts"],
-        json!({"accounts": 0, "assets": 0, "events": 0, "parameters": 0, "open_suggestions": 0})
+        json!({"accounts": 0, "assets": 0, "events": 0, "parameters": 0, "open_suggestions": 0,
+               "notes": 0, "notes_added": 0, "notes_to_confirm": 0})
     );
     assert!(first["expires_at"].as_str().is_some());
     assert_eq!(app.ai_drafts().await["remaining"], 19);
@@ -5244,7 +5248,8 @@ async fn a_draft_takes_notes_without_a_run_and_becomes_a_plan_when_created() {
     let (_, drafted) = app.get(&format!("/api/drafts/{id}")).await;
     assert_eq!(
         drafted["counts"],
-        json!({"accounts": 2, "assets": 1, "events": 1, "parameters": 1, "open_suggestions": 0})
+        json!({"accounts": 2, "assets": 1, "events": 1, "parameters": 1, "open_suggestions": 0,
+               "notes": 1, "notes_added": 1, "notes_to_confirm": 0})
     );
     let scenario = &drafted["scenario"];
     assert_eq!(scenario["birth_date"], "1988-04-01");

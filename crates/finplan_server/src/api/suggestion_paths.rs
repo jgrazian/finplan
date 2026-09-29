@@ -72,6 +72,10 @@ pub(crate) fn shape_problems(
             "fix and stress notes need at least one path; make it a check or read note otherwise"
                 .into(),
         ),
+        Kind::Add if paths.is_empty() => problems.push(
+            "an add note needs at least one path; make it a check note if there is nothing to add yet"
+                .into(),
+        ),
         _ => {}
     }
     if paths.len() > MAX_PATHS {

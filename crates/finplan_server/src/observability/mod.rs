@@ -83,7 +83,10 @@ bounded_enum!(AiTool {
     PreviewPaths => "preview_paths", Preflight => "preflight", InspectPath => "inspect_path",
     FailureProfile => "failure_profile", ReferenceFacts => "reference_facts",
     FinanceCalc => "finance_calc", SocialSecurity => "estimate_social_security",
-    Taxes => "estimate_taxes", Unknown => "unknown"
+    Taxes => "estimate_taxes", AskUser => "ask_user", ReadDocument => "read_document",
+    ExpandTemplate => "expand_template", FindReturnProfile => "find_return_profile",
+    SimulateDraft => "simulate_draft", SummarizeTransactions => "summarize_transactions",
+    MatchAccount => "match_account", Reconcile => "reconcile", Unknown => "unknown"
 });
 bounded_enum!(AiToolOutcome {
     Ok => "ok", Problems => "problems", Error => "error", Invalid => "invalid",

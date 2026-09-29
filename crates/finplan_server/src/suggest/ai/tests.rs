@@ -2500,3 +2500,959 @@ async fn every_tool_reports_under_its_own_metric_label() {
         ]
     );
 }
+
+// ── the drafting agent ──────────────────────────────────────────────────────
+
+mod drafting {
+    use std::collections::HashMap;
+    use std::ops::RangeInclusive;
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+
+    use super::*;
+    use crate::api::suggestions::DraftColumn;
+    use crate::documents::store::DocumentPage;
+    use crate::suggest::ai::draft::{
+        self, AddedNote, AnswerType, DocumentRead, DocumentTool, DraftHost, DraftInput,
+        DraftQuestion, DraftStop, LibraryProfile, NewNote, NoteSummary, QuestionOption, Resume,
+        Transcript, validate_answer,
+    };
+
+    const STATEMENT: &str = "Acme Bank statement\nAccount ending 1234\nBalance: $12,345.00";
+
+    /// A draft's server, in memory: one plan (the default snapshot, which never
+    /// changes), a few documents, and a record of what the loop did.
+    struct FakeDraft {
+        tools: Tools,
+        docs: Mutex<HashMap<i64, Vec<String>>>,
+        /// Documents that are held originals: id -> (mime, bytes).
+        held: Mutex<HashMap<i64, (String, Vec<u8>)>>,
+        notes: Mutex<Vec<NewNote>>,
+        extractions: Mutex<Vec<(i64, String)>>,
+        progress: Mutex<Vec<String>>,
+        blocked: Mutex<Vec<(String, Vec<String>)>>,
+        simulations: Mutex<Vec<usize>>,
+        ids: AtomicI64,
+        alive: AtomicBool,
+    }
+
+    impl FakeDraft {
+        fn new() -> Self {
+            Self {
+                tools: Tools::new(),
+                docs: Mutex::new(HashMap::from([(1, vec![STATEMENT.to_owned()])])),
+                held: Mutex::new(HashMap::new()),
+                notes: Mutex::new(Vec::new()),
+                extractions: Mutex::new(Vec::new()),
+                progress: Mutex::new(Vec::new()),
+                blocked: Mutex::new(Vec::new()),
+                simulations: Mutex::new(Vec::new()),
+                ids: AtomicI64::new(100),
+                alive: AtomicBool::new(true),
+            }
+        }
+
+        fn added(&self) -> Vec<String> {
+            self.notes
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|n| n.draft.title.clone())
+                .collect()
+        }
+    }
+
+    impl ToolHost for FakeDraft {
+        fn preview<'a>(&'a self, _: Vec<Change>) -> BoxFuture<'a, Result<Value, String>> {
+            Box::pin(async { Err("no previews in a draft".into()) })
+        }
+        fn preflight(&self) -> Result<Value, String> {
+            self.tools.preflight()
+        }
+        fn resolve_steps(
+            &self,
+            steps: &[Vec<Change>],
+        ) -> Result<Vec<Vec<DiffLine>>, (usize, Vec<ChangeProblem>)> {
+            self.tools.resolve_steps(steps)
+        }
+    }
+
+    impl DraftHost for FakeDraft {
+        fn alive(&self) -> BoxFuture<'_, bool> {
+            Box::pin(async move { self.alive.load(Ordering::SeqCst) })
+        }
+        fn progress(&self, line: String) -> BoxFuture<'_, ()> {
+            Box::pin(async move { self.progress.lock().unwrap().push(line) })
+        }
+        fn read_document(
+            &self,
+            id: i64,
+            pages: Option<RangeInclusive<u32>>,
+        ) -> BoxFuture<'_, Result<DocumentRead, String>> {
+            Box::pin(async move {
+                if let Some((mime, bytes)) = self.held.lock().unwrap().get(&id).cloned() {
+                    return Ok(DocumentRead::Held {
+                        filename: "photo.png".into(),
+                        mime,
+                        bytes,
+                    });
+                }
+                let docs = self.docs.lock().unwrap();
+                let Some(text) = docs.get(&id) else {
+                    return Err(format!("there is no document #{id} in this draft"));
+                };
+                let all: Vec<DocumentPage> = text
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| DocumentPage {
+                        page: i as u32 + 1,
+                        text: t.clone(),
+                    })
+                    .collect();
+                Ok(DocumentRead::Text {
+                    filename: "statement.pdf".into(),
+                    kind: "bank_statement".into(),
+                    pages_total: all.len(),
+                    pages: all
+                        .into_iter()
+                        .filter(|p| pages.as_ref().is_none_or(|r| r.contains(&p.page)))
+                        .collect(),
+                })
+            })
+        }
+        fn store_extraction(
+            &self,
+            id: i64,
+            text: String,
+        ) -> BoxFuture<'_, Result<Vec<String>, String>> {
+            Box::pin(async move {
+                self.held.lock().unwrap().remove(&id);
+                self.extractions.lock().unwrap().push((id, text.clone()));
+                self.docs.lock().unwrap().insert(id, vec![text.clone()]);
+                Ok(vec![text])
+            })
+        }
+        fn document_tool(
+            &self,
+            tool: DocumentTool,
+            id: i64,
+            _months: Option<u32>,
+        ) -> BoxFuture<'_, Result<Value, String>> {
+            Box::pin(async move { Ok(json!({"tool": format!("{tool:?}"), "document": id})) })
+        }
+        fn return_profiles(&self) -> Vec<LibraryProfile> {
+            Vec::new()
+        }
+        fn simulate(&self, steps: Vec<Vec<Change>>) -> BoxFuture<'_, Result<Value, String>> {
+            Box::pin(async move {
+                self.simulations.lock().unwrap().push(steps.len());
+                Ok(json!({"iterations": 400, "stats": {"success_rate": 0.81}}))
+            })
+        }
+        fn notes(&self) -> BoxFuture<'_, Vec<NoteSummary>> {
+            Box::pin(async move {
+                self.notes
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|n| NoteSummary {
+                        key: n.key.clone(),
+                        kind: n.draft.kind,
+                        title: n.draft.title.clone(),
+                        changes: n.draft.all_changes(),
+                        open: !n.auto_add,
+                    })
+                    .collect()
+            })
+        }
+        fn block_notes(
+            &self,
+            question: String,
+            notes: Vec<String>,
+        ) -> BoxFuture<'_, Result<(), String>> {
+            Box::pin(async move {
+                self.blocked.lock().unwrap().push((question, notes));
+                Ok(())
+            })
+        }
+        fn add_note(&self, note: NewNote) -> BoxFuture<'_, Result<AddedNote, String>> {
+            Box::pin(async move {
+                let added = note.auto_add && note.blocked_by.is_empty();
+                if let Some(key) = &note.replaces {
+                    self.notes
+                        .lock()
+                        .unwrap()
+                        .retain(|n| n.key.as_deref() != Some(key));
+                }
+                self.notes.lock().unwrap().push(note);
+                Ok(AddedNote {
+                    id: self.ids.fetch_add(1, Ordering::SeqCst),
+                    added,
+                    not_added: None,
+                    created: if added {
+                        vec![json!({"key": "floor", "kind": "parameter", "id": 9})]
+                    } else {
+                        Vec::new()
+                    },
+                    counts: json!({"accounts": 0, "parameters": self.notes.lock().unwrap().len()}),
+                })
+            })
+        }
+    }
+
+    fn client(script: &Arc<Script>) -> AiClient {
+        AiClient::new(settings(), script.clone(), Some(KEY.into()))
+            .with_registry(draft::shared_tools())
+            .with_zero_data_retention(true)
+    }
+
+    fn input(questions: Vec<DraftQuestion>) -> DraftInput {
+        DraftInput {
+            context: "<today>2026-09-29</today> the person's context".into(),
+            description: "I earn $205,000 a year and plan to retire at 60.".into(),
+            documents: vec![(1, Some(STATEMENT))]
+                .into_iter()
+                .map(|(id, t)| (id, t.map(str::to_owned)))
+                .collect(),
+            questions,
+        }
+    }
+
+    fn parameter(key: &str, name: &str, value: f64) -> Value {
+        json!({"op": "add", "target": {"new_parameter": key}, "path": "",
+               "value": {"name": name, "value": {"kind": "Money", "value": value}}})
+    }
+
+    fn note(title: &str, changes: Vec<Value>, extra: Value) -> Value {
+        let mut note = json!({
+            "kind": "add", "section": "plan", "title": title,
+            "reasoning": "Read from the statement.",
+            "evidence": [{"ref": "document", "document_id": 1, "page": 1,
+                          "excerpt": "Balance: $12,345.00"}],
+            "paths": [{"key": "a", "label": "Add it", "recommended": true,
+                       "steps": [{"key": "a", "title": "Add it", "changes": changes}]}]
+        });
+        for (k, v) in extra.as_object().unwrap() {
+            note[k] = v.clone();
+        }
+        note
+    }
+
+    fn bonus_question() -> Value {
+        json!({
+            "key": "bonus", "prompt": "Do you get a yearly bonus?", "answer_type": "choice",
+            "options": [{"value": "none", "label": "No bonus"}, {"value": "yes", "label": "Yes, add one"}]
+        })
+    }
+
+    fn all_requests(script: &Script) -> Vec<Value> {
+        script.requests()
+    }
+
+    #[tokio::test]
+    async fn reading_asking_suspending_answering_and_resuming_is_one_conversation() {
+        let host = FakeDraft::new();
+        let first = Script::new(vec![
+            reply(
+                "tool_use",
+                json!([call("read1", "read_document", json!({"id": 1}))]),
+            ),
+            reply(
+                "tool_use",
+                json!([
+                    // The question comes last in the message but is served
+                    // first, so the note after it can wait on it.
+                    call(
+                        "submit1",
+                        "submit_suggestion",
+                        note(
+                            "Checking holds $12,345 at Acme Bank",
+                            vec![parameter("floor", "Acme balance", 12_345.0)],
+                            json!({"auto_add": true, "key": "acme", "column": "portfolio",
+                                   "section": "portfolio"}),
+                        )
+                    ),
+                    call(
+                        "submit2",
+                        "submit_suggestion",
+                        note(
+                            "Add a yearly bonus of the usual size",
+                            vec![parameter("bonus", "Yearly bonus", 20_000.0)],
+                            json!({"blocked_by": ["bonus"], "key": "bonus-note",
+                                   "evidence": [{"ref": "description",
+                                                 "excerpt": "I earn $205,000 a year"}]})
+                        )
+                    ),
+                    call("ask1", "ask_user", json!({"questions": [bonus_question()]})),
+                ]),
+            ),
+        ]);
+        let outcome = draft::run(
+            &client(&first),
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.stop, DraftStop::Suspended);
+        assert_eq!(outcome.segment_turns, 2);
+        assert_eq!(outcome.questions.len(), 1);
+        assert!(outcome.questions[0].is_open());
+        assert_eq!(
+            host.added(),
+            [
+                "Checking holds $12,345 at Acme Bank",
+                "Add a yearly bonus of the usual size"
+            ]
+        );
+        {
+            let notes = host.notes.lock().unwrap();
+            assert!(notes[0].auto_add);
+            assert_eq!(notes[0].column, DraftColumn::Portfolio);
+            assert_eq!(notes[1].blocked_by, ["bonus"]);
+            // Not auto-added, and to plan by default.
+            assert_eq!(notes[1].column, DraftColumn::Plan);
+        }
+        // What the model saw of its two submissions.
+        let pending = serde_json::to_value(&outcome.transcript.pending).unwrap();
+        let accepted: Value = serde_json::from_str(
+            pending
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["part"]["tool_use_id"] == "submit1")
+                .unwrap()["part"]["content"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(accepted["accepted"], true);
+        assert_eq!(accepted["state"], "added");
+        assert_eq!(accepted["created"][0]["id"], 9);
+        assert_eq!(request_count(&first), 2);
+
+        // The stored conversation keeps the statement by reference.
+        let stored = serde_json::to_string(&outcome.transcript).unwrap();
+        assert!(!stored.contains("Account ending 1234"), "{stored}");
+        assert!(outcome.transcript.refs.contains_key("read1"));
+        assert_eq!(outcome.transcript.pending.len(), 3);
+        assert_eq!(outcome.transcript.usage.turns, 2);
+        assert!(!host.progress.lock().unwrap().is_empty());
+
+        // The answer arrives; the conversation resumes from what was stored.
+        let mut answered = outcome.questions.clone();
+        answered[0].answer = Some(json!("none"));
+        let stored: Transcript = serde_json::from_str(&stored).unwrap();
+        let second = Script::new(vec![
+            reply(
+                "tool_use",
+                json!([call(
+                    "submit3",
+                    "submit_suggestion",
+                    note(
+                        "The person gets no bonus",
+                        vec![parameter("nobonus", "Bonus", 0.0)],
+                        json!({"evidence": [{"ref": "answer", "question_key": "bonus"}],
+                               "replaces": "bonus-note"}),
+                    )
+                )]),
+            ),
+            reply(
+                "end_turn",
+                json!([{"type": "text", "text": "Draft ready."}]),
+            ),
+        ]);
+        let resumed = draft::run(
+            &client(&second),
+            &host,
+            &NoObserver,
+            input(answered),
+            stored,
+            Some(Resume {
+                state: "The draft now holds: 0 accounts.".into(),
+                unblocked: vec!["bonus-note".into()],
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed.stop, DraftStop::Finished);
+        assert_eq!(resumed.summary.as_deref(), Some("Draft ready."));
+        assert_eq!(
+            resumed.transcript.usage.turns, 4,
+            "turns total the whole job"
+        );
+        // The replaced note is gone, the answer note is in.
+        assert_eq!(
+            host.added(),
+            [
+                "Checking holds $12,345 at Acme Bank",
+                "The person gets no bonus"
+            ]
+        );
+
+        let requests = second.requests();
+        let messages = requests[0]["messages"].as_array().unwrap();
+        // opening, the model's two turns, then the resume turn.
+        assert_eq!(messages.len(), 5);
+        let opening = messages[0]["content"].as_array().unwrap();
+        assert!(opening[0]["text"].as_str().unwrap().contains("2026-09-29"));
+        assert_eq!(opening[0]["cache_control"]["type"], "ephemeral");
+        let resume_turn = messages[4]["content"].as_array().unwrap();
+        let result = |id: &str| {
+            resume_turn
+                .iter()
+                .find(|p| p["tool_use_id"] == id)
+                .unwrap_or_else(|| panic!("no result for {id}"))["content"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        // The statement is read into the resumed request again, from the draft.
+        let read = messages[2]["content"][0]["content"].as_str().unwrap();
+        assert!(read.contains("Account ending 1234"), "{read}");
+        // ask_user's result is the answers; the other results are as they were.
+        let answers: Value = serde_json::from_str(&result("ask1")).unwrap();
+        assert_eq!(answers["answers"][0]["key"], "bonus");
+        assert_eq!(answers["answers"][0]["answer"], "none");
+        assert_eq!(answers["unblocked_notes"][0], "bonus-note");
+        assert!(result("submit1").contains("\"accepted\":true"));
+        assert!(
+            resume_turn.last().unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .contains("The draft now holds")
+        );
+        // Drafting requests: ZDR routing, its own tools, three system blocks.
+        assert_eq!(requests[0]["provider"]["zdr"], true);
+        let names: Vec<&str> = requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        for expected in [
+            "ask_user",
+            "read_document",
+            "expand_template",
+            "find_return_profile",
+            "simulate_draft",
+            "validate_changes",
+            "preflight",
+            "reference_facts",
+            "finance_calc",
+            "estimate_social_security",
+            "estimate_taxes",
+            "summarize_transactions",
+            "match_account",
+            "reconcile",
+            "submit_suggestion",
+        ] {
+            assert!(names.contains(&expected), "{expected} missing in {names:?}");
+        }
+        assert!(!names.contains(&"preview_changes"));
+        assert_eq!(requests[0]["system"].as_array().unwrap().len(), 3);
+    }
+
+    fn request_count(script: &Script) -> usize {
+        all_requests(script).len()
+    }
+
+    #[tokio::test]
+    async fn a_draft_note_is_gated_by_its_own_rules() {
+        let host = FakeDraft::new();
+        let good = note(
+            "Checking holds $12,345 at Acme Bank",
+            vec![parameter("floor", "Acme balance", 12_345.0)],
+            json!({}),
+        );
+        let script = Script::new(vec![
+            reply(
+                "tool_use",
+                json!([
+                    // A review kind, no evidence, unknown question.
+                    call("k", "submit_suggestion", {
+                        let mut n = note("A fix", vec![parameter("a", "A", 1.0)], json!({}));
+                        n["kind"] = json!("fix");
+                        n["evidence"] = json!([]);
+                        n
+                    }),
+                    // Add without evidence.
+                    call("e", "submit_suggestion", {
+                        let mut n = note(
+                            "No evidence at all",
+                            vec![parameter("b", "B", 1.0)],
+                            json!({}),
+                        );
+                        n["evidence"] = json!([]);
+                        n
+                    }),
+                    // A quote that is not on the page; a run-based evidence kind.
+                    call("q", "submit_suggestion", {
+                        let mut n = note(
+                            "A misquoted balance",
+                            vec![parameter("c", "C", 1.0)],
+                            json!({}),
+                        );
+                        n["evidence"] = json!([
+                            {"ref": "document", "document_id": 1, "page": 1, "excerpt": "Balance: $99.00"},
+                            {"ref": "ledger", "year": 2030},
+                            {"ref": "document", "document_id": 5, "page": 1, "excerpt": "x"},
+                            {"ref": "computed", "tool": "finance_calc", "call_id": "nope"}
+                        ]);
+                        n
+                    }),
+                    // auto_add with a choice of two paths, blocked by nothing asked.
+                    call("a", "submit_suggestion", {
+                        let mut n = note(
+                            "Two ways to add it",
+                            vec![parameter("d", "D", 1.0)],
+                            json!({"auto_add": true, "blocked_by": ["never-asked"]}),
+                        );
+                        let second = n["paths"][0].clone();
+                        n["paths"] = json!([second.clone(), {"key": "b", "label": "Another way", "steps": second["steps"].clone()}]);
+                        n["paths"][1]["steps"][0]["changes"] = json!([parameter("d2", "D2", 2.0)]);
+                        n
+                    }),
+                    // Results section, a bad key.
+                    call("s", "submit_suggestion", {
+                        let mut n = note(
+                            "Wrong section and key",
+                            vec![parameter("f", "F", 1.0)],
+                            json!({"key": "Not Valid"}),
+                        );
+                        n["section"] = json!("results");
+                        n
+                    }),
+                    // Changes that do nothing / cannot resolve.
+                    call(
+                        "c",
+                        "submit_suggestion",
+                        note(
+                            "Edits an event that does not exist",
+                            vec![
+                                json!({"op": "replace", "target": {"event": 99999}, "path": "/name", "expect": "x", "value": "y"})
+                            ],
+                            json!({}),
+                        )
+                    ),
+                ]),
+            ),
+            reply(
+                "tool_use",
+                json!([
+                    call("ok", "submit_suggestion", good.clone()),
+                    // The same note again, then the same title reworded.
+                    call("dup1", "submit_suggestion", {
+                        let mut n = good.clone();
+                        n["paths"][0]["steps"][0]["changes"] =
+                            json!([parameter("zzz", "Other name", 5.0)]);
+                        n
+                    }),
+                    call("dup2", "submit_suggestion", {
+                        let mut n = good.clone();
+                        n["title"] = json!("Acme Bank: checking holds $12,345 ");
+                        n["title"] = json!("checking holds $12,345 at acme bank!");
+                        n
+                    }),
+                ]),
+            ),
+            reply("end_turn", json!([])),
+        ]);
+        let outcome = draft::run(
+            &client(&script),
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.stop, DraftStop::Finished);
+        let requests = script.requests();
+        let problems = |id: &str, n: usize| -> String {
+            let result = json_result(&requests, n, id);
+            assert_eq!(result["accepted"], false, "{id}: {result}");
+            result["problems"].to_string()
+        };
+        assert!(problems("k", 1).contains("add or a check note"));
+        assert!(problems("e", 1).contains("an add note cites where"));
+        let q = problems("q", 1);
+        assert!(q.contains("does not appear on page"), "{q}");
+        assert!(q.contains("a draft has no run"), "{q}");
+        assert!(q.contains("no document #5"), "{q}");
+        assert!(q.contains("no successful call nope"), "{q}");
+        let a = problems("a", 1);
+        assert!(a.contains("you have not asked a question"), "{a}");
+        assert!(a.contains("exactly one path"), "{a}");
+        assert!(a.contains("cannot be auto_add"), "{a}");
+        let s = problems("s", 1);
+        assert!(s.contains("no results section"), "{s}");
+        assert!(s.contains("key must be 1 to 32"), "{s}");
+        assert!(problems("c", 1).contains("unknown_target") || problems("c", 1).contains("event"));
+
+        let ok = json_result(&requests, 2, "ok");
+        assert_eq!(ok["accepted"], true, "{ok}");
+        assert_eq!(ok["state"], "open", "a note not auto_add stays open");
+        // Duplicates of the draft's own notes, by edits and by title.
+        assert!(problems("dup1", 2).contains("repeats a note already in the draft"));
+        assert!(problems("dup2", 2).contains("repeats a note already in the draft"));
+        assert_eq!(host.notes.lock().unwrap().len(), 1);
+        assert_eq!(outcome.transcript.usage.turns, 3);
+    }
+
+    #[tokio::test]
+    async fn only_three_questions_are_asked_in_all_and_they_must_be_well_formed() {
+        let host = FakeDraft::new();
+        let script = Script::new(vec![
+            reply(
+                "tool_use",
+                json!([
+                    call(
+                        "q1",
+                        "ask_user",
+                        json!({"questions": [
+                            {"key": "One", "prompt": "x", "answer_type": "choice", "options": [{"value": "a", "label": "A"}]},
+                            {"key": "two", "prompt": "Money?", "answer_type": "money", "options": [{"value": "a", "label": "A"}]},
+                            {"key": "three", "prompt": "Blocks a ghost", "answer_type": "text", "blocks": ["ghost"]},
+                        ]})
+                    ),
+                    call("q2", "ask_user", json!({"questions": []})),
+                    call("q3", "ask_user", json!({"questions": [1, 2, 3, 4]})),
+                ]),
+            ),
+            reply("end_turn", json!([])),
+        ]);
+        let outcome = draft::run(
+            &client(&script),
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        // Nothing valid was asked, so the model went on and finished.
+        assert_eq!(outcome.stop, DraftStop::Finished);
+        assert!(outcome.questions.is_empty());
+        let requests = script.requests();
+        let (q1, is_error) = result_for(&requests, 1, "q1");
+        assert!(is_error);
+        assert!(q1.contains("must be 1 to 32"), "{q1}");
+        assert!(q1.contains("two to six options"), "{q1}");
+        assert!(q1.contains("only a choice has options"), "{q1}");
+        assert!(q1.contains("not an open note of yours"), "{q1}");
+        assert!(result_for(&requests, 1, "q2").1);
+        assert!(result_for(&requests, 1, "q3").1);
+
+        // Already three asked: a fourth is refused.
+        let asked: Vec<DraftQuestion> = ["a", "b", "c"]
+            .into_iter()
+            .map(|k| DraftQuestion {
+                key: k.into(),
+                prompt: "?".into(),
+                answer_type: AnswerType::Text,
+                options: Vec::new(),
+                blocks: Vec::new(),
+                answer: Some(json!("yes")),
+            })
+            .collect();
+        let script = Script::new(vec![
+            reply(
+                "tool_use",
+                json!([call(
+                    "q4",
+                    "ask_user",
+                    json!({"questions": [
+                        {"key": "d", "prompt": "One more?", "answer_type": "text"}
+                    ]})
+                )]),
+            ),
+            reply("end_turn", json!([])),
+        ]);
+        let outcome = draft::run(
+            &client(&script),
+            &host,
+            &NoObserver,
+            input(asked),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.stop, DraftStop::Finished);
+        let (text, is_error) = result_for(&script.requests(), 1, "q4");
+        assert!(is_error && text.contains("at most 3 questions"), "{text}");
+    }
+
+    #[test]
+    fn answers_are_checked_against_their_question() {
+        let question = |answer_type, options: &[&str]| DraftQuestion {
+            key: "q".into(),
+            prompt: "?".into(),
+            answer_type,
+            options: options
+                .iter()
+                .map(|v| QuestionOption {
+                    value: (*v).into(),
+                    label: (*v).into(),
+                })
+                .collect(),
+            blocks: Vec::new(),
+            answer: None,
+        };
+        let choice = question(AnswerType::Choice, &["per-fund", "mix"]);
+        assert_eq!(validate_answer(&choice, &json!("mix")), Ok(json!("mix")));
+        assert!(validate_answer(&choice, &json!("other")).is_err());
+        assert!(validate_answer(&choice, &json!(3)).is_err());
+        let money = question(AnswerType::Money, &[]);
+        assert_eq!(validate_answer(&money, &json!(1200)), Ok(json!(1200.0)));
+        assert_eq!(
+            validate_answer(&money, &json!("$1,200.50")),
+            Ok(json!(1200.5))
+        );
+        assert!(validate_answer(&money, &json!(-5)).is_err());
+        assert!(validate_answer(&money, &json!("lots")).is_err());
+        let date = question(AnswerType::Date, &[]);
+        assert_eq!(
+            validate_answer(&date, &json!("2030-02-01")),
+            Ok(json!("2030-02-01"))
+        );
+        assert!(validate_answer(&date, &json!("2030-02-31")).is_err());
+        assert!(validate_answer(&date, &json!("soon")).is_err());
+        let text = question(AnswerType::Text, &[]);
+        assert_eq!(validate_answer(&text, &json!("  hi ")), Ok(json!("hi")));
+        assert!(validate_answer(&text, &json!("")).is_err());
+        assert!(validate_answer(&text, &json!("x".repeat(600))).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_scan_is_shown_to_the_model_and_kept_only_as_its_reading() {
+        let host = FakeDraft::new();
+        host.held
+            .lock()
+            .unwrap()
+            .insert(2, ("image/png".into(), vec![137, 80, 78, 71, 1, 2, 3]));
+        let script = Script::new(vec![
+            reply(
+                "tool_use",
+                json!([call("look", "read_document", json!({"id": 2}))]),
+            ),
+            reply(
+                "tool_use",
+                json!([call(
+                    "keep",
+                    "read_document",
+                    json!({"id": 2, "extraction": "Vanguard 401k balance $88,000.00 as of 2026-09-01"})
+                )]),
+            ),
+            reply(
+                "tool_use",
+                json!([call("note", "submit_suggestion", {
+                    let mut n = note(
+                        "The 401(k) holds $88,000",
+                        vec![parameter("k401", "401k balance", 88_000.0)],
+                        json!({}),
+                    );
+                    n["evidence"] = json!([{"ref": "document", "document_id": 2, "page": 1,
+                                                "excerpt": "401k balance $88,000.00"}]);
+                    n
+                })]),
+            ),
+            reply("end_turn", json!([])),
+        ]);
+        let mut with_scan = input(Vec::new());
+        with_scan.documents.push((2, None));
+        let outcome = draft::run(
+            &client(&script),
+            &host,
+            &NoObserver,
+            with_scan,
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.stop, DraftStop::Finished);
+        let requests = script.requests();
+        // The second request carries the image in the result of the first call.
+        let shown = &requests[1]["messages"][2]["content"][0]["content"];
+        let parts = shown.as_array().unwrap();
+        assert_eq!(parts[1]["type"], "image");
+        assert_eq!(parts[1]["source"]["media_type"], "image/png");
+        assert!(parts[1]["source"]["data"].as_str().unwrap().len() > 4);
+        assert!(parts[0]["text"].as_str().unwrap().contains("extraction"));
+        // The reading was stored, and a quote of it then checks out.
+        assert_eq!(host.extractions.lock().unwrap().len(), 1);
+        assert_eq!(json_result(&requests, 3, "note")["accepted"], true);
+        // Neither the image nor the reading is in the stored conversation.
+        let stored = serde_json::to_string(&outcome.transcript).unwrap();
+        assert!(!stored.contains("\"image\""), "{stored}");
+        assert!(
+            !stored.contains("Vanguard 401k balance $88,000.00 as of"),
+            "{stored}"
+        );
+    }
+
+    #[tokio::test]
+    async fn templates_profiles_and_simulations_are_served_and_budgeted() {
+        let host = FakeDraft::new();
+        let script = Script::new(vec![
+            reply(
+                "tool_use",
+                json!([
+                    call(
+                        "t",
+                        "expand_template",
+                        json!({
+                            "kind": "recurring_expense", "key_prefix": "rent-",
+                            "params": {"name": "Rent", "amount": 2400.0, "interval": "Monthly",
+                                       "from_account_id": 1, "start": {"kind": "Age", "years": 30}}
+                        })
+                    ),
+                    call(
+                        "bad",
+                        "expand_template",
+                        json!({"kind": "salary", "params": {"nope": 1}})
+                    ),
+                    call("f", "find_return_profile", json!({"ticker": "VTI"})),
+                    call("s1", "simulate_draft", json!({})),
+                    call(
+                        "s2",
+                        "simulate_draft",
+                        json!({"steps": [[parameter("p", "P", 1.0)]]})
+                    ),
+                ]),
+            ),
+            reply("end_turn", json!([])),
+        ]);
+        let mut settings = settings();
+        settings.max_previews = 1;
+        let client =
+            AiClient::new(settings, script.clone(), None).with_registry(draft::shared_tools());
+        let outcome = draft::run(
+            &client,
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.stop, DraftStop::Finished);
+        let requests = script.requests();
+        let expansion = result_for(&requests, 1, "t");
+        // Whatever the template lowers to, it is changes and their keys or a
+        // named problem with the parameters; never a crash.
+        assert!(!expansion.0.is_empty());
+        assert!(result_for(&requests, 1, "bad").1);
+        let profile = json_result(&requests, 1, "f");
+        assert_eq!(profile["asset_class"], "UsEquity");
+        assert_eq!(profile["source"], "history_preset");
+        assert_eq!(json_result(&requests, 1, "s1")["iterations"], 400);
+        let (text, is_error) = result_for(&requests, 1, "s2");
+        assert!(is_error && text.contains("budget"), "{text}");
+        assert_eq!(host.simulations.lock().unwrap().len(), 1);
+        assert_eq!(outcome.transcript.usage.previews, 1);
+    }
+
+    #[tokio::test]
+    async fn the_turn_budget_totals_the_whole_job_and_a_deleted_draft_stops_it() {
+        let host = FakeDraft::new();
+        let mut transcript = Transcript::default();
+        transcript.usage.turns = settings().max_turns;
+        let script = Script::new(vec![]);
+        let outcome = draft::run(
+            &client(&script),
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            transcript,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.stop, DraftStop::TurnLimit);
+        assert_eq!(outcome.segment_turns, 0);
+        assert!(script.requests().is_empty());
+
+        host.alive.store(false, Ordering::SeqCst);
+        let outcome = draft::run(
+            &client(&script),
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.stop, DraftStop::Cancelled);
+        assert!(script.requests().is_empty());
+
+        // A first request that fails is an error; nothing was drafted.
+        host.alive.store(true, Ordering::SeqCst);
+        let failing = Script::new(vec![Err(TransportError::Status {
+            status: 400,
+            error_type: None,
+            message: format!("bad request with {KEY}"),
+        })]);
+        let error = draft::run(
+            &client(&failing),
+            &host,
+            &NoObserver,
+            input(Vec::new()),
+            Transcript::default(),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(!error.to_string().contains(KEY), "{error}");
+    }
+
+    #[test]
+    fn the_drafting_prompt_and_tools_are_static_and_complete() {
+        let tools = draft::prompt::tools(&draft::shared_tools());
+        let tools = tools.as_array().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert_eq!(names.last(), Some(&"submit_suggestion"));
+        assert_eq!(
+            names.iter().filter(|n| **n == "ask_user").count(),
+            1,
+            "{names:?}"
+        );
+        let submit = tools.last().unwrap();
+        let kinds = &submit["input_schema"]["properties"]["kind"]["enum"];
+        assert_eq!(kinds, &json!(["add", "check"]));
+        for field in ["auto_add", "blocked_by", "column", "key", "replaces"] {
+            assert!(
+                submit["input_schema"]["properties"].get(field).is_some(),
+                "{field}"
+            );
+        }
+        let evidence =
+            &submit["input_schema"]["properties"]["evidence"]["items"]["properties"]["ref"]["enum"];
+        assert_eq!(
+            evidence,
+            &json!(["document", "description", "answer", "computed"])
+        );
+        // The declarations of what a draft writes beyond the review's bodies.
+        let extra = draft::prompt::extra_reference();
+        for needed in [
+            "TemplateRequest",
+            "ParameterBody",
+            "CreateProfile",
+            "CreateTaxConfig",
+            "UpdateScenario",
+        ] {
+            assert!(extra.contains(needed), "{needed}");
+        }
+        assert_eq!(extra, draft::prompt::extra_reference());
+        assert!(draft::prompt::SYSTEM_PROMPT.contains("at most three questions"));
+    }
+}

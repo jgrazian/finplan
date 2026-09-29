@@ -74,7 +74,7 @@ pub async fn build_with(
             hint = "set FINPLAN_OPENROUTER_API_KEY; reviews stay rules-only until then"
         );
     }
-    let review_ai = review_ai.map(api::review_ai::AiReviews::new);
+    let review_ai = review_ai.map(|client| api::review_ai::AiReviews::new(client, &config.draft));
     if let Some(reviews) = &review_ai {
         tracing::info!(
             event = "review_ai.enabled",
@@ -98,6 +98,7 @@ pub async fn build_with(
     runner::requeue_orphans(&db, &runs).await?;
     api::review_ai::recover(&db).await?;
     api::suggestion_chat::recover(&db).await?;
+    api::draft_agent::recover(&db).await?;
 
     let analyses = analysis::AnalysisJobs::new_with_telemetry(
         db.clone(),

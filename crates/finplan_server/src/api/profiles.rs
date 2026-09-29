@@ -93,7 +93,7 @@ impl AssetClass {
 
     /// Text that names no class reads as none rather than as an error: a column
     /// written by a newer build should leave an older one working.
-    fn parse(text: &str) -> Option<Self> {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|c| c.as_str() == text)
     }
 }

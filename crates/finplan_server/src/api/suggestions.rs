@@ -217,6 +217,18 @@ impl SuggestionPath {
     }
 }
 
+/// Where a note of a draft groups on the Review board (design 2c): the
+/// accounts and holdings, the events and parameters, or what the user still has
+/// to confirm. A hint from the drafting agent; null on every other note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum DraftColumn {
+    Portfolio,
+    Plan,
+    ToConfirm,
+}
+
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct Suggestion {
@@ -245,6 +257,18 @@ pub struct Suggestion {
     /// The note whose "Chat about this" thread the model wrote this one from
     /// (see `suggestion_chat`); null otherwise, or once that note is gone.
     pub parent_id: Option<i64>,
+    /// A draft note's own key, which a question's `blocks` names; null
+    /// otherwise.
+    pub note_key: Option<String>,
+    /// The keys of the drafting agent's questions this note still waits on.
+    /// While any is unanswered the note cannot be applied. Empty once they are
+    /// answered, and on every other note.
+    pub blocked_by: Vec<String>,
+    /// Where the note groups on a draft's Review board.
+    pub column: Option<DraftColumn>,
+    /// The drafting agent applied this note itself, as a plain fact read from a
+    /// document or answered by the user: it is `applied` and shows as "Added".
+    pub auto_added: bool,
 }
 
 /// A scenario's latest review: the run it read and the notes still standing
@@ -521,11 +545,12 @@ type Out<T> = Result<T, Failure>;
 const COLUMNS: &str = "s.id, s.scenario_id, s.run_id, s.source, s.rule, s.kind, s.section, \
                        s.title, s.reasoning, s.evidence_json, s.paths_json, \
                        s.applied_path, s.created_json, s.status, s.created_at, \
-                       s.resolved_at, s.parent_id";
+                       s.resolved_at, s.parent_id, s.note_key, s.blocked_by_json, \
+                       s.board_column, s.auto_added";
 
 /// Fixes first, reads last; ties in the order written.
-const ORDER: &str = "CASE s.kind WHEN 'fix' THEN 0 WHEN 'check' THEN 1 WHEN 'stress' THEN 2 \
-                     ELSE 3 END, s.id";
+const ORDER: &str = "CASE s.kind WHEN 'add' THEN 0 WHEN 'fix' THEN 1 WHEN 'check' THEN 2 \
+                     WHEN 'stress' THEN 3 ELSE 4 END, s.id";
 
 #[derive(sqlx::FromRow)]
 pub(super) struct SuggestionRow {
@@ -547,10 +572,14 @@ pub(super) struct SuggestionRow {
     created_at: String,
     resolved_at: Option<String>,
     parent_id: Option<i64>,
+    note_key: Option<String>,
+    blocked_by_json: String,
+    board_column: Option<String>,
+    auto_added: i64,
 }
 
 /// A unit enum's wire tag, as stored in its TEXT column.
-fn tag<T: Serialize>(value: &T) -> String {
+pub(super) fn tag<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
@@ -589,6 +618,10 @@ impl SuggestionRow {
             created_at: self.created_at,
             resolved_at: self.resolved_at,
             parent_id: self.parent_id,
+            note_key: self.note_key,
+            blocked_by: from_json(&self.blocked_by_json)?,
+            column: self.board_column.as_deref().map(untag).transpose()?,
+            auto_added: self.auto_added != 0,
         })
     }
 }
@@ -609,6 +642,18 @@ pub(super) struct NewSuggestion {
     pub review_job: Option<String>,
     /// The note a chat thread wrote it from (`suggestions.parent_id`).
     pub parent_id: Option<i64>,
+    /// What only the drafting agent's notes carry.
+    pub draft: DraftMeta,
+}
+
+/// The columns of a note that belong to the drafting agent; every other
+/// writer leaves them at their defaults.
+#[derive(Debug, Clone, Default)]
+pub(super) struct DraftMeta {
+    pub note_key: Option<String>,
+    pub blocked_by: Vec<String>,
+    pub column: Option<DraftColumn>,
+    pub auto_added: bool,
 }
 
 pub(super) async fn insert(
@@ -619,8 +664,9 @@ pub(super) async fn insert(
     let id = sqlx::query_scalar(
         "INSERT INTO suggestions
             (scenario_id, run_id, source, rule, kind, section, title, reasoning,
-             evidence_json, paths_json, fingerprint, review_job, parent_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) RETURNING id",
+             evidence_json, paths_json, fingerprint, review_job, parent_id,
+             note_key, blocked_by_json, board_column, auto_added)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) RETURNING id",
     )
     .bind(scenario_id)
     .bind(new.run_id)
@@ -635,6 +681,10 @@ pub(super) async fn insert(
     .bind(&new.fingerprint)
     .bind(&new.review_job)
     .bind(new.parent_id)
+    .bind(&new.draft.note_key)
+    .bind(to_json(&new.draft.blocked_by)?)
+    .bind(new.draft.column.as_ref().map(tag))
+    .bind(i64::from(new.draft.auto_added))
     .fetch_one(&mut *conn)
     .await?;
     Ok(id)
@@ -896,6 +946,7 @@ async fn review(
             fingerprint,
             review_job: None,
             parent_id: None,
+            draft: DraftMeta::default(),
         });
     }
 
@@ -1281,6 +1332,7 @@ async fn create(
         fingerprint,
         review_job: None,
         parent_id: None,
+        draft: DraftMeta::default(),
     };
     let mut conn = state.db.acquire().await?;
     let id = insert(&mut conn, scenario_id, &new).await?;
@@ -1537,7 +1589,7 @@ async fn store_check(db: &Db, id: i64, key: &str, check: SuggestionCheck) -> Api
 /// transaction; or, whole and before any step is applied, into a new copy of
 /// the plan. Once a path is started the others are closed. Nothing is run;
 /// the client starts the run.
-async fn apply(
+pub(super) async fn apply(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
@@ -1548,6 +1600,14 @@ async fn apply(
         return Err(
             ApiError::Conflict(format!("this suggestion is already {}", row.status)).into(),
         );
+    }
+    let waiting: Vec<String> = from_json(&row.blocked_by_json)?;
+    if !waiting.is_empty() {
+        return Err(ApiError::Conflict(format!(
+            "this note waits on your answer to: {}",
+            waiting.join(", ")
+        ))
+        .into());
     }
     let mut paths: Vec<SuggestionPath> = from_json(&row.paths_json)?;
     let p = path_index(&paths, &body.path)?;

@@ -38,6 +38,9 @@ use crate::compile::rows::ScenarioGraph;
 #[serde(rename_all = "snake_case")]
 #[ts(export, rename = "SuggestionKind")]
 pub enum Kind {
+    /// A draft's note: something to put in the plan (an account, an income, a
+    /// parameter), written by the drafting agent.
+    Add,
     /// Something in the plan is wrong, and the note says how to change it.
     Fix,
     /// An input that may be wrong; only the user knows.

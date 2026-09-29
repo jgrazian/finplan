@@ -4,4 +4,4 @@
  * What a note asks of the reader. Declared in severity order: the review
  * lists fixes first.
  */
-export type SuggestionKind = "fix" | "check" | "stress" | "read";
+export type SuggestionKind = "add" | "fix" | "check" | "stress" | "read";

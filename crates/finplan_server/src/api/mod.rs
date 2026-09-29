@@ -6,6 +6,7 @@ pub mod archives;
 pub mod assets;
 pub mod contact;
 pub mod documents;
+pub mod draft_agent;
 pub mod drafts;
 pub mod events;
 pub(crate) mod expression_refs;

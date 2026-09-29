@@ -144,6 +144,24 @@ impl ReviewContext {
         }
     }
 
+    /// A drafting session's context: no plan, run or existing notes, only
+    /// what its notes are checked against (see the `with_*` methods).
+    pub fn for_draft(text: String) -> Self {
+        Self {
+            run_id: 0,
+            text,
+            events: HashSet::new(),
+            accounts: HashSet::new(),
+            years: None,
+            dates: HashSet::new(),
+            existing: Vec::new(),
+            failure_profile: None,
+            documents: HashMap::new(),
+            answers: HashSet::new(),
+            description: None,
+        }
+    }
+
     /// Documents whose text a note may quote as `Evidence::Document`: each
     /// with its id and stored text (pages separated by form feeds), `None` for
     /// one with no text layer, whose excerpts cannot be checked.
@@ -485,7 +503,7 @@ fn describe(graph: &ScenarioGraph, d: &DistributionRow, depth: usize) -> String 
 
 // ── the plan ────────────────────────────────────────────────────────────────
 
-fn render_plan(out: &mut String, graph: &ScenarioGraph) {
+pub(super) fn render_plan(out: &mut String, graph: &ScenarioGraph) {
     let s = &graph.scenario;
     let birth_year = s.birth_date.as_deref().and_then(year_of);
     let start_year = year_of(&s.start_date);

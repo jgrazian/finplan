@@ -31,6 +31,7 @@
 pub mod chat;
 mod config;
 mod context;
+pub mod draft;
 mod prompt;
 pub mod tools;
 mod transport;
@@ -191,7 +192,8 @@ pub enum Stop {
     Unexpected { stop_reason: String },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Usage {
     /// Model requests made (retries not counted).
     pub turns: u32,
@@ -417,6 +419,24 @@ impl AiClient {
         self
     }
 
+    /// A client for the drafting agent: the same transport, key and model, with
+    /// the draft budget (turns, previews, output tokens), the ZDR routing the
+    /// draft settings ask for and the shared tools a draft is given.
+    pub fn for_drafts(&self, cfg: &DraftConfig) -> Self {
+        let mut settings = self.settings.clone();
+        settings.max_turns = cfg.max_turns;
+        settings.max_previews = cfg.max_previews;
+        settings.max_tokens = cfg.max_tokens;
+        Self {
+            settings,
+            transport: self.transport.clone(),
+            secret: self.secret.clone(),
+            zdr: cfg.require_zdr,
+            registry: draft::shared_tools(),
+            prices: tokio::sync::Mutex::new(None),
+        }
+    }
+
     /// This client's requests may only be served by zero-data-retention
     /// providers. Drafting clients (documents in the context) turn it on; the
     /// review client does not, so review routing is unchanged.
@@ -529,11 +549,28 @@ impl AiClient {
     }
 
     fn request(&self, messages: &[AnthropicMessage]) -> Result<Request, AiError> {
-        let settings = &self.settings;
         let mut reference = AnthropicSystemTextBlock::text(prompt::reference());
         // The static instructions stay cached whatever happens after them.
         reference.cache_control = Some(CacheControl::ephemeral());
+        self.request_with(
+            vec![
+                AnthropicSystemTextBlock::text(prompt::SYSTEM_PROMPT),
+                reference,
+            ],
+            tools(&self.registry),
+            messages,
+        )
+    }
 
+    /// One request with its own instructions and tools: the review's, or the
+    /// drafting agent's.
+    fn request_with(
+        &self,
+        system: Vec<AnthropicSystemTextBlock>,
+        tools: Vec<AnthropicTool>,
+        messages: &[AnthropicMessage],
+    ) -> Result<Request, AiError> {
+        let settings = &self.settings;
         let provider = transport::provider_preferences(self.zdr);
 
         let mut builder = Request::builder();
@@ -541,11 +578,8 @@ impl AiClient {
             .model(settings.model.as_str())
             .max_tokens(settings.max_tokens)
             .messages(with_breakpoint(messages))
-            .system(AnthropicSystemPrompt::Blocks(vec![
-                AnthropicSystemTextBlock::text(prompt::SYSTEM_PROMPT),
-                reference,
-            ]))
-            .tools(tools(&self.registry))
+            .system(AnthropicSystemPrompt::Blocks(system))
+            .tools(tools)
             .provider(provider);
         if settings.thinking {
             builder
@@ -560,7 +594,12 @@ impl AiClient {
 
 /// The tool definitions, typed from [`prompt::tools`].
 fn tools(registry: &Registry) -> Vec<AnthropicTool> {
-    prompt::tools(registry)
+    typed_tools(&prompt::tools(registry))
+}
+
+/// Tool definitions as JSON (`name`, `description`, `input_schema`), typed.
+fn typed_tools(definitions: &Value) -> Vec<AnthropicTool> {
+    definitions
         .as_array()
         .into_iter()
         .flatten()
@@ -947,6 +986,12 @@ impl Session<'_> {
                 format!("reasoning must be 1 to {MAX_REASONING} characters"),
             );
         }
+        if s.kind == Kind::Add {
+            problem(
+                "kind",
+                "add notes are for drafting a new plan; a review writes fix, check, stress or read notes".into(),
+            );
+        }
         let motive = s.motive;
         if motive.is_none() {
             problem(
@@ -1237,68 +1282,83 @@ impl Session<'_> {
                 }
                 finite(*value)
             }
-            Evidence::Document {
-                document_id,
-                page,
-                excerpt,
-            } => {
-                check_excerpt(excerpt)?;
-                let pages = self
-                    .context
-                    .documents
-                    .get(document_id)
-                    .ok_or_else(|| format!("no document #{document_id} in this session"))?;
-                let index = usize::try_from(*page)
-                    .ok()
-                    .filter(|p| (1..=pages.len().max(1)).contains(p))
-                    .ok_or_else(|| {
-                        format!(
-                            "document #{document_id} has {} page(s); page {page} is outside it",
-                            pages.len().max(1)
-                        )
-                    })?;
-                // A document with no text layer (a scan) has nothing to check against.
-                match pages.get(index - 1) {
-                    Some(text) if !text.trim().is_empty() => {
-                        if squash(text).contains(&squash(excerpt)) {
-                            Ok(())
-                        } else {
-                            Err(format!(
-                                "the excerpt does not appear on page {page} of document #{document_id}; quote the text exactly"
-                            ))
-                        }
-                    }
-                    _ => Ok(()),
-                }
-            }
-            Evidence::Answer { question_key } => self
-                .context
-                .answers
-                .contains(question_key)
-                .then_some(())
-                .ok_or_else(|| format!("the user has not answered a question `{question_key}`")),
-            Evidence::Description { excerpt } => {
-                check_excerpt(excerpt)?;
-                match &self.context.description {
-                    Some(text) if squash(text).contains(&squash(excerpt)) => Ok(()),
-                    Some(_) => Err(
-                        "the excerpt does not appear in the user's description; quote it exactly"
-                            .into(),
-                    ),
-                    None => Err("there is no user description in this session".into()),
-                }
-            }
-            Evidence::Computed { tool, call_id } => match self.computed.get(call_id) {
-                Some(call) if call.tool == *tool => Ok(()),
-                Some(call) => Err(format!(
-                    "call {call_id} was a call to {}, not {tool}",
-                    call.tool
-                )),
-                None => Err(format!(
-                    "no successful call {call_id} to {tool} in this session; cite the tool_use id of a call that returned a result"
-                )),
-            },
+            Evidence::Document { .. }
+            | Evidence::Answer { .. }
+            | Evidence::Description { .. }
+            | Evidence::Computed { .. } => check_source_evidence(self.context, &self.computed, e),
         }
+    }
+}
+
+/// The checks for evidence that names a source outside the run: an uploaded
+/// document, an answer, the user's description or a tool call of the session.
+/// Shared by the review loop and the drafting loop.
+fn check_source_evidence(
+    context: &ReviewContext,
+    computed: &HashMap<String, Computed>,
+    e: &Evidence,
+) -> Result<(), String> {
+    match e {
+        Evidence::Document {
+            document_id,
+            page,
+            excerpt,
+        } => {
+            check_excerpt(excerpt)?;
+            let pages = context
+                .documents
+                .get(document_id)
+                .ok_or_else(|| format!("no document #{document_id} in this session"))?;
+            let index = usize::try_from(*page)
+                .ok()
+                .filter(|p| (1..=pages.len().max(1)).contains(p))
+                .ok_or_else(|| {
+                    format!(
+                        "document #{document_id} has {} page(s); page {page} is outside it",
+                        pages.len().max(1)
+                    )
+                })?;
+            // A document with no text layer (a scan) has nothing to check against.
+            match pages.get(index - 1) {
+                Some(text) if !text.trim().is_empty() => {
+                    if squash(text).contains(&squash(excerpt)) {
+                        Ok(())
+                    } else {
+                        Err(format!(
+                            "the excerpt does not appear on page {page} of document #{document_id}; quote the text exactly"
+                        ))
+                    }
+                }
+                _ => Ok(()),
+            }
+        }
+        Evidence::Answer { question_key } => context
+            .answers
+            .contains(question_key)
+            .then_some(())
+            .ok_or_else(|| format!("the user has not answered a question `{question_key}`")),
+        Evidence::Description { excerpt } => {
+            check_excerpt(excerpt)?;
+            match &context.description {
+                Some(text) if squash(text).contains(&squash(excerpt)) => Ok(()),
+                Some(_) => Err(
+                    "the excerpt does not appear in the user's description; quote it exactly"
+                        .into(),
+                ),
+                None => Err("there is no user description in this session".into()),
+            }
+        }
+        Evidence::Computed { tool, call_id } => match computed.get(call_id) {
+            Some(call) if call.tool == *tool => Ok(()),
+            Some(call) => Err(format!(
+                "call {call_id} was a call to {}, not {tool}",
+                call.tool
+            )),
+            None => Err(format!(
+                "no successful call {call_id} to {tool} in this session; cite the tool_use id of a call that returned a result"
+            )),
+        },
+        _ => Ok(()),
     }
 }
 

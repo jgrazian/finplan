@@ -38,14 +38,15 @@ export const SECTIONS: ReadonlyArray<{ id: SuggestionSection; heading: string }>
 ];
 
 const KIND_LABEL: Record<SuggestionKind, string> = {
+  add: "Add",
   fix: "Fix",
   check: "Check",
   stress: "Stress",
   read: "Read",
 };
 
-/** Fix before check before stress before read: what needs acting on first. */
-const KIND_ORDER: Record<SuggestionKind, number> = { fix: 0, check: 1, stress: 2, read: 3 };
+/** Add (a draft's notes) before fix before check before stress before read: what needs acting on first. */
+const KIND_ORDER: Record<SuggestionKind, number> = { add: 0, fix: 1, check: 2, stress: 3, read: 4 };
 
 /**
  * The short topic after the kind in a card's kicker, per rule. A rule missing
@@ -368,6 +369,7 @@ export function actionsFor(
   const apply: CardAction = (path?.steps.length ?? 0) > 1 ? "apply-path" : "apply";
   const actions: CardAction[] = [];
   switch (suggestion.kind) {
+    case "add":
     case "fix":
       if (editable) actions.push(apply);
       break;

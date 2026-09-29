@@ -137,15 +137,19 @@ pub(crate) fn change_schema() -> Value {
         "properties": {
             "op": {"type": "string", "enum": ["replace", "add", "remove"]},
             "target": {
-                "type": "object",
-                "description": "Exactly one key: {\"event\": id} | {\"asset\": id} | {\"account\": id} | {\"new_event\": \"<key>\"} | {\"new_asset\": \"<key>\"} | {\"new_account\": \"<key>\"}",
+                "type": ["object", "string"],
+                "description": "Exactly one key: {\"event\": id} | {\"asset\": id} | {\"account\": id} | {\"parameter\": id} | {\"new_event\": \"<key>\"} | {\"new_asset\": \"<key>\"} | {\"new_account\": \"<key>\"} | {\"new_parameter\": \"<key>\"} | {\"new_return_profile\": \"<key>\"} | {\"new_tax_config\": \"<key>\"}. Drafts only: the bare string \"scenario\" edits the plan's own settings; the parameter and library targets are for drafts and the drafting reference.",
                 "properties": {
                     "event": {"type": "integer"},
                     "asset": {"type": "integer"},
                     "account": {"type": "integer"},
+                    "parameter": {"type": "integer"},
                     "new_event": {"type": "string"},
                     "new_asset": {"type": "string"},
-                    "new_account": {"type": "string"}
+                    "new_account": {"type": "string"},
+                    "new_parameter": {"type": "string"},
+                    "new_return_profile": {"type": "string"},
+                    "new_tax_config": {"type": "string"}
                 }
             },
             "path": {"type": "string", "description": "RFC 6901 pointer into the target's body; \"\" is the whole resource."},
@@ -156,7 +160,7 @@ pub(crate) fn change_schema() -> Value {
     })
 }
 
-fn evidence_schema() -> Value {
+pub(super) fn evidence_schema() -> Value {
     json!({
         "type": "array",
         "description": "Where the note's numbers come from.",
@@ -207,7 +211,7 @@ fn step_schema() -> Value {
     })
 }
 
-fn paths_schema() -> Value {
+pub(super) fn paths_schema() -> Value {
     json!({
         "type": "array",
         "description": "The courses of action, at most 4; empty for read notes, and for a check only with no_change_reason. Exactly one recommended when there are several.",

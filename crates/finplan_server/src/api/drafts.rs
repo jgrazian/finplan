@@ -17,9 +17,10 @@
 //! draft also removes its held originals (`documents::images`). Create & run
 //! deletes them too unless the draft's `retain_documents` is set.
 //!
-//! Later steps extend [`DraftStatus`] (documents, questions, blocked notes) and
-//! fill the draft through `apply_steps_sql`; this module owns only the
-//! lifecycle and the quota.
+//! The drafting agent (`draft_agent`) fills the draft: `POST /drafts/{id}/start`
+//! begins its job, `POST /drafts/{id}/answers` answers its questions, and
+//! [`DraftStatus`] is what the web polls meanwhile. This module owns the
+//! lifecycle, the quota and the status.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -28,6 +29,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use super::draft_agent::{self, DraftAnswers, StartDrafting};
 use super::runs::{self, Run};
 use super::scenarios::{SCENARIO_COLUMNS, Scenario};
 use crate::auth::session::CurrentUser;
@@ -38,24 +40,35 @@ use crate::error::{ApiError, ApiResult};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
+use crate::suggest::ai::draft::DraftQuestion;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/drafts", post(start))
         .route("/drafts/{id}", get(status).patch(update).delete(discard))
+        .route("/drafts/{id}/start", post(start_drafting))
+        .route("/drafts/{id}/answers", post(answer))
         .route("/drafts/{id}/create", post(create_and_run))
 }
 
-/// Where a draft stands. Only `ready` exists until the drafting agent lands;
-/// it will add states for a model still writing and one waiting on answers.
+/// Where a draft stands. A draft the agent was never started on is `ready`
+/// too: nothing is being written and nothing is being waited for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum DraftState {
+    /// The model is working.
+    Drafting,
+    /// The model asked its questions and waits for `POST /drafts/{id}/answers`.
+    AwaitingAnswers,
+    /// Finished (or stopped at a limit: see `progress`), or never started.
     Ready,
+    /// The job failed; `error` says why. Notes written before stay.
+    Failed,
 }
 
-/// What the draft holds so far, for the live "3 accounts, 6 events" line.
+/// What the draft holds so far, for the live "3 accounts, 6 events" line and
+/// 2c's "12 notes · 7 added · 3 to confirm".
 #[derive(Debug, Clone, Default, Serialize, sqlx::FromRow, TS)]
 #[ts(export)]
 pub struct DraftCounts {
@@ -65,6 +78,62 @@ pub struct DraftCounts {
     pub parameters: i64,
     /// Notes still open on the draft.
     pub open_suggestions: i64,
+    /// Every note of the draft that is still standing: added, open or
+    /// confirmed (dismissed ones are gone from the count).
+    pub notes: i64,
+    /// Notes applied to the draft, by the agent or by the user.
+    pub notes_added: i64,
+    /// Open notes in the `to_confirm` column.
+    pub notes_to_confirm: i64,
+}
+
+impl DraftCounts {
+    pub async fn load(db: &Db, scenario_id: i64) -> ApiResult<Self> {
+        Ok(sqlx::query_as(
+            "SELECT (SELECT count(*) FROM accounts WHERE scenario_id = ?1) AS accounts,
+                    (SELECT count(*) FROM assets WHERE scenario_id = ?1) AS assets,
+                    (SELECT count(*) FROM events WHERE scenario_id = ?1) AS events,
+                    (SELECT count(*) FROM named_parameters WHERE scenario_id = ?1) AS parameters,
+                    (SELECT count(*) FROM suggestions
+                      WHERE scenario_id = ?1 AND status = 'open') AS open_suggestions,
+                    (SELECT count(*) FROM suggestions
+                      WHERE scenario_id = ?1 AND status <> 'dismissed') AS notes,
+                    (SELECT count(*) FROM suggestions
+                      WHERE scenario_id = ?1 AND status = 'applied') AS notes_added,
+                    (SELECT count(*) FROM suggestions
+                      WHERE scenario_id = ?1 AND status = 'open'
+                        AND board_column = 'to_confirm') AS notes_to_confirm",
+        )
+        .bind(scenario_id)
+        .fetch_one(db)
+        .await?)
+    }
+}
+
+/// The agent's last whole-plan simulation of the draft as it stood: the
+/// "est. 81%" figure. Either the rates or, when the draft cannot run yet, what
+/// stops it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DraftEstimate {
+    pub success_rate: Option<f64>,
+    pub funding_success_rate: Option<f64>,
+    /// Simulated iterations behind the rates.
+    pub iterations: usize,
+    /// Why the draft could not be simulated, when it could not.
+    pub blocked: Option<String>,
+}
+
+/// An open note that waits on questions the person has not answered.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct BlockedNote {
+    pub id: i64,
+    /// The note's own key, which a question's `blocks` names.
+    pub key: Option<String>,
+    pub title: String,
+    /// Keys of the unanswered questions it waits on.
+    pub waiting_on: Vec<String>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -81,6 +150,23 @@ pub struct DraftStatus {
     /// instead of deleted (2a's retention choice).
     pub retain_documents: bool,
     pub document_count: i64,
+    /// What the agent is doing, or how it ended ("Drafting… 3 accounts, 6
+    /// events, 7 parameters so far"); null before it starts.
+    pub progress: Option<String>,
+    /// Why the job failed, in words for the person; null otherwise.
+    pub error: Option<String>,
+    /// Why the model stopped once it has: `finished`, `turn_limit`,
+    /// `max_tokens`, `suspended`, ...
+    pub stop: Option<String>,
+    /// The questions the agent is waiting on (state `awaiting_answers`):
+    /// at most three, each with its answer type and options.
+    pub questions: Vec<DraftQuestion>,
+    /// Questions already answered, with their answers.
+    pub answered: Vec<DraftQuestion>,
+    /// Open notes waiting on an unanswered question ("waiting on question 1").
+    pub blocked_notes: Vec<BlockedNote>,
+    /// The agent's last simulation of the draft, once it has run one.
+    pub estimate: Option<DraftEstimate>,
 }
 
 /// The body of `POST /drafts`, all of it optional.
@@ -146,6 +232,9 @@ async fn start(
     for old in replaced.iter().chain([&id]) {
         documents::images::discard_draft(&files, *old);
     }
+    for old in &replaced {
+        draft_agent::abort(&state, *old);
+    }
 
     state.telemetry.mutation(
         Resource::Scenario,
@@ -188,17 +277,7 @@ async fn load_status(state: &AppState, id: i64, user_id: &str) -> ApiResult<Draf
     .fetch_optional(&state.db)
     .await?
     .ok_or(ApiError::NotFound("draft"))?;
-    let counts: DraftCounts = sqlx::query_as(
-        "SELECT (SELECT count(*) FROM accounts WHERE scenario_id = ?1) AS accounts,
-                (SELECT count(*) FROM assets WHERE scenario_id = ?1) AS assets,
-                (SELECT count(*) FROM events WHERE scenario_id = ?1) AS events,
-                (SELECT count(*) FROM named_parameters WHERE scenario_id = ?1) AS parameters,
-                (SELECT count(*) FROM suggestions
-                  WHERE scenario_id = ?1 AND status = 'open') AS open_suggestions",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    let counts = DraftCounts::load(&state.db, id).await?;
     let expires_at: String = sqlx::query_scalar(
         "SELECT datetime(updated_at, '+' || ?2 || ' hours') FROM scenarios WHERE id = ?1",
     )
@@ -213,15 +292,94 @@ async fn load_status(state: &AppState, id: i64, user_id: &str) -> ApiResult<Draf
     .bind(id)
     .fetch_one(&state.db)
     .await?;
+    let job = draft_agent::load_job(&state.db, id).await?;
+    let (state_of, progress, error, stop, questions, estimate) = match &job {
+        None => (DraftState::Ready, None, None, None, Vec::new(), None),
+        Some(job) => (
+            match job.state.as_str() {
+                "drafting" => DraftState::Drafting,
+                "awaiting_answers" => DraftState::AwaitingAnswers,
+                "failed" => DraftState::Failed,
+                _ => DraftState::Ready,
+            },
+            job.progress.clone(),
+            job.error.clone(),
+            job.stop.clone(),
+            draft_agent::questions_of(job)?,
+            job.simulation_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str::<DraftEstimate>(json).ok()),
+        ),
+    };
+    let (answered, open): (Vec<DraftQuestion>, Vec<DraftQuestion>) =
+        questions.into_iter().partition(|q| !q.is_open());
+    let blocked_notes = blocked_notes(&state.db, id).await?;
     Ok(DraftStatus {
         id,
-        state: DraftState::Ready,
+        state: state_of,
         scenario,
         expires_at,
         counts,
         retain_documents: retain_documents != 0,
         document_count,
+        progress,
+        error,
+        stop,
+        questions: open,
+        answered,
+        blocked_notes,
+        estimate,
     })
+}
+
+/// The draft's open notes that still wait on questions.
+async fn blocked_notes(db: &Db, id: i64) -> ApiResult<Vec<BlockedNote>> {
+    let rows: Vec<(i64, Option<String>, String, String)> = sqlx::query_as(
+        "SELECT id, note_key, title, blocked_by_json FROM suggestions
+          WHERE scenario_id = ?1 AND status = 'open' AND blocked_by_json <> '[]'
+          ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, key, title, json)| BlockedNote {
+            id,
+            key,
+            title,
+            waiting_on: serde_json::from_str(&json).unwrap_or_default(),
+        })
+        .collect())
+}
+
+/// `POST /drafts/{id}/start` — hand the agent the person's description (and
+/// whatever documents are attached) and start it in the background. Answers
+/// with the status at once (`drafting`); poll `GET /drafts/{id}`.
+async fn start_drafting(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(body): Json<StartDrafting>,
+) -> ApiResult<Json<DraftStatus>> {
+    // A draft that is not the caller's, or is no longer a draft, is not found.
+    load_status(&state, id, &user.id).await?;
+    draft_agent::start(&state, &user, id, &body.description).await?;
+    Ok(Json(load_status(&state, id, &user.id).await?))
+}
+
+/// `POST /drafts/{id}/answers` — answer the agent's open questions, by key.
+/// Any subset may be sent; once none is left open the agent resumes
+/// (`drafting`) and the notes that waited on the answers are unblocked.
+async fn answer(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(body): Json<DraftAnswers>,
+) -> ApiResult<Json<DraftStatus>> {
+    load_status(&state, id, &user.id).await?;
+    draft_agent::answer(&state, &user, id, body.answers).await?;
+    Ok(Json(load_status(&state, id, &user.id).await?))
 }
 
 /// `PATCH /drafts/{id}` — change the draft's retention choice: whether its
@@ -273,6 +431,7 @@ async fn discard(
     if affected == 0 {
         return Err(ApiError::NotFound("draft"));
     }
+    draft_agent::abort(&state, id);
     documents::images::discard_draft(&documents::images::root(&state.config), id);
     state.telemetry.mutation(
         Resource::Scenario,
@@ -313,10 +472,32 @@ async fn create_and_run(
         Ok(_) | Err(ApiError::NotFound(_)) => return Err(ApiError::NotFound("draft")),
         Err(err) => return Err(err),
     };
+    // A model still writing would keep adding to the plan; open notes and
+    // unanswered questions are simply left out.
+    if draft_agent::load_job(&state.db, id)
+        .await?
+        .is_some_and(|job| job.state == "drafting")
+    {
+        return Err(ApiError::Conflict(
+            "the draft is still being written; wait for it to finish".into(),
+        ));
+    }
     compile::compile(&graph)?;
 
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     crate::billing::check_plan_slot(&mut tx, &user.id, &state.config, 1).await?;
+    // Under the write lock, so a job started in the meantime is not missed.
+    let drafting: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM draft_jobs WHERE scenario_id = ?1 AND state = 'drafting')",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if drafting {
+        return Err(ApiError::Conflict(
+            "the draft is still being written; wait for it to finish".into(),
+        ));
+    }
     let promoted = sqlx::query(
         "UPDATE scenarios SET status = 'active', updated_at = datetime('now')
           WHERE id = ?1 AND user_id = ?2 AND status = 'draft'",
@@ -343,7 +524,13 @@ async fn create_and_run(
         }
     };
     // The plan is made: its documents are deleted unless kept, and the held
-    // originals always are.
+    // originals always are. So is the agent's stored conversation, which
+    // quotes them.
+    draft_agent::abort(&state, id);
+    sqlx::query("DELETE FROM draft_jobs WHERE scenario_id = ?1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     documents::finish_draft(&state.db, &state.config, id).await?;
     let scenario: Scenario = sqlx::query_as(&format!(
         "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"

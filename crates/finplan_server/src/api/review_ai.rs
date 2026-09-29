@@ -38,8 +38,8 @@ use tracing::{Instrument, instrument::WithSubscriber};
 
 use super::preview;
 use super::suggestions::{
-    NewSuggestion, SuggestionCheck, SuggestionEstimate, SuggestionPath, SuggestionSource,
-    SuggestionStep, all_changes, fingerprint, insert,
+    DraftMeta, NewSuggestion, SuggestionCheck, SuggestionEstimate, SuggestionPath,
+    SuggestionSource, SuggestionStep, all_changes, fingerprint, insert,
 };
 use crate::auth::session::CurrentUser;
 use crate::compile::rows::ScenarioGraph;
@@ -69,6 +69,11 @@ pub struct AiReviews {
     /// scenario id -> its running pass
     running: Arc<Mutex<HashMap<i64, Running>>>,
     permits: Arc<Semaphore>,
+    /// The same model with the drafting agent's budget, tools and routing
+    /// (`api::draft_agent`).
+    draft_client: Arc<AiClient>,
+    /// draft (scenario id) -> its running drafting segment
+    draft_running: Arc<Mutex<HashMap<i64, Running>>>,
 }
 
 struct Running {
@@ -100,11 +105,56 @@ pub(super) fn new_job() -> String {
 }
 
 impl AiReviews {
-    pub fn new(client: Arc<AiClient>) -> Self {
+    pub fn new(client: Arc<AiClient>, draft: &crate::suggest::ai::DraftConfig) -> Self {
         Self {
+            draft_client: Arc::new(client.for_drafts(draft)),
             client,
             running: Arc::new(Mutex::new(HashMap::new())),
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_PASSES)),
+            draft_running: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// The drafting agent's client.
+    pub(super) fn draft_client(&self) -> &Arc<AiClient> {
+        &self.draft_client
+    }
+
+    /// Note `job`'s task as the draft's running segment, aborting the one it
+    /// replaces.
+    pub(super) fn track_draft(&self, scenario_id: i64, job: &str, abort: AbortHandle) {
+        let previous = self
+            .draft_running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                scenario_id,
+                Running {
+                    job: job.to_owned(),
+                    abort,
+                },
+            );
+        if let Some(previous) = previous {
+            previous.abort.abort();
+        }
+    }
+
+    pub(super) fn forget_draft(&self, scenario_id: i64, job: &str) {
+        let mut running = self.draft_running.lock().unwrap_or_else(|e| e.into_inner());
+        if running.get(&scenario_id).is_some_and(|r| r.job == job) {
+            running.remove(&scenario_id);
+        }
+    }
+
+    /// Stop the draft's running segment, if any.
+    pub(super) fn abort_draft(&self, scenario_id: i64) {
+        if let Some(running) = self
+            .draft_running
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&scenario_id)
+        {
+            running.abort.abort();
         }
     }
 
@@ -350,7 +400,7 @@ pub(super) fn pass_outcome(stop: &Stop) -> AiPassOutcome {
 /// Counts a pass once, with its wall time from taking a pass slot, when it
 /// is dropped: a pass aborted by a newer review never sets an outcome and
 /// counts as superseded; one that panicked counts as failed.
-struct PassEnd {
+pub(super) struct PassEnd {
     telemetry: Telemetry,
     model: String,
     started: Instant,
@@ -358,7 +408,7 @@ struct PassEnd {
 }
 
 impl PassEnd {
-    fn new(telemetry: &Telemetry, model: &str) -> Self {
+    pub(super) fn new(telemetry: &Telemetry, model: &str) -> Self {
         Self {
             telemetry: telemetry.clone(),
             model: model.to_owned(),
@@ -366,7 +416,7 @@ impl PassEnd {
             outcome: None,
         }
     }
-    fn set(&mut self, outcome: AiPassOutcome) {
+    pub(super) fn set(&mut self, outcome: AiPassOutcome) {
         self.outcome = Some(outcome);
     }
     fn elapsed_ms(&self) -> u64 {
@@ -600,6 +650,7 @@ pub(super) fn draft_suggestion(
         paths,
         review_job,
         parent_id,
+        draft: DraftMeta::default(),
     }
 }
 

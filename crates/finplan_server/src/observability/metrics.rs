@@ -435,6 +435,14 @@ impl Telemetry {
             AiTool::FinanceCalc,
             AiTool::SocialSecurity,
             AiTool::Taxes,
+            AiTool::AskUser,
+            AiTool::ReadDocument,
+            AiTool::ExpandTemplate,
+            AiTool::FindReturnProfile,
+            AiTool::SimulateDraft,
+            AiTool::SummarizeTransactions,
+            AiTool::MatchAccount,
+            AiTool::Reconcile,
         ] {
             drop(ai_tool_duration.get_or_create(&labels([("tool", tool.as_str())])));
         }
