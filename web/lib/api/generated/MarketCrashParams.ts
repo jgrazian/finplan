@@ -4,16 +4,18 @@ import type { When } from "./When";
 /**
  * A one-time market crash.
  */
-export type MarketCrashParams = { 
-/**
- * Defaults to "Market crash".
- */
-name?: string, 
-/**
- * Fraction every market asset's price falls by, between 0 and 1.
- */
-drop: number, when: When, 
-/**
- * Defaults to on.
- */
-enabled?: boolean, };
+export type MarketCrashParams = {
+  /**
+   * Defaults to "Market crash".
+   */
+  name?: string;
+  /**
+   * Fraction every market asset's price falls by, between 0 and 1.
+   */
+  drop: number;
+  when: When;
+  /**
+   * Defaults to on.
+   */
+  enabled?: boolean;
+};

@@ -4,13 +4,17 @@ import type { ReviewAiStatus } from "./ReviewAiStatus";
 /**
  * Where the review's model-written pass stands.
  */
-export type ReviewAi = { status: ReviewAiStatus, 
-/**
- * Why the model stopped (`finished`, `turn_limit`, `suggestion_limit`,
- * `max_tokens`, `refused`, `interrupted`, `unexpected`) once it has.
- */
-stop: string | null, 
-/**
- * A short public explanation when the pass failed or stopped early.
- */
-error: string | null, started_at: string, finished_at: string | null, };
+export type ReviewAi = {
+  status: ReviewAiStatus;
+  /**
+   * Why the model stopped (`finished`, `turn_limit`, `suggestion_limit`,
+   * `max_tokens`, `refused`, `interrupted`, `unexpected`) once it has.
+   */
+  stop: string | null;
+  /**
+   * A short public explanation when the pass failed or stopped early.
+   */
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+};

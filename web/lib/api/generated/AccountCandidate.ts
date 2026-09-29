@@ -3,8 +3,13 @@
 /**
  * A plan account a statement might belong to.
  */
-export type AccountCandidate = { account_id: number, name: string, 
-/**
- * 0 to 1.
- */
-score: number, reasons: Array<string>, plan_value: number, };
+export type AccountCandidate = {
+  account_id: number;
+  name: string;
+  /**
+   * 0 to 1.
+   */
+  score: number;
+  reasons: Array<string>;
+  plan_value: number;
+};

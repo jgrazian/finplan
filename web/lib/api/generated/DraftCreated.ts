@@ -2,14 +2,16 @@
 import type { Run } from "./Run";
 import type { Scenario } from "./Scenario";
 
-export type DraftCreated = { scenario: Scenario, 
-/**
- * Open notes `add_open` added on the way.
- */
-added: number, 
-/**
- * The queued run. A review starts, as for any plan, once it has
- * succeeded (`POST /scenarios/{id}/review`), because notes are written
- * against a finished run.
- */
-run: Run, };
+export type DraftCreated = {
+  scenario: Scenario;
+  /**
+   * Open notes `add_open` added on the way.
+   */
+  added: number;
+  /**
+   * The queued run. A review starts, as for any plan, once it has
+   * succeeded (`POST /scenarios/{id}/review`), because notes are written
+   * against a finished run.
+   */
+  run: Run;
+};

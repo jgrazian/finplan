@@ -9,39 +9,47 @@ import type { RealNetWorthSummary } from "./RealNetWorthSummary";
 import type { Stats } from "./Stats";
 import type { Warning } from "./Warning";
 
-export type Results = { run_id: number, scenario_id: number, stats: Stats, bands: Array<Band>, 
-/**
- * Null for historical runs; never inferred from stored representative paths.
- */
-real_net_worth: RealNetWorthSummary | null, 
-/**
- * False once a newer run in the scenario has succeeded. Only the newest
- * successful run keeps its paths, account series, cash flows, taxes,
- * warnings, real-dollar bands and ledger; an older run serves `stats`
- * and `real_net_worth.terminal`, and every per-path field is empty.
- */
-path_details: boolean, 
-/**
- * Actual run-local path ID shared by accounts, cash flows and ledger.
- * Empty when `path_details` is false.
- */
-series_id: string, 
-/**
- * Per-account decomposition of the path named by `series_percentile`.
- */
-account_series: Array<AccountSeries>, series_percentile: number | null, cash_flows: Array<CashFlow>, warnings: Array<Warning>, 
-/**
- * Cumulative inflation on the same path as `cash_flows`, one point per
- * plan year. Empty for a run stored before inflation was recorded.
- */
-inflation: Array<InflationPoint>, 
-/**
- * Per-year ledger index, for the years the ledger covers.
- */
-ledger_years: Array<LedgerYear>, 
-/**
- * When, where and how the iterations that failed the funding check
- * failed, over the whole run rather than the shown path. Kept for
- * superseded runs too. Null for runs stored before it was measured.
- */
-funding_diagnostics: FundingDiagnostics | null, };
+export type Results = {
+  run_id: number;
+  scenario_id: number;
+  stats: Stats;
+  bands: Array<Band>;
+  /**
+   * Null for historical runs; never inferred from stored representative paths.
+   */
+  real_net_worth: RealNetWorthSummary | null;
+  /**
+   * False once a newer run in the scenario has succeeded. Only the newest
+   * successful run keeps its paths, account series, cash flows, taxes,
+   * warnings, real-dollar bands and ledger; an older run serves `stats`
+   * and `real_net_worth.terminal`, and every per-path field is empty.
+   */
+  path_details: boolean;
+  /**
+   * Actual run-local path ID shared by accounts, cash flows and ledger.
+   * Empty when `path_details` is false.
+   */
+  series_id: string;
+  /**
+   * Per-account decomposition of the path named by `series_percentile`.
+   */
+  account_series: Array<AccountSeries>;
+  series_percentile: number | null;
+  cash_flows: Array<CashFlow>;
+  warnings: Array<Warning>;
+  /**
+   * Cumulative inflation on the same path as `cash_flows`, one point per
+   * plan year. Empty for a run stored before inflation was recorded.
+   */
+  inflation: Array<InflationPoint>;
+  /**
+   * Per-year ledger index, for the years the ledger covers.
+   */
+  ledger_years: Array<LedgerYear>;
+  /**
+   * When, where and how the iterations that failed the funding check
+   * failed, over the whole run rather than the shown path. Kept for
+   * superseded runs too. Null for runs stored before it was measured.
+   */
+  funding_diagnostics: FundingDiagnostics | null;
+};

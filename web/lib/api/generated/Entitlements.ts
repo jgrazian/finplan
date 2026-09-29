@@ -2,15 +2,25 @@
 import type { AccessMode } from "./AccessMode";
 import type { AiDrafts } from "./AiDrafts";
 
-export type Entitlements = { 
-/**
- * Full planning capabilities, including beta and self-hosted access.
- */
-pro: boolean, access_mode: AccessMode, hosted: boolean, goal_seeks_used_this_month: number, max_iterations: number, saved_plan_limit: number | null, goal_seeks_per_month: number | null, editable_scenario_id: number | null, annual_price_usd: number, monthly_price_usd: number, 
-/**
- * AI-guided drafts (`api::drafts`); null when the server has no review
- * model, so the web hides the option entirely. Filled in by
- * [`entitlements_for`], which knows whether a model is configured;
- * [`entitlements`] alone leaves it null.
- */
-ai_drafts: AiDrafts | null, };
+export type Entitlements = {
+  /**
+   * Full planning capabilities, including beta and self-hosted access.
+   */
+  pro: boolean;
+  access_mode: AccessMode;
+  hosted: boolean;
+  goal_seeks_used_this_month: number;
+  max_iterations: number;
+  saved_plan_limit: number | null;
+  goal_seeks_per_month: number | null;
+  editable_scenario_id: number | null;
+  annual_price_usd: number;
+  monthly_price_usd: number;
+  /**
+   * AI-guided drafts (`api::drafts`); null when the server has no review
+   * model, so the web hides the option entirely. Filled in by
+   * [`entitlements_for`], which knows whether a model is configured;
+   * [`entitlements`] alone leaves it null.
+   */
+  ai_drafts: AiDrafts | null;
+};

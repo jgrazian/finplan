@@ -5,12 +5,14 @@ import type { RowRef } from "./RowRef";
 /**
  * The part of a salary the employee defers into a 401(k).
  */
-export type Employee401k = { account_id: RowRef, 
-/**
- * Annual deferral, in today's dollars; at most the salary.
- */
-annual_amount: number, 
-/**
- * What each deferral buys; empty leaves it as cash in the account.
- */
-allocation: Array<Allocation>, };
+export type Employee401k = {
+  account_id: RowRef;
+  /**
+   * Annual deferral, in today's dollars; at most the salary.
+   */
+  annual_amount: number;
+  /**
+   * What each deferral buys; empty leaves it as cash in the account.
+   */
+  allocation: Array<Allocation>;
+};

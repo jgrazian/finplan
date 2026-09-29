@@ -12,4 +12,13 @@ import type { SocialSecurityParams } from "./SocialSecurityParams";
 /**
  * One template and its parameters, tagged by `kind`.
  */
-export type Template = { "kind": "salary" } & SalaryParams | { "kind": "employer_match" } & EmployerMatchParams | { "kind": "recurring_expense" } & RecurringExpenseParams | { "kind": "retirement" } & RetirementParams | { "kind": "home_purchase" } & HomePurchaseParams | { "kind": "social_security" } & SocialSecurityParams | { "kind": "market_crash" } & MarketCrashParams | { "kind": "large_expense" } & LargeExpenseParams | { "kind": "job_loss" } & JobLossParams;
+export type Template =
+  | { "kind": "salary" } & SalaryParams
+  | { "kind": "employer_match" } & EmployerMatchParams
+  | { "kind": "recurring_expense" } & RecurringExpenseParams
+  | { "kind": "retirement" } & RetirementParams
+  | { "kind": "home_purchase" } & HomePurchaseParams
+  | { "kind": "social_security" } & SocialSecurityParams
+  | { "kind": "market_crash" } & MarketCrashParams
+  | { "kind": "large_expense" } & LargeExpenseParams
+  | { "kind": "job_loss" } & JobLossParams;

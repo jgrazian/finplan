@@ -3,4 +3,4 @@
 /**
  * The body of `POST /drafts/{id}/messages`: a follow-up to a finished draft.
  */
-export type DraftMessage = { message: string, };
+export type DraftMessage = { message: string };

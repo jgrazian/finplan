@@ -3,4 +3,10 @@
 /**
  * What a `$new` key names, or an id field holds.
  */
-export type RefKind = "event" | "asset" | "account" | "parameter" | "return_profile" | "tax_config";
+export type RefKind =
+  | "event"
+  | "asset"
+  | "account"
+  | "parameter"
+  | "return_profile"
+  | "tax_config";

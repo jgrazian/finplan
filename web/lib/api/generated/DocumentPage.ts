@@ -3,8 +3,10 @@
 /**
  * One page of a document.
  */
-export type DocumentPage = { 
-/**
- * 1-based.
- */
-page: number, text: string, };
+export type DocumentPage = {
+  /**
+   * 1-based.
+   */
+  page: number;
+  text: string;
+};

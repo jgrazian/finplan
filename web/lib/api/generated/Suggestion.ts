@@ -7,48 +7,60 @@ import type { SuggestionSection } from "./SuggestionSection";
 import type { SuggestionSource } from "./SuggestionSource";
 import type { SuggestionStatus } from "./SuggestionStatus";
 
-export type Suggestion = { id: number, scenario_id: number, 
-/**
- * The run whose inputs and results the suggestion was written against;
- * null on a note written for a draft, which has no run yet.
- */
-run_id: number | null, source: SuggestionSource, 
-/**
- * The rule that wrote it; null for model-written suggestions.
- */
-rule: string | null, kind: SuggestionKind, section: SuggestionSection, title: string, reasoning: string, evidence: Array<Evidence>, 
-/**
- * The courses of action, in the author's order; empty on a read note.
- */
-paths: Array<SuggestionPath>, 
-/**
- * The path being followed, once any of its steps is applied; the other
- * paths are then closed. `status` turns `applied` when every step of it
- * is.
- */
-applied_path: string | null, status: SuggestionStatus, created_at: string, resolved_at: string | null, 
-/**
- * The note whose "Chat about this" thread the model wrote this one from
- * (see `suggestion_chat`); null otherwise, or once that note is gone.
- */
-parent_id: number | null, 
-/**
- * A draft note's own key, which a question's `blocks` names; null
- * otherwise.
- */
-note_key: string | null, 
-/**
- * The keys of the drafting agent's questions this note still waits on.
- * While any is unanswered the note cannot be applied. Empty once they are
- * answered, and on every other note.
- */
-blocked_by: Array<string>, 
-/**
- * Where the note groups on a draft's Review board.
- */
-column: DraftColumn | null, 
-/**
- * The drafting agent applied this note itself, as a plain fact read from a
- * document or answered by the user: it is `applied` and shows as "Added".
- */
-auto_added: boolean, };
+export type Suggestion = {
+  id: number;
+  scenario_id: number;
+  /**
+   * The run whose inputs and results the suggestion was written against;
+   * null on a note written for a draft, which has no run yet.
+   */
+  run_id: number | null;
+  source: SuggestionSource;
+  /**
+   * The rule that wrote it; null for model-written suggestions.
+   */
+  rule: string | null;
+  kind: SuggestionKind;
+  section: SuggestionSection;
+  title: string;
+  reasoning: string;
+  evidence: Array<Evidence>;
+  /**
+   * The courses of action, in the author's order; empty on a read note.
+   */
+  paths: Array<SuggestionPath>;
+  /**
+   * The path being followed, once any of its steps is applied; the other
+   * paths are then closed. `status` turns `applied` when every step of it
+   * is.
+   */
+  applied_path: string | null;
+  status: SuggestionStatus;
+  created_at: string;
+  resolved_at: string | null;
+  /**
+   * The note whose "Chat about this" thread the model wrote this one from
+   * (see `suggestion_chat`); null otherwise, or once that note is gone.
+   */
+  parent_id: number | null;
+  /**
+   * A draft note's own key, which a question's `blocks` names; null
+   * otherwise.
+   */
+  note_key: string | null;
+  /**
+   * The keys of the drafting agent's questions this note still waits on.
+   * While any is unanswered the note cannot be applied. Empty once they are
+   * answered, and on every other note.
+   */
+  blocked_by: Array<string>;
+  /**
+   * Where the note groups on a draft's Review board.
+   */
+  column: DraftColumn | null;
+  /**
+   * The drafting agent applied this note itself, as a plain fact read from a
+   * document or answered by the user: it is `applied` and shows as "Added".
+   */
+  auto_added: boolean;
+};

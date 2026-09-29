@@ -6,53 +6,58 @@ import type { DraftQuestion } from "./DraftQuestion";
 import type { DraftState } from "./DraftState";
 import type { Scenario } from "./Scenario";
 
-export type DraftStatus = { 
-/**
- * The draft's scenario id.
- */
-id: number, state: DraftState, scenario: Scenario, 
-/**
- * When the sweeper deletes the draft unless it is touched first.
- */
-expires_at: string, counts: DraftCounts, 
-/**
- * Whether the documents are kept with the plan once it is created,
- * instead of deleted (2a's retention choice).
- */
-retain_documents: boolean, document_count: number, 
-/**
- * What the agent is doing, or how it ended ("Drafting… 3 accounts, 6
- * events, 7 parameters so far"); null before it starts.
- */
-progress: string | null, 
-/**
- * Why the job failed, in words for the person; null otherwise.
- */
-error: string | null, 
-/**
- * Why the model stopped once it has: `finished`, `turn_limit`,
- * `max_tokens`, `suspended`, ...
- */
-stop: string | null, 
-/**
- * The questions the agent is waiting on (state `awaiting_answers`):
- * at most three, each with its answer type and options.
- */
-questions: Array<DraftQuestion>, 
-/**
- * Questions already answered, with their answers.
- */
-answered: Array<DraftQuestion>, 
-/**
- * Open notes waiting on an unanswered question ("waiting on question 1").
- */
-blocked_notes: Array<BlockedNote>, 
-/**
- * The agent's last simulation of the draft, once it has run one.
- */
-estimate: DraftEstimate | null, 
-/**
- * Follow-up messages the draft still takes once it is ready
- * (`POST /drafts/{id}/messages`).
- */
-follow_ups_left: number, };
+export type DraftStatus = {
+  /**
+   * The draft's scenario id.
+   */
+  id: number;
+  state: DraftState;
+  scenario: Scenario;
+  /**
+   * When the sweeper deletes the draft unless it is touched first.
+   */
+  expires_at: string;
+  counts: DraftCounts;
+  /**
+   * Whether the documents are kept with the plan once it is created,
+   * instead of deleted (2a's retention choice).
+   */
+  retain_documents: boolean;
+  document_count: number;
+  /**
+   * What the agent is doing, or how it ended ("Drafting… 3 accounts, 6
+   * events, 7 parameters so far"); null before it starts.
+   */
+  progress: string | null;
+  /**
+   * Why the job failed, in words for the person; null otherwise.
+   */
+  error: string | null;
+  /**
+   * Why the model stopped once it has: `finished`, `turn_limit`,
+   * `max_tokens`, `suspended`, ...
+   */
+  stop: string | null;
+  /**
+   * The questions the agent is waiting on (state `awaiting_answers`):
+   * at most three, each with its answer type and options.
+   */
+  questions: Array<DraftQuestion>;
+  /**
+   * Questions already answered, with their answers.
+   */
+  answered: Array<DraftQuestion>;
+  /**
+   * Open notes waiting on an unanswered question ("waiting on question 1").
+   */
+  blocked_notes: Array<BlockedNote>;
+  /**
+   * The agent's last simulation of the draft, once it has run one.
+   */
+  estimate: DraftEstimate | null;
+  /**
+   * Follow-up messages the draft still takes once it is ready
+   * (`POST /drafts/{id}/messages`).
+   */
+  follow_ups_left: number;
+};

@@ -4,21 +4,26 @@
  * What the draft holds so far, for the live "3 accounts, 6 events" line and
  * 2c's "12 notes · 7 added · 3 to confirm".
  */
-export type DraftCounts = { accounts: number, assets: number, events: number, parameters: number, 
-/**
- * Notes still open on the draft.
- */
-open_suggestions: number, 
-/**
- * Every note of the draft that is still standing: added, open or
- * confirmed (dismissed ones are gone from the count).
- */
-notes: number, 
-/**
- * Notes applied to the draft, by the agent or by the user.
- */
-notes_added: number, 
-/**
- * Open notes in the `to_confirm` column.
- */
-notes_to_confirm: number, };
+export type DraftCounts = {
+  accounts: number;
+  assets: number;
+  events: number;
+  parameters: number;
+  /**
+   * Notes still open on the draft.
+   */
+  open_suggestions: number;
+  /**
+   * Every note of the draft that is still standing: added, open or
+   * confirmed (dismissed ones are gone from the count).
+   */
+  notes: number;
+  /**
+   * Notes applied to the draft, by the agent or by the user.
+   */
+  notes_added: number;
+  /**
+   * Open notes in the `to_confirm` column.
+   */
+  notes_to_confirm: number;
+};

@@ -5,4 +5,4 @@ import type { CreatedKey } from "./CreatedKey";
 /**
  * The changes a template lowers to, and the keys they create.
  */
-export type Expansion = { changes: Array<Change>, keys: Array<CreatedKey>, };
+export type Expansion = { changes: Array<Change>; keys: Array<CreatedKey> };

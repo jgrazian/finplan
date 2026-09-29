@@ -5,4 +5,9 @@ import type { ContactTopic } from "./ContactTopic";
 /**
  * A receipt only: the submitted message is intentionally not echoed back.
  */
-export type ContactMessageReceipt = { id: number, topic: ContactTopic, status: ContactMessageStatus, created_at: string, };
+export type ContactMessageReceipt = {
+  id: number;
+  topic: ContactTopic;
+  status: ContactMessageStatus;
+  created_at: string;
+};

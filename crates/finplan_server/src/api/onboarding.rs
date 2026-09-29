@@ -1,13 +1,15 @@
 //! Guided setup writes the same account, position and event records as advanced editing.
+use crate::api::specs::Interval;
 use crate::observability::{EventFields, Operation, Resource};
 use crate::suggest::{
     Change, Created, apply_steps_sql,
     templates::{
         Allocation, Employee401k, RecurringExpenseParams, RowRef, SalaryParams, Template, When,
-        allocation_asset, bank_account, expand_template, investment_account, position,
+        allocation_asset, bank_account, expand_template, investment_account, parameter, position,
     },
 };
 use crate::{
+    api::parameters::ParameterValueSpec,
     auth::session::CurrentUser,
     compile::rows::ScenarioGraph,
     error::{ApiError, ApiResult},
@@ -123,9 +125,15 @@ fn validate(p: &SetupPlan) -> ApiResult<()> {
     }
     Ok(())
 }
+/// The parameters guided setup's events follow, so Analysis can vary them and
+/// the Plan tab edits each in one place.
+pub(crate) const RETIREMENT_AGE: &str = "Retirement age";
+pub(crate) const MONTHLY_SPENDING: &str = "Monthly spending";
+
 /// The plan a setup describes, as changes to the empty scenario row: accounts,
-/// the allocation assets and opening lots, then salary and spending events.
-/// The same builders back the drafting agent's templates.
+/// the allocation assets and opening lots, the parameters the answers set,
+/// then the salary and spending events, which follow them. The same
+/// builders back the drafting agent's templates.
 pub(crate) fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> ApiResult<Vec<Change>> {
     let cash_profile = RowRef::Id(p.cash_profile_id);
     let mut changes = vec![bank_account(
@@ -191,7 +199,32 @@ pub(crate) fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> ApiResult<V
         ));
     }
 
-    let age = || When::age(p.retirement_age);
+    // Created only when an event follows them, so Analysis offers exactly
+    // the inputs the plan uses.
+    let has_events = p.annual_income > 0. || p.annual_spending > 0. || p.retirement_spending > 0.;
+    if has_events {
+        changes.push(parameter(
+            "retirement_age",
+            RETIREMENT_AGE,
+            ParameterValueSpec::Age {
+                years: p.retirement_age,
+                months: 0,
+            },
+        ));
+    }
+    if p.annual_spending > 0. {
+        changes.push(parameter(
+            "monthly_spending",
+            MONTHLY_SPENDING,
+            ParameterValueSpec::Money {
+                value: p.annual_spending / 12.,
+            },
+        ));
+    }
+
+    let age = || When::AgeParameter {
+        parameter_id: RowRef::new("retirement_age"),
+    };
     let allocations: Vec<Allocation> = allocation
         .iter()
         .map(|(asset, fraction)| Allocation {
@@ -220,11 +253,12 @@ pub(crate) fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> ApiResult<V
             }),
         ));
     }
-    for (prefix, name, amount, sort_order, start, end) in [
+    for (prefix, name, amount, amount_parameter, sort_order, start, end) in [
         (
             "before_",
             "Spending before retirement",
             p.annual_spending,
+            Some(MONTHLY_SPENDING),
             1,
             None,
             Some(age()),
@@ -233,6 +267,7 @@ pub(crate) fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> ApiResult<V
             "after_",
             "Retirement spending",
             p.retirement_spending,
+            None,
             2,
             Some(age()),
             None,
@@ -245,6 +280,8 @@ pub(crate) fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> ApiResult<V
                     name: name.into(),
                     from_account_id: checking.clone(),
                     amount,
+                    amount_parameter: amount_parameter.map(Into::into),
+                    parameter_interval: amount_parameter.map(|_| Interval::Monthly),
                     interval: None,
                     inflation_adjusted: None,
                     start,
@@ -384,7 +421,7 @@ async fn create(
     .bind(id)
     .execute(&mut *tx)
     .await?;
-    let count: i64 = sqlx::query_scalar("SELECT 1 + (SELECT count(*) FROM accounts WHERE scenario_id = ?1) + (SELECT count(*) FROM assets WHERE scenario_id = ?1) + (SELECT count(*) FROM events WHERE scenario_id = ?1) + (SELECT count(*) FROM positions WHERE account_id IN (SELECT id FROM accounts WHERE scenario_id = ?1))")
+    let count: i64 = sqlx::query_scalar("SELECT 1 + (SELECT count(*) FROM accounts WHERE scenario_id = ?1) + (SELECT count(*) FROM assets WHERE scenario_id = ?1) + (SELECT count(*) FROM events WHERE scenario_id = ?1) + (SELECT count(*) FROM named_parameters WHERE scenario_id = ?1) + (SELECT count(*) FROM positions WHERE account_id IN (SELECT id FROM accounts WHERE scenario_id = ?1))")
         .bind(id).fetch_one(&mut *tx).await?;
     tx.commit().await?;
     state.telemetry.mutation(

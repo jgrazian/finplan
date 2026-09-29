@@ -3,12 +3,17 @@
 /**
  * A transaction well above what is usual for its category.
  */
-export type Outlier = { date: string, description: string, category: string, amount: number, 
-/**
- * The category's median transaction.
- */
-category_median: number, 
-/**
- * `amount / category_median`.
- */
-ratio: number, };
+export type Outlier = {
+  date: string;
+  description: string;
+  category: string;
+  amount: number;
+  /**
+   * The category's median transaction.
+   */
+  category_median: number;
+  /**
+   * `amount / category_median`.
+   */
+  ratio: number;
+};

@@ -21,6 +21,15 @@ export interface PreviewEvent {
   fresh?: boolean;
 }
 
+/** A named parameter the plan's events follow, which Analysis can vary. */
+export interface PreviewParameter {
+  name: string;
+  value: string;
+  /** The events that follow it, by name. */
+  usedBy: string;
+  fresh?: boolean;
+}
+
 // The net-worth bar's fills, in account order: cash, 401(k), other.
 const FILLS = ["var(--color-accent-300)", "var(--color-accent-600)", "var(--color-accent)"];
 
@@ -34,12 +43,14 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "
 export function SetupPreview({
   accounts,
   events,
+  parameters = [],
   pending,
   assumptions,
   blank,
 }: {
   accounts: PreviewAccount[];
   events: PreviewEvent[];
+  parameters?: PreviewParameter[];
   /** What later steps will add, in words. */
   pending: string[];
   assumptions?: ReadonlyArray<{ label: string; value: string }>;
@@ -176,6 +187,22 @@ export function SetupPreview({
               </div>
             ))}
           </div>
+
+          {parameters.length > 0 && (
+            <div>
+              <StatLabel>Parameters</StatLabel>
+              {parameters.map((parameter) => (
+                <div key={parameter.name} className="ns-crow">
+                  <span className="ns-mono">${parameter.name}</span>
+                  <span className="ns-mut" style={{ flex: 1 }}>
+                    {parameter.usedBy}
+                  </span>
+                  {parameter.fresh && <Tag tone="outline">just added</Tag>}
+                  <span style={{ textAlign: "right" }}>{parameter.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {assumptions && assumptions.length > 0 && (
             <div>

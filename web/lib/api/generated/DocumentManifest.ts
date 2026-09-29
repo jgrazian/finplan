@@ -6,16 +6,26 @@ import type { DocumentStatus } from "./DocumentStatus";
  * One line of the draft's document list: what the drafting agent's context
  * carries instead of the documents.
  */
-export type DocumentManifest = { id: number, kind: DocumentKind, filename: string, mime: string, pages: number, status: DocumentStatus, note: string | null, 
-/**
- * Size of the upload (the bytes themselves are not kept).
- */
-bytes: number, 
-/**
- * The start of the first page's (redacted) text.
- */
-snippet: string, retain: boolean, 
-/**
- * The one birth date found in it, `YYYY-MM-DD`.
- */
-birth_date_hint: string | null, created_at: string, };
+export type DocumentManifest = {
+  id: number;
+  kind: DocumentKind;
+  filename: string;
+  mime: string;
+  pages: number;
+  status: DocumentStatus;
+  note: string | null;
+  /**
+   * Size of the upload (the bytes themselves are not kept).
+   */
+  bytes: number;
+  /**
+   * The start of the first page's (redacted) text.
+   */
+  snippet: string;
+  retain: boolean;
+  /**
+   * The one birth date found in it, `YYYY-MM-DD`.
+   */
+  birth_date_hint: string | null;
+  created_at: string;
+};

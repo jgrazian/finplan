@@ -35,6 +35,7 @@ export function AccountScreen({
   onUserChange,
   onSignOut,
   onDeleted,
+  onScenarioDeleted,
   offline,
 }: {
   user: UserResponse;
@@ -43,6 +44,8 @@ export function AccountScreen({
   onSignOut: () => void;
   /** The account is gone: everything above this has to be torn down. */
   onDeleted: () => void;
+  /** One scenario was deleted from the Data list. */
+  onScenarioDeleted: (id: number) => void;
   /** Writes are being refused, so the forms close rather than lie. */
   offline?: boolean;
 }) {
@@ -102,6 +105,7 @@ export function AccountScreen({
             user={user}
             scenarios={scenarios}
             onDeleted={onDeleted}
+            onScenarioDeleted={onScenarioDeleted}
             readOnly={offline}
           />
         )}

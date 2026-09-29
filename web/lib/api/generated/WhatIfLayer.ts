@@ -3,4 +3,12 @@
 /**
  * One override on top of the plan.
  */
-export type WhatIfLayer = { "kind": "parameter", parameter_id: number, value: number, } | { "kind": "market-shock", age: number, drop: number, } | { "kind": "one-off", age: number, amount: number, account_id: number | null, };
+export type WhatIfLayer =
+  | { "kind": "parameter"; parameter_id: number; value: number }
+  | { "kind": "market-shock"; age: number; drop: number }
+  | {
+    "kind": "one-off";
+    age: number;
+    amount: number;
+    account_id: number | null;
+  };

@@ -20,6 +20,7 @@ use serde_json::{Map, Value, json};
 use ts_rs::TS;
 
 use super::{Change, ChangeOp, ChangeTarget, RefKind};
+use crate::api::parameters::ParameterValueSpec;
 use crate::api::specs::Interval;
 use crate::error::ApiError;
 
@@ -214,6 +215,19 @@ pub struct RecurringExpenseParams {
     pub from_account_id: RowRef,
     /// Per `interval`, in today's dollars unless `inflation_adjusted` is off.
     pub amount: f64,
+    /// A Money plan parameter (by name, without the `$`) holding the amount;
+    /// the expense then follows it instead of `amount`, which stays what the
+    /// expense comes to at the plan's start. The parameter must exist or be
+    /// created in the same batch.
+    #[serde(default)]
+    #[ts(optional)]
+    pub amount_parameter: Option<String>,
+    /// How often the parameter's amount is spent, when that differs from
+    /// `interval`: a monthly figure paid yearly is paid as 12 of it. Defaults
+    /// to `interval`.
+    #[serde(default)]
+    #[ts(optional)]
+    pub parameter_interval: Option<Interval>,
     /// Defaults to yearly.
     #[serde(default)]
     #[ts(optional)]
@@ -585,6 +599,34 @@ fn dollars(value: f64, inflate: bool) -> Value {
     }
 }
 
+/// `$name`, quoted when the name is not a bare identifier (`$"Monthly spending"`).
+fn parameter_ref(name: &str) -> String {
+    let mut chars = name.chars();
+    let bare = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || c == '_');
+    if bare {
+        format!("${name}")
+    } else {
+        format!("$\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+}
+
+fn expression(source: String) -> Value {
+    json!({"kind": "Expression", "source": source})
+}
+
+/// How many times a year something repeating at `interval` happens.
+fn per_year(interval: Interval) -> Option<f64> {
+    match interval {
+        Interval::Never => None,
+        Interval::Weekly => Some(52.),
+        Interval::BiWeekly => Some(26.),
+        Interval::Monthly => Some(12.),
+        Interval::Quarterly => Some(4.),
+        Interval::Yearly => Some(1.),
+    }
+}
+
 fn repeating(interval: Interval, start: Option<Value>, end: Option<Value>) -> Value {
     json!({
         "kind": "Repeating",
@@ -738,9 +780,7 @@ fn employer_match(out: &mut Builder, p: &EmployerMatchParams) -> Result<(), Temp
     // Dollars matched per dollar of salary.
     let factor = p.match_rate * employee.min(p.up_to_percent) / 100.;
     let scaled = |share: f64| match &p.salary_parameter {
-        Some(name) => {
-            json!({"kind": "Expression", "source": format!("${name} * {}", factor * share)})
-        }
+        Some(name) => expression(format!("{} * {}", parameter_ref(name), factor * share)),
         None => json!({
             "kind": "Scale",
             "factor": factor * share,
@@ -787,12 +827,33 @@ fn recurring_expense(
         return Err(TemplateError::new("a recurring expense repeats"));
     }
     let inflate = p.inflation_adjusted.unwrap_or(true);
+    // The amount as source over the parameter: `$x`, scaled when the parameter
+    // counts a different period than the expense repeats over.
+    let parameter = match &p.amount_parameter {
+        Some(name) => {
+            let mut source = parameter_ref(name);
+            let own = p.parameter_interval.unwrap_or(interval);
+            let (Some(own), Some(paid)) = (per_year(own), per_year(interval)) else {
+                return Err(TemplateError::new("a parameter_interval repeats"));
+            };
+            if own != paid {
+                source = format!("{source} * {}", own / paid);
+            }
+            Some(if inflate {
+                format!("inflation({source})")
+            } else {
+                source
+            })
+        }
+        None => None,
+    };
     let mut effects = Vec::new();
     if p.fund_from_investments {
-        effects.push(json!({
-            "kind": "Sweep",
-            "to_account_id": p.from_account_id.json(),
-            "amount": {
+        // The sweep's target is the paying account's cash, so `top_up` is the
+        // shortfall the fixed-amount tree spells out.
+        let shortfall = match &parameter {
+            Some(amount) => expression(format!("top_up({amount})")),
+            None => json!({
                 "kind": "Max",
                 "left": fixed(0.),
                 "right": {
@@ -800,7 +861,12 @@ fn recurring_expense(
                     "left": dollars(p.amount, inflate),
                     "right": {"kind": "AccountCashBalance", "account_id": p.from_account_id.json()},
                 },
-            },
+            }),
+        };
+        effects.push(json!({
+            "kind": "Sweep",
+            "to_account_id": p.from_account_id.json(),
+            "amount": shortfall,
             "sources": {
                 "mode": "Strategy",
                 "strategy": "TaxEfficientEarly",
@@ -815,7 +881,10 @@ fn recurring_expense(
     effects.push(json!({
         "kind": "Expense",
         "from_account_id": p.from_account_id.json(),
-        "amount": dollars(p.amount, inflate),
+        "amount": match parameter {
+            Some(amount) => expression(amount),
+            None => dollars(p.amount, inflate),
+        },
     }));
     let start = p.start.as_ref().map(When::trigger).transpose()?;
     let end = p.end.as_ref().map(When::trigger).transpose()?;
@@ -854,6 +923,8 @@ fn retirement(out: &mut Builder, p: &RetirementParams) -> Result<(), TemplateErr
                 name: named(&s.name, "Retirement spending")?,
                 from_account_id: s.from_account_id.clone(),
                 amount: s.annual_amount,
+                amount_parameter: None,
+                parameter_interval: None,
                 interval: None,
                 inflation_adjusted: None,
                 start: Some(p.retirement.clone()),
@@ -1097,6 +1168,15 @@ pub fn allocation_asset(
         body["sort_order"] = json!(sort_order);
     }
     add(ChangeTarget::NewAsset(key.into()), body)
+}
+
+/// A named plan parameter, which amounts can use as `$name` and schedules as
+/// an age or date.
+pub fn parameter(key: &str, name: &str, value: ParameterValueSpec) -> Change {
+    add(
+        ChangeTarget::NewParameter(key.into()),
+        json!({"name": name, "value": value}),
+    )
 }
 
 /// An opening lot, bought on the plan's start date.

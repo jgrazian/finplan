@@ -321,6 +321,37 @@ async fn a_match_can_follow_a_salary_parameter() {
 }
 
 #[tokio::test]
+async fn an_expense_can_follow_a_monthly_parameter() {
+    let f = Fixture::new().await;
+    let e = request(json!({
+        "kind": "recurring_expense", "name": "Living", "from_account_id": {"$new": "checking"},
+        "amount": 36000, "amount_parameter": "Monthly spending", "parameter_interval": "Monthly",
+        "fund_from_investments": true,
+    }))
+    .expand()
+    .unwrap();
+    let parameter = parameter(
+        "monthly",
+        "Monthly spending",
+        ParameterValueSpec::Money { value: 3000. },
+    );
+    f.apply(&[f.base(), vec![parameter], e.changes])
+        .await
+        .unwrap();
+    let g = f.graph().await;
+    let living = serde_json::to_value(event(&g, "Living")).unwrap();
+    assert_eq!(
+        living["effects"][0]["amount"]["source"],
+        "top_up(inflation($\"Monthly spending\" * 12))"
+    );
+    assert_eq!(
+        living["effects"][1]["amount"]["source"],
+        "inflation($\"Monthly spending\" * 12)"
+    );
+    crate::compile::compile(&g).expect("compiles");
+}
+
+#[tokio::test]
 async fn a_cash_home_purchase_makes_no_mortgage() {
     let f = Fixture::new().await;
     let h = request(json!({

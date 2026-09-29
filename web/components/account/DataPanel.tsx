@@ -9,6 +9,7 @@ import type { Scenario, UserResponse } from "@/lib/api/types";
 import { fmtPercent } from "@/lib/format";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { PanelNote } from "./chrome";
+import { DeleteScenarioDialog } from "@/components/scenario/DeleteScenarioDialog";
 import { DeleteAccountDialog } from "./DeleteAccountDialog";
 import { collectScenario, download, fileNameFor } from "./download";
 
@@ -26,15 +27,19 @@ export function DataPanel({
   user,
   scenarios,
   onDeleted,
+  onScenarioDeleted,
   readOnly,
 }: {
   user: UserResponse;
   scenarios: Scenario[];
   onDeleted: () => void;
+  /** One scenario was deleted from the list. */
+  onScenarioDeleted: (id: number) => void;
   /** No connection: exports still work, deletion cannot be offered. */
   readOnly?: boolean;
 }) {
   const [deleting, setDeleting] = useState(false);
+  const [deletingScenario, setDeletingScenario] = useState<Scenario>();
   const [exporting, setExporting] = useState<number | "all">();
   const exportJob = useSubmit();
 
@@ -88,6 +93,14 @@ export function DataPanel({
                     >
                       {exporting === scenario.id ? "…" : "Export JSON"}
                     </Button>
+                    <Button
+                      variant="ghost"
+                      disabled={readOnly}
+                      title={readOnly ? "No connection to the server." : undefined}
+                      onClick={() => setDeletingScenario(scenario)}
+                    >
+                      Delete…
+                    </Button>
                   </Td>
                 </tr>
               ))}
@@ -128,6 +141,17 @@ export function DataPanel({
           Delete account…
         </Button>
       </Blueprint>
+
+      {deletingScenario && (
+        <DeleteScenarioDialog
+          scenario={deletingScenario}
+          onClose={() => setDeletingScenario(undefined)}
+          onDeleted={(id) => {
+            setDeletingScenario(undefined);
+            onScenarioDeleted(id);
+          }}
+        />
+      )}
 
       {deleting && (
         <DeleteAccountDialog

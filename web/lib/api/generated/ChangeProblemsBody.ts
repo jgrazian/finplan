@@ -9,4 +9,8 @@ import type { StepProblems } from "./StepProblems";
  * by the path and step whose changes they concern (`by_step`). A problem's
  * `change` indexes that step's `changes`.
  */
-export type ChangeProblemsBody = { error: ErrorDetail, problems: Array<ChangeProblem>, by_step: Array<StepProblems>, };
+export type ChangeProblemsBody = {
+  error: ErrorDetail;
+  problems: Array<ChangeProblem>;
+  by_step: Array<StepProblems>;
+};

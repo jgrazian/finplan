@@ -2,4 +2,4 @@
 import type { Results } from "./Results";
 import type { RunInputs } from "./RunInputs";
 
-export type RunReport = { results: Results, inputs: RunInputs, };
+export type RunReport = { results: Results; inputs: RunInputs };

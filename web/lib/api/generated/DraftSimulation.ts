@@ -6,12 +6,14 @@ import type { PreviewStats } from "./PreviewStats";
  * A whole-plan, unpaired simulation of a draft: no base run, nothing to
  * compare against. Exactly one of `stats` and `blocked` is set.
  */
-export type DraftSimulation = { 
-/**
- * Simulations run; 0 when the plan was blocked.
- */
-iterations: number, 
-/**
- * Success and funding rates, final real net worth and funding diagnostics.
- */
-stats: PreviewStats | null, blocked: DraftBlocked | null, };
+export type DraftSimulation = {
+  /**
+   * Simulations run; 0 when the plan was blocked.
+   */
+  iterations: number;
+  /**
+   * Success and funding rates, final real net worth and funding diagnostics.
+   */
+  stats: PreviewStats | null;
+  blocked: DraftBlocked | null;
+};

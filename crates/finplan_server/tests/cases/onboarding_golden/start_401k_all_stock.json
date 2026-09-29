@@ -90,9 +90,8 @@
       "sort_order": 0,
       "trigger": {
         "end_condition": {
-          "kind": "Age",
-          "months": null,
-          "years": 65
+          "kind": "AgeParameter",
+          "parameter_id": "Retirement age"
         },
         "interval": "Yearly",
         "kind": "Repeating",
@@ -105,25 +104,8 @@
       "effects": [
         {
           "amount": {
-            "kind": "Max",
-            "left": {
-              "kind": "Fixed",
-              "value": 0.0
-            },
-            "right": {
-              "kind": "Sub",
-              "left": {
-                "inner": {
-                  "kind": "Fixed",
-                  "value": 40000.0
-                },
-                "kind": "InflationAdjusted"
-              },
-              "right": {
-                "account_id": "Checking",
-                "kind": "AccountCashBalance"
-              }
-            }
+            "kind": "Expression",
+            "source": "top_up(inflation($\"Monthly spending\" * 12))"
           },
           "amount_mode": "Net",
           "income_type": "TaxFree",
@@ -139,11 +121,8 @@
         },
         {
           "amount": {
-            "inner": {
-              "kind": "Fixed",
-              "value": 40000.0
-            },
-            "kind": "InflationAdjusted"
+            "kind": "Expression",
+            "source": "inflation($\"Monthly spending\" * 12)"
           },
           "from_account_id": "Checking",
           "kind": "Expense"
@@ -155,9 +134,8 @@
       "sort_order": 1,
       "trigger": {
         "end_condition": {
-          "kind": "Age",
-          "months": null,
-          "years": 65
+          "kind": "AgeParameter",
+          "parameter_id": "Retirement age"
         },
         "interval": "Yearly",
         "kind": "Repeating",
@@ -224,10 +202,46 @@
         "kind": "Repeating",
         "max_occurrences": null,
         "start_condition": {
-          "kind": "Age",
-          "months": null,
-          "years": 65
+          "kind": "AgeParameter",
+          "parameter_id": "Retirement age"
         }
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "name": "Retirement age",
+      "uses": [
+        {
+          "event_name": "Salary until retirement",
+          "location": "schedule"
+        },
+        {
+          "event_name": "Spending before retirement",
+          "location": "schedule"
+        },
+        {
+          "event_name": "Retirement spending",
+          "location": "schedule"
+        }
+      ],
+      "value": {
+        "kind": "Age",
+        "months": 0,
+        "years": 65
+      }
+    },
+    {
+      "name": "Monthly spending",
+      "uses": [
+        {
+          "event_name": "Spending before retirement",
+          "location": "effect amount"
+        }
+      ],
+      "value": {
+        "kind": "Money",
+        "value": 3500.0
       }
     }
   ],

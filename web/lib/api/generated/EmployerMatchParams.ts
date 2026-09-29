@@ -7,31 +7,37 @@ import type { When } from "./When";
  * An employer's 401(k) match: tax-free income into the account, a share of
  * salary.
  */
-export type EmployerMatchParams = { 
-/**
- * Defaults to "Employer 401(k) match".
- */
-name?: string, to_account_id: RowRef, 
-/**
- * Gross annual salary, in today's dollars.
- */
-salary: number, 
-/**
- * A plan parameter (by name, without the `$`) holding the salary; the
- * match then follows it instead of `salary`. The parameter must exist or
- * be created in the same batch.
- */
-salary_parameter?: string, 
-/**
- * Dollars of match per dollar contributed: 0.5 for "50% of the first 6%".
- */
-match_rate: number, 
-/**
- * The contribution the employer matches up to, in percent of salary.
- */
-up_to_percent: number, 
-/**
- * What the employee contributes, in percent of salary; defaults to
- * `up_to_percent`.
- */
-employee_percent?: number, allocation: Array<Allocation>, start?: When, end?: When, sort_order?: number, };
+export type EmployerMatchParams = {
+  /**
+   * Defaults to "Employer 401(k) match".
+   */
+  name?: string;
+  to_account_id: RowRef;
+  /**
+   * Gross annual salary, in today's dollars.
+   */
+  salary: number;
+  /**
+   * A plan parameter (by name, without the `$`) holding the salary; the
+   * match then follows it instead of `salary`. The parameter must exist or
+   * be created in the same batch.
+   */
+  salary_parameter?: string;
+  /**
+   * Dollars of match per dollar contributed: 0.5 for "50% of the first 6%".
+   */
+  match_rate: number;
+  /**
+   * The contribution the employer matches up to, in percent of salary.
+   */
+  up_to_percent: number;
+  /**
+   * What the employee contributes, in percent of salary; defaults to
+   * `up_to_percent`.
+   */
+  employee_percent?: number;
+  allocation: Array<Allocation>;
+  start?: When;
+  end?: When;
+  sort_order?: number;
+};

@@ -4,8 +4,10 @@ import type { RowRef } from "./RowRef";
 /**
  * A share of a contribution that buys one asset in the receiving account.
  */
-export type Allocation = { asset_id: RowRef, 
-/**
- * 0-1; the shares of one contribution add up to 1.
- */
-fraction: number, };
+export type Allocation = {
+  asset_id: RowRef;
+  /**
+   * 0-1; the shares of one contribution add up to 1.
+   */
+  fraction: number;
+};

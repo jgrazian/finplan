@@ -7,27 +7,30 @@ import type { SuggestionStep } from "./SuggestionStep";
  * One course of action: ordered steps, and what all of them together are
  * expected (`estimate`) or simulated (`check`) to do.
  */
-export type SuggestionPath = { 
-/**
- * Unique within the suggestion: 1-32 of `a-z`, `0-9`, `-`.
- */
-key: string, label: string, 
-/**
- * Why this path rather than the others; null when the note's own
- * reasoning covers it.
- */
-reasoning: string | null, 
-/**
- * At most one path is; with none, clients treat the first as default.
- */
-recommended: boolean, 
-/**
- * 1 to [`MAX_STEPS`], in the order they apply.
- */
-steps: Array<SuggestionStep>, estimate: SuggestionEstimate | null, 
-/**
- * The last preview of every step together. A check from an older shape
- * of the stats is dropped when read, not fatal: previewing again
- * rewrites it.
- */
-check: SuggestionCheck | null, };
+export type SuggestionPath = {
+  /**
+   * Unique within the suggestion: 1-32 of `a-z`, `0-9`, `-`.
+   */
+  key: string;
+  label: string;
+  /**
+   * Why this path rather than the others; null when the note's own
+   * reasoning covers it.
+   */
+  reasoning: string | null;
+  /**
+   * At most one path is; with none, clients treat the first as default.
+   */
+  recommended: boolean;
+  /**
+   * 1 to [`MAX_STEPS`], in the order they apply.
+   */
+  steps: Array<SuggestionStep>;
+  estimate: SuggestionEstimate | null;
+  /**
+   * The last preview of every step together. A check from an older shape
+   * of the stats is dropped when read, not fatal: previewing again
+   * rewrites it.
+   */
+  check: SuggestionCheck | null;
+};

@@ -2,4 +2,9 @@
 import type { AssetClass } from "./AssetClass";
 import type { DistributionSpec } from "./DistributionSpec";
 
-export type CreateProfile = { name: string, description?: string | null, asset_class?: AssetClass | null, distribution: DistributionSpec, };
+export type CreateProfile = {
+  name: string;
+  description?: string | null;
+  asset_class?: AssetClass | null;
+  distribution: DistributionSpec;
+};

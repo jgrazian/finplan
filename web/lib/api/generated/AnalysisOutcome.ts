@@ -8,4 +8,8 @@ import type { WhatIfOutcome } from "./WhatIfOutcome";
  * The results of whichever analysis was asked for, tagged so the client can
  * narrow on `kind` rather than on which field happens to be present.
  */
-export type AnalysisOutcome = { "kind": "sweep" } & SweepResults | { "kind": "sensitivity" } & SensitivityResults | { "kind": "solve" } & SolveOutcome | { "kind": "what-if" } & WhatIfOutcome;
+export type AnalysisOutcome =
+  | { "kind": "sweep" } & SweepResults
+  | { "kind": "sensitivity" } & SensitivityResults
+  | { "kind": "solve" } & SolveOutcome
+  | { "kind": "what-if" } & WhatIfOutcome;

@@ -6,13 +6,86 @@ import type { IncomeType } from "./IncomeType";
 import type { LotMethod } from "./LotMethod";
 import type { WithdrawalSourcesSpec } from "./WithdrawalSourcesSpec";
 
-export type EffectSpec = { "kind": "Income", to_account_id: number, amount: AmountSpec, amount_mode: AmountMode, income_type: IncomeType, } | { "kind": "Expense", from_account_id: number, amount: AmountSpec, } | { "kind": "AssetPurchase", from_account_id: number, to_account_id: number, asset_id: number, amount: AmountSpec, } | { "kind": "AssetSale", from_account_id: number, asset_id: number | null, amount: AmountSpec, amount_mode: AmountMode, lot_method: LotMethod, } | { "kind": "Sweep", to_account_id: number, amount: AmountSpec, sources: WithdrawalSourcesSpec | null, amount_mode: AmountMode, lot_method: LotMethod, income_type: IncomeType, } | { "kind": "AdjustBalance", account_id: number, amount: AmountSpec, } | { "kind": "CashTransfer", from_account_id: number, to_account_id: number, amount: AmountSpec, } | { "kind": "TriggerEvent", target_event_id: number, } | { "kind": "PauseEvent", target_event_id: number, } | { "kind": "ResumeEvent", target_event_id: number, } | { "kind": "TerminateEvent", target_event_id: number, } | { "kind": "DeleteAccount", account_id: number, } | { "kind": "ApplyRmd", to_account_id: number, lot_method: LotMethod, } | { "kind": "RsuVesting", to_account_id: number, asset_id: number, units: number, sell_to_cover: boolean, lot_method: LotMethod, } | { "kind": "Random", probability: number, on_true: EffectSpec, on_false: EffectSpec | null, } | { "kind": "BuyProperty", property_account_id: number, from_account_id: number, price: AmountSpec, financing: FinancingSpec | null, } | { "kind": "SellProperty", property_account_id: number, to_account_id: number, 
-/**
- * Share of the sale price lost to fees and closing costs, 0–1.
- */
-selling_cost_rate: number, 
-/**
- * Gain excluded from tax: 250000 single, 500000 joint, 0 if not a
- * primary residence.
- */
-gain_exclusion: number, payoff_account_id: number | null, } | { "kind": "MarketShock", drop: number, };
+export type EffectSpec =
+  | {
+    "kind": "Income";
+    to_account_id: number;
+    amount: AmountSpec;
+    amount_mode: AmountMode;
+    income_type: IncomeType;
+  }
+  | { "kind": "Expense"; from_account_id: number; amount: AmountSpec }
+  | {
+    "kind": "AssetPurchase";
+    from_account_id: number;
+    to_account_id: number;
+    asset_id: number;
+    amount: AmountSpec;
+  }
+  | {
+    "kind": "AssetSale";
+    from_account_id: number;
+    asset_id: number | null;
+    amount: AmountSpec;
+    amount_mode: AmountMode;
+    lot_method: LotMethod;
+  }
+  | {
+    "kind": "Sweep";
+    to_account_id: number;
+    amount: AmountSpec;
+    sources: WithdrawalSourcesSpec | null;
+    amount_mode: AmountMode;
+    lot_method: LotMethod;
+    income_type: IncomeType;
+  }
+  | { "kind": "AdjustBalance"; account_id: number; amount: AmountSpec }
+  | {
+    "kind": "CashTransfer";
+    from_account_id: number;
+    to_account_id: number;
+    amount: AmountSpec;
+  }
+  | { "kind": "TriggerEvent"; target_event_id: number }
+  | { "kind": "PauseEvent"; target_event_id: number }
+  | { "kind": "ResumeEvent"; target_event_id: number }
+  | { "kind": "TerminateEvent"; target_event_id: number }
+  | { "kind": "DeleteAccount"; account_id: number }
+  | { "kind": "ApplyRmd"; to_account_id: number; lot_method: LotMethod }
+  | {
+    "kind": "RsuVesting";
+    to_account_id: number;
+    asset_id: number;
+    units: number;
+    sell_to_cover: boolean;
+    lot_method: LotMethod;
+  }
+  | {
+    "kind": "Random";
+    probability: number;
+    on_true: EffectSpec;
+    on_false: EffectSpec | null;
+  }
+  | {
+    "kind": "BuyProperty";
+    property_account_id: number;
+    from_account_id: number;
+    price: AmountSpec;
+    financing: FinancingSpec | null;
+  }
+  | {
+    "kind": "SellProperty";
+    property_account_id: number;
+    to_account_id: number;
+    /**
+     * Share of the sale price lost to fees and closing costs, 0–1.
+     */
+    selling_cost_rate: number;
+    /**
+     * Gain excluded from tax: 250000 single, 500000 joint, 0 if not a
+     * primary residence.
+     */
+    gain_exclusion: number;
+    payoff_account_id: number | null;
+  }
+  | { "kind": "MarketShock"; drop: number };

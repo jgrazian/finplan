@@ -4,4 +4,8 @@
  * What to optimise for. Named rather than free-form: a client cannot ask for
  * an objective the solver has no way to evaluate.
  */
-export type ObjectiveRequest = "max-parameter" | "min-parameter" | "max-median-net-worth" | "max-floor-net-worth";
+export type ObjectiveRequest =
+  | "max-parameter"
+  | "min-parameter"
+  | "max-median-net-worth"
+  | "max-floor-net-worth";

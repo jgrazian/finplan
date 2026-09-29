@@ -3,16 +3,20 @@
 /**
  * What a user may do with AI-guided drafts right now.
  */
-export type AiDrafts = { 
-/**
- * The user can start a draft: quota remains and a plan slot is free.
- */
-enabled: boolean, 
-/**
- * Drafts left this calendar month (UTC).
- */
-remaining: number, 
-/**
- * Drafts the tier gets each calendar month, for "1 of 2 left".
- */
-per_month: number, max_files: number, max_bytes: number, max_pages: number, };
+export type AiDrafts = {
+  /**
+   * The user can start a draft: quota remains and a plan slot is free.
+   */
+  enabled: boolean;
+  /**
+   * Drafts left this calendar month (UTC).
+   */
+  remaining: number;
+  /**
+   * Drafts the tier gets each calendar month, for "1 of 2 left".
+   */
+  per_month: number;
+  max_files: number;
+  max_bytes: number;
+  max_pages: number;
+};

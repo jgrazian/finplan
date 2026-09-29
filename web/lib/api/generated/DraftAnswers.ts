@@ -5,10 +5,12 @@
  * answers with an option's `value`, money with a number (or "$1,200"), a date
  * with `YYYY-MM-DD`, text with a string.
  */
-export type DraftAnswers = { answers: Record<string, string | number>, 
-/**
- * Anything else the person wrote with their answers ("Answer, or tell me
- * more"). Only with answers that leave no question open, since that is
- * when the agent resumes and reads it.
- */
-message?: string, };
+export type DraftAnswers = {
+  answers: Record<string, string | number>;
+  /**
+   * Anything else the person wrote with their answers ("Answer, or tell me
+   * more"). Only with answers that leave no question open, since that is
+   * when the agent resumes and reads it.
+   */
+  message?: string;
+};

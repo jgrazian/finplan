@@ -7,16 +7,21 @@ import type { When } from "./When";
  * Salary paid into a bank account, optionally with a pre-tax employee
  * contribution to a 401(k) taken out of it.
  */
-export type SalaryParams = { 
-/**
- * Defaults to "Salary".
- */
-name?: string, to_account_id: RowRef, 
-/**
- * Gross annual pay, in today's dollars.
- */
-annual_amount: number, start?: When, 
-/**
- * Usually the retirement age.
- */
-end?: When, employee_401k?: Employee401k, sort_order?: number, };
+export type SalaryParams = {
+  /**
+   * Defaults to "Salary".
+   */
+  name?: string;
+  to_account_id: RowRef;
+  /**
+   * Gross annual pay, in today's dollars.
+   */
+  annual_amount: number;
+  start?: When;
+  /**
+   * Usually the retirement age.
+   */
+  end?: When;
+  employee_401k?: Employee401k;
+  sort_order?: number;
+};

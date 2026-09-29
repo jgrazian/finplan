@@ -10,6 +10,7 @@ import {
   eventProblem,
   toEventBody,
 } from "@/components/plan";
+import { DeleteScenarioDialog } from "@/components/scenario/DeleteScenarioDialog";
 import { Button, Dialog, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { Event as ApiEvent, EventBody, UpdateScenario } from "@/lib/api/types";
@@ -69,6 +70,7 @@ export function PlanScreen({
   offline,
   reviewNotes,
   onOpenReview,
+  onScenarioDeleted,
 }: {
   scenarioId: number;
   params: ScenarioParams;
@@ -82,7 +84,10 @@ export function PlanScreen({
   /** Open review notes that edit each event, by server id. */
   reviewNotes?: ReadonlyMap<number, number>;
   onOpenReview?: () => void;
+  /** The scenario itself was deleted from its strip. */
+  onScenarioDeleted?: (id: number) => void;
 }) {
+  const [deletingScenario, setDeletingScenario] = useState(false);
   const [savedAt, setSavedAt] = useState<Map<number, number>>(new Map());
   const [lastEventId, setLastEventId] = useState<string>();
   const editing = useSubmit();
@@ -312,6 +317,7 @@ export function PlanScreen({
         params={params}
         assumptions={assumptions}
         onChange={saveParams}
+        onDelete={onScenarioDeleted && (() => setDeletingScenario(true))}
         offline={offline}
       />
 
@@ -413,6 +419,14 @@ export function PlanScreen({
         selectedId={railMode === "events" ? selected?.id ?? "" : ""}
         onSelect={selectEvent}
       />}
+
+      {deletingScenario && onScenarioDeleted && (
+        <DeleteScenarioDialog
+          scenario={{ id: scenarioId, name: params.name }}
+          onClose={() => setDeletingScenario(false)}
+          onDeleted={onScenarioDeleted}
+        />
+      )}
 
       {deleting && (
         <Dialog

@@ -5,17 +5,21 @@ import type { QuestionOption } from "./QuestionOption";
 /**
  * One of the agent's questions, and the person's answer once given.
  */
-export type DraftQuestion = { key: string, prompt: string, answer_type: AnswerType, 
-/**
- * The choices, for a `choice` question.
- */
-options: Array<QuestionOption>, 
-/**
- * Keys of notes that wait on this question.
- */
-blocks: Array<string>, 
-/**
- * The answer once given: an option's value, a number of dollars, a date
- * or text. Null while the question is open.
- */
-answer: string | number | null, };
+export type DraftQuestion = {
+  key: string;
+  prompt: string;
+  answer_type: AnswerType;
+  /**
+   * The choices, for a `choice` question.
+   */
+  options: Array<QuestionOption>;
+  /**
+   * Keys of notes that wait on this question.
+   */
+  blocks: Array<string>;
+  /**
+   * The answer once given: an option's value, a number of dollars, a date
+   * or text. Null while the question is open.
+   */
+  answer: string | number | null;
+};

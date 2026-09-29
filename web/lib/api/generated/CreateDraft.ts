@@ -3,13 +3,14 @@
 /**
  * The body of `POST /drafts/{id}/create`, all of it optional.
  */
-export type CreateDraft = { 
-/**
- * Add the draft's open `add` notes first, each by its recommended path,
- * in the order they were written. Notes waiting on an unanswered
- * question and check notes (To confirm) are left out. If any cannot be
- * added the draft stays a draft (422, naming them), so nothing is
- * dropped without the person knowing; false creates from what the
- * draft already holds.
- */
-add_open?: boolean, };
+export type CreateDraft = {
+  /**
+   * Add the draft's open `add` notes first, each by its recommended path,
+   * in the order they were written. Notes waiting on an unanswered
+   * question and check notes (To confirm) are left out. If any cannot be
+   * added the draft stays a draft (422, naming them), so nothing is
+   * dropped without the person knowing; false creates from what the
+   * draft already holds.
+   */
+  add_open?: boolean;
+};

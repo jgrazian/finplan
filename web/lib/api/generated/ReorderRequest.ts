@@ -4,4 +4,4 @@
  * The body every reorder route takes: the collection's row ids, in the order
  * the list should now be in.
  */
-export type ReorderRequest = { ids: Array<number>, };
+export type ReorderRequest = { ids: Array<number> };

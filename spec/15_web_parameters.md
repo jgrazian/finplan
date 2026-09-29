@@ -29,6 +29,10 @@ reference. Rate bounds appear as percentages; Date bounds use date inputs; Age
 bounds use years and months. Calendar ranges use whole days or months, including
 when solving, and repeated calendar candidates are removed. Existing saved plans
 can run without parameters; add parameters to expose inputs to Analysis.
+Guided setup creates two: `Retirement age` (Age), which ends salary and
+working-year spending and starts retirement spending, and `Monthly spending`
+(Money), which working-year spending pays as `inflation($"Monthly spending" * 12)`
+a year. Each is created only when an event follows it.
 
 ## API and persistence
 

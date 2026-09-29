@@ -4,4 +4,17 @@
  * The distribution shapes a profile can take. `RegimeSwitching` nests two more
  * distributions, so this mirrors the recursive Rust enum.
  */
-export type DistributionSpec = { "kind": "None" } | { "kind": "Fixed", rate: number, } | { "kind": "Normal", mean: number, std_dev: number, } | { "kind": "LogNormal", mean: number, std_dev: number, } | { "kind": "StudentT", mean: number, scale: number, df: number, } | { "kind": "RegimeSwitching", bull: DistributionSpec, bear: DistributionSpec, bull_to_bear_prob: number, bear_to_bull_prob: number, } | { "kind": "Bootstrap", preset: string, block_size: number | null, };
+export type DistributionSpec =
+  | { "kind": "None" }
+  | { "kind": "Fixed"; rate: number }
+  | { "kind": "Normal"; mean: number; std_dev: number }
+  | { "kind": "LogNormal"; mean: number; std_dev: number }
+  | { "kind": "StudentT"; mean: number; scale: number; df: number }
+  | {
+    "kind": "RegimeSwitching";
+    bull: DistributionSpec;
+    bear: DistributionSpec;
+    bull_to_bear_prob: number;
+    bear_to_bull_prob: number;
+  }
+  | { "kind": "Bootstrap"; preset: string; block_size: number | null };

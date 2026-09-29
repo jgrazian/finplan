@@ -3,8 +3,9 @@
 /**
  * The body of `POST /drafts`, all of it optional.
  */
-export type StartDraft = { 
-/**
- * Keep the documents with the plan created from this draft. Default: delete them.
- */
-retain_documents: boolean, };
+export type StartDraft = {
+  /**
+   * Keep the documents with the plan created from this draft. Default: delete them.
+   */
+  retain_documents: boolean;
+};

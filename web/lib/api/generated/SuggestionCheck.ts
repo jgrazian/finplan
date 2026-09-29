@@ -4,4 +4,9 @@ import type { PreviewStats } from "./PreviewStats";
 /**
  * The changes simulated against the suggestion's run: the last preview.
  */
-export type SuggestionCheck = { iterations: number, paired: boolean, base: PreviewStats, edited: PreviewStats, };
+export type SuggestionCheck = {
+  iterations: number;
+  paired: boolean;
+  base: PreviewStats;
+  edited: PreviewStats;
+};

@@ -4,4 +4,4 @@ import type { RefKind } from "./RefKind";
 /**
  * A resource an expansion creates, by the key a later change can point at.
  */
-export type CreatedKey = { key: string, kind: RefKind, };
+export type CreatedKey = { key: string; kind: RefKind };

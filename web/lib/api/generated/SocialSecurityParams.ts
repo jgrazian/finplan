@@ -5,12 +5,15 @@ import type { When } from "./When";
 /**
  * Social Security retirement benefits from a claiming age.
  */
-export type SocialSecurityParams = { 
-/**
- * Defaults to "Social Security".
- */
-name?: string, to_account_id: RowRef, 
-/**
- * Annual benefit at the claiming age, in today's dollars.
- */
-annual_benefit: number, claim: When, };
+export type SocialSecurityParams = {
+  /**
+   * Defaults to "Social Security".
+   */
+  name?: string;
+  to_account_id: RowRef;
+  /**
+   * Annual benefit at the claiming age, in today's dollars.
+   */
+  annual_benefit: number;
+  claim: When;
+};

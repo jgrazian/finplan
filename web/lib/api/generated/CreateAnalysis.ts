@@ -8,25 +8,40 @@ import type { WhatIfLayer } from "./WhatIfLayer";
  * The analysis to run. `kind` selects which of the three, and the fields that
  * do not apply to it are ignored.
  */
-export type CreateAnalysis = { "kind": "sweep", axes: Array<AxisRequest>, iterations?: number | null, } | { "kind": "sensitivity", 
-/**
- * Which parameters to rank. Empty means all of them.
- */
-parameter_ids: Array<string>, 
-/**
- * Band width as a fraction of each parameter's value: `0.2` for ±20%.
- */
-fraction?: number | null, iterations?: number | null, } | { "kind": "solve", vary: Array<AxisRequest>, objective: ObjectiveRequest, constraint?: ConstraintRequest | null, 
-/**
- * The floor, as a fraction: `0.95` for "success ≥ 95%".
- */
-min_value: number, iterations?: number | null, } | { "kind": "what-if", 
-/**
- * The enabled layers only, in order. At most eight.
- */
-layers: Array<WhatIfLayer>, 
-/**
- * Simulations for the whole stack, split evenly across its steps
- * (each gets at least the analysis minimum).
- */
-iterations?: number | null, };
+export type CreateAnalysis = {
+  "kind": "sweep";
+  axes: Array<AxisRequest>;
+  iterations?: number | null;
+} | {
+  "kind": "sensitivity";
+  /**
+   * Which parameters to rank. Empty means all of them.
+   */
+  parameter_ids: Array<string>;
+  /**
+   * Band width as a fraction of each parameter's value: `0.2` for ±20%.
+   */
+  fraction?: number | null;
+  iterations?: number | null;
+} | {
+  "kind": "solve";
+  vary: Array<AxisRequest>;
+  objective: ObjectiveRequest;
+  constraint?: ConstraintRequest | null;
+  /**
+   * The floor, as a fraction: `0.95` for "success ≥ 95%".
+   */
+  min_value: number;
+  iterations?: number | null;
+} | {
+  "kind": "what-if";
+  /**
+   * The enabled layers only, in order. At most eight.
+   */
+  layers: Array<WhatIfLayer>;
+  /**
+   * Simulations for the whole stack, split evenly across its steps
+   * (each gets at least the analysis minimum).
+   */
+  iterations?: number | null;
+};

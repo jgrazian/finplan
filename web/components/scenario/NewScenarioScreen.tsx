@@ -22,7 +22,12 @@ import { useSubmit } from "@/lib/hooks/useSubmit";
 import { addYears, money, yearsBetween } from "@/lib/view/format";
 import { DescribeSetup } from "./DescribeSetup";
 import { SetupBar } from "./SetupBar";
-import { SetupPreview, type PreviewAccount, type PreviewEvent } from "./SetupPreview";
+import {
+  SetupPreview,
+  type PreviewAccount,
+  type PreviewEvent,
+  type PreviewParameter,
+} from "./SetupPreview";
 
 /** The step strip's short names, then each step's question and lead. */
 const steps = [
@@ -49,7 +54,7 @@ const steps = [
   {
     short: "Income",
     title: "How much do you earn and spend?",
-    lead: "Enter plan-start dollars. Each amount becomes a yearly event that rises with inflation.",
+    lead: "Enter plan-start dollars. Each amount becomes a yearly event that rises with inflation; monthly spending and your retirement age become parameters you can vary later.",
   },
   {
     short: "Saving",
@@ -64,7 +69,7 @@ const steps = [
   {
     short: "Review",
     title: "Review your starter plan",
-    lead: "Everything on the right is created together as ordinary, editable accounts and events.",
+    lead: "Everything on the right is created together as ordinary, editable accounts, events and parameters.",
   },
 ] as const;
 
@@ -519,7 +524,9 @@ function GuidedSetup(
       balance: otherInvestments,
     });
   }
-  const retireAt = { slot: `age ${draft.retirement_age}` };
+  // Guided setup's events follow these parameters (`/scenarios/setup`
+  // creates them only when an event does).
+  const retireAt = { slot: `Retirement age (${draft.retirement_age})` };
   const funding: PreviewEvent["parts"] =
     hasInvestments && draft.fund_from_investments
       ? ["· shortfall from", { slot: "investments" }]
@@ -549,7 +556,7 @@ function GuidedSetup(
         "every year until",
         retireAt,
         "· Expense of",
-        { expr: `inflation(${money(draft.monthly_spending * 12)})` },
+        { expr: `inflation($"Monthly spending" * 12)` },
         "from",
         { slot: "Checking" },
         ...funding,
@@ -572,8 +579,27 @@ function GuidedSetup(
       fresh: step === INCOME_STEP || (step === ASSUME_STEP && funding.length > 0),
     });
   }
+  const parameters: PreviewParameter[] = [];
+  if (events.length > 0) {
+    parameters.push({
+      name: "Retirement age",
+      value: `${draft.retirement_age} years`,
+      // Every event starts or stops at it.
+      usedBy: events.map((event) => event.name).join(", "),
+      fresh: step === INCOME_STEP,
+    });
+  }
+  if (draft.monthly_spending > 0) {
+    parameters.push({
+      name: "Monthly spending",
+      value: money(draft.monthly_spending),
+      usedBy: "Spending before retirement",
+      fresh: step === INCOME_STEP,
+    });
+  }
   const pending = [
-    step < INCOME_STEP && "Step 5 adds your salary and spending as yearly events.",
+    step < INCOME_STEP &&
+      "Step 5 adds your salary and spending as yearly events, with your retirement age and monthly spending as parameters.",
     step < SAVING_STEP && "Step 6 can add 401(k) contributions to Salary.",
     step < ASSUME_STEP &&
       "Step 7 sets return, inflation and tax assumptions, and whether savings cover spending when checking runs short.",
@@ -973,6 +999,7 @@ function GuidedSetup(
               blank={blank}
               accounts={accounts}
               events={events}
+              parameters={parameters}
               pending={blank ? [] : pending}
               assumptions={assumptions}
             />

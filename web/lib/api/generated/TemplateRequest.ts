@@ -13,4 +13,16 @@ import type { SocialSecurityParams } from "./SocialSecurityParams";
  * What the `expand_template` tool takes: a template and the prefix that
  * namespaces the keys it creates.
  */
-export type TemplateRequest = { key_prefix: string, } & ({ "kind": "salary" } & SalaryParams | { "kind": "employer_match" } & EmployerMatchParams | { "kind": "recurring_expense" } & RecurringExpenseParams | { "kind": "retirement" } & RetirementParams | { "kind": "home_purchase" } & HomePurchaseParams | { "kind": "social_security" } & SocialSecurityParams | { "kind": "market_crash" } & MarketCrashParams | { "kind": "large_expense" } & LargeExpenseParams | { "kind": "job_loss" } & JobLossParams);
+export type TemplateRequest =
+  & { key_prefix: string }
+  & (
+    | { "kind": "salary" } & SalaryParams
+    | { "kind": "employer_match" } & EmployerMatchParams
+    | { "kind": "recurring_expense" } & RecurringExpenseParams
+    | { "kind": "retirement" } & RetirementParams
+    | { "kind": "home_purchase" } & HomePurchaseParams
+    | { "kind": "social_security" } & SocialSecurityParams
+    | { "kind": "market_crash" } & MarketCrashParams
+    | { "kind": "large_expense" } & LargeExpenseParams
+    | { "kind": "job_loss" } & JobLossParams
+  );

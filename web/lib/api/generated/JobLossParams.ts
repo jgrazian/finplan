@@ -5,12 +5,16 @@ import type { When } from "./When";
 /**
  * Income stops for a while: an event pauses, and resumes `months` later.
  */
-export type JobLossParams = { 
-/**
- * Names the pair of events; defaults to "Job loss".
- */
-name?: string, 
-/**
- * The salary event that pauses.
- */
-salary_event_id: RowRef, when: When, months: number, enabled?: boolean, };
+export type JobLossParams = {
+  /**
+   * Names the pair of events; defaults to "Job loss".
+   */
+  name?: string;
+  /**
+   * The salary event that pauses.
+   */
+  salary_event_id: RowRef;
+  when: When;
+  months: number;
+  enabled?: boolean;
+};

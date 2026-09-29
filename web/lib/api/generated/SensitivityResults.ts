@@ -5,8 +5,12 @@ import type { SensitivityRow } from "./SensitivityRow";
 /**
  * A finished sensitivity ranking, worst-moving parameter last.
  */
-export type SensitivityResults = { rows: Array<SensitivityRow>, plan: AnalysisPoint, 
-/**
- * The band each parameter was moved through, as a fraction of its value.
- */
-fraction: number, iterations: number, };
+export type SensitivityResults = {
+  rows: Array<SensitivityRow>;
+  plan: AnalysisPoint;
+  /**
+   * The band each parameter was moved through, as a fraction of its value.
+   */
+  fraction: number;
+  iterations: number;
+};

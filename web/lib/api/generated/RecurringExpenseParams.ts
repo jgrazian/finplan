@@ -6,21 +6,40 @@ import type { When } from "./When";
 /**
  * Spending that repeats: rent, groceries, insurance.
  */
-export type RecurringExpenseParams = { name: string, from_account_id: RowRef, 
-/**
- * Per `interval`, in today's dollars unless `inflation_adjusted` is off.
- */
-amount: number, 
-/**
- * Defaults to yearly.
- */
-interval?: Interval, 
-/**
- * Defaults to on.
- */
-inflation_adjusted?: boolean, start?: When, end?: When, 
-/**
- * Refill the paying account from investments before each payment, by the
- * tax-efficient-early strategy.
- */
-fund_from_investments: boolean, sort_order?: number, };
+export type RecurringExpenseParams = {
+  name: string;
+  from_account_id: RowRef;
+  /**
+   * Per `interval`, in today's dollars unless `inflation_adjusted` is off.
+   */
+  amount: number;
+  /**
+   * A Money plan parameter (by name, without the `$`) holding the amount;
+   * the expense then follows it instead of `amount`, which stays what the
+   * expense comes to at the plan's start. The parameter must exist or be
+   * created in the same batch.
+   */
+  amount_parameter?: string;
+  /**
+   * How often the parameter's amount is spent, when that differs from
+   * `interval`: a monthly figure paid yearly is paid as 12 of it. Defaults
+   * to `interval`.
+   */
+  parameter_interval?: Interval;
+  /**
+   * Defaults to yearly.
+   */
+  interval?: Interval;
+  /**
+   * Defaults to on.
+   */
+  inflation_adjusted?: boolean;
+  start?: When;
+  end?: When;
+  /**
+   * Refill the paying account from investments before each payment, by the
+   * tax-efficient-early strategy.
+   */
+  fund_from_investments: boolean;
+  sort_order?: number;
+};

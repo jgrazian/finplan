@@ -5,8 +5,14 @@ import type { When } from "./When";
 /**
  * A one-time large cost: medical, long-term care, a roof.
  */
-export type LargeExpenseParams = { 
-/**
- * Defaults to "Large expense".
- */
-name?: string, from_account_id: RowRef, amount: number, when: When, inflation_adjusted?: boolean, enabled?: boolean, };
+export type LargeExpenseParams = {
+  /**
+   * Defaults to "Large expense".
+   */
+  name?: string;
+  from_account_id: RowRef;
+  amount: number;
+  when: When;
+  inflation_adjusted?: boolean;
+  enabled?: boolean;
+};

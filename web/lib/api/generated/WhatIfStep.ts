@@ -5,13 +5,15 @@ import type { AnalysisPoint } from "./AnalysisPoint";
  * One cumulative step of a what-if: the plan with the first `i` enabled
  * layers applied.
  */
-export type WhatIfStep = { point: AnalysisPoint, 
-/**
- * Real (today's $) median net worth at plan end.
- */
-median_end_real: number, 
-/**
- * First age (or year if no birth_date) at which the P10 path's net worth
- * hits <= 0; null = never.
- */
-p10_dry_at: number | null, };
+export type WhatIfStep = {
+  point: AnalysisPoint;
+  /**
+   * Real (today's $) median net worth at plan end.
+   */
+  median_end_real: number;
+  /**
+   * First age (or year if no birth_date) at which the P10 path's net worth
+   * hits <= 0; null = never.
+   */
+  p10_dry_at: number | null;
+};

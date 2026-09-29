@@ -5,4 +5,8 @@ import type { RowRef } from "./RowRef";
  * When something starts, ends or happens: at an age, at a date, or at an age
  * or date a plan parameter holds.
  */
-export type When = { "kind": "Age", years: number, months?: number, } | { "kind": "AgeParameter", parameter_id: RowRef, } | { "kind": "Date", on_date: string, } | { "kind": "DateParameter", parameter_id: RowRef, };
+export type When =
+  | { "kind": "Age"; years: number; months?: number }
+  | { "kind": "AgeParameter"; parameter_id: RowRef }
+  | { "kind": "Date"; on_date: string }
+  | { "kind": "DateParameter"; parameter_id: RowRef };

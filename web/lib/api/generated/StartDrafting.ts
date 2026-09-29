@@ -3,9 +3,10 @@
 /**
  * The body of `POST /drafts/{id}/start`.
  */
-export type StartDrafting = { 
-/**
- * What the person says about themselves: age, income, spending, goals,
- * big purchases. May be empty when documents are attached.
- */
-description: string, };
+export type StartDrafting = {
+  /**
+   * What the person says about themselves: age, income, spending, goals,
+   * big purchases. May be empty when documents are attached.
+   */
+  description: string;
+};

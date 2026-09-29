@@ -69,6 +69,40 @@ async fn guided_setup_retries_preserve_one_reconciled_plan_and_compile() {
             .iter()
             .any(|effect| effect["kind"] == "AssetPurchase")
     );
+    let (_, parameters) = app.get(&format!("/api/scenarios/{sid}/parameters")).await;
+    let parameter = |name: &str| {
+        parameters
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} parameter: {parameters}"))
+            .clone()
+    };
+    assert_eq!(parameters.as_array().unwrap().len(), 2);
+    let age = parameter("Retirement age");
+    assert_eq!(
+        age["value"],
+        json!({"kind": "Age", "years": 65, "months": 0})
+    );
+    assert_eq!(age["uses"].as_array().unwrap().len(), 3);
+    let spending = parameter("Monthly spending");
+    assert_eq!(spending["value"]["value"], 40000. / 12.);
+    assert_eq!(salary["trigger"]["end_condition"]["kind"], "AgeParameter");
+    assert_eq!(
+        salary["trigger"]["end_condition"]["parameter_id"],
+        age["id"]
+    );
+    let before = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["name"] == "Spending before retirement")
+        .unwrap();
+    assert_eq!(
+        before["effects"][1]["amount"]["source"],
+        "inflation($\"Monthly spending\" * 12)"
+    );
     let mut changed = body.clone();
     changed["cash"] = json!(60000);
     assert_eq!(
@@ -210,6 +244,7 @@ async fn dumped_plan(app: &mut TestApp, sid: i64) -> Value {
     let (_, accounts) = app.get(&format!("/api/scenarios/{sid}/accounts")).await;
     let (_, assets) = app.get(&format!("/api/scenarios/{sid}/assets")).await;
     let (_, events) = app.get(&format!("/api/scenarios/{sid}/events")).await;
+    let (_, parameters) = app.get(&format!("/api/scenarios/{sid}/parameters")).await;
     let (_, scenario) = app.get(&format!("/api/scenarios/{sid}")).await;
     let (_, profiles) = app.get("/api/return-profiles").await;
     let (_, inflation) = app.get("/api/inflation-profiles").await;
@@ -221,11 +256,13 @@ async fn dumped_plan(app: &mut TestApp, sid: i64) -> Value {
             .map(|row| row["name"].clone())
             .unwrap_or_else(|| id.clone())
     };
-    fn walk(value: &mut Value, lists: &[&Value; 3], name_of: &dyn Fn(&Value, &Value) -> Value) {
-        let [accounts, assets, profiles] = lists;
+    fn walk(value: &mut Value, lists: &[&Value; 4], name_of: &dyn Fn(&Value, &Value) -> Value) {
+        let [accounts, assets, profiles, parameters] = lists;
         match value {
             Value::Object(object) => {
                 object.remove("id");
+                object.remove("scenario_id");
+                object.remove("event_id");
                 for (key, child) in object.iter_mut() {
                     if key.ends_with("account_id") {
                         *child = name_of(accounts, child);
@@ -233,6 +270,8 @@ async fn dumped_plan(app: &mut TestApp, sid: i64) -> Value {
                         *child = name_of(assets, child);
                     } else if key.ends_with("return_profile_id") {
                         *child = name_of(profiles, child);
+                    } else if key == "parameter_id" {
+                        *child = name_of(parameters, child);
                     } else {
                         walk(child, lists, name_of);
                     }
@@ -252,6 +291,7 @@ async fn dumped_plan(app: &mut TestApp, sid: i64) -> Value {
         "accounts": accounts.clone(),
         "assets": assets,
         "events": events,
+        "parameters": parameters.clone(),
     });
     for account in plan["accounts"].as_array_mut().unwrap() {
         let id = account["id"].clone();
@@ -260,13 +300,17 @@ async fn dumped_plan(app: &mut TestApp, sid: i64) -> Value {
             .await;
         account["positions"] = positions;
     }
-    walk(&mut plan, &[&accounts, &assets, &profiles], &name_of);
+    walk(
+        &mut plan,
+        &[&accounts, &assets, &profiles, &parameters],
+        &name_of,
+    );
     plan
 }
 
 /// Guided setup lowers to the same change model the AI drafting uses; its
-/// plans must not drift. Fixtures hold the plans the original SQL lowering
-/// wrote (`UPDATE_GOLDEN=1` rewrites them).
+/// plans must not drift. Fixtures hold the plans it writes, parameters
+/// included (`UPDATE_GOLDEN=1` rewrites them).
 #[tokio::test]
 async fn guided_setup_plans_match_the_recorded_lowering() {
     let mut app = TestApp::new().await;
@@ -275,7 +319,7 @@ async fn guided_setup_plans_match_the_recorded_lowering() {
         "birth_date": "1981-01-01", "duration_years": 50, "retirement_age": 65,
         "cash": 50000, "retirement_401k": 350000, "investments": 150000, "stock_percent": 60,
         "investment_tax_status": "Taxable", "annual_income": 100000,
-        "retirement_401k_contribution_percent": 50, "annual_spending": 40000,
+        "retirement_401k_contribution_percent": 50, "annual_spending": 42000,
         "retirement_spending": 30000, "inflation_profile_id": null, "tax_config_id": null,
         "fund_from_investments": true, "assumptions_confirmed": true,
     });

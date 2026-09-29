@@ -4,4 +4,8 @@ import type { ChangeProblem } from "./ChangeProblem";
 /**
  * Why a draft cannot be simulated as it stands.
  */
-export type DraftBlocked = { "kind": "steps", step: number, problems: Array<ChangeProblem>, } | { "kind": "compile", message: string, };
+export type DraftBlocked = {
+  "kind": "steps";
+  step: number;
+  problems: Array<ChangeProblem>;
+} | { "kind": "compile"; message: string };

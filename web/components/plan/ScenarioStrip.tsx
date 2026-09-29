@@ -37,6 +37,7 @@ export function ScenarioStrip({
   params,
   assumptions,
   onChange,
+  onDelete,
   offline,
 }: {
   params: ScenarioParams;
@@ -44,6 +45,8 @@ export function ScenarioStrip({
   assumptions: AssumptionChoices;
   /** Saves one field. Rejecting leaves the value in the field, unsaved. */
   onChange?: (patch: Partial<ScenarioParams>) => Promise<void>;
+  /** Asks to delete the scenario; absent, the fields offer no delete. */
+  onDelete?: () => void;
   /** No connection: the fields are read-only rather than held for later. */
   offline?: boolean;
 }) {
@@ -297,6 +300,14 @@ export function ScenarioStrip({
             {refused.taxConfigId && <UnsavedNote>{refused.taxConfigId}</UnsavedNote>}
             {tax && <Note>{tax.note}</Note>}
           </Field>
+
+          {!readOnly && onDelete && unsaved === 0 && (
+            <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+              <Button variant="ghost" onClick={onDelete}>
+                Delete scenario…
+              </Button>
+            </div>
+          )}
 
           {unsaved > 0 && (
             <div

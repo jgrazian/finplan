@@ -2,13 +2,20 @@
 import type { BalanceDiff } from "./BalanceDiff";
 import type { PositionDiff } from "./PositionDiff";
 
-export type AccountReconciliation = { document_account: number, last4: string | null, 
-/**
- * The plan account it was matched to; `None` when nothing matched
- * well enough (a new account to add).
- */
-account_id: number | null, account_name: string | null, match_score: number | null, balance: BalanceDiff | null, 
-/**
- * The cash balance against the plan account's cash.
- */
-cash: BalanceDiff | null, positions: Array<PositionDiff>, };
+export type AccountReconciliation = {
+  document_account: number;
+  last4: string | null;
+  /**
+   * The plan account it was matched to; `None` when nothing matched
+   * well enough (a new account to add).
+   */
+  account_id: number | null;
+  account_name: string | null;
+  match_score: number | null;
+  balance: BalanceDiff | null;
+  /**
+   * The cash balance against the plan account's cash.
+   */
+  cash: BalanceDiff | null;
+  positions: Array<PositionDiff>;
+};

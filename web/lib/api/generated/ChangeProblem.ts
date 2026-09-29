@@ -6,4 +6,31 @@ import type { RefKind } from "./RefKind";
  * Why a batch of changes cannot be applied. `change` indexes the request's
  * `changes` array.
  */
-export type ChangeProblem = { "kind": "stale", change: number, path: string, expected: unknown, actual: unknown, } | { "kind": "bad_path", change: number, path: string, reason: string, } | { "kind": "invalid_body", change: number, target: ChangeTarget, message: string, } | { "kind": "unknown_target", change: number, target: ChangeTarget, } | { "kind": "unsupported_op", change: number, reason: string, } | { "kind": "duplicate_key", change: number, key: string, } | { "kind": "unknown_reference", change: number, key: string, } | { "kind": "wrong_reference_kind", change: number, key: string, field: string, expected: RefKind | null, found: RefKind, } | { "kind": "reference_cycle", change: number, keys: Array<string>, };
+export type ChangeProblem =
+  | {
+    "kind": "stale";
+    change: number;
+    path: string;
+    expected: unknown;
+    actual: unknown;
+  }
+  | { "kind": "bad_path"; change: number; path: string; reason: string }
+  | {
+    "kind": "invalid_body";
+    change: number;
+    target: ChangeTarget;
+    message: string;
+  }
+  | { "kind": "unknown_target"; change: number; target: ChangeTarget }
+  | { "kind": "unsupported_op"; change: number; reason: string }
+  | { "kind": "duplicate_key"; change: number; key: string }
+  | { "kind": "unknown_reference"; change: number; key: string }
+  | {
+    "kind": "wrong_reference_kind";
+    change: number;
+    key: string;
+    field: string;
+    expected: RefKind | null;
+    found: RefKind;
+  }
+  | { "kind": "reference_cycle"; change: number; keys: Array<string> };

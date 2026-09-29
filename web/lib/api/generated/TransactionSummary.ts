@@ -3,12 +3,21 @@ import type { CategoryAverage } from "./CategoryAverage";
 import type { MonthSummary } from "./MonthSummary";
 import type { Outlier } from "./Outlier";
 
-export type TransactionSummary = { document_id: number, first_date: string | null, last_date: string | null, months: Array<MonthSummary>, 
-/**
- * Over the full months (or all of them when there are too few).
- */
-average_monthly_spending: number, average_monthly_income: number, category_averages: Array<CategoryAverage>, outliers: Array<Outlier>, transactions_counted: number, 
-/**
- * Transfers and card payments, which are neither spending nor income.
- */
-transfers_excluded: number, };
+export type TransactionSummary = {
+  document_id: number;
+  first_date: string | null;
+  last_date: string | null;
+  months: Array<MonthSummary>;
+  /**
+   * Over the full months (or all of them when there are too few).
+   */
+  average_monthly_spending: number;
+  average_monthly_income: number;
+  category_averages: Array<CategoryAverage>;
+  outliers: Array<Outlier>;
+  transactions_counted: number;
+  /**
+   * Transfers and card payments, which are neither spending nor income.
+   */
+  transfers_excluded: number;
+};

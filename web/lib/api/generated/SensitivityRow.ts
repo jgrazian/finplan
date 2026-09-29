@@ -4,8 +4,16 @@ import type { AnalysisPoint } from "./AnalysisPoint";
 /**
  * One parameter's ±band and what moving it did.
  */
-export type SensitivityRow = { parameter_id: string, label: string, kind: string, low_value: number, high_value: number, low: AnalysisPoint, high: AnalysisPoint, 
-/**
- * Success-rate spread across the band, in points. The ranking is by this.
- */
-span: number, };
+export type SensitivityRow = {
+  parameter_id: string;
+  label: string;
+  kind: string;
+  low_value: number;
+  high_value: number;
+  low: AnalysisPoint;
+  high: AnalysisPoint;
+  /**
+   * Success-rate spread across the band, in points. The ranking is by this.
+   */
+  span: number;
+};

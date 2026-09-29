@@ -5,8 +5,11 @@ import type { When } from "./When";
 /**
  * A retirement marker event, and optionally the spending that begins with it.
  */
-export type RetirementParams = { retirement: When, 
-/**
- * Defaults to "Retirement".
- */
-name?: string, spending?: RetirementSpending, };
+export type RetirementParams = {
+  retirement: When;
+  /**
+   * Defaults to "Retirement".
+   */
+  name?: string;
+  spending?: RetirementSpending;
+};

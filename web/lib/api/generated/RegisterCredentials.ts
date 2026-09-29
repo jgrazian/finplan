@@ -6,4 +6,9 @@
  * Keeping this separate from `Credentials` makes confirmation mandatory for
  * registration without imposing an irrelevant field on sign-in requests.
  */
-export type RegisterCredentials = { email: string, password: string, password_confirmation: string, display_name?: string | null, };
+export type RegisterCredentials = {
+  email: string;
+  password: string;
+  password_confirmation: string;
+  display_name?: string | null;
+};

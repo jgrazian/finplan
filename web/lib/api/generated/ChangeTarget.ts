@@ -11,4 +11,15 @@
  * profile, tax config). `new_return_profile` and `new_tax_config` create rows
  * in the caller's libraries, which no later batch can edit.
  */
-export type ChangeTarget = { "event": number } | { "asset": number } | { "account": number } | { "parameter": number } | { "new_event": string } | { "new_asset": string } | { "new_account": string } | { "new_parameter": string } | "scenario" | { "new_return_profile": string } | { "new_tax_config": string };
+export type ChangeTarget =
+  | { "event": number }
+  | { "asset": number }
+  | { "account": number }
+  | { "parameter": number }
+  | { "new_event": string }
+  | { "new_asset": string }
+  | { "new_account": string }
+  | { "new_parameter": string }
+  | "scenario"
+  | { "new_return_profile": string }
+  | { "new_tax_config": string };

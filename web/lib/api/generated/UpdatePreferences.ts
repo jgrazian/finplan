@@ -2,4 +2,10 @@
 import type { Accent } from "./Accent";
 import type { ThemeMode } from "./ThemeMode";
 
-export type UpdatePreferences = { default_iterations: number, default_duration_years: number, auto_run: boolean, theme_mode: ThemeMode, accent: Accent, };
+export type UpdatePreferences = {
+  default_iterations: number;
+  default_duration_years: number;
+  auto_run: boolean;
+  theme_mode: ThemeMode;
+  accent: Accent;
+};

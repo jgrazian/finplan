@@ -3,4 +3,4 @@
 /**
  * `{"$new": "<key>"}`: a resource the same batch creates.
  */
-export type NewRef = { $new: string, };
+export type NewRef = { $new: string };

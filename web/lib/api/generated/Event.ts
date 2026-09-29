@@ -2,4 +2,13 @@
 import type { EffectSpec } from "./EffectSpec";
 import type { TriggerSpec } from "./TriggerSpec";
 
-export type Event = { id: number, name: string, description: string | null, fires_once: boolean, enabled: boolean, sort_order: number, trigger: TriggerSpec, effects: Array<EffectSpec>, };
+export type Event = {
+  id: number;
+  name: string;
+  description: string | null;
+  fires_once: boolean;
+  enabled: boolean;
+  sort_order: number;
+  trigger: TriggerSpec;
+  effects: Array<EffectSpec>;
+};

@@ -2,10 +2,14 @@
 import type { AssetClass } from "./AssetClass";
 import type { DistributionSpec } from "./DistributionSpec";
 
-export type UpdateProfile = { name?: string | null, description?: string | null, 
-/**
- * Doubly optional: absent leaves the class alone, an explicit null
- * unclassifies the profile. Every other field here reads absent as
- * "unchanged", which would otherwise make unclassifying unsayable.
- */
-asset_class?: AssetClass | null, distribution?: DistributionSpec | null, };
+export type UpdateProfile = {
+  name?: string | null;
+  description?: string | null;
+  /**
+   * Doubly optional: absent leaves the class alone, an explicit null
+   * unclassifies the profile. Every other field here reads absent as
+   * "unchanged", which would otherwise make unclassifying unsayable.
+   */
+  asset_class?: AssetClass | null;
+  distribution?: DistributionSpec | null;
+};

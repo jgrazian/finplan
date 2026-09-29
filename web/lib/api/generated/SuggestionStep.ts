@@ -6,18 +6,23 @@ import type { DiffLine } from "./DiffLine";
  * One step of a path: a self-contained batch of changes the user could stop
  * after.
  */
-export type SuggestionStep = { 
-/**
- * Unique within its path: 1-32 of `a-z`, `0-9`, `-`.
- */
-key: string, title: string, reasoning: string | null, changes: Array<Change>, 
-/**
- * `changes` as the server renders them, read after the path's earlier
- * steps.
- */
-diff: Array<DiffLine>, applied: boolean, 
-/**
- * When it was applied (UTC, `YYYY-MM-DD HH:MM:SS` like `resolved_at`);
- * steps applied in one request share it.
- */
-applied_at: string | null, };
+export type SuggestionStep = {
+  /**
+   * Unique within its path: 1-32 of `a-z`, `0-9`, `-`.
+   */
+  key: string;
+  title: string;
+  reasoning: string | null;
+  changes: Array<Change>;
+  /**
+   * `changes` as the server renders them, read after the path's earlier
+   * steps.
+   */
+  diff: Array<DiffLine>;
+  applied: boolean;
+  /**
+   * When it was applied (UTC, `YYYY-MM-DD HH:MM:SS` like `resolved_at`);
+   * steps applied in one request share it.
+   */
+  applied_at: string | null;
+};

@@ -3,17 +3,20 @@
 /**
  * One outcome, wherever it was measured — a grid cell, a probe, a baseline.
  */
-export type AnalysisPoint = { 
-/**
- * Fraction of runs ending solvent, 0–1.
- */
-success_rate: number, 
-/**
- * Fraction of runs that met every cash need on time; `null` where the run
- * predates the check.
- */
-funding_success_rate: number | null, 
-/**
- * Terminal net worth at the 5th, 50th and 95th percentile, nominal.
- */
-p5: number, p50: number, p95: number, };
+export type AnalysisPoint = {
+  /**
+   * Fraction of runs ending solvent, 0–1.
+   */
+  success_rate: number;
+  /**
+   * Fraction of runs that met every cash need on time; `null` where the run
+   * predates the check.
+   */
+  funding_success_rate: number | null;
+  /**
+   * Terminal net worth at the 5th, 50th and 95th percentile, nominal.
+   */
+  p5: number;
+  p50: number;
+  p95: number;
+};

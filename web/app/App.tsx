@@ -334,6 +334,20 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     access.reload();
   }, [nav, list, access]);
 
+  // A scenario was deleted: drop it from the list, and if it was the one on
+  // screen, move to the next plan (or the empty state when none is left).
+  const scenarioDeleted = useCallback(
+    (id: number) => {
+      if (recentlyCreated?.id === id) setRecentlyCreated(undefined);
+      if (id === scenarioId) {
+        const next = list.find((row) => row.id !== id);
+        if (next) nav.setScenario(next.slug);
+      }
+      scenarios.reload();
+    },
+    [recentlyCreated, scenarioId, list, nav, scenarios],
+  );
+
   const headerScenarios = useMemo(
     () => list.map((s) => ({
       ...toHeaderScenario(s),
@@ -435,6 +449,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
             onUserChange={session.update}
             onSignOut={() => void session.signOut()}
             onDeleted={session.forget}
+            onScenarioDeleted={scenarioDeleted}
           />
         ) : scenarios.error ? (
           <EmptyState title="Cannot reach the API" detail={scenarios.error.message} />
@@ -492,6 +507,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onChanged={saved}
                 reviewNotes={reviewCounts.events}
                 onOpenReview={openReview}
+                onScenarioDeleted={scenarioDeleted}
               />
             )}
             {nav.tab === "review" && (

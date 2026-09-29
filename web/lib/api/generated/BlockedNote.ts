@@ -3,12 +3,15 @@
 /**
  * An open note that waits on questions the person has not answered.
  */
-export type BlockedNote = { id: number, 
-/**
- * The note's own key, which a question's `blocks` names.
- */
-key: string | null, title: string, 
-/**
- * Keys of the unanswered questions it waits on.
- */
-waiting_on: Array<string>, };
+export type BlockedNote = {
+  id: number;
+  /**
+   * The note's own key, which a question's `blocks` names.
+   */
+  key: string | null;
+  title: string;
+  /**
+   * Keys of the unanswered questions it waits on.
+   */
+  waiting_on: Array<string>;
+};

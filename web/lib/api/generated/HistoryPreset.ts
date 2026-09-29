@@ -9,20 +9,21 @@
  * a bell from them would be drawing the distribution the user declined.
  * Eleven series of at most a century of `f64` is a few kilobytes.
  */
-export type HistoryPreset = { 
-/**
- * The value a `Bootstrap` distribution stores.
- */
-id: string, 
-/**
- * Display name, e.g. `S&P 500`.
- */
-name: string, 
-/**
- * Calendar year of `returns[0]`.
- */
-start_year: number, 
-/**
- * Annual total returns as fractions, one per year.
- */
-returns: Array<number>, };
+export type HistoryPreset = {
+  /**
+   * The value a `Bootstrap` distribution stores.
+   */
+  id: string;
+  /**
+   * Display name, e.g. `S&P 500`.
+   */
+  name: string;
+  /**
+   * Calendar year of `returns[0]`.
+   */
+  start_year: number;
+  /**
+   * Annual total returns as fractions, one per year.
+   */
+  returns: Array<number>;
+};

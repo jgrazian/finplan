@@ -4,16 +4,21 @@
  * A number in the plan that a sweep axis, a sensitivity row or a solve can
  * vary, and the range it defaults to.
  */
-export type AnalysisParameter = { 
-/**
- * `parameter:<database id>`, stable across renames.
- */
-id: string, parameter_id: number, name: string, 
-/**
- * `age` (years), `amount` (money), `rate` (fraction), or `date` (UTC epoch days).
- */
-kind: string, 
-/**
- * The plan's own value today.
- */
-current: number, min: number, max: number, };
+export type AnalysisParameter = {
+  /**
+   * `parameter:<database id>`, stable across renames.
+   */
+  id: string;
+  parameter_id: number;
+  name: string;
+  /**
+   * `age` (years), `amount` (money), `rate` (fraction), or `date` (UTC epoch days).
+   */
+  kind: string;
+  /**
+   * The plan's own value today.
+   */
+  current: number;
+  min: number;
+  max: number;
+};

@@ -5,12 +5,15 @@
  * "est. 81%" figure. Either the rates or, when the draft cannot run yet, what
  * stops it.
  */
-export type DraftEstimate = { success_rate: number | null, funding_success_rate: number | null, 
-/**
- * Simulated iterations behind the rates.
- */
-iterations: number, 
-/**
- * Why the draft could not be simulated, when it could not.
- */
-blocked: string | null, };
+export type DraftEstimate = {
+  success_rate: number | null;
+  funding_success_rate: number | null;
+  /**
+   * Simulated iterations behind the rates.
+   */
+  iterations: number;
+  /**
+   * Why the draft could not be simulated, when it could not.
+   */
+  blocked: string | null;
+};

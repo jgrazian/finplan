@@ -3,8 +3,11 @@
 /**
  * A category's total in a month.
  */
-export type CategoryTotal = { category: string, 
-/**
- * Spending, positive; refunds within the category net against it.
- */
-total: number, count: number, };
+export type CategoryTotal = {
+  category: string;
+  /**
+   * Spending, positive; refunds within the category net against it.
+   */
+  total: number;
+  count: number;
+};

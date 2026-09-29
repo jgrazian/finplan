@@ -3,9 +3,15 @@ import type { Balance } from "./Balance";
 import type { Position } from "./Position";
 import type { Transaction } from "./Transaction";
 
-export type AccountData = { 
-/**
- * `checking`, `savings`, `credit_card`, `investment`, `retirement`, ...
- * as the document says; `None` when it does not.
- */
-kind: string | null, last4: string | null, currency: string | null, balances: Array<Balance>, positions: Array<Position>, transactions: Array<Transaction>, };
+export type AccountData = {
+  /**
+   * `checking`, `savings`, `credit_card`, `investment`, `retirement`, ...
+   * as the document says; `None` when it does not.
+   */
+  kind: string | null;
+  last4: string | null;
+  currency: string | null;
+  balances: Array<Balance>;
+  positions: Array<Position>;
+  transactions: Array<Transaction>;
+};
