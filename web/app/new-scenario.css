@@ -1,0 +1,354 @@
+/* ── New scenario: full page ──────────────────────────────────────────────
+   Design: "New Scenario" canvas, 1a (guided questions with the plan
+   assembling on the right) and 2a (Describe & upload as a conversation with
+   the draft on the right). The page takes the screen area under the header;
+   each column scrolls on its own and keeps its footer in view. */
+
+.ns-page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 160px);
+}
+
+.ns-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 9px 26px;
+  border-bottom: 1px solid var(--color-divider);
+  font-size: 12.5px;
+}
+
+.ns-bar .stat-l {
+  color: var(--color-text);
+}
+
+.ns-bar-sep {
+  opacity: .35;
+}
+
+.ns-bar-end {
+  margin-left: auto;
+}
+
+.ns-body {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 1a: questions on the left, the plan so far on the right. */
+.ns-body-guided {
+  grid-template-columns: 520px minmax(0, 1fr);
+}
+
+/* 2a: the conversation takes the room, the draft is a fixed rail. */
+.ns-body-describe {
+  grid-template-columns: minmax(0, 1fr) 460px;
+}
+
+.ns-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ns-col + .ns-col {
+  border-left: 1px solid var(--color-divider);
+}
+
+.ns-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ns-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 32px;
+  border-top: 1px solid var(--color-divider);
+}
+
+.ns-foot-end {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ns-mut {
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+.ns-lbl {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+/* The eight steps as a strip: done steps underlined, the current one solid. */
+.ns-steps {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.ns-step {
+  padding: 10px 8px;
+  border: 0;
+  border-right: 1px solid var(--color-divider);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.ns-step:last-child {
+  border-right: 0;
+}
+
+.ns-step-name {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns-step.done {
+  cursor: pointer;
+  box-shadow: inset 0 -3px 0 var(--color-accent-300);
+}
+
+.ns-step.done:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.ns-step.on {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}
+
+.ns-step.on .stat-l {
+  color: inherit;
+  opacity: .8;
+}
+
+.ns-step.todo .ns-step-name {
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+.ns-question {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 28px 32px;
+}
+
+.ns-question h2 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+.ns-question p {
+  margin: 0;
+  font-size: 13.5px;
+  text-wrap: pretty;
+}
+
+/* The plan so far: accounts and event sentences as the plan editor shows them. */
+.ns-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 22px 28px;
+}
+
+.ns-sentence {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+
+.ns-sentence.fresh {
+  box-shadow: inset 3px 0 0 var(--color-accent);
+}
+
+.ns-sentence-name {
+  width: 170px;
+  font: 12.5px ui-monospace, Menlo, monospace;
+}
+
+.ns-slot {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 8px;
+  border: 1px solid var(--color-divider);
+  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  font-size: 13px;
+}
+
+.ns-slot.x {
+  background: var(--color-bg);
+  border-color: var(--color-accent);
+  font: 12.5px ui-monospace, Menlo, monospace;
+}
+
+.ns-pending {
+  padding: 10px 14px;
+  border: 1px dashed var(--color-divider);
+  font-size: 12.5px;
+}
+
+/* 2a: messages, the composer, and the draft rail. */
+.ns-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px 40px;
+}
+
+.ns-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 86%;
+  padding: 10px 14px;
+  border: 1px solid var(--color-divider);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.ns-msg.mine {
+  align-self: flex-end;
+  max-width: 78%;
+  background: var(--color-accent-100);
+}
+
+.ns-fchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-divider);
+  font-size: 12px;
+  background: var(--color-bg);
+}
+
+.ns-fchip b {
+  font: 600 9.5px ui-monospace, Menlo, monospace;
+  color: var(--color-accent-800);
+}
+
+.ns-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 40px 18px;
+  border-top: 1px solid var(--color-divider);
+}
+
+.ns-rail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.ns-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 16px 24px;
+}
+
+.ns-crow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--color-divider);
+  font-size: 12.5px;
+}
+
+.ns-foot.ns-foot-rail {
+  padding: 14px 24px;
+}
+
+/* Tablet: the two columns no longer fit side by side at their design widths. */
+@media (max-width: 1100px) {
+  .ns-body-guided {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .ns-body-describe {
+    grid-template-columns: minmax(0, 1fr) 360px;
+  }
+}
+
+/* Phone: one column, the plan or draft below the questions. */
+@media (max-width: 639px) {
+  .ns-page {
+    min-height: 0;
+  }
+
+  .ns-bar {
+    padding: 9px 16px;
+  }
+
+  .ns-body-guided,
+  .ns-body-describe {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ns-col + .ns-col {
+    border-left: 0;
+    border-top: 1px solid var(--color-divider);
+  }
+
+  .ns-steps {
+    grid-template-columns: repeat(8, minmax(64px, 1fr));
+    overflow-x: auto;
+  }
+
+  .ns-question,
+  .ns-plan,
+  .ns-thread,
+  .ns-rail {
+    padding: 20px 16px;
+  }
+
+  .ns-question h2 {
+    font-size: 24px;
+  }
+
+  .ns-foot,
+  .ns-composer,
+  .ns-rail-head,
+  .ns-foot.ns-foot-rail {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .ns-sentence-name {
+    width: 100%;
+  }
+
+  .ns-msg,
+  .ns-msg.mine {
+    max-width: 100%;
+  }
+}

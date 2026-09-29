@@ -6,6 +6,7 @@
 @import "./mobile/plan.css";
 @import "./mobile/results.css";
 @import "./mobile/analysis.css";
+@import "./new-scenario.css";
 
 /* Expose the Industry tokens to Tailwind utilities, so `text-accent-700`,
    `border-divider`, `font-heading` etc. resolve to the same values the

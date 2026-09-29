@@ -13,7 +13,7 @@ import {
   ResultsScreen,
 } from "@/components/screens";
 import { ReviewScreen } from "@/components/review";
-import { NewScenarioDialog } from "@/components/scenario/NewScenarioDialog";
+import { NewScenarioScreen } from "@/components/scenario/NewScenarioScreen";
 import { SessionExpiredDialog, StatusBar } from "@/components/status";
 import { Button, Tag } from "@/components/ui";
 import { api } from "@/lib/api/client";
@@ -306,11 +306,13 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      // New scenario covers the plan that `r` would run.
+      if (creating) return;
       if (e.key === "r" && !e.metaKey && !e.ctrlKey) start();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [start]);
+  }, [start, creating]);
 
   // Create & run made the draft a plan: it joins the list like any new one.
   const draftCreated = useCallback(
@@ -354,22 +356,33 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
       <AppShell>
         <AppHeader
           tabs={TABS}
-          activeTab={nav.tab}
-          onTabChange={nav.setTab}
+          activeTab={creating ? undefined : nav.tab}
+          onTabChange={(tab) => {
+            // New scenario is a page, not a tab: any tab leaves it.
+            setCreating(false);
+            nav.setTab(tab);
+          }}
           scenarios={headerScenarios}
           activeScenarioId={isDraft ? "" : (scenarioSlug ?? "")}
           trailing={isDraft ? <Tag tone="accent">AI draft</Tag> : undefined}
-          onScenarioChange={nav.setScenario}
+          onScenarioChange={(slug) => {
+            setCreating(false);
+            nav.setScenario(slug);
+          }}
           onNewScenario={() => setCreating(true)}
           userInitials={initials(user.display_name ?? user.email)}
           onAccount={() => {
             // The Data list shows each scenario's last run, which a run
             // started since the list loaded would have moved on from.
             scenarios.reload();
+            setCreating(false);
             nav.setTab("account");
           }}
-          accountOpen={nav.tab === "account"}
-          onRun={start}
+          accountOpen={!creating && nav.tab === "account"}
+          onRun={() => {
+            setCreating(false);
+            start();
+          }}
           offline={status.offline}
         />
 
@@ -388,7 +401,33 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           </p>
         )}
 
-        {nav.tab === "account" ? (
+        {creating ? (
+          <NewScenarioScreen
+            defaults={user}
+            inflationProfiles={inflationProfiles}
+            taxConfigs={taxConfigs}
+            access={access.data}
+            onClose={() => {
+              setCreating(false);
+              // A draft started here spent one of the month's drafts.
+              access.reload();
+            }}
+            onCreated={(created) => {
+              setRecentlyCreated(created);
+              nav.openScenario(created.slug, "plan");
+              scenarios.reload();
+            }}
+            onDraftCreated={(created) => {
+              setCreating(false);
+              draftCreated(created);
+            }}
+            onReviewDraft={(created) => {
+              setCreating(false);
+              setDraft(created);
+              nav.openScenario(created.slug, "review");
+            }}
+          />
+        ) : nav.tab === "account" ? (
           <AccountScreen
             user={user}
             scenarios={list}
@@ -498,33 +537,6 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
         <SessionExpiredDialog onSignIn={() => void session.signOut()} />
       )}
 
-      {creating && (
-        <NewScenarioDialog
-          defaults={user}
-          inflationProfiles={inflationProfiles}
-          taxConfigs={taxConfigs}
-          access={access.data}
-          onClose={() => {
-            setCreating(false);
-            // A draft in the dialog spent one of the month's drafts.
-            access.reload();
-          }}
-          onCreated={(created) => {
-            setRecentlyCreated(created);
-            nav.openScenario(created.slug, "plan");
-            scenarios.reload();
-          }}
-          onDraftCreated={(created) => {
-            setCreating(false);
-            draftCreated(created);
-          }}
-          onReviewDraft={(created) => {
-            setCreating(false);
-            setDraft(created);
-            nav.openScenario(created.slug, "review");
-          }}
-        />
-      )}
     </main>
   );
 }

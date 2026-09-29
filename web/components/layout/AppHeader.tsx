@@ -37,7 +37,8 @@ export function AppHeader<T extends string>({
   trailing,
 }: {
   tabs: ReadonlyArray<TabDef<T>>;
-  activeTab: T;
+  /** Absent while a page that is not a tab (New scenario) is on screen. */
+  activeTab?: T;
   onTabChange: (id: T) => void;
   scenarios: Scenario[];
   activeScenarioId: string;
