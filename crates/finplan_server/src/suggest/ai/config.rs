@@ -372,12 +372,15 @@ pub struct DraftConfig {
     )]
     pub require_zdr: bool,
 
-    /// Most model requests one drafting pass may make.
+    /// Most model requests one drafting job may make, across its
+    /// suspensions for questions (a follow-up message gets its own). A draft
+    /// reads each document and writes a note per account, income and spending
+    /// line, so a few statements take dozens.
     #[arg(
         id = "draft_max_turns",
         long = "draft-max-turns",
         env = "FINPLAN_DRAFT_MAX_TURNS",
-        default_value_t = 20
+        default_value_t = 50
     )]
     pub max_turns: u32,
 
@@ -386,7 +389,7 @@ pub struct DraftConfig {
         id = "draft_max_previews",
         long = "draft-max-previews",
         env = "FINPLAN_DRAFT_MAX_PREVIEWS",
-        default_value_t = 12
+        default_value_t = 20
     )]
     pub max_previews: u32,
 
@@ -414,8 +417,8 @@ impl Default for DraftConfig {
             ttl_hours: 24,
             temp_dir: None,
             require_zdr: true,
-            max_turns: 20,
-            max_previews: 12,
+            max_turns: 50,
+            max_previews: 20,
             max_tokens: 32_000,
         }
     }
@@ -479,11 +482,11 @@ impl DraftConfig {
         if self.ttl_hours == 0 || self.ttl_hours > 24 * 30 {
             return Err("draft ttl hours must be between 1 and 720".into());
         }
-        if self.max_turns == 0 || self.max_turns > 100 {
-            return Err("draft max turns must be between 1 and 100".into());
+        if self.max_turns == 0 || self.max_turns > 200 {
+            return Err("draft max turns must be between 1 and 200".into());
         }
-        if self.max_previews > 100 {
-            return Err("draft max previews must be at most 100".into());
+        if self.max_previews > 200 {
+            return Err("draft max previews must be at most 200".into());
         }
         if !(1_024..=128_000).contains(&self.max_tokens) {
             return Err("draft max tokens must be between 1024 and 128000".into());
@@ -529,7 +532,7 @@ mod draft_tests {
         );
         assert_eq!(config.ttl_hours, 24);
         // Its own model budget, beside the review's rather than shared with it.
-        assert_eq!((config.max_turns, config.max_previews), (20, 12));
+        assert_eq!((config.max_turns, config.max_previews), (50, 20));
         assert_eq!(Cli::parse_from(["test"]).review.max_turns, 16);
     }
 
@@ -551,7 +554,7 @@ mod draft_tests {
         assert_eq!((config.draft.max_turns, config.review.max_turns), (9, 7));
         config.draft.validate().unwrap();
 
-        let broken: [fn(&mut DraftConfig); 8] = [
+        let broken: [fn(&mut DraftConfig); 9] = [
             |c| c.free_per_month = 0,
             |c| c.pro_per_month = 1,
             |c| c.free_max_files = 0,
@@ -559,6 +562,7 @@ mod draft_tests {
             |c| c.free_max_pages = 0,
             |c| c.ttl_hours = 0,
             |c| c.max_turns = 0,
+            |c| c.max_turns = 201,
             |c| c.max_tokens = 10,
         ];
         for break_it in broken {

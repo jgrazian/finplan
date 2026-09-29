@@ -54,6 +54,7 @@ export function DraftReview({
   const [selections, setSelections] = useState<Record<number, string>>({});
   const [working, setWorking] = useState<"create" | "discard">();
   const [error, setError] = useState<string>();
+  const [unadded, setUnadded] = useState(false);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
   const id = scenario.id;
 
@@ -111,13 +112,18 @@ export function DraftReview({
     }
   };
 
-  const create = async () => {
+  // Create & run adds the notes not yet added, as "Add to draft" would; one
+  // it cannot add keeps the draft a draft and is named, with the choice to
+  // create without it.
+  const create = async (addOpen: boolean) => {
     setWorking("create");
     setError(undefined);
+    setUnadded(false);
     try {
-      const created = await api.drafts.createAndRun(id);
+      const created = await api.drafts.createAndRun(id, { add_open: addOpen });
       onCreated(created.scenario);
     } catch (err) {
+      const unaddable = err instanceof ApiError && err.status === 422;
       setError(
         err instanceof ApiError && err.status === 409
           ? "The draft is still being written. Try again when it has finished."
@@ -125,6 +131,12 @@ export function DraftReview({
             ? err.message
             : String(err),
       );
+      setUnadded(unaddable);
+      // The notes it could add are in the draft now.
+      if (unaddable) {
+        onPlanChanged();
+        reload();
+      }
       setWorking(undefined);
     }
   };
@@ -154,6 +166,10 @@ export function DraftReview({
   }
 
   const drafting = status?.state === "drafting";
+  // What Create & run will add: open add notes no question holds back.
+  const toAdd = (notes ?? []).filter(
+    (note) => note.status === "open" && note.kind === "add" && note.blocked_by.length === 0,
+  ).length;
   const questions = status?.questions.length ?? 0;
 
   const renderCard = ({ card, badge, waiting }: DraftCard) => (
@@ -188,12 +204,21 @@ export function DraftReview({
           borderBottom: "1px solid var(--color-divider)",
         }}
       >
-        <span style={{ fontSize: 12.5, color: MUTED }}>{board.headline || "No notes"}</span>
+        <span style={{ fontSize: 12.5, color: MUTED }}>
+          {board.headline || "No notes"}
+          {toAdd > 0 &&
+            ` · Create & run adds the ${toAdd === 1 ? "note" : `${toAdd} notes`} not yet added; Leave out any you don't want`}
+        </span>
         <div style={{ marginLeft: "auto", display: "flex", flexWrap: "wrap", gap: 8 }}>
           <Button disabled={offline || working != null} onClick={() => void discard()}>
             {working === "discard" ? "Deleting…" : "Discard draft"}
           </Button>
-          <Button variant="primary" disabled={offline || drafting || working != null} onClick={() => void create()}>
+          {unadded && (
+            <Button disabled={offline || drafting || working != null} onClick={() => void create(false)}>
+              Create without them
+            </Button>
+          )}
+          <Button variant="primary" disabled={offline || drafting || working != null} onClick={() => void create(true)}>
             {working === "create" ? "Creating…" : "Create & run"}
           </Button>
         </div>

@@ -24,6 +24,7 @@ import type {
   CreateRun,
   CreateScenario,
   CreateTaxConfig,
+  CreateDraft,
   Credentials,
   DeleteAccount,
   DocumentManifest,
@@ -346,8 +347,13 @@ export const api = {
     /** A follow-up to a finished draft: the agent runs again over it. 409 while it writes or waits. */
     message: (id: number, body: DraftMessage) =>
       http.post<DraftStatus>(`/drafts/${id}/messages`, body),
-    /** Create & run: 409 while the agent is still writing. */
-    createAndRun: (id: number) => http.post<DraftCreated>(`/drafts/${id}/create`),
+    /**
+     * Create & run: 409 while the agent is still writing. With `add_open` the
+     * open notes are added first; 422 names any that could not be, and the
+     * draft stays a draft.
+     */
+    createAndRun: (id: number, body: CreateDraft = {}) =>
+      http.post<DraftCreated>(`/drafts/${id}/create`, body),
     documents: {
       list: (id: number) => http.get<DocumentManifest[]>(`/drafts/${id}/documents`),
       /** 413 over the tier's file or size limit, 415 for a type it cannot read. */

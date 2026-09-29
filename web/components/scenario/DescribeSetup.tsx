@@ -101,6 +101,7 @@ export function DescribeSetup({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [working, setWorking] = useState<"attach" | "start" | "send" | "create" | "review">();
   const [error, setError] = useState<string>();
+  const [unadded, setUnadded] = useState(false);
   const [pollFailures, setPollFailures] = useState(0);
   const [gone, setGone] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -332,13 +333,16 @@ export function DescribeSetup({
     onReviewDraft(status.scenario);
   };
 
-  const create = async () => {
+  // Create & run adds the notes not yet added first; if one cannot be added
+  // the draft stays a draft, the note is named, and it can be left out.
+  const create = async (addOpen: boolean) => {
     const id = draftId.current;
     if (id == null) return;
     setWorking("create");
     setError(undefined);
+    setUnadded(false);
     try {
-      const created = await api.drafts.createAndRun(id);
+      const created = await api.drafts.createAndRun(id, { add_open: addOpen });
       handedOff.current = true;
       onCreated(created.scenario);
     } catch (err) {
@@ -347,6 +351,11 @@ export function DescribeSetup({
           ? "The draft is still being written. Try again when it has finished."
           : message(err),
       );
+      if (err instanceof ApiError && err.status === 422) {
+        setUnadded(true);
+        // What it could add is in the draft now: read the status again.
+        api.drafts.get(id).then(setStatus, () => undefined);
+      }
       setWorking(undefined);
     }
   };
@@ -628,7 +637,12 @@ export function DescribeSetup({
               <Button disabled={!canFinish} onClick={review}>
                 Review draft
               </Button>
-              <Button variant="primary" disabled={!canFinish} onClick={() => void create()}>
+              {unadded && (
+                <Button disabled={!canFinish} onClick={() => void create(false)}>
+                  Create without them
+                </Button>
+              )}
+              <Button variant="primary" disabled={!canFinish} onClick={() => void create(true)}>
                 {working === "create" ? "Creating…" : "Create & run"}
               </Button>
             </div>
@@ -815,7 +829,8 @@ function DraftPanel({
           )}
           {stop === "turn_limit" || stop === "max_tokens" ? (
             <p className="ns-mut" style={{ margin: 0, fontSize: 12 }}>
-              It stopped before covering everything. Review what it wrote and add the rest.
+              It stopped before covering everything. Send a message such as &ldquo;Carry on&rdquo; to let it
+              finish, or review what it wrote and add the rest.
             </p>
           ) : null}
         </div>

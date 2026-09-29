@@ -1031,7 +1031,7 @@ fn public(error: ApiError) -> String {
 }
 
 /// A failed apply, in words.
-fn failure_text(failure: Failure) -> String {
+pub(super) fn failure_text(failure: Failure) -> String {
     match failure {
         Failure::Api(error) => public(error),
         Failure::Problems {

@@ -34,6 +34,7 @@ use ts_rs::TS;
 use super::draft_agent::{self, DraftAnswers, DraftMessage, StartDrafting};
 use super::runs::{self, Run};
 use super::scenarios::{SCENARIO_COLUMNS, Scenario};
+use super::suggestions::{self, ApplySuggestion, ApplyTo, SuggestionPath};
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::db::Db;
@@ -470,17 +471,35 @@ async fn discard(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// The body of `POST /drafts/{id}/create`, all of it optional.
+#[derive(Debug, Default, Deserialize, TS)]
+#[ts(export)]
+pub struct CreateDraft {
+    /// Add the draft's open `add` notes first, each by its recommended path,
+    /// in the order they were written. Notes waiting on an unanswered
+    /// question and check notes (To confirm) are left out. If any cannot be
+    /// added the draft stays a draft (422, naming them), so nothing is
+    /// dropped without the person knowing; false creates from what the
+    /// draft already holds.
+    #[serde(default)]
+    #[ts(optional)]
+    pub add_open: Option<bool>,
+}
+
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct DraftCreated {
     pub scenario: Scenario,
+    /// Open notes `add_open` added on the way.
+    pub added: i64,
     /// The queued run. A review starts, as for any plan, once it has
     /// succeeded (`POST /scenarios/{id}/review`), because notes are written
     /// against a finished run.
     pub run: Run,
 }
 
-/// `POST /drafts/{id}/create` — Create & run: check the plan slot, make the
+/// `POST /drafts/{id}/create` — Create & run: with `add_open`, add the open
+/// notes first ([`add_open_notes`]); then check the plan slot, make the
 /// draft a plan (`status = 'active'`) and queue its run the way any run is
 /// queued. A draft that does not compile is refused while it is still a draft;
 /// if the run cannot be queued (capacity), the draft stays a draft so the
@@ -489,7 +508,9 @@ async fn create_and_run(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
+    body: Option<Json<CreateDraft>>,
 ) -> ApiResult<(StatusCode, Json<DraftCreated>)> {
+    let add_open = body.and_then(|Json(b)| b.add_open).unwrap_or(false);
     // A draft that cannot run says why now, before it stops being a draft.
     let graph = match ScenarioGraph::load(&state.db, id, &user.id).await {
         Ok(graph) if super::is_draft(&state.db, id).await? => graph,
@@ -506,6 +527,12 @@ async fn create_and_run(
             "the draft is still being written; wait for it to finish".into(),
         ));
     }
+    let (graph, added) = if add_open {
+        let added = add_open_notes(&state, &user, id).await?;
+        (ScenarioGraph::load(&state.db, id, &user.id).await?, added)
+    } else {
+        (graph, 0)
+    };
     compile::compile(&graph)?;
 
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
@@ -562,7 +589,78 @@ async fn create_and_run(
     .bind(id)
     .fetch_one(&state.db)
     .await?;
-    Ok((StatusCode::CREATED, Json(DraftCreated { scenario, run })))
+    Ok((
+        StatusCode::CREATED,
+        Json(DraftCreated {
+            scenario,
+            added,
+            run,
+        }),
+    ))
+}
+
+/// Add the draft's open, unblocked `add` notes, as Review's "Add to draft"
+/// would: each by the path it has started, else its recommended one, else
+/// its first, in the order written (a later note may build on an earlier
+/// one). A note that cannot be added does not stop the rest; if any could
+/// not, the draft is left a draft and the error names them.
+async fn add_open_notes(state: &AppState, user: &CurrentUser, id: i64) -> ApiResult<i64> {
+    let open: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, title, paths_json, applied_path FROM suggestions
+          WHERE scenario_id = ?1 AND status = 'open' AND kind = 'add'
+            AND blocked_by_json = '[]'
+          ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    let mut added = 0;
+    let mut failed = Vec::new();
+    for (note, title, paths_json, applied_path) in open {
+        let paths: Vec<SuggestionPath> = serde_json::from_str(&paths_json)
+            .map_err(|_| ApiError::internal("unreadable stored paths"))?;
+        let Some(path) = applied_path.or_else(|| {
+            paths
+                .iter()
+                .find(|p| p.recommended)
+                .or(paths.first())
+                .map(|p| p.key.clone())
+        }) else {
+            continue;
+        };
+        let applied = suggestions::apply(
+            State(state.clone()),
+            user.clone(),
+            Path(note),
+            Json(ApplySuggestion {
+                path,
+                through_step: None,
+                to: ApplyTo::Plan,
+                name: None,
+            }),
+        )
+        .await;
+        match applied {
+            Ok(_) => added += 1,
+            Err(failure) => failed.push(format!(
+                "\u{201c}{title}\u{201d} ({})",
+                draft_agent::failure_text(failure)
+            )),
+        }
+    }
+    if !failed.is_empty() {
+        return Err(ApiError::unprocessable(format!(
+            "{} could not be added to the draft, so it was not created: {}. \
+             Fix or leave them out on Review, or create without them",
+            if failed.len() == 1 {
+                "1 note".to_owned()
+            } else {
+                format!("{} notes", failed.len())
+            },
+            failed.join("; ")
+        )));
+    }
+    Ok(added)
 }
 
 /// Put a plan whose first run could not be queued back to a draft.

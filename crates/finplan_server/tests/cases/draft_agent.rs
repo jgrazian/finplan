@@ -764,3 +764,183 @@ async fn messages_go_with_answers_and_follow_ups_run_the_agent_again() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
 }
+
+#[tokio::test]
+async fn create_and_run_adds_the_open_notes_and_names_any_it_cannot() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("agent-add-open@example.com").await;
+    let id = app.start_draft().await["id"].as_i64().unwrap();
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let savings = profiles
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "Savings Account")
+        .unwrap()["id"]
+        .clone();
+
+    // The statement's account goes in at once.
+    let account = note(
+        "add",
+        "Acme checking holds $12,345",
+        json!([{"ref": "description", "excerpt": "I spend $3,000 a month"}]),
+        json!([{"op": "add", "target": {"new_account": "acme"}, "path": "",
+                "value": {"name": "Acme Checking", "flavor": "Bank",
+                          "cash_value": 12345.0, "return_profile_id": savings}}]),
+        json!({"auto_add": true, "section": "portfolio", "column": "portfolio", "key": "acme"}),
+    );
+    script.push(message(vec![
+        call("acct", "submit_suggestion", account),
+        end(),
+    ]));
+    let (status, _) = app
+        .post(
+            &format!("/api/drafts/{id}/start"),
+            json!({"description": DESCRIPTION}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    app.await_draft(id, &["ready", "failed"]).await;
+    let (_, accounts) = app.get(&format!("/api/scenarios/{id}/accounts")).await;
+    let account_id = accounts[0]["id"].as_i64().unwrap();
+
+    // Spending, a parameter and two balance changes are the agent's
+    // estimates: left open. The two changes read the same balance, so once
+    // the first is added the second is stale.
+    let living = note(
+        "add",
+        "Living costs are $3,000 a month",
+        json!([{"ref": "description", "excerpt": "I spend $3,000 a month"}]),
+        json!([{"op": "add", "target": {"new_event": "living"}, "path": "",
+                "value": {"name": "Living", "trigger": {"kind": "Repeating", "interval": "Monthly"},
+                          "effects": [{"kind": "Expense", "from_account_id": account_id,
+                                       "amount": {"kind": "Fixed", "value": 3000.0}}]}}]),
+        json!({"key": "living", "column": "plan"}),
+    );
+    let salary = note(
+        "add",
+        "Salary of $205,000 a year",
+        json!([{"ref": "description", "excerpt": "earn $205,000 a year"}]),
+        json!([{"op": "add", "target": {"new_parameter": "salary"}, "path": "",
+                "value": {"name": "Salary", "value": {"kind": "Money", "value": 205000.0}}}]),
+        json!({"key": "salary", "column": "plan"}),
+    );
+    // Two notes may not make the same edits, so the second also renames.
+    let raise = |title: &str, key: &str, value: f64, rename: bool| {
+        let mut changes = vec![json!({"op": "replace", "target": {"account": account_id},
+                                      "path": "/cash_value", "expect": 12345.0, "value": value})];
+        if rename {
+            changes.push(json!({"op": "replace", "target": {"account": account_id},
+                                "path": "/name", "expect": "Acme Checking", "value": "Acme Joint"}));
+        }
+        note(
+            "add",
+            title,
+            json!([{"ref": "description", "excerpt": "I spend $3,000 a month"}]),
+            Value::Array(changes),
+            json!({"key": key, "section": "portfolio", "column": "portfolio"}),
+        )
+    };
+    script.push(message(vec![
+        call("living", "submit_suggestion", living),
+        call("salary", "submit_suggestion", salary),
+        call(
+            "first",
+            "submit_suggestion",
+            raise("Checking is $20,000 now", "first", 20_000.0, false),
+        ),
+        call(
+            "second",
+            "submit_suggestion",
+            raise("Checking is $25,000 after payday", "second", 25_000.0, true),
+        ),
+        end(),
+    ]));
+    let (status, sent) = app
+        .post(
+            &format!("/api/drafts/{id}/messages"),
+            json!({"message": "Add my spending."}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    let ready = app.await_draft(id, &["ready", "failed"]).await;
+    assert_eq!(ready["counts"]["open_suggestions"], 4, "{ready}");
+
+    // Create & run adding the open notes: the stale one cannot be added, so
+    // the draft stays a draft and the error names it. The rest are in.
+    let (status, refused) = app
+        .post(
+            &format!("/api/drafts/{id}/create"),
+            json!({"add_open": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let why = refused["error"]["message"].as_str().unwrap();
+    assert!(why.contains("1 note could not be added"), "{why}");
+    assert!(why.contains("Checking is $25,000 after payday"), "{why}");
+    let (_, still) = app.get(&format!("/api/drafts/{id}")).await;
+    assert_eq!(still["scenario"]["status"], "draft");
+    assert_eq!(still["counts"]["events"], 1, "{still}");
+    assert_eq!(still["counts"]["parameters"], 1);
+    assert_eq!(still["counts"]["open_suggestions"], 1);
+
+    // Asked again, with nothing left it can add, it creates from what the
+    // draft holds; so does leaving the open notes out.
+    let (status, created) = app
+        .post(
+            &format!("/api/drafts/{id}/create"),
+            json!({"add_open": false}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["added"], 0);
+    let (_, events) = app.get(&format!("/api/scenarios/{id}/events")).await;
+    let (_, parameters) = app.get(&format!("/api/scenarios/{id}/parameters")).await;
+    let (_, accounts) = app.get(&format!("/api/scenarios/{id}/accounts")).await;
+    assert_eq!(events.as_array().unwrap().len(), 1, "{events}");
+    assert_eq!(parameters.as_array().unwrap().len(), 1, "{parameters}");
+    assert_eq!(accounts[0]["cash_value"], 20_000.0);
+}
+
+#[tokio::test]
+async fn create_and_run_with_every_open_note_addable_creates_at_once() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("agent-add-all@example.com").await;
+    let id = app.start_draft().await["id"].as_i64().unwrap();
+    let salary = note(
+        "add",
+        "Salary of $205,000 a year",
+        json!([{"ref": "description", "excerpt": "earn $205,000 a year"}]),
+        json!([{"op": "add", "target": {"new_parameter": "salary"}, "path": "",
+                "value": {"name": "Salary", "value": {"kind": "Money", "value": 205000.0}}}]),
+        json!({"key": "salary", "column": "plan"}),
+    );
+    script.push(message(vec![
+        call("salary", "submit_suggestion", salary),
+        end(),
+    ]));
+    let (status, _) = app
+        .post(
+            &format!("/api/drafts/{id}/start"),
+            json!({"description": DESCRIPTION}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let ready = app.await_draft(id, &["ready", "failed"]).await;
+    assert_eq!(ready["counts"]["open_suggestions"], 1, "{ready}");
+    assert_eq!(ready["counts"]["parameters"], 0);
+
+    let (status, created) = app
+        .post(
+            &format!("/api/drafts/{id}/create"),
+            json!({"add_open": true}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    assert_eq!(created["added"], 1);
+    let (_, parameters) = app.get(&format!("/api/scenarios/{id}/parameters")).await;
+    assert_eq!(parameters.as_array().unwrap().len(), 1, "{parameters}");
+    assert_eq!(created["scenario"]["status"], "active");
+}

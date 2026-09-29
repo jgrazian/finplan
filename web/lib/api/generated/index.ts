@@ -56,6 +56,7 @@ export type { CreateAccount } from "./CreateAccount";
 export type { CreateAnalysis } from "./CreateAnalysis";
 export type { CreateAsset } from "./CreateAsset";
 export type { CreateContactMessage } from "./CreateContactMessage";
+export type { CreateDraft } from "./CreateDraft";
 export type { CreatePosition } from "./CreatePosition";
 export type { CreateProfile } from "./CreateProfile";
 export type { CreateRun } from "./CreateRun";

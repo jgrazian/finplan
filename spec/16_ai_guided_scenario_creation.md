@@ -61,6 +61,17 @@ Landed, by phase:
   named in it. The Draft rail lists the draft's accounts (opening balances)
   and events (when they fire), read from the ordinary scenario routes whenever
   the counts or added notes move.
+  Create & run (`add_open` on `POST /drafts/{id}/create`, which both pages
+  send) first adds the open `add` notes no question holds back, each by its
+  started, recommended or first path, in the order written. Only statement
+  facts are auto-added, so without this the estimates (salary, spending,
+  retirement, parameters) were silently left out of the plan. A note that
+  cannot be added keeps the draft a draft; the 422 names it, and "Create
+  without them" sends `add_open: false`. Check notes (To confirm) stay out.
+  The drafting budget is 50 requests per job (was 20) and 20 previews (was
+  12), up to 200 each through `FINPLAN_DRAFT_MAX_TURNS` /
+  `FINPLAN_DRAFT_MAX_PREVIEWS`; a draft stopped at the limit can be carried
+  on with a follow-up message, which gets a fresh budget.
 - **6, tools.** `validate_changes`, `preview_paths`, `preflight`,
   `inspect_path`, `failure_profile`, `reference_facts`, `finance_calc`,
   `estimate_social_security`, `estimate_taxes`, `Evidence::Computed`
