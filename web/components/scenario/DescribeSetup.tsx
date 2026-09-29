@@ -11,18 +11,23 @@ import type { Entitlements } from "@/lib/api/generated/Entitlements";
 import { ApiError } from "@/lib/api/http";
 import type { Scenario } from "@/lib/api/types";
 import {
+  answerLabel,
   answersOf,
   CONSENT_LINES,
   documentNote,
   DRAFT_POLL_MS,
+  draftContents,
+  type DraftContents,
   draftPanel,
   fileSize,
   limitsLine,
+  outgoingMessage,
   quotaBlock,
   quotaLine,
   RETENTION_OPTIONS,
   type Retention,
 } from "@/lib/view/draft";
+import { money } from "@/lib/view/format";
 import { SetupBar } from "./SetupBar";
 
 const ERROR = { margin: 0, fontSize: 12.5, color: "var(--color-accent-800)" } as const;
@@ -40,21 +45,33 @@ const extension = (filename: string) => {
 
 const documentsWord = (count: number) => `${count} ${count === 1 ? "document" : "documents"}`;
 
-/** "your description and 5 documents", leaving out what was not given. */
-function sourcesOf(description: string, documents: number): string | undefined {
+/** "5 documents and your description", leaving out what was not given. */
+function sourcesOf(described: boolean, documents: number): string | undefined {
   const parts = [
     documents > 0 ? documentsWord(documents) : undefined,
-    description.trim() ? "your description" : undefined,
+    described ? "your description" : undefined,
   ].filter((part): part is string => part != null);
   return parts.length > 0 ? parts.join(" and ") : undefined;
 }
 
+/** One message in the conversation, as it was sent or as the agent ended. */
+type Turn =
+  | {
+      key: number;
+      from: "you";
+      text: string;
+      files: DocumentManifest[];
+      answers: Array<{ prompt: string; answer: string }>;
+    }
+  | { key: number; from: "finplan"; text: string };
+
 /**
  * New scenario, Describe & upload (design 2a): a conversation on the left,
- * where the person describes themselves and attaches files and the agent asks
- * what it could not tell from them, and the draft filling in on the right.
- * Nothing here is a plan until Create & run; leaving the page (or going back
- * to Guided) deletes the draft, which is not resumable.
+ * where the person describes themselves, attaches files, answers the agent's
+ * questions and tells it more once a draft is written; and the draft filling
+ * in on the right, account by account and event by event. Nothing here is a
+ * plan until Create & run; leaving the page (or going back to Guided) deletes
+ * the draft, which is not resumable.
  */
 export function DescribeSetup({
   access,
@@ -72,17 +89,23 @@ export function DescribeSetup({
   onReviewDraft: (draft: Scenario) => void;
 }) {
   const [description, setDescription] = useState("");
+  const [reply, setReply] = useState("");
   const [retention, setRetention] = useState<Retention>("delete");
   const [status, setStatus] = useState<DraftStatus>();
   const [documents, setDocuments] = useState<DocumentManifest[]>([]);
+  // Files before this index went with an earlier message.
+  const [sentFiles, setSentFiles] = useState(0);
+  const [thread, setThread] = useState<Turn[]>([]);
+  const [contents, setContents] = useState<DraftContents>();
   const [started, setStarted] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [working, setWorking] = useState<"attach" | "start" | "answer" | "create" | "review">();
+  const [working, setWorking] = useState<"attach" | "start" | "send" | "create" | "review">();
   const [error, setError] = useState<string>();
   const [pollFailures, setPollFailures] = useState(0);
   const [gone, setGone] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const turnKey = useRef(0);
 
   // The draft exists from the first file or the first "Draft it", not from
   // opening the page: creating one spends one of the month's drafts.
@@ -156,6 +179,37 @@ export function DescribeSetup({
     };
   }, [started, state, gone]);
 
+  // The rows behind the rail's lists, read again whenever what the draft
+  // holds moves (a note added counts: it may change a balance, not a count).
+  const counts = status?.counts;
+  const holds = started && counts
+    ? `${counts.accounts}/${counts.assets}/${counts.events}/${counts.notes_added}`
+    : undefined;
+  useEffect(() => {
+    const id = draftId.current;
+    if (holds == null || id == null) return;
+    let live = true;
+    Promise.all([api.accounts.list(id), api.assets.list(id), api.events.list(id)]).then(
+      ([accounts, assets, events]) => live && setContents(draftContents(accounts, assets, events)),
+      // The counts still say what is there; the lists catch up on the next change.
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [holds]);
+
+  // Each time the agent stops, its closing line answers the last message.
+  const closing = state === "ready" ? (status?.progress ?? "The draft is ready.") : undefined;
+  useEffect(() => {
+    if (!started || closing == null) return;
+    setThread((turns) =>
+      turns.at(-1)?.from !== "you"
+        ? turns
+        : [...turns, { key: ++turnKey.current, from: "finplan", text: closing }],
+    );
+  }, [started, closing]);
+
   const attach = async (files: File[]) => {
     if (files.length === 0) return;
     setWorking("attach");
@@ -209,6 +263,11 @@ export function DescribeSetup({
         await api.drafts.update(id, { retain_documents: retention === "keep" });
       }
       setStatus(await api.drafts.start(id, { description: description.trim() }));
+      // A retry after a failure starts over, so the thread does too.
+      setThread([
+        { key: ++turnKey.current, from: "you", text: description.trim(), files: documents, answers: [] },
+      ]);
+      setSentFiles(documents.length);
       setStarted(true);
       setPollFailures(0);
       setGone(false);
@@ -221,15 +280,44 @@ export function DescribeSetup({
 
   const questions: DraftQuestion[] = status?.state === "awaiting_answers" ? status.questions : [];
   const ready = answersOf(questions, answers);
+  const fresh = documents.slice(sentFiles);
+  const followUpsLeft = status?.follow_ups_left ?? 0;
 
-  const sendAnswers = async () => {
+  /** The composer's Send: answers and a message while it waits, a follow-up once it is ready. */
+  const send = async () => {
     const id = draftId.current;
-    if (id == null || ready == null) return;
-    setWorking("answer");
+    if (id == null) return;
+    const outgoing = outgoingMessage(reply, fresh);
+    if (state === "awaiting_answers" && ready == null) {
+      setError("Answer the questions above to send.");
+      return;
+    }
+    if (state === "ready" && outgoing === "") {
+      setError("Write something to send.");
+      return;
+    }
+    setWorking("send");
     setError(undefined);
     try {
-      setStatus(await api.drafts.answer(id, { answers: ready }));
+      const answered = questions.map((q) => ({ prompt: q.prompt, answer: answerLabel(q, answers[q.key]) }));
+      const next =
+        state === "awaiting_answers" && ready != null
+          ? await api.drafts.answer(id, { answers: ready, ...(outgoing ? { message: outgoing } : {}) })
+          : await api.drafts.message(id, { message: outgoing });
+      setThread((turns) => [
+        ...turns,
+        {
+          key: ++turnKey.current,
+          from: "you",
+          text: reply.trim(),
+          files: fresh,
+          answers: state === "awaiting_answers" ? answered : [],
+        },
+      ]);
+      setStatus(next);
+      setReply("");
       setAnswers({});
+      setSentFiles(documents.length);
     } catch (err) {
       setError(message(err));
     } finally {
@@ -271,47 +359,30 @@ export function DescribeSetup({
   const canFinish = settled && !gone && working == null;
   const busy = working != null;
   const panel = status && started ? draftPanel(status) : undefined;
-  // Once the first message is sent it stays in the thread and the composer
-  // steps aside: the agent's questions are answered where they are asked.
+  // The first message has gone and the agent has not failed on it: the
+  // composer now answers and follows up rather than describes.
   const sent = started && state !== "failed";
-  const locked = working != null || (started && state === "drafting");
-  const sources = sourcesOf(description, documents.length);
+  const drafting = started && state === "drafting";
+  const sources = sourcesOf(description.trim() !== "", documents.length);
+  const canSend =
+    !busy &&
+    !gone &&
+    (state === "awaiting_answers" ? ready != null : state === "ready" && followUpsLeft > 0);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
-    void (sent ? sendAnswers() : begin());
+    void (sent ? send() : begin());
   };
 
-  const files = (removable: boolean) =>
-    documents.length > 0 && (
-      <ul
-        aria-label="Attached files"
-        style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexWrap: "wrap", gap: 6 }}
-      >
-        {documents.map((doc) => (
-          <li key={doc.id} className="ns-fchip" title={`${fileSize(doc.bytes)} · ${documentNote(doc)}`}>
-            <b>{extension(doc.filename)}</b>
-            <span style={{ overflowWrap: "anywhere" }}>{doc.filename}</span>
-            {/* Once sent, only a file that was not read cleanly says so. */}
-            {(removable || doc.status !== "parsed") && (
-              <span className="ns-mut">· {documentNote(doc)}</span>
-            )}
-            {removable && (
-              <button
-                type="button"
-                className="btn btn-ghost"
-                style={{ fontSize: 12, minHeight: 0, padding: "0 4px" }}
-                disabled={locked}
-                aria-label={`Remove ${doc.filename}`}
-                onClick={() => void detach(doc)}
-              >
-                ×
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-    );
+  const placeholder = !sent
+    ? "Your age, income, spending, goals and any big purchases ahead…"
+    : drafting
+      ? "Drafting… you can write again when it stops."
+      : state === "awaiting_answers"
+        ? "Anything else? It goes with your answers."
+        : followUpsLeft > 0
+          ? "Tell me more, or correct something…"
+          : "This draft takes no more messages. Change the rest on Review.";
 
   return (
     <div className="ns-page">
@@ -359,23 +430,43 @@ export function DescribeSetup({
                 </div>
               )}
 
-              {sent && (
-                <div className="ns-msg mine">
-                  <span className="ns-lbl">You</span>
-                  {description.trim() && (
-                    <span style={{ textWrap: "pretty", whiteSpace: "pre-wrap" }}>{description.trim()}</span>
-                  )}
-                  {files(false)}
-                </div>
-              )}
+              {sent &&
+                thread.map((turn) =>
+                  turn.from === "you" ? (
+                    <div key={turn.key} className="ns-msg mine">
+                      <span className="ns-lbl">You</span>
+                      {turn.answers.length > 0 && (
+                        <dl style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
+                          {turn.answers.map((a) => (
+                            <div key={a.prompt}>
+                              <dt className="ns-mut" style={{ display: "inline" }}>
+                                {a.prompt}{" "}
+                              </dt>
+                              <dd style={{ display: "inline", margin: 0, fontWeight: 600 }}>{a.answer}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
+                      {turn.text && (
+                        <span style={{ textWrap: "pretty", whiteSpace: "pre-wrap" }}>{turn.text}</span>
+                      )}
+                      <FileChips files={turn.files} />
+                    </div>
+                  ) : (
+                    <div key={turn.key} className="ns-msg">
+                      <span className="ns-lbl">FinPlan</span>
+                      <span style={{ textWrap: "pretty", whiteSpace: "pre-wrap" }}>{turn.text}</span>
+                    </div>
+                  ),
+                )}
 
               {questions.length > 0 && (
                 <section aria-label="Questions" className="ns-msg">
                   <span className="ns-lbl">FinPlan</span>
                   <span style={{ textWrap: "pretty" }}>
                     I read {sources ?? "what you sent"}.{" "}
-                    {questions.length === 1 ? "One thing" : `${questions.length} things`} I couldn&rsquo;t tell
-                    from {documents.length > 0 ? "them" : "it"}:
+                    {questions.length === 1 ? "One thing" : `${questions.length} things`}{" "}
+                    I couldn&rsquo;t tell from {documents.length > 0 ? "them" : "it"}:
                   </span>
                   <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "4px 0" }}>
                     {questions.map((question, index) => (
@@ -391,79 +482,73 @@ export function DescribeSetup({
                   <span className="ns-mut" style={{ fontSize: 12.5, textWrap: "pretty" }}>
                     Anything else I&rsquo;m unsure of goes into the draft as a note to confirm.
                   </span>
-                  <div>
-                    <Button type="submit" variant="primary" disabled={busy || ready == null}>
-                      {working === "answer" ? "Sending…" : "Send answers"}
-                    </Button>
-                  </div>
                 </section>
               )}
 
-              {state === "ready" && (
-                <div className="ns-msg">
-                  <span className="ns-lbl">FinPlan</span>
-                  <span style={{ textWrap: "pretty" }}>
-                    The draft is ready. Review it note by note, or create the plan and run it now.
-                  </span>
-                </div>
-              )}
-
-              {panel?.progress && (
+              {drafting && panel && (
                 <span className="ns-mut" style={{ fontSize: 12.5, fontStyle: "italic" }}>
-                  {panel.progress}
+                  {panel.progress ?? "Drafting…"} · {panel.summary}
                 </span>
               )}
             </div>
           </div>
 
           <div className="ns-composer">
-            {sent ? (
-              <span className="ns-mut" style={{ fontSize: 12.5 }}>
-                {state === "drafting"
-                  ? "Drafting from what you sent. Anything your documents don’t answer is asked above."
-                  : "Anything the draft got wrong can be changed on Review, before the plan is created."}
-              </span>
-            ) : (
-              <>
-                {files(true)}
-                <textarea
-                  ref={composer}
-                  className="input"
-                  rows={3}
-                  maxLength={4000}
-                  aria-label="About you"
-                  value={description}
-                  disabled={working === "start"}
-                  placeholder="Your age, income, spending, goals and any big purchases ahead…"
-                  style={{ resize: "vertical", fontSize: 13 }}
-                  onChange={(e) => setDescription(e.target.value)}
-                />
-              </>
-            )}
+            <FileChips
+              files={sent ? fresh : documents}
+              disabled={busy || drafting}
+              onRemove={(doc) => void detach(doc)}
+            />
+            <textarea
+              ref={composer}
+              className="input"
+              rows={sent ? 2 : 3}
+              maxLength={4000}
+              aria-label={sent ? "Message" : "About you"}
+              value={sent ? reply : description}
+              disabled={
+                working === "start" || working === "send" || drafting || (state === "ready" && followUpsLeft === 0)
+              }
+              placeholder={placeholder}
+              style={{ resize: "vertical", fontSize: 13 }}
+              onChange={(e) => (sent ? setReply(e.target.value) : setDescription(e.target.value))}
+            />
             {error && (
               <p role="alert" style={ERROR}>
                 {error}
               </p>
             )}
-            {!sent && (
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
-                <input
-                  ref={fileInput}
-                  type="file"
-                  multiple
-                  hidden
-                  aria-label="Attach files"
-                  onChange={(e) => void attach(Array.from(e.target.files ?? []))}
-                />
-                <Button
-                  disabled={locked || blocked != null || documents.length >= drafts.max_files}
-                  onClick={() => fileInput.current?.click()}
-                >
-                  {working === "attach" ? "Uploading…" : "Attach files"}
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
+              <input
+                ref={fileInput}
+                type="file"
+                multiple
+                hidden
+                aria-label="Attach files"
+                onChange={(e) => void attach(Array.from(e.target.files ?? []))}
+              />
+              <Button
+                disabled={
+                  busy ||
+                  drafting ||
+                  blocked != null ||
+                  documents.length >= drafts.max_files ||
+                  (state === "ready" && followUpsLeft === 0)
+                }
+                onClick={() => fileInput.current?.click()}
+              >
+                {working === "attach" ? "Uploading…" : "Attach files"}
+              </Button>
+              <span className="ns-mut" style={{ fontSize: 11.5 }}>
+                {sent && state === "ready"
+                  ? `${followUpsLeft} ${followUpsLeft === 1 ? "message" : "messages"} left on this draft`
+                  : `PDF, CSV, OFX, images · ${limitsLine(drafts)}`}
+              </span>
+              {sent ? (
+                <Button type="submit" variant="primary" style={{ marginLeft: "auto" }} disabled={!canSend}>
+                  {working === "send" ? "Sending…" : state === "awaiting_answers" ? "Send answers" : "Send"}
                 </Button>
-                <span className="ns-mut" style={{ fontSize: 11.5 }}>
-                  PDF, CSV, OFX, images · {limitsLine(drafts)}
-                </span>
+              ) : (
                 <Button
                   type="submit"
                   variant="primary"
@@ -472,8 +557,8 @@ export function DescribeSetup({
                 >
                   {working === "start" ? "Starting…" : state === "failed" ? "Try again" : "Draft it"}
                 </Button>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </form>
 
@@ -490,6 +575,7 @@ export function DescribeSetup({
             <div className="ns-rail">
               <DraftPanel
                 panel={panel}
+                contents={contents}
                 gone={gone}
                 lostTouch={pollFailures >= POLL_FAILURES_SHOWN}
                 stop={status?.stop ?? undefined}
@@ -553,6 +639,47 @@ export function DescribeSetup({
   );
 }
 
+/** Files as chips: in a sent message, or waiting in the composer to be removed. */
+function FileChips({
+  files,
+  disabled,
+  onRemove,
+}: {
+  files: readonly DocumentManifest[];
+  disabled?: boolean;
+  /** Present in the composer, where a file can still be taken off. */
+  onRemove?: (doc: DocumentManifest) => void;
+}) {
+  if (files.length === 0) return null;
+  return (
+    <ul
+      aria-label={onRemove ? "Attached files" : "Files sent"}
+      style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexWrap: "wrap", gap: 6 }}
+    >
+      {files.map((doc) => (
+        <li key={doc.id} className="ns-fchip" title={`${fileSize(doc.bytes)} · ${documentNote(doc)}`}>
+          <b>{extension(doc.filename)}</b>
+          <span style={{ overflowWrap: "anywhere" }}>{doc.filename}</span>
+          {/* Once sent, only a file that was not read cleanly says so. */}
+          {(onRemove || doc.status !== "parsed") && <span className="ns-mut">· {documentNote(doc)}</span>}
+          {onRemove && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              style={{ fontSize: 12, minHeight: 0, padding: "0 4px" }}
+              disabled={disabled}
+              aria-label={`Remove ${doc.filename}`}
+              onClick={() => onRemove(doc)}
+            >
+              ×
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** One of the agent's questions: segmented for a choice, otherwise a value. */
 function QuestionField({
   number,
@@ -599,27 +726,33 @@ function QuestionField({
   );
 }
 
-/** The draft as it fills in (design 2a, right-hand rail). */
+/**
+ * The draft as it fills in (design 2a, right-hand rail): its status, then the
+ * accounts and events it holds, with the notes that wait on an answer shown
+ * as ghost rows among them.
+ */
 function DraftPanel({
   panel,
+  contents,
   gone,
   lostTouch,
   stop,
 }: {
   panel: ReturnType<typeof draftPanel> | undefined;
+  contents: DraftContents | undefined;
   gone: boolean;
   lostTouch: boolean;
   stop?: string;
 }) {
   return (
-    <section aria-label="Draft status" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <section aria-label="Draft status" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {panel == null ? (
         <p className="ns-mut" style={{ margin: 0, fontSize: 13 }}>
           Your draft appears here once you start: the accounts, events and assumptions it finds, and anything it needs
           to ask you.
         </p>
       ) : (
-        <div role="status" aria-live="polite" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div role="status" aria-live="polite" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <Blueprint style={{ padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
             <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
               <span className="ns-lbl">{panel.heading}</span>
@@ -631,19 +764,44 @@ function DraftPanel({
             </div>
             <div style={{ fontSize: 14 }}>{panel.summary}</div>
           </Blueprint>
-          {panel.waiting.length > 0 && (
+
+          {contents && contents.accounts.length > 0 && (
             <div>
               <div className="ns-lbl" style={{ marginBottom: 4 }}>
-                Waiting on your answers
+                Accounts · {money(contents.total)}
               </div>
-              {panel.waiting.map((note) => (
-                <div key={note.id} className="ns-crow ns-mut" style={{ fontStyle: "italic" }}>
-                  <span style={{ flex: 1 }}>{note.title}</span>
-                  <span>{note.text}</span>
+              {contents.accounts.map((account) => (
+                <div key={account.id} className="ns-crow">
+                  <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{account.name}</span>
+                  <Tag tone={account.tone}>{account.tag}</Tag>
+                  <span style={{ minWidth: 90, textAlign: "right" }}>{money(account.balance)}</span>
                 </div>
               ))}
             </div>
           )}
+
+          {((contents && contents.events.length > 0) || panel.waiting.length > 0) && (
+            <div>
+              <div className="ns-lbl" style={{ marginBottom: 4 }}>
+                Events
+              </div>
+              {contents?.events.map((event) => (
+                <div key={event.id} className="ns-crow ns-mono" style={{ fontSize: 12 }}>
+                  <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{event.name}</span>
+                  <span className="ns-mut" style={{ textAlign: "right" }}>
+                    {event.when}
+                  </span>
+                </div>
+              ))}
+              {panel.waiting.map((note) => (
+                <div key={note.id} className="ns-crow ns-mut" style={{ fontSize: 12, fontStyle: "italic" }}>
+                  <span style={{ flex: 1, minWidth: 0 }}>{note.title}</span>
+                  <span style={{ textAlign: "right" }}>{note.text}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           {panel.notes && (
             <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12.5 }}>
               <Tag tone="outline">Notes</Tag>

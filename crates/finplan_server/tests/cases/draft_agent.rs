@@ -582,3 +582,185 @@ async fn a_restart_fails_a_running_job_and_keeps_one_waiting_for_answers() {
     let draft = app.await_draft(id, &["failed"]).await;
     assert_eq!(draft["error"], "interrupted by a server restart");
 }
+
+/// The last user turn of the latest request to the model, as text.
+fn last_user_text(script: &Script) -> String {
+    let requests = script.requests.lock().unwrap();
+    let request = requests.last().expect("a request");
+    let messages = request["messages"].as_array().unwrap();
+    messages
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "user")
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn messages_go_with_answers_and_follow_ups_run_the_agent_again() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("agent-follow-up@example.com").await;
+    let id = app.start_draft().await["id"].as_i64().unwrap();
+    let db = app.agent_db().await;
+
+    // Nothing to follow up before the draft is started.
+    let (status, refused) = app
+        .post(
+            &format!("/api/drafts/{id}/messages"),
+            json!({"message": "I also have a Roth IRA."}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+
+    // The first segment asks two questions.
+    script.push(message(vec![call(
+        "ask",
+        "ask_user",
+        json!({"questions": [
+            {"key": "bonus", "prompt": "Do you get a yearly bonus?", "answer_type": "choice",
+             "options": [{"value": "none", "label": "No bonus"}, {"value": "yes", "label": "Yes"}]},
+            {"key": "retire", "prompt": "When do you want to retire?", "answer_type": "text"}
+        ]}),
+    )]));
+    let (status, started) = app
+        .post(
+            &format!("/api/drafts/{id}/start"),
+            json!({"description": DESCRIPTION}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let waiting = app.await_draft(id, &["awaiting_answers", "failed"]).await;
+    assert_eq!(waiting["state"], "awaiting_answers", "{waiting}");
+    assert_eq!(waiting["follow_ups_left"], 3);
+
+    // While it waits, a follow-up is refused: the message goes with the answers.
+    let (status, refused) = app
+        .post(
+            &format!("/api/drafts/{id}/messages"),
+            json!({"message": "I also have a Roth IRA."}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    // A message with a question still open would sit unread; nothing is stored.
+    let (status, refused) = app
+        .post(
+            &format!("/api/drafts/{id}/answers"),
+            json!({"answers": {"bonus": "none"}, "message": "I also have a Roth IRA."}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let (_, unchanged) = app.get(&format!("/api/drafts/{id}")).await;
+    assert_eq!(unchanged["questions"].as_array().unwrap().len(), 2);
+
+    // Answers that close every question carry the message to the model and
+    // into the description.
+    script.push(message(vec![end()]));
+    let (status, resumed) = app
+        .post(
+            &format!("/api/drafts/{id}/answers"),
+            json!({"answers": {"bonus": "none", "retire": "at 55"},
+                   "message": "I also have a Roth IRA."}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{resumed}");
+    let ready = app.await_draft(id, &["ready", "failed"]).await;
+    assert_eq!(ready["state"], "ready", "{ready}");
+    let resume = last_user_text(&script);
+    assert!(resume.contains("The person answered."), "{resume}");
+    assert!(resume.contains("I also have a Roth IRA."), "{resume}");
+    let description: String =
+        sqlx::query_scalar("SELECT description FROM draft_jobs WHERE scenario_id = ?1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(
+        description,
+        format!("{DESCRIPTION}\n\nI also have a Roth IRA.")
+    );
+
+    // A follow-up to the finished draft runs the agent again, in a fresh
+    // conversation that opens with the message; what it writes lands in the
+    // draft and may quote the message as description.
+    let bonus = note(
+        "add",
+        "Add a yearly bonus of $5,000",
+        json!([{"ref": "description", "excerpt": "a $5,000 bonus"}]),
+        json!([{"op": "add", "target": {"new_parameter": "bonus"}, "path": "",
+                "value": {"name": "Yearly bonus", "value": {"kind": "Money", "value": 5000.0}}}]),
+        json!({"auto_add": true, "key": "bonus", "column": "plan"}),
+    );
+    script.push(message(vec![
+        call("bonus", "submit_suggestion", bonus),
+        end(),
+    ]));
+    let (status, empty) = app
+        .post(
+            &format!("/api/drafts/{id}/messages"),
+            json!({"message": "  "}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{empty}");
+    let (status, sent) = app
+        .post(
+            &format!("/api/drafts/{id}/messages"),
+            json!({"message": "Actually I get a $5,000 bonus each March."}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["state"], "drafting");
+    assert_eq!(sent["progress"], "Reading your message");
+    let updated = app.await_draft(id, &["ready", "failed"]).await;
+    assert_eq!(updated["state"], "ready", "{updated}");
+    assert_eq!(updated["counts"]["parameters"], 1, "{updated}");
+    assert_eq!(updated["follow_ups_left"], 2);
+    {
+        let requests = script.requests.lock().unwrap();
+        let opening = requests[requests.len() - 2]["messages"][0].to_string();
+        assert!(opening.contains("has since written"), "{opening}");
+        assert!(opening.contains("$5,000 bonus each March"), "{opening}");
+        assert_eq!(
+            requests[requests.len() - 2]["messages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "a follow-up starts a fresh conversation"
+        );
+    }
+    let (tokens, cost): (i64, f64) =
+        sqlx::query_as("SELECT output_tokens, cost_usd FROM draft_jobs WHERE scenario_id = ?1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(
+        tokens,
+        20 * 4,
+        "the job's totals carry across the follow-up"
+    );
+    assert!(cost >= 0.0);
+
+    // Two more, then the draft takes no more.
+    for n in 0..2 {
+        script.push(message(vec![end()]));
+        let (status, sent) = app
+            .post(
+                &format!("/api/drafts/{id}/messages"),
+                json!({"message": format!("One more thing, {n}.")}),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{sent}");
+        app.await_draft(id, &["ready", "failed"]).await;
+    }
+    let (_, spent) = app.get(&format!("/api/drafts/{id}")).await;
+    assert_eq!(spent["follow_ups_left"], 0);
+    let (status, refused) = app
+        .post(
+            &format!("/api/drafts/{id}/messages"),
+            json!({"message": "And another."}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+}

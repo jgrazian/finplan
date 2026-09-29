@@ -63,6 +63,9 @@ use crate::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 const MAX_DESCRIPTION: usize = 4_000;
 /// Longest progress line shown while a draft is written and once it is ready.
 const MAX_PROGRESS: usize = 300;
+/// Follow-up messages a finished draft takes. Each runs the agent again, so
+/// the month's draft allowance would mean little without a cap.
+pub(super) const MAX_FOLLOW_UPS: i64 = 3;
 
 /// The body of `POST /drafts/{id}/start`.
 #[derive(Debug, Deserialize, TS)]
@@ -82,6 +85,19 @@ pub struct StartDrafting {
 pub struct DraftAnswers {
     #[ts(type = "Record<string, string | number>")]
     pub answers: BTreeMap<String, Value>,
+    /// Anything else the person wrote with their answers ("Answer, or tell me
+    /// more"). Only with answers that leave no question open, since that is
+    /// when the agent resumes and reads it.
+    #[serde(default)]
+    #[ts(optional)]
+    pub message: Option<String>,
+}
+
+/// The body of `POST /drafts/{id}/messages`: a follow-up to a finished draft.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct DraftMessage {
+    pub message: String,
 }
 
 /// A job row, as the routes and the runner read it.
@@ -96,10 +112,16 @@ pub(super) struct JobRow {
     pub questions_json: String,
     pub transcript_json: Option<String>,
     pub simulation_json: Option<String>,
+    /// Follow-up messages taken since the job started.
+    pub follow_ups: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cost_usd: f64,
 }
 
 const JOB_COLUMNS: &str = "job, state, description, progress, error, stop, questions_json, \
-                           transcript_json, simulation_json";
+                           transcript_json, simulation_json, follow_ups, input_tokens, \
+                           output_tokens, cost_usd";
 
 pub(super) async fn load_job(db: &Db, scenario_id: i64) -> ApiResult<Option<JobRow>> {
     Ok(sqlx::query_as(&format!(
@@ -136,8 +158,8 @@ pub async fn recover(db: &Db) -> Result<u64, sqlx::Error> {
 
 // ── starting and resuming ───────────────────────────────────────────────────
 
-/// One segment of a job for the runner: the first, or one resumed after
-/// answers.
+/// One segment of a job for the runner: the first, one resumed after
+/// answers, or one a follow-up message started.
 struct Segment {
     job: String,
     scenario_id: i64,
@@ -145,6 +167,21 @@ struct Segment {
     resumed: bool,
     /// Notes the answers just unblocked.
     unblocked: Vec<String>,
+    /// What the person wrote with their answers, or as the follow-up.
+    message: Option<String>,
+    /// A follow-up to a finished draft: a fresh conversation over the draft.
+    follow_up: bool,
+}
+
+/// A message's text, trimmed and within the description's limit.
+fn message_text(message: &str) -> ApiResult<String> {
+    let message = message.trim();
+    if message.chars().count() > MAX_DESCRIPTION {
+        return Err(ApiError::unprocessable(format!(
+            "a message is at most {MAX_DESCRIPTION} characters"
+        )));
+    }
+    Ok(message.to_owned())
 }
 
 /// Begin drafting: store the description, mark the job `drafting` and run its
@@ -196,7 +233,7 @@ pub(super) async fn start(
              job = excluded.job, state = 'drafting', description = excluded.description,
              progress = excluded.progress, error = NULL, stop = NULL,
              questions_json = '[]', transcript_json = NULL, simulation_json = NULL,
-             turns = 0, previews = 0, input_tokens = 0, output_tokens = 0, cost_usd = 0,
+             follow_ups = 0, turns = 0, previews = 0, input_tokens = 0, output_tokens = 0, cost_usd = 0,
              started_at = datetime('now'), finished_at = NULL, updated_at = datetime('now')",
     )
     .bind(scenario_id)
@@ -215,6 +252,8 @@ pub(super) async fn start(
             user: user.clone(),
             resumed: false,
             unblocked: Vec::new(),
+            message: None,
+            follow_up: false,
         },
     );
     Ok(())
@@ -228,6 +267,7 @@ pub(super) async fn answer(
     user: &CurrentUser,
     scenario_id: i64,
     answers: BTreeMap<String, Value>,
+    message: Option<&str>,
 ) -> ApiResult<()> {
     let Some(reviews) = &state.review_ai else {
         return Err(ApiError::Conflict(
@@ -237,6 +277,10 @@ pub(super) async fn answer(
     if answers.is_empty() {
         return Err(ApiError::unprocessable("send at least one answer"));
     }
+    let message = message
+        .map(message_text)
+        .transpose()?
+        .filter(|m| !m.is_empty());
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     let row: JobRow = sqlx::query_as(&format!(
         "SELECT {JOB_COLUMNS} FROM draft_jobs WHERE scenario_id = ?1"
@@ -302,13 +346,25 @@ pub(super) async fn answer(
     }
 
     let resume = questions.iter().all(|q| !q.is_open());
+    // The agent reads a message only when it resumes; one sent with a question
+    // still open would sit unread.
+    if message.is_some() && !resume {
+        return Err(ApiError::unprocessable(
+            "answer every question before adding a message",
+        ));
+    }
     let job = uuid::Uuid::new_v4().to_string();
+    // The message joins the description, which the context shows and
+    // description evidence is checked against.
     sqlx::query(
         "UPDATE draft_jobs
             SET questions_json = ?2,
                 state = CASE WHEN ?3 THEN 'drafting' ELSE state END,
                 job = CASE WHEN ?3 THEN ?4 ELSE job END,
                 progress = CASE WHEN ?3 THEN 'Continuing with your answers' ELSE progress END,
+                description = CASE WHEN ?5 IS NULL THEN description
+                                   WHEN description = '' THEN ?5
+                                   ELSE description || char(10) || char(10) || ?5 END,
                 updated_at = datetime('now')
           WHERE scenario_id = ?1",
     )
@@ -316,6 +372,7 @@ pub(super) async fn answer(
     .bind(serde_json::to_string(&questions).map_err(|e| ApiError::internal(e.to_string()))?)
     .bind(resume)
     .bind(&job)
+    .bind(message.as_deref())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -331,9 +388,95 @@ pub(super) async fn answer(
                 user: user.clone(),
                 resumed: true,
                 unblocked,
+                message,
+                follow_up: false,
             },
         );
     }
+    Ok(())
+}
+
+/// Take a follow-up message to a finished draft and run the agent again over
+/// the draft as it stands: the message joins the description and opens a
+/// fresh conversation (a finished job keeps none). At most
+/// [`MAX_FOLLOW_UPS`] per draft.
+pub(super) async fn follow_up(
+    state: &AppState,
+    user: &CurrentUser,
+    scenario_id: i64,
+    message: &str,
+) -> ApiResult<()> {
+    let Some(reviews) = &state.review_ai else {
+        return Err(ApiError::Conflict(
+            "AI drafts are not available on this server".into(),
+        ));
+    };
+    let message = message_text(message)?;
+    if message.is_empty() {
+        return Err(ApiError::unprocessable("write a message to send"));
+    }
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    let row: JobRow = sqlx::query_as(&format!(
+        "SELECT {JOB_COLUMNS} FROM draft_jobs WHERE scenario_id = ?1"
+    ))
+    .bind(scenario_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ApiError::Conflict("this draft has not been started".into()))?;
+    match row.state.as_str() {
+        "ready" => {}
+        "drafting" => {
+            return Err(ApiError::Conflict(
+                "the draft is still being written; wait for it to finish".into(),
+            ));
+        }
+        "awaiting_answers" => {
+            return Err(ApiError::Conflict(
+                "the draft is waiting for answers; send the message with them".into(),
+            ));
+        }
+        _ => {
+            return Err(ApiError::Conflict(
+                "this draft stopped; start it again".into(),
+            ));
+        }
+    }
+    if row.follow_ups >= MAX_FOLLOW_UPS {
+        return Err(ApiError::Conflict(format!(
+            "a draft takes at most {MAX_FOLLOW_UPS} follow-up messages; review it and change the rest there"
+        )));
+    }
+    let job = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "UPDATE draft_jobs
+            SET job = ?2, state = 'drafting', progress = 'Reading your message',
+                description = CASE WHEN description = '' THEN ?3
+                                   ELSE description || char(10) || char(10) || ?3 END,
+                follow_ups = follow_ups + 1, error = NULL, stop = NULL,
+                transcript_json = NULL, finished_at = NULL, updated_at = datetime('now')
+          WHERE scenario_id = ?1",
+    )
+    .bind(scenario_id)
+    .bind(&job)
+    .bind(&message)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    super::touch_scenario(&state.db, scenario_id).await?;
+
+    launch(
+        state,
+        reviews,
+        Segment {
+            job,
+            scenario_id,
+            user: user.clone(),
+            resumed: true,
+            unblocked: Vec::new(),
+            message: Some(message),
+            follow_up: true,
+        },
+    );
     Ok(())
 }
 
@@ -419,9 +562,11 @@ async fn run_segment(state: AppState, reviews: AiReviews, segment: Segment) {
         user,
         resumed,
         unblocked,
+        message,
+        follow_up,
     } = segment;
 
-    let prepared = prepare(&state, &user, scenario_id, &job).await;
+    let prepared = prepare(&state, &user, scenario_id, &job, follow_up).await;
     let (host, input, transcript) = match prepared {
         Ok(Some(prepared)) => prepared,
         // The draft was deleted before the segment began.
@@ -440,6 +585,8 @@ async fn run_segment(state: AppState, reviews: AiReviews, segment: Segment) {
     let resume = resumed.then(|| Resume {
         state: format!("The draft now holds: {}.", host.holds_line()),
         unblocked,
+        message,
+        follow_up,
     });
 
     let outcome = draft::run(
@@ -503,6 +650,7 @@ async fn prepare(
     user: &CurrentUser,
     scenario_id: i64,
     job: &str,
+    follow_up: bool,
 ) -> ApiResult<Option<(DraftTools, DraftInput, Transcript)>> {
     let Some(row) = load_job(&state.db, scenario_id).await? else {
         return Ok(None);
@@ -511,11 +659,18 @@ async fn prepare(
         return Ok(None);
     }
     let questions = questions_of(&row)?;
-    let transcript: Transcript = match &row.transcript_json {
+    let mut transcript: Transcript = match &row.transcript_json {
         Some(json) => serde_json::from_str(json)
             .map_err(|_| ApiError::internal("unreadable stored conversation"))?,
         None => Transcript::default(),
     };
+    // A follow-up starts a new conversation with a new turn budget, but what
+    // the job has spent carries on, so the stored totals stay the job's.
+    if follow_up {
+        transcript.usage.input_tokens = row.input_tokens.max(0) as u64;
+        transcript.usage.output_tokens = row.output_tokens.max(0) as u64;
+        transcript.usage.cost_usd = row.cost_usd;
+    }
     let host = DraftTools::load(state, user, scenario_id, job).await?;
 
     let manifest = store::manifest(&state.db, scenario_id).await?;

@@ -1,4 +1,8 @@
 import type { AiDrafts } from "../api/generated/AiDrafts.ts";
+import type { Account } from "../api/generated/Account.ts";
+import type { Asset } from "../api/generated/Asset.ts";
+import type { Event } from "../api/generated/Event.ts";
+import type { TriggerSpec } from "../api/generated/TriggerSpec.ts";
 import type { AnswerType } from "../api/generated/AnswerType.ts";
 import type { DocumentManifest } from "../api/generated/DocumentManifest.ts";
 import type { DraftCounts } from "../api/generated/DraftCounts.ts";
@@ -6,7 +10,7 @@ import type { DraftEstimate } from "../api/generated/DraftEstimate.ts";
 import type { DraftQuestion } from "../api/generated/DraftQuestion.ts";
 import type { DraftStatus } from "../api/generated/DraftStatus.ts";
 import type { Entitlements } from "../api/generated/Entitlements.ts";
-import { fmtInt } from "../format.ts";
+import { fmtCurrency, fmtInt } from "../format.ts";
 import type { DraftColumn } from "../api/generated/DraftColumn.ts";
 import type { Suggestion } from "../api/suggestions.ts";
 import { accessPresentation } from "./access.ts";
@@ -300,4 +304,169 @@ export function draftBoard(
     }),
     columns: DRAFT_COLUMNS.map(({ id, heading }) => ({ column: id, heading, cards: cards.get(id) ?? [] })),
   };
+}
+
+// ── what the draft holds (design 2a, the Draft rail's lists) ────────────────
+
+export interface DraftAccountLine {
+  id: number;
+  name: string;
+  /** "Bank", "Taxable", "Tax-deferred"…: the tag beside the name. */
+  tag: string;
+  tone: "neutral" | "accent" | "accent-2" | "outline";
+  /** Signed: a loan is negative. */
+  balance: number;
+}
+
+export interface DraftEventLine {
+  id: number;
+  name: string;
+  /** "yearly until age 65", "once at age 35". */
+  when: string;
+}
+
+export interface DraftContents {
+  accounts: DraftAccountLine[];
+  /** The accounts' balances summed: the opening net worth. */
+  total: number;
+  events: DraftEventLine[];
+}
+
+const TAX_TAG: Record<string, Pick<DraftAccountLine, "tag" | "tone">> = {
+  Taxable: { tag: "Taxable", tone: "neutral" },
+  TaxDeferred: { tag: "Tax-deferred", tone: "accent" },
+  TaxFree: { tag: "Tax-free", tone: "accent-2" },
+};
+
+const INTERVAL_WORD: Record<string, string> = {
+  Never: "once",
+  Weekly: "weekly",
+  BiWeekly: "every 2 weeks",
+  Monthly: "monthly",
+  Quarterly: "quarterly",
+  Yearly: "yearly",
+};
+
+/**
+ * An account's opening balance: cash plus holdings marked at each asset's
+ * opening price, as the engine starts from (and `toViewAccounts` shows).
+ */
+function openingBalance(account: Account, price: (assetId: number) => number): number {
+  const held = account.positions.reduce((sum, lot) => sum + lot.units * price(lot.asset_id), 0);
+  switch (account.flavor) {
+    case "Bank":
+      return account.cash_value;
+    case "Investment":
+      return account.cash_value + held;
+    case "Property":
+      return account.value;
+    case "Liability":
+      return -account.principal;
+  }
+}
+
+/** A trigger as a point in a sentence: "age 65", "2031-05-01", "Retirement". */
+function point(trigger: TriggerSpec, eventName: (id: number) => string): string {
+  switch (trigger.kind) {
+    case "Age":
+      return `age ${trigger.years}`;
+    case "Date":
+      return trigger.on_date;
+    case "AgeParameter":
+      return "a set age";
+    case "DateParameter":
+      return "a set date";
+    case "RelativeToEvent":
+      return eventName(trigger.event_id);
+    default:
+      return "a condition";
+  }
+}
+
+/** When an event fires, in a few words for the rail. */
+export function eventWhen(trigger: TriggerSpec, eventName: (id: number) => string): string {
+  switch (trigger.kind) {
+    case "Repeating": {
+      const parts = [INTERVAL_WORD[trigger.interval] ?? trigger.interval.toLowerCase()];
+      if (trigger.start_condition) parts.push(`from ${point(trigger.start_condition, eventName)}`);
+      if (trigger.end_condition) parts.push(`until ${point(trigger.end_condition, eventName)}`);
+      return parts.join(" ");
+    }
+    case "Age":
+    case "AgeParameter":
+      return `once at ${point(trigger, eventName)}`;
+    case "Date":
+    case "DateParameter":
+      return `once on ${point(trigger, eventName)}`;
+    case "RelativeToEvent": {
+      const size = Math.abs(trigger.value);
+      const unit = trigger.unit.toLowerCase().replace(/s$/, size === 1 ? "" : "s");
+      return size === 0
+        ? `with ${eventName(trigger.event_id)}`
+        : `${size} ${unit} ${trigger.value < 0 ? "before" : "after"} ${eventName(trigger.event_id)}`;
+    }
+    case "AccountBalance":
+    case "AssetBalance":
+      return `when a balance crosses ${fmtCurrency(trigger.threshold)}`;
+    case "NetWorth":
+      return `when net worth crosses ${fmtCurrency(trigger.threshold)}`;
+    case "And":
+    case "Or":
+      return "when its conditions hold";
+    case "Manual":
+      return "when triggered";
+  }
+}
+
+/** The draft's accounts and events as the rail lists them, in the plan's order. */
+export function draftContents(
+  accounts: readonly Account[],
+  assets: ReadonlyArray<Pick<Asset, "id" | "initial_price">>,
+  events: readonly Event[],
+): DraftContents {
+  const prices = new Map(assets.map((asset) => [asset.id, asset.initial_price]));
+  const price = (id: number) => prices.get(id) ?? 0;
+  const names = new Map(events.map((event) => [event.id, event.name]));
+  const eventName = (id: number) => names.get(id) ?? "another event";
+  const lines = [...accounts]
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((account): DraftAccountLine => {
+      const tag =
+        account.flavor === "Bank"
+          ? { tag: "Bank", tone: "neutral" as const }
+          : account.flavor === "Investment"
+            ? (TAX_TAG[account.tax_status] ?? TAX_TAG.Taxable)
+            : account.flavor === "Property"
+              ? { tag: "Property", tone: "neutral" as const }
+              : { tag: "Loan", tone: "outline" as const };
+      return { id: account.id, name: account.name, ...tag, balance: openingBalance(account, price) };
+    });
+  return {
+    accounts: lines,
+    total: lines.reduce((sum, line) => sum + line.balance, 0),
+    events: [...events]
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((event) => ({ id: event.id, name: event.name, when: eventWhen(event.trigger, eventName) })),
+  };
+}
+
+/** An answer as the person's message shows it: a choice by its label, money as dollars. */
+export function answerLabel(
+  question: Pick<DraftQuestion, "answer_type" | "options">,
+  raw: string | undefined,
+): string {
+  if (raw == null || raw === "") return "—";
+  if (question.answer_type === "choice")
+    return question.options.find((option) => option.value === raw)?.label ?? raw;
+  if (question.answer_type === "money" && Number.isFinite(Number(raw))) return fmtCurrency(Number(raw));
+  return raw;
+}
+
+/**
+ * What goes to the agent from the composer: what was typed, and the names of
+ * files attached since the last message, so the agent knows to read them.
+ */
+export function outgoingMessage(text: string, attached: ReadonlyArray<Pick<DocumentManifest, "filename">>): string {
+  const files = attached.length > 0 ? `(Attached: ${attached.map((doc) => doc.filename).join(", ")})` : "";
+  return [text.trim(), files].filter(Boolean).join("\n\n");
 }

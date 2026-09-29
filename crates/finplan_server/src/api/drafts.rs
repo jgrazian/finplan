@@ -18,7 +18,9 @@
 //! deletes them too unless the draft's `retain_documents` is set.
 //!
 //! The drafting agent (`draft_agent`) fills the draft: `POST /drafts/{id}/start`
-//! begins its job, `POST /drafts/{id}/answers` answers its questions, and
+//! begins its job, `POST /drafts/{id}/answers` answers its questions (with an
+//! optional message), `POST /drafts/{id}/messages` sends a follow-up once it
+//! is ready, and
 //! [`DraftStatus`] is what the web polls meanwhile. This module owns the
 //! lifecycle, the quota and the status.
 
@@ -29,7 +31,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::draft_agent::{self, DraftAnswers, StartDrafting};
+use super::draft_agent::{self, DraftAnswers, DraftMessage, StartDrafting};
 use super::runs::{self, Run};
 use super::scenarios::{SCENARIO_COLUMNS, Scenario};
 use crate::auth::session::CurrentUser;
@@ -48,6 +50,7 @@ pub fn router() -> Router<AppState> {
         .route("/drafts/{id}", get(status).patch(update).delete(discard))
         .route("/drafts/{id}/start", post(start_drafting))
         .route("/drafts/{id}/answers", post(answer))
+        .route("/drafts/{id}/messages", post(message))
         .route("/drafts/{id}/create", post(create_and_run))
 }
 
@@ -167,6 +170,9 @@ pub struct DraftStatus {
     pub blocked_notes: Vec<BlockedNote>,
     /// The agent's last simulation of the draft, once it has run one.
     pub estimate: Option<DraftEstimate>,
+    /// Follow-up messages the draft still takes once it is ready
+    /// (`POST /drafts/{id}/messages`).
+    pub follow_ups_left: i64,
 }
 
 /// The body of `POST /drafts`, all of it optional.
@@ -314,6 +320,8 @@ async fn load_status(state: &AppState, id: i64, user_id: &str) -> ApiResult<Draf
     let (answered, open): (Vec<DraftQuestion>, Vec<DraftQuestion>) =
         questions.into_iter().partition(|q| !q.is_open());
     let blocked_notes = blocked_notes(&state.db, id).await?;
+    let follow_ups_left =
+        (draft_agent::MAX_FOLLOW_UPS - job.as_ref().map_or(0, |job| job.follow_ups)).max(0);
     Ok(DraftStatus {
         id,
         state: state_of,
@@ -329,6 +337,7 @@ async fn load_status(state: &AppState, id: i64, user_id: &str) -> ApiResult<Draf
         answered,
         blocked_notes,
         estimate,
+        follow_ups_left,
     })
 }
 
@@ -378,7 +387,22 @@ async fn answer(
     Json(body): Json<DraftAnswers>,
 ) -> ApiResult<Json<DraftStatus>> {
     load_status(&state, id, &user.id).await?;
-    draft_agent::answer(&state, &user, id, body.answers).await?;
+    draft_agent::answer(&state, &user, id, body.answers, body.message.as_deref()).await?;
+    Ok(Json(load_status(&state, id, &user.id).await?))
+}
+
+/// `POST /drafts/{id}/messages` — a follow-up to a finished draft ("tell me
+/// more"): the agent runs again over the draft as it stands and updates it.
+/// Refused while it is writing or waiting on answers (send the message with
+/// the answers then), and after the draft's last follow-up.
+async fn message(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(body): Json<DraftMessage>,
+) -> ApiResult<Json<DraftStatus>> {
+    load_status(&state, id, &user.id).await?;
+    draft_agent::follow_up(&state, &user, id, &body.message).await?;
     Ok(Json(load_status(&state, id, &user.id).await?))
 }
 

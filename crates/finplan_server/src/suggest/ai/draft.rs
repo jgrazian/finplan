@@ -457,12 +457,20 @@ pub struct DraftInput {
     pub questions: Vec<DraftQuestion>,
 }
 
-/// What resuming after answers adds to the conversation.
+/// What resuming adds to the conversation: after answers, or after a
+/// follow-up message to a finished draft.
 pub struct Resume {
     /// The draft as it stands, for the model to continue from.
     pub state: String,
     /// Notes the answers unblocked.
     pub unblocked: Vec<String>,
+    /// What the person wrote: with their answers, or as a follow-up. It is
+    /// also the end of the description, so it is quoted as description
+    /// evidence.
+    pub message: Option<String>,
+    /// A follow-up to a finished draft. Its conversation starts afresh from
+    /// the context (which holds the draft and its notes); no question waits.
+    pub follow_up: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -664,15 +672,19 @@ pub async fn run(
     if let AnthropicContentPart::Text { cache_control, .. } = &mut opening_context {
         *cache_control = Some(CacheControl::ephemeral());
     }
-    let mut messages = vec![AnthropicMessage::with_parts(
-        AnthropicRole::User,
-        vec![
-            opening_context,
-            AnthropicContentPart::text(prompt::task(resume.is_some())),
-        ],
-    )];
+    let mut opening = vec![
+        opening_context,
+        AnthropicContentPart::text(prompt::task(resume.is_some())),
+    ];
+    // A follow-up has no conversation to carry on: the message goes in the
+    // opening turn rather than as a second user turn after it.
+    let follow_up = resume.as_ref().filter(|r| r.follow_up);
+    if let Some(resume) = follow_up {
+        opening.push(AnthropicContentPart::text(follow_up_text(resume)));
+    }
+    let mut messages = vec![AnthropicMessage::with_parts(AnthropicRole::User, opening)];
     messages.append(&mut transcript.messages);
-    if let Some(resume) = &resume {
+    if let Some(resume) = resume.as_ref().filter(|r| !r.follow_up) {
         messages.push(resume_message(
             &mut transcript.pending,
             &input.questions,
@@ -920,11 +932,30 @@ fn resume_message(
             }
         })
         .collect();
-    parts.push(AnthropicContentPart::text(format!(
-        "The person answered. {}",
-        resume.state
-    )));
+    let mut text = String::from("The person answered.");
+    if let Some(message) = &resume.message {
+        text.push_str(&format!(
+            " They also wrote (now the end of the description): \"{message}\""
+        ));
+    }
+    text.push(' ');
+    text.push_str(&resume.state);
+    parts.push(AnthropicContentPart::text(text));
     AnthropicMessage::with_parts(AnthropicRole::User, parts)
+}
+
+/// The opening's last part for a follow-up to a finished draft.
+fn follow_up_text(resume: &Resume) -> String {
+    format!(
+        "The draft was finished and the person has since written (now the end of the \
+         description, quote it as description evidence): \"{}\"\n\n{}\n\n\
+         Update the draft for what they wrote. Add what is new. Where it changes a note \
+         that is still open, submit one that `replaces` it; where it changes something \
+         already in the draft, submit a note whose changes edit those rows. Leave the \
+         rest as it is, then end your turn with one line saying what changed.",
+        resume.message.as_deref().unwrap_or_default(),
+        resume.state
+    )
 }
 
 // ── serving tools ───────────────────────────────────────────────────────────

@@ -49,6 +49,18 @@ Landed, by phase:
 - **5, web.** Describe & upload in New Scenario (absent when
   `ai_drafts` is null), consent text, polling panel, retention and quota
   line; `DraftReview` on `ReviewScreen` with Portfolio / Plan / To confirm.
+  New Scenario is a full page (1a, 2a): the conversation keeps its composer
+  after the first message. While the agent waits, what is typed goes with the
+  answers (`message` on `POST /drafts/{id}/answers`, only with answers that
+  close every question). Once the draft is ready, `POST /drafts/{id}/messages`
+  sends a follow-up: the message joins the description and a fresh
+  conversation runs over the draft as it stands (a finished job keeps no
+  transcript), with its own turn budget and the job's token and cost totals
+  carried on. A draft takes 3 follow-ups (`follow_ups`, migration 0013;
+  `follow_ups_left` on the status). Files attached since the last message are
+  named in it. The Draft rail lists the draft's accounts (opening balances)
+  and events (when they fire), read from the ordinary scenario routes whenever
+  the counts or added notes move.
 - **6, tools.** `validate_changes`, `preview_paths`, `preflight`,
   `inspect_path`, `failure_profile`, `reference_facts`, `finance_calc`,
   `estimate_social_security`, `estimate_taxes`, `Evidence::Computed`

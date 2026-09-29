@@ -3010,6 +3010,8 @@ mod drafting {
             Some(Resume {
                 state: "The draft now holds: 0 accounts.".into(),
                 unblocked: vec!["bonus-note".into()],
+                message: None,
+                follow_up: false,
             }),
         )
         .await
@@ -3555,6 +3557,8 @@ mod drafting {
             Some(Resume {
                 state: "The draft now holds nothing.".into(),
                 unblocked: Vec::new(),
+                message: None,
+                follow_up: false,
             }),
         )
         .await

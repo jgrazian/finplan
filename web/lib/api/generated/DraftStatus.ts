@@ -50,4 +50,9 @@ blocked_notes: Array<BlockedNote>,
 /**
  * The agent's last simulation of the draft, once it has run one.
  */
-estimate: DraftEstimate | null, };
+estimate: DraftEstimate | null, 
+/**
+ * Follow-up messages the draft still takes once it is ready
+ * (`POST /drafts/{id}/messages`).
+ */
+follow_ups_left: number, };

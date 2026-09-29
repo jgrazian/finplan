@@ -80,6 +80,7 @@ export type { DraftColumn } from "./DraftColumn";
 export type { DraftCounts } from "./DraftCounts";
 export type { DraftCreated } from "./DraftCreated";
 export type { DraftEstimate } from "./DraftEstimate";
+export type { DraftMessage } from "./DraftMessage";
 export type { DraftQuestion } from "./DraftQuestion";
 export type { DraftSimulation } from "./DraftSimulation";
 export type { DraftState } from "./DraftState";

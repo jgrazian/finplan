@@ -3,15 +3,19 @@ import { test } from "node:test";
 import type { DraftStatus } from "../lib/api/generated/DraftStatus.ts";
 import type { Suggestion } from "../lib/api/suggestions.ts";
 import {
+  answerLabel,
   answersOf,
   answerValue,
   countsLine,
+  draftContents,
   documentNote,
   draftBoard,
   draftPanel,
   estimateLine,
+  eventWhen,
   limitsLine,
   notesHeader,
+  outgoingMessage,
   quotaBlock,
   quotaLine,
   waitingOn,
@@ -170,4 +174,75 @@ test("a draft note offers no preview or copy", () => {
 
 test("notes header leaves out zero parts", () => {
   assert.equal(notesHeader({ notes: 1, notes_added: 0, notes_to_confirm: 0 }), "1 note");
+});
+
+test("draftContents lists accounts with opening balances and events with when they fire", () => {
+  const contents = draftContents(
+    [
+      {
+        id: 2, name: "Vanguard", description: null, sort_order: 2, flavor: "Investment", tax_status: "Taxable",
+        cash_value: 1_000, cash_return_profile_id: 1, contribution_limit: null, contribution_period: null,
+        positions: [{ id: 1, asset_id: 9, purchase_date: "2026-01-01", units: 10, cost_basis: 500 }],
+      },
+      { id: 1, name: "USAA", description: null, sort_order: 1, flavor: "Bank", cash_value: 265_012, return_profile_id: 1, positions: [] },
+      {
+        id: 3, name: "Fidelity 401(k)", description: null, sort_order: 3, flavor: "Investment", tax_status: "TaxDeferred",
+        cash_value: 0, cash_return_profile_id: 1, contribution_limit: null, contribution_period: null, positions: [],
+      },
+      { id: 4, name: "Mortgage", description: null, sort_order: 4, flavor: "Liability", principal: 360_000, interest_rate: 0.06, repayment: null, positions: [] },
+    ],
+    [{ id: 9, initial_price: 300 }],
+    [
+      {
+        id: 11, name: "Salary", description: null, fires_once: false, enabled: true, sort_order: 0, effects: [],
+        trigger: { kind: "Repeating", interval: "BiWeekly", start_condition: null, end_condition: { kind: "RelativeToEvent", event_id: 12, unit: "Days", value: 0 }, max_occurrences: null },
+      },
+      { id: 12, name: "Retirement", description: null, fires_once: true, enabled: true, sort_order: 1, effects: [], trigger: { kind: "Age", years: 40, months: null } },
+    ],
+  );
+  assert.deepEqual(
+    contents.accounts.map((a) => [a.name, a.tag, a.balance]),
+    [
+      ["USAA", "Bank", 265_012],
+      ["Vanguard", "Taxable", 4_000],
+      ["Fidelity 401(k)", "Tax-deferred", 0],
+      ["Mortgage", "Loan", -360_000],
+    ],
+  );
+  assert.equal(contents.total, 265_012 + 4_000 - 360_000);
+  assert.deepEqual(
+    contents.events.map((e) => [e.name, e.when]),
+    [
+      ["Salary", "every 2 weeks until Retirement"],
+      ["Retirement", "once at age 40"],
+    ],
+  );
+});
+
+test("eventWhen reads offsets, dates and balance conditions", () => {
+  const name = () => "Home Purchase";
+  assert.equal(eventWhen({ kind: "RelativeToEvent", event_id: 1, unit: "Years", value: 1 }, name), "1 year after Home Purchase");
+  assert.equal(eventWhen({ kind: "RelativeToEvent", event_id: 1, unit: "Months", value: -3 }, name), "3 months before Home Purchase");
+  assert.equal(eventWhen({ kind: "Date", on_date: "2031-05-01" }, name), "once on 2031-05-01");
+  assert.equal(
+    eventWhen({ kind: "Repeating", interval: "Yearly", start_condition: { kind: "Age", years: 65, months: null }, end_condition: null, max_occurrences: null }, name),
+    "yearly from age 65",
+  );
+  assert.equal(eventWhen({ kind: "NetWorth", comparison: "GreaterThanOrEqual", threshold: 2_000_000 }, name), "when net worth crosses $2,000,000");
+});
+
+test("answerLabel shows a choice by its label and money as dollars", () => {
+  const choice = { answer_type: "choice" as const, options: [{ value: "none", label: "No bonus" }] };
+  assert.equal(answerLabel(choice, "none"), "No bonus");
+  assert.equal(answerLabel({ answer_type: "money", options: [] }, "30000"), "$30,000");
+  assert.equal(answerLabel({ answer_type: "text", options: [] }, ""), "—");
+});
+
+test("outgoingMessage names the files attached since the last message", () => {
+  assert.equal(outgoingMessage("  I also have a Roth IRA. ", []), "I also have a Roth IRA.");
+  assert.equal(
+    outgoingMessage("", [{ filename: "roth.pdf" }, { filename: "q3.csv" }]),
+    "(Attached: roth.pdf, q3.csv)",
+  );
+  assert.equal(outgoingMessage("See these.", [{ filename: "roth.pdf" }]), "See these.\n\n(Attached: roth.pdf)");
 });

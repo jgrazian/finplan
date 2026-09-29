@@ -28,6 +28,7 @@ import type {
   DeleteAccount,
   DocumentManifest,
   DraftAnswers,
+  DraftMessage,
   DraftCreated,
   DraftStatus,
   Event,
@@ -339,9 +340,12 @@ export const api = {
     /** Starts the drafting agent; progress is read with `get`. */
     start: (id: number, body: StartDrafting) =>
       http.post<DraftStatus>(`/drafts/${id}/start`, body),
-    /** Answers the agent's open questions, by key; it resumes. */
+    /** Answers the agent's open questions, by key, with anything else the person wrote; it resumes. */
     answer: (id: number, body: DraftAnswers) =>
       http.post<DraftStatus>(`/drafts/${id}/answers`, body),
+    /** A follow-up to a finished draft: the agent runs again over it. 409 while it writes or waits. */
+    message: (id: number, body: DraftMessage) =>
+      http.post<DraftStatus>(`/drafts/${id}/messages`, body),
     /** Create & run: 409 while the agent is still writing. */
     createAndRun: (id: number) => http.post<DraftCreated>(`/drafts/${id}/create`),
     documents: {

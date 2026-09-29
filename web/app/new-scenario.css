@@ -275,6 +275,10 @@
   padding: 16px 24px;
 }
 
+.ns-mono {
+  font-family: ui-monospace, Menlo, monospace;
+}
+
 .ns-crow {
   display: flex;
   align-items: baseline;
