@@ -316,15 +316,21 @@ async fn destroy(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-    let affected = sqlx::query("DELETE FROM scenarios WHERE id = ?1 AND user_id = ?2")
-        .bind(id)
-        .bind(&user.id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
+    let deleted: Option<ScenarioStatus> =
+        sqlx::query_scalar("DELETE FROM scenarios WHERE id = ?1 AND user_id = ?2 RETURNING status")
+            .bind(id)
+            .bind(&user.id)
+            .fetch_optional(&state.db)
+            .await?;
 
-    if affected == 0 {
+    let Some(status) = deleted else {
         return Err(ApiError::NotFound("scenario"));
+    };
+    // A draft deleted this way is no different from one cancelled: its running
+    // agent stops and the originals held for it go now, not at the next sweep.
+    if status == ScenarioStatus::Draft {
+        super::draft_agent::abort(&state, id);
+        crate::documents::images::discard_draft(&crate::documents::images::root(&state.config), id);
     }
 
     state.telemetry.mutation(

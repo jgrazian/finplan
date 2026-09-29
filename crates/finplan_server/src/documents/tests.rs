@@ -6,7 +6,7 @@ use super::data::{AccountData, Balance, DocumentData, Position, Transaction};
 use super::redact::{parse_birth_date, parse_date, redact};
 use super::store::{Document, DocumentStatus};
 use super::tools::{self, PositionStatus};
-use super::{ingest, ofx, tabular};
+use super::{clean_filename, ingest, ofx, tabular};
 use crate::compile::rows::ScenarioGraph;
 
 fn masked(text: &str) -> String {
@@ -391,6 +391,26 @@ fn an_ofx_upload_stores_masked_text_and_structured_data() {
     assert!(!text.contains("00012345671234"));
     assert!(text.contains("ledger balance: 12004.55 as of 2026-01-31"));
     assert!(text.contains("2026-01-05 | -1450.00 | RENT - SUNSET APTS Jan rent"));
+}
+
+#[test]
+fn ofx_transaction_memos_and_file_names_are_redacted_before_storage() {
+    let ofx = OFX_BANK_SGML.replace(
+        "<MEMO>Jan rent",
+        "<MEMO>ACH to acct 987654321012 SSN 123-45-6789",
+    );
+    let ingested = ingest("stmt_123-45-6789.qfx", ofx.as_bytes()).unwrap();
+    let text = ingested.pages.join("\n");
+    let data = serde_json::to_string(&ingested.data).unwrap();
+    for stored in [&text, &data] {
+        assert!(!stored.contains("987654321012"), "{stored}");
+        assert!(!stored.contains("123-45-6789"), "{stored}");
+    }
+    assert!(text.contains("••••1012"), "{text}");
+    assert_eq!(
+        clean_filename("stmt_123-45-6789.qfx"),
+        "stmt •••-••-••••.qfx"
+    );
 }
 
 // ── CSV ─────────────────────────────────────────────────────────────────────

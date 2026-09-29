@@ -333,6 +333,22 @@ async fn deleting_or_replacing_a_draft_deletes_its_documents() {
 }
 
 #[tokio::test]
+async fn deleting_a_draft_through_the_scenario_route_removes_its_held_files() {
+    let (app, id) = TestApp::draft_app("docs-scenario-delete@example.com").await;
+    let (status, _) = app.upload(id, &[("shot.png", png())]).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(app.held_files().len(), 1);
+
+    let (status, _) = app.delete(&format!("/api/scenarios/{id}")).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(
+        app.held_files().is_empty(),
+        "the original outlived its draft"
+    );
+    assert_eq!(app.document_rows().await, 0);
+}
+
+#[tokio::test]
 async fn orphaned_files_are_purged_and_live_drafts_kept() {
     let (app, id) = TestApp::draft_app("docs-purge@example.com").await;
     app.upload(id, &[("shot.png", png())]).await;

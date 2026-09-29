@@ -84,7 +84,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 pub fn clean_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
     let cleaned: String = base.chars().filter(|c| !c.is_control()).take(120).collect();
-    let cleaned = cleaned.trim().to_owned();
+    // A name like `1040_123-45-6789.pdf` is shown, stored and sent too.
+    // `_` joins words to the digits beside it, so the patterns need it as a space.
+    let spaced = cleaned.trim().replace('_', " ");
+    let redacted = redact::redact(&spaced).text;
+    let cleaned = if redacted == spaced {
+        cleaned.trim().to_owned()
+    } else {
+        redacted.trim().to_owned()
+    };
     if cleaned.is_empty() {
         "document".into()
     } else {
@@ -199,6 +207,24 @@ fn redact_pages(pages: &[String]) -> (Vec<String>, Option<String>) {
     (out, hint)
 }
 
+/// Redact the free-text fields of parsed statement data in place.
+fn redact_data(data: &mut data::DocumentData) {
+    let clean = |text: &mut String| *text = redact::redact(text).text;
+    if let Some(name) = &mut data.institution {
+        clean(name);
+    }
+    for account in &mut data.accounts {
+        for position in &mut account.positions {
+            if let Some(name) = &mut position.name {
+                clean(name);
+            }
+        }
+        for transaction in &mut account.transactions {
+            clean(&mut transaction.description);
+        }
+    }
+}
+
 fn ingest_pdf(filename: &str, bytes: &[u8]) -> Ingested {
     const MIME: &str = "application/pdf";
     let text = match pdf::extract(bytes) {
@@ -247,9 +273,12 @@ fn ingest_pdf(filename: &str, bytes: &[u8]) -> Ingested {
 fn ingest_ofx(bytes: &[u8]) -> Ingested {
     const MIME: &str = "application/x-ofx";
     let text = String::from_utf8_lossy(bytes);
-    let Some(data) = ofx::parse(&text) else {
+    let Some(mut data) = ofx::parse(&text) else {
         return failed(MIME, "No account statement was found in this OFX file.");
     };
+    // Free text in a statement (a memo naming an account, a payee) is redacted
+    // like any other text, before it is rendered, stored or sent.
+    redact_data(&mut data);
     let pages = render_data(&data);
     let has_positions = data.accounts.iter().any(|a| !a.positions.is_empty());
     let has_balances = data.accounts.iter().any(|a| !a.balances.is_empty());

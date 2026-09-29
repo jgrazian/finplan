@@ -249,6 +249,8 @@ async fn upload(
                 for sha in held {
                     images::discard(&root, id, sha);
                 }
+                // A write that failed part-way may have left a piece.
+                images::discard(&root, id, &p.sha256);
                 return Err(err);
             }
             held.push(&p.sha256);

@@ -433,4 +433,180 @@ mod tests {
         assert_eq!(old_details, 2, "the source database was modified");
         untouched.close().await.unwrap();
     }
+    /// Apply migrations `from < version <= to`, each in a transaction as the
+    /// real migrator does.
+    async fn apply(conn: &mut SqliteConnection, from: i64, to: i64) {
+        for m in MIGRATOR
+            .iter()
+            .filter(|m| m.version > from && m.version <= to)
+        {
+            let mut tx = sqlx::Connection::begin(&mut *conn).await.unwrap();
+            sqlx::raw_sql(&m.sql).execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+    }
+
+    /// A database at the 0009 schema, with review notes, chat threads and a
+    /// note parented to another, upgrades through 0010-0012 (which rebuild
+    /// `suggestions`) without losing a row, an index or a link, and with the
+    /// foreign keys on, as the real migrator runs them.
+    #[tokio::test]
+    async fn drafts_migrations_upgrade_a_populated_database() {
+        let mut conn = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .in_memory(true)
+                .foreign_keys(true),
+        )
+        .await
+        .unwrap();
+        apply(&mut conn, 0, 9).await;
+
+        for sql in [
+            "INSERT INTO users(id,email,password_hash) VALUES('u','u@example.com','h')",
+            "INSERT INTO scenarios(id,user_id,name,start_date) VALUES(1,'u','Plan','2026-01-01')",
+            "INSERT INTO runs(id,scenario_id,user_id,status,iterations) VALUES(1,1,'u','succeeded',10)",
+        ] {
+            sqlx::query(sql).execute(&mut conn).await.unwrap();
+        }
+        for (id, status, parent) in [
+            (1, "open", None),
+            (2, "applied", Some(1)),
+            (3, "dismissed", Some(2)),
+        ] {
+            sqlx::query(
+                "INSERT INTO suggestions (id, scenario_id, run_id, source, rule, kind, section,
+                     title, reasoning, evidence_json, fingerprint, status, review_job,
+                     paths_json, applied_path, created_json, parent_id, resolved_at)
+                 VALUES (?1, 1, 1, 'ai', NULL, 'fix', 'plan', ?2, 'why', '[]', ?3, ?4, 'job',
+                         '[{\"key\":\"a\"}]', 'a', '{\"k\":1}', ?5, '2026-09-28 10:00:00')",
+            )
+            .bind(id)
+            .bind(format!("Note {id}"))
+            .bind(format!("f{id}"))
+            .bind(status)
+            .bind(parent)
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        }
+        for sql in [
+            "INSERT INTO suggestion_threads(suggestion_id,status,job,turns) VALUES(2,'running','j',3)",
+            "INSERT INTO suggestion_messages(suggestion_id,role,text,suggestion_ids) VALUES(2,'user','hi','[]')",
+            "INSERT INTO suggestion_messages(suggestion_id,role,text,suggestion_ids) VALUES(2,'assistant','yo','[3]')",
+        ] {
+            sqlx::query(sql).execute(&mut conn).await.unwrap();
+        }
+
+        apply(&mut conn, 9, 12).await;
+
+        type Note = (
+            i64,
+            i64,
+            String,
+            String,
+            Option<i64>,
+            Option<String>,
+            String,
+            i64,
+        );
+        let rows: Vec<Note> = sqlx::query_as(
+            "SELECT id, run_id, title, status, parent_id, applied_path, created_json, auto_added
+                   FROM suggestions ORDER BY id",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    1,
+                    1,
+                    "Note 1".into(),
+                    "open".into(),
+                    None,
+                    Some("a".into()),
+                    "{\"k\":1}".into(),
+                    0
+                ),
+                (
+                    2,
+                    1,
+                    "Note 2".into(),
+                    "applied".into(),
+                    Some(1),
+                    Some("a".into()),
+                    "{\"k\":1}".into(),
+                    0
+                ),
+                (
+                    3,
+                    1,
+                    "Note 3".into(),
+                    "dismissed".into(),
+                    Some(2),
+                    Some("a".into()),
+                    "{\"k\":1}".into(),
+                    0
+                ),
+            ],
+            "every note and its parent link survive the rebuilds"
+        );
+        let thread: (i64, String, Option<i64>) =
+            sqlx::query_as("SELECT suggestion_id, status, turns FROM suggestion_threads")
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(thread, (2, "running".into(), Some(3)));
+        let messages: Vec<(String, String)> =
+            sqlx::query_as("SELECT role, suggestion_ids FROM suggestion_messages ORDER BY id")
+                .fetch_all(&mut conn)
+                .await
+                .unwrap();
+        assert_eq!(
+            messages,
+            vec![
+                ("user".into(), "[]".into()),
+                ("assistant".into(), "[3]".into())
+            ]
+        );
+
+        let indexes: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='suggestions'
+                AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .fetch_all(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(
+            indexes,
+            ["suggestions_by_fingerprint", "suggestions_by_scenario"]
+        );
+        let broken: Vec<(String,)> = sqlx::query_as("PRAGMA foreign_key_check")
+            .fetch_all(&mut conn)
+            .await
+            .unwrap();
+        assert!(broken.is_empty(), "dangling foreign keys: {broken:?}");
+
+        // The rebuilt table takes what the drafts need and still cascades.
+        sqlx::query(
+            "INSERT INTO suggestions (scenario_id, run_id, source, kind, section, title, reasoning,
+                 evidence_json, fingerprint, note_key, blocked_by_json, board_column)
+             VALUES (1, NULL, 'ai', 'add', 'plan', 't', 'r', '[]', 'f', 'k', '[\"q\"]', 'to_confirm')",
+        )
+        .execute(&mut conn)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM scenarios WHERE id = 1")
+            .execute(&mut conn)
+            .await
+            .unwrap();
+        for table in ["suggestions", "suggestion_threads", "suggestion_messages"] {
+            let left: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table}"))
+                .fetch_one(&mut conn)
+                .await
+                .unwrap();
+            assert_eq!(left, 0, "{table} outlived its scenario");
+        }
+    }
 }
