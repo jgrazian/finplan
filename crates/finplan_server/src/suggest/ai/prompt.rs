@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use serde_json::{Value, json};
 use ts_rs::{Config, TS};
 
+use super::tools::Registry;
 use crate::api::accounts::{
     Account, ContributionPeriod, CreateAccount, FlavorSpec, Position, RepaymentSpec, TaxStatus,
 };
@@ -22,10 +23,10 @@ use crate::api::specs::{
 use crate::suggest::rules::{Evidence, Kind, Section};
 use crate::suggest::{Change, ChangeOp, ChangeTarget};
 
-pub const PREVIEW_TOOL: &str = "preview_changes";
+pub const PREVIEW_TOOL: &str = super::tools::PREVIEW;
 pub const SUBMIT_TOOL: &str = "submit_suggestion";
 
-pub const SYSTEM_PROMPT: &str = "\
+pub const SYSTEM_PROMPT: &str = concat!("\
 You review a personal financial plan built in FinPlan, a Monte Carlo retirement planner, and write short notes for its Review tab. The user message holds the plan, the results of one simulation run of it, and the notes FinPlan's built-in rules already wrote.
 
 Each note is one idea, of one kind:
@@ -44,15 +45,17 @@ What matters, in order. Choose notes, and the changes in them, by this priority,
 4. optimization: a better outcome from the same facts, only when the effect is material.
 The aim is the simulation that makes the most sense given the person's starting point, not the one that scores best. Prefer changes that make the plan reflect the person's likely reality over changes that squeeze the metric. Never propose tax-lot, withdrawal-order or strategy tweaks, or small parameter nudges, whose simulated effect is marginal: a result like funding 99.90% -> 99.95%, or a median that moves by a fraction of a percent, is itself the sign the note is not worth the user's attention. The server rejects risk and optimization paths below a materiality floor (the rejection states it and the measured effect). Correctness and realism notes are exempt, because they fix the model of reality whatever the metric does, but they are still previewed.
 
-Say what is missing with a change, not only in prose. Missing income or spending is a new_event (an Income or Expense with the trigger, amount and account you would expect), referring by a $new reference (see Changes in the reference) to anything the path creates. When the right figure is a real-world fact the plan does not hold, propose a conservative, round estimate and label it: put \"estimated\" in the step title, state the method in one sentence of the reasoning, and name the figure to use instead. For Social Security: claim at 67, inflation-adjusted, the amount estimated from the plan's own earnings with the method stated, and the person's SSA statement as the figure to use instead. Leave a check without a path only when no reasonable estimate exists (a true cost basis), and give no_change_reason.
+Say what is missing with a change, not only in prose. Missing income or spending is a new_event (an Income or Expense with the trigger, amount and account you would expect), referring by a $new reference (see Changes in the reference) to anything the path creates. When the right figure is a real-world fact the plan does not hold, propose a conservative, round estimate and label it: put \"estimated\" in the step title, state the method in one sentence of the reasoning, and name the figure to use instead. For Social Security: claim at 67, inflation-adjusted, the amount from estimate_social_security over the plan's own earnings (its method stated in the reasoning), and the person's SSA statement as the figure to use instead. Leave a check without a path only when no reasonable estimate exists (a true cost basis), and give no_change_reason.
 
 How a note reads. The title is one specific sentence, at most 120 characters, naming the account, event or asset and the number that matters. The reasoning is two to four plain sentences: what you saw, why it matters for this plan, and what the change does. Use the plan's own names, dollar amounts, ages and years. Round: money to two or three significant figures ($11.8M, $137k, $2,400/month), rates to one decimal unless a smaller difference is the point. Leave out disclaimers, hedging boilerplate and generic financial advice; the app shows its own disclaimer.
 
-Numbers. Every number in a note must come from the plan, the run, a preview you ran, or arithmetic on those; list where in `evidence`. Before submitting, run preview_changes on each path (all of its steps, in order) and quote the simulated effect (for example: funding 90.6% -> 91.8%) in that path's reasoning or the note's. Give a path an `estimate` only when you did not preview it, and call it an estimate. When a preview reports paired: false, the two runs used different random draws, so present the comparison as approximate.
+Numbers. Every number in a note must come from the plan, the run, a preview you ran, a tool's result, or arithmetic on those; list where in `evidence`, citing a tool's result as `computed` with the tool_use id of the call. Before submitting, run preview_changes on each path (all of its steps, in order) and quote the simulated effect (for example: funding 90.6% -> 91.8%) in that path's reasoning or the note's. Give a path an `estimate` only when you did not preview it, and call it an estimate. When a preview reports paired: false, the two runs used different random draws, so present the comparison as approximate.
 
 Changes are JSON-pointer edits written against exactly the bodies shown in the user message. Set `expect` to the current value you are replacing, copied from the plan. Prefer the smallest change that expresses the idea.
 
-Do not repeat a note the rules already wrote, even reworded. A few sharp notes beat many; skip anything minor. Submit each note with submit_suggestion. If a submission is rejected, fix the problem it names or drop the note. When you are done, end your turn with a one-line summary.";
+Do not repeat a note the rules already wrote, even reworded. A few sharp notes beat many; skip anything minor. Submit each note with submit_suggestion. If a submission is rejected, fix the problem it names or drop the note. When you are done, end your turn with a one-line summary.
+
+", super::tools::guide!());
 
 /// How the simulation behaves, as far as a reviewer needs to know. Checked
 /// against finplan_core; update alongside the engine.
@@ -128,7 +131,7 @@ pub fn task(max_suggestions: usize) -> String {
     )
 }
 
-fn change_schema() -> Value {
+pub(crate) fn change_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
@@ -160,14 +163,20 @@ fn evidence_schema() -> Value {
         "items": {
             "type": "object",
             "properties": {
-                "ref": {"type": "string", "enum": ["ledger", "account_series", "stat", "diagnostic"]},
+                "ref": {"type": "string", "enum": ["ledger", "account_series", "stat", "diagnostic", "computed", "document", "answer", "description"]},
                 "year": {"type": "integer", "description": "ledger: the calendar year"},
                 "event_id": {"type": ["integer", "null"], "description": "ledger: narrow to an event"},
                 "account_id": {"type": ["integer", "null"], "description": "ledger or account_series: the account"},
                 "date": {"type": "string", "description": "account_series: the YYYY-MM-DD point"},
                 "value": {"type": "number", "description": "account_series, stat, diagnostic: the number"},
                 "name": {"type": "string", "description": "stat: what the number is"},
-                "field": {"type": "string", "description": "diagnostic: the funding_diagnostics field"}
+                "field": {"type": "string", "description": "diagnostic: the funding_diagnostics field"},
+                "tool": {"type": "string", "description": "computed: the tool that produced the figure"},
+                "call_id": {"type": "string", "description": "computed: the tool_use id of that call"},
+                "document_id": {"type": "integer", "description": "document: the uploaded document, when the session has any"},
+                "page": {"type": "integer", "description": "document: the 1-based page"},
+                "excerpt": {"type": "string", "description": "document, description: the exact text quoted, at most 400 characters; checked against the source"},
+                "question_key": {"type": "string", "description": "answer: the key of a question the user answered"}
             },
             "required": ["ref"]
         }
@@ -224,26 +233,8 @@ fn paths_schema() -> Value {
     })
 }
 
-/// The two client-side tools, in a fixed order.
-pub fn tools() -> Value {
-    json!([
-        {
-            "name": PREVIEW_TOOL,
-            "description": "Simulate the plan with one path's steps applied in order, against the same run's random draws, and compare with the run. Returns the diff the user would see, any problems with the changes (stale expect, bad path, invalid body), and base vs edited statistics: success_rate, funding_success_rate, real (today's dollars) final net worth quantiles, and funding diagnostics. Nothing is saved. Preview every path of a note before submitting it, with exactly the steps you will submit; the number of previews per review is limited.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "steps": {
-                        "type": "array",
-                        "description": "The path's steps in order, each a list of changes.",
-                        "items": {"type": "array", "items": change_schema(), "minItems": 1},
-                        "minItems": 1,
-                        "maxItems": 4
-                    }
-                },
-                "required": ["steps"]
-            }
-        },
+fn submit_tool() -> Value {
+    json!(
         {
             "name": SUBMIT_TOOL,
             "description": "Add one note to the Review tab. The server checks every path's steps against the plan and the evidence against the run, and either accepts the note (returning the diffs the user will see) or rejects it with the problems to fix. Accepted notes cannot be edited; submit only finished notes.",
@@ -269,5 +260,12 @@ pub fn tools() -> Value {
                 "required": ["kind", "section", "motive", "title", "reasoning", "evidence", "paths"]
             }
         }
-    ])
+    )
+}
+
+/// The tools a loop offers: the registry's, then `submit_suggestion`.
+pub fn tools(registry: &Registry) -> Value {
+    let mut definitions = registry.definitions();
+    definitions.push(submit_tool());
+    Value::Array(definitions)
 }

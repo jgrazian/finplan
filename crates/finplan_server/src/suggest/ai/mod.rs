@@ -3,14 +3,18 @@
 //! `openrouter-rs`) over one plan and one run.
 //!
 //! [`generate`] sends the static instructions ([`prompt`]) and the rendered
-//! plan and run ([`ReviewContext`]), then serves the model two tools until it
-//! ends its turn or a cap is hit:
+//! plan and run ([`ReviewContext`]), then serves the model its tools until it
+//! ends its turn or a cap is hit. The shared tools (previews, validation,
+//! preflight, run inspection and the calculators) live in [`tools`] as a
+//! registry the loop serves whole; the loop itself owns `submit_suggestion`:
 //!
 //! - `preview_changes` simulates changes against the run's own draws through
-//!   [`ReviewTools::preview`] — the caller's preview core, so this module never
+//!   [`ToolHost::preview`] — the caller's preview core, so this module never
 //!   touches the database or the engine;
+//! - the rest of [`tools::Registry`], whose outputs are kept by call id so a
+//!   note can cite them as [`Evidence::Computed`];
 //! - `submit_suggestion` validates a note (its changes through
-//!   [`ReviewTools::resolve`], its evidence against the run, its text, and
+//!   [`ToolHost::resolve`], its evidence against the run, its text, and
 //!   that it neither repeats an existing note nor quotes changes it never
 //!   previewed) and either keeps it as an [`AiDraft`] or tells the model what
 //!   to fix.
@@ -28,6 +32,7 @@ pub mod chat;
 mod config;
 mod context;
 mod prompt;
+pub mod tools;
 mod transport;
 
 #[cfg(test)]
@@ -51,33 +56,21 @@ pub use config::{
     AiConfig, DEFAULT_APP_TITLE, DEFAULT_BASE_URL, DEFAULT_MODEL, DraftConfig, DraftLimits,
     ThinkingMode,
 };
-pub use context::ReviewContext;
+pub use context::{ReviewContext, render_path};
 pub use transport::{
     BoxFuture, ModelPrice, OpenRouterSettings, OpenRouterTransport, Reply, Request, Transport,
     TransportError,
 };
 
 use crate::api::suggestion_paths::{self, PathShape, StepShape};
-use crate::api::suggestions::MAX_STEPS;
 use crate::observability::{AiCostSource, AiMotive, AiRetryReason, AiTool, AiToolOutcome};
 use crate::suggest::rules::{Evidence, Kind, Section};
 use crate::suggest::{Change, ChangeProblem, DiffLine};
+use tools::{MAX_CHANGES, Registry, ToolEnv, batch_key};
 
-/// The two things a review needs from the rest of the server.
-pub trait ReviewTools: Send + Sync {
-    /// Simulate `changes` (a path's steps, in order, as one batch) against
-    /// the review's base run; the `Preview` JSON the preview endpoint
-    /// returns, or why it could not run.
-    fn preview<'a>(&'a self, changes: Vec<Change>) -> BoxFuture<'a, Result<Value, String>>;
-
-    /// Check a path's steps against the base run's plan, each read after the
-    /// ones before it: every step's diff lines on success, otherwise the
-    /// index of the step that failed and its problems.
-    fn resolve_steps(
-        &self,
-        steps: &[Vec<Change>],
-    ) -> Result<Vec<Vec<DiffLine>>, (usize, Vec<ChangeProblem>)>;
-}
+/// What a review needs from the rest of the server: [`ToolHost`], the plan
+/// and simulations the shared tools work on.
+pub use tools::ToolHost;
 
 /// Where a pass reports what it spends and does, as it happens. The server's
 /// implementation feeds its metrics; every method defaults to nothing.
@@ -371,6 +364,8 @@ pub struct AiClient {
     secret: Option<String>,
     /// Route only to zero-data-retention providers (a drafting client).
     zdr: bool,
+    /// The shared tools this client's requests offer and its loop serves.
+    registry: Registry,
     /// The model's listed prices, when last looked up.
     prices: tokio::sync::Mutex<Option<(Instant, Option<ModelPrice>)>>,
 }
@@ -411,8 +406,15 @@ impl AiClient {
             transport,
             secret,
             zdr: false,
+            registry: Registry::all(),
             prices: tokio::sync::Mutex::new(None),
         }
+    }
+
+    /// Serve only these shared tools (a loop with other needs picks a subset).
+    pub fn with_registry(mut self, registry: Registry) -> Self {
+        self.registry = registry;
+        self
     }
 
     /// This client's requests may only be served by zero-data-retention
@@ -543,7 +545,7 @@ impl AiClient {
                 AnthropicSystemTextBlock::text(prompt::SYSTEM_PROMPT),
                 reference,
             ]))
-            .tools(tools())
+            .tools(tools(&self.registry))
             .provider(provider);
         if settings.thinking {
             builder
@@ -557,8 +559,8 @@ impl AiClient {
 }
 
 /// The tool definitions, typed from [`prompt::tools`].
-fn tools() -> Vec<AnthropicTool> {
-    prompt::tools()
+fn tools(registry: &Registry) -> Vec<AnthropicTool> {
+    prompt::tools(registry)
         .as_array()
         .into_iter()
         .flatten()
@@ -683,23 +685,12 @@ impl SubmittedPath {
     }
 }
 
-/// A path to preview: its steps in order. A bare `changes` list reads as a
-/// path of one step.
-#[derive(Debug, Deserialize)]
-struct PreviewInput {
-    #[serde(default)]
-    steps: Vec<Vec<Change>>,
-    #[serde(default)]
-    changes: Vec<Change>,
-}
-
 const MAX_TITLE: usize = 120;
 const MAX_REASONING: usize = 1_200;
 const MAX_EVIDENCE: usize = 10;
-/// Per step.
-const MAX_CHANGES: usize = 12;
 const MAX_STAT_NAME: usize = 80;
 const MAX_NO_CHANGE_REASON: usize = 200;
+const MAX_EXCERPT: usize = 400;
 /// `funding_diagnostics` fields a `diagnostic` evidence entry may name.
 const DIAGNOSTIC_FIELDS: &[&str] = &[
     "iterations",
@@ -763,49 +754,49 @@ fn change_problem_kind(problem: &ChangeProblem) -> &'static str {
     }
 }
 
+/// The output of a tool call that succeeded, kept for the session so a note
+/// can cite it as `Evidence::Computed`.
+#[derive(Debug, Clone)]
+struct Computed {
+    tool: String,
+    /// The tool result the model was shown; kept for loops that check a
+    /// note's figures against what its tools returned.
+    #[allow(dead_code)]
+    output: String,
+}
+
 /// One review's state across turns.
 struct Session<'a> {
     client: &'a AiClient,
     context: &'a ReviewContext,
-    tools: &'a dyn ReviewTools,
+    tools: &'a dyn ToolHost,
     observer: &'a dyn Observer,
     drafts: Vec<AiDraft>,
     usage: Usage,
     /// Serialized change batches whose preview ran without problems, and
     /// what the preview returned.
     previewed: HashMap<String, Value>,
-}
-
-/// A path's steps as one batch, keyed for "was exactly this previewed".
-fn batch_key(steps: &[Vec<Change>]) -> String {
-    let batch: Vec<&Change> = steps.iter().flatten().collect();
-    serde_json::to_string(&batch).unwrap_or_default()
+    /// Successful shared-tool calls by `tool_use` id.
+    computed: HashMap<String, Computed>,
 }
 
 impl Session<'_> {
     /// Serve one tool call, then log and count it.
-    async fn run_tool(&mut self, name: &str, input: &Value) -> (String, bool) {
+    async fn run_tool(&mut self, call_id: &str, name: &str, input: &Value) -> (String, bool) {
         let started = Instant::now();
-        let (output, is_error, report) = match name {
-            prompt::PREVIEW_TOOL => self.preview(input).await,
-            prompt::SUBMIT_TOOL => self.submit(input),
-            other => (
-                format!("unknown tool `{other}`"),
-                true,
-                ToolReport::new(AiTool::Unknown, AiToolOutcome::Invalid),
-            ),
+        let (output, is_error, report) = if name == prompt::SUBMIT_TOOL {
+            self.submit(input)
+        } else {
+            self.serve(call_id, name, input).await
         };
         let seconds = started.elapsed().as_secs_f64();
         self.observer.tool(report.tool, report.outcome, seconds);
-        match report.tool {
-            AiTool::Submit => {
-                let accepted = report.outcome == AiToolOutcome::Accepted;
-                self.observer.submission(accepted);
-                if let Some(motive) = report.motive {
-                    self.observer.motive(motive, accepted);
-                }
+        if report.tool == AiTool::Submit {
+            let accepted = report.outcome == AiToolOutcome::Accepted;
+            self.observer.submission(accepted);
+            if let Some(motive) = report.motive {
+                self.observer.motive(motive, accepted);
             }
-            AiTool::Preview | AiTool::Unknown => {}
         }
         tracing::info!(
             event = "review_ai.tool",
@@ -822,70 +813,48 @@ impl Session<'_> {
         (output, is_error)
     }
 
-    async fn preview(&mut self, input: &Value) -> (String, bool, ToolReport) {
-        let report = |outcome| ToolReport::new(AiTool::Preview, outcome);
-        if self.usage.previews >= self.client.settings.max_previews {
-            return (
-                "The preview budget for this review is used up. Submit notes with an estimate instead, or stop.".into(),
-                true,
-                report(AiToolOutcome::BudgetExhausted),
-            );
-        }
-        let steps = match serde_json::from_value::<PreviewInput>(input.clone()) {
-            Ok(input) => {
-                let steps = if input.steps.is_empty() && !input.changes.is_empty() {
-                    vec![input.changes]
-                } else {
-                    input.steps
-                };
-                if steps.is_empty()
-                    || steps.len() > MAX_STEPS
-                    || steps.iter().any(|s| s.is_empty() || s.len() > MAX_CHANGES)
-                {
-                    return (
-                        format!("send 1 to {MAX_STEPS} steps, each of 1 to {MAX_CHANGES} changes"),
-                        true,
-                        report(AiToolOutcome::Invalid),
-                    );
-                }
-                steps
-            }
-            Err(e) => {
-                return (
-                    format!("invalid changes: {e}"),
-                    true,
-                    report(AiToolOutcome::Invalid),
-                );
-            }
+    /// A call to one of the registry's tools.
+    async fn serve(
+        &mut self,
+        call_id: &str,
+        name: &str,
+        input: &Value,
+    ) -> (String, bool, ToolReport) {
+        let env = ToolEnv {
+            host: self.tools,
+            previews_left: self
+                .client
+                .settings
+                .max_previews
+                .saturating_sub(self.usage.previews),
+            failure_profile: self.context.failure_profile.as_ref(),
         };
-        self.usage.previews += 1;
-        let key = batch_key(&steps);
-        let changes: Vec<Change> = steps.into_iter().flatten().collect();
-        match self.tools.preview(changes).await {
-            Ok(preview) => {
-                let problems = preview
-                    .get("problems")
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                let mut done = report(if problems == 0 {
-                    AiToolOutcome::Ok
-                } else {
-                    AiToolOutcome::Problems
-                });
-                done.problems = problems;
-                done.paired = preview.get("paired").and_then(Value::as_bool);
-                let reply = preview.to_string();
-                if problems == 0 {
-                    self.previewed.insert(key, preview);
-                }
-                (reply, false, done)
-            }
-            Err(message) => (
-                self.client.scrub(&message),
+        let Some((tool, out)) = self.client.registry.dispatch(name, input, &env).await else {
+            return (
+                format!("unknown tool `{name}`"),
                 true,
-                report(AiToolOutcome::Error),
-            ),
-        }
+                ToolReport::new(AiTool::Unknown, AiToolOutcome::Invalid),
+            );
+        };
+        self.usage.previews += out.previews_spent;
+        self.previewed.extend(out.previewed);
+        let text = if out.is_error {
+            // Not the model's to read: a key must never reach it.
+            self.client.scrub(&out.text)
+        } else {
+            self.computed.insert(
+                call_id.to_owned(),
+                Computed {
+                    tool: name.to_owned(),
+                    output: out.text.clone(),
+                },
+            );
+            out.text
+        };
+        let mut report = ToolReport::new(tool, out.outcome);
+        report.paired = out.paired;
+        report.problems = out.problems;
+        (text, out.is_error, report)
     }
 
     fn submit(&mut self, input: &Value) -> (String, bool, ToolReport) {
@@ -1268,6 +1237,67 @@ impl Session<'_> {
                 }
                 finite(*value)
             }
+            Evidence::Document {
+                document_id,
+                page,
+                excerpt,
+            } => {
+                check_excerpt(excerpt)?;
+                let pages = self
+                    .context
+                    .documents
+                    .get(document_id)
+                    .ok_or_else(|| format!("no document #{document_id} in this session"))?;
+                let index = usize::try_from(*page)
+                    .ok()
+                    .filter(|p| (1..=pages.len().max(1)).contains(p))
+                    .ok_or_else(|| {
+                        format!(
+                            "document #{document_id} has {} page(s); page {page} is outside it",
+                            pages.len().max(1)
+                        )
+                    })?;
+                // A document with no text layer (a scan) has nothing to check against.
+                match pages.get(index - 1) {
+                    Some(text) if !text.trim().is_empty() => {
+                        if squash(text).contains(&squash(excerpt)) {
+                            Ok(())
+                        } else {
+                            Err(format!(
+                                "the excerpt does not appear on page {page} of document #{document_id}; quote the text exactly"
+                            ))
+                        }
+                    }
+                    _ => Ok(()),
+                }
+            }
+            Evidence::Answer { question_key } => self
+                .context
+                .answers
+                .contains(question_key)
+                .then_some(())
+                .ok_or_else(|| format!("the user has not answered a question `{question_key}`")),
+            Evidence::Description { excerpt } => {
+                check_excerpt(excerpt)?;
+                match &self.context.description {
+                    Some(text) if squash(text).contains(&squash(excerpt)) => Ok(()),
+                    Some(_) => Err(
+                        "the excerpt does not appear in the user's description; quote it exactly"
+                            .into(),
+                    ),
+                    None => Err("there is no user description in this session".into()),
+                }
+            }
+            Evidence::Computed { tool, call_id } => match self.computed.get(call_id) {
+                Some(call) if call.tool == *tool => Ok(()),
+                Some(call) => Err(format!(
+                    "call {call_id} was a call to {}, not {tool}",
+                    call.tool
+                )),
+                None => Err(format!(
+                    "no successful call {call_id} to {tool} in this session; cite the tool_use id of a call that returned a result"
+                )),
+            },
         }
     }
 }
@@ -1362,6 +1392,20 @@ impl Materiality {
 fn trim_float(v: f64) -> String {
     let text = format!("{v:.2}");
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// Text with runs of whitespace collapsed to one space, for comparing an
+/// excerpt with where it came from.
+fn squash(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn check_excerpt(excerpt: &str) -> Result<(), String> {
+    let len = excerpt.trim().chars().count();
+    if len == 0 || len > MAX_EXCERPT {
+        return Err(format!("an excerpt is 1 to {MAX_EXCERPT} characters"));
+    }
+    Ok(())
 }
 
 fn finite(value: f64) -> Result<(), String> {
@@ -1467,7 +1511,7 @@ fn text(text: impl Into<String>) -> AnthropicContentPart {
 pub async fn generate(
     client: &AiClient,
     input: &ReviewContext,
-    tools: &dyn ReviewTools,
+    tools: &dyn ToolHost,
 ) -> Result<AiOutcome, AiError> {
     generate_observed(client, input, tools, &NoObserver).await
 }
@@ -1478,7 +1522,7 @@ pub async fn generate(
 pub async fn generate_observed(
     client: &AiClient,
     input: &ReviewContext,
-    tools: &dyn ReviewTools,
+    tools: &dyn ToolHost,
     observer: &dyn Observer,
 ) -> Result<AiOutcome, AiError> {
     let settings = client.settings();
@@ -1511,7 +1555,7 @@ pub async fn generate_observed(
 async fn converse(
     client: &AiClient,
     input: &ReviewContext,
-    tools: &dyn ReviewTools,
+    tools: &dyn ToolHost,
     observer: &dyn Observer,
     mut messages: Vec<AnthropicMessage>,
     started: Instant,
@@ -1525,6 +1569,7 @@ async fn converse(
         drafts: Vec::new(),
         usage: Usage::default(),
         previewed: HashMap::new(),
+        computed: HashMap::new(),
     };
     let mut model = None;
     let mut summary = None;
@@ -1636,7 +1681,7 @@ async fn converse(
                 continue;
             };
             let input = input.clone().unwrap_or(Value::Null);
-            let (output, is_error) = session.run_tool(name, &input).await;
+            let (output, is_error) = session.run_tool(id, name, &input).await;
             results.push(AnthropicContentPart::ToolResult {
                 tool_use_id: id.clone(),
                 content: Some(AnthropicMessageContent::Text(output)),

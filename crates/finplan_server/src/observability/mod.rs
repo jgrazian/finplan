@@ -78,7 +78,13 @@ bounded_enum!(AiPassOutcome {
     MaxTokens => "max_tokens", Refused => "refused", Interrupted => "interrupted",
     Unexpected => "unexpected", Failed => "failed", Superseded => "superseded"
 });
-bounded_enum!(AiTool { Preview => "preview_changes", Submit => "submit_suggestion", Unknown => "unknown" });
+bounded_enum!(AiTool {
+    Preview => "preview_changes", Submit => "submit_suggestion", Validate => "validate_changes",
+    PreviewPaths => "preview_paths", Preflight => "preflight", InspectPath => "inspect_path",
+    FailureProfile => "failure_profile", ReferenceFacts => "reference_facts",
+    FinanceCalc => "finance_calc", SocialSecurity => "estimate_social_security",
+    Taxes => "estimate_taxes", Unknown => "unknown"
+});
 bounded_enum!(AiToolOutcome {
     Ok => "ok", Problems => "problems", Error => "error", Invalid => "invalid",
     BudgetExhausted => "budget_exhausted", Accepted => "accepted", Rejected => "rejected"

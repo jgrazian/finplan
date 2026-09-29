@@ -6,11 +6,12 @@
 //! everything else is worked out here so the model does not have to: lot
 //! values, gains, account totals, ages, and names next to every id.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
+use crate::api::funding::FundingDiagnostics;
 use crate::api::runs::Results;
 use crate::compile::rows::{DistributionRow, ScenarioGraph};
 use crate::suggest::read;
@@ -31,6 +32,15 @@ pub struct ReviewContext {
     pub(super) dates: HashSet<String>,
     /// Notes already written, for the duplicate check.
     pub(super) existing: Vec<Existing>,
+    /// The run's failure aggregates with names, for `failure_profile`.
+    pub(super) failure_profile: Option<Value>,
+    /// Text of each document the session may cite, by id, page by page. An
+    /// empty list is a document with no text layer.
+    pub(super) documents: HashMap<i64, Vec<String>>,
+    /// Keys of the questions the user has answered.
+    pub(super) answers: HashSet<String>,
+    /// What the user wrote about themselves, when the session has it.
+    pub(super) description: Option<String>,
 }
 
 /// A note already on the board, reduced to what makes two notes the same.
@@ -124,8 +134,265 @@ impl ReviewContext {
                     Existing::new(d.kind, &d.title, &changes)
                 })
                 .collect(),
+            failure_profile: results
+                .funding_diagnostics
+                .as_ref()
+                .map(|f| failure_profile(graph, f)),
+            documents: HashMap::new(),
+            answers: HashSet::new(),
+            description: None,
         }
     }
+
+    /// Documents whose text a note may quote as `Evidence::Document`: each
+    /// with its id and stored text (pages separated by form feeds), `None` for
+    /// one with no text layer, whose excerpts cannot be checked.
+    pub fn with_documents<'d>(
+        mut self,
+        documents: impl IntoIterator<Item = (i64, Option<&'d str>)>,
+    ) -> Self {
+        self.documents = documents
+            .into_iter()
+            .map(|(id, text)| {
+                let pages = text
+                    .map(|t| {
+                        crate::documents::store::split_pages(t, None)
+                            .into_iter()
+                            .map(|p| p.text)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (id, pages)
+            })
+            .collect();
+        self
+    }
+
+    /// Keys of the questions the user has answered, for `Evidence::Answer`.
+    pub fn with_answers<'a>(mut self, keys: impl IntoIterator<Item = &'a str>) -> Self {
+        self.answers = keys.into_iter().map(str::to_owned).collect();
+        self
+    }
+
+    /// The user's own description, for `Evidence::Description`.
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+}
+
+/// Share of `part` in `whole`, as a fraction rounded to four places.
+fn share(part: i64, whole: i64) -> f64 {
+    if whole <= 0 {
+        0.0
+    } else {
+        (part as f64 / whole as f64 * 10_000.0).round() / 10_000.0
+    }
+}
+
+/// The run's funding diagnostics with names and ages, as JSON, for the
+/// `failure_profile` tool. Aggregates over every iteration; per-iteration
+/// paths are not stored.
+fn failure_profile(graph: &ScenarioGraph, f: &FundingDiagnostics) -> Value {
+    let birth_year = graph.scenario.birth_date.as_deref().and_then(year_of);
+    let age = |year: i64| birth_year.map(|b| year - b);
+    let account = |id: Option<i64>| {
+        id.and_then(|id| graph.accounts.iter().find(|a| a.id == id))
+            .map(|a| a.name.clone())
+    };
+    let event = |id: Option<i64>| {
+        id.and_then(|id| graph.events.iter().find(|e| e.id == id))
+            .map(|e| e.name.clone())
+    };
+    let years = |list: &[crate::api::funding::YearCount]| -> Vec<Value> {
+        list.iter()
+            .map(|y| json!({"year": y.year, "age": age(y.year), "iterations": y.count, "share_of_failed": share(y.count, f.failed)}))
+            .collect()
+    };
+    json!({
+        "iterations": f.iterations,
+        "failed": f.failed,
+        "failed_share": share(f.failed, f.iterations),
+        "cash_shortfall": f.cash_shortfall,
+        "event_failure": f.event_failure,
+        "iteration_limit": f.iteration_limit,
+        "failed_solvent": f.failed_solvent,
+        "first_shortfall_years": years(&f.first_shortfall_years),
+        "median_first_shortfall": f.median_first_shortfall_year.map(|y| json!({"year": y, "age": age(y)})),
+        "shortfall_accounts": f.shortfall_accounts.iter().map(|a| json!({
+            "account_id": a.account_id, "account": account(a.account_id),
+            "iterations": a.count, "share_of_failed": share(a.count, f.failed),
+        })).collect::<Vec<_>>(),
+        "event_failures": f.event_failures.iter().map(|e| json!({
+            "event_id": e.event_id, "event": event(e.event_id),
+            "iterations": e.count, "share_of_failed": share(e.count, f.failed),
+        })).collect::<Vec<_>>(),
+        "liquid_depleted_years": years(&f.liquid_depleted_years),
+        "median_max_deficit_nominal": f.median_max_deficit,
+        "median_years_short": f.median_shortfall_years,
+        "note": "Aggregates over every iteration of the run; the run stores per-path detail only for its percentile paths (see inspect_path).",
+    })
+}
+
+/// A stored path of the run as text: the balance and cash flows year by year.
+/// `results` is the run read with the path's series; `asked` names the rank
+/// the model asked for, and `years` narrows the rows.
+pub fn render_path(
+    graph: &ScenarioGraph,
+    results: &Results,
+    asked: &str,
+    years: Option<(i64, i64)>,
+) -> String {
+    /// Most cash-flow rows shown; a longer run is thinned to it.
+    const MAX_ROWS: usize = 45;
+    let account_name = |id: i64| {
+        graph
+            .accounts
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| format!("{} (#{})", a.name, a.id))
+            .unwrap_or_else(|| format!("account #{id}"))
+    };
+    let event_name = |id: i64| {
+        graph
+            .events
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| format!("{} (#{})", e.name, e.id))
+            .unwrap_or_else(|| format!("event #{id}"))
+    };
+    let birth_year = graph.scenario.birth_date.as_deref().and_then(year_of);
+    let age = |year: i64| {
+        birth_year
+            .map(|b| (year - b).to_string())
+            .unwrap_or_else(|| "-".into())
+    };
+    let in_window = |year: i64| years.is_none_or(|(from, to)| (from..=to).contains(&year));
+
+    let mut out = String::new();
+    let Some(shown) = results.series_percentile else {
+        return format!("The run has no stored percentile path for {asked}.");
+    };
+    let stored: Vec<String> = results
+        .bands
+        .iter()
+        .filter_map(|b| b.percentile)
+        .map(|p| format!("P{:.0}", p * 100.0))
+        .collect();
+    let _ = writeln!(
+        out,
+        "Path for `{asked}`: the stored P{:.0} path, ranked by final nominal net worth. The run stores {}.",
+        shown * 100.0,
+        stored.join(", ")
+    );
+    let band = results
+        .bands
+        .iter()
+        .find(|b| b.path_id == results.series_id);
+    if let Some(final_value) = band.and_then(|b| b.net_worth.last()) {
+        let _ = writeln!(
+            out,
+            "Final net worth on this path (nominal): {}.",
+            money(*final_value)
+        );
+    }
+    if !results.warnings.is_empty() {
+        let shown_warnings: Vec<String> = results
+            .warnings
+            .iter()
+            .filter(|w| w.date.as_deref().and_then(year_of).is_none_or(in_window))
+            .take(15)
+            .map(|w| {
+                format!(
+                    "{} {}{}{}",
+                    w.kind,
+                    w.date.as_deref().unwrap_or(""),
+                    w.event_id
+                        .map(|id| format!(" ({})", event_name(id)))
+                        .unwrap_or_default(),
+                    w.account_id
+                        .map(|id| format!(" [{}]", account_name(id)))
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        if !shown_warnings.is_empty() {
+            let _ = writeln!(out, "Warnings on this path: {}.", shown_warnings.join("; "));
+        }
+    }
+
+    let flows: Vec<_> = results
+        .cash_flows
+        .iter()
+        .filter(|c| in_window(c.year))
+        .collect();
+    let step = flows.len().div_ceil(MAX_ROWS).max(1);
+    let _ = writeln!(
+        out,
+        "\nYearly cash flows (nominal dollars){}:",
+        if step > 1 {
+            format!(", every {step} years and the last; pass `years` for every year")
+        } else {
+            String::new()
+        }
+    );
+    let _ = writeln!(
+        out,
+        "year,age,income,expenses,contributions,withdrawals,taxes,appreciation,net_cash_flow"
+    );
+    for (i, c) in flows.iter().enumerate() {
+        if i % step != 0 && i != flows.len() - 1 {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "{},{},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0}",
+            c.year,
+            age(c.year),
+            c.income,
+            c.expenses,
+            c.contributions,
+            c.withdrawals,
+            c.taxes,
+            c.appreciation,
+            c.net_cash_flow
+        );
+    }
+
+    if let Some(band) = band {
+        let rows: Vec<usize> = band
+            .dates
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.ends_with("-12-31") && year_of(d).is_some_and(in_window))
+            .map(|(i, _)| i)
+            .collect();
+        let step = rows.len().div_ceil(MAX_ROWS).max(1);
+        let _ = writeln!(out, "\nYear-end balances (nominal):");
+        let header: Vec<String> = results
+            .account_series
+            .iter()
+            .map(|s| account_name(s.account_id))
+            .collect();
+        let _ = writeln!(out, "date,{}", header.join(","));
+        for (n, &i) in rows.iter().enumerate() {
+            if n % step != 0 && n != rows.len() - 1 {
+                continue;
+            }
+            let values: Vec<String> = results
+                .account_series
+                .iter()
+                .map(|s| {
+                    s.values
+                        .get(i)
+                        .map(|v| format!("{v:.0}"))
+                        .unwrap_or_default()
+                })
+                .collect();
+            let _ = writeln!(out, "{},{}", band.dates[i], values.join(","));
+        }
+    }
+    out
 }
 
 // ── formatting ──────────────────────────────────────────────────────────────

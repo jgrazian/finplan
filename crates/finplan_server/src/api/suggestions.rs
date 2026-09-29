@@ -1421,6 +1421,14 @@ fn validate_evidence(graph: &ScenarioGraph, evidence: &[Evidence]) -> ApiResult<
                     return bad(index, "the value is not a number".into());
                 }
             }
+            // Only the AI loops write these, and they check them against what
+            // they came from (a document, an answer, a tool call).
+            Evidence::Document { .. }
+            | Evidence::Answer { .. }
+            | Evidence::Description { .. }
+            | Evidence::Computed { .. } => {
+                return bad(index, "this kind of evidence is not accepted here".into());
+            }
         }
     }
     Ok(())

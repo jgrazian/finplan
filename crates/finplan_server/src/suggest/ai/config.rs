@@ -85,7 +85,7 @@ pub struct AiConfig {
     #[arg(
         long = "review-max-turns",
         env = "FINPLAN_REVIEW_MAX_TURNS",
-        default_value_t = 12
+        default_value_t = 16
     )]
     pub max_turns: u32,
 
@@ -158,7 +158,7 @@ impl Default for AiConfig {
             openrouter_referer: None,
             model: DEFAULT_MODEL.into(),
             thinking: ThinkingMode::Auto,
-            max_turns: 12,
+            max_turns: 16,
             max_suggestions: 6,
             max_previews: 8,
             max_tokens: 16_000,
@@ -530,7 +530,7 @@ mod draft_tests {
         assert_eq!(config.ttl_hours, 24);
         // Its own model budget, beside the review's rather than shared with it.
         assert_eq!((config.max_turns, config.max_previews), (20, 12));
-        assert_eq!(Cli::parse_from(["test"]).review.max_turns, 12);
+        assert_eq!(Cli::parse_from(["test"]).review.max_turns, 16);
     }
 
     #[test]

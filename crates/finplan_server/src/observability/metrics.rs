@@ -423,7 +423,19 @@ impl Telemetry {
             "Review chat spend in US dollars (included in review_ai_cost_usd), by source",
             Family::<Labels, FloatCounter>::default()
         );
-        for tool in [AiTool::Preview, AiTool::Submit] {
+        for tool in [
+            AiTool::Preview,
+            AiTool::Submit,
+            AiTool::Validate,
+            AiTool::PreviewPaths,
+            AiTool::Preflight,
+            AiTool::InspectPath,
+            AiTool::FailureProfile,
+            AiTool::ReferenceFacts,
+            AiTool::FinanceCalc,
+            AiTool::SocialSecurity,
+            AiTool::Taxes,
+        ] {
             drop(ai_tool_duration.get_or_create(&labels([("tool", tool.as_str())])));
         }
         for outcome in [

@@ -492,7 +492,21 @@ export function evidenceLink(evidence: Evidence, names: Names = NO_NAMES): Evide
         label: `${humanize(evidence.field)}: ${statValue(evidence.field, evidence.value)}`,
         to: { tab: "results" },
       };
+    case "document":
+      return { label: `Document p. ${evidence.page}: “${clip(evidence.excerpt)}”` };
+    case "answer":
+      return { label: `Your answer: ${humanize(evidence.question_key)}` };
+    case "description":
+      return { label: `You wrote: “${clip(evidence.excerpt)}”` };
+    case "computed":
+      return { label: `Calculated: ${humanize(evidence.tool)}` };
   }
+}
+
+/** A quoted excerpt, cut to fit a chip. */
+function clip(excerpt: string, max = 60): string {
+  const text = excerpt.replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 export function diffRow(line: { label: string; from: string | null; to: string | null }): DiffRow {

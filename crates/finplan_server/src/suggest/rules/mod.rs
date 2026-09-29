@@ -81,6 +81,20 @@ pub enum Evidence {
     Stat { name: String, value: f64 },
     /// A field of `funding_diagnostics`.
     Diagnostic { field: String, value: f64 },
+    /// Text on one page (1-based) of an uploaded document, quoted. Checked
+    /// against the document's stored text where it has any.
+    Document {
+        document_id: i64,
+        page: i64,
+        excerpt: String,
+    },
+    /// The user's answer to one of the drafting agent's questions.
+    Answer { question_key: String },
+    /// Text the user wrote in their description, quoted.
+    Description { excerpt: String },
+    /// A figure a tool call returned in this session: `call_id` is the model's
+    /// `tool_use` id.
+    Computed { tool: String, call_id: String },
 }
 
 /// One review note, before anyone has previewed or stored it.

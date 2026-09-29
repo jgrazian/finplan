@@ -21,7 +21,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-const EMPLOYEE_401K_DEFERRAL_LIMIT_2026: f64 = 24_500.;
+use crate::suggest::ai::tools::facts::employee_deferral_limit;
+
+/// The tax year guided setup's 401(k) cap is read from in the reference table.
+const GUIDED_SETUP_TAX_YEAR: i32 = 2026;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -331,7 +334,7 @@ async fn create(
     let invested = p.retirement_401k + p.investments;
     let annual_401k_contribution = (p.annual_income * p.retirement_401k_contribution_percent
         / 100.)
-        .min(EMPLOYEE_401K_DEFERRAL_LIMIT_2026);
+        .min(employee_deferral_limit(GUIDED_SETUP_TAX_YEAR).unwrap_or(f64::INFINITY));
     let has_investments = invested > 0. || annual_401k_contribution > 0.;
     for (table, id) in [
         ("return_profiles", Some(p.cash_profile_id)),

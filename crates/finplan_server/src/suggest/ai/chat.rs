@@ -16,8 +16,7 @@ use openrouter_rs::api::messages::{AnthropicContentPart, AnthropicMessage, Anthr
 
 use super::context::Existing;
 use super::{
-    AiClient, AiError, AiOutcome, Observer, ReviewContext, ReviewTools, Settings, Stop, converse,
-    text,
+    AiClient, AiError, AiOutcome, Observer, ReviewContext, Settings, Stop, ToolHost, converse, text,
 };
 use crate::suggest::Change;
 use crate::suggest::rules::Kind;
@@ -74,6 +73,7 @@ impl AiClient {
             transport: self.transport.clone(),
             secret: self.secret.clone(),
             zdr: self.zdr,
+            registry: self.registry.clone(),
             prices: tokio::sync::Mutex::new(prices),
         }
     }
@@ -84,7 +84,7 @@ impl AiClient {
 pub async fn answer(
     client: &AiClient,
     input: &ChatInput<'_>,
-    tools: &dyn ReviewTools,
+    tools: &dyn ToolHost,
     observer: &dyn Observer,
 ) -> Result<AiOutcome, AiError> {
     let chat = client.for_chat();
@@ -260,6 +260,10 @@ mod tests {
             years: None,
             dates: Default::default(),
             existing: Vec::new(),
+            failure_profile: None,
+            documents: Default::default(),
+            answers: Default::default(),
+            description: None,
         };
         let history = vec![
             (ChatRole::User, "first".to_owned()),

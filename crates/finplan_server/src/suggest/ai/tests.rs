@@ -242,7 +242,7 @@ impl Tools {
     }
 }
 
-impl ReviewTools for Tools {
+impl ToolHost for Tools {
     fn preview<'a>(&'a self, changes: Vec<Change>) -> BoxFuture<'a, Result<Value, String>> {
         Box::pin(async move {
             *self.previews.lock().unwrap() += 1;
@@ -254,6 +254,27 @@ impl ReviewTools for Tools {
                 Err(problems) => json!({"problems": problems}),
             })
         })
+    }
+
+    fn preflight(&self) -> Result<Value, String> {
+        Ok(json!({"issues": [{"code": "no_inflation", "severity": "warning"}], "can_run": true}))
+    }
+
+    fn inspect_path<'a>(
+        &'a self,
+        rank: tools::PathRank,
+        years: Option<(i64, i64)>,
+    ) -> BoxFuture<'a, Result<String, String>> {
+        Box::pin(async move {
+            match rank {
+                tools::PathRank::Median => Ok(format!("median path, years {years:?}")),
+                _ => Err("this run stored no percentile paths".into()),
+            }
+        })
+    }
+
+    fn plan_tax_config(&self) -> Option<finplan_core::model::TaxConfig> {
+        Some(finplan_core::model::TaxConfig::default())
     }
 
     fn resolve_steps(
@@ -398,10 +419,25 @@ async fn preview_then_a_rejected_then_an_accepted_note() {
     assert_eq!(first["provider"]["data_collection"], "deny");
     assert_eq!(first["system"][1]["cache_control"]["type"], "ephemeral");
     assert!(first["system"][0].get("cache_control").is_none());
+    let tool = |name: &str| {
+        first["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("no tool {name}"))
+            .clone()
+    };
     assert_eq!(first["tools"][0]["name"], "preview_changes");
-    assert_eq!(first["tools"][1]["name"], "submit_suggestion");
-    assert!(first["tools"][0]["input_schema"]["properties"]["steps"].is_object());
-    assert!(first["tools"][1]["input_schema"]["properties"]["paths"].is_object());
+    assert_eq!(
+        first["tools"].as_array().unwrap().last().unwrap()["name"],
+        "submit_suggestion"
+    );
+    assert!(tool("preview_changes")["input_schema"]["properties"]["steps"].is_object());
+    assert!(tool("submit_suggestion")["input_schema"]["properties"]["paths"].is_object());
+    for name in tools::Registry::all().names() {
+        assert!(tool(name)["input_schema"].is_object(), "{name}");
+    }
     // The newest block carries the conversation's breakpoint.
     assert_eq!(
         first["messages"][0]["content"][1]["cache_control"]["type"],
@@ -978,7 +1014,8 @@ fn the_static_prefix_is_stable_and_names_the_body_types() {
     ] {
         assert!(reference.contains(needle), "missing {needle:?}");
     }
-    assert_eq!(prompt::tools(), prompt::tools());
+    let registry = tools::Registry::all();
+    assert_eq!(prompt::tools(&registry), prompt::tools(&registry));
     assert!(
         !prompt::SYSTEM_PROMPT.contains('{'),
         "no templating in the system prompt"
@@ -998,6 +1035,7 @@ fn evidence_is_checked_against_the_run() {
         drafts: Vec::new(),
         usage: Usage::default(),
         previewed: HashMap::new(),
+        computed: HashMap::new(),
     };
     let ok = |e: Value| session.check_evidence(&serde_json::from_value(e).unwrap());
     assert!(ok(json!({"ref": "ledger", "year": 2040, "event_id": 5, "account_id": 6})).is_ok());
@@ -1830,8 +1868,13 @@ fn materiality_comes_from_config_and_measures_improvements_only() {
 
 #[test]
 fn the_submit_tool_requires_a_motive_and_offers_a_no_change_reason() {
-    let tools = prompt::tools();
-    let submit = &tools[1]["input_schema"];
+    let tools = prompt::tools(&tools::Registry::all());
+    let submit = &tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "submit_suggestion")
+        .unwrap()["input_schema"];
     let required: Vec<&str> = submit["required"]
         .as_array()
         .unwrap()
@@ -1887,4 +1930,573 @@ fn a_drafting_client_requires_zero_data_retention_and_review_does_not() {
     assert_eq!(provider["zdr"], true);
     assert_eq!(provider["require_parameters"], true);
     assert_eq!(provider["data_collection"], "deny");
+}
+
+// ── shared tools through the loop ───────────────────────────────────────────
+
+/// The result the request at `n` carried for the call `id`, and whether it
+/// was flagged an error.
+fn result_for(requests: &[Value], n: usize, id: &str) -> (String, bool) {
+    let messages = requests[n]["messages"].as_array().unwrap();
+    let parts = messages.last().unwrap()["content"].as_array().unwrap();
+    let part = parts
+        .iter()
+        .find(|p| p["tool_use_id"] == id)
+        .unwrap_or_else(|| panic!("no result for {id}"));
+    (
+        part["content"].as_str().unwrap().to_owned(),
+        part["is_error"] == true,
+    )
+}
+
+fn json_result(requests: &[Value], n: usize, id: &str) -> Value {
+    serde_json::from_str(&result_for(requests, n, id).0).expect("a JSON result")
+}
+
+async fn run_script(
+    script: Arc<Script>,
+    settings: Settings,
+    context: &ReviewContext,
+    tools: &Tools,
+) -> AiOutcome {
+    let client = AiClient::new(settings, script, None);
+    generate(&client, context, tools).await.unwrap()
+}
+
+#[tokio::test]
+async fn validate_changes_is_free_and_reports_diffs_or_problems() {
+    let g = graph();
+    let good = remove_sweep(&g);
+    let mut stale = good.clone();
+    stale[0]["expect"] = json!({"kind": "Nothing"});
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call("v1", "validate_changes", json!({"steps": [good]})),
+                call("v2", "validate_changes", json!({"steps": [stale]})),
+                call("v3", "validate_changes", json!({"steps": []})),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings(), &context(&[]), &tools).await;
+    let requests = script.requests();
+
+    let ok = json_result(&requests, 1, "v1");
+    assert_eq!(ok["valid"], true);
+    assert!(!ok["steps"][0]["diff"].as_array().unwrap().is_empty());
+    let bad = json_result(&requests, 1, "v2");
+    assert_eq!(bad["valid"], false);
+    assert_eq!(bad["failed_step"], 0);
+    assert_eq!(bad["problems"][0]["kind"], "stale");
+    // A dry run is informational, not an error; an unusable call is.
+    assert!(!result_for(&requests, 1, "v2").1);
+    assert!(result_for(&requests, 1, "v3").1);
+    assert_eq!(outcome.usage.previews, 0, "validation spends no preview");
+    assert_eq!(*tools.previews.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn preview_paths_previews_each_path_on_the_budget_and_counts_for_submission() {
+    let g = graph();
+    let remove = remove_sweep(&g);
+    let halve = halve_sweep(&g);
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([call(
+                "p1",
+                "preview_paths",
+                json!({"paths": [
+                    {"key": "remove", "steps": [remove.clone()]},
+                    {"key": "halve", "steps": [halve.clone()]}
+                ]})
+            )]),
+        ),
+        reply(
+            "tool_use",
+            json!([call("s1", "submit_suggestion", {
+                let mut note = good_note(remove.clone());
+                note["paths"] = json!([
+                    {"key": "remove", "label": "Remove the sweep", "recommended": true,
+                     "steps": [{"key": "a", "title": "Remove the sweep", "changes": remove}]},
+                    {"key": "halve", "label": "Halve the sweep", "recommended": false,
+                     "steps": [{"key": "a", "title": "Halve the sweep", "changes": halve}]}
+                ]);
+                note
+            })]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings(), &context(&[]), &tools).await;
+    let requests = script.requests();
+
+    let result = json_result(&requests, 1, "p1");
+    assert_eq!(result["paths"][0]["path"], "remove");
+    assert_eq!(result["paths"][1]["path"], "halve");
+    assert_eq!(result["paths"][1]["preview"]["paired"], true);
+    assert_eq!(outcome.usage.previews, 2, "one preview per path");
+    assert_eq!(*tools.previews.lock().unwrap(), 2);
+    // Both paths were previewed by the call, so the note needs no preview_changes.
+    assert_eq!(outcome.drafts.len(), 1, "{:?}", outcome.summary);
+    assert!(outcome.drafts[0].paths.iter().all(|p| p.previewed));
+}
+
+#[tokio::test]
+async fn preview_paths_is_refused_when_it_would_overspend_or_is_malformed() {
+    let g = graph();
+    let remove = remove_sweep(&g);
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call(
+                    "p1",
+                    "preview_paths",
+                    json!({"paths": [{"steps": [remove.clone()]}, {"steps": [remove.clone()]}]})
+                ),
+                call(
+                    "p2",
+                    "preview_paths",
+                    json!({"paths": [{"steps": [remove.clone()]}]})
+                ),
+                call("p3", "preview_changes", json!({"steps": [remove.clone()]})),
+                call("p4", "preview_changes", json!({"steps": [remove.clone()]})),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let tools = Tools::new();
+    let settings = Settings {
+        max_previews: 1,
+        ..settings()
+    };
+    let outcome = run_script(script.clone(), settings, &context(&[]), &tools).await;
+    let requests = script.requests();
+
+    let (over, is_error) = result_for(&requests, 1, "p1");
+    assert!(
+        is_error && over.contains("need 2 previews and 1 are left"),
+        "{over}"
+    );
+    let (few, is_error) = result_for(&requests, 1, "p2");
+    assert!(is_error && few.contains("2 to 4 paths"), "{few}");
+    // The refusals spent nothing: the one preview left served the next call.
+    assert!(!result_for(&requests, 1, "p3").1);
+    let (spent, is_error) = result_for(&requests, 1, "p4");
+    assert!(is_error && spent.contains("budget"), "{spent}");
+    assert_eq!(outcome.usage.previews, 1);
+}
+
+#[tokio::test]
+async fn preflight_and_calculators_answer_through_the_loop_and_can_be_cited() {
+    let g = graph();
+    let changes = remove_sweep(&g);
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call("f1", "preflight", json!({})),
+                call(
+                    "f2",
+                    "reference_facts",
+                    json!({"topic": "401k", "year": 2025})
+                ),
+                call(
+                    "f3",
+                    "finance_calc",
+                    json!({"op": "pmt", "principal": 400000, "annual_rate": 0.06, "years": 30})
+                ),
+                call(
+                    "f4",
+                    "estimate_social_security",
+                    json!({"birth_year": 1965, "claim_age": 67, "current_salary": 100000})
+                ),
+                call(
+                    "f5",
+                    "estimate_taxes",
+                    json!({"income": 100000, "year": 2025, "filing_status": "single"})
+                ),
+                call(
+                    "f6",
+                    "reference_facts",
+                    json!({"topic": "401k", "year": 2031})
+                ),
+                call("f7", "preview_changes", json!({"changes": changes})),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings(), &context(&[]), &tools).await;
+    let requests = script.requests();
+
+    assert_eq!(json_result(&requests, 1, "f1")["can_run"], true);
+    assert_eq!(
+        json_result(&requests, 1, "f2")["facts"]["401k"]["employee_deferral"],
+        23_500.0
+    );
+    assert_eq!(
+        json_result(&requests, 1, "f3")["payment_per_period"],
+        2_398.2
+    );
+    let ss = json_result(&requests, 1, "f4");
+    assert_eq!(
+        (ss["aime"].clone(), ss["monthly_benefit"].clone()),
+        (json!(8_333.0), json!(3_313.0))
+    );
+    let tax = json_result(&requests, 1, "f5");
+    assert_eq!(tax["federal_income_tax"], 13_449.0);
+    // The double's plan settings are supplied to the tax tool.
+    assert!(tax["plan_model"]["total_tax"].is_number());
+    let (refused, is_error) = result_for(&requests, 1, "f6");
+    assert!(is_error && refused.contains("outside"), "{refused}");
+    assert_eq!(outcome.usage.previews, 1);
+
+    // Successful calls can be cited; failed ones and made-up ids cannot.
+    let ctx = context(&[]);
+    let client = AiClient::new(settings(), Script::new(Vec::new()), None);
+    let tools = Tools::new();
+    let mut session = Session {
+        client: &client,
+        context: &ctx,
+        tools: &tools,
+        observer: &NoObserver,
+        drafts: Vec::new(),
+        usage: Usage::default(),
+        previewed: HashMap::new(),
+        computed: HashMap::new(),
+    };
+    let (_, is_error) = session
+        .run_tool(
+            "c1",
+            "reference_facts",
+            &json!({"topic": "hsa", "year": 2026}),
+        )
+        .await;
+    assert!(!is_error);
+    let (_, is_error) = session
+        .run_tool(
+            "c2",
+            "reference_facts",
+            &json!({"topic": "hsa", "year": 1999}),
+        )
+        .await;
+    assert!(is_error);
+    let cite = |tool: &str, call_id: &str| {
+        session.check_evidence(
+            &serde_json::from_value(json!({"ref": "computed", "tool": tool, "call_id": call_id}))
+                .unwrap(),
+        )
+    };
+    assert!(cite("reference_facts", "c1").is_ok());
+    assert!(
+        cite("finance_calc", "c1")
+            .unwrap_err()
+            .contains("not finance_calc")
+    );
+    assert!(
+        cite("reference_facts", "c2")
+            .unwrap_err()
+            .contains("no successful call")
+    );
+    assert!(cite("reference_facts", "nope").is_err());
+}
+
+#[tokio::test]
+async fn a_note_citing_a_tool_result_is_accepted_and_a_forged_call_is_not() {
+    let g = graph();
+    let changes = remove_sweep(&g);
+    let cited = |call_id: &str| {
+        let mut note = good_note(changes.clone());
+        note["evidence"] =
+            json!([{"ref": "computed", "tool": "reference_facts", "call_id": call_id}]);
+        note
+    };
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call(
+                    "f1",
+                    "reference_facts",
+                    json!({"topic": "401k", "year": 2026})
+                ),
+                call("f2", "preview_changes", json!({"changes": changes.clone()})),
+            ]),
+        ),
+        reply(
+            "tool_use",
+            json!([call("s1", "submit_suggestion", cited("forged"))]),
+        ),
+        reply(
+            "tool_use",
+            json!([call("s2", "submit_suggestion", cited("f1"))]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let outcome = run_script(script.clone(), settings(), &context(&[]), &Tools::new()).await;
+    let requests = script.requests();
+    let (rejected, is_error) = result_for(&requests, 2, "s1");
+    assert!(
+        is_error && rejected.contains("no successful call forged"),
+        "{rejected}"
+    );
+    assert_eq!(outcome.drafts.len(), 1);
+    assert_eq!(
+        outcome.drafts[0].evidence,
+        vec![Evidence::Computed {
+            tool: "reference_facts".into(),
+            call_id: "f1".into()
+        }]
+    );
+}
+
+#[tokio::test]
+async fn failure_profile_and_inspect_path_ground_risk_notes_in_the_run() {
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call("i1", "failure_profile", json!({})),
+                call(
+                    "i2",
+                    "inspect_path",
+                    json!({"rank": "median", "years": [2060, 2070]})
+                ),
+                call("i3", "inspect_path", json!({"rank": "worst"})),
+                call("i4", "inspect_path", json!({"rank": "typical"})),
+                call(
+                    "i5",
+                    "inspect_path",
+                    json!({"rank": "median", "years": [2070, 2060]})
+                ),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    run_script(script.clone(), settings(), &context(&[]), &Tools::new()).await;
+    let requests = script.requests();
+
+    let profile = json_result(&requests, 1, "i1");
+    assert_eq!(profile["failed"], 189);
+    assert_eq!(profile["first_shortfall_years"][0]["year"], 2074);
+    assert_eq!(
+        profile["first_shortfall_years"][0]["share_of_failed"],
+        0.9524
+    );
+    assert_eq!(profile["shortfall_accounts"][0]["account_id"], 6);
+    assert!(
+        profile["shortfall_accounts"][0]["account"]
+            .as_str()
+            .unwrap()
+            .len()
+            > 1
+    );
+    assert!(
+        profile["note"]
+            .as_str()
+            .unwrap()
+            .contains("percentile paths")
+    );
+    assert_eq!(
+        result_for(&requests, 1, "i2").0,
+        "median path, years Some((2060, 2070))"
+    );
+    // A host with no stored path says so.
+    let (worst, is_error) = result_for(&requests, 1, "i3");
+    assert!(is_error && worst.contains("no percentile paths"));
+    assert!(result_for(&requests, 1, "i4").1);
+    assert!(result_for(&requests, 1, "i5").1);
+}
+
+#[test]
+fn a_stored_path_renders_with_its_percentile_and_thins_long_runs() {
+    let g = graph();
+    let r = results();
+    let all = render_path(&g, &r, "median", None);
+    assert!(all.contains("stored P50 path"), "{all}");
+    assert!(all.contains("year,age,income"));
+    // 70 years thin to at most 45 rows plus the last.
+    let flow_rows = |text: &str| {
+        text.lines()
+            .filter(|l| {
+                l.split(',')
+                    .next()
+                    .is_some_and(|y| y.len() == 4 && y.starts_with("20"))
+            })
+            .count()
+    };
+    let rows = flow_rows(&all);
+    assert!(rows <= 46 && rows > 20, "{rows}");
+    let narrow = render_path(&g, &r, "median", Some((2030, 2032)));
+    assert_eq!(flow_rows(&narrow), 3);
+    assert!(narrow.contains("2032-12-31,"));
+    assert!(!narrow.contains("2040-12-31"));
+}
+
+#[test]
+fn document_answer_and_description_evidence_is_checked_against_its_source() {
+    let ctx = context(&[])
+        .with_documents([
+            (
+                7,
+                Some("USAA Savings\nBalance:   $6,000.00\u{c}Page two\nno deposits"),
+            ),
+            (8, None),
+        ])
+        .with_answers(["bonus"])
+        .with_description("I earn $205,000 a year and plan to retire at 45.");
+    let client = AiClient::new(settings(), Script::new(Vec::new()), None);
+    let tools = Tools::new();
+    let session = Session {
+        client: &client,
+        context: &ctx,
+        tools: &tools,
+        observer: &NoObserver,
+        drafts: Vec::new(),
+        usage: Usage::default(),
+        previewed: HashMap::new(),
+        computed: HashMap::new(),
+    };
+    let check = |e: Value| session.check_evidence(&serde_json::from_value(e).unwrap());
+    // Whitespace is normalized, pages are 1-based.
+    assert!(
+        check(
+            json!({"ref": "document", "document_id": 7, "page": 1, "excerpt": "Balance: $6,000.00"})
+        )
+        .is_ok()
+    );
+    assert!(
+        check(json!({"ref": "document", "document_id": 7, "page": 2, "excerpt": "no deposits"}))
+            .is_ok()
+    );
+    assert!(
+        check(
+            json!({"ref": "document", "document_id": 7, "page": 2, "excerpt": "Balance: $6,000.00"})
+        )
+        .unwrap_err()
+        .contains("does not appear")
+    );
+    assert!(
+        check(json!({"ref": "document", "document_id": 7, "page": 3, "excerpt": "x"}))
+            .unwrap_err()
+            .contains("outside")
+    );
+    assert!(
+        check(json!({"ref": "document", "document_id": 99, "page": 1, "excerpt": "x"})).is_err()
+    );
+    assert!(check(json!({"ref": "document", "document_id": 7, "page": 1, "excerpt": ""})).is_err());
+    // No text layer: nothing to check against, so the citation stands.
+    assert!(
+        check(json!({"ref": "document", "document_id": 8, "page": 1, "excerpt": "Balance $1"}))
+            .is_ok()
+    );
+    assert!(check(json!({"ref": "answer", "question_key": "bonus"})).is_ok());
+    assert!(check(json!({"ref": "answer", "question_key": "filing"})).is_err());
+    assert!(check(json!({"ref": "description", "excerpt": "retire at   45"})).is_ok());
+    assert!(check(json!({"ref": "description", "excerpt": "retire at 50"})).is_err());
+    // A review has none of these.
+    let bare = context(&[]);
+    let session = Session {
+        context: &bare,
+        ..session
+    };
+    let check = |e: Value| session.check_evidence(&serde_json::from_value(e).unwrap());
+    assert!(
+        check(json!({"ref": "description", "excerpt": "x"}))
+            .unwrap_err()
+            .contains("no user description")
+    );
+    assert!(check(json!({"ref": "answer", "question_key": "bonus"})).is_err());
+}
+
+#[tokio::test]
+async fn a_loop_can_serve_a_subset_of_the_registry() {
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call(
+                    "a",
+                    "reference_facts",
+                    json!({"topic": "ira", "year": 2026})
+                ),
+                call("b", "preview_changes", json!({"changes": []})),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let client = AiClient::new(settings(), script.clone(), None)
+        .with_registry(tools::Registry::only(&["reference_facts", "finance_calc"]));
+    generate(&client, &context(&[]), &Tools::new())
+        .await
+        .unwrap();
+    let requests = script.requests();
+    let names: Vec<&str> = requests[0]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        ["reference_facts", "finance_calc", "submit_suggestion"]
+    );
+    assert!(!result_for(&requests, 1, "a").1);
+    let (unknown, is_error) = result_for(&requests, 1, "b");
+    assert!(is_error && unknown.contains("unknown tool"));
+
+    assert_eq!(
+        tools::Registry::group(tools::Group::Calculators)
+            .names()
+            .len(),
+        4
+    );
+    assert!(tools::Registry::all().contains("validate_changes"));
+    assert!(
+        !tools::Registry::all()
+            .without(&["preflight"])
+            .contains("preflight")
+    );
+}
+
+#[tokio::test]
+async fn every_tool_reports_under_its_own_metric_label() {
+    #[derive(Default)]
+    struct Seen(Mutex<Vec<(AiTool, AiToolOutcome)>>);
+    impl Observer for Seen {
+        fn tool(&self, tool: AiTool, outcome: AiToolOutcome, _seconds: f64) {
+            self.0.lock().unwrap().push((tool, outcome));
+        }
+    }
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                call("1", "preflight", json!({})),
+                call("2", "finance_calc", json!({"op": "wat"})),
+                call("3", "estimate_taxes", json!({"income": 1000})),
+                call("4", "nonsense", json!({})),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let client = AiClient::new(settings(), script, None);
+    let seen = Seen::default();
+    generate_observed(&client, &context(&[]), &Tools::new(), &seen)
+        .await
+        .unwrap();
+    assert_eq!(
+        *seen.0.lock().unwrap(),
+        vec![
+            (AiTool::Preflight, AiToolOutcome::Ok),
+            (AiTool::FinanceCalc, AiToolOutcome::Invalid),
+            (AiTool::Taxes, AiToolOutcome::Ok),
+            (AiTool::Unknown, AiToolOutcome::Invalid),
+        ]
+    );
 }

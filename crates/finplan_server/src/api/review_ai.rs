@@ -29,6 +29,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use axum::extract::{Path, Query, State};
+use finplan_core::model::{TaxBracket, TaxConfig};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio::task::AbortHandle;
@@ -49,9 +51,10 @@ use crate::observability::{
 };
 use crate::runner::telemetry::{Attempt, Submitted};
 use crate::state::AppState;
+use crate::suggest::ai::tools::PathRank;
 use crate::suggest::ai::{
-    AiClient, AiDraft, AiError, AiOutcome, BoxFuture, Observer, ReviewContext, ReviewTools, Stop,
-    TurnReport, stop_tag,
+    AiClient, AiDraft, AiError, AiOutcome, BoxFuture, Observer, ReviewContext, Stop, ToolHost,
+    TurnReport, render_path, stop_tag,
 };
 use crate::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 
@@ -673,7 +676,7 @@ impl<'a> Tools<'a> {
     }
 }
 
-impl ReviewTools for Tools<'_> {
+impl ToolHost for Tools<'_> {
     fn preview<'b>(&'b self, changes: Vec<Change>) -> BoxFuture<'b, Result<Value, String>> {
         Box::pin(async move {
             let preview = preview::run_preview(
@@ -695,6 +698,84 @@ impl ReviewTools for Tools<'_> {
                 other => other.to_string(),
             })?;
             serde_json::to_value(&preview).map_err(|e| e.to_string())
+        })
+    }
+
+    fn preflight(&self) -> Result<Value, String> {
+        serde_json::to_value(super::onboarding::review(&self.graph)).map_err(|e| e.to_string())
+    }
+
+    fn inspect_path<'b>(
+        &'b self,
+        rank: PathRank,
+        years: Option<(i64, i64)>,
+    ) -> BoxFuture<'b, Result<String, String>> {
+        Box::pin(async move {
+            let percentile = match rank.percentile() {
+                Some(p) => Some(p),
+                // The worst path is the lowest percentile the run stored.
+                None => sqlx::query_scalar::<_, Option<f64>>(
+                    "SELECT MIN(percentile) FROM run_net_worth_points
+                      WHERE run_id = ?1 AND percentile IS NOT NULL",
+                )
+                .bind(self.run_id)
+                .fetch_one(&self.state.db)
+                .await
+                .map_err(|e| {
+                    tracing::warn!(event = "review_ai.inspect_failed", error = %e);
+                    "the run's paths could not be read".to_string()
+                })?,
+            };
+            let Some(percentile) = percentile else {
+                return Err("this run stored no percentile paths".into());
+            };
+            let asked = match rank {
+                PathRank::Worst => "worst",
+                PathRank::P10 => "p10",
+                PathRank::P25 => "p25",
+                PathRank::Median => "median",
+            };
+            let results = super::runs::results(
+                State(self.state.clone()),
+                self.user.clone(),
+                Path(self.run_id),
+                Query(super::runs::ResultsQuery {
+                    series: Some(percentile.to_string()),
+                }),
+            )
+            .await
+            .map_err(|error| match error {
+                ApiError::Database(_) | ApiError::Internal(_) => {
+                    tracing::warn!(event = "review_ai.inspect_failed", error = %error);
+                    "the run's paths could not be read".to_string()
+                }
+                other => other.to_string(),
+            })?
+            .0;
+            if !results.path_details {
+                return Err(
+                    "a newer run replaced this one's paths; only its summary remains".into(),
+                );
+            }
+            Ok(render_path(&self.graph, &results, asked, years))
+        })
+    }
+
+    fn plan_tax_config(&self) -> Option<TaxConfig> {
+        let config = self.graph.tax_config.as_ref()?;
+        Some(TaxConfig {
+            federal_brackets: self
+                .graph
+                .tax_brackets
+                .iter()
+                .map(|b| TaxBracket {
+                    threshold: b.threshold,
+                    rate: b.rate,
+                })
+                .collect(),
+            state_rate: config.state_rate,
+            capital_gains_rate: config.capital_gains_rate,
+            early_withdrawal_penalty_rate: config.early_withdrawal_penalty_rate,
         })
     }
 
