@@ -28,7 +28,9 @@ pub fn router() -> Router<AppState> {
 #[ts(export)]
 pub struct Asset {
     pub id: i64,
+    /// The ticker symbol (the Ticker column), e.g. `VBTLX`.
     pub name: String,
+    /// The fund's full name (the Name column).
     pub description: Option<String>,
     pub initial_price: f64,
     /// Null while the asset is unmapped — it has a price, but nothing yet
@@ -44,7 +46,12 @@ const COLUMNS: &str =
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct CreateAsset {
+    /// The ticker symbol alone, as the Ticker column shows it: `VBTLX`, not
+    /// `VBTLX Vanguard Total Bond Market`. A holding with no ticker takes a
+    /// short label instead.
     pub name: String,
+    /// The fund's full name, as the Name column shows it: `Vanguard Total
+    /// Bond Market Index Fund Admiral Shares`.
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default = "one")]

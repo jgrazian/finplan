@@ -1736,6 +1736,9 @@ impl Session<'_> {
         // Duplicates: against the draft's own notes.
         let normalized = context::normalize(&title);
         let all: Vec<Change> = s.paths.iter().flat_map(|p| p.batches()).flatten().collect();
+        for name in ticker_with_name(&all) {
+            problem("asset_name", name);
+        }
         let edits = draft_edits(&all);
         if let Some(twin) = self.notes.iter().find(|n| {
             !(replaced.is_some() && n.key.as_deref() == replaced)
@@ -1882,6 +1885,51 @@ fn draft_edits(changes: &[Change]) -> std::collections::BTreeSet<String> {
 }
 
 /// A note as the duplicate check knows it.
+/// Asset names that run a ticker and the fund's name together
+/// ("VBTLX Vanguard Total Bond Market"), each as a problem saying how to
+/// split them: the Ticker column shows `name`, the Name column `description`.
+fn ticker_with_name(changes: &[Change]) -> Vec<String> {
+    let names = changes.iter().filter_map(|change| {
+        let value = change.value.as_ref()?;
+        match (&change.target, change.path.as_str()) {
+            (ChangeTarget::NewAsset(_), "") => value.get("name")?.as_str(),
+            (ChangeTarget::NewAsset(_) | ChangeTarget::Asset(_), "/name") => value.as_str(),
+            _ => None,
+        }
+    });
+    names
+        .filter_map(|name| {
+            let (ticker, rest) = split_ticker(name)?;
+            Some(format!(
+                "asset name \"{name}\" runs the ticker and the fund's name together: set name to \
+                 \"{ticker}\" and put \"{rest}\" in description"
+            ))
+        })
+        .collect()
+}
+
+/// "VBTLX Vanguard Total Bond Market" -> ("VBTLX", "Vanguard Total Bond
+/// Market"): a leading run of 1-6 capitals or digits (with a letter) followed
+/// by words. A plain name ("Home equity", "S&P 500 Index") is not split.
+fn split_ticker(name: &str) -> Option<(&str, &str)> {
+    let name = name.trim();
+    let (first, rest) = name.split_once(char::is_whitespace)?;
+    let ticker = first.trim_end_matches([':', '-', ',', '\u{2013}', '\u{2014}']);
+    let rest =
+        rest.trim_start_matches(|c: char| c.is_whitespace() || "-:\u{2013}\u{2014}".contains(c));
+    let looks_like_ticker = (1..=6).contains(&ticker.len())
+        && ticker
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '.')
+        && ticker.chars().any(|c| c.is_ascii_uppercase());
+    // The rest is the fund's name: words, one of them starting in lower or
+    // mixed case, so "S&P 500" or "US TIPS" read as names, not tickers.
+    let named = rest
+        .split_whitespace()
+        .any(|word| word.len() > 2 && word.chars().skip(1).any(|c| c.is_ascii_lowercase()));
+    (looks_like_ticker && named).then_some((ticker, rest))
+}
+
 fn existing(kind: Kind, title: &str, changes: &[Change]) -> context::Existing {
     context::Existing {
         kind,
@@ -1928,4 +1976,39 @@ struct DraftSubmission {
     blocked_by: Vec<String>,
     #[serde(default)]
     replaces: Option<String>,
+}
+
+#[cfg(test)]
+mod ticker_tests {
+    use super::split_ticker;
+
+    #[test]
+    fn a_ticker_run_into_the_fund_name_is_split() {
+        assert_eq!(
+            split_ticker("VBTLX Vanguard Total Bond Market"),
+            Some(("VBTLX", "Vanguard Total Bond Market"))
+        );
+        assert_eq!(
+            split_ticker("VTI - Vanguard Total Stock Market ETF"),
+            Some(("VTI", "Vanguard Total Stock Market ETF"))
+        );
+        assert_eq!(
+            split_ticker("BRK.B Berkshire Hathaway"),
+            Some(("BRK.B", "Berkshire Hathaway"))
+        );
+    }
+
+    #[test]
+    fn a_ticker_alone_or_a_plain_name_is_left() {
+        for name in [
+            "VBTLX",
+            "Home equity",
+            "S&P 500 Index",
+            "US TIPS",
+            "Target Date 2055",
+            "Company stock",
+        ] {
+            assert_eq!(split_ticker(name), None, "{name}");
+        }
+    }
 }

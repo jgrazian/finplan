@@ -3667,3 +3667,13 @@ mod drafting {
         assert!(draft::prompt::SYSTEM_PROMPT.contains("at most three questions"));
     }
 }
+
+#[test]
+fn the_reference_says_an_assets_name_is_its_ticker() {
+    let reference = super::prompt::reference();
+    assert!(
+        reference.contains("The ticker symbol alone"),
+        "CreateAsset's field docs reach the model"
+    );
+    assert!(super::draft::prompt::SYSTEM_PROMPT.contains("its ticker symbol alone (VBTLX)"));
+}
