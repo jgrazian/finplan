@@ -495,6 +495,64 @@ impl DraftConfig {
     }
 }
 
+/// Operator settings for plan chat (`api::plan_chat`): how many messages a
+/// user may send each calendar month (UTC), per tier. Each message runs the
+/// review model once. Reported to the web through `Entitlements::ai_plan_chat`.
+///
+/// Its own allowance for now; model usage across features is to be unified.
+#[derive(Debug, Clone, Args)]
+pub struct PlanChatConfig {
+    /// Plan chat messages a Free user may send per calendar month (UTC).
+    #[arg(
+        id = "plan_chat_free_per_month",
+        long = "plan-chat-free-per-month",
+        env = "FINPLAN_PLAN_CHAT_FREE_PER_MONTH",
+        default_value_t = 10
+    )]
+    pub free_per_month: u32,
+    /// Plan chat messages a Pro user may send per calendar month (UTC).
+    #[arg(
+        id = "plan_chat_pro_per_month",
+        long = "plan-chat-pro-per-month",
+        env = "FINPLAN_PLAN_CHAT_PRO_PER_MONTH",
+        default_value_t = 200
+    )]
+    pub pro_per_month: u32,
+}
+
+impl Default for PlanChatConfig {
+    fn default() -> Self {
+        Self {
+            free_per_month: 10,
+            pro_per_month: 200,
+        }
+    }
+}
+
+impl PlanChatConfig {
+    /// Messages a Pro or a Free user may send per calendar month.
+    pub fn per_month(&self, pro: bool) -> u32 {
+        if pro {
+            self.pro_per_month
+        } else {
+            self.free_per_month
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        const MAX: u32 = 10_000;
+        if self.free_per_month > MAX || self.pro_per_month > MAX {
+            return Err(format!(
+                "plan chat messages per month must be at most {MAX}"
+            ));
+        }
+        if self.pro_per_month < self.free_per_month {
+            return Err("plan chat messages per month for Pro must not be below Free".into());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod draft_tests {
     use super::*;
@@ -506,6 +564,27 @@ mod draft_tests {
         review: AiConfig,
         #[command(flatten)]
         draft: DraftConfig,
+        #[command(flatten)]
+        plan_chat: PlanChatConfig,
+    }
+
+    #[test]
+    fn plan_chat_defaults_match_the_cli_and_pro_gets_more() {
+        let config = Cli::parse_from(["test"]).plan_chat;
+        config.validate().unwrap();
+        assert_eq!(
+            config.per_month(false),
+            PlanChatConfig::default().free_per_month
+        );
+        assert_eq!(
+            config.per_month(true),
+            PlanChatConfig::default().pro_per_month
+        );
+        let below = PlanChatConfig {
+            free_per_month: 5,
+            pro_per_month: 4,
+        };
+        assert!(below.validate().is_err());
     }
 
     #[test]

@@ -9,6 +9,7 @@ import {
   chatLine,
   chatOffer,
   lastQuestion,
+  allowanceLine,
   settled,
   threadView,
 } from "../lib/view/chat.ts";
@@ -237,4 +238,38 @@ test("reviews stored before chat carry no parent_id and read as top-level", () =
   delete (old as { parent_id?: unknown }).parent_id;
   assert.equal(parentOf(old), null);
   assert.deepEqual(cards(board(review([old]))).map((c) => c.id), [1]);
+});
+
+// ── plan chat ───────────────────────────────────────────────────────────────
+
+function planThread(messages: number) {
+  return {
+    status: "idle" as const,
+    error: null,
+    messages: Array.from({ length: messages }, (_, i) => ({
+      id: i + 1,
+      role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      text: `message ${i + 1}`,
+      created_at: "2026-09-28 12:00:00",
+      suggestion_ids: [],
+    })),
+  };
+}
+
+test("a plan's thread has no message cap, only the month's allowance", () => {
+  const long = planThread(CHAT_MAX_MESSAGES + 10);
+  const open = threadView(long, { draft: "Retire at 62", maxMessages: null, allowance: { remaining: 3, per_month: 10 } });
+  assert.equal(open.state, "idle");
+  assert.equal(open.canSend, true);
+  assert.equal(open.blocked, undefined);
+
+  const spent = threadView(long, { draft: "Retire at 62", maxMessages: null, allowance: { remaining: 0, per_month: 10 } });
+  assert.equal(spent.canSend, false);
+  assert.match(spent.blocked ?? "", /used this month's 10 plan chat messages/);
+  assert.equal(spent.retry, undefined);
+});
+
+test("the allowance reads as what is left of the month", () => {
+  assert.equal(allowanceLine({ remaining: 12, per_month: 200 }), "12 of 200 messages left this month");
+  assert.equal(allowanceLine({ remaining: 1_500, per_month: 2_000 }), "1,500 of 2,000 messages left this month");
 });

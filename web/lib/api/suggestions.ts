@@ -5,6 +5,7 @@
  * `./generated`; this module is the one place the Review screens and view
  * model import them from, with paths the Node test runner can resolve.
  */
+export type { AiPlanChat } from "./generated/AiPlanChat.ts";
 export type { AppliedSuggestion } from "./generated/AppliedSuggestion.ts";
 export type { ApplySuggestion } from "./generated/ApplySuggestion.ts";
 export type { ChangeProblem } from "./generated/ChangeProblem.ts";
@@ -14,6 +15,7 @@ export type { ChatRequest } from "./generated/ChatRequest.ts";
 export type { ChatRole } from "./generated/ChatRole.ts";
 export type { DismissSuggestion } from "./generated/DismissSuggestion.ts";
 export type { Evidence } from "./generated/Evidence.ts";
+export type { PlanThread } from "./generated/PlanThread.ts";
 export type { PreviewSuggestion } from "./generated/PreviewSuggestion.ts";
 export type { Review } from "./generated/Review.ts";
 export type { ReviewRequest } from "./generated/ReviewRequest.ts";

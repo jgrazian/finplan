@@ -14,6 +14,7 @@ pub mod expressions;
 pub mod funding;
 pub mod onboarding;
 pub mod parameters;
+pub mod plan_chat;
 pub mod preview;
 pub mod profiles;
 pub mod reports;
@@ -58,6 +59,7 @@ pub fn router(config: &crate::config::ServerConfig) -> Router<AppState> {
         .merge(preview::router())
         .merge(suggestions::router())
         .merge(suggestion_chat::router())
+        .merge(plan_chat::router())
         .merge(archives::router())
         .merge(onboarding::router())
         .merge(contact::router())

@@ -238,6 +238,7 @@ impl Telemetry {
             JobKind::Preview,
             JobKind::ReviewAi,
             JobKind::ReviewChat,
+            JobKind::PlanChat,
         ] {
             queued.get_or_create(&job_labels(kind)).set(0);
             oldest.get_or_create(&job_labels(kind)).set(0.0);
@@ -467,6 +468,7 @@ impl Telemetry {
             JobKind::Preview,
             JobKind::ReviewAi,
             JobKind::ReviewChat,
+            JobKind::PlanChat,
         ] {
             drop(canceled_before_start.get_or_create(&job_labels(kind)));
             for outcome in [

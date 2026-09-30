@@ -79,6 +79,7 @@ import type {
   Suggestion,
   SuggestionStatus,
   SuggestionThread,
+  PlanThread,
 } from "./suggestions";
 
 const scenario = (id: number) => `/scenarios/${id}`;
@@ -325,6 +326,22 @@ export const api = {
       send: (id: number, message: string) =>
         http.post<SuggestionThread>(`/suggestions/${id}/chat`, { message } satisfies ChatRequest),
     },
+  },
+
+  /**
+   * Plan chat on the Review tab: one thread per plan. Sending spends one of
+   * the month's plan chat messages and answers at once with the thread
+   * `running`; read it again until the reply lands. The model's changes come
+   * back as notes on the review, never as edits. 409 when AI review is off,
+   * the plan has no review, or a turn is running; 403 when the month's
+   * messages are spent.
+   */
+  planChat: {
+    get: (scenarioId: number) => http.get<PlanThread>(`${scenario(scenarioId)}/chat`),
+    send: (scenarioId: number, message: string) =>
+      http.post<PlanThread>(`${scenario(scenarioId)}/chat`, { message } satisfies ChatRequest),
+    /** Start over. The notes the thread added stay on the review. */
+    clear: (scenarioId: number) => http.delete(`${scenario(scenarioId)}/chat`),
   },
 
   /**

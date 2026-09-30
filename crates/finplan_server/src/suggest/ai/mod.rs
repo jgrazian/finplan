@@ -55,7 +55,7 @@ use serde_json::{Value, json};
 
 pub use config::{
     AiConfig, DEFAULT_APP_TITLE, DEFAULT_BASE_URL, DEFAULT_MODEL, DraftConfig, DraftLimits,
-    ThinkingMode,
+    PlanChatConfig, ThinkingMode,
 };
 pub use context::{ReviewContext, render_path};
 pub use transport::{

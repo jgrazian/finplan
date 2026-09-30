@@ -2,10 +2,13 @@
 
 import type React from "react";
 import { useMemo, useRef, useState } from "react";
+import { SubTabBar } from "@/components/layout";
 import { Button } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/http";
+import type { AiPlanChat } from "@/lib/api/suggestions";
 import type { Run, Scenario } from "@/lib/api/types";
+import { useNav } from "@/lib/nav";
 import type { ReviewState } from "@/lib/hooks/useReview";
 import {
   aiLine,
@@ -23,6 +26,7 @@ import {
 } from "@/lib/view/review";
 import { cardAnchor } from "@/lib/view/chat";
 import { DraftReview } from "./DraftReview";
+import { PlanChat } from "./PlanChat";
 import { type CardOutcome, SuggestionCard } from "./SuggestionCard";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
@@ -49,6 +53,7 @@ export function ReviewScreen({ draft, ...props }: ReviewScreenProps) {
 }
 
 interface ReviewProps {
+  scenarioId: number;
   state: ReviewState;
   /** The scenario's runs, newest first, as the run history holds them. */
   runs: readonly Run[];
@@ -65,6 +70,28 @@ interface ReviewProps {
   /** Open a scenario a stress note was applied to. It is not run. */
   onOpenCopy: (scenarioId: number) => void;
   onNavigate: (to: Destination) => void;
+  /** Plan chat's month; null or absent when the server has no model. */
+  planChat?: AiPlanChat | null;
+  /** A plan chat message was spent: read the allowance again. */
+  onChatSpent?: () => void;
+}
+
+type ReviewSection = "notes" | "chat";
+
+const REVIEW_SECTIONS = [
+  { value: "notes" as const, label: "Notes" },
+  { value: "chat" as const, label: "Chat" },
+];
+
+/** Every card on the board, nested ones included, by suggestion id. */
+function cardsById(columns: readonly { cards: readonly Card[] }[]): Map<number, Card> {
+  const out = new Map<number, Card>();
+  const add = (card: Card) => {
+    out.set(card.id, card);
+    card.children.forEach(add);
+  };
+  columns.forEach((column) => column.cards.forEach(add));
+  return out;
 }
 
 /** What a draft's Review (design 2c) needs beyond a plan's. */
@@ -80,6 +107,7 @@ interface ReviewScreenProps extends ReviewProps {
 }
 
 function PlanReview({
+  scenarioId,
   state,
   runs,
   planChanged,
@@ -90,8 +118,15 @@ function PlanReview({
   onRerun,
   onOpenCopy,
   onNavigate,
+  planChat,
+  onChatSpent,
 }: ReviewProps) {
   const { review, error, reload, reviewRun, reviewing } = state;
+  // The sub-tab is in the query, like Portfolio's. Chat is offered only while
+  // the server has a model to answer.
+  const nav = useNav();
+  const chatAvailable = planChat != null && review?.ai != null;
+  const section: ReviewSection = chatAvailable && nav.section === "chat" ? "chat" : "notes";
   const [busy, setBusy] = useState<number>();
   // What happened when a card's path was last acted on, by "id:path": a
   // preview or a refusal belongs to the path it was made for.
@@ -269,6 +304,18 @@ function PlanReview({
     </div>
   );
 
+  const cards = useMemo(() => (view ? cardsById(view.columns) : new Map<number, Card>()), [view]);
+  // A note a chat reply wrote, as its card; one set aside since, in words.
+  const renderNote = (id: number) => {
+    const card = cards.get(id);
+    if (card) return renderCard(card);
+    return (
+      <p style={{ margin: 0, fontSize: 12.5, color: MUTED }}>
+        This note is no longer on the review: it was set aside, or a newer review replaced it.
+      </p>
+    );
+  };
+
   if (review === undefined && !error) {
     return <p style={{ padding: "24px 20px", margin: 0, fontSize: 13, color: MUTED }}>Loading the review…</p>;
   }
@@ -300,6 +347,19 @@ function PlanReview({
 
   return (
     <section aria-label="Review" style={{ display: "flex", flexDirection: "column" }}>
+      {chatAvailable && (
+        <SubTabBar
+          ariaLabel="Review section"
+          options={REVIEW_SECTIONS}
+          value={section}
+          onChange={nav.setSection}
+          caption={
+            section === "chat"
+              ? "Ask about the plan or for a change; changes come back as notes for you to apply."
+              : undefined
+          }
+        />
+      )}
       <div
         style={{
           display: "flex",
@@ -364,6 +424,16 @@ function PlanReview({
         </div>
       )}
 
+      {section === "chat" && planChat ? (
+        <PlanChat
+          scenarioId={scenarioId}
+          allowance={planChat}
+          offline={offline}
+          renderNote={renderNote}
+          onSettled={reload}
+          onSpent={() => onChatSpent?.()}
+        />
+      ) : (
       <div
         style={{
           display: "grid",
@@ -398,6 +468,7 @@ function PlanReview({
           </div>
         ))}
       </div>
+      )}
 
       <p style={{ margin: 0, padding: "10px 20px", fontSize: 11.5, color: MUTED, borderTop: "1px solid var(--color-divider)" }}>
         Notes are generated from the plan and the reviewed run. Figures marked “est.” are not simulated until

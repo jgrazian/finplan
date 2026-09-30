@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { ChatBubble, ChatText } from "@/components/chat/ChatBubble";
 import { Blueprint, Button, CurrencyInput, DateInput, Input, SegmentedControl, Tag } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { AiDrafts } from "@/lib/api/generated/AiDrafts";
@@ -411,8 +412,7 @@ export function DescribeSetup({
           <div className="ns-scroll">
             <div className="ns-thread">
               {!sent && (
-                <div className="ns-msg">
-                  <span className="ns-lbl">FinPlan</span>
+                <ChatBubble from="finplan">
                   <span style={{ textWrap: "pretty" }}>
                     Tell me about yourself: your age, income, spending, goals and any big purchases ahead.
                     Attach bank, brokerage and 401(k) statements, pay stubs or a tax return and I&rsquo;ll
@@ -436,14 +436,13 @@ export function DescribeSetup({
                       <span key={line}>{line}</span>
                     ))}
                   </div>
-                </div>
+                </ChatBubble>
               )}
 
               {sent &&
                 thread.map((turn) =>
                   turn.from === "you" ? (
-                    <div key={turn.key} className="ns-msg mine">
-                      <span className="ns-lbl">You</span>
+                    <ChatBubble key={turn.key} from="you">
                       {turn.answers.length > 0 && (
                         <dl style={{ margin: 0, display: "flex", flexDirection: "column", gap: 4, fontSize: 13 }}>
                           {turn.answers.map((a) => (
@@ -456,22 +455,18 @@ export function DescribeSetup({
                           ))}
                         </dl>
                       )}
-                      {turn.text && (
-                        <span style={{ textWrap: "pretty", whiteSpace: "pre-wrap" }}>{turn.text}</span>
-                      )}
+                      {turn.text && <ChatText>{turn.text}</ChatText>}
                       <FileChips files={turn.files} />
-                    </div>
+                    </ChatBubble>
                   ) : (
-                    <div key={turn.key} className="ns-msg">
-                      <span className="ns-lbl">FinPlan</span>
-                      <span style={{ textWrap: "pretty", whiteSpace: "pre-wrap" }}>{turn.text}</span>
-                    </div>
+                    <ChatBubble key={turn.key} from="finplan">
+                      <ChatText>{turn.text}</ChatText>
+                    </ChatBubble>
                   ),
                 )}
 
               {questions.length > 0 && (
-                <section aria-label="Questions" className="ns-msg">
-                  <span className="ns-lbl">FinPlan</span>
+                <ChatBubble as="section" ariaLabel="Questions" from="finplan">
                   <span style={{ textWrap: "pretty" }}>
                     I read {sources ?? "what you sent"}.{" "}
                     {questions.length === 1 ? "One thing" : `${questions.length} things`}{" "}
@@ -491,7 +486,7 @@ export function DescribeSetup({
                   <span className="ns-mut" style={{ fontSize: 12.5, textWrap: "pretty" }}>
                     Anything else I&rsquo;m unsure of goes into the draft as a note to confirm.
                   </span>
-                </section>
+                </ChatBubble>
               )}
 
               {drafting && panel && (

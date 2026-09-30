@@ -403,6 +403,41 @@ reported through `Entitlements`. Initial values:
 Model turns, previews and output tokens per draft reuse the review settings'
 shape, with their own `FINPLAN_DRAFT_MAX_*` values.
 
+## Plan chat (Review › Chat)
+
+Describe & upload's conversation, for a plan that already exists. The Review
+tab gains a Notes | Chat sub-tab (`?sec=chat`), shown when the server has a
+review model. The user asks about the plan or for a change ("retire at 62",
+"my 401(k) is now $310,000"); the review model answers in the background.
+
+- **Notes only.** The model never edits the plan. A change it proposes is
+  previewed, checked like a review's, and stored as an ordinary note on the
+  plan's review (no parent note), at most three per turn. Chat draws each
+  under the reply that wrote it, as its card, to apply, adjust or dismiss;
+  the Notes board shows it too. Its instructions ask it to describe options
+  and consequences, leave the choice to the user, and never recommend
+  specific securities.
+- **Needs a review.** Notes are written against the reviewed run, since the
+  board shows that run's. With no review the POST is refused (409); a plan
+  edited since the run is flagged to the model.
+- **One thread per plan** (`plan_chat_threads`, `plan_chat_messages`,
+  migration 0014). `GET/POST/DELETE /scenarios/{id}/chat`; DELETE is "Start
+  over" and keeps the notes. One turn at a time; the model reads the last 24
+  messages. Drafts are refused: they have Describe & upload.
+- **Its own limit, for now.** Each message spends one of the month's plan
+  chat messages (`monthly_ai_plan_chats`), reported as
+  `Entitlements::ai_plan_chat`: 10 a month on Free, 200 on Pro
+  (`FINPLAN_PLAN_CHAT_FREE_PER_MONTH`, `FINPLAN_PLAN_CHAT_PRO_PER_MONTH`). A
+  refused message spends nothing; an accepted one counts even if its turn
+  fails. Drafts, goal seeks, review passes and note chat each have their own
+  limits too; unifying model usage across features into one allowance is
+  still to do.
+- **Shared machinery.** The turn (claim, run, store, recover) is
+  `suggestion_chat`'s, keyed by `Thread::Note` or `Thread::Plan`; the model
+  side is `suggest::ai::chat` with `Subject::Plan`. On the web, the bubbles
+  are Describe & upload's (`components/chat/ChatBubble`), and the view model
+  and polling hook are "Chat about this"'s.
+
 ## Decisions
 
 Made (2026-09-28):

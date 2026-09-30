@@ -62,7 +62,7 @@ bounded_enum!(ErrorClass {
     QueueClosed => "queue_closed", Unavailable => "unavailable", Clock => "clock",
     TaskPanic => "task_panic", Upstream => "upstream"
 });
-bounded_enum!(JobKind { Run => "run", Sweep => "sweep", Sensitivity => "sensitivity", Solve => "solve", WhatIf => "what_if", Preview => "preview", ReviewAi => "review_ai", ReviewChat => "review_chat" });
+bounded_enum!(JobKind { Run => "run", Sweep => "sweep", Sensitivity => "sensitivity", Solve => "solve", WhatIf => "what_if", Preview => "preview", ReviewAi => "review_ai", ReviewChat => "review_chat", PlanChat => "plan_chat" });
 bounded_enum!(Outcome { Succeeded => "succeeded", Failed => "failed", Canceled => "canceled", Interrupted => "interrupted" });
 bounded_enum!(Origin { Request => "request", Recovery => "recovery" });
 bounded_enum!(SubmissionResult { Accepted => "accepted", Invalid => "invalid", CapacityRejected => "capacity_rejected", InternalError => "internal_error" });

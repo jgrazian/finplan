@@ -54,6 +54,9 @@ pub struct Entitlements {
     /// [`entitlements_for`], which knows whether a model is configured;
     /// [`entitlements`] alone leaves it null.
     pub ai_drafts: Option<AiDrafts>,
+    /// Plan chat on the Review tab (`api::plan_chat`); null when the server
+    /// has no review model. Filled in by [`entitlements_for`], as `ai_drafts`.
+    pub ai_plan_chat: Option<AiPlanChat>,
 }
 
 /// What a user may do with AI-guided drafts right now.
@@ -70,6 +73,18 @@ pub struct AiDrafts {
     pub max_bytes: u64,
     pub max_pages: u32,
 }
+/// What a user may do with plan chat right now.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
+pub struct AiPlanChat {
+    /// The user can send a message: this month's allowance is not used up.
+    pub enabled: bool,
+    /// Messages left this calendar month (UTC).
+    pub remaining: u32,
+    /// Messages the tier gets each calendar month.
+    pub per_month: u32,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/entitlements", get(get_entitlements))
@@ -90,10 +105,16 @@ pub async fn entitlements_for(state: &AppState, user: &str) -> ApiResult<Entitle
         let limits = state.config.draft.limits(out.pro);
         let used = ai_drafts_used(&state.db, user).await?;
         let remaining = limits.drafts_per_month.saturating_sub(used);
+        // Read before the connection below is taken: a pool of one would
+        // otherwise wait on itself.
+        let chat_per_month = state.config.plan_chat.per_month(out.pro);
+        let chat_remaining =
+            chat_per_month.saturating_sub(ai_plan_chats_used(&state.db, user).await?);
         let mut conn = state.db.acquire().await?;
         let slot = check_plan_slot(&mut conn, user, &state.config, 1)
             .await
             .is_ok();
+        drop(conn);
         out.ai_drafts = Some(AiDrafts {
             enabled: remaining > 0 && slot,
             remaining,
@@ -102,8 +123,24 @@ pub async fn entitlements_for(state: &AppState, user: &str) -> ApiResult<Entitle
             max_bytes: limits.max_bytes,
             max_pages: limits.max_pages,
         });
+        out.ai_plan_chat = Some(AiPlanChat {
+            enabled: chat_remaining > 0,
+            remaining: chat_remaining,
+            per_month: chat_per_month,
+        });
     }
     Ok(out)
+}
+
+async fn ai_plan_chats_used(db: &Db, user: &str) -> ApiResult<u32> {
+    let used: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT used FROM monthly_ai_plan_chats
+                           WHERE user_id = ? AND month = strftime('%Y-%m','now')), 0)",
+    )
+    .bind(user)
+    .fetch_one(db)
+    .await?;
+    Ok(used.clamp(0, i64::from(u32::MAX)) as u32)
 }
 
 async fn ai_drafts_used(db: &Db, user: &str) -> ApiResult<u32> {
@@ -135,6 +172,7 @@ pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResu
         annual_price_usd: 80,
         monthly_price_usd: 10,
         ai_drafts: None,
+        ai_plan_chat: None,
     })
 }
 pub async fn require_pro(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<()> {
@@ -199,6 +237,32 @@ pub async fn reserve_ai_draft(
     if accepted == 0 {
         return Err(ApiError::Forbidden(
             "You have used this month's AI drafts (calendar month, UTC). Try next month or upgrade to Pro.".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Call once per plan chat message, after it is validated and the thread is
+/// known to be free, on the caller's write transaction so the count and the
+/// increment cannot race. An accepted message counts even if its turn fails.
+pub async fn reserve_ai_plan_chat(
+    connection: &mut sqlx::SqliteConnection,
+    user: &str,
+    limit: u32,
+) -> ApiResult<()> {
+    let accepted = sqlx::query(
+        "INSERT INTO monthly_ai_plan_chats(user_id, month, used)
+         SELECT ?1, strftime('%Y-%m','now'), 1 WHERE ?2 > 0
+         ON CONFLICT(user_id, month) DO UPDATE SET used = used + 1 WHERE used < ?2",
+    )
+    .bind(user)
+    .bind(i64::from(limit))
+    .execute(&mut *connection)
+    .await?
+    .rows_affected();
+    if accepted == 0 {
+        return Err(ApiError::Forbidden(
+            "You have used this month's plan chat messages (calendar month, UTC). Try next month or upgrade to Pro.".into(),
         ));
     }
     Ok(())
@@ -375,6 +439,22 @@ mod tests {
         );
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
         assert!(reserve_goal_seek(&db, "u", &config(false)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn plan_chat_reservations_stop_at_the_limit_per_user() {
+        let db = fixture().await;
+        let mut conn = db.acquire().await.unwrap();
+        for _ in 0..3 {
+            reserve_ai_plan_chat(&mut conn, "u", 3).await.unwrap();
+        }
+        assert!(reserve_ai_plan_chat(&mut conn, "u", 3).await.is_err());
+        // Another user's allowance is their own; a zero limit allows nothing.
+        reserve_ai_plan_chat(&mut conn, "v", 3).await.unwrap();
+        assert!(reserve_ai_plan_chat(&mut conn, "v", 0).await.is_err());
+        drop(conn);
+        assert_eq!(ai_plan_chats_used(&db, "u").await.unwrap(), 3);
+        assert_eq!(ai_plan_chats_used(&db, "v").await.unwrap(), 1);
     }
 }
 

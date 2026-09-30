@@ -219,6 +219,7 @@ mod tests {
             mail: Default::default(),
             review_ai: Default::default(),
             draft: Default::default(),
+            plan_chat: Default::default(),
             log_format: Default::default(),
             metrics_bind,
             hosted: false,

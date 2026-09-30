@@ -56,6 +56,7 @@ impl Fixture {
             mail: Default::default(),
             review_ai: Default::default(),
             draft: Default::default(),
+            plan_chat: Default::default(),
             hosted: false,
             access_mode: Default::default(),
             registration_open: true,

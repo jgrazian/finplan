@@ -382,12 +382,17 @@ test("note counts are per row, once per note, open notes only", () => {
   assert.equal(noteLink(0), undefined);
 });
 
-test("the Review tab is a path of its own, with no sub-tab", async () => {
+test("the Review tab opens on Notes, and Chat is a sub-tab in the query", async () => {
   const { parseNav, toHref } = await import("../lib/nav/url.ts");
-  assert.deepEqual(parseNav("/review", "?scenario=s1&sec=x"), {
-    scenario: "s1", tab: "review", section: undefined, selection: undefined,
+  assert.deepEqual(parseNav("/review", "?scenario=s1"), {
+    scenario: "s1", tab: "review", section: "notes", selection: undefined,
   });
-  assert.equal(toHref({ scenario: "s1", tab: "review" }), "/review?scenario=s1");
+  assert.deepEqual(parseNav("/review", "?scenario=s1&sec=chat"), {
+    scenario: "s1", tab: "review", section: "chat", selection: undefined,
+  });
+  // The default is left out of the URL.
+  assert.equal(toHref({ scenario: "s1", tab: "review", section: "notes" }), "/review?scenario=s1");
+  assert.equal(toHref({ scenario: "s1", tab: "review", section: "chat" }), "/review?scenario=s1&sec=chat");
 });
 
 test("the model pass reads as running, failed or stopped early, and says nothing otherwise", () => {

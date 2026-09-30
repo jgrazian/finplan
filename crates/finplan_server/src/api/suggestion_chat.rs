@@ -14,13 +14,18 @@
 //! replaces open rule notes) writes nothing: the thread went with the note.
 //! A restart leaves no turn running: [`recover`] marks them failed.
 //!
+//! The turn itself (claiming the thread, running the model, storing the answer
+//! and its notes, recovering after a restart) is shared with plan chat
+//! (`api::plan_chat`) through [`Thread`], which names either kind of thread.
+//!
 //! Observability: a turn runs inside the job span of the POST that started it
-//! (a `review_chat` job), so its logs, the model loop's and its tool calls'
-//! carry that request's `request_id`, also stored on the thread. It reports
-//! through the same `finplan_review_ai_*` families as review passes (which
-//! total every review-model request), and adds `finplan_review_chat_*`: turns
-//! by outcome, turn wall time, and the chat share of tokens and cost. Message
-//! text is never logged.
+//! (a `review_chat` or `plan_chat` job), so its logs, the model loop's and its
+//! tool calls' carry that request's `request_id`, also stored on the thread.
+//! It reports through the same `finplan_review_ai_*` families as review
+//! passes (which total every review-model request), and adds
+//! `finplan_review_chat_*`: turns by outcome, turn wall time, and the chat
+//! share of tokens and cost, for both kinds of thread. Message text is never
+//! logged.
 
 use std::collections::HashSet;
 use std::fmt::Write as _;
@@ -49,7 +54,7 @@ use crate::observability::{
 };
 use crate::runner::telemetry::{Attempt, Submitted};
 use crate::state::AppState;
-use crate::suggest::ai::chat::{self, ChatInput, ChatRole as ModelRole};
+use crate::suggest::ai::chat::{self, ChatInput, ChatRole as ModelRole, Subject};
 use crate::suggest::ai::{AiError, AiOutcome, ReviewContext, stop_tag};
 use crate::suggest::rules;
 
@@ -58,9 +63,83 @@ pub fn router() -> Router<AppState> {
 }
 
 /// Longest message, in characters.
-const MAX_MESSAGE: usize = 2_000;
-/// Most questions one thread takes.
+pub(super) const MAX_MESSAGE: usize = 2_000;
+/// Most questions one note's thread takes.
 const MAX_USER_MESSAGES: i64 = 20;
+
+/// A thread: a note's ("Chat about this") or a plan's (`api::plan_chat`).
+/// Names the tables it lives in and what its turns report as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Thread {
+    Note(i64),
+    Plan(i64),
+}
+
+/// Where a turn has got to, for its log line's `event`.
+#[derive(Clone, Copy)]
+enum Ev {
+    Accepted,
+    Stored,
+    Discarded,
+    StartFailed,
+    StoreFailed,
+    Failed,
+    Panicked,
+    StatusFailed,
+}
+
+impl Thread {
+    /// The note's id, or the plan's.
+    fn id(self) -> i64 {
+        match self {
+            Thread::Note(id) | Thread::Plan(id) => id,
+        }
+    }
+
+    /// The thread table, the messages table, and the key column both share.
+    fn tables(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Thread::Note(_) => ("suggestion_threads", "suggestion_messages", "suggestion_id"),
+            Thread::Plan(_) => ("plan_chat_threads", "plan_chat_messages", "scenario_id"),
+        }
+    }
+
+    fn kind(self) -> JobKind {
+        match self {
+            Thread::Note(_) => JobKind::ReviewChat,
+            Thread::Plan(_) => JobKind::PlanChat,
+        }
+    }
+
+    fn event(self, ev: Ev) -> &'static str {
+        match (self, ev) {
+            (Thread::Note(_), Ev::Accepted) => "review_chat.accepted",
+            (Thread::Note(_), Ev::Stored) => "review_chat.stored",
+            (Thread::Note(_), Ev::Discarded) => "review_chat.discarded",
+            (Thread::Note(_), Ev::StartFailed) => "review_chat.start_failed",
+            (Thread::Note(_), Ev::StoreFailed) => "review_chat.store_failed",
+            (Thread::Note(_), Ev::Failed) => "review_chat.failed",
+            (Thread::Note(_), Ev::Panicked) => "review_chat.panicked",
+            (Thread::Note(_), Ev::StatusFailed) => "review_chat.status_failed",
+            (Thread::Plan(_), Ev::Accepted) => "plan_chat.accepted",
+            (Thread::Plan(_), Ev::Stored) => "plan_chat.stored",
+            (Thread::Plan(_), Ev::Discarded) => "plan_chat.discarded",
+            (Thread::Plan(_), Ev::StartFailed) => "plan_chat.start_failed",
+            (Thread::Plan(_), Ev::StoreFailed) => "plan_chat.store_failed",
+            (Thread::Plan(_), Ev::Failed) => "plan_chat.failed",
+            (Thread::Plan(_), Ev::Panicked) => "plan_chat.panicked",
+            (Thread::Plan(_), Ev::StatusFailed) => "plan_chat.status_failed",
+        }
+    }
+
+    /// A note the model adds from a note's thread points back at that note.
+    fn parent(self) -> Option<i64> {
+        match self {
+            Thread::Note(id) => Some(id),
+            Thread::Plan(_) => None,
+        }
+    }
+}
 
 // ── wire types ──────────────────────────────────────────────────────────────
 
@@ -184,14 +263,54 @@ async fn post_message(
         id,
     );
 
+    let thread = Thread::Note(id);
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
-    sqlx::query("INSERT OR IGNORE INTO suggestion_threads (suggestion_id) VALUES (?1)")
-        .bind(id)
-        .execute(&mut *tx)
-        .await?;
+    let asked = claim(&mut tx, thread).await?;
+    if asked >= MAX_USER_MESSAGES {
+        return Err(ApiError::Conflict(format!(
+            "a thread takes at most {MAX_USER_MESSAGES} messages; review again for a fresh one"
+        )));
+    }
+    let history = begin_turn(&mut tx, thread, &message, &job, &job_context, None).await?;
+    tx.commit().await?;
+
+    start(
+        &state,
+        reviews,
+        Turn {
+            thread,
+            job,
+            job_context,
+            submitted: Submitted::now(),
+            scenario_id: note.scenario_id,
+            run_id,
+            user,
+            graph,
+            context,
+            subject: note_text,
+            history,
+            check_iterations,
+        },
+        message.chars().count(),
+    );
+
+    Ok(Json(load_thread(&state.db, id).await?))
+}
+
+/// Take the thread for a new turn on the caller's write transaction: create
+/// it if nobody has asked yet, and refuse while a turn is still out. Returns
+/// how many questions it has already taken.
+pub(super) async fn claim(tx: &mut sqlx::SqliteConnection, thread: Thread) -> ApiResult<i64> {
+    let (threads, messages, key) = thread.tables();
+    sqlx::query(&format!(
+        "INSERT OR IGNORE INTO {threads} ({key}) VALUES (?1)"
+    ))
+    .bind(thread.id())
+    .execute(&mut *tx)
+    .await?;
     let status: String =
-        sqlx::query_scalar("SELECT status FROM suggestion_threads WHERE suggestion_id = ?1")
-            .bind(id)
+        sqlx::query_scalar(&format!("SELECT status FROM {threads} WHERE {key} = ?1"))
+            .bind(thread.id())
             .fetch_one(&mut *tx)
             .await?;
     if status == "running" {
@@ -199,84 +318,67 @@ async fn post_message(
             "the model is still answering the last message".into(),
         ));
     }
-    let asked: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM suggestion_messages WHERE suggestion_id = ?1 AND role = 'user'",
-    )
-    .bind(id)
+    Ok(sqlx::query_scalar(&format!(
+        "SELECT COUNT(*) FROM {messages} WHERE {key} = ?1 AND role = 'user'"
+    ))
+    .bind(thread.id())
     .fetch_one(&mut *tx)
-    .await?;
-    if asked >= MAX_USER_MESSAGES {
-        return Err(ApiError::Conflict(format!(
-            "a thread takes at most {MAX_USER_MESSAGES} messages; review again for a fresh one"
-        )));
-    }
-    sqlx::query(
-        "INSERT INTO suggestion_messages (suggestion_id, role, text) VALUES (?1, 'user', ?2)",
-    )
-    .bind(id)
-    .bind(&message)
+    .await?)
+}
+
+/// Add the user's message to a claimed thread and mark it running. Returns
+/// the history the model reads: the last `window` messages (all of them when
+/// `None`), oldest first, ending with this one.
+pub(super) async fn begin_turn(
+    tx: &mut sqlx::SqliteConnection,
+    thread: Thread,
+    message: &str,
+    job: &str,
+    job_context: &JobContext,
+    window: Option<i64>,
+) -> ApiResult<Vec<(ModelRole, String)>> {
+    let (threads, messages, key) = thread.tables();
+    sqlx::query(&format!(
+        "INSERT INTO {messages} ({key}, role, text) VALUES (?1, 'user', ?2)"
+    ))
+    .bind(thread.id())
+    .bind(message)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "UPDATE suggestion_threads
+    sqlx::query(&format!(
+        "UPDATE {threads}
             SET status = 'running', error = NULL, job = ?2, request_id = ?3,
                 started_at = datetime('now'), finished_at = NULL, stop = NULL
-          WHERE suggestion_id = ?1",
-    )
-    .bind(id)
-    .bind(&job)
+          WHERE {key} = ?1"
+    ))
+    .bind(thread.id())
+    .bind(job)
     .bind(&job_context.request_id)
     .execute(&mut *tx)
     .await?;
-    let history: Vec<(String, String)> = sqlx::query_as(
-        "SELECT role, text FROM suggestion_messages WHERE suggestion_id = ?1 ORDER BY id",
-    )
-    .bind(id)
+    let mut history: Vec<(String, String)> = sqlx::query_as(&format!(
+        "SELECT role, text FROM {messages} WHERE {key} = ?1 ORDER BY id DESC LIMIT ?2"
+    ))
+    .bind(thread.id())
+    .bind(window.unwrap_or(-1))
     .fetch_all(&mut *tx)
     .await?;
-    tx.commit().await?;
-
-    state
-        .telemetry
-        .submission(JobKind::ReviewChat, SubmissionResult::Accepted);
-    tracing::info!(
-        event = "review_chat.accepted",
-        suggestion_id = id,
-        run_id,
-        chat_job = %job,
-        messages = history.len(),
-        message_chars = message.chars().count(),
-    );
-    start(
-        &state,
-        reviews,
-        Turn {
-            job,
-            job_context,
-            submitted: Submitted::now(),
-            suggestion_id: id,
-            scenario_id: note.scenario_id,
-            run_id,
-            user,
-            graph,
-            context,
-            note: note_text,
-            history: history
-                .into_iter()
-                .map(|(role, text)| {
-                    let role = if role == "assistant" {
-                        ModelRole::Assistant
-                    } else {
-                        ModelRole::User
-                    };
-                    (role, text)
-                })
-                .collect(),
-            check_iterations,
-        },
-    );
-
-    Ok(Json(load_thread(&state.db, id).await?))
+    history.reverse();
+    // The model's side of the conversation starts with the user.
+    while history.first().is_some_and(|(role, _)| role == "assistant") {
+        history.remove(0);
+    }
+    Ok(history
+        .into_iter()
+        .map(|(role, text)| {
+            let role = if role == "assistant" {
+                ModelRole::Assistant
+            } else {
+                ModelRole::User
+            };
+            (role, text)
+        })
+        .collect())
 }
 
 #[derive(sqlx::FromRow)]
@@ -288,23 +390,29 @@ struct MessageRow {
     created_at: String,
 }
 
-async fn load_thread(db: &Db, id: i64) -> ApiResult<SuggestionThread> {
-    let head: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT status, error FROM suggestion_threads WHERE suggestion_id = ?1")
-            .bind(id)
-            .fetch_optional(db)
-            .await?;
+/// A thread's current turn status, its failure message, and its messages.
+pub(super) async fn load_messages(
+    db: &Db,
+    thread: Thread,
+) -> ApiResult<(ThreadStatus, Option<String>, Vec<ChatMessage>)> {
+    let (threads, messages, key) = thread.tables();
+    let head: Option<(String, Option<String>)> = sqlx::query_as(&format!(
+        "SELECT status, error FROM {threads} WHERE {key} = ?1"
+    ))
+    .bind(thread.id())
+    .fetch_optional(db)
+    .await?;
     let (status, error) = head.unwrap_or_else(|| ("idle".into(), None));
     let status = match status.as_str() {
         "running" => ThreadStatus::Running,
         "failed" => ThreadStatus::Failed,
         _ => ThreadStatus::Idle,
     };
-    let rows: Vec<MessageRow> = sqlx::query_as(
-        "SELECT id, role, text, suggestion_ids, created_at FROM suggestion_messages
-          WHERE suggestion_id = ?1 ORDER BY id",
-    )
-    .bind(id)
+    let rows: Vec<MessageRow> = sqlx::query_as(&format!(
+        "SELECT id, role, text, suggestion_ids, created_at FROM {messages}
+          WHERE {key} = ?1 ORDER BY id"
+    ))
+    .bind(thread.id())
     .fetch_all(db)
     .await?;
     let messages = rows
@@ -321,26 +429,35 @@ async fn load_thread(db: &Db, id: i64) -> ApiResult<SuggestionThread> {
             suggestion_ids: serde_json::from_str(&row.suggestion_ids).unwrap_or_default(),
         })
         .collect();
+    let error = (status == ThreadStatus::Failed).then_some(error).flatten();
+    Ok((status, error, messages))
+}
+
+async fn load_thread(db: &Db, id: i64) -> ApiResult<SuggestionThread> {
+    let (status, error, messages) = load_messages(db, Thread::Note(id)).await?;
     Ok(SuggestionThread {
         suggestion_id: id,
-        error: (status == ThreadStatus::Failed).then_some(error).flatten(),
         status,
+        error,
         messages,
     })
 }
 
-/// Mark turns a previous process left running as failed: nothing is going
-/// to finish them.
+/// Mark turns a previous process left running, on either kind of thread, as
+/// failed: nothing is going to finish them.
 pub async fn recover(db: &Db) -> Result<u64, sqlx::Error> {
-    let recovered = sqlx::query(
-        "UPDATE suggestion_threads
-            SET status = 'failed', error = 'interrupted by a server restart',
-                finished_at = datetime('now')
-          WHERE status = 'running'",
-    )
-    .execute(db)
-    .await?
-    .rows_affected();
+    let mut recovered = 0;
+    for threads in ["suggestion_threads", "plan_chat_threads"] {
+        recovered += sqlx::query(&format!(
+            "UPDATE {threads}
+                SET status = 'failed', error = 'interrupted by a server restart',
+                    finished_at = datetime('now')
+              WHERE status = 'running'"
+        ))
+        .execute(db)
+        .await?
+        .rows_affected();
+    }
     if recovered > 0 {
         tracing::info!(event = "review_chat.recovered", turns = recovered);
     }
@@ -452,7 +569,7 @@ fn render_note(note: &Suggestion, board: &[Suggestion]) -> String {
 }
 
 /// A unit enum's wire tag.
-fn tag<T: Serialize>(value: &T) -> String {
+pub(super) fn tag<T: Serialize>(value: &T) -> String {
     serde_json::to_value(value)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
@@ -462,28 +579,53 @@ fn tag<T: Serialize>(value: &T) -> String {
 // ── the turn ────────────────────────────────────────────────────────────────
 
 /// One turn, as the POST hands it over.
-struct Turn {
-    /// `suggestion_threads.job`, already stored as the thread's current turn.
-    job: String,
+pub(super) struct Turn {
+    pub thread: Thread,
+    /// The thread's `job`, already stored as its current turn.
+    pub job: String,
     /// The starting request's context: its `request_id` tags every log line.
-    job_context: JobContext,
-    submitted: Submitted,
-    suggestion_id: i64,
-    scenario_id: i64,
-    run_id: i64,
-    user: CurrentUser,
-    /// The note's run snapshot: what the model's changes resolve against.
-    graph: ScenarioGraph,
-    context: ReviewContext,
-    note: String,
-    history: Vec<(ModelRole, String)>,
-    check_iterations: usize,
+    pub job_context: JobContext,
+    pub submitted: Submitted,
+    pub scenario_id: i64,
+    /// The run the board reviews: notes are written against it.
+    pub run_id: i64,
+    pub user: CurrentUser,
+    /// The run's snapshot: what the model's changes resolve against.
+    pub graph: ScenarioGraph,
+    pub context: ReviewContext,
+    /// What the thread is about, rendered ([`Subject`]).
+    pub subject: String,
+    pub history: Vec<(ModelRole, String)>,
+    pub check_iterations: usize,
 }
 
-fn start(state: &AppState, reviews: AiReviews, turn: Turn) {
-    let suggestion_id = turn.suggestion_id;
+impl Turn {
+    fn subject(&self) -> Subject<'_> {
+        match self.thread {
+            Thread::Note(_) => Subject::Note(&self.subject),
+            Thread::Plan(_) => Subject::Plan(&self.subject),
+        }
+    }
+}
+
+/// Run an accepted turn in the background. `message_chars` sizes the log.
+pub(super) fn start(state: &AppState, reviews: AiReviews, turn: Turn, message_chars: usize) {
+    let thread = turn.thread;
     let job = turn.job.clone();
+    state
+        .telemetry
+        .submission(thread.kind(), SubmissionResult::Accepted);
     let span = turn.job_context.span();
+    span.in_scope(|| {
+        tracing::info!(
+            event = thread.event(Ev::Accepted),
+            thread_id = thread.id(),
+            run_id = turn.run_id,
+            chat_job = %job,
+            messages = turn.history.len(),
+            message_chars,
+        );
+    });
     let span = span.in_scope(|| tracing::info_span!("review_chat", chat_job = %job));
     let task = tokio::spawn(
         run(state.clone(), reviews, turn)
@@ -497,8 +639,8 @@ fn start(state: &AppState, reviews: AiReviews, turn: Turn) {
             if let Err(error) = task.await
                 && error.is_panic()
             {
-                tracing::error!(event = "review_chat.panicked", suggestion_id);
-                fail(&db, suggestion_id, &job, "the model stopped unexpectedly").await;
+                tracing::error!(event = thread.event(Ev::Panicked), thread_id = thread.id());
+                fail(&db, thread, &job, "the model stopped unexpectedly").await;
             }
         }
         .instrument(span)
@@ -507,16 +649,13 @@ fn start(state: &AppState, reviews: AiReviews, turn: Turn) {
 }
 
 async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
+    let thread = turn.thread;
     let telemetry = state.telemetry.clone();
     let Ok(_permit) = reviews.permits().acquire_owned().await else {
         return;
     };
-    telemetry.queue_wait(
-        JobKind::ReviewChat,
-        QueueExit::Started,
-        turn.submitted.elapsed(),
-    );
-    let _running = telemetry.job_started(JobKind::ReviewChat);
+    telemetry.queue_wait(thread.kind(), QueueExit::Started, turn.submitted.elapsed());
+    let _running = telemetry.job_started(thread.kind());
     let mut attempt = Attempt::new(&telemetry, &turn.job_context, turn.submitted.clone());
     let started = Instant::now();
     let model = reviews.model().to_owned();
@@ -538,14 +677,11 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
         Ok(tools) => tools,
         Err(_) => {
             telemetry.count_error(Component::ReviewAi, ErrorClass::Database);
-            tracing::error!(event = "review_chat.start_failed", error_class = "database");
-            fail(
-                &state.db,
-                turn.suggestion_id,
-                &turn.job,
-                "the chat could not start",
-            )
-            .await;
+            tracing::error!(
+                event = thread.event(Ev::StartFailed),
+                error_class = "database"
+            );
+            fail(&state.db, thread, &turn.job, "the chat could not start").await;
             attempt.failure(ErrorClass::Database);
             attempt.finish(Outcome::Failed);
             finish(AiPassOutcome::Failed);
@@ -555,7 +691,7 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
 
     let input = ChatInput {
         context: &turn.context,
-        note: &turn.note,
+        subject: turn.subject(),
         history: &turn.history,
     };
     match chat::answer(reviews.client(), &input, &tools, &observer).await {
@@ -570,8 +706,8 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
                     telemetry
                         .review_ai_suggestions(AiSuggestionOutcome::Discarded, discarded as u64);
                     tracing::info!(
-                        event = "review_chat.stored",
-                        suggestion_id = turn.suggestion_id,
+                        event = thread.event(Ev::Stored),
+                        thread_id = thread.id(),
                         run_id = turn.run_id,
                         stop = stop_tag(&outcome.stop),
                         accepted,
@@ -593,8 +729,8 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
                     telemetry
                         .review_ai_suggestions(AiSuggestionOutcome::Discarded, accepted as u64);
                     tracing::info!(
-                        event = "review_chat.discarded",
-                        suggestion_id = turn.suggestion_id,
+                        event = thread.event(Ev::Discarded),
+                        thread_id = thread.id(),
                         reason = "thread_gone",
                         accepted,
                         cost_usd = outcome.usage.cost_usd,
@@ -605,13 +741,13 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
                 Err(_) => {
                     telemetry.count_error(Component::ReviewAi, ErrorClass::Database);
                     tracing::error!(
-                        event = "review_chat.store_failed",
-                        suggestion_id = turn.suggestion_id,
+                        event = thread.event(Ev::StoreFailed),
+                        thread_id = thread.id(),
                         error_class = "database",
                     );
                     fail(
                         &state.db,
-                        turn.suggestion_id,
+                        thread,
                         &turn.job,
                         "the answer could not be saved",
                     )
@@ -630,8 +766,8 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
             telemetry.count_error(Component::ReviewAi, class);
             // The model loop has already scrubbed the key out of the text.
             tracing::warn!(
-                event = "review_chat.failed",
-                suggestion_id = turn.suggestion_id,
+                event = thread.event(Ev::Failed),
+                thread_id = thread.id(),
                 error_class = class.as_str(),
                 error = %error
             );
@@ -639,7 +775,7 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
                 AiError::Api(_) => "the model could not be reached",
                 AiError::Malformed(_) => "the model's reply could not be read",
             };
-            fail(&state.db, turn.suggestion_id, &turn.job, message).await;
+            fail(&state.db, thread, &turn.job, message).await;
             attempt.failure(class);
             attempt.finish(Outcome::Failed);
             finish(AiPassOutcome::Failed);
@@ -664,35 +800,42 @@ fn record_spend(telemetry: &crate::observability::Telemetry, model: &str, outcom
 }
 
 /// Record a failed turn, if it is still the thread's current one.
-async fn fail(db: &Db, suggestion_id: i64, job: &str, message: &str) {
-    let result = sqlx::query(
-        "UPDATE suggestion_threads
+async fn fail(db: &Db, thread: Thread, job: &str, message: &str) {
+    let (threads, _, key) = thread.tables();
+    let result = sqlx::query(&format!(
+        "UPDATE {threads}
             SET status = 'failed', error = ?3, finished_at = datetime('now')
-          WHERE suggestion_id = ?1 AND job = ?2 AND status = 'running'",
-    )
-    .bind(suggestion_id)
+          WHERE {key} = ?1 AND job = ?2 AND status = 'running'"
+    ))
+    .bind(thread.id())
     .bind(job)
     .bind(message)
     .execute(db)
     .await;
     if result.is_err() {
-        tracing::error!(event = "review_chat.status_failed", suggestion_id);
+        tracing::error!(
+            event = thread.event(Ev::StatusFailed),
+            thread_id = thread.id()
+        );
     }
 }
 
 /// Store the answer and the notes it added, and mark the thread idle —
-/// unless the thread is gone (its note was deleted) or no longer this turn's,
-/// in which case nothing is written and `None` comes back.
+/// unless the thread is gone (its note was deleted, or the plan's thread
+/// cleared) or no longer this turn's, in which case nothing is written and
+/// `None` comes back.
 async fn store(db: &Db, turn: &Turn, outcome: &AiOutcome) -> ApiResult<Option<Vec<i64>>> {
+    let thread = turn.thread;
+    let (threads, messages, key) = thread.tables();
     let mut tx = db.begin().await?;
     // First, so the transaction holds the write lock before it reads.
-    let current = sqlx::query(
-        "UPDATE suggestion_threads
+    let current = sqlx::query(&format!(
+        "UPDATE {threads}
             SET status = 'idle', error = NULL, finished_at = datetime('now'), stop = ?3,
                 turns = ?4, input_tokens = ?5, output_tokens = ?6, cost_usd = ?7
-          WHERE suggestion_id = ?1 AND job = ?2 AND status = 'running'",
-    )
-    .bind(turn.suggestion_id)
+          WHERE {key} = ?1 AND job = ?2 AND status = 'running'"
+    ))
+    .bind(thread.id())
     .bind(&turn.job)
     .bind(stop_tag(&outcome.stop))
     .bind(i64::from(outcome.usage.turns))
@@ -725,17 +868,17 @@ async fn store(db: &Db, turn: &Turn, outcome: &AiOutcome) -> ApiResult<Option<Ve
     let mut stored = Vec::new();
     for draft in &outcome.drafts {
         // Not a review pass's: a later pass does not replace it.
-        let new = draft_suggestion(turn.run_id, draft, None, Some(turn.suggestion_id));
+        let new = draft_suggestion(turn.run_id, draft, None, thread.parent());
         if standing.contains(&new.fingerprint) || !seen.insert(new.fingerprint.clone()) {
             continue;
         }
         stored.push(insert(&mut tx, turn.scenario_id, &new).await?);
     }
-    sqlx::query(
-        "INSERT INTO suggestion_messages (suggestion_id, role, text, suggestion_ids)
-         VALUES (?1, 'assistant', ?2, ?3)",
-    )
-    .bind(turn.suggestion_id)
+    sqlx::query(&format!(
+        "INSERT INTO {messages} ({key}, role, text, suggestion_ids)
+         VALUES (?1, 'assistant', ?2, ?3)"
+    ))
+    .bind(thread.id())
     .bind(chat::answer_text(outcome))
     .bind(serde_json::to_string(&stored).map_err(|e| ApiError::internal(e.to_string()))?)
     .execute(&mut *tx)

@@ -41,7 +41,26 @@ impl TestApp {
             ..Default::default()
         };
         adjust(&mut draft);
-        let router = Self::router(&dir, review_ai, draft).await;
+        let router = Self::router(&dir, review_ai, draft, Default::default()).await;
+        TestApp {
+            router,
+            cookie: None,
+            _dir: dir,
+        }
+    }
+
+    /// [`with_review_ai`](Self::with_review_ai), with the plan chat allowance
+    /// set.
+    async fn with_plan_chat(
+        review_ai: Option<Arc<AiClient>>,
+        plan_chat: finplan_server::suggest::ai::PlanChatConfig,
+    ) -> Self {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let draft = finplan_server::suggest::ai::DraftConfig {
+            temp_dir: Some(dir.path().join("draft-files")),
+            ..Default::default()
+        };
+        let router = Self::router(&dir, review_ai, draft, plan_chat).await;
         TestApp {
             router,
             cookie: None,
@@ -53,6 +72,7 @@ impl TestApp {
         dir: &tempfile::TempDir,
         review_ai: Option<Arc<AiClient>>,
         draft: finplan_server::suggest::ai::DraftConfig,
+        plan_chat: finplan_server::suggest::ai::PlanChatConfig,
     ) -> Router {
         let db_path = dir.path().join("test.db");
 
@@ -60,6 +80,7 @@ impl TestApp {
             mail: Default::default(),
             review_ai: Default::default(),
             draft,
+            plan_chat,
             log_format: Default::default(),
             metrics_bind: None,
             bind: "127.0.0.1:0".into(),
@@ -88,7 +109,7 @@ impl TestApp {
             temp_dir: Some(self._dir.path().join("draft-files")),
             ..Default::default()
         };
-        self.router = Self::router(&self._dir, None, draft).await;
+        self.router = Self::router(&self._dir, None, draft, Default::default()).await;
     }
 
     async fn send(&self, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
@@ -4981,6 +5002,241 @@ async fn a_restart_fails_a_chat_turn_left_running() {
     assert_eq!(thread["status"], "failed", "{thread}");
     assert_eq!(thread["error"], "interrupted by a server restart");
     assert_eq!(roles(&thread), ["user"]);
+}
+
+// ── Plan chat ───────────────────────────────────────────────────────────────
+
+impl TestApp {
+    /// A reviewed plan whose model pass added nothing: its scenario and its
+    /// checking account.
+    async fn plan_chat_ready(&mut self, email: &str, script: &Script) -> (i64, i64) {
+        self.login_as(email).await;
+        let (scenario_id, _, _) = self.reviewable_plan().await;
+        let checking = self.account_named(scenario_id, "Checking").await;
+        script.push(vec![Reply::Message(chat_answer("Nothing to add."))]);
+        self.review(scenario_id).await;
+        let review = self.await_review_model(scenario_id).await;
+        assert_eq!(review["ai"]["status"], "done", "{review}");
+        (scenario_id, checking)
+    }
+
+    async fn plan_chat(&self, scenario_id: i64, message: &str) -> (StatusCode, Value) {
+        self.post(
+            &format!("/api/scenarios/{scenario_id}/chat"),
+            json!({"message": message}),
+        )
+        .await
+    }
+
+    async fn await_plan_chat(&self, scenario_id: i64) -> Value {
+        for _ in 0..200 {
+            let (status, thread) = self
+                .get(&format!("/api/scenarios/{scenario_id}/chat"))
+                .await;
+            assert_eq!(status, StatusCode::OK, "{thread}");
+            if thread["status"] != "running" {
+                return thread;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("the plan chat turn never finished");
+    }
+}
+
+#[tokio::test]
+async fn plan_chat_proposes_changes_as_notes_and_leaves_the_plan_alone() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    let (scenario_id, checking) = app.plan_chat_ready("plan-chat@example.com", &script).await;
+    let (_, before) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+
+    let (status, thread) = app.get(&format!("/api/scenarios/{scenario_id}/chat")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(thread["status"], "idle");
+    assert_eq!(thread["messages"], json!([]));
+
+    script.push(chat_turn_adding_a_note(checking));
+    let (status, thread) = app
+        .plan_chat(scenario_id, "  Put $20,000 in checking to start.  ")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{thread}");
+    assert_eq!(thread["scenario_id"], scenario_id);
+    assert_eq!(
+        thread["messages"][0]["text"],
+        "Put $20,000 in checking to start."
+    );
+
+    let thread = app.await_plan_chat(scenario_id).await;
+    assert_eq!(thread["status"], "idle", "{thread}");
+    assert_eq!(roles(&thread), ["user", "assistant"]);
+    let added = thread["messages"][1]["suggestion_ids"].as_array().unwrap();
+    assert_eq!(added.len(), 1, "{thread}");
+    let note_id = added[0].as_i64().unwrap();
+
+    // The change is an open note on the review, with no parent note...
+    let (_, review) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    let note = review["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == note_id)
+        .unwrap_or_else(|| panic!("the chat's note is not on the review: {review}"));
+    assert_eq!(note["status"], "open");
+    assert_eq!(note["source"], "ai");
+    assert!(note["parent_id"].is_null());
+    // ...and the plan itself is untouched until the user applies it.
+    let (_, after) = app
+        .get(&format!("/api/scenarios/{scenario_id}/accounts"))
+        .await;
+    assert_eq!(before, after);
+
+    // The model read the whole plan's framing and the message.
+    let asked = script.requests.lock().unwrap().clone();
+    let request = asked
+        .iter()
+        .map(|r| r.to_string())
+        .find(|r| r.contains("about the whole plan"))
+        .expect("a plan chat request");
+    assert!(request.contains("Put $20,000 in checking to start."));
+    assert!(request.contains("cannot change the plan yourself"));
+
+    // Starting over forgets the thread; the note stays on the board.
+    let (status, _) = app
+        .delete(&format!("/api/scenarios/{scenario_id}/chat"))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, thread) = app.get(&format!("/api/scenarios/{scenario_id}/chat")).await;
+    assert_eq!(thread["messages"], json!([]));
+    let (_, review) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    assert!(
+        review["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == note_id)
+    );
+}
+
+#[tokio::test]
+async fn plan_chat_needs_a_review_a_model_and_the_owner() {
+    let mut app = TestApp::new().await;
+    app.login_as("plan-chat-no-model@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+    let (status, body) = app.plan_chat(scenario_id, "Retire at 60").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.to_string().contains("not enabled"));
+    let (_, entitlements) = app.get("/api/billing/entitlements").await;
+    assert!(entitlements["ai_plan_chat"].is_null(), "{entitlements}");
+
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    app.login_as("plan-chat-unreviewed@example.com").await;
+    let (scenario_id, _, _) = app.reviewable_plan().await;
+    let (status, body) = app.plan_chat(scenario_id, "Retire at 60").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.to_string().contains("review this plan first"));
+    // Nothing was spent on a refused message.
+    let (_, entitlements) = app.get("/api/billing/entitlements").await;
+    assert_eq!(
+        entitlements["ai_plan_chat"]["remaining"],
+        entitlements["ai_plan_chat"]["per_month"]
+    );
+    for message in ["", "   ", &"x".repeat(2_001)] {
+        let (status, _) = app.plan_chat(scenario_id, message).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    app.login_as("plan-chat-intruder@example.com").await;
+    for (status, _) in [
+        app.get(&format!("/api/scenarios/{scenario_id}/chat")).await,
+        app.plan_chat(scenario_id, "Let me in").await,
+        app.delete(&format!("/api/scenarios/{scenario_id}/chat"))
+            .await,
+    ] {
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn plan_chat_spends_a_monthly_allowance_one_turn_at_a_time() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_plan_chat(
+        script.client(),
+        finplan_server::suggest::ai::PlanChatConfig {
+            free_per_month: 2,
+            pro_per_month: 2,
+        },
+    )
+    .await;
+    let (scenario_id, _) = app
+        .plan_chat_ready("plan-chat-quota@example.com", &script)
+        .await;
+    let (_, entitlements) = app.get("/api/billing/entitlements").await;
+    assert_eq!(
+        entitlements["ai_plan_chat"],
+        json!({"enabled": true, "remaining": 2, "per_month": 2})
+    );
+
+    // One turn at a time: a second message while the first is out is refused
+    // and costs nothing; so is clearing the thread.
+    script.push(vec![Reply::Hang]);
+    let (status, _) = app.plan_chat(scenario_id, "First").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app.plan_chat(scenario_id, "Second").await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = app
+        .delete(&format!("/api/scenarios/{scenario_id}/chat"))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, entitlements) = app.get("/api/billing/entitlements").await;
+    assert_eq!(entitlements["ai_plan_chat"]["remaining"], 1);
+
+    // A restart fails the hung turn.
+    app.restart().await;
+    let (_, thread) = app.get(&format!("/api/scenarios/{scenario_id}/chat")).await;
+    assert_eq!(thread["status"], "failed", "{thread}");
+    assert_eq!(thread["error"], "interrupted by a server restart");
+}
+
+#[tokio::test]
+async fn plan_chat_refuses_once_the_month_is_spent() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_plan_chat(
+        script.client(),
+        finplan_server::suggest::ai::PlanChatConfig {
+            free_per_month: 1,
+            pro_per_month: 1,
+        },
+    )
+    .await;
+    let (scenario_id, _) = app
+        .plan_chat_ready("plan-chat-spent@example.com", &script)
+        .await;
+    script.push(vec![Reply::Message(chat_answer("An answer."))]);
+    let (status, _) = app.plan_chat(scenario_id, "How am I doing?").await;
+    assert_eq!(status, StatusCode::OK);
+    app.await_plan_chat(scenario_id).await;
+
+    let (status, body) = app.plan_chat(scenario_id, "And now?").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(body.to_string().contains("plan chat messages"));
+    let (_, thread) = app.get(&format!("/api/scenarios/{scenario_id}/chat")).await;
+    assert_eq!(
+        roles(&thread),
+        ["user", "assistant"],
+        "a refused message is not kept"
+    );
+    let (_, entitlements) = app.get("/api/billing/entitlements").await;
+    assert_eq!(
+        entitlements["ai_plan_chat"],
+        json!({"enabled": false, "remaining": 0, "per_month": 1})
+    );
 }
 
 // ── AI-guided drafts ────────────────────────────────────────────────────────

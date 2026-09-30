@@ -512,6 +512,9 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
             )}
             {nav.tab === "review" && (
               <ReviewScreen
+                scenarioId={workspace.scenario.id}
+                planChat={access.data?.ai_plan_chat}
+                onChatSpent={access.reload}
                 draft={
                   isDraft && selectedScenario
                     ? { scenario: selectedScenario, onCreated: draftCreated, onDiscarded: draftDiscarded }

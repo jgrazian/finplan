@@ -1,11 +1,16 @@
 /**
- * "Chat about this": a follow-up conversation under one review note, from
- * the thread the server keeps to what the card shows.
+ * Chat threads on the Review tab, from what the server keeps to what is
+ * shown: "Chat about this" under one note, and plan chat about the whole
+ * plan.
  *
  * The model answers in text and, where a change fits, writes a new
- * suggestion as a child of the note; the board nests those under it.
+ * suggestion: under the note it was asked about, or on the board for plan
+ * chat. It never edits the plan; the user applies what it wrote.
  */
-import type { ChatMessage, SuggestionThread } from "../api/suggestions.ts";
+import type { AiPlanChat, ChatMessage, SuggestionThread } from "../api/suggestions.ts";
+
+/** What both kinds of thread share. */
+export type ChatThread = Pick<SuggestionThread, "status" | "error" | "messages">;
 
 /** Longest message the server takes. */
 export const CHAT_MAX_CHARS = 2_000;
@@ -86,7 +91,7 @@ export function chatLine(message: ChatMessage): ChatLine {
 }
 
 /** The last thing the user asked, to send again after a failed turn. */
-export function lastQuestion(thread: SuggestionThread | undefined): string | undefined {
+export function lastQuestion(thread: ChatThread | undefined): string | undefined {
   const messages = thread?.messages ?? [];
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user") return messages[i].text;
@@ -97,14 +102,27 @@ export function lastQuestion(thread: SuggestionThread | undefined): string | und
 /**
  * What the thread shows and whether it takes a message. `sending` covers the
  * request that starts a turn, before the server says it is running.
+ * `maxMessages` caps a note's thread (a plan's has none: `null`), and
+ * `allowance` is plan chat's month, which stops the box once it is spent.
  */
 export function threadView(
-  thread: SuggestionThread | undefined,
-  { draft = "", sending = false }: { draft?: string; sending?: boolean } = {},
+  thread: ChatThread | undefined,
+  {
+    draft = "",
+    sending = false,
+    maxMessages = CHAT_MAX_MESSAGES,
+    allowance,
+  }: {
+    draft?: string;
+    sending?: boolean;
+    maxMessages?: number | null;
+    allowance?: Pick<AiPlanChat, "remaining" | "per_month">;
+  } = {},
 ): ThreadView {
   const messages = thread?.messages ?? [];
   const running = sending || thread?.status === "running";
-  const full = messages.length >= CHAT_MAX_MESSAGES;
+  const spent = allowance != null && allowance.remaining <= 0;
+  const full = spent || (maxMessages != null && messages.length >= maxMessages);
   const failed = !running && thread?.status === "failed";
   const state: ThreadState = running
     ? "running"
@@ -116,7 +134,12 @@ export function threadView(
           ? "empty"
           : "idle";
   const over = draft.length > CHAT_MAX_CHARS;
-  const blocked = full && !running ? `This thread has reached its ${CHAT_MAX_MESSAGES}-message limit.` : undefined;
+  const blocked =
+    full && !running
+      ? spent
+        ? `You have used this month's ${allowance.per_month.toLocaleString("en-US")} plan chat messages. They renew at the start of next month (UTC).`
+        : `This thread has reached its ${maxMessages}-message limit.`
+      : undefined;
   return {
     lines: messages.map(chatLine),
     state,
@@ -137,8 +160,14 @@ export function threadView(
  * A turn just finished: the thread was running and no longer is. The board
  * then reloads, so suggestions the reply added appear under the note.
  */
-export function settled(before: SuggestionThread | undefined, after: SuggestionThread | undefined): boolean {
+export function settled(before: ChatThread | undefined, after: ChatThread | undefined): boolean {
   return before?.status === "running" && after != null && after.status !== "running";
+}
+
+/** "12 of 200 messages left this month", under plan chat's box. */
+export function allowanceLine(allowance: Pick<AiPlanChat, "remaining" | "per_month">): string {
+  const left = allowance.remaining.toLocaleString("en-US");
+  return `${left} of ${allowance.per_month.toLocaleString("en-US")} messages left this month`;
 }
 
 /** The DOM id a card is rendered with, for "Added a suggestion ↓" to scroll to. */

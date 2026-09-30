@@ -28,6 +28,9 @@ pub struct ServerConfig {
     /// AI-guided scenario drafts (`api::drafts`).
     #[command(flatten)]
     pub draft: crate::suggest::ai::DraftConfig,
+    /// Plan chat on the Review tab (`api::plan_chat`).
+    #[command(flatten)]
+    pub plan_chat: crate::suggest::ai::PlanChatConfig,
     /// Structured JSON in hosted mode, readable text locally when set to auto.
     #[arg(long, env = "FINPLAN_LOG_FORMAT", value_enum, default_value = "auto")]
     pub log_format: LogFormat,
@@ -101,6 +104,7 @@ impl ServerConfig {
             .validate(self.hosted, self.local_mail_sink.as_deref())?;
         self.review_ai.validate()?;
         self.draft.validate()?;
+        self.plan_chat.validate()?;
         if self.hosted
             && (!self.secure_cookies
                 || self.local_mail_sink.is_some()
