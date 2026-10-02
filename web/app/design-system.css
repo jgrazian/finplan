@@ -799,6 +799,29 @@ textarea.input {
   color: var(--color-neutral-800);
 }
 
+/* Tax treatment: a soft tint of the blue the portfolio strip draws that
+   band in, ringed in it — so a pill matches its band without shouting over
+   the row. */
+.tag-tax-deferred {
+  --tax-tone: var(--color-accent-700);
+}
+
+.tag-tax-taxable {
+  --tax-tone: var(--color-accent-500);
+}
+
+.tag-tax-free {
+  --tax-tone: var(--color-accent-300);
+}
+
+.tag-tax-deferred,
+.tag-tax-taxable,
+.tag-tax-free {
+  background: color-mix(in srgb, var(--tax-tone) 12%, transparent);
+  border-color: color-mix(in srgb, var(--tax-tone) 40%, transparent);
+  color: var(--color-accent-800);
+}
+
 /* A placeholder value — "n/a" — present so the column stays aligned, and
    quiet so it never reads as a status. */
 .tag-quiet {

@@ -7,10 +7,11 @@ const LABELS: Record<TaxStatus, string> = {
   TaxFree: "Tax-free",
 };
 
+/** Matches the portfolio strip's tax-treatment bands (`TAX_BANDS`). */
 const TONES: Record<TaxStatus, TagTone> = {
-  Taxable: "neutral",
-  TaxDeferred: "accent",
-  TaxFree: "accent",
+  Taxable: "tax-taxable",
+  TaxDeferred: "tax-deferred",
+  TaxFree: "tax-free",
 };
 
 /** Display label + tag tone for an account's tax treatment. */

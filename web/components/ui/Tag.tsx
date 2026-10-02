@@ -1,7 +1,15 @@
 import type { ReactNode } from "react";
 import { cx } from "./cx";
 
-export type TagTone = "accent" | "accent-2" | "neutral" | "outline" | "quiet";
+export type TagTone =
+  | "accent"
+  | "accent-2"
+  | "neutral"
+  | "outline"
+  | "quiet"
+  | "tax-deferred"
+  | "tax-taxable"
+  | "tax-free";
 
 export function Tag({
   tone = "neutral",

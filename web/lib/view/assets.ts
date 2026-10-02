@@ -36,6 +36,12 @@ export interface AssetRow {
    */
   profileId: ReturnProfileId | null;
   profileServerId: number | null;
+  /**
+   * Annual spread around the profile's draw, as a fraction, for a holding
+   * that does not track its profile exactly (a single stock on an index).
+   * Null when none is set — the asset moves with its profile.
+   */
+  trackingError: number | null;
   units: number;
   /** Units marked at the opening price — what a balance counts. */
   value: number;
@@ -91,6 +97,7 @@ export function toAssetRows(
       profileId:
         mapping == null ? null : (profiles.find((p) => p.serverId === mapping)?.id ?? null),
       profileServerId: mapping,
+      trackingError: asset.tracking_error,
       units,
       value: units * asset.initial_price,
       costBasis: held.reduce((sum, h) => sum + h.costBasis, 0),

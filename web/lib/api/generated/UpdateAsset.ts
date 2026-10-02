@@ -10,6 +10,11 @@ export type UpdateAsset = {
    * which would otherwise make unmapping unsayable.
    */
   return_profile_id?: number | null;
+  /**
+   * Doubly optional for the same reason: an explicit null removes the
+   * tracking error, which a zero would only approximate (a zero still
+   * reads as "set" to anything asking whether one was chosen).
+   */
   tracking_error?: number | null;
   sort_order?: number | null;
 };

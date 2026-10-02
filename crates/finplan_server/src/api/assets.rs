@@ -87,8 +87,12 @@ pub struct UpdateAsset {
     #[serde(default, deserialize_with = "crate::api::double_option")]
     #[ts(optional, type = "number | null")]
     pub return_profile_id: Option<Option<i64>>,
-    #[serde(default)]
-    pub tracking_error: Option<f64>,
+    /// Doubly optional for the same reason: an explicit null removes the
+    /// tracking error, which a zero would only approximate (a zero still
+    /// reads as "set" to anything asking whether one was chosen).
+    #[serde(default, deserialize_with = "crate::api::double_option")]
+    #[ts(optional, type = "number | null")]
+    pub tracking_error: Option<Option<f64>>,
     #[serde(default)]
     pub sort_order: Option<i64>,
 }
@@ -293,13 +297,14 @@ pub(crate) async fn update_in(
     // `Some(None)` is a deliberate unmap, `None` is silence about the mapping.
     let remap = body.return_profile_id.is_some();
     let profile_id = body.return_profile_id.flatten();
+    let retrack = body.tracking_error.is_some();
     let affected = sqlx::query(
         "UPDATE assets SET
             name              = COALESCE(?3, name),
             description       = COALESCE(?4, description),
             initial_price     = COALESCE(?5, initial_price),
             return_profile_id = CASE WHEN ?9 THEN ?6 ELSE return_profile_id END,
-            tracking_error    = COALESCE(?7, tracking_error),
+            tracking_error    = CASE WHEN ?10 THEN ?7 ELSE tracking_error END,
             sort_order        = COALESCE(?8, sort_order),
             updated_at        = datetime('now')
           WHERE id = ?1 AND scenario_id = ?2",
@@ -310,9 +315,10 @@ pub(crate) async fn update_in(
     .bind(&body.description)
     .bind(body.initial_price)
     .bind(profile_id)
-    .bind(body.tracking_error)
+    .bind(body.tracking_error.flatten())
     .bind(body.sort_order)
     .bind(remap)
+    .bind(retrack)
     .execute(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?

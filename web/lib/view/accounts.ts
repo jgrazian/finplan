@@ -364,14 +364,15 @@ export interface PortfolioSummary {
 }
 
 /**
- * Three steps of the neutral ink rather than accent tints: tax treatment is an
- * ordered reading of one pool, not three identities, and the accent stays for
- * actions. The ramp reverses with the ground, so dark-to-light holds in both.
+ * Three steps of one blue, dark to light, so tax treatment reads as an ordered
+ * split of one pool rather than three unrelated identities. The Tax column's
+ * pills (`.tag-tax-*`) fill with the same tokens, so a band and its accounts
+ * share a swatch. The ramp reverses with the ground, so the order holds in both.
  */
 const TAX_BANDS: ReadonlyArray<{ label: string; status: TaxStatus; color: string }> = [
-  { label: "Deferred", status: "TaxDeferred", color: "var(--color-neutral-900)" },
-  { label: "Taxable", status: "Taxable", color: "var(--color-neutral-500)" },
-  { label: "Tax-free", status: "TaxFree", color: "var(--color-neutral-300)" },
+  { label: "Deferred", status: "TaxDeferred", color: "var(--color-accent-700)" },
+  { label: "Taxable", status: "Taxable", color: "var(--color-accent-500)" },
+  { label: "Tax-free", status: "TaxFree", color: "var(--color-accent-300)" },
 ];
 
 /**

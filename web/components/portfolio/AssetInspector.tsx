@@ -10,11 +10,13 @@ import {
   Dropdown,
   Field,
   Hr,
+  PercentInput,
   SectionHeading,
   StatLabel,
   Table,
   Tag,
   Td,
+  Tooltip,
 } from "@/components/ui";
 import type { DistributionSpec, Profile } from "@/lib/api/types";
 import { fmtCurrency, fmtUnits } from "@/lib/format";
@@ -30,6 +32,8 @@ export interface AssetDraft {
   price: number;
   /** Null leaves the asset unmapped, which the engine holds flat at 0%. */
   profileServerId: number | null;
+  /** In percent, as the field shows it; null is none, not zero. */
+  trackingError: number | null;
 }
 
 /** An unmapped asset is held flat, which is what a None profile draws. */
@@ -47,6 +51,7 @@ function draftOf(asset: AssetRow): AssetDraft {
     name: asset.name,
     price: asset.price,
     profileServerId: asset.profileServerId,
+    trackingError: asset.trackingError == null ? null : asset.trackingError * 100,
   };
 }
 
@@ -189,6 +194,25 @@ export function AssetInspector({
           maxMenuHeight={300}
           ariaLabel="Return profile"
           onChange={(id) => set("profileServerId", id === UNMAPPED ? null : id)}
+        />
+      </Field>
+
+      <Field
+        label={
+          <Tooltip content="Extra yearly volatility on top of the return profile's draw, for a holding that does not move exactly with it — a single stock modelled on an index, say. Each year the asset's return is the profile's plus a normal draw with this standard deviation. Leave blank to follow the profile exactly.">
+            <span>Tracking error</span>
+          </Tooltip>
+        }
+      >
+        <PercentInput
+          nullable
+          style={{ minHeight: 32 }}
+          value={draft.trackingError}
+          readOnly={offline}
+          allowNegative={false}
+          placeholder="None"
+          onValueChange={(te) => set("trackingError", te)}
+          aria-label="Tracking error"
         />
       </Field>
 

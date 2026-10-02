@@ -812,6 +812,8 @@ async fn asset_updates_match_the_route() {
             ids.vfiax,
             json!({"return_profile_id": ids.bonds, "tracking_error": 0.02, "sort_order": 7}),
         ),
+        // An explicit null clears the tracking error just set.
+        (ids.vfiax, json!({"tracking_error": null})),
         // An explicit null unmaps; an absent field is left alone.
         (
             ids.bnd,

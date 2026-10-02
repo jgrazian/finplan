@@ -209,6 +209,10 @@ export function AssetsScreen({
     if (!Number.isFinite(price) || price <= 0) {
       return editingAsset.fail("Opening price must be positive.");
     }
+    const te = draft.trackingError;
+    if (te != null && (!Number.isFinite(te) || te < 0)) {
+      return editingAsset.fail("Tracking error cannot be negative.");
+    }
     editingAsset.run(
       () =>
         api.assets.update(scenarioId, asset.serverId, {
@@ -218,6 +222,9 @@ export function AssetsScreen({
           description: draft.name.trim(),
           initial_price: price,
           return_profile_id: draft.profileServerId,
+          // Null clears it, and zero is the same as none to the engine, so
+          // store none rather than a zero that reads as a choice.
+          tracking_error: te == null || te === 0 ? null : te / 100,
         }),
       onChanged,
     );

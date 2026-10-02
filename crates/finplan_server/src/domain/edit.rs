@@ -255,7 +255,7 @@ pub(crate) fn update_asset(
         if body.initial_price.is_some_and(|p| p <= 0.0) {
             return Err(ApiError::bad_request("initial_price must be positive"));
         }
-        if body.tracking_error.is_some_and(|t| t < 0.0) {
+        if body.tracking_error.flatten().is_some_and(|t| t < 0.0) {
             return Err(ApiError::bad_request("tracking_error cannot be negative"));
         }
         let renamed = match name {
@@ -281,7 +281,7 @@ pub(crate) fn update_asset(
             row.return_profile_id = profile;
         }
         if let Some(tracking_error) = body.tracking_error {
-            row.tracking_error = Some(tracking_error);
+            row.tracking_error = tracking_error;
         }
         if let Some(sort_order) = body.sort_order {
             row.sort_order = sort_order;
