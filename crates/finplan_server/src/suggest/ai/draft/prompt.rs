@@ -519,17 +519,6 @@ pub fn render_context(parts: &ContextParts<'_>) -> String {
         "\nPlan settings (the `scenario` target's body): {}",
         crate::suggest::read::scenario(parts.graph)
     );
-    let _ = writeln!(out, "Parameters:");
-    let mut any = false;
-    for p in &parts.graph.parameters {
-        if let Some(body) = crate::suggest::read::parameter(parts.graph, p.id) {
-            any = true;
-            let _ = writeln!(out, "- {body}");
-        }
-    }
-    if !any {
-        let _ = writeln!(out, "None.");
-    }
 
     if !parts.notes.is_empty() {
         let _ = writeln!(out, "\n<notes_so_far>");

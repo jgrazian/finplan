@@ -1,12 +1,13 @@
-//! `inspect_path` and `failure_profile`: what a stored run shows about its
-//! bad cases.
+//! `inspect_path`, `cash_flow_breakdown` and `failure_profile`: what a stored
+//! run shows about its bad cases.
 //!
 //! The run stores the percentile paths it was started with (10, 50 and 90 by
 //! default): cash flows, balances and warnings for each. `inspect_path` serves
 //! the nearest stored one to the rank asked for, through the host, and says
 //! which it was. Per-iteration data for the other paths is not stored, so
 //! `failure_profile` is built from the aggregates every run keeps
-//! (`funding_diagnostics`).
+//! (`funding_diagnostics`). `cash_flow_breakdown` sums a stored path's ledger
+//! by the event (or, for rows no event wrote, the account) behind each flow.
 
 use serde_json::{Value, json};
 
@@ -34,6 +35,15 @@ impl PathRank {
         }
     }
 
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Worst => "worst",
+            Self::P10 => "p10",
+            Self::P25 => "p25",
+            Self::Median => "median",
+        }
+    }
+
     /// The percentile to ask for; `None` for the worst.
     pub fn percentile(self) -> Option<f64> {
         match self {
@@ -56,16 +66,17 @@ pub(super) fn inspect_schema() -> Value {
     })
 }
 
-pub(super) async fn inspect_path(input: &Value, env: &ToolEnv<'_>) -> ToolOutput {
+/// A path tool's input: which stored path, and optionally which years.
+fn path_input(input: &Value) -> Result<(PathRank, Option<(i64, i64)>), ToolOutput> {
     let Some(rank) = input
         .get("rank")
         .and_then(Value::as_str)
         .and_then(PathRank::parse)
     else {
-        return ToolOutput::error(
+        return Err(ToolOutput::error(
             AiToolOutcome::Invalid,
             "rank must be worst, p10, p25 or median",
-        );
+        ));
     };
     let years = match input.get("years") {
         None | Some(Value::Null) => None,
@@ -75,17 +86,39 @@ pub(super) async fn inspect_path(input: &Value, env: &ToolEnv<'_>) -> ToolOutput
         ) {
             (Some(from), Some(to)) if pair.len() == 2 && from <= to => Some((from, to)),
             _ => {
-                return ToolOutput::error(
+                return Err(ToolOutput::error(
                     AiToolOutcome::Invalid,
                     "years must be [first, last] with first <= last",
-                );
+                ));
             }
         },
         Some(_) => {
-            return ToolOutput::error(AiToolOutcome::Invalid, "years must be [first, last]");
+            return Err(ToolOutput::error(
+                AiToolOutcome::Invalid,
+                "years must be [first, last]",
+            ));
         }
     };
+    Ok((rank, years))
+}
+
+pub(super) async fn inspect_path(input: &Value, env: &ToolEnv<'_>) -> ToolOutput {
+    let (rank, years) = match path_input(input) {
+        Ok(parsed) => parsed,
+        Err(refused) => return refused,
+    };
     match env.host.inspect_path(rank, years).await {
+        Ok(text) => ToolOutput::ok(text),
+        Err(message) => ToolOutput::error(AiToolOutcome::Error, message),
+    }
+}
+
+pub(super) async fn cash_flow_breakdown(input: &Value, env: &ToolEnv<'_>) -> ToolOutput {
+    let (rank, years) = match path_input(input) {
+        Ok(parsed) => parsed,
+        Err(refused) => return refused,
+    };
+    match env.host.cash_flow_breakdown(rank, years).await {
         Ok(text) => ToolOutput::ok(text),
         Err(message) => ToolOutput::error(AiToolOutcome::Error, message),
     }

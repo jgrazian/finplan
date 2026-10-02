@@ -56,8 +56,8 @@ use crate::runner::telemetry::{Attempt, Submitted};
 use crate::state::AppState;
 use crate::suggest::ai::tools::PathRank;
 use crate::suggest::ai::{
-    AiClient, AiDraft, AiError, AiOutcome, BoxFuture, Observer, ReviewContext, Stop, ToolHost,
-    TurnReport, render_path, stop_tag,
+    AiClient, AiDraft, AiError, AiOutcome, BoxFuture, LedgerSum, Observer, ReviewContext, Stop,
+    ToolHost, TurnReport, render_breakdown, render_path, stop_tag,
 };
 use crate::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 
@@ -812,12 +812,6 @@ impl ToolHost for Tools<'_> {
             let Some(percentile) = percentile else {
                 return Err("this run stored no percentile paths".into());
             };
-            let asked = match rank {
-                PathRank::Worst => "worst",
-                PathRank::P10 => "p10",
-                PathRank::P25 => "p25",
-                PathRank::Median => "median",
-            };
             let results = super::runs::results(
                 State(self.state.clone()),
                 self.user.clone(),
@@ -840,8 +834,87 @@ impl ToolHost for Tools<'_> {
                     "a newer run replaced this one's paths; only its summary remains".into(),
                 );
             }
-            Ok(render_path(&self.graph, &results, asked, years))
+            Ok(render_path(&self.graph, &results, rank.as_str(), years))
         })
+    }
+
+    fn cash_flow_breakdown<'b>(
+        &'b self,
+        rank: PathRank,
+        years: Option<(i64, i64)>,
+    ) -> BoxFuture<'b, Result<String, String>> {
+        Box::pin(async move {
+            let unreadable = |e: sqlx::Error| {
+                tracing::warn!(event = "review_ai.breakdown_failed", error = %e);
+                "the run's ledger could not be read".to_string()
+            };
+            // The stored path nearest the rank; the worst is the lowest, and
+            // nearest to zero.
+            let percentile: Option<f64> = sqlx::query_scalar(
+                "SELECT percentile FROM run_ledger
+                  WHERE run_id = ?1 AND percentile IS NOT NULL
+                  GROUP BY percentile ORDER BY ABS(percentile - ?2) LIMIT 1",
+            )
+            .bind(self.run_id)
+            .bind(rank.percentile().unwrap_or(0.0))
+            .fetch_optional(&self.state.db)
+            .await
+            .map_err(unreadable)?;
+            let Some(percentile) = percentile else {
+                return Err(
+                    "this run keeps no ledger: a newer run replaced its paths, or it stored none"
+                        .into(),
+                );
+            };
+            let (from, to) = years.unwrap_or((i64::MIN, i64::MAX));
+            // Cash in and out of the plan, and taxes; not money moved between
+            // its accounts. An RMD is written twice, as the required
+            // distribution and as the cash it paid in; only the cash counts.
+            let sums: Vec<LedgerSum> = sqlx::query_as(
+                "SELECT event_id,
+                        CASE WHEN event_id IS NULL THEN account_id END AS account_id,
+                        CASE WHEN category = 'tax' THEN 'taxes'
+                             WHEN kind = 'Income' THEN 'income'
+                             WHEN kind = 'Expense' THEN 'expenses'
+                             WHEN kind = 'Contribution' THEN 'contributions'
+                             ELSE 'withdrawals' END AS bucket,
+                        SUM(amount) AS amount, MIN(year) AS first_year, MAX(year) AS last_year
+                   FROM run_ledger
+                  WHERE run_id = ?1 AND percentile = ?2 AND amount IS NOT NULL
+                    AND year BETWEEN ?3 AND ?4
+                    AND (category = 'tax'
+                         OR kind IN ('Income', 'Expense', 'Contribution', 'Withdrawal')
+                         OR (kind = 'RMD' AND detail LIKE 'into %'))
+                  GROUP BY 1, 2, 3",
+            )
+            .bind(self.run_id)
+            .bind(percentile)
+            .bind(from)
+            .bind(to)
+            .fetch_all(&self.state.db)
+            .await
+            .map_err(unreadable)?;
+            Ok(render_breakdown(
+                &self.graph,
+                &sums,
+                rank.as_str(),
+                percentile,
+                years,
+            ))
+        })
+    }
+
+    fn sensitivity<'b>(
+        &'b self,
+        request: crate::suggest::ai::tools::sensitivity::SensitivityRequest,
+    ) -> BoxFuture<'b, Result<Value, crate::suggest::ai::tools::sensitivity::SensitivityError>>
+    {
+        Box::pin(super::analysis::ai_sensitivity(
+            self.state,
+            self.user,
+            &self.graph,
+            request,
+        ))
     }
 
     fn plan_tax_config(&self) -> Option<TaxConfig> {

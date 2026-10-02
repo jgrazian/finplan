@@ -57,7 +57,7 @@ pub use config::{
     AiConfig, DEFAULT_APP_TITLE, DEFAULT_BASE_URL, DEFAULT_MODEL, DraftConfig, DraftLimits,
     PlanChatConfig, ThinkingMode,
 };
-pub use context::{NoteOutline, ReviewContext, render_path};
+pub use context::{LedgerSum, NoteOutline, ReviewContext, render_breakdown, render_path};
 pub use transport::{
     BoxFuture, ModelInfo, ModelPrice, OpenRouterSettings, OpenRouterTransport, Reply, Request,
     Transport, TransportError,
@@ -214,6 +214,8 @@ pub struct Usage {
     pub previews: u32,
     /// Goal seeks run (each is also charged to `previews`).
     pub goal_seeks: u32,
+    /// Sensitivity rankings run (each is also charged to `previews`).
+    pub sensitivities: u32,
     /// Submissions the checks sent back.
     pub rejected: u32,
     pub input_tokens: u64,
@@ -930,6 +932,8 @@ impl Session<'_> {
                 .max_previews
                 .saturating_sub(self.usage.previews),
             goal_seeks_left: tools::goal_seek::MAX_GOAL_SEEKS.saturating_sub(self.usage.goal_seeks),
+            sensitivities_left: tools::sensitivity::MAX_SENSITIVITIES
+                .saturating_sub(self.usage.sensitivities),
             failure_profile: self.context.failure_profile.as_ref(),
         };
         let Some((tool, out)) = self.client.registry.dispatch(name, input, &env).await else {
@@ -941,6 +945,7 @@ impl Session<'_> {
         };
         self.usage.previews += out.previews_spent;
         self.usage.goal_seeks += out.goal_seeks_spent;
+        self.usage.sensitivities += out.sensitivities_spent;
         self.previewed.extend(out.previewed);
         let text = if out.is_error {
             // Not the model's to read: a key must never reach it.

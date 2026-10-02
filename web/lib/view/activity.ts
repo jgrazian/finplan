@@ -33,6 +33,8 @@ const TOOL_LABELS: Record<string, string> = {
   estimate_social_security: "Estimating Social Security",
   estimate_taxes: "Estimating taxes",
   goal_seek: "Searching for the amount that reaches the goal",
+  cash_flow_breakdown: "Breaking down income and spending",
+  sensitivity: "Ranking which assumptions matter most",
   submit_suggestion: "Writing a suggestion",
 };
 

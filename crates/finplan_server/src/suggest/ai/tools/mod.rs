@@ -10,9 +10,12 @@
 //! - [`plan`]: `preview_changes`, `preview_paths`, `validate_changes`,
 //!   `preflight` — the plan and simulations of it, through a [`ToolHost`].
 //!   Simulation-backed tools spend the loop's preview budget, per simulation.
-//! - [`runs`]: `inspect_path`, `failure_profile` — what a stored run shows.
+//! - [`runs`]: `inspect_path`, `cash_flow_breakdown`, `failure_profile` —
+//!   what a stored run shows.
 //! - [`goal_seek`]: `goal_seek` — a parameter searched for the value that
 //!   reaches a target, paid for from the preview budget and capped per session.
+//! - [`sensitivity`]: `sensitivity` — the plan's parameters ranked by how far
+//!   each moves the success rate, paid for and capped the same way.
 //! - [`facts`], [`calc`], [`social_security`], [`taxes`]: deterministic
 //!   calculators with no host at all, so the model quotes figures it did not
 //!   have to recall or work out.
@@ -28,6 +31,7 @@ pub mod facts;
 pub mod goal_seek;
 mod plan;
 mod runs;
+pub mod sensitivity;
 pub mod social_security;
 pub mod taxes;
 
@@ -51,11 +55,13 @@ Tools. Besides preview_changes and submit_suggestion you have:
 - preview_paths(paths): previews two to four paths in one call, on the same random draws, so the comparison is fair. Each path spends one preview from the same budget.
 - preflight(): whether the plan can run at all, and what the app flags about it.
 - inspect_path(rank, years?) and failure_profile(): the cash flows and balances of a stored path (worst, p10, p25 or median) and where and when failing iterations fail. Ground risk notes in them rather than in guesses.
+- cash_flow_breakdown(rank, years?): a stored path's income, expenses, contributions, withdrawals and taxes split by the event behind each (salary, the house, health care), with each source's share of income and of spending. Free. Use it before saying what drives the spending.
 - reference_facts(topic, year): 401(k), IRA and HSA limits, RMD start age, standard deduction, brackets, Social Security bend points, wage base and full retirement age, and (approximate) state income tax rates. Never quote a statutory figure from memory; call this. Its `status` says published, projected or approximate; say so when the figure is not published.
 - finance_calc(op): loan payments, future and present value, pay period to annual and back, age to date and back. Never do this arithmetic yourself.
 - estimate_social_security(birth_year, claim_age, earnings or current_salary): the benefit by the statutory formula. Use it for every Social Security estimate, and state its method.
 - estimate_taxes(income, filing_status, state): one year of tax on one income, and what the plan's own tax settings would charge.
 - goal_seek(parameter, metric, target): searches one named plan parameter (a retirement age, a spending amount) for the value at which success_rate or funding_success_rate reaches the target (0.9 for 90%), and returns that value and the rate achieved. It runs about a dozen simulations, costs 4 previews, and may be used twice in a session: spend it on the one question where a value matters (\"retire at 43 reaches 90%\"), then turn the answer into a path and preview that. A name it does not know is answered with the plan's parameters.
+- sensitivity(parameters?, fraction?, metric?): moves each named parameter down and up on its own (amounts and rates by ±fraction, ages ±5 years, dates ±1 year) and ranks them by how far the success rate moves. Costs 4 previews and may be used once in a session: use it to find which assumption matters before spending goal_seek or previews on one.
 Every figure a tool returns is kept for the session and may be cited as evidence with ref \"computed\", the tool's name as `tool` and the tool_use id of the call as `call_id`. Quote figures from the tool that produced them; a number from nowhere is rejected."
     };
 }
@@ -105,6 +111,29 @@ pub trait ToolHost: Send + Sync {
         None
     }
 
+    /// A stored path's ledger summed by the event behind each flow, rendered
+    /// as text; `years` narrows it to a span of calendar years.
+    fn cash_flow_breakdown<'a>(
+        &'a self,
+        _rank: PathRank,
+        _years: Option<(i64, i64)>,
+    ) -> BoxFuture<'a, Result<String, String>> {
+        Box::pin(async { Err(unavailable("cash_flow_breakdown")) })
+    }
+
+    /// Rank the plan's named parameters by how far each moves the success
+    /// rate (see [`sensitivity`]). The plan is the one the host serves.
+    fn sensitivity<'a>(
+        &'a self,
+        _request: sensitivity::SensitivityRequest,
+    ) -> BoxFuture<'a, Result<Value, sensitivity::SensitivityError>> {
+        Box::pin(async {
+            Err(sensitivity::SensitivityError::Refused(unavailable(
+                "sensitivity",
+            )))
+        })
+    }
+
     /// Search a plan parameter for the value that reaches a target (see
     /// [`goal_seek`]): the found value and the metric achieved, or why it
     /// could not run. The plan is the one the host serves, as it stands.
@@ -123,6 +152,8 @@ pub struct ToolEnv<'a> {
     pub previews_left: u32,
     /// Goal seeks the session may still run.
     pub goal_seeks_left: u32,
+    /// Sensitivity rankings the session may still run.
+    pub sensitivities_left: u32,
     /// The run's failure aggregates, rendered (see `ReviewContext`), when there
     /// is a run.
     pub failure_profile: Option<&'a Value>,
@@ -145,6 +176,8 @@ pub struct ToolOutput {
     pub previews_spent: u32,
     /// Goal seeks run, to count against the session's few.
     pub goal_seeks_spent: u32,
+    /// Sensitivity rankings run, likewise.
+    pub sensitivities_spent: u32,
     /// Path batches whose preview came back clean, keyed by [`batch_key`], with
     /// what it returned: "exactly this was previewed" for the submission check.
     pub previewed: Vec<(String, Value)>,
@@ -161,6 +194,7 @@ impl ToolOutput {
             problem_kinds: Vec::new(),
             previews_spent: 0,
             goal_seeks_spent: 0,
+            sensitivities_spent: 0,
             previewed: Vec::new(),
         }
     }
@@ -215,6 +249,8 @@ pub const FINANCE_CALC: &str = "finance_calc";
 pub const ESTIMATE_SOCIAL_SECURITY: &str = "estimate_social_security";
 pub const ESTIMATE_TAXES: &str = "estimate_taxes";
 pub const GOAL_SEEK: &str = "goal_seek";
+pub const CASH_FLOW_BREAKDOWN: &str = "cash_flow_breakdown";
+pub const SENSITIVITY: &str = "sensitivity";
 
 /// Every shared tool, in the order the model sees them.
 pub const SPECS: &[ToolSpec] = &[
@@ -252,6 +288,13 @@ pub const SPECS: &[ToolSpec] = &[
         schema: runs::inspect_schema,
         group: Group::Runs,
         metric: AiTool::InspectPath,
+    },
+    ToolSpec {
+        name: CASH_FLOW_BREAKDOWN,
+        description: "Income, expenses, contributions, withdrawals and taxes on one stored path of the run (worst, p10, p25 or median), summed by the event behind each flow (salary, a house, health care, base spending), or by account for flows no event wrote (scheduled loan payments). Each source's years and its share of income and of expenses. Transfers between the plan's accounts, purchases and interest are left out. Optionally narrow to years [from, to]. Free.",
+        schema: runs::inspect_schema,
+        group: Group::Runs,
+        metric: AiTool::CashFlowBreakdown,
     },
     ToolSpec {
         name: FAILURE_PROFILE,
@@ -294,6 +337,13 @@ pub const SPECS: &[ToolSpec] = &[
         schema: goal_seek::schema,
         group: Group::Plan,
         metric: AiTool::GoalSeek,
+    },
+    ToolSpec {
+        name: SENSITIVITY,
+        description: "Rank the plan's named parameters by how much each moves the success rate: each is moved down and up on its own (amounts and rates by ±fraction of their value, default 0.2; ages ±5 years; dates ±1 year) and simulated on fixed draws, two simulations apiece plus the plan as it stands. Returns, biggest mover first, each parameter's low and high values and the success and funding success rates at each, and the plan's own rates. Costs 4 previews and may be called once in a session; a call refused before simulating costs nothing. Use it to learn which assumption matters, then goal_seek or preview that one.",
+        schema: sensitivity::schema,
+        group: Group::Plan,
+        metric: AiTool::Sensitivity,
     },
 ];
 
@@ -374,6 +424,8 @@ impl Registry {
             VALIDATE => plan::validate(input, env),
             PREFLIGHT => plan::preflight(env),
             INSPECT_PATH => runs::inspect_path(input, env).await,
+            CASH_FLOW_BREAKDOWN => runs::cash_flow_breakdown(input, env).await,
+            SENSITIVITY => sensitivity::run(input, env).await,
             FAILURE_PROFILE => runs::failure_profile(env),
             GOAL_SEEK => goal_seek::run(input, env).await,
             REFERENCE_FACTS => ToolOutput::from_result(facts::run(input)),

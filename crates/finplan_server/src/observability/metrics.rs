@@ -445,6 +445,8 @@ impl Telemetry {
             AiTool::MatchAccount,
             AiTool::Reconcile,
             AiTool::GoalSeek,
+            AiTool::CashFlowBreakdown,
+            AiTool::Sensitivity,
         ] {
             drop(ai_tool_duration.get_or_create(&labels([("tool", tool.as_str())])));
         }

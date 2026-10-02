@@ -686,6 +686,166 @@ pub(crate) async fn ai_goal_seek(
     Ok(out)
 }
 
+/// Monte Carlo iterations behind each simulation of a model's sensitivity
+/// ranking: the goal seek's, for the same reason.
+const AI_SENSITIVITY_ITERATIONS: usize = 150;
+
+/// `sensitivity` for the review loop: rank `graph`'s named parameters by how
+/// far moving each down and up moves the metric, as the analysis screen's
+/// ranking does, on fewer iterations. A refusal is anything turned away before
+/// a simulation started; the loop charges only for the rest. Messages are in
+/// words the model may read.
+pub(crate) async fn ai_sensitivity(
+    state: &AppState,
+    user: &CurrentUser,
+    graph: &ScenarioGraph,
+    request: crate::suggest::ai::tools::sensitivity::SensitivityRequest,
+) -> Result<serde_json::Value, crate::suggest::ai::tools::sensitivity::SensitivityError> {
+    use crate::analysis::jobs::{InlineFailure, run_inline};
+    use crate::suggest::ai::tools::goal_seek::Metric;
+    use crate::suggest::ai::tools::sensitivity::{MAX_PARAMETERS, SensitivityError};
+    use serde_json::json;
+
+    let refused = |error: ApiError| match error {
+        ApiError::Database(_) | ApiError::Internal(_) => {
+            tracing::warn!(event = "review_ai.sensitivity_failed", error = %error);
+            SensitivityError::Refused(
+                "the sensitivity ranking could not run; use the results you have or stop".into(),
+            )
+        }
+        other => SensitivityError::Refused(other.to_string()),
+    };
+    let compiled = compile::compile(graph).map_err(refused)?;
+    let available = parameters(&compiled);
+    if available.is_empty() {
+        return Err(SensitivityError::Refused(
+            "this plan has no named parameters to move; add one and reference it in an amount or trigger".into(),
+        ));
+    }
+    let params: Vec<PlanParameter> = if request.parameters.is_empty() {
+        if available.len() > MAX_PARAMETERS {
+            return Err(SensitivityError::Refused(format!(
+                "this plan has {} parameters and one ranking moves at most {MAX_PARAMETERS}; name the ones to try: {}",
+                available.len(),
+                available
+                    .iter()
+                    .map(|p| format!("{} ({})", p.name, p.id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        available.clone()
+    } else {
+        let mut chosen: Vec<PlanParameter> = Vec::new();
+        for wanted in &request.parameters {
+            let found = lookup(&available, wanted).map_err(refused)?;
+            if !chosen.iter().any(|p| p.id == found.id) {
+                chosen.push(found.clone());
+            }
+        }
+        chosen
+    };
+    let fraction = request.fraction.unwrap_or(0.2);
+    let metric = request.metric.unwrap_or(Metric::FundingSuccessRate);
+    let spec = JobSpec::Sensitivity {
+        params: params.clone(),
+        fraction,
+        iterations: AI_SENSITIVITY_ITERATIONS,
+        parallel_batches: state.config.sim_workers.max(1),
+        seed: Some(ANALYSIS_SEED),
+    };
+    if spec.budget().saturating_mul(compiled.config.duration_years) > 20_000_000 {
+        return Err(SensitivityError::Refused(
+            "this ranking is too large for the plan's horizon; name fewer parameters".into(),
+        ));
+    }
+
+    let permit =
+        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)
+            .map_err(refused)?;
+    let progress = finplan_core::analysis::SweepProgress::new(spec.budget());
+    let guard = CancelOnDrop(progress.clone());
+    let base = compiled.config;
+    let outcome = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        run_inline(&base, &spec, &progress)
+    })
+    .await;
+    drop(guard);
+    let results = match outcome {
+        Ok(Ok(AnalysisOutcome::Sensitivity(results))) => results,
+        Ok(Err(InlineFailure::Cancelled)) => {
+            return Err(SensitivityError::Failed("the ranking was canceled".into()));
+        }
+        Ok(Ok(_)) | Ok(Err(InlineFailure::Failed)) | Err(_) => {
+            tracing::warn!(
+                event = "review_ai.sensitivity_failed",
+                error = "simulation failed"
+            );
+            return Err(SensitivityError::Failed(
+                "the plan failed to simulate; use the results you have or stop".into(),
+            ));
+        }
+    };
+
+    let rate = |point: &crate::analysis::results::AnalysisPoint| match metric {
+        Metric::SuccessRate => point.success_rate,
+        Metric::FundingSuccessRate => point.funding_success_rate.unwrap_or(point.success_rate),
+    };
+    let mut rows = results.rows;
+    // The screen ranks by success rate; the model asked for its own metric.
+    rows.sort_by(|a, b| {
+        let span =
+            |r: &crate::analysis::results::SensitivityRow| (rate(&r.high) - rate(&r.low)).abs();
+        span(b).total_cmp(&span(a))
+    });
+    let ranking: Vec<serde_json::Value> = rows
+        .iter()
+        .filter_map(|row| {
+            let param = params.iter().find(|p| p.id == row.parameter_id)?;
+            let point = |value: f64, at: &crate::analysis::results::AnalysisPoint| {
+                json!({
+                    "value": value,
+                    "value_text": value_text(param.kind, value),
+                    "success_rate": at.success_rate,
+                    "funding_success_rate": at.funding_success_rate,
+                })
+            };
+            Some(json!({
+                "parameter": {
+                    "id": param.id,
+                    "name": param.name,
+                    "kind": param.kind.as_str(),
+                    "unit": unit_of(param.kind),
+                    "current": param.current,
+                    "current_text": value_text(param.kind, param.current),
+                },
+                "low": point(row.low_value, &row.low),
+                "high": point(row.high_value, &row.high),
+                "span_points": ((rate(&row.high) - rate(&row.low)).abs() * 1000.0).round() / 10.0,
+            }))
+        })
+        .collect();
+    let skipped: Vec<&str> = params
+        .iter()
+        .filter(|p| !rows.iter().any(|r| r.parameter_id == p.id))
+        .map(|p| p.name.as_str())
+        .collect();
+    Ok(json!({
+        "metric": metric.as_str(),
+        "fraction": fraction,
+        "plan_as_it_stands": {
+            "success_rate": results.plan.success_rate,
+            "funding_success_rate": results.plan.funding_success_rate,
+        },
+        "ranking": ranking,
+        "skipped": skipped,
+        "simulations": rows.len() * 2 + 1,
+        "iterations_each": results.iterations,
+        "note": "Each parameter moved on its own, everything else as the plan stands, all on the same fixed draws, so the differences are paired. span_points is how far the metric moved between low and high, in percentage points; a span of a point or less is within sampling error. Amounts and rates moved by the fraction, ages by 5 years, dates by 1 year, so the ranking compares those moves, not equally likely ones. `skipped` had no room to move within its range.",
+    }))
+}
+
 /// A parameter by id (`parameter:5` or `5`) or by name (exact, ignoring case,
 /// else the one name that contains the text).
 fn lookup<'a>(available: &'a [PlanParameter], wanted: &str) -> ApiResult<&'a PlanParameter> {

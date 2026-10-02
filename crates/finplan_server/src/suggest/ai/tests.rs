@@ -235,6 +235,8 @@ struct Tools {
     stats: (Value, Value),
     /// Goal seeks asked of the host, as `parameter/metric/target`.
     goal_seeks: Mutex<Vec<String>>,
+    /// Sensitivity rankings asked of the host, as their parameter lists.
+    sensitivities: Mutex<Vec<Vec<String>>>,
 }
 
 impl Tools {
@@ -251,6 +253,7 @@ impl Tools {
             previews: Mutex::new(0),
             stats: (base, edited),
             goal_seeks: Mutex::new(Vec::new()),
+            sensitivities: Mutex::new(Vec::new()),
         }
     }
 }
@@ -304,6 +307,41 @@ impl ToolHost for Tools {
                 tools::PathRank::Median => Ok(format!("median path, years {years:?}")),
                 _ => Err("this run stored no percentile paths".into()),
             }
+        })
+    }
+
+    fn cash_flow_breakdown<'a>(
+        &'a self,
+        rank: tools::PathRank,
+        years: Option<(i64, i64)>,
+    ) -> BoxFuture<'a, Result<String, String>> {
+        Box::pin(async move { Ok(format!("{} breakdown, years {years:?}", rank.as_str())) })
+    }
+
+    fn sensitivity<'a>(
+        &'a self,
+        request: tools::sensitivity::SensitivityRequest,
+    ) -> BoxFuture<'a, Result<Value, tools::sensitivity::SensitivityError>> {
+        Box::pin(async move {
+            use tools::sensitivity::SensitivityError;
+            if request.parameters.iter().any(|p| p == "nothing") {
+                return Err(SensitivityError::Refused(
+                    "there is no parameter `nothing`".into(),
+                ));
+            }
+            self.sensitivities
+                .lock()
+                .unwrap()
+                .push(request.parameters.clone());
+            if request.parameters.iter().any(|p| p == "boom") {
+                return Err(SensitivityError::Failed(
+                    "the plan failed to simulate".into(),
+                ));
+            }
+            Ok(json!({
+                "metric": request.metric.map_or("funding_success_rate", |m| m.as_str()),
+                "ranking": [{"parameter": {"name": "Spending"}, "span_points": 12.5}]
+            }))
         })
     }
 
@@ -1192,6 +1230,97 @@ fn the_context_reads_like_the_plan_and_run() {
     // Every fifth year end, plus the ends; not every year.
     assert!(!text.contains("\n2031-12-31,"));
     assert!(text.contains("\n2096-09-03,"));
+}
+
+#[test]
+fn the_context_shows_parameters_yearly_bands_and_withdrawal_rates() {
+    let mut g = graph();
+    g.parameters.push(crate::compile::rows::ParameterRow {
+        id: 3,
+        name: "monthly_expenses".into(),
+        kind: "Money".into(),
+        number_value: Some(9_500.0),
+        date_value: None,
+        age_years: None,
+        age_months: None,
+    });
+    let mut r = results();
+    r.real_net_worth.as_mut().unwrap().points =
+        ["2026-09-03", "2030-12-31", "2031-12-31", "2096-09-03"]
+            .iter()
+            .enumerate()
+            .map(|(i, date)| RealQuantilePoint {
+                date: (*date).into(),
+                p5: 100.0 * i as f64,
+                p10: Some(200.0),
+                p25: None,
+                p50: 500.0,
+                p75: Some(750.0),
+                p90: Some(900.0),
+                p95: 950.0,
+            })
+            .collect();
+    // Investment accounts 1 to 5 hold 15,000 at every point on the path.
+    r.cash_flows[0].withdrawals = 600.0;
+    r.cash_flows[5].withdrawals = 1_500.0;
+    let text = ReviewContext::build(&g, &r, &[]).text;
+    for needle in [
+        "Parameters (body as GET /parameters returns it",
+        "{\"id\":3,\"name\":\"monthly_expenses\",\"value\":",
+        "date,age,p5,p10,p25,p50,p75,p90,p95",
+        "2026-09-03,30,0,200,-,500,750,900,950",
+        "2030-12-31,34,100,200,-,500,750,900,950",
+        "withdrawal_rate is the year's withdrawals",
+        // The first year divides by the plan start, later ones by the
+        // prior year end.
+        "\n2026,30,205000,100000,0,600,0,0,0,4.0%",
+        "\n2031,35,205000,100000,0,1500,0,0,0,10.0%",
+        "\n2032,36,205000,100000,0,0,0,0,0,0.0%",
+    ] {
+        assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+    }
+    // Every fifth year end, plus the ends.
+    assert!(!text.contains("\n2031-12-31,35,"), "{text}");
+    // A plan with no parameters says so rather than leaving the list out.
+    assert!(context(&[]).text.contains("GET /parameters returns it; amounts and triggers refer to one as `$name`, a change targets it as {\"parameter\": id}):\nNone."));
+}
+
+#[test]
+fn a_breakdown_names_each_source_and_its_shares() {
+    let g = graph();
+    let sum = |event_id: Option<i64>, account_id: Option<i64>, bucket: &str, amount: f64| {
+        crate::suggest::ai::LedgerSum {
+            event_id,
+            account_id,
+            bucket: bucket.into(),
+            amount,
+            first_year: 2026,
+            last_year: 2040,
+        }
+    };
+    let sums = [
+        sum(Some(1), None, "income", 300_000.0),
+        sum(Some(1), None, "taxes", -60_000.0),
+        sum(Some(5), None, "expenses", -75_000.0),
+        sum(None, Some(6), "expenses", -25_000.0),
+        sum(Some(6), None, "withdrawals", 40_000.0),
+    ];
+    let text = render_breakdown(&g, &sums, "median", 0.5, Some((2026, 2040)));
+    for needle in [
+        "stored P50 path (asked for `median`), 2026 to 2040",
+        "source,years,income,expenses,contributions,withdrawals,taxes",
+        "Salary (#1),2026-2040,300000,0,0,0,60000",
+        "Home Purchase (#5),2026-2040,0,75000,0,0,0",
+        "no event: USAA (#6),2026-2040,0,25000,0,0,0",
+        "total,-,300000,100000,0,40000,60000",
+        "Share of expenses: Home Purchase (#5) 75.0%, no event: USAA (#6) 25.0%.",
+        "Share of income: Salary (#1) 100.0%.",
+    ] {
+        assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+    }
+    // The biggest source first.
+    assert!(text.find("Salary (#1),").unwrap() < text.find("Home Purchase (#5),").unwrap());
+    assert!(render_breakdown(&g, &[], "worst", 0.1, None).contains("No flows in the whole run."));
 }
 
 #[test]
@@ -2919,6 +3048,96 @@ async fn goal_seek_costs_previews_is_capped_and_its_answer_is_citable() {
             tool: "goal_seek".into(),
             call_id: "g1".into()
         }]
+    );
+}
+
+#[tokio::test]
+async fn sensitivity_costs_previews_once_and_a_refusal_costs_nothing() {
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                // Refused before simulating: free, and the one use is left.
+                call("r", "sensitivity", json!({"parameters": ["nothing"]})),
+                call("bad", "sensitivity", json!({"fraction": 3})),
+                call(
+                    "s1",
+                    "sensitivity",
+                    json!({"parameters": ["Spending", "Retirement age"]})
+                ),
+                call("s2", "sensitivity", json!({})),
+                call(
+                    "b",
+                    "cash_flow_breakdown",
+                    json!({"rank": "p10", "years": [2040, 2050]})
+                ),
+                call("b2", "cash_flow_breakdown", json!({"rank": "p99"})),
+            ]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let mut settings = settings();
+    settings.max_previews = 12;
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings, &context(&[]), &tools).await;
+    let requests = script.requests();
+
+    let (refused, is_error) = result_for(&requests, 1, "r");
+    assert!(is_error && refused.contains("no parameter"), "{refused}");
+    let (invalid, is_error) = result_for(&requests, 1, "bad");
+    assert!(is_error && invalid.contains("fraction"), "{invalid}");
+    let ranked = json_result(&requests, 1, "s1");
+    assert_eq!(ranked["metric"], "funding_success_rate");
+    assert_eq!(ranked["ranking"][0]["span_points"], 12.5);
+    let (capped, is_error) = result_for(&requests, 1, "s2");
+    assert!(is_error && capped.contains("1 time"), "{capped}");
+    assert_eq!(
+        *tools.sensitivities.lock().unwrap(),
+        [vec!["Spending".to_owned(), "Retirement age".to_owned()]]
+    );
+    assert_eq!(
+        (outcome.usage.previews, outcome.usage.sensitivities),
+        (tools::sensitivity::PREVIEW_COST, 1)
+    );
+
+    assert_eq!(
+        result_for(&requests, 1, "b").0,
+        "p10 breakdown, years Some((2040, 2050))"
+    );
+    assert!(result_for(&requests, 1, "b2").1);
+}
+
+#[tokio::test]
+async fn a_failed_sensitivity_is_charged_and_one_without_previews_is_refused() {
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([call("f", "sensitivity", json!({"parameters": ["boom"]}))]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings(), &context(&[]), &tools).await;
+    assert!(result_for(&script.requests(), 1, "f").1);
+    assert_eq!(
+        (outcome.usage.previews, outcome.usage.sensitivities),
+        (tools::sensitivity::PREVIEW_COST, 1)
+    );
+
+    let script = Script::new(vec![
+        reply("tool_use", json!([call("p", "sensitivity", json!({}))])),
+        reply("end_turn", json!([])),
+    ]);
+    let mut settings = settings();
+    settings.max_previews = tools::sensitivity::PREVIEW_COST - 1;
+    let tools = Tools::new();
+    let outcome = run_script(script.clone(), settings, &context(&[]), &tools).await;
+    let (text, is_error) = result_for(&script.requests(), 1, "p");
+    assert!(is_error && text.contains("costs 4 previews"), "{text}");
+    assert!(tools.sensitivities.lock().unwrap().is_empty());
+    assert_eq!(
+        (outcome.usage.previews, outcome.usage.sensitivities),
+        (0, 0)
     );
 }
 

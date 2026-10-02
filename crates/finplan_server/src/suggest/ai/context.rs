@@ -263,6 +263,72 @@ fn failure_profile(graph: &ScenarioGraph, f: &FundingDiagnostics) -> Value {
     })
 }
 
+/// The yearly cash-flow table's header, shared by the run and `inspect_path`.
+const CASH_FLOW_HEADER: &str = "year,age,income,expenses,contributions,withdrawals,taxes,appreciation,net_cash_flow,withdrawal_rate";
+
+/// What `withdrawal_rate` means, for the line above a cash-flow table.
+const WITHDRAWAL_RATE_NOTE: &str = "withdrawal_rate is the year's withdrawals over the investment accounts' balance at the start of the year (the prior year end, or the plan start)";
+
+/// Each year's investment-account balance at its start, on the run's shown
+/// path: the prior year end's, or the plan start's for the first year. What
+/// `withdrawal_rate` divides by.
+fn investable_at_start(graph: &ScenarioGraph, results: &Results) -> HashMap<i64, f64> {
+    let mut out = HashMap::new();
+    let Some(band) = results
+        .bands
+        .iter()
+        .find(|b| b.path_id == results.series_id)
+        .or(results.bands.first())
+    else {
+        return out;
+    };
+    let investment: HashSet<i64> = graph
+        .accounts
+        .iter()
+        .filter(|a| a.flavor == "Investment")
+        .map(|a| a.id)
+        .collect();
+    let total = |i: usize| -> f64 {
+        results
+            .account_series
+            .iter()
+            .filter(|s| investment.contains(&s.account_id))
+            .filter_map(|s| s.values.get(i))
+            .sum()
+    };
+    for (i, date) in band.dates.iter().enumerate() {
+        let Some(year) = year_of(date) else { continue };
+        if i == 0 {
+            out.insert(year, total(i));
+        } else if date.ends_with("-12-31") {
+            out.insert(year + 1, total(i));
+        }
+    }
+    out
+}
+
+/// One row of the yearly cash-flow table.
+fn cash_flow_row(c: &crate::api::runs::CashFlow, age: &str, start: &HashMap<i64, f64>) -> String {
+    let rate = start
+        .get(&c.year)
+        .filter(|&&balance| balance > 0.0)
+        .map(|balance| format!("{:.1}%", c.withdrawals / balance * 100.0))
+        .unwrap_or_else(|| "-".into());
+    format!(
+        "{},{},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{}",
+        c.year,
+        age,
+        c.income,
+        c.expenses,
+        c.contributions,
+        c.withdrawals,
+        c.taxes,
+        c.appreciation,
+        c.net_cash_flow,
+        rate
+    )
+}
+
 /// A stored path of the run as text: the balance and cash flows year by year.
 /// `results` is the run read with the path's series; `asked` names the rank
 /// the model asked for, and `years` narrows the rows.
@@ -356,36 +422,22 @@ pub fn render_path(
         .filter(|c| in_window(c.year))
         .collect();
     let step = flows.len().div_ceil(MAX_ROWS).max(1);
+    let start = investable_at_start(graph, results);
     let _ = writeln!(
         out,
-        "\nYearly cash flows (nominal dollars){}:",
+        "\nYearly cash flows (nominal dollars){}; {WITHDRAWAL_RATE_NOTE}:",
         if step > 1 {
             format!(", every {step} years and the last; pass `years` for every year")
         } else {
             String::new()
         }
     );
-    let _ = writeln!(
-        out,
-        "year,age,income,expenses,contributions,withdrawals,taxes,appreciation,net_cash_flow"
-    );
+    let _ = writeln!(out, "{CASH_FLOW_HEADER}");
     for (i, c) in flows.iter().enumerate() {
         if i % step != 0 && i != flows.len() - 1 {
             continue;
         }
-        let _ = writeln!(
-            out,
-            "{},{},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0}",
-            c.year,
-            age(c.year),
-            c.income,
-            c.expenses,
-            c.contributions,
-            c.withdrawals,
-            c.taxes,
-            c.appreciation,
-            c.net_cash_flow
-        );
+        let _ = writeln!(out, "{}", cash_flow_row(c, &age(c.year), &start));
     }
 
     if let Some(band) = band {
@@ -420,6 +472,165 @@ pub fn render_path(
                 .collect();
             let _ = writeln!(out, "{},{}", band.dates[i], values.join(","));
         }
+    }
+    out
+}
+
+/// One source's flows of one kind on a stored path, summed from its ledger:
+/// an event's, or for rows no event wrote (scheduled loan payments), an
+/// account's.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct LedgerSum {
+    pub event_id: Option<i64>,
+    /// Only for rows with no event.
+    pub account_id: Option<i64>,
+    /// `income`, `expenses`, `contributions`, `withdrawals` or `taxes`.
+    pub bucket: String,
+    /// Signed as the ledger signs it: money in positive.
+    pub amount: f64,
+    pub first_year: i64,
+    pub last_year: i64,
+}
+
+/// What `cash_flow_breakdown` returns: `sums` (see [`LedgerSum`]) laid out
+/// one source a row, biggest first, with each source's share of income and of
+/// expenses. `percentile` is the stored path the sums were read from.
+pub fn render_breakdown(
+    graph: &ScenarioGraph,
+    sums: &[LedgerSum],
+    asked: &str,
+    percentile: f64,
+    years: Option<(i64, i64)>,
+) -> String {
+    /// Most sources listed; the rest are folded into one row.
+    const MAX_ROWS: usize = 40;
+    const BUCKETS: [&str; 5] = [
+        "income",
+        "expenses",
+        "contributions",
+        "withdrawals",
+        "taxes",
+    ];
+
+    #[derive(Default)]
+    struct Source {
+        flows: [f64; 5],
+        first: i64,
+        last: i64,
+    }
+    let label = |event_id: Option<i64>, account_id: Option<i64>| match (event_id, account_id) {
+        (Some(id), _) => graph
+            .events
+            .iter()
+            .find(|e| e.id == id)
+            .map(|e| format!("{} (#{id})", e.name))
+            .unwrap_or_else(|| format!("event #{id}")),
+        (None, Some(id)) => format!(
+            "no event: {}",
+            graph
+                .accounts
+                .iter()
+                .find(|a| a.id == id)
+                .map(|a| format!("{} (#{id})", a.name))
+                .unwrap_or_else(|| format!("account #{id}"))
+        ),
+        (None, None) => "no event or account".to_owned(),
+    };
+
+    let mut sources: Vec<(String, Source)> = Vec::new();
+    for sum in sums {
+        let Some(bucket) = BUCKETS.iter().position(|b| *b == sum.bucket) else {
+            continue;
+        };
+        let name = label(sum.event_id, sum.account_id);
+        let index = match sources.iter().position(|(n, _)| *n == name) {
+            Some(i) => i,
+            None => {
+                sources.push((
+                    name,
+                    Source {
+                        first: sum.first_year,
+                        last: sum.last_year,
+                        ..Source::default()
+                    },
+                ));
+                sources.len() - 1
+            }
+        };
+        let source = &mut sources[index].1;
+        // Shown as the yearly table shows them: every column positive in its
+        // usual direction, so a refund or a reversal reads negative.
+        source.flows[bucket] += match bucket {
+            0 | 3 => sum.amount,
+            _ => -sum.amount,
+        };
+        source.first = source.first.min(sum.first_year);
+        source.last = source.last.max(sum.last_year);
+    }
+    let size = |s: &Source| s.flows.iter().map(|v| v.abs()).fold(0.0, f64::max);
+    sources.sort_by(|a, b| size(&b.1).total_cmp(&size(&a.1)));
+
+    let mut totals = [0.0; 5];
+    for (_, s) in &sources {
+        for (t, v) in totals.iter_mut().zip(s.flows) {
+            *t += v;
+        }
+    }
+
+    let mut out = String::new();
+    let span = match years {
+        Some((from, to)) => format!("{from} to {to}"),
+        None => "the whole run".to_owned(),
+    };
+    let _ = writeln!(
+        out,
+        "Cash flows by source on the stored P{:.0} path (asked for `{asked}`), {span}, nominal dollars summed from the run's ledger. income: money arriving from outside the plan; expenses: money leaving it; contributions: cash into investment accounts; withdrawals: sales and RMDs paid into cash; taxes: income and gains taxes and penalties withheld from the event's flows. Income and withdrawals are after that tax (a salary's gross is its income plus its taxes). Transfers between the plan's accounts, purchases and interest are left out.",
+        percentile * 100.0
+    );
+    if sources.is_empty() {
+        let _ = writeln!(out, "No flows in {span}.");
+        return out;
+    }
+    let _ = writeln!(out, "source,years,{}", BUCKETS.join(","));
+    let row = |out: &mut String, name: &str, years: &str, flows: &[f64; 5]| {
+        let values: Vec<String> = flows.iter().map(|v| format!("{v:.0}")).collect();
+        let _ = writeln!(out, "{name},{years},{}", values.join(","));
+    };
+    let mut rest = [0.0; 5];
+    for (i, (name, s)) in sources.iter().enumerate() {
+        if i < MAX_ROWS {
+            row(&mut out, name, &format!("{}-{}", s.first, s.last), &s.flows);
+        } else {
+            for (r, v) in rest.iter_mut().zip(s.flows) {
+                *r += v;
+            }
+        }
+    }
+    if sources.len() > MAX_ROWS {
+        row(
+            &mut out,
+            &format!("{} smaller sources", sources.len() - MAX_ROWS),
+            "-",
+            &rest,
+        );
+    }
+    row(&mut out, "total", "-", &totals);
+
+    for (bucket, title) in [(1, "Share of expenses"), (0, "Share of income")] {
+        if totals[bucket] <= 0.0 {
+            continue;
+        }
+        let mut largest: Vec<_> = sources
+            .iter()
+            .filter(|(_, s)| s.flows[bucket] > 0.0)
+            .collect();
+        largest.sort_by(|a, b| b.1.flows[bucket].total_cmp(&a.1.flows[bucket]));
+        let shares: Vec<String> = largest
+            .iter()
+            .take(10)
+            .map(|(name, s)| format!("{name} {:.1}%", s.flows[bucket] / totals[bucket] * 100.0))
+            .collect();
+        let _ = writeln!(out, "{title}: {}.", shares.join(", "));
     }
     out
 }
@@ -696,6 +907,21 @@ pub(super) fn render_plan(out: &mut String, graph: &ScenarioGraph) {
 
     let _ = writeln!(
         out,
+        "\nParameters (body as GET /parameters returns it; amounts and triggers refer to one as `$name`, a change targets it as {{\"parameter\": id}}):"
+    );
+    let mut any = false;
+    for p in &graph.parameters {
+        if let Some(body) = read::parameter(graph, p.id) {
+            any = true;
+            let _ = writeln!(out, "- {}", compact(&body));
+        }
+    }
+    if !any {
+        let _ = writeln!(out, "None.");
+    }
+
+    let _ = writeln!(
+        out,
         "\nEvents (body as GET /events returns it; ids refer to the accounts, assets and events above):"
     );
     let mut events: Vec<_> = graph.events.iter().collect();
@@ -766,6 +992,7 @@ fn render_run(out: &mut String, graph: &ScenarioGraph, results: &Results) {
             money(last.p95)
         );
     }
+    render_bands(out, results, &age);
 
     match &results.funding_diagnostics {
         Some(f) => {
@@ -867,25 +1094,14 @@ fn render_run(out: &mut String, graph: &ScenarioGraph, results: &Results) {
         );
     }
 
-    let _ = writeln!(out, "\nYearly cash flows on {path} (nominal dollars):");
+    let start = investable_at_start(graph, results);
     let _ = writeln!(
         out,
-        "year,age,income,expenses,contributions,withdrawals,taxes,appreciation,net_cash_flow"
+        "\nYearly cash flows on {path} (nominal dollars; one path, not a median of each year; {WITHDRAWAL_RATE_NOTE}):"
     );
+    let _ = writeln!(out, "{CASH_FLOW_HEADER}");
     for c in &results.cash_flows {
-        let _ = writeln!(
-            out,
-            "{},{},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0},{:.0}",
-            c.year,
-            age(c.year),
-            c.income,
-            c.expenses,
-            c.contributions,
-            c.withdrawals,
-            c.taxes,
-            c.appreciation,
-            c.net_cash_flow
-        );
+        let _ = writeln!(out, "{}", cash_flow_row(c, &age(c.year), &start));
     }
 
     if let Some(band) = results
@@ -928,6 +1144,47 @@ fn render_run(out: &mut String, graph: &ScenarioGraph, results: &Results) {
         }
     }
     let _ = writeln!(out, "</run>");
+}
+
+/// Net worth across every iteration, by year, in today's dollars: the spread
+/// of outcomes at each point, which the one path's tables below do not show.
+/// Every fifth year end plus the first and last points.
+fn render_bands(out: &mut String, results: &Results, age: &dyn Fn(i64) -> String) {
+    let Some(points) = results
+        .real_net_worth
+        .as_ref()
+        .map(|r| &r.points)
+        .filter(|p| p.len() > 1)
+    else {
+        return;
+    };
+    let last = points.len() - 1;
+    let opt = |v: Option<f64>| v.map(|v| format!("{v:.0}")).unwrap_or_else(|| "-".into());
+    let _ = writeln!(
+        out,
+        "Net worth across all iterations by year, in today's dollars (each column is that year's percentile, not one path; every fifth year end plus the first and last points):"
+    );
+    let _ = writeln!(out, "date,age,p5,p10,p25,p50,p75,p90,p95");
+    for (i, p) in points.iter().enumerate() {
+        let year = year_of(&p.date);
+        let fifth = p.date.ends_with("-12-31") && year.is_some_and(|y| y % 5 == 0);
+        if i != 0 && i != last && !fifth {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "{},{},{:.0},{},{},{:.0},{},{},{:.0}",
+            p.date,
+            year.map(age).unwrap_or_else(|| "-".into()),
+            p.p5,
+            opt(p.p10),
+            opt(p.p25),
+            p.p50,
+            opt(p.p75),
+            opt(p.p90),
+            p.p95
+        );
+    }
 }
 
 /// A note listed for the model: its kind, section, title and changes.

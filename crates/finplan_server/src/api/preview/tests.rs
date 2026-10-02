@@ -314,6 +314,60 @@ async fn an_ai_goal_seek_finds_the_spending_that_reaches_the_target_and_spends_n
 }
 
 #[tokio::test]
+async fn an_ai_sensitivity_ranks_the_plans_parameters_and_refuses_unknown_ones() {
+    use crate::suggest::ai::tools::sensitivity::{SensitivityError, SensitivityRequest};
+
+    let d = Draft::new(Some("1980-01-01")).await;
+    let graph = plan_with_spend_parameter(&d).await;
+    let user = CurrentUser {
+        id: "sensitivity-spend".into(),
+        ..d.user.clone()
+    };
+    let ranked = crate::api::analysis::ai_sensitivity(
+        &d.state,
+        &user,
+        &graph,
+        SensitivityRequest {
+            parameters: Vec::new(),
+            fraction: Some(0.5),
+            metric: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(ranked["metric"], "funding_success_rate", "{ranked}");
+    assert_eq!(ranked["simulations"], 3);
+    let row = &ranked["ranking"][0];
+    assert_eq!(row["parameter"]["name"], "spend");
+    assert_eq!(row["low"]["value"], 20_000.0);
+    assert_eq!(row["high"]["value"], 60_000.0);
+    // Less spending never funds the plan worse.
+    assert!(
+        row["low"]["success_rate"].as_f64().unwrap()
+            >= row["high"]["success_rate"].as_f64().unwrap(),
+        "{ranked}"
+    );
+    assert!(row["span_points"].as_f64().unwrap() >= 0.0);
+
+    let unknown = crate::api::analysis::ai_sensitivity(
+        &d.state,
+        &user,
+        &graph,
+        SensitivityRequest {
+            parameters: vec!["Nope".into()],
+            fraction: None,
+            metric: None,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&unknown, SensitivityError::Refused(m) if m.contains("spend")),
+        "{unknown:?}"
+    );
+}
+
+#[tokio::test]
 async fn an_ai_goal_seek_over_an_age_searches_a_grid_and_reports_years() {
     use crate::suggest::ai::tools::goal_seek::{GoalSeekRequest, Metric};
 
