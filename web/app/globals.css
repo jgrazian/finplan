@@ -1624,3 +1624,194 @@ tr:hover > * > .grip,
   font: 600 11px var(--font-heading);
   letter-spacing: .03em;
 }
+
+/* ── Success scale ─────────────────────────────────────────────────────────
+   The funding rate read against rule-of-thumb bands (lib/view/outcome.ts).
+   The bands are drawn from 50% up; the one the rate lands in is named in
+   type and tinted a step stronger, and a marker stands at the rate itself. */
+
+.success-scale {
+  position: relative;
+}
+
+.success-track {
+  position: relative;
+  height: 10px;
+  margin-top: 4px;
+}
+
+.success-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  opacity: .55;
+  transition: opacity var(--dur) var(--ease);
+}
+
+.success-zone + .success-zone {
+  border-left: 2px solid var(--color-bg);
+}
+
+.success-zone:first-child {
+  border-radius: var(--radius-pill) 0 0 var(--radius-pill);
+}
+
+.success-zone:nth-last-child(2) {
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+
+.success-zone.is-fragile {
+  background: color-mix(in srgb, var(--color-accent-2) 55%, transparent);
+}
+
+.success-zone.is-workable {
+  background: color-mix(in srgb, var(--color-text) 16%, transparent);
+}
+
+.success-zone.is-robust {
+  background: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+.success-zone.is-here {
+  opacity: 1;
+}
+
+/* A post standing on the track at the rate, ringed in the sheet's colour so
+   it reads cleanly over whichever band it lands on. */
+.success-marker {
+  position: absolute;
+  top: -5px;
+  left: var(--at);
+  width: 4px;
+  height: 20px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--color-text);
+  box-shadow: 0 0 0 2px var(--color-bg);
+}
+
+.success-zone-labels {
+  position: relative;
+  height: 18px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--color-text) 52%, transparent);
+}
+
+.success-zone-labels > span {
+  position: absolute;
+  top: 0;
+  padding-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.success-zone-labels small {
+  margin-left: 5px;
+  font: 10px var(--font-mono);
+  opacity: .8;
+}
+
+.success-zone-labels .is-here {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+/* The phone layout keeps the count spans in .success-bar on one line; the
+   sentence here has to wrap. */
+.success-bar .success-meaning,
+.success-bar .success-meaning span {
+  white-space: normal;
+}
+
+.success-meaning {
+  margin-top: 2px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--color-text) 66%, transparent);
+}
+
+.success-verdict {
+  font-weight: 600;
+}
+
+.success-verdict.is-fragile {
+  color: var(--color-accent-2-700);
+}
+
+.success-verdict.is-robust {
+  color: var(--color-accent-700);
+}
+
+/* ── Chart motion ──────────────────────────────────────────────────────────
+   A new run's marks draw in from the left, the way time runs along the axis.
+   Keyed on the run in NetWorthChart, so changing view or percentile does not
+   replay it; reduced motion collapses it with every other animation. */
+
+.chart-reveal {
+  animation: chart-reveal 900ms var(--ease) backwards;
+}
+
+@keyframes chart-reveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.event-markers {
+  animation: fade-in 400ms 700ms var(--ease) both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* ── Effect families ───────────────────────────────────────────────────────
+   What an event does to the money (lib/view/effectFamily.ts), as a colour the
+   rail's dots and the timeline's lanes share. Drawn from the series palette;
+   the effect's name is always printed beside the dot. */
+
+[data-family] {
+  --fam: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+[data-family="inflow"] {
+  --fam: var(--color-series-3);
+}
+
+[data-family="outflow"] {
+  --fam: var(--color-series-2);
+}
+
+[data-family="transfer"] {
+  --fam: var(--color-series-1);
+}
+
+[data-family="control"] {
+  --fam: var(--color-series-7);
+}
+
+[data-family="shock"] {
+  --fam: var(--color-series-8);
+}
+
+.kind-dot {
+  display: inline-block;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--fam);
+}
+
+/* A marker moves no money: an empty ring rather than a filled dot. */
+.kind-dot[data-family="marker"] {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--fam);
+}

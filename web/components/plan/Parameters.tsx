@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Button, CompactInput, Dialog, CurrencyInput, DateInput, Dropdown, Field, NumberInput } from "@/components/ui";
+import { Button, CompactInput, Dialog, CurrencyInput, DateInput, Dropdown, Field, NumberInput, rowStyle } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { NamedParameter, ParameterValueSpec } from "@/lib/api/types";
 
@@ -47,7 +47,7 @@ export function ParameterRail({ parameters, selectedId, onSelect, error }: {
           const on = p.id === selectedId;
           return <div key={p.id} className="rowsel" role="option" tabIndex={0} aria-selected={on}
             onClick={() => onSelect(p.id)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(p.id); } }}
-            style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "2px 8px", padding: "10px 18px", borderTop: "1px solid var(--color-divider)", background: on ? "color-mix(in srgb, var(--color-accent) 14%, transparent)" : undefined, boxShadow: on ? "inset 3px 0 0 var(--color-accent)" : undefined }}>
+            style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: "2px 8px", padding: "10px 18px", borderTop: "1px solid var(--color-divider)", ...rowStyle(on) }}>
             <span className="cd-name" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</span>
             <span style={{ fontSize: 13 }}>{valueLabel(p.value)}</span>
             <span style={{ fontSize: 11.5, color: muted }}>{p.value.kind} · {p.uses.length ? `used by ${p.uses.length}` : "unused"}</span>

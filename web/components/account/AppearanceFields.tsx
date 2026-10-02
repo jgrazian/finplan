@@ -2,7 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { SegmentedControl } from "@/components/ui";
-import { ACCENTS, type Appearance, applyAppearance, THEME_MODES, useResolvedMode } from "@/lib/theme";
+import {
+  ACCENTS,
+  type Appearance,
+  applyAppearance,
+  applyDarkStyle,
+  DARK_STYLES,
+  type DarkStyle,
+  THEME_MODES,
+  useDarkStyle,
+  useResolvedMode,
+} from "@/lib/theme";
 import { PanelNote } from "./chrome";
 
 const LABEL = "color-mix(in srgb, var(--color-text) 70%, transparent)";
@@ -27,6 +37,7 @@ export function AppearanceFields({
   readOnly?: boolean;
 }) {
   const resolved = useResolvedMode(value.mode);
+  const [darkStyle, setDarkStyle] = useDarkStyle();
 
   return (
     <>
@@ -42,6 +53,20 @@ export function AppearanceFields({
             }))}
             value={value.mode}
             onChange={(mode) => onChange({ ...value, mode })}
+          />
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, marginBottom: 5, color: LABEL }}>
+            Dark style <span style={{ opacity: 0.75 }}>· this device</span>
+          </div>
+          {/* Not part of the draft: it lives on this device, not the account,
+              so it applies the moment it is picked and Save never sees it. */}
+          <SegmentedControl
+            ariaLabel="Dark style"
+            options={DARK_STYLES.map((s) => ({ value: s.value, label: s.label }))}
+            value={darkStyle}
+            onChange={setDarkStyle}
           />
         </div>
 
@@ -96,13 +121,14 @@ export function AppearanceFields({
 
         <div>
           <div style={{ fontSize: 12, marginBottom: 5, color: LABEL }}>Preview</div>
-          <Preview appearance={value} resolved={resolved} />
+          <Preview appearance={value} resolved={resolved} darkStyle={darkStyle} />
         </div>
       </div>
 
       <PanelNote>
         {value.mode === "system" && `Following the operating system — ${resolved} right now. `}
-        Your appearance settings apply to all your scenarios after you save.
+        Mode and accent apply to all your scenarios after you save. Dark style is kept on this
+        device and applies straight away.
       </PanelNote>
     </>
   );
@@ -111,9 +137,11 @@ export function AppearanceFields({
 function Preview({
   appearance,
   resolved,
+  darkStyle,
 }: {
   appearance: Appearance;
   resolved: "light" | "dark";
+  darkStyle: DarkStyle;
 }) {
   const [box, setBox] = useState<HTMLDivElement | null>(null);
 
@@ -122,35 +150,40 @@ function Preview({
   // server. `resolved` is a dependency because the machine can change its
   // mind while this is on screen.
   useEffect(() => {
-    if (box) applyAppearance(box, appearance);
-  }, [box, appearance, resolved]);
+    if (!box) return;
+    applyAppearance(box, appearance);
+    applyDarkStyle(box, darkStyle);
+  }, [box, appearance, resolved, darkStyle]);
 
-  const TAB: React.CSSProperties = {
-    fontFamily: "var(--font-heading)",
-    fontWeight: 600,
-    fontSize: 11,
-    letterSpacing: ".06em",
-    textTransform: "uppercase",
-    padding: "4px 9px",
-  };
-
+  // A desk with a sheet on it, and on the sheet a current tab, a quiet one and
+  // a tag: the three layers and the accent, drawn by the app's own tokens.
   return (
-    <div ref={setBox}>
+    <div
+      ref={setBox}
+      style={{
+        padding: 8,
+        borderRadius: "var(--radius-lg)",
+        background: "var(--color-ground)",
+        border: "1px solid var(--color-divider)",
+      }}
+    >
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          padding: "8px 10px",
+          gap: 6,
+          padding: "7px 9px",
+          borderRadius: "var(--radius-md)",
           border: "1px solid var(--color-divider)",
           background: "var(--color-bg)",
           color: "var(--color-text)",
+          boxShadow: "var(--shadow-md)",
         }}
       >
-        <span style={{ ...TAB, background: "var(--color-accent)", color: "var(--color-bg)" }}>
+        <span className="tab-inline" aria-current="page" style={{ fontSize: 12, padding: "3px 10px" }}>
           Results
         </span>
-        <span style={{ ...TAB, color: "color-mix(in srgb, var(--color-text) 50%, transparent)" }}>
+        <span className="tab-inline" style={{ fontSize: 12, padding: "3px 10px" }}>
           Plan
         </span>
         <span className="tag tag-accent">91.4%</span>

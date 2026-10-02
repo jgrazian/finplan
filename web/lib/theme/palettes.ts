@@ -80,3 +80,31 @@ export function parseAppearance(raw: unknown): Appearance {
     accent: accent ?? DEFAULT_APPEARANCE.accent,
   };
 }
+
+// ── Dark style (this device) ─────────────────────────────────────────────
+
+/**
+ * How a dark ground is layered: Charcoal lays a lighter sheet on a darker
+ * desk, the way light mode does; Midnight inverts it, a near-black sheet on a
+ * lifted desk. A per-device preference — kept in local storage, not on the
+ * account — because it is about the screen in front of you.
+ */
+export type DarkStyle = "charcoal" | "midnight";
+
+export const DARK_STYLES: ReadonlyArray<{ value: DarkStyle; label: string }> = [
+  { value: "charcoal", label: "Charcoal" },
+  { value: "midnight", label: "Midnight" },
+];
+
+/** Read by the pre-paint script in `app/layout.tsx` too. Keep them in step. */
+export const DARK_STYLE_KEY = "finplan.darkStyle";
+
+export function parseDarkStyle(raw: unknown): DarkStyle {
+  return raw === "midnight" ? "midnight" : "charcoal";
+}
+
+/** Stamp the style as `data-ground`; the stylesheet only reads it on dark. */
+export function applyDarkStyle(el: HTMLElement, style: DarkStyle): void {
+  if (style === "midnight") el.dataset.ground = "midnight";
+  else delete el.dataset.ground;
+}

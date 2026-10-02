@@ -156,6 +156,17 @@
   --shadow-lg: 0 4px 10px rgb(0 0 0 / 0.4), 0 24px 64px rgb(0 0 0 / 0.55);
 }
 
+/* Midnight (a per-device dark style, lib/theme/useDarkStyle.ts): the layers
+   inverted — a near-black sheet on a lifted desk, controls a half-step up
+   from the sheet. Only the grounds move; ink, ramps and series stay. */
+[data-theme="dark"][data-ground="midnight"] {
+  --color-ground: #2b2824;
+  --color-bg: #121110;
+  --color-surface: #191816;
+  --color-raised: #1f1d1b;
+  --shadow-lg: 0 4px 12px rgb(0 0 0 / 0.35), 0 28px 70px rgb(0 0 0 / 0.5);
+}
+
 /* ── Accent ramps, one per ground × hue ── */
 
 :root,

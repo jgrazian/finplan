@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist_Mono, Instrument_Sans, Newsreader } from "next/font/google";
-import { APPEARANCE_KEY } from "@/lib/theme";
+import { APPEARANCE_KEY, DARK_STYLE_KEY } from "@/lib/theme";
 import "./globals.css";
 
 /**
@@ -41,6 +41,7 @@ const PRE_PAINT = `try{
   var r=document.documentElement;
   r.dataset.theme=m;
   r.dataset.accent=a.accent==="green"||a.accent==="purple"?a.accent:"blue";
+  if(localStorage.getItem(${JSON.stringify(DARK_STYLE_KEY)})==="midnight")r.dataset.ground="midnight";
 }catch(e){}`;
 
 export default function RootLayout({

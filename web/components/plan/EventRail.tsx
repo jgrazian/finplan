@@ -1,6 +1,7 @@
 "use client";
 
-import { DragHandle, DropLine, Tag } from "@/components/ui";
+import { DragHandle, DropLine, Tag, rowStyle } from "@/components/ui";
+import { FAMILY_LABEL, effectFamily } from "@/lib/view/effectFamily";
 import { useReorder } from "@/lib/hooks/useReorder";
 import type { EventId, PlanEvent } from "@/lib/types";
 import { NO_AMOUNT } from "@/lib/view/events";
@@ -75,12 +76,7 @@ export function EventRail({
                 padding: "9px 16px 9px 2px",
                 borderTop: "1px solid var(--color-divider)",
                 opacity: dragging === serverId ? 0.5 : event.enabled ? undefined : 0.6,
-                ...(selected
-                  ? {
-                      background: "color-mix(in srgb, var(--color-accent) 14%, transparent)",
-                      boxShadow: "inset 3px 0 0 var(--color-accent)",
-                    }
-                  : null),
+                ...rowStyle(selected),
               }}
             >
               <DragHandle label={event.id} props={handleProps(serverId)} />
@@ -147,15 +143,20 @@ export function EventRail({
 
 /**
  * What the event does, in one word: the kind of its first effect, or `marker`
- * for an event that only exists so others can be timed against it.
+ * for an event that only exists so others can be timed against it. The dot
+ * names its family — money in, money out, moving money — so the rail can be
+ * scanned by colour, with the word always beside it.
  */
 function KindTag({ event }: { event: PlanEvent }) {
   const first = event.effects[0];
-  if (!first) return <Tag tone="outline">marker</Tag>;
+  const family = effectFamily(first?.kind);
   return (
-    <Tag tone="accent">
-      {first.kind}
-      {event.effects.length > 1 ? ` +${event.effects.length - 1}` : ""}
-    </Tag>
+    <span title={FAMILY_LABEL[family]} style={{ display: "inline-flex" }}>
+      <Tag tone="neutral">
+        <i className="kind-dot" data-family={family} aria-hidden />
+        {first ? first.kind : "marker"}
+        {event.effects.length > 1 ? ` +${event.effects.length - 1}` : ""}
+      </Tag>
+    </span>
   );
 }

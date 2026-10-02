@@ -2,6 +2,7 @@
 
 import { type Scale, areaPath, bandPath, barColumn, linePath } from "./geometry";
 import type { AccountSeries, NetWorthBands } from "@/lib/types";
+import { type ChartMarker, stackLabels } from "@/lib/view/outcome";
 import { stackSeries } from "./stack";
 
 /**
@@ -98,6 +99,74 @@ export function StackedBarSeries({
                 />
               );
             })}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+/** Label type for the markers; the width estimate below assumes it. */
+const MARKER_FONT = 10;
+const MARKER_ROW = 13;
+
+/**
+ * One-off events — the home purchase, retirement — as faint rules through the
+ * plot with their names along the top, so the bends in the path have causes.
+ * Labels that would collide step down a row rather than overprint.
+ */
+export function EventMarkers({
+  markers,
+  scale,
+}: {
+  markers: ChartMarker[];
+  scale: Scale;
+}) {
+  const geo = scale.geo;
+  const right = geo.w - geo.right;
+  const placed = markers.map((m) => {
+    const x = scale.x(m.index);
+    const width = m.label.length * MARKER_FONT * 0.56 + 10;
+    // A label that would run off the right edge hangs to the left of its rule.
+    const flip = x + width > right;
+    return { ...m, x, width, start: flip ? x - width : x };
+  });
+  const rows = stackLabels(placed.map((p) => ({ x: p.start, width: p.width })));
+
+  return (
+    <g pointerEvents="none" className="event-markers">
+      {placed.map((p, i) => {
+        const y = geo.top + 9 + rows[i] * MARKER_ROW;
+        const flip = p.start < p.x;
+        return (
+          <g key={`${p.index}-${p.label}`}>
+            <title>{`${p.label} · ${p.year}`}</title>
+            <line
+              x1={p.x}
+              x2={p.x}
+              y1={y + 3}
+              y2={scale.baseline}
+              stroke="var(--color-text)"
+              strokeOpacity={0.28}
+              strokeDasharray="2 3"
+            />
+            <circle cx={p.x} cy={y - 3} r={2.5} fill="var(--color-accent-2)" />
+            <text
+              x={flip ? p.x - 6 : p.x + 6}
+              y={y}
+              textAnchor={flip ? "end" : "start"}
+              fontSize={MARKER_FONT}
+              fontFamily="var(--font-body)"
+              fontWeight={600}
+              fill="var(--color-text)"
+              fillOpacity={0.72}
+              stroke="var(--color-raised)"
+              strokeWidth={3}
+              strokeLinejoin="round"
+              paintOrder="stroke"
+            >
+              {p.label}
+            </text>
           </g>
         );
       })}
