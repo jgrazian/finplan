@@ -297,18 +297,20 @@ export function accountShares(accounts: Account[]): Map<string, number | null> {
 // ── portfolio summary ───────────────────────────────────────────────────────
 
 /**
- * One accent ramp, darkest first, shared by the composition bar, its legend and
- * the share column — so a colour means the same account wherever it appears.
+ * The categorical series, in their validated order, shared by the composition
+ * bar, its legend and the share column — so a colour means the same account
+ * wherever it appears. Hues rather than one ramp's steps: eight accounts in
+ * eight shades of one blue cannot be told apart.
  */
 const ACCOUNT_COLORS = [
-  "var(--color-accent-900)",
-  "var(--color-accent-700)",
-  "var(--color-accent)",
-  "var(--color-accent-500)",
-  "var(--color-accent-300)",
-  "var(--color-accent-800)",
-  "var(--color-accent-400)",
-  "var(--color-accent-200)",
+  "var(--color-series-1)",
+  "var(--color-series-2)",
+  "var(--color-series-3)",
+  "var(--color-series-4)",
+  "var(--color-series-5)",
+  "var(--color-series-6)",
+  "var(--color-series-7)",
+  "var(--color-series-8)",
 ];
 
 /** account id → its swatch, assigned by position in the list. */

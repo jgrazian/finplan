@@ -12,7 +12,7 @@ import {
 
 const TICK_TEXT = {
   fontSize: 10,
-  fontFamily: "Barlow, sans-serif",
+  fontFamily: "var(--font-body)",
   fill: "var(--color-text)",
   fillOpacity: 0.5,
 } as const;

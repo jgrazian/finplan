@@ -6,7 +6,7 @@ import { FAN, type FanView } from "@/lib/view/whatIf";
 
 const TICK = {
   fontSize: 10.5,
-  fontFamily: "Barlow, sans-serif",
+  fontFamily: "var(--font-body)",
   fill: "var(--color-text)",
   fillOpacity: 0.55,
 } as const;

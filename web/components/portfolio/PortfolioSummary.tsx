@@ -47,9 +47,10 @@ function NetWorthCard({ summary }: { summary: SummaryData }) {
         <StatLabel>Net worth</StatLabel>
         <div
           style={{
-            fontFamily: "var(--font-heading)",
-            fontWeight: 600,
-            fontSize: 30,
+            fontFamily: "var(--font-display)",
+            fontWeight: 500,
+            fontSize: 32,
+            letterSpacing: "-0.02em",
             lineHeight: 1.05,
             marginTop: 2,
           }}

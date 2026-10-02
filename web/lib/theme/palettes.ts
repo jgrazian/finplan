@@ -29,9 +29,9 @@ export const ACCENTS: ReadonlyArray<{
   light: string;
   dark: string;
 }> = [
-  { value: "blue", label: "Blue", light: "#5980a6", dark: "#94bce3" },
-  { value: "green", label: "Green", light: "#5a8967", dark: "#96c5a1" },
-  { value: "purple", label: "Purple", light: "#8372a2", dark: "#beaedf" },
+  { value: "blue", label: "Blue", light: "#3570bd", dark: "#8ab7f4" },
+  { value: "green", label: "Green", light: "#028653", dark: "#7bc89c" },
+  { value: "purple", label: "Purple", light: "#8359ae", dark: "#c3a4e8" },
 ];
 
 /** What the appearance controls hold, and what gets stamped on `<html>`. */

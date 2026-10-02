@@ -228,7 +228,7 @@ export function GraphInspector({
               >
                 <span
                   style={{
-                    fontFamily: "ui-monospace, Menlo, monospace",
+                    fontFamily: "var(--font-mono)",
                     fontSize: 11,
                     flex: 1,
                     minWidth: 0,

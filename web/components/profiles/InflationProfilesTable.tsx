@@ -120,7 +120,7 @@ export function InflationProfilesTable({
               style={{
                 textAlign: "right",
                 fontSize: 11.5,
-                fontFamily: "ui-monospace, Menlo, monospace",
+                fontFamily: "var(--font-mono)",
                 ...(bandIsFigures(profile.distribution) ? null : { color: FAINT }),
               }}
             >

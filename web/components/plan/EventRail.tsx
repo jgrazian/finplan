@@ -97,7 +97,7 @@ export function EventRail({
                   <span
                     className="event-row-name"
                     style={{
-                      fontFamily: "ui-monospace, Menlo, monospace",
+                      fontFamily: "var(--font-mono)",
                       fontSize: 12.5,
                       overflow: "hidden",
                       textOverflow: "ellipsis",

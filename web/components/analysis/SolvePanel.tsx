@@ -315,8 +315,8 @@ function Answer({
         </div>
         <div
           style={{
-            fontFamily: "var(--font-heading)",
-            fontWeight: 600,
+            fontFamily: "var(--font-display)",
+            fontWeight: 500,
             fontSize: 34,
             lineHeight: 1.05,
             color: outcome.best
@@ -350,7 +350,7 @@ function Answer({
                 <Td
                   style={
                     row.mono
-                      ? { fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }
+                      ? { fontFamily: "var(--font-mono)", fontSize: 12 }
                       : undefined
                   }
                 >

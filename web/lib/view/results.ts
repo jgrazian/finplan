@@ -17,18 +17,20 @@ import type { PlanAxis } from "./axis";
 import { yearOf } from "./format.ts";
 
 /**
- * Stack colours, heaviest step first, matching the Results artboard. Named by
- * ramp step rather than by colour so they turn with the account's palette.
+ * Stack colours: the categorical series in their validated order, the same
+ * assignment the Portfolio's composition bar makes, so an account keeps its
+ * colour from one tab to the next. Tokens rather than hex so dark mode takes
+ * its own steps.
  */
 const SERIES_COLORS = [
-  "var(--color-accent-900)",
-  "var(--color-accent-700)",
-  "var(--color-accent-500)",
-  "var(--color-accent-300)",
-  "var(--color-accent)",
-  "var(--color-accent-400)",
-  "var(--color-accent-800)",
-  "var(--color-accent-200)",
+  "var(--color-series-1)",
+  "var(--color-series-2)",
+  "var(--color-series-3)",
+  "var(--color-series-4)",
+  "var(--color-series-5)",
+  "var(--color-series-6)",
+  "var(--color-series-7)",
+  "var(--color-series-8)",
 ];
 
 const WARNING_TITLES: Record<string, string> = {

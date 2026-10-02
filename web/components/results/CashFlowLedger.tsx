@@ -357,7 +357,7 @@ function YearRow({
         {hasLedger && (
           <Td
             style={{
-              fontFamily: "ui-monospace, Menlo, monospace",
+              fontFamily: "var(--font-mono)",
               fontSize: 11,
               color: FAINT,
             }}
@@ -396,7 +396,7 @@ function YearRow({
             )}
             <span
               style={{
-                fontFamily: "ui-monospace, Menlo, monospace",
+                fontFamily: "var(--font-mono)",
                 fontSize: 11,
                 color: MUTED,
               }}
@@ -533,7 +533,7 @@ function EntryRow({ entry }: { entry: LedgerEntry }) {
         alignItems: "baseline",
         // A printout, not prose: the whole line is monospace so dates, figures
         // and the columns between them stay in register down the drawer.
-        fontFamily: "ui-monospace, Menlo, monospace",
+        fontFamily: "var(--font-mono)",
         fontSize: 11,
         lineHeight: 1.45,
         padding: "3px 5px",

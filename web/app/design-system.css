@@ -1,11 +1,15 @@
-/* Industry — design-system tokens and component classes.
-   Vendored from the Claude Design project
-   (_ds/industry-a6926af7-71b9-4c72-b3db-95b778871b44/styles.css), with the
-   single-palette `:root` block replaced by the six token sets the canvas's
-   Palettes artboard compares. Everything below the palettes is the system's
-   own; this file is the source of truth for its look, so retune it here. */
-/* The Barlow @import is hoisted to the top of globals.css: a CSS @import
-   must precede all other rules, and Tailwind's output lands above this file. */
+/* Almanac — design-system tokens and component classes.
+
+   A warm, editorial ledger: paper and ink rather than blueprint and steel.
+   The page is a desk (`--color-ground`) with one sheet laid on it
+   (`--color-bg`); controls are raised a step off the sheet (`--color-raised`)
+   and wells sink a step into it (`--color-surface`). Display type is a serif
+   for the figures a plan is read by; everything a hand touches is a grotesk.
+
+   This file is the source of truth for the look, so retune it here. */
+/* The faces are loaded by next/font in app/layout.tsx, which sets the
+   --font-newsreader / --font-instrument / --font-geist-mono variables read
+   below. */
 
 /* ── Palettes ──────────────────────────────────────────────────────────────
    Six token sets: a light or dark ground × a blue, green or purple accent.
@@ -18,16 +22,15 @@
    substituted at computed-value time, so a descendant inherits the resolved
    colour and re-pointing the source below the root would change nothing.
 
-   Green and purple are the blue ramp rotated in OKLCH — the same lightness and
-   chroma at each step, hue moved to 152° and 300° — so step 500 of any hue
-   carries the same visual weight.
+   Every ramp is generated in OKLCH on one shared lightness scale (0.97 → 0.27)
+   with a chroma arc that peaks at the base step, so step 500 of any hue
+   carries the same visual weight. Blue sits at 256°, green at 158°, purple at
+   305°, and the supporting brass at 70°.
 
-   The dark ramps are not a straight reverse. `-100` becomes the darkest tint
-   and `-800` the text on it, then the scale is re-spaced so the base accent
-   falls between 500 and 600, which leaves `-600` free as the hover step
-   `.btn-primary:hover` already reaches for. Two mid steps drop out, a new
-   lightest tint enters at 900, and the light `-400` step becomes the base
-   accent — that last move is what lifts it clear of the dark ground.
+   Light grounds take step 600 as the base accent. Dark ramps are the light
+   ramp reversed and re-spaced: `-100` becomes the darkest tint, the light
+   `-400` step becomes the base accent — which is what lifts it clear of the
+   dark ground — and a new lightest tint enters at 900.
 
    `data-theme` is always present on `<html>`, resolved before first paint by
    the script in app/layout.tsx: "system" is answered there with matchMedia
@@ -40,45 +43,64 @@
 [data-theme="light"] {
   color-scheme: light;
 
-  --color-bg: #f2f2f3;
-  --color-surface: #e9e9ea;
-  --color-text: #1d1f20;
-  --color-divider: color-mix(in srgb, #1d1f20 16%, transparent);
+  /* The desk the sheet lies on, the sheet itself, a well sunk into it and a
+     control raised off it. */
+  --color-ground: #ece8df;
+  --color-bg: #fbf9f5;
+  --color-surface: #f2efe8;
+  --color-raised: #ffffff;
+  --color-text: #1e1c19;
+  --color-divider: color-mix(in srgb, #1e1c19 13%, transparent);
+  /* The hairline between rows of one table — quieter than a section edge. */
+  --color-rule: color-mix(in srgb, #1e1c19 7%, transparent);
   /* The scrim behind a dialog. Its own token rather than a neutral step,
      because the neutral ramp reverses with the ground and a scrim must not:
      it darkens the page in both themes. */
-  --color-scrim: color-mix(in srgb, #1d1f20 38%, transparent);
+  --color-scrim: color-mix(in srgb, #1e1c19 36%, transparent);
 
-  /* Tonal ramps — generated in OKLCH on one shared lightness scale, so the
-     same step of any role matches the others in visual value. */
-  --color-neutral-100: #f5f5f8;
-  --color-neutral-200: #e7e7ea;
-  --color-neutral-300: #d4d4d7;
-  --color-neutral-400: #b7b7ba;
-  --color-neutral-500: #98989b;
-  --color-neutral-600: #7a7a7d;
-  --color-neutral-700: #5d5d60;
-  --color-neutral-800: #424244;
-  --color-neutral-900: #2b2b2d;
+  /* Warm neutrals: the paper's own grey, hue 80° at near-zero chroma. */
+  --color-neutral-100: #f6f4f0;
+  --color-neutral-200: #e9e6e0;
+  --color-neutral-300: #d6d2cb;
+  --color-neutral-400: #b9b4ac;
+  --color-neutral-500: #9a958d;
+  --color-neutral-600: #7c776f;
+  --color-neutral-700: #5f5a53;
+  --color-neutral-800: #44403a;
+  --color-neutral-900: #2d2a26;
 
   /* The secondary accent does not follow `data-accent`: it is the system's
-     own supporting blue, and stays put while the primary hue turns. */
-  --color-accent-2: #728fab;
-  --color-accent-2-100: #eef6ff;
-  --color-accent-2-200: #d6ebff;
-  --color-accent-2-300: #bdd8f2;
-  --color-accent-2-400: #9ebbd8;
-  --color-accent-2-500: #7e9cb8;
-  --color-accent-2-600: #627d98;
-  --color-accent-2-700: #486077;
-  --color-accent-2-800: #314457;
-  --color-accent-2-900: #1f2d3a;
+     own supporting brass, and stays put while the primary hue turns. */
+  --color-accent-2: #c4852f;
+  --color-accent-2-100: #fdf3e8;
+  --color-accent-2-200: #f8e2ca;
+  --color-accent-2-300: #efca9f;
+  --color-accent-2-400: #dda96b;
+  --color-accent-2-500: #c4852f;
+  --color-accent-2-600: #9b6203;
+  --color-accent-2-700: #754901;
+  --color-accent-2-800: #553300;
+  --color-accent-2-900: #392000;
 
-  /* Elevation — derived from the ground: soft ink-tinted shadows on a
-     light theme, a hairline edge + ambient darkness on a dark one. */
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #2b2b2d 14%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2b2b2d 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2b2b2d 22%, transparent);
+  /* Categorical series — identity, never magnitude. Validated as a set
+     (dataviz validate_palette.js, light, on the sheet): worst adjacent CVD
+     ΔE 9.9, worst adjacent normal-vision ΔE 18.7. Slot 4 sits under 3:1, so
+     every chart that uses it keeps its legend and a table view. Assign in
+     this order; never cycle a ninth. */
+  --color-series-1: #2f6fb3;
+  --color-series-2: #d0643a;
+  --color-series-3: #1c9a7a;
+  --color-series-4: #c9900e;
+  --color-series-5: #d06a92;
+  --color-series-6: #4f8a2b;
+  --color-series-7: #6650b5;
+  --color-series-8: #c2453f;
+
+  /* Elevation — warm ink-tinted, two layers: a tight contact shadow that
+     seats the box and a wide ambient one that lifts it. */
+  --shadow-sm: 0 1px 1px rgb(52 40 22 / 0.05), 0 1px 3px rgb(52 40 22 / 0.06);
+  --shadow-md: 0 1px 2px rgb(52 40 22 / 0.05), 0 6px 18px rgb(52 40 22 / 0.08);
+  --shadow-lg: 0 2px 6px rgb(52 40 22 / 0.06), 0 22px 56px rgb(52 40 22 / 0.16);
 }
 
 /* The neutral ramp reverses with the ground, so `.tag-neutral` keeps reading
@@ -86,128 +108,145 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --color-bg: #191b1c;
-  --color-surface: #232527;
-  --color-text: #ececed;
-  --color-divider: color-mix(in srgb, #ececed 20%, transparent);
-  --color-scrim: color-mix(in srgb, #000 62%, transparent);
+  --color-ground: #11100f;
+  --color-bg: #1b1a18;
+  --color-surface: #23211e;
+  --color-raised: #292724;
+  --color-text: #ede9e2;
+  --color-divider: color-mix(in srgb, #ede9e2 14%, transparent);
+  --color-rule: color-mix(in srgb, #ede9e2 7%, transparent);
+  --color-scrim: color-mix(in srgb, #000 60%, transparent);
 
-  --color-neutral-100: #2b2b2d;
-  --color-neutral-200: #424244;
-  --color-neutral-300: #5d5d60;
-  --color-neutral-400: #7a7a7d;
-  --color-neutral-500: #98989b;
-  --color-neutral-600: #b7b7ba;
-  --color-neutral-700: #d4d4d7;
-  --color-neutral-800: #e7e7ea;
-  --color-neutral-900: #f5f5f8;
+  --color-neutral-100: #2d2a26;
+  --color-neutral-200: #44403a;
+  --color-neutral-300: #5f5a53;
+  --color-neutral-400: #7c776f;
+  --color-neutral-500: #9a958d;
+  --color-neutral-600: #b9b4ac;
+  --color-neutral-700: #d6d2cb;
+  --color-neutral-800: #e9e6e0;
+  --color-neutral-900: #f6f4f0;
 
-  --color-accent-2: #9ebbd8;
-  --color-accent-2-100: #1f2d3a;
-  --color-accent-2-200: #314457;
-  --color-accent-2-300: #486077;
-  --color-accent-2-400: #728fab;
-  --color-accent-2-500: #7e9cb8;
-  --color-accent-2-600: #bdd8f2;
-  --color-accent-2-700: #d6ebff;
-  --color-accent-2-800: #eef6ff;
-  --color-accent-2-900: #f7fbff;
+  --color-accent-2: #dda96b;
+  --color-accent-2-100: #392000;
+  --color-accent-2-200: #553300;
+  --color-accent-2-300: #754901;
+  --color-accent-2-400: #9b6203;
+  --color-accent-2-500: #c4852f;
+  --color-accent-2-600: #efca9f;
+  --color-accent-2-700: #f8e2ca;
+  --color-accent-2-800: #fdf3e8;
+  --color-accent-2-900: #fff9f3;
+
+  /* The same eight hues stepped into the dark band (OKLCH L 0.48–0.67) and
+     re-validated against the dark sheet: worst adjacent CVD ΔE 9.4, all ≥ 3:1. */
+  --color-series-1: #4f8acb;
+  --color-series-2: #d56c40;
+  --color-series-3: #1f9e7c;
+  --color-series-4: #be8a12;
+  --color-series-5: #cf6f97;
+  --color-series-6: #629a38;
+  --color-series-7: #8573d8;
+  --color-series-8: #d9534d;
 
   /* On a dark ground the ink tint disappears; what reads as elevation is
-     ambient darkness under the box. */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.5);
-  --shadow-md: 0 3px 12px rgb(0 0 0 / 0.55);
-  --shadow-lg: 0 12px 32px rgb(0 0 0 / 0.62);
+     ambient darkness under the box plus a faint lit top edge. */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --shadow-md: 0 2px 4px rgb(0 0 0 / 0.35), 0 8px 24px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 4px 10px rgb(0 0 0 / 0.4), 0 24px 64px rgb(0 0 0 / 0.55);
 }
 
 /* ── Accent ramps, one per ground × hue ── */
 
-
 :root,
 [data-theme="light"][data-accent="blue"] {
-  --color-accent: #5980a6;
-  --color-accent-100: #eef6ff;
-  --color-accent-200: #d6ebff;
-  --color-accent-300: #b5d9fd;
-  --color-accent-400: #94bce3;
-  --color-accent-500: #749dc4;
-  --color-accent-600: #597ea3;
-  --color-accent-700: #416180;
-  --color-accent-800: #2c455d;
-  --color-accent-900: #1d2d3d;
+  --color-accent: #3570bd;
+  --color-accent-100: #eff6ff;
+  --color-accent-200: #d7e8ff;
+  --color-accent-300: #b4d4fe;
+  --color-accent-400: #8ab7f4;
+  --color-accent-500: #5e95df;
+  --color-accent-600: #3570bd;
+  --color-accent-700: #205395;
+  --color-accent-800: #153b6c;
+  --color-accent-900: #0c2648;
 }
 
 [data-theme="light"][data-accent="green"] {
-  --color-accent: #5a8967;
-  --color-accent-100: #eef8f0;
-  --color-accent-200: #d8efdd;
-  --color-accent-300: #b7e1c1;
-  --color-accent-400: #96c5a1;
-  --color-accent-500: #76a682;
-  --color-accent-600: #5a8766;
-  --color-accent-700: #42684c;
-  --color-accent-800: #2d4b35;
-  --color-accent-900: #1d3122;
+  --color-accent: #028653;
+  --color-accent-100: #ecf9f1;
+  --color-accent-200: #d1efdc;
+  --color-accent-300: #abe0c0;
+  --color-accent-400: #7bc89c;
+  --color-accent-500: #42ab76;
+  --color-accent-600: #028653;
+  --color-accent-700: #00653d;
+  --color-accent-800: #00482a;
+  --color-accent-900: #002f1a;
 }
 
 [data-theme="light"][data-accent="purple"] {
-  --color-accent: #8372a2;
-  --color-accent-100: #f6f3fe;
-  --color-accent-200: #ebe3fd;
-  --color-accent-300: #dbccf9;
-  --color-accent-400: #beaedf;
-  --color-accent-500: #9f8fc0;
-  --color-accent-600: #81719f;
-  --color-accent-700: #63567c;
-  --color-accent-800: #473c5a;
-  --color-accent-900: #2e273b;
+  --color-accent: #8359ae;
+  --color-accent-100: #f7f3fe;
+  --color-accent-200: #ece0fc;
+  --color-accent-300: #dbc6f7;
+  --color-accent-400: #c3a4e8;
+  --color-accent-500: #a67fd1;
+  --color-accent-600: #8359ae;
+  --color-accent-700: #643f88;
+  --color-accent-800: #482c63;
+  --color-accent-900: #2e1c41;
 }
 
 [data-theme="dark"][data-accent="blue"] {
-  --color-accent: #94bce3;
-  --color-accent-100: #1d2d3d;
-  --color-accent-200: #2c455d;
-  --color-accent-300: #416180;
-  --color-accent-400: #5980a6;
-  --color-accent-500: #749dc4;
-  --color-accent-600: #b5d9fd;
-  --color-accent-700: #d6ebff;
-  --color-accent-800: #eef6ff;
-  --color-accent-900: #f7fbff;
+  --color-accent: #8ab7f4;
+  --color-accent-100: #0c2648;
+  --color-accent-200: #153b6c;
+  --color-accent-300: #205395;
+  --color-accent-400: #3570bd;
+  --color-accent-500: #5e95df;
+  --color-accent-600: #b4d4fe;
+  --color-accent-700: #d7e8ff;
+  --color-accent-800: #eff6ff;
+  --color-accent-900: #f7fafe;
 }
 
 [data-theme="dark"][data-accent="green"] {
-  --color-accent: #96c5a1;
-  --color-accent-100: #1d3122;
-  --color-accent-200: #2d4b35;
-  --color-accent-300: #42684c;
-  --color-accent-400: #5a8967;
-  --color-accent-500: #76a682;
-  --color-accent-600: #b7e1c1;
-  --color-accent-700: #d8efdd;
-  --color-accent-800: #eef8f0;
-  --color-accent-900: #f7fcf8;
+  --color-accent: #7bc89c;
+  --color-accent-100: #002f1a;
+  --color-accent-200: #00482a;
+  --color-accent-300: #00653d;
+  --color-accent-400: #028653;
+  --color-accent-500: #42ab76;
+  --color-accent-600: #abe0c0;
+  --color-accent-700: #d1efdc;
+  --color-accent-800: #ecf9f1;
+  --color-accent-900: #f5fcf7;
 }
 
 [data-theme="dark"][data-accent="purple"] {
-  --color-accent: #beaedf;
-  --color-accent-100: #2e273b;
-  --color-accent-200: #473c5a;
-  --color-accent-300: #63567c;
-  --color-accent-400: #8372a2;
-  --color-accent-500: #9f8fc0;
-  --color-accent-600: #dbccf9;
-  --color-accent-700: #ebe3fd;
-  --color-accent-800: #f6f3fe;
+  --color-accent: #c3a4e8;
+  --color-accent-100: #2e1c41;
+  --color-accent-200: #482c63;
+  --color-accent-300: #643f88;
+  --color-accent-400: #8359ae;
+  --color-accent-500: #a67fd1;
+  --color-accent-600: #dbc6f7;
+  --color-accent-700: #ece0fc;
+  --color-accent-800: #f7f3fe;
   --color-accent-900: #fbf9ff;
 }
 
 /* ── Type, measure and shape — unchanged by the palette ── */
 
 :root {
-  --font-heading: "Barlow Condensed", system-ui, sans-serif;
+  /* The serif is for what a plan is read by: titles and headline figures. */
+  --font-display: var(--font-newsreader), Georgia, "Times New Roman", serif;
+  /* The heading voice for everything a hand touches — buttons, tabs, labels. */
+  --font-heading: var(--font-instrument), system-ui, sans-serif;
   --font-heading-weight: 600;
-  --font-body: "Barlow", system-ui, sans-serif;
+  --font-body: var(--font-instrument), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, Menlo, monospace;
 
   --space-1: 3.4px;
   --space-2: 6.8px;
@@ -216,35 +255,35 @@
   --space-6: 20.4px;
   --space-8: 27.2px;
 
-  --radius-sm: 2px;
-  --radius-md: 4px;
-  --radius-lg: 7px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --dur: 140ms;
 }
 
 body {
-  background: var(--color-bg);
+  background: var(--color-ground);
   color: var(--color-text);
   font-family: var(--font-body);
 }
 
-h1,
-h2,
-h3,
-h4 {
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-}
+/* ── Frames ────────────────────────────────────────────────────────────────
+   `.blueprint` keeps its name — every framed object in the app wears it — but
+   it now draws a raised card rather than a wireframe. The registration marks
+   are still rendered by <Blueprint>; they are simply not shown. */
 
 .blueprint {
   position: relative;
   border: 1px solid var(--color-divider);
-  border-radius: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-raised);
+  box-shadow: var(--shadow-sm);
 }
 
-/* The overlay image treatments (halftone, duotone) clip their overlay
-   (overflow:hidden); a blueprint wrapper draws its registration marks
-   outside the box, so when both classes share a wrapper the frame must
-   win. */
 .blueprint.halftone,
 .blueprint.plate,
 .blueprint.duotone {
@@ -252,51 +291,7 @@ h4 {
 }
 
 .blueprint>.corner {
-  position: absolute;
-  width: 11px;
-  height: 11px;
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
-}
-
-.blueprint>.corner::before,
-.blueprint>.corner::after {
-  content: "";
-  position: absolute;
-  background: currentColor;
-}
-
-.blueprint>.corner::before {
-  left: 5px;
-  top: 0;
-  width: 1px;
-  height: 100%;
-}
-
-.blueprint>.corner::after {
-  top: 5px;
-  left: 0;
-  width: 100%;
-  height: 1px;
-}
-
-.blueprint>.corner.tl {
-  top: -6px;
-  left: -6px;
-}
-
-.blueprint>.corner.tr {
-  top: -6px;
-  right: -6px;
-}
-
-.blueprint>.corner.bl {
-  bottom: -6px;
-  left: -6px;
-}
-
-.blueprint>.corner.br {
-  bottom: -6px;
-  right: -6px;
+  display: none;
 }
 
 .duotone {
@@ -326,9 +321,13 @@ h4 {
 
 body {
   margin: 0;
-  font-size: 15px;
+  font-size: 14.5px;
   line-height: 1.55;
   font-weight: 400;
+  font-feature-settings: "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 h1,
@@ -339,21 +338,34 @@ h5,
 h6 {
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
-  line-height: 1.12;
-  letter-spacing: -0.015em;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
   margin: 0 0 var(--space-2);
 }
 
+/* Titles are set in the serif at a text optical size, a touch lighter than
+   the grotesk's semibold so the two voices weigh the same on the page. */
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-display);
+  font-weight: 540;
+  font-optical-sizing: auto;
+  font-variant-numeric: lining-nums;
+  letter-spacing: -0.012em;
+}
+
 h1 {
-  font-size: 42px;
+  font-size: 40px;
 }
 
 h2 {
-  font-size: 32px;
+  font-size: 30px;
 }
 
 h3 {
-  font-size: 25px;
+  font-size: 24px;
 }
 
 h4 {
@@ -361,16 +373,17 @@ h4 {
 }
 
 h5 {
-  font-size: 16px;
+  font-size: 15px;
 }
 
+/* The section label: small caps in the grotesk, muted, so it marks a region
+   without competing with the figures inside it. */
 h6 {
-  font-size: 13px;
-}
-
-h6 {
-  letter-spacing: 0.08em;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 72%, transparent);
 }
 
 p {
@@ -378,8 +391,14 @@ p {
 }
 
 a {
-  color: var(--color-accent);
+  color: var(--color-accent-700);
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
   text-underline-offset: 3px;
+  transition: color var(--dur) var(--ease), text-decoration-color var(--dur) var(--ease);
+}
+
+a:hover {
+  text-decoration-color: currentColor;
 }
 
 img {
@@ -398,7 +417,7 @@ figcaption {
 }
 
 .text-muted {
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
 }
 
 :focus {
@@ -411,7 +430,15 @@ figcaption {
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+
+/* Figures line up in columns everywhere a number can stack over another. */
+table,
+.stat-v,
+output,
+input {
+  font-variant-numeric: tabular-nums lining-nums;
 }
 
 /* — rules — */
@@ -427,22 +454,33 @@ figcaption {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 7px;
   cursor: pointer;
   text-decoration: none;
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.2;
+  letter-spacing: 0.005em;
   color: var(--color-text);
   background: transparent;
   border: 1px solid transparent;
-  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  padding: 7px 13px;
   border-radius: var(--radius-md);
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    transform 80ms var(--ease);
 }
 
 .btn svg {
   display: block;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0.5px);
 }
 
 .btn:disabled {
@@ -450,47 +488,58 @@ figcaption {
   cursor: not-allowed;
 }
 
+/* Primary is a lit slab: the accent with a faint highlight along its top edge
+   and a contact shadow in its own hue, so it reads as the one thing to press. */
 .btn-primary {
   background: var(--color-accent);
+  border-color: color-mix(in oklab, var(--color-accent) 80%, var(--color-text));
   color: var(--color-bg);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.18),
+    0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
+    0 4px 12px -4px color-mix(in srgb, var(--color-accent) 55%, transparent);
 }
 
-.btn-primary:hover {
-  background: var(--color-accent-600);
+.btn-primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--color-accent) 88%, var(--color-text));
 }
 
-.btn-primary:active {
-  background: var(--color-accent-700);
+.btn-primary:active:not(:disabled) {
+  background: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
 }
 
 .btn-secondary {
+  background: var(--color-raised);
   border-color: var(--color-divider);
+  box-shadow: var(--shadow-sm);
 }
 
-.btn-secondary:hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+.btn-secondary:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-text) 26%, transparent);
+  background: color-mix(in srgb, var(--color-text) 3%, var(--color-raised));
 }
 
-.btn-secondary:active {
-  background: color-mix(in srgb, var(--color-text) 14%, transparent);
+.btn-secondary:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text) 7%, var(--color-raised));
+  box-shadow: none;
 }
 
 .btn-ghost {
-  color: var(--color-accent);
-  padding-inline: var(--space-1);
+  color: var(--color-accent-700);
+  padding-inline: 8px;
 }
 
-.btn-ghost:hover {
+.btn-ghost:hover:not(:disabled) {
   background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
-.btn-ghost:active {
+.btn-ghost:active:not(:disabled) {
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
 .btn-icon {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
   padding: 0;
 }
 
@@ -499,34 +548,62 @@ figcaption {
   margin-top: var(--space-2);
 }
 
+/* Creation actions: an accent-tinted pill-ish button with a leading plus
+   implied by the tone rather than drawn. */
+.btn-add {
+  color: var(--color-accent-700);
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--color-raised));
+  border-color: color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
+.btn-add:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 13%, var(--color-raised));
+  border-color: color-mix(in srgb, var(--color-accent) 60%, transparent);
+}
+
+.btn-add:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 20%, var(--color-raised));
+}
+
 /* — forms — */
 .field>label {
   display: block;
   font-size: 12px;
+  font-weight: 500;
   margin-bottom: 5px;
-  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+  color: color-mix(in srgb, var(--color-text) 68%, transparent);
 }
 
 .input {
   width: 100%;
   min-height: 36px;
-  padding: 6px 10px;
+  padding: 6px 11px;
   font: inherit;
   font-size: 14px;
   color: var(--color-text);
   caret-color: var(--color-accent);
-  background: var(--color-surface);
+  background: var(--color-raised);
   border: 1px solid var(--color-divider);
   border-radius: var(--radius-md);
+  box-shadow: inset 0 1px 1px rgb(0 0 0 / 0.03);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+
+.input::placeholder {
+  color: color-mix(in srgb, var(--color-text) 40%, transparent);
 }
 
 .input:hover {
-  border-color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  border-color: color-mix(in srgb, var(--color-text) 28%, transparent);
 }
 
-.input:focus-visible {
+/* Focus is a soft halo in the accent rather than an outline drawn outside
+   the field, so a row of inputs does not shift its neighbours' outlines. */
+.input:focus-visible,
+.input:focus-within {
   border-color: var(--color-accent);
-  outline-offset: 0;
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 22%, transparent);
 }
 
 textarea.input {
@@ -556,7 +633,9 @@ textarea.input {
   height: 16px;
   flex: none;
   border-radius: 50%;
-  border: 1.5px solid var(--color-divider);
+  border: 1.5px solid color-mix(in srgb, var(--color-text) 30%, transparent);
+  background: var(--color-raised);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 
 .radio:hover .dot {
@@ -566,7 +645,7 @@ textarea.input {
 .radio input:checked+.dot {
   border-color: var(--color-accent);
   background: var(--color-accent);
-  box-shadow: inset 0 0 0 4px var(--color-bg);
+  box-shadow: inset 0 0 0 3.5px var(--color-raised);
 }
 
 .radio input:focus-visible+.dot {
@@ -574,38 +653,45 @@ textarea.input {
   outline-offset: 2px;
 }
 
+/* Segmented control: a sunken track with the chosen option raised out of it,
+   so the choice reads by elevation and the accent stays free for actions. */
 .seg {
   display: inline-flex;
-  overflow: hidden;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: var(--radius-md);
+  border-radius: calc(var(--radius-md) + 2px);
 }
 
 .seg-opt {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 12px;
+  padding: 5px 12px;
   font-size: 13px;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--color-text) 66%, transparent);
+  border-radius: var(--radius-md);
   cursor: pointer;
-}
-
-.seg-opt+.seg-opt {
-  border-left: 1px solid var(--color-divider);
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 
 .seg-opt:has(input:checked) {
-  background: var(--color-accent);
-  color: var(--color-bg);
+  background: var(--color-raised);
+  color: var(--color-text);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--color-divider);
 }
 
 .seg-opt:not(:has(input:checked)):hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
 }
 
 .seg-opt:has(input:focus-visible) {
   outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
+  outline-offset: 0;
 }
 
 /* — cards — */
@@ -613,22 +699,25 @@ textarea.input {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--color-raised);
+  border: 1px solid var(--color-divider);
+  box-shadow: var(--shadow-sm);
 }
 
 .card-kicker {
-  font-size: 10px;
+  font-size: 10.5px;
+  font-weight: 600;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--color-accent);
+  color: var(--color-accent-700);
 }
 
 .card-title {
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 17px;
+  font-family: var(--font-display);
+  font-weight: 540;
+  font-size: 18px;
   line-height: 1.2;
 }
 
@@ -663,30 +752,38 @@ textarea.input {
 .tag {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   font-size: 11px;
-  letter-spacing: 0.02em;
-  padding: 3px 10px;
-  border-radius: calc(var(--radius-md) * 0.75);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.4;
+  padding: 2px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
 }
 
 .tag-accent {
   background: var(--color-accent-100);
+  border-color: color-mix(in srgb, var(--color-accent) 18%, transparent);
   color: var(--color-accent-800);
 }
 
 .tag-accent-2 {
   background: var(--color-accent-2-100);
+  border-color: color-mix(in srgb, var(--color-accent-2) 22%, transparent);
   color: var(--color-accent-2-800);
 }
 
 .tag-neutral {
   background: var(--color-neutral-100);
+  border-color: var(--color-rule);
   color: var(--color-neutral-800);
 }
 
 .tag-outline {
-  border: 1px solid var(--color-accent);
-  color: var(--color-accent);
+  border-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
+  color: var(--color-accent-700);
 }
 
 /* — navigation — */
@@ -699,9 +796,13 @@ textarea.input {
 }
 
 .nav-brand {
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 20px;
+  letter-spacing: -0.02em;
   margin-right: auto;
 }
 
@@ -713,33 +814,38 @@ textarea.input {
 
 .nav a:hover,
 .nav a[aria-current='page'] {
-  color: var(--color-accent);
+  color: var(--color-accent-700);
 }
 
 /* — tables — */
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 13.5px;
 }
 
 .table th {
   text-align: left;
-  font-size: 11px;
+  font-size: 10.5px;
+  font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
   padding: var(--space-2);
   border-bottom: 1px solid var(--color-divider);
 }
 
 .table td {
   padding: var(--space-2);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.table tbody tr {
+  transition: background-color var(--dur) var(--ease);
 }
 
 .table tbody tr:hover {
-  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 5%, transparent);
 }
 
 /* — dialog — */
@@ -750,23 +856,34 @@ textarea.input {
   place-items: center;
   padding: var(--space-4);
   background: var(--color-scrim);
+  backdrop-filter: blur(3px);
 }
 
-.dialog {
+.dialog,
+.dialog-panel {
   width: min(440px, 100%);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-4);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface);
+  padding: 20px 22px 20px;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg);
+  border: 1px solid var(--color-divider);
   box-shadow: var(--shadow-lg);
+  animation: dialog-in 180ms var(--ease);
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
 }
 
 .dialog-title {
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 20px;
+  font-family: var(--font-display);
+  font-weight: 540;
+  font-size: 21px;
 }
 
 .dialog-body {
@@ -781,50 +898,11 @@ textarea.input {
   margin-top: var(--space-2);
 }
 
-/* — blueprint frame: components are wireframe objects (see .blueprint
-     and .corner above) — square, transparent, hairline-bordered — */
-.card,
-.btn,
-.input,
-.tag,
-.seg,
-.dialog {
-  border-radius: 0;
-}
-
-.card,
-.dialog {
-  background: transparent;
-  border: 1px solid var(--color-divider);
-}
-
-.btn {
-  border: 1px solid var(--color-divider);
-}
-
-.btn-primary {
-  border-color: var(--color-accent);
-}
-
-.btn-ghost {
-  border-color: transparent;
-}
-
-/* Creation actions share the secondary outline and the accent text color. */
-.btn-add {
-  color: var(--color-accent);
-  border-color: var(--color-accent);
-}
-
-.btn-add:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
-}
-
-.btn-add:active:not(:disabled) {
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-}
-
-.btn-add:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
 }

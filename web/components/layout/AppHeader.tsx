@@ -3,6 +3,7 @@
 import { type ReactNode, useMemo } from "react";
 import { Button, Dropdown, type DropdownOption, Tag } from "@/components/ui";
 import type { Scenario } from "@/lib/types";
+import { BrandMark, Wordmark } from "./Brand";
 
 export interface TabDef<T extends string> {
   id: T;
@@ -86,11 +87,12 @@ export function AppHeader<T extends string>({
         borderBottom: "1px solid var(--color-divider)",
       }}
     >
-      <span className="nav-brand" style={{ margin: 0, padding: "12px 0" }}>
-        FINPLAN
+      <span className="nav-brand" style={{ margin: 0, padding: "13px 0" }}>
+        <BrandMark />
+        <Wordmark />
       </span>
 
-      <nav className="app-header-tabs" style={{ display: "flex", gap: 2, marginRight: "auto" }} aria-label="Sections">
+      <nav className="app-header-tabs" style={{ display: "flex", gap: 4, marginRight: "auto" }} aria-label="Sections">
         {tabs.map((tab) => (
           <button
             key={tab.id}
@@ -130,20 +132,16 @@ export function AppHeader<T extends string>({
 
       <button
         type="button"
-        className="btn btn-secondary btn-icon"
+        className="btn btn-secondary btn-icon app-avatar"
         aria-label="Account settings"
         aria-current={accountOpen ? "page" : undefined}
         title="Account settings"
         onClick={onAccount}
-        style={{
-          fontSize: 9.5,
-          fontFamily: "ui-monospace, Menlo, monospace",
-          width: 30,
-          height: 30,
-          ...(accountOpen
-            ? { background: "var(--color-accent)", color: "var(--color-bg)" }
-            : null),
-        }}
+        style={
+          accountOpen
+            ? { background: "var(--color-accent)", color: "var(--color-bg)", borderColor: "var(--color-accent)" }
+            : undefined
+        }
       >
         {userInitials}
       </button>

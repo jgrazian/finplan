@@ -192,7 +192,7 @@
 
 .ns-sentence-name {
   width: 170px;
-  font: 12.5px ui-monospace, Menlo, monospace;
+  font: 12.5px var(--font-mono);
 }
 
 .ns-slot {
@@ -208,7 +208,7 @@
 .ns-slot.x {
   background: var(--color-bg);
   border-color: var(--color-accent);
-  font: 12.5px ui-monospace, Menlo, monospace;
+  font: 12.5px var(--font-mono);
 }
 
 .ns-pending {
@@ -253,7 +253,7 @@
 }
 
 .ns-fchip b {
-  font: 600 9.5px ui-monospace, Menlo, monospace;
+  font: 600 9.5px var(--font-mono);
   color: var(--color-accent-800);
 }
 
@@ -282,7 +282,7 @@
 }
 
 .ns-mono {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .ns-crow {

@@ -23,7 +23,7 @@ const WASH = "var(--color-accent)";
 /** Room under the baseline for the quantile figures, in viewBox units. */
 const LABEL_BAND = 14;
 const LABEL_SIZE = 8;
-/** Barlow's digits at 8px; near enough to keep two labels from touching. */
+/** The body face's digits at 8px; near enough to keep two labels from touching. */
 const CHAR = 4.5;
 
 /**
@@ -75,7 +75,7 @@ export function ShapeAxis({
         </g>
         <g
           fontSize={fontSize}
-          fontFamily="Barlow, sans-serif"
+          fontFamily="var(--font-body)"
           fill={INK}
           fillOpacity={0.55}
           textAnchor="middle"
@@ -190,7 +190,7 @@ export function ShapePanel({
           />
           <line x1={zero} x2={zero} y1={6} y2={height - 2} stroke={INK} strokeOpacity={0.22} />
           <ShapeInk paths={paths} />
-          <g fontSize={LABEL_SIZE} fontFamily="Barlow, sans-serif" textAnchor="middle">
+          <g fontSize={LABEL_SIZE} fontFamily="var(--font-body)" textAnchor="middle">
             {labels.map((label) => (
               <text key={label.q} x={label.x} y={height + 8} fill={CURVE}>
                 {label.rank && (

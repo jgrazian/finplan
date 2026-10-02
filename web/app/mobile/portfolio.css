@@ -281,7 +281,7 @@
 
   .row-card-ticker {
     flex: none;
-    font: 600 15px ui-monospace, Menlo, monospace;
+    font: 600 15px var(--font-mono);
   }
 
   .row-card-name,

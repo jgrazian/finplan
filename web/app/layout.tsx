@@ -1,6 +1,22 @@
 import type { Metadata } from "next";
+import { Geist_Mono, Instrument_Sans, Newsreader } from "next/font/google";
 import { APPEARANCE_KEY } from "@/lib/theme";
 import "./globals.css";
+
+/**
+ * The three Almanac faces, self-hosted by next/font at build time: no request
+ * to Google at runtime and no flash of the fallback while one is in flight.
+ * Each lands as a CSS variable on <html>, which design-system.css reads into
+ * --font-display / --font-body / --font-mono.
+ */
+const display = Newsreader({
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  axes: ["opsz"],
+  variable: "--font-newsreader",
+});
+const sans = Instrument_Sans({ subsets: ["latin"], axes: ["wdth"], variable: "--font-instrument" });
+const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 
 export const metadata: Metadata = {
   title: "FinPlan",
@@ -33,7 +49,11 @@ export default function RootLayout({
   return (
     // The script above writes attributes the server did not render, which is
     // the whole point of it; React is told not to call that a mismatch.
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${display.variable} ${sans.variable} ${mono.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: PRE_PAINT }} />
       </head>

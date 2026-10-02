@@ -94,7 +94,7 @@ export function PlanTimeline({
                   width: GUTTER,
                   flex: "none",
                   textAlign: "right",
-                  fontFamily: "ui-monospace, Menlo, monospace",
+                  fontFamily: "var(--font-mono)",
                   fontSize: 11,
                   overflow: "hidden",
                   textOverflow: "ellipsis",

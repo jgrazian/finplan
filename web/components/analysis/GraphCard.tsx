@@ -222,6 +222,6 @@ export function GraphGap({ spec, position }: { spec: GraphSpec; position: number
 
 function Mono({ children }: { children: React.ReactNode }) {
   return (
-    <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>{children}</span>
+    <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{children}</span>
   );
 }

@@ -65,9 +65,16 @@
   }
 
   .app-header .nav-brand {
-    font-size: 20px;
-    font-weight: 700;
-    letter-spacing: .04em;
+    font-size: 19px;
+  }
+
+  /* On a phone the mark alone carries the brand; the switcher needs the room. */
+  .app-header .brand-word {
+    display: none;
+  }
+
+  .app.app-shell {
+    border-radius: 0;
   }
 
   .app-header-tabs {
@@ -99,30 +106,44 @@
     padding-bottom: env(safe-area-inset-bottom);
     border-top: 1px solid var(--color-divider);
     background: var(--color-bg);
+    box-shadow: 0 -6px 20px rgb(0 0 0 / 0.06);
+    backdrop-filter: saturate(1.4) blur(14px);
+    -webkit-backdrop-filter: saturate(1.4) blur(14px);
   }
 
   .mobile-tabbar button {
+    position: relative;
     min-height: 52px;
     margin-top: -1px;
     padding: 0;
     border: 0;
-    border-top: 2px solid transparent;
     background: transparent;
     color: var(--color-text);
-    opacity: .55;
+    opacity: .6;
     font-family: var(--font-heading);
-    font-weight: 600;
-    /* Five tabs across a 360px phone: 12px keeps "ANALYSIS" on one line. */
-    font-size: 12px;
-    letter-spacing: .04em;
-    text-transform: uppercase;
+    font-weight: 500;
+    /* Five tabs across a 360px phone: 12.5px keeps "Analysis" on one line. */
+    font-size: 12.5px;
     cursor: pointer;
   }
 
+  /* The current tab: a short accent pill above the label. */
   .mobile-tabbar button[aria-current="page"] {
     opacity: 1;
-    border-top-color: var(--color-accent);
-    color: var(--color-accent);
+    font-weight: 600;
+    color: var(--color-accent-700);
+  }
+
+  .mobile-tabbar button[aria-current="page"]::before {
+    content: "";
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    width: 22px;
+    height: 3px;
+    margin-left: -11px;
+    border-radius: 3px;
+    background: var(--color-accent);
   }
 
   /* Page-level action bars (Apply, Save) stick above the tab bar. */
@@ -197,8 +218,8 @@
   }
 
   .mobile-pushed-title {
-    font-family: var(--font-heading);
-    font-weight: 600;
+    font-family: var(--font-display);
+    font-weight: 560;
     font-size: 18px;
     white-space: nowrap;
     overflow: hidden;

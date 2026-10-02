@@ -9,7 +9,7 @@ const GEO = { w: 360, h: 124, left: 46, top: 10, right: 10, bottom: 24 } as cons
 
 const TICK = {
   fontSize: 9.5,
-  fontFamily: "Barlow, sans-serif",
+  fontFamily: "var(--font-body)",
   fill: "var(--color-text)",
   fillOpacity: 0.55,
 } as const;

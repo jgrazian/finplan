@@ -3,6 +3,7 @@
 import { RecoveryForm } from "./RecoveryForm";
 import { useState } from "react";
 import { Button, CompactInput, Field } from "@/components/ui";
+import { BrandMark, Wordmark } from "@/components/layout/Brand";
 import type { Session } from "@/lib/hooks/useSession";
 
 /**
@@ -40,8 +41,9 @@ export function LoginForm({ session }: { session: Session }) {
         gap: 12,
       }}
     >
-      <span className="nav-brand" style={{ margin: 0 }}>
-        FINPLAN
+      <span className="nav-brand" style={{ margin: 0, fontSize: 24 }}>
+        <BrandMark size={26} />
+        <Wordmark />
       </span>
       <h4 style={{ margin: "4px 0 6px" }}>
         {registering ? "Create an account" : "Sign in"}

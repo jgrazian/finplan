@@ -51,7 +51,7 @@ export function AccountBreakdown({
         <span
           style={{
             fontSize: 11,
-            fontFamily: "ui-monospace, Menlo, monospace",
+            fontFamily: "var(--font-mono)",
             color: "var(--color-accent-800)",
           }}
         >

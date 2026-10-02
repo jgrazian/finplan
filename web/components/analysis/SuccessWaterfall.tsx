@@ -5,7 +5,7 @@ import { WATERFALL, type BarTone, type WaterfallView } from "@/lib/view/whatIf";
 
 const TICK = {
   fontSize: 10.5,
-  fontFamily: "Barlow, sans-serif",
+  fontFamily: "var(--font-body)",
   fill: "var(--color-text)",
   fillOpacity: 0.55,
 } as const;
@@ -77,7 +77,7 @@ export function SuccessWaterfall({ view }: { view: WaterfallView }) {
               fontSize={12}
               fontWeight={600}
               fill="var(--color-text)"
-              fontFamily="Barlow, sans-serif"
+              fontFamily="var(--font-body)"
             >
               {bar.label}
             </text>

@@ -43,15 +43,19 @@ export function SuccessRate({
             <span
               className="success-pct"
               style={{
-                fontFamily: "var(--font-heading)",
-                fontWeight: 600,
-                fontSize: 64,
+                fontFamily: "var(--font-display)",
+                fontWeight: 500,
+                fontSize: 68,
                 lineHeight: 1,
+                letterSpacing: "-0.035em",
               }}
             >
               {measured ? pct.toFixed(1) : "—"}
             </span>
-            <span className="success-pct-unit" style={{ fontSize: 24 }}>
+            <span
+              className="success-pct-unit"
+              style={{ fontFamily: "var(--font-display)", fontSize: 28, color: "var(--color-accent-700)" }}
+            >
               %
             </span>
           </div>
