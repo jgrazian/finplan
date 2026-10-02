@@ -1,8 +1,24 @@
 # FinPlan
 
-A Monte Carlo retirement planning simulator with an interactive terminal UI.
+An open-source Monte Carlo retirement planner. [Try the hosted feedback beta](https://finplan.rayknot.com/) or run the terminal UI locally.
 
-Unlike simple retirement calculators, FinPlan models tax-aware withdrawals, RSU vesting, and multiple account types, then runs full Monte Carlo simulations to show you the probability of your plan succeeding. Everything runs locally — no account required, no data leaves your machine.
+FinPlan models multiple account types, taxes, income and spending events, and changing market returns. Run simulations to explore how assumptions affect the range of possible outcomes.
+
+## Hosted feedback beta
+
+The [web beta](https://finplan.rayknot.com/) is free during the beta and includes saved plans, comparisons, reports, and advanced analysis. Compute limits apply, and future plans and pricing may change. An account is required; hosted plans are stored on the beta server. If you would rather keep your plan on your own machine, use the terminal UI below.
+
+To help improve the beta:
+
+1. Create an account and build a plan, using fictional figures if you do not want to enter personal financial information.
+2. Run a simulation and try changing an assumption such as retirement age or spending.
+3. Use **Contact** in the app to send private feedback, or [open a GitHub issue](https://github.com/jgrazian/finplan/issues/new) for a public bug report or feature request. Please do not include account details or personal financial information in either message.
+
+Especially useful feedback: where setup was confusing, which assumptions were hard to find, and which real-life events the model could not express. FinPlan is for planning and educational use, not financial, tax, or investment advice.
+
+## Terminal UI
+
+The terminal UI runs locally. It does not require an account, and its scenario files remain on your machine.
 
 ![FinPlan TUI Demo](finplan.gif)
 
@@ -12,7 +28,7 @@ FinPlan runs thousands of simulations with varying market conditions to answer q
 
 - What's the probability my savings will last through retirement?
 - How does retiring at 62 vs 65 affect my outcomes?
-- What's the optimal withdrawal strategy given my account mix?
+- How do different withdrawal choices affect my outcomes?
 
 ## Installation
 
