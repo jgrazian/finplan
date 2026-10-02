@@ -425,6 +425,8 @@ fn replace_detail(
             cash_return_profile_id,
             contribution_limit,
             contribution_period,
+            plan_type,
+            catch_up,
         } => {
             profile(*cash_return_profile_id)?;
             graph.investment.insert(
@@ -436,6 +438,8 @@ fn replace_detail(
                     cash_return_profile_id: *cash_return_profile_id,
                     contribution_limit: *contribution_limit,
                     contribution_period: contribution_period.map(|p| p.as_str().to_string()),
+                    plan_type: plan_type.map(|p| p.as_str().to_string()),
+                    catch_up: sqlx::types::Json(catch_up.clone()),
                 },
             );
         }

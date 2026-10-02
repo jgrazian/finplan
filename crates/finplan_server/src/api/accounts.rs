@@ -73,6 +73,64 @@ impl ContributionPeriod {
     }
 }
 
+/// Which retirement plan an Investment account is. It decides the tax
+/// treatment and which statutory limits the web UI fills in; the engine reads
+/// only the limit and catch-up figures themselves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum PlanType {
+    /// Also 403(b), 457(b) and the TSP: they share the deferral limits.
+    Traditional401k,
+    Roth401k,
+    TraditionalIra,
+    RothIra,
+    Hsa,
+}
+
+impl PlanType {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            PlanType::Traditional401k => "Traditional401k",
+            PlanType::Roth401k => "Roth401k",
+            PlanType::TraditionalIra => "TraditionalIra",
+            PlanType::RothIra => "RothIra",
+            PlanType::Hsa => "Hsa",
+        }
+    }
+
+    pub(crate) fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "Traditional401k" => PlanType::Traditional401k,
+            "Roth401k" => PlanType::Roth401k,
+            "TraditionalIra" => PlanType::TraditionalIra,
+            "RothIra" => PlanType::RothIra,
+            "Hsa" => PlanType::Hsa,
+            _ => return None,
+        })
+    }
+
+    /// The only tax treatment the plan can have.
+    pub(crate) fn tax_status(self) -> TaxStatus {
+        match self {
+            PlanType::Traditional401k | PlanType::TraditionalIra => TaxStatus::TaxDeferred,
+            PlanType::Roth401k | PlanType::RothIra | PlanType::Hsa => TaxStatus::TaxFree,
+        }
+    }
+}
+
+/// Extra contribution room from `from_age` through `through_age` (inclusive;
+/// null for no upper bound), on top of the account's contribution limit. Age
+/// is the one reached by December 31 of the contribution year. Tiers do not
+/// stack: the largest that applies wins.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CatchUpSpec {
+    pub from_age: u8,
+    #[serde(default)]
+    pub through_age: Option<u8>,
+    pub amount: f64,
+}
+
 /// The flavor-specific half of an account.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "flavor")]
@@ -92,6 +150,11 @@ pub enum FlavorSpec {
         contribution_limit: Option<f64>,
         #[serde(default)]
         contribution_period: Option<ContributionPeriod>,
+        /// None for a brokerage or a retirement account of no particular plan.
+        #[serde(default)]
+        plan_type: Option<PlanType>,
+        #[serde(default)]
+        catch_up: Vec<CatchUpSpec>,
     },
     Property {
         asset_id: i64,
@@ -133,15 +196,46 @@ impl FlavorSpec {
 
     pub(crate) fn validate(&self) -> ApiResult<()> {
         if let FlavorSpec::Investment {
+            tax_status,
             contribution_limit,
             contribution_period,
+            plan_type,
+            catch_up,
             ..
         } = self
-            && contribution_limit.is_some() != contribution_period.is_some()
         {
-            return Err(ApiError::bad_request(
-                "contribution_limit and contribution_period must be set together",
-            ));
+            if contribution_limit.is_some() != contribution_period.is_some() {
+                return Err(ApiError::bad_request(
+                    "contribution_limit and contribution_period must be set together",
+                ));
+            }
+            if let Some(plan) = plan_type
+                && plan.tax_status().as_str() != tax_status.as_str()
+            {
+                return Err(ApiError::bad_request(format!(
+                    "a {} account is {}; set tax_status to match or change plan_type",
+                    plan.as_str(),
+                    plan.tax_status().as_str()
+                )));
+            }
+            if !catch_up.is_empty() && contribution_limit.is_none() {
+                return Err(ApiError::bad_request(
+                    "catch_up adds to a contribution_limit; set the limit first",
+                ));
+            }
+            for tier in catch_up {
+                if tier.amount.is_nan() || tier.amount < 0.0 {
+                    return Err(ApiError::bad_request(
+                        "a catch-up amount cannot be negative",
+                    ));
+                }
+                if tier.through_age.is_some_and(|t| t < tier.from_age) {
+                    return Err(ApiError::bad_request(format!(
+                        "a catch-up from age {} cannot end before it starts",
+                        tier.from_age
+                    )));
+                }
+            }
         }
         if let FlavorSpec::Liability { principal, .. } = self
             && *principal < 0.0
@@ -249,15 +343,18 @@ async fn load_account(state: &AppState, scenario_id: i64, id: i64) -> ApiResult<
             }
         }
         "Investment" => {
-            let (tax_status, cash_value, cash_return_profile_id, limit, period): (
+            #[allow(clippy::type_complexity)]
+            let (tax_status, cash_value, cash_return_profile_id, limit, period, plan, catch_up): (
                 String,
                 f64,
                 i64,
                 Option<f64>,
                 Option<String>,
+                Option<String>,
+                sqlx::types::Json<Vec<CatchUpSpec>>,
             ) = sqlx::query_as(
                 "SELECT tax_status, cash_value, cash_return_profile_id,
-                        contribution_limit, contribution_period
+                        contribution_limit, contribution_period, plan_type, catch_up
                    FROM account_investment WHERE account_id = ?1",
             )
             .bind(id)
@@ -278,6 +375,8 @@ async fn load_account(state: &AppState, scenario_id: i64, id: i64) -> ApiResult<
                     Some("Yearly") => Some(ContributionPeriod::Yearly),
                     _ => None,
                 },
+                plan_type: plan.as_deref().and_then(PlanType::parse),
+                catch_up: catch_up.0,
             }
         }
         "Property" => {
@@ -352,12 +451,14 @@ async fn insert_detail(
             cash_return_profile_id,
             contribution_limit,
             contribution_period,
+            plan_type,
+            catch_up,
         } => {
             sqlx::query(
                 "INSERT INTO account_investment
                     (account_id, tax_status, cash_value, cash_return_profile_id,
-                     contribution_limit, contribution_period)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
+                     contribution_limit, contribution_period, plan_type, catch_up)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .bind(account_id)
             .bind(tax_status.as_str())
@@ -365,6 +466,8 @@ async fn insert_detail(
             .bind(cash_return_profile_id)
             .bind(contribution_limit)
             .bind(contribution_period.map(|p| p.as_str()))
+            .bind(plan_type.map(|p| p.as_str()))
+            .bind(sqlx::types::Json(catch_up))
             .execute(&mut **tx)
             .await?;
         }

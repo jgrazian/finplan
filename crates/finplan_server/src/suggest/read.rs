@@ -3,7 +3,9 @@
 
 use serde_json::Value;
 
-use crate::api::accounts::{Account, ContributionPeriod, FlavorSpec, Position, TaxStatus};
+use crate::api::accounts::{
+    Account, ContributionPeriod, FlavorSpec, PlanType, Position, TaxStatus,
+};
 use crate::api::assets::Asset;
 use crate::api::parameters::ParameterValueSpec;
 use crate::compile::rows::ScenarioGraph;
@@ -82,6 +84,8 @@ pub(crate) fn account(graph: &ScenarioGraph, id: i64) -> Option<Value> {
                     Some("Yearly") => Some(ContributionPeriod::Yearly),
                     _ => None,
                 },
+                plan_type: inv.plan_type.as_deref().and_then(PlanType::parse),
+                catch_up: inv.catch_up.0.clone(),
             }
         }
         "Property" => {

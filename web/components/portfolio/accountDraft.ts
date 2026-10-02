@@ -1,4 +1,6 @@
+import type { CatchUpSpec, PlanType } from "@/lib/api/types";
 import type { Account, ContributionLimitPeriod, TaxStatus } from "@/lib/types";
+import { sameCatchUp } from "@/lib/view/planTypes";
 import { type AccountKind, kindOf } from "./accountKind";
 
 /** The fields a PATCH on the account can carry, across all five kinds. */
@@ -27,6 +29,10 @@ export interface AccountDraft {
   termMonths: number;
   contributionLimit: number | null;
   contributionPeriod: ContributionLimitPeriod;
+  /** Retirement only; null is a brokerage or a plan of no particular type. */
+  planType: PlanType | null;
+  /** Extra room by age on top of the limit; meaningless without one. */
+  catchUp: CatchUpSpec[];
 }
 
 export type SetDraft = <K extends keyof AccountDraft>(
@@ -60,6 +66,8 @@ export function draftOf(account: Account): AccountDraft {
     termMonths: account.repayment?.termMonths ?? 360,
     contributionLimit: account.contributionLimit?.amount ?? null,
     contributionPeriod: account.contributionLimit?.period ?? "Yearly",
+    planType: account.planType ?? null,
+    catchUp: account.contributionLimit?.catchUp ?? [],
   };
 }
 
@@ -74,6 +82,7 @@ export interface ChangedFields {
   rate: boolean;
   repayment: boolean;
   limit: boolean;
+  catchUp: boolean;
 }
 
 export function changedFields(
@@ -85,7 +94,10 @@ export function changedFields(
     kind: draft.kind !== pristine.kind,
     // A kind change moves the tax status with it; counting both would report
     // two edits for one decision.
-    taxStatus: draft.kind === pristine.kind && draft.taxStatus !== pristine.taxStatus,
+    // The plan type and the tax status are one menu, so either moving is one edit.
+    taxStatus:
+      draft.kind === pristine.kind &&
+      (draft.taxStatus !== pristine.taxStatus || draft.planType !== pristine.planType),
     amount: draft.amount !== pristine.amount,
     profile: draft.returnProfileServerId !== pristine.returnProfileServerId,
     asset: draft.assetServerId !== pristine.assetServerId,
@@ -99,6 +111,7 @@ export function changedFields(
       // A period on its own says nothing until there is a figure to divide.
       (draft.contributionLimit != null &&
         draft.contributionPeriod !== pristine.contributionPeriod),
+    catchUp: !sameCatchUp(draft.catchUp, pristine.catchUp),
   };
 }
 

@@ -182,13 +182,13 @@ test("draftContents lists accounts with opening balances and events with when th
     [
       {
         id: 2, name: "Vanguard", description: null, sort_order: 2, flavor: "Investment", tax_status: "Taxable",
-        cash_value: 1_000, cash_return_profile_id: 1, contribution_limit: null, contribution_period: null,
+        cash_value: 1_000, cash_return_profile_id: 1, contribution_limit: null, contribution_period: null, plan_type: null, catch_up: [],
         positions: [{ id: 1, asset_id: 9, purchase_date: "2026-01-01", units: 10, cost_basis: 500 }],
       },
       { id: 1, name: "USAA", description: null, sort_order: 1, flavor: "Bank", cash_value: 265_012, return_profile_id: 1, positions: [] },
       {
         id: 3, name: "Fidelity 401(k)", description: null, sort_order: 3, flavor: "Investment", tax_status: "TaxDeferred",
-        cash_value: 0, cash_return_profile_id: 1, contribution_limit: null, contribution_period: null, positions: [],
+        cash_value: 0, cash_return_profile_id: 1, contribution_limit: null, contribution_period: null, plan_type: null, catch_up: [], positions: [],
       },
       { id: 4, name: "Mortgage", description: null, sort_order: 4, flavor: "Liability", principal: 360_000, interest_rate: 0.06, repayment: null, positions: [] },
     ],

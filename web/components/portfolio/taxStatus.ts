@@ -24,5 +24,6 @@ export function contributionLimitLabel(account: Account): string {
   const limit = account.contributionLimit;
   if (!limit) return "—";
   const period = limit.period === "Yearly" ? "yr" : "mo";
-  return `$${limit.amount.toLocaleString("en-US")} / ${period}`;
+  const catchUp = limit.catchUp.length > 0 ? " + catch-up" : "";
+  return `$${limit.amount.toLocaleString("en-US")} / ${period}${catchUp}`;
 }

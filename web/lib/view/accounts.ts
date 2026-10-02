@@ -69,8 +69,13 @@ export function toViewAccounts(
         account.flavor === "Investment" &&
         account.contribution_limit != null &&
         account.contribution_period != null
-          ? { amount: account.contribution_limit, period: account.contribution_period }
+          ? {
+              amount: account.contribution_limit,
+              period: account.contribution_period,
+              catchUp: account.catch_up,
+            }
           : undefined,
+      planType: (account.flavor === "Investment" && account.plan_type) || undefined,
       assetServerId: account.flavor === "Property" ? account.asset_id : undefined,
       interestRate: account.flavor === "Liability" ? account.interest_rate : undefined,
       repayment:

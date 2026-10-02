@@ -62,6 +62,10 @@ function flavorOf(raw: ApiAccount, draft: AccountDraft): FlavorSpec {
         // The server refuses one without the other.
         contribution_period:
           draft.contributionLimit == null ? null : draft.contributionPeriod,
+        // A brokerage is no plan, and a catch-up is room on top of a limit:
+        // the server refuses either without the thing it qualifies.
+        plan_type: draft.kind === "retirement" ? draft.planType : null,
+        catch_up: draft.contributionLimit == null ? [] : draft.catchUp,
       };
     case "Property":
       return {

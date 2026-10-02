@@ -7,7 +7,7 @@
  * place that maps one onto the other, so a server change surfaces there as a
  * type error rather than as a wrong number on screen.
  */
-import type { AssetClass, DistributionSpec } from "@/lib/api/types";
+import type { AssetClass, CatchUpSpec, DistributionSpec, PlanType } from "@/lib/api/types";
 
 // ── ids ───────────────────────────────────────────────────────────────────
 /** Display identity — a name where the domain has one, else the row id. */
@@ -27,6 +27,8 @@ export type ContributionLimitPeriod = "Monthly" | "Yearly";
 export interface ContributionLimit {
   amount: number;
   period: ContributionLimitPeriod;
+  /** Extra room by age, on top of `amount`; the largest tier that applies wins. */
+  catchUp: CatchUpSpec[];
 }
 
 /** A single purchase lot for cost-basis tracking. */
@@ -112,6 +114,8 @@ export interface Account {
   /** What the account holds, in one line — the list's widest column. */
   holdings: HoldingsLine;
   contributionLimit?: ContributionLimit;
+  /** Which retirement plan this is; absent for a brokerage or an unnamed plan. */
+  planType?: PlanType;
   positions: AssetLot[];
   /** Names of events that read or write this account. */
   referencedBy: EventId[];

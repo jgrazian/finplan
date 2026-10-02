@@ -172,8 +172,11 @@ export function AccountInspector({
                   ...d,
                   kind,
                   taxStatus: taxStatusFor(kind, pristine.taxStatus),
-                  // A brokerage has no contribution limit for the engine to read.
+                  // A brokerage has no contribution limit for the engine to read,
+                  // and no plan type or catch-up either.
                   contributionLimit: kind === "retirement" ? d.contributionLimit : null,
+                  planType: kind === "retirement" ? pristine.planType : null,
+                  catchUp: kind === "retirement" ? d.catchUp : [],
                 }));
               }}
               ariaLabel="Kind"

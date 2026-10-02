@@ -24,8 +24,8 @@
 //! ```
 
 use crate::model::{
-    Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, FixedAsset, InvestmentContainer,
-    LoanDetail, Repayment, ReturnProfileId, TaxStatus,
+    Account, AccountFlavor, AccountId, AssetId, AssetLot, Cash, ContributionLimit, FixedAsset,
+    InvestmentContainer, LoanDetail, Repayment, ReturnProfileId, TaxStatus,
 };
 use jiff::civil::Date;
 
@@ -48,6 +48,7 @@ enum AccountFlavorBuilder {
         cash_value: f64,
         cash_return_profile_id: ReturnProfileId,
         positions: Vec<AssetLot>,
+        contribution_limit: Option<ContributionLimit>,
     },
     Property {
         asset: Option<FixedAsset>,
@@ -77,6 +78,7 @@ impl AccountBuilder {
                 cash_value: 0.0,
                 cash_return_profile_id: ReturnProfileId(0),
                 positions: Vec::new(),
+                contribution_limit: None,
             },
         }
     }
@@ -94,6 +96,7 @@ impl AccountBuilder {
                 cash_value: 0.0,
                 cash_return_profile_id: ReturnProfileId(0),
                 positions: Vec::new(),
+                contribution_limit: None,
             },
         }
     }
@@ -111,6 +114,7 @@ impl AccountBuilder {
                 cash_value: 0.0,
                 cash_return_profile_id: ReturnProfileId(0),
                 positions: Vec::new(),
+                contribution_limit: None,
             },
         }
     }
@@ -128,6 +132,7 @@ impl AccountBuilder {
                 cash_value: 0.0,
                 cash_return_profile_id: ReturnProfileId(0),
                 positions: Vec::new(),
+                contribution_limit: None,
             },
         }
     }
@@ -145,6 +150,7 @@ impl AccountBuilder {
                 cash_value: 0.0,
                 cash_return_profile_id: ReturnProfileId(0),
                 positions: Vec::new(),
+                contribution_limit: None,
             },
         }
     }
@@ -162,6 +168,7 @@ impl AccountBuilder {
                 cash_value: 0.0,
                 cash_return_profile_id: ReturnProfileId(0),
                 positions: Vec::new(),
+                contribution_limit: None,
             },
         }
     }
@@ -179,6 +186,7 @@ impl AccountBuilder {
                 cash_value: 0.0,
                 cash_return_profile_id: ReturnProfileId(0),
                 positions: Vec::new(),
+                contribution_limit: None,
             },
         }
     }
@@ -346,6 +354,18 @@ impl AccountBuilder {
         self
     }
 
+    /// Cap contributions to an Investment account, catch-ups included
+    #[must_use]
+    pub fn contribution_limit(mut self, limit: ContributionLimit) -> Self {
+        if let AccountFlavorBuilder::Investment {
+            contribution_limit, ..
+        } = &mut self.flavor
+        {
+            *contribution_limit = Some(limit);
+        }
+        self
+    }
+
     /// Set the fixed asset for a Property account
     #[must_use]
     pub fn fixed_asset(mut self, asset_id: AssetId, value: f64) -> Self {
@@ -385,6 +405,7 @@ impl AccountBuilder {
                 cash_value,
                 cash_return_profile_id,
                 positions,
+                contribution_limit,
             } => AccountFlavor::Investment(InvestmentContainer {
                 tax_status,
                 cash: Cash {
@@ -392,7 +413,7 @@ impl AccountBuilder {
                     return_profile_id: cash_return_profile_id,
                 },
                 positions,
-                contribution_limit: None,
+                contribution_limit,
             }),
             AccountFlavorBuilder::Property { asset } => {
                 AccountFlavor::Property(asset.unwrap_or(FixedAsset {

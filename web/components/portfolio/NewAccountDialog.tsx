@@ -14,19 +14,33 @@ import { api } from "@/lib/api/client";
 import type {
   Account as ApiAccount,
   Asset,
+  CatchUpSpec,
   ContributionPeriod,
   CreateAccount,
   FlavorSpec,
+  PlanType,
   Profile,
   TaxStatus,
 } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import {
+  LIMITS_YEAR,
+  PLAN_CHOICES,
+  type PlanChoice,
+  applyPlanChoice,
+  catchUpLabel,
+} from "@/lib/view/planTypes";
 import { NewAssetInline } from "./NewAssetInline";
 
 const FLAVORS = ["Bank", "Investment", "Property", "Liability"] as const;
 type Flavor = (typeof FLAVORS)[number];
 
-const TAX_STATUSES: TaxStatus[] = ["Taxable", "TaxDeferred", "TaxFree"];
+/** A brokerage, or one of the retirement plans — which also sets the tax treatment. */
+type Treatment = "Taxable" | PlanChoice;
+const TREATMENTS: ReadonlyArray<{ value: Treatment; label: string; detail?: string }> = [
+  { value: "Taxable", label: "Brokerage", detail: "taxable" },
+  ...PLAN_CHOICES,
+];
 const PERIODS: ContributionPeriod[] = ["Yearly", "Monthly"];
 
 /** The dropdown row that makes an asset rather than naming one. */
@@ -62,7 +76,10 @@ export function NewAccountDialog({
   const [name, setName] = useState("");
   const [cash, setCash] = useState(0);
   const [profileId, setProfileId] = useState(profiles[0]?.id ?? 0);
+  const [treatment, setTreatment] = useState<Treatment>("Taxable");
   const [taxStatus, setTaxStatus] = useState<TaxStatus>("Taxable");
+  const [planType, setPlanType] = useState<PlanType | null>(null);
+  const [catchUp, setCatchUp] = useState<CatchUpSpec[]>([]);
   const [limit, setLimit] = useState<number | null>(null);
   const [period, setPeriod] = useState<ContributionPeriod>("Yearly");
   const [assetId, setAssetId] = useState<number | null>(assets[0]?.id ?? null);
@@ -88,6 +105,9 @@ export function NewAccountDialog({
           // The server rejects one without the other, so they travel together.
           contribution_limit: limit,
           contribution_period: limit == null ? null : period,
+          plan_type: planType,
+          // Room on top of a limit; the server refuses one without the other.
+          catch_up: limit == null ? [] : catchUp,
         };
       case "Property":
         // Guarded by `noAssets`, which stops the submit before it reaches here
@@ -161,16 +181,31 @@ export function NewAccountDialog({
       {flavor === "Investment" && (
         <>
           <DialogRow>
-            <Field label="Tax treatment">
+            <Field label="Plan type">
               <Dropdown
                 className="dd-field"
-                ariaLabel="Tax treatment"
-                value={taxStatus}
-                onChange={setTaxStatus}
-                options={TAX_STATUSES.map((value) => ({
-                  value,
-                  label: value === "TaxDeferred" ? "Tax-deferred" : value === "TaxFree" ? "Tax-free" : "Taxable",
-                }))}
+                ariaLabel="Plan type"
+                value={treatment}
+                onChange={(choice: Treatment) => {
+                  setTreatment(choice);
+                  if (choice === "Taxable") {
+                    // A brokerage has no limit for the engine to read.
+                    setTaxStatus("Taxable");
+                    setPlanType(null);
+                    setLimit(null);
+                    setCatchUp([]);
+                    return;
+                  }
+                  const { planType, taxStatus, defaults } = applyPlanChoice(choice);
+                  setTaxStatus(taxStatus);
+                  setPlanType(planType);
+                  if (defaults) {
+                    setLimit(defaults.limit);
+                    setPeriod("Yearly");
+                    setCatchUp(defaults.catchUp);
+                  }
+                }}
+                options={TREATMENTS}
               />
             </Field>
             <Field label="Opening cash">
@@ -193,7 +228,10 @@ export function NewAccountDialog({
                 nullable
                 value={limit}
                 placeholder="none"
-                onValueChange={setLimit}
+                onValueChange={(next) => {
+                  setLimit(next);
+                  if (next == null) setCatchUp([]);
+                }}
                 aria-label="Contribution limit"
               />
             </Field>
@@ -208,6 +246,12 @@ export function NewAccountDialog({
               />
             </Field>
           </DialogRow>
+          {limit != null && catchUp.length > 0 && (
+            <p style={{ margin: 0, fontSize: 12 }}>
+              Catch-up: {catchUpLabel(catchUp)} ({LIMITS_YEAR} limits, by age at year end).
+              Adjust them in the account drawer after creating it.
+            </p>
+          )}
         </>
       )}
 

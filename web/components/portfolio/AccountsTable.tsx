@@ -4,7 +4,7 @@ import { DragHandle, DropLine, Table, Tag, Td, Th, rowStyle } from "@/components
 import { fmtCurrency, fmtShareFine } from "@/lib/format";
 import { useReorder } from "@/lib/hooks/useReorder";
 import type { Account, AccountId } from "@/lib/types";
-import { KIND_LABEL, kindOf } from "./accountKind";
+import { kindLabel } from "./accountKind";
 import { taxBadge } from "./taxStatus";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
@@ -82,11 +82,11 @@ export function AccountsTable({
                 <Td style={{ padding: 0 }}>
                   <DragHandle label={a.name} props={handleProps(serverId)} />
                 </Td>
-                <Td title={`${a.name} · ${KIND_LABEL[kindOf(a)]}`}>
+                <Td title={`${a.name} · ${kindLabel(a)}`}>
                   <i className="ledger-swatch" style={{ background: color }} aria-hidden />
                   <strong style={{ fontWeight: 500 }}>{a.name}</strong>{" "}
                   <span className="text-muted" style={{ fontSize: 11.5 }}>
-                    {KIND_LABEL[kindOf(a)]}
+                    {kindLabel(a)}
                   </span>
                 </Td>
                 <Td>

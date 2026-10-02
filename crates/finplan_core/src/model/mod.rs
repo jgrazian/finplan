@@ -11,7 +11,7 @@ mod state_event;
 mod tax_config;
 
 pub use accounts::{
-    Account, AccountFlavor, AccountSnapshot, AccountSnapshotFlavor, AssetLot, Cash,
+    Account, AccountFlavor, AccountSnapshot, AccountSnapshotFlavor, AssetLot, Cash, CatchUp,
     ContributionLimit, ContributionLimitPeriod, FixedAsset, InvestmentContainer, LoanDetail,
     PaymentSchedule, Repayment, TaxStatus, amortized_payment,
 };

@@ -8,6 +8,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -92,6 +93,18 @@ export function Dropdown<T extends string | number>({
 
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
+  // The menu hangs from the trigger's left edge, or its right one where the
+  // left would run off the viewport. Measured before paint, so it never shows
+  // off-screen for a frame; the menu mounts fresh on each open, so there is
+  // nothing to reset on close.
+  useLayoutEffect(() => {
+    const el = menu.current;
+    if (!open || !el) return;
+    const GUTTER = 8;
+    if (el.getBoundingClientRect().right > window.innerWidth - GUTTER) {
+      el.dataset.align = "end";
+    }
+  }, [open]);
 
   const selected = useMemo(
     () => options.findIndex((o) => o.value === value),

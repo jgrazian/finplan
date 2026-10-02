@@ -1,5 +1,6 @@
 import type { Account, AccountFlavorKind, TaxStatus } from "@/lib/types";
 import { fmtCurrency } from "@/lib/format";
+import { PLANS } from "@/lib/view/planTypes";
 
 /**
  * The five kinds the drawer is polymorphic over.
@@ -49,6 +50,11 @@ export function kindOf(account: Account): AccountKind {
   }
 }
 
+/** The kind as a list names it: the plan where one is set, `Roth IRA` over `Retirement`. */
+export function kindLabel(account: Account): string {
+  return account.planType ? PLANS[account.planType].label : KIND_LABEL[kindOf(account)];
+}
+
 /** The tax treatment a kind implies when it is chosen, before refinement. */
 export function taxStatusFor(kind: AccountKind, current: TaxStatus | undefined): TaxStatus | undefined {
   if (kind === "investment") return "Taxable";
@@ -89,8 +95,12 @@ export function conversionWarning(account: Account, to: AccountKind): string | u
   if (from === "retirement" && to === "investment") {
     const parts: string[] = [];
     if (account.contributionLimit) {
-      parts.push(`clears the ${fmtCurrency(account.contributionLimit.amount)} contribution limit`);
+      const catchUp = account.contributionLimit.catchUp.length > 0 ? " and its catch-ups" : "";
+      parts.push(
+        `clears the ${fmtCurrency(account.contributionLimit.amount)} contribution limit${catchUp}`,
+      );
     }
+    if (account.planType) parts.push(`drops the ${PLANS[account.planType].label} plan type`);
     if (lots > 0) parts.push(`starts taxing gains on ${clause(lots)} at sale`);
     if (parts.length === 0) return undefined;
     return `Retirement → Investment ${parts.join(", and ")}.`;

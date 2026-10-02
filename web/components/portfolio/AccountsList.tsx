@@ -2,7 +2,7 @@
 
 import { fmtCurrency } from "@/lib/format";
 import type { Account, AccountId } from "@/lib/types";
-import { KIND_LABEL, kindOf } from "./accountKind";
+import { kindLabel } from "./accountKind";
 import { taxBadge } from "./taxStatus";
 
 /**
@@ -39,7 +39,7 @@ export function AccountsList({
             <span className="portfolio-list-text">
               <span className="portfolio-list-name">{a.name}</span>
               <span className="portfolio-list-meta">
-                {KIND_LABEL[kindOf(a)]}
+                {kindLabel(a)}
                 {a.taxStatus && ` · ${taxBadge(a).label}`}
               </span>
             </span>

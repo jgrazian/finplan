@@ -12,11 +12,13 @@
     {
       "cash_return_profile_id": "Cash / T-Bills",
       "cash_value": 0.0,
+      "catch_up": [],
       "contribution_limit": null,
       "contribution_period": null,
       "description": null,
       "flavor": "Investment",
       "name": "401(k)",
+      "plan_type": null,
       "positions": [],
       "sort_order": 1,
       "tax_status": "TaxDeferred"

@@ -1105,11 +1105,18 @@ tr:hover > * > .grip,
   text-overflow: clip;
 }
 
-/* The menu floats a few pixels under its trigger as its own raised sheet. */
+/* The menu floats a few pixels under its trigger as its own raised sheet. It
+   is at least as wide as the trigger and otherwise sizes to its rows, so a
+   label is never clipped just because the field above it is narrow. Hung from
+   the trigger's left edge, it flips to the right one (`data-align="end"`, set
+   by the component) where growing rightwards would leave the viewport. */
 .dd-menu {
   position: absolute;
   left: 0;
-  right: 0;
+  right: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: min(380px, calc(100vw - 32px));
   top: 100%;
   margin-top: 5px;
   z-index: 40;
@@ -1121,6 +1128,11 @@ tr:hover > * > .grip,
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   animation: pop-in 140ms var(--ease);
+}
+
+.dd-menu[data-align="end"] {
+  left: auto;
+  right: 0;
 }
 
 /* Rows: label left, secondary value right, each its own rounded hit target. */
@@ -1167,15 +1179,27 @@ tr:hover > * > .grip,
   color: currentColor;
 }
 
+/* The label is what the row is: it keeps its width and the secondary value
+   wraps under itself instead. Only a label too long for the whole menu
+   truncates — and beside a detail it stops at two thirds, so the detail always
+   has a column to wrap in rather than one word per line. */
 .dd-opt .dd-label {
+  flex: 0 0 auto;
+  max-width: 100%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
+.dd-opt .dd-label:not(:last-child) {
+  max-width: 65%;
+}
+
 .dd-opt .sub {
-  margin-left: auto;
+  flex: 1 1 auto;
+  min-width: 0;
   padding-left: 10px;
+  text-align: right;
   font-size: 11px;
   opacity: .6;
 }
@@ -1236,9 +1260,6 @@ tr:hover > * > .grip,
 
 .dd-inline .dd-menu {
   right: auto;
-  width: max-content;
-  min-width: 100%;
-  max-width: 280px;
 }
 
 /* A dropdown standing in a field beside text inputs takes the input's box, not

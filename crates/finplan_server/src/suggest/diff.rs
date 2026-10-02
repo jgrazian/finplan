@@ -334,11 +334,16 @@ fn new_account(value: &Value, names: &Names) -> String {
                 Some("TaxFree") => "Tax-free",
                 _ => "Taxable",
             };
+            let kind = match field(value, "plan_type").as_str() {
+                Some("Traditional401k") => "Traditional 401(k)".to_string(),
+                Some("Roth401k") => "Roth 401(k)".to_string(),
+                Some("TraditionalIra") => "Traditional IRA".to_string(),
+                Some("RothIra") => "Roth IRA".to_string(),
+                Some("Hsa") => "HSA".to_string(),
+                _ => format!("{status} investment"),
+            };
             let lots = field(value, "positions").as_array().map_or(0, Vec::len);
-            let mut parts = vec![
-                format!("{status} investment"),
-                format!("{} cash", money_of("cash_value")),
-            ];
+            let mut parts = vec![kind, format!("{} cash", money_of("cash_value"))];
             if lots > 0 {
                 parts.push(if lots == 1 {
                     "1 lot".to_string()
@@ -351,7 +356,25 @@ fn new_account(value: &Value, names: &Names) -> String {
                     Some("Monthly") => "month",
                     _ => "year",
                 };
-                parts.push(format!("up to {} a {period}", money(limit)));
+                let catch_up: Vec<String> = field(value, "catch_up")
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|tier| {
+                        let amount = field(tier, "amount").as_f64()?;
+                        let from = field(tier, "from_age").as_u64()?;
+                        Some(match field(tier, "through_age").as_u64() {
+                            Some(through) => format!("+{} at {from}-{through}", money(amount)),
+                            None => format!("+{} at {from}+", money(amount)),
+                        })
+                    })
+                    .collect();
+                let extra = if catch_up.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", catch_up.join(", "))
+                };
+                parts.push(format!("up to {} a {period}{extra}", money(limit)));
             }
             parts.join(" · ")
         }

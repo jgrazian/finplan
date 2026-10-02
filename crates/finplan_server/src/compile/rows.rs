@@ -92,6 +92,11 @@ pub struct InvestmentRow {
     pub cash_return_profile_id: i64,
     pub contribution_limit: Option<f64>,
     pub contribution_period: Option<String>,
+    /// Defaulted so a plan archived before plan types existed still imports.
+    #[serde(default)]
+    pub plan_type: Option<String>,
+    #[serde(default)]
+    pub catch_up: sqlx::types::Json<Vec<crate::api::accounts::CatchUpSpec>>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -373,7 +378,7 @@ impl ScenarioGraph {
 
         let investment: Vec<InvestmentRow> = sqlx::query_as(
             "SELECT i.account_id, i.tax_status, i.cash_value, i.cash_return_profile_id,
-                    i.contribution_limit, i.contribution_period
+                    i.contribution_limit, i.contribution_period, i.plan_type, i.catch_up
                FROM account_investment i JOIN accounts a ON a.id = i.account_id
               WHERE a.scenario_id = ?1",
         )

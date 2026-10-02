@@ -75,6 +75,13 @@ impl SimTimeline {
         // Below 59.5 means: years < 59 OR (years == 59 AND months < 6)
         years < 59 || (years == 59 && months < 6)
     }
+
+    /// The age reached by December 31 of the current year, which is what
+    /// IRS age tests such as contribution catch-ups go by.
+    #[must_use]
+    pub fn age_at_year_end(&self) -> i16 {
+        self.current_date.year() - self.birth_date.year()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -839,7 +846,8 @@ impl SimulationState {
                     .copied()
                     .unwrap_or(0.0),
             };
-            let room = (limit.amount - contributed).max(0.0);
+            let allowed = limit.amount_for_age(self.timeline.age_at_year_end());
+            let room = (allowed - contributed).max(0.0);
             return Ok(Some(room));
         }
 

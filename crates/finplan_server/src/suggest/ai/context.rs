@@ -657,7 +657,7 @@ pub(super) fn render_plan(out: &mut String, graph: &ScenarioGraph) {
             "Investment" => graph.investment.get(&a.id).map(|inv| {
                 format!(
                     "{} {}: cash {} + holdings {} = {}; basis {}, unrealized gain {}.",
-                    inv.tax_status,
+                    inv.plan_type.as_deref().unwrap_or(&inv.tax_status),
                     a.flavor,
                     money(inv.cash_value),
                     money(held),

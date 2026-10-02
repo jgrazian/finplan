@@ -38,6 +38,7 @@ fn test_monthly_contribution_limit() {
                 contribution_limit: Some(ContributionLimit {
                     amount: 500.0, // $500/month limit
                     period: ContributionLimitPeriod::Monthly,
+                    catch_up: Vec::new(),
                 }),
             }),
         }],
@@ -145,6 +146,7 @@ fn test_yearly_contribution_limit() {
                 contribution_limit: Some(ContributionLimit {
                     amount: 23000.0, // $23k/year limit (2024 Roth 401k limit)
                     period: ContributionLimitPeriod::Yearly,
+                    catch_up: Vec::new(),
                 }),
             }),
         }],
@@ -237,6 +239,7 @@ fn test_contribution_limit_with_asset_purchase() {
                     contribution_limit: Some(ContributionLimit {
                         amount: 7000.0, // $7k/year IRA limit
                         period: ContributionLimitPeriod::Yearly,
+                        catch_up: Vec::new(),
                     }),
                 }),
             },
@@ -327,4 +330,114 @@ fn test_contribution_limit_with_asset_purchase() {
         (asset_balance - 2000.0).abs() < 0.01,
         "Expected $2000 in assets, got ${asset_balance:.2}"
     );
+}
+
+/// Contribute $5,000 a month to a capped 401(k) for someone born on
+/// `birth_date`, and return the amount credited in each calendar year.
+fn yearly_credits_with_catch_up(
+    birth_date: jiff::civil::Date,
+    start_year: i16,
+    years: usize,
+) -> Vec<(i16, f64)> {
+    let k401 = AccountId(1);
+    let start_date = jiff::civil::date(start_year, 1, 1);
+
+    let params = SimulationConfig {
+        start_date: Some(start_date),
+        duration_years: years,
+        birth_date: Some(birth_date),
+        inflation_profile: InflationProfile::None,
+        return_profiles: HashMap::from([(ReturnProfileId(0), ReturnProfile::Fixed(0.0))]),
+        accounts: vec![Account {
+            account_id: k401,
+            flavor: AccountFlavor::Investment(InvestmentContainer {
+                tax_status: TaxStatus::TaxDeferred,
+                cash: Cash {
+                    value: 0.0,
+                    return_profile_id: ReturnProfileId(0),
+                },
+                positions: vec![],
+                contribution_limit: Some(
+                    ContributionLimit::yearly(23_000.0)
+                        .with_catch_up(50, None, 7_500.0)
+                        .with_catch_up(60, Some(63), 11_250.0),
+                ),
+            }),
+        }],
+        events: vec![Event {
+            event_id: EventId(1),
+            trigger: EventTrigger::Repeating {
+                interval: RepeatInterval::Monthly,
+                start_condition: Some(Box::new(EventTrigger::Date(start_date))),
+                end_condition: None,
+                max_occurrences: None,
+            },
+            effects: vec![EventEffect::Income {
+                to: k401,
+                amount: TransferAmount::fixed(5_000.0),
+                amount_mode: AmountMode::Net,
+                income_type: IncomeType::TaxFree,
+            }],
+            once: false,
+        }],
+        ..Default::default()
+    };
+
+    let result = simulate(&params, 42).unwrap();
+
+    let mut totals: Vec<(i16, f64)> = (0..years as i16).map(|i| (start_year + i, 0.0)).collect();
+    for entry in &result.ledger {
+        if let crate::model::StateEvent::CashCredit { to, amount, .. } = &entry.event
+            && *to == k401
+            && let Some(slot) = totals.iter_mut().find(|(y, _)| *y == entry.date.year())
+        {
+            slot.1 += amount;
+        }
+    }
+    totals
+}
+
+fn assert_yearly(actual: &[(i16, f64)], expected: &[(i16, f64)]) {
+    for ((year, got), (_, want)) in actual.iter().zip(expected) {
+        assert!(
+            (got - want).abs() < 0.01,
+            "{year}: expected ${want:.2}, got ${got:.2} (all years: {actual:?})"
+        );
+    }
+}
+
+#[test]
+fn test_catch_up_starts_in_the_year_of_the_50th_birthday() {
+    // Turns 50 on Dec 15, 2025: the catch-up is open from Jan 1, 2025.
+    let totals = yearly_credits_with_catch_up(jiff::civil::date(1975, 12, 15), 2024, 2);
+    assert_yearly(&totals, &[(2024, 23_000.0), (2025, 30_500.0)]);
+}
+
+#[test]
+fn test_age_60_to_63_catch_up_replaces_the_age_50_one() {
+    // Born mid-1963: 59 in 2022, 60-63 in 2023-2026, 64 in 2027.
+    let totals = yearly_credits_with_catch_up(jiff::civil::date(1963, 6, 1), 2022, 6);
+    assert_yearly(
+        &totals,
+        &[
+            (2022, 30_500.0),
+            (2023, 34_250.0),
+            (2024, 34_250.0),
+            (2025, 34_250.0),
+            (2026, 34_250.0),
+            (2027, 30_500.0),
+        ],
+    );
+}
+
+#[test]
+fn test_catch_up_tiers_take_the_largest_not_the_sum() {
+    let limit = ContributionLimit::yearly(23_000.0)
+        .with_catch_up(50, None, 7_500.0)
+        .with_catch_up(60, Some(63), 11_250.0);
+    assert!((limit.amount_for_age(49) - 23_000.0).abs() < f64::EPSILON);
+    assert!((limit.amount_for_age(50) - 30_500.0).abs() < f64::EPSILON);
+    assert!((limit.amount_for_age(60) - 34_250.0).abs() < f64::EPSILON);
+    assert!((limit.amount_for_age(63) - 34_250.0).abs() < f64::EPSILON);
+    assert!((limit.amount_for_age(64) - 30_500.0).abs() < f64::EPSILON);
 }

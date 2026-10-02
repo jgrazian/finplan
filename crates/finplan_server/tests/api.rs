@@ -413,6 +413,69 @@ async fn a_scenario_can_be_renamed_but_not_to_nothing() {
 }
 
 #[tokio::test]
+async fn a_retirement_account_keeps_its_plan_type_and_catch_up() {
+    let mut app = TestApp::new().await;
+    app.login_as("plan-type@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let cash = profiles[0]["id"].as_i64().unwrap();
+    let accounts = format!("/api/scenarios/{scenario_id}/accounts");
+    let k401 = |extra: Value| {
+        let mut body = json!({
+            "name": "Work 401(k)", "flavor": "Investment", "tax_status": "TaxDeferred",
+            "cash_value": 0.0, "cash_return_profile_id": cash,
+            "plan_type": "Traditional401k",
+            "contribution_limit": 24500.0, "contribution_period": "Yearly",
+            "catch_up": [
+                {"from_age": 50, "through_age": null, "amount": 8000.0},
+                {"from_age": 60, "through_age": 63, "amount": 11250.0}
+            ]
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            body[key] = value.clone();
+        }
+        body
+    };
+
+    let (status, created) = app.post(&accounts, k401(json!({}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    let path = format!("{accounts}/{}", created["id"]);
+    let (_, fetched) = app.get(&path).await;
+    assert_eq!(fetched["plan_type"], "Traditional401k");
+    assert_eq!(fetched["catch_up"][1]["through_age"], 63);
+    assert_eq!(fetched["catch_up"][1]["amount"], 11250.0);
+
+    // The plan decides the tax treatment; a Roth-taxed traditional 401(k) is refused.
+    let (status, error) = app
+        .post(
+            &accounts,
+            k401(json!({"name": "Bad", "tax_status": "TaxFree"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+
+    // A catch-up adds to a limit, so it needs one.
+    let (status, error) = app
+        .post(
+            &accounts,
+            k401(json!({"name": "Bad", "contribution_limit": null, "contribution_period": null})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+
+    // Accounts written before plan types existed read back with neither.
+    let (_, listed) = app.get(&accounts).await;
+    let brokerage = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["name"] == "Brokerage")
+        .unwrap();
+    assert_eq!(brokerage["plan_type"], Value::Null);
+    assert_eq!(brokerage["catch_up"], json!([]));
+}
+
+#[tokio::test]
 async fn funding_results_distinguish_shortfalls_from_positive_terminal_wealth() {
     let mut app = TestApp::new().await;
     app.login_as("funding@example.com").await;

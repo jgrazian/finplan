@@ -4,15 +4,19 @@ import { CompactInput, CurrencyInput, DirtyField, Dropdown, Field, NumberInput }
 import type { Account as ApiAccount, Asset, Profile } from "@/lib/api/types";
 import { termLabel } from "@/lib/view/events";
 import { fmtCurrency } from "@/lib/format";
-import type { Account, TaxStatus } from "@/lib/types";
+import type { Account } from "@/lib/types";
+import {
+  LIMITS_YEAR,
+  PLANS,
+  PLAN_CHOICES,
+  applyPlanChoice,
+  catchUpLabel,
+  planChoiceOf,
+} from "@/lib/view/planTypes";
 import type { AccountDraft, ChangedFields, SetDraft } from "./accountDraft";
+import { CatchUpEditor } from "./CatchUpEditor";
 
 const GRID = { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } as const;
-
-const TREATMENTS: ReadonlyArray<{ value: TaxStatus; label: string; detail: string }> = [
-  { value: "TaxDeferred", label: "Tax-deferred", detail: "traditional" },
-  { value: "TaxFree", label: "Tax-free", detail: "Roth" },
-];
 
 /**
  * Block 2 — the kind-specific fields.
@@ -80,15 +84,33 @@ export function AccountTerms({
           </DirtyField>
           {draft.kind === "retirement" && (
             <>
-              <DirtyField label="Tax treatment" changed={changed.taxStatus}>
+              <DirtyField label="Plan type" changed={changed.taxStatus}>
                 <Dropdown
                   className="dd-field"
-                  options={TREATMENTS}
-                  value={draft.taxStatus ?? "TaxDeferred"}
+                  options={PLAN_CHOICES}
+                  value={planChoiceOf(draft.planType, draft.taxStatus)}
                   disabled={offline}
-                  onChange={(status) => set("taxStatus", status)}
-                  ariaLabel="Tax treatment"
+                  onChange={(choice) => {
+                    const { planType, taxStatus, defaults } = applyPlanChoice(choice);
+                    set("planType", planType);
+                    set("taxStatus", taxStatus);
+                    // A named plan brings its statutory limits; "other" keeps
+                    // whatever the account had.
+                    if (defaults) {
+                      set("contributionLimit", defaults.limit);
+                      set("contributionPeriod", "Yearly");
+                      set("catchUp", defaults.catchUp);
+                    }
+                  }}
+                  ariaLabel="Plan type"
                 />
+                {changed.taxStatus && draft.planType && (
+                  <div className="field-was">
+                    {LIMITS_YEAR} limits: {fmtCurrency(PLANS[draft.planType].limit)}/yr
+                    {PLANS[draft.planType].catchUp.length > 0 &&
+                      `, ${catchUpLabel(PLANS[draft.planType].catchUp)}`}
+                  </div>
+                )}
               </DirtyField>
               <DirtyField label="Contribution limit" changed={changed.limit}>
                 <CurrencyInput
@@ -97,7 +119,12 @@ export function AccountTerms({
                   value={draft.contributionLimit}
                   placeholder="none"
                   readOnly={offline}
-                  onValueChange={(limit) => set("contributionLimit", limit)}
+                  onValueChange={(limit) => {
+                    set("contributionLimit", limit);
+                    // A catch-up is room on top of a limit; with none, there is
+                    // nothing for it to add to.
+                    if (limit == null) set("catchUp", []);
+                  }}
                   aria-label="Contribution limit"
                   suffix={
                     <button
@@ -117,6 +144,18 @@ export function AccountTerms({
                   }
                 />
               </DirtyField>
+              {draft.contributionLimit != null && (
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <DirtyField label="Catch-up contributions" changed={changed.catchUp}>
+                    <CatchUpEditor
+                      tiers={draft.catchUp}
+                      period={draft.contributionPeriod}
+                      readOnly={offline}
+                      onChange={(tiers) => set("catchUp", tiers)}
+                    />
+                  </DirtyField>
+                </div>
+              )}
             </>
           )}
         </div>

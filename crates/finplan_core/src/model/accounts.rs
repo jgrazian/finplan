@@ -19,12 +19,87 @@ pub enum ContributionLimitPeriod {
 }
 
 /// Contribution limit configuration for an account
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ContributionLimit {
     /// Maximum contribution per period
     pub amount: f64,
     /// Period type for the limit
     pub period: ContributionLimitPeriod,
+    /// Extra room by age, on top of `amount`. Tiers do not stack: when more
+    /// than one applies, the largest wins, which is how the 401(k) age 60-63
+    /// catch-up replaces the age-50 one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catch_up: Vec<CatchUp>,
+}
+
+impl ContributionLimit {
+    #[must_use]
+    pub fn yearly(amount: f64) -> Self {
+        Self {
+            amount,
+            period: ContributionLimitPeriod::Yearly,
+            catch_up: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn monthly(amount: f64) -> Self {
+        Self {
+            amount,
+            period: ContributionLimitPeriod::Monthly,
+            catch_up: Vec::new(),
+        }
+    }
+
+    /// Add `amount` of room for anyone turning `from_age` through
+    /// `through_age` (inclusive, `None` for no upper bound) during the year.
+    #[must_use]
+    pub fn with_catch_up(mut self, from_age: u8, through_age: Option<u8>, amount: f64) -> Self {
+        self.catch_up.push(CatchUp {
+            from_age,
+            through_age,
+            amount,
+        });
+        self
+    }
+
+    /// The extra room for someone who reaches `age` by the end of the year.
+    #[must_use]
+    pub fn catch_up_for_age(&self, age: i16) -> f64 {
+        self.catch_up
+            .iter()
+            .filter(|c| c.applies_at(age))
+            .map(|c| c.amount)
+            .fold(0.0, f64::max)
+    }
+
+    /// The whole limit for someone who reaches `age` by the end of the year.
+    #[must_use]
+    pub fn amount_for_age(&self, age: i16) -> f64 {
+        self.amount + self.catch_up_for_age(age)
+    }
+}
+
+/// Extra contribution room by age, such as the 401(k) catch-up at 50.
+///
+/// Eligibility follows the IRS rule: the age reached by December 31 of the
+/// contribution year counts, so someone turning 50 in November has the full
+/// catch-up from January.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct CatchUp {
+    pub from_age: u8,
+    /// Last eligible age, inclusive. `None` means no upper bound.
+    #[serde(default)]
+    pub through_age: Option<u8>,
+    /// Extra room per period
+    pub amount: f64,
+}
+
+impl CatchUp {
+    #[must_use]
+    pub fn applies_at(&self, age: i16) -> bool {
+        age >= i16::from(self.from_age) && self.through_age.is_none_or(|t| age <= i16::from(t))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]

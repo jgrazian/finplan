@@ -13,8 +13,8 @@ use finplan_core::config::SimulationMetadata;
 use finplan_core::expression::compile_amount;
 use finplan_core::model::{
     Account, AccountFlavor, AmountMode, AssetCoord, AssetLot, BalanceThreshold, CalendarAge, Cash,
-    ContributionLimit, ContributionLimitPeriod, Event, EventEffect, EventTrigger, Financing,
-    FixedAsset, HistoricalInflation, HistoricalReturns, IncomeType, InflationProfile,
+    CatchUp, ContributionLimit, ContributionLimitPeriod, Event, EventEffect, EventTrigger,
+    Financing, FixedAsset, HistoricalInflation, HistoricalReturns, IncomeType, InflationProfile,
     InvestmentContainer, LoanDetail, LotMethod, ParameterValue, Repayment, RepeatInterval,
     ReturnProfile, TaxBracket, TaxConfig, TaxStatus, TransferAmount, TriggerOffset,
     WithdrawalOrder, WithdrawalSources,
@@ -298,6 +298,15 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
                                 )));
                             }
                         },
+                        catch_up: inv
+                            .catch_up
+                            .iter()
+                            .map(|c| CatchUp {
+                                from_age: c.from_age,
+                                through_age: c.through_age,
+                                amount: c.amount,
+                            })
+                            .collect(),
                     }),
                     _ => None,
                 };

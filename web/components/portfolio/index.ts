@@ -15,7 +15,7 @@ export { LinkedAccounts } from "./LinkedAccounts";
 export { PortfolioSummary } from "./PortfolioSummary";
 export { PositionsTable } from "./PositionsTable";
 export { ReferencedBy } from "./ReferencedBy";
-export { KINDS, KIND_LABEL, kindOf } from "./accountKind";
+export { KINDS, KIND_LABEL, kindLabel, kindOf } from "./accountKind";
 export type { AccountKind } from "./accountKind";
 export { contributionLimitLabel, taxBadge } from "./taxStatus";
 export { UNMAPPED, profileOptions } from "./profilePicker";

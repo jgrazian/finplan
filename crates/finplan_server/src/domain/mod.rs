@@ -128,8 +128,8 @@ pub(crate) async fn clone_into_mapped(
             sqlx::query(
                 "INSERT INTO account_investment
                     (account_id, tax_status, cash_value, cash_return_profile_id,
-                     contribution_limit, contribution_period)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
+                     contribution_limit, contribution_period, plan_type, catch_up)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
             .bind(id)
             .bind(&inv.tax_status)
@@ -137,6 +137,8 @@ pub(crate) async fn clone_into_mapped(
             .bind(inv.cash_return_profile_id)
             .bind(inv.contribution_limit)
             .bind(&inv.contribution_period)
+            .bind(&inv.plan_type)
+            .bind(&inv.catch_up)
             .execute(&mut **tx)
             .await?;
         }
