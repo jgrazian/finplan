@@ -79,6 +79,7 @@ impl TestApp {
 fn note(kind: &str, title: &str, evidence: Value, changes: Value, extra: Value) -> Value {
     let mut note = json!({
         "kind": kind, "section": "plan", "title": title,
+        "summary": "The one-line lead.",
         "reasoning": "From what the person gave.",
         "evidence": evidence,
         "paths": [{"key": "a", "label": "Add it", "recommended": true,

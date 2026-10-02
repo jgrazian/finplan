@@ -5,6 +5,8 @@ import { useId } from "react";
 export interface SegmentOption<T extends string> {
   value: T;
   label: string;
+  /** A muted tally after the label, e.g. how many rows the option shows. */
+  count?: number;
   disabled?: boolean;
   title?: string;
 }
@@ -42,6 +44,7 @@ export function SegmentedControl<T extends string>({
             onChange={() => onChange(opt.value)}
           />
           {opt.label}
+          {opt.count != null && <span className="seg-count">{opt.count}</span>}
         </label>
       ))}
     </div>

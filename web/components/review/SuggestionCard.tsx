@@ -44,7 +44,7 @@ const MONO: React.CSSProperties = {
 };
 
 /** The server's diff lines, additions and removals marked as such. */
-function DiffRows({ rows }: { rows: DiffRow[] }) {
+export function DiffRows({ rows }: { rows: DiffRow[] }) {
   return (
     <>
       {rows.map((row, i) => (
@@ -148,7 +148,8 @@ export function SuggestionCard({
         {card.title}
       </div>
       <div className="card-body" style={{ fontSize: 12.5, textWrap: "pretty" }}>
-        {card.body}
+        {card.summary}
+        {card.more && ` ${card.more}`}
       </div>
       {card.chat === "prominent" && !chatOpen && (
         <p style={{ margin: 0, fontSize: 12.5, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
@@ -159,6 +160,113 @@ export function SuggestionCard({
         </p>
       )}
 
+      <PathPicker card={card} busy={busy} onSelect={onSelect} />
+
+      <StepList card={card} busy={busy} onAction={onAction} />
+
+      {(card.diff.length > 0 || check) && (
+        <div style={MONO}>
+          <DiffRows rows={card.diff} />
+          {check && (
+            <div style={{ color: FAINT, marginTop: card.diff.length > 0 ? 6 : 0 }}>
+              {check.text}
+              {!check.simulated && " · not simulated yet"}
+            </div>
+          )}
+          {check?.basis && <div style={{ color: FAINT, fontSize: 11 }}>{check.basis}</div>}
+          {check?.caveat && <div style={{ color: FAINT, fontSize: 11 }}>{check.caveat}</div>}
+        </div>
+      )}
+
+      {card.evidence.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 12 }}>
+          {card.evidence.map((link, i) =>
+            link.to ? (
+              <a
+                key={`${link.label}:${i}`}
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onNavigate(link.to!);
+                }}
+              >
+                {link.label} →
+              </a>
+            ) : (
+              <span key={`${link.label}:${i}`} style={{ color: MUTED }}>
+                {link.label}
+              </span>
+            ),
+          )}
+        </div>
+      )}
+
+      <OutcomeNotes outcome={outcome} onReviewAgain={onReviewAgain} onOpenCopy={onOpenCopy} />
+
+      {(card.actions.length > 0 || (card.chat && (card.chat === "quiet" || chatOpen))) && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {primary && (
+            <button
+              className="btn btn-primary blueprint"
+              type="button"
+              style={{ fontSize: 12 }}
+              disabled={busy}
+              onClick={() => onAction(primary)}
+            >
+              <i className="corner tl" />
+              <i className="corner tr" />
+              <i className="corner bl" />
+              <i className="corner br" />
+              {label(primary)}
+            </button>
+          )}
+          {secondary.map((action) => (
+            <button
+              key={action}
+              className="btn btn-ghost"
+              type="button"
+              style={{ fontSize: 12 }}
+              disabled={busy}
+              onClick={() => onAction(action)}
+            >
+              {label(action)}
+            </button>
+          ))}
+          {card.chat && (card.chat === "quiet" || chatOpen) && (
+            <button
+              className="btn btn-ghost"
+              type="button"
+              style={{ fontSize: 12, marginLeft: "auto" }}
+              aria-expanded={chatOpen}
+              onClick={() => setChatOpen((open) => !open)}
+            >
+              {chatOpen ? CHAT_HIDE : CHAT_PROMPT.quiet.label}
+            </button>
+          )}
+        </div>
+      )}
+      {card.chat && chatOpen && (
+        <SuggestionChat suggestionId={card.id} offline={offline} onSettled={onChatSettled ?? (() => undefined)} />
+      )}
+    </Blueprint>
+  );
+}
+
+/**
+ * The paths to pick between, when a note offers several, then the picked
+ * one's label and reasoning.
+ */
+export function PathPicker({
+  card,
+  busy,
+  onSelect,
+}: {
+  card: Card;
+  busy: boolean;
+  onSelect: (path: string) => void;
+}) {
+  return (
+    <>
       {card.paths.length > 0 && (
         <fieldset style={{ border: 0, margin: 0, padding: 0, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
           <legend
@@ -222,84 +330,74 @@ export function SuggestionCard({
           {card.pathReasoning}
         </div>
       )}
+    </>
+  );
+}
 
-      {card.steps.length > 0 && (
-        <ol aria-label="Steps" style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
-          {card.steps.map((step) => (
-            <li key={step.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 10px", fontSize: 12.5 }}>
-                <span style={{ flex: "1 1 160px", minWidth: 0, fontWeight: 600 }}>
-                  {step.number}. {step.title}
-                </span>
-                {step.status && (
-                  <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-accent-800)" }}>{step.status}</span>
-                )}
-                {step.apply && (
-                  <button
-                    className="btn btn-ghost"
-                    type="button"
-                    style={{ fontSize: 12 }}
-                    disabled={busy}
-                    aria-label={`Apply step ${step.number}: ${step.title}`}
-                    onClick={() => onAction("apply-step", step.key)}
-                  >
-                    {ACTION_LABEL["apply-step"]}
-                  </button>
-                )}
-                {step.after != null && <span style={{ fontSize: 11.5, color: FAINT }}>after {step.after}</span>}
-              </div>
-              {step.reasoning && (
-                <div className="card-body" style={{ fontSize: 12, textWrap: "pretty" }}>
-                  {step.reasoning}
-                </div>
-              )}
-              {step.diff.length > 0 && (
-                <div style={{ ...MONO, opacity: step.applied ? 0.7 : 1 }}>
-                  <DiffRows rows={step.diff} />
-                </div>
-              )}
-            </li>
-          ))}
-        </ol>
-      )}
-
-      {(card.diff.length > 0 || check) && (
-        <div style={MONO}>
-          <DiffRows rows={card.diff} />
-          {check && (
-            <div style={{ color: FAINT, marginTop: card.diff.length > 0 ? 6 : 0 }}>
-              {check.text}
-              {!check.simulated && " · not simulated yet"}
+/** The selected path's steps, each with its diff and, for the next one, its Apply. */
+export function StepList({
+  card,
+  busy,
+  onAction,
+}: {
+  card: Card;
+  busy: boolean;
+  onAction: (action: CardAction, step?: string) => void;
+}) {
+  if (card.steps.length === 0) return null;
+  return (
+    <ol aria-label="Steps" style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
+      {card.steps.map((step) => (
+        <li key={step.key} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "4px 10px", fontSize: 12.5 }}>
+            <span style={{ flex: "1 1 160px", minWidth: 0, fontWeight: 600 }}>
+              {step.number}. {step.title}
+            </span>
+            {step.status && (
+              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--color-accent-800)" }}>{step.status}</span>
+            )}
+            {step.apply && (
+              <button
+                className="btn btn-ghost"
+                type="button"
+                style={{ fontSize: 12 }}
+                disabled={busy}
+                aria-label={`Apply step ${step.number}: ${step.title}`}
+                onClick={() => onAction("apply-step", step.key)}
+              >
+                {ACTION_LABEL["apply-step"]}
+              </button>
+            )}
+            {step.after != null && <span style={{ fontSize: 11.5, color: FAINT }}>after {step.after}</span>}
+          </div>
+          {step.reasoning && (
+            <div className="card-body" style={{ fontSize: 12, textWrap: "pretty" }}>
+              {step.reasoning}
             </div>
           )}
-          {check?.basis && <div style={{ color: FAINT, fontSize: 11 }}>{check.basis}</div>}
-          {check?.caveat && <div style={{ color: FAINT, fontSize: 11 }}>{check.caveat}</div>}
-        </div>
-      )}
-
-      {card.evidence.length > 0 && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", fontSize: 12 }}>
-          {card.evidence.map((link, i) =>
-            link.to ? (
-              <a
-                key={`${link.label}:${i}`}
-                href="#"
-                onClick={(e) => {
-                  e.preventDefault();
-                  onNavigate(link.to!);
-                }}
-              >
-                {link.label} →
-              </a>
-            ) : (
-              <span key={`${link.label}:${i}`} style={{ color: MUTED }}>
-                {link.label}
-              </span>
-            ),
+          {step.diff.length > 0 && (
+            <div style={{ ...MONO, opacity: step.applied ? 0.7 : 1 }}>
+              <DiffRows rows={step.diff} />
+            </div>
           )}
-        </div>
-      )}
+        </li>
+      ))}
+    </ol>
+  );
+}
 
+/** What happened when the note was last acted on: a refusal, an error, a copy made. */
+export function OutcomeNotes({
+  outcome,
+  onReviewAgain,
+  onOpenCopy,
+}: {
+  outcome?: CardOutcome;
+  onReviewAgain: () => void;
+  onOpenCopy: (scenarioId: number) => void;
+}) {
+  return (
+    <>
       {outcome?.problems && outcome.problems.length > 0 && (
         <div
           role="alert"
@@ -344,52 +442,6 @@ export function SuggestionCard({
           </a>
         </div>
       )}
-
-      {(card.actions.length > 0 || (card.chat && (card.chat === "quiet" || chatOpen))) && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          {primary && (
-            <button
-              className="btn btn-primary blueprint"
-              type="button"
-              style={{ fontSize: 12 }}
-              disabled={busy}
-              onClick={() => onAction(primary)}
-            >
-              <i className="corner tl" />
-              <i className="corner tr" />
-              <i className="corner bl" />
-              <i className="corner br" />
-              {label(primary)}
-            </button>
-          )}
-          {secondary.map((action) => (
-            <button
-              key={action}
-              className="btn btn-ghost"
-              type="button"
-              style={{ fontSize: 12 }}
-              disabled={busy}
-              onClick={() => onAction(action)}
-            >
-              {label(action)}
-            </button>
-          ))}
-          {card.chat && (card.chat === "quiet" || chatOpen) && (
-            <button
-              className="btn btn-ghost"
-              type="button"
-              style={{ fontSize: 12, marginLeft: "auto" }}
-              aria-expanded={chatOpen}
-              onClick={() => setChatOpen((open) => !open)}
-            >
-              {chatOpen ? CHAT_HIDE : CHAT_PROMPT.quiet.label}
-            </button>
-          )}
-        </div>
-      )}
-      {card.chat && chatOpen && (
-        <SuggestionChat suggestionId={card.id} offline={offline} onSettled={onChatSettled ?? (() => undefined)} />
-      )}
-    </Blueprint>
+    </>
   );
 }

@@ -242,12 +242,18 @@ async fn post_message(
     let board = suggestions::notes_of(&state.db, note.scenario_id).await?;
     let rule_drafts = rules::review(&graph, &results);
     // The model must repeat neither this note nor any other still standing.
-    let context = ReviewContext::build(&graph, &results, &rule_drafts).with_notes(
-        board
-            .iter()
-            .filter(|n| n.status != SuggestionStatus::Applied)
-            .map(|n| (n.kind, n.title.as_str(), all_changes(&n.paths))),
-    );
+    let context = ReviewContext::build(&graph, &results, &rule_drafts)
+        .with_notes(
+            board
+                .iter()
+                .filter(|n| n.status != SuggestionStatus::Applied)
+                .map(|n| (n.kind, n.title.as_str(), all_changes(&n.paths))),
+        )
+        .with_dismissed_notes(
+            suggestions::dismissed(&board)
+                .into_iter()
+                .map(suggestions::outline),
+        );
     let note_text = render_note(&note, &board);
     let check_iterations = suggestions::check_iterations(&state.db, run_id).await?;
 
@@ -486,6 +492,9 @@ fn render_note(note: &Suggestion, board: &[Suggestion]) -> String {
         tag(&note.status)
     );
     let _ = writeln!(out, "Title: {}", note.title);
+    if let Some(summary) = &note.summary {
+        let _ = writeln!(out, "Summary: {summary}");
+    }
     let _ = writeln!(out, "Reasoning: {}", note.reasoning);
     if !note.evidence.is_empty() {
         let _ = writeln!(

@@ -97,6 +97,10 @@ pub(super) fn sweep_sells_while_cash(ctx: &Ctx) -> Vec<Draft> {
                     money(swept),
                     money(held)
                 ),
+                summary: format!(
+                    "{name} already has the cash, so selling investments first only brings \
+                     gains and their taxes forward."
+                ),
                 reasoning: format!(
                     "In {year} {event} first sweeps {swept} into {name} by selling investments, \
                      then pays {expense} from {name}. On the median path {name} already holds \
@@ -217,6 +221,10 @@ pub(super) fn liability_payment_inflation_adjusted(ctx: &Ctx) -> Vec<Draft> {
                 kind: Kind::Fix,
                 section: Section::Plan,
                 title,
+                summary: format!(
+                    "A loan payment is fixed in dollars, but this one grows with inflation, so \
+                     {loan} is paid off early and its cost lands in later years."
+                ),
                 reasoning: format!(
                     "A loan payment is fixed in dollars, but this one is inflation-adjusted, so \
                      it grows every year.{path_note} That pays {loan} off sooner than its \

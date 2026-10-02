@@ -48,6 +48,7 @@ const note = (over: Partial<Suggestion> = {}): Suggestion =>
     kind: "add",
     section: "portfolio",
     title: "Checking account",
+    summary: null as string | null,
     reasoning: "From the statement.",
     evidence: [],
     paths: [],

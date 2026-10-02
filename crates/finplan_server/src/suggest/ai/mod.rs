@@ -57,7 +57,7 @@ pub use config::{
     AiConfig, DEFAULT_APP_TITLE, DEFAULT_BASE_URL, DEFAULT_MODEL, DraftConfig, DraftLimits,
     PlanChatConfig, ThinkingMode,
 };
-pub use context::{ReviewContext, render_path};
+pub use context::{NoteOutline, ReviewContext, render_path};
 pub use transport::{
     BoxFuture, ModelPrice, OpenRouterSettings, OpenRouterTransport, Reply, Request, Transport,
     TransportError,
@@ -122,6 +122,8 @@ pub struct AiDraft {
     pub kind: Kind,
     pub section: Section,
     pub title: String,
+    /// One sentence under the title; the reasoning sits behind a disclosure.
+    pub summary: String,
     pub reasoning: String,
     pub evidence: Vec<Evidence>,
     /// The courses of action; empty on a read note.
@@ -686,6 +688,9 @@ struct Submission {
     #[serde(default)]
     motive: Option<Motive>,
     title: String,
+    /// Required; optional here so a missing one is a named problem.
+    #[serde(default)]
+    summary: Option<String>,
     reasoning: String,
     /// Why a check note offers no path.
     #[serde(default)]
@@ -728,6 +733,15 @@ impl SubmittedPath {
 
 const MAX_TITLE: usize = 120;
 const MAX_REASONING: usize = 1_200;
+/// The lead sentence under a note's title.
+pub(crate) const MAX_SUMMARY: usize = 200;
+
+/// Why a note's summary is refused, if it is: it is one line of 1 to
+/// `MAX_SUMMARY` characters.
+pub(crate) fn summary_problem(summary: &str) -> Option<String> {
+    (summary.is_empty() || summary.chars().count() > MAX_SUMMARY || summary.contains('\n'))
+        .then(|| format!("summary must be one sentence on one line, 1 to {MAX_SUMMARY} characters"))
+}
 const MAX_EVIDENCE: usize = 10;
 const MAX_STAT_NAME: usize = 80;
 const MAX_NO_CHANGE_REASON: usize = 200;
@@ -978,11 +992,15 @@ impl Session<'_> {
 
         let title = s.title.trim().to_owned();
         let reasoning = s.reasoning.trim().to_owned();
+        let summary = s.summary.as_deref().unwrap_or("").trim().to_owned();
         if title.is_empty() || title.chars().count() > MAX_TITLE || title.contains('\n') {
             problem(
                 "title",
                 format!("title must be one line of 1 to {MAX_TITLE} characters"),
             );
+        }
+        if let Some(text) = summary_problem(&summary) {
+            problem("summary", text);
         }
         if reasoning.is_empty() || reasoning.chars().count() > MAX_REASONING {
             problem(
@@ -1089,10 +1107,20 @@ impl Session<'_> {
         if let Some(twin) = self.context.existing.iter().chain(&accepted).find(|n| {
             n.title == normalized || (!edits.is_empty() && n.edits == edits && n.kind == s.kind)
         }) {
+            // Say which test matched, so a note refused by mistake can be told
+            // apart from a real repeat.
+            let why = if twin.title == normalized {
+                "has the same title as".to_owned()
+            } else {
+                format!(
+                    "makes the same changes ({}) as",
+                    edits.iter().cloned().collect::<Vec<_>>().join(", ")
+                )
+            };
             problem(
                 "duplicate",
                 format!(
-                    "repeats an existing note (\"{}\"); drop it or make a different point",
+                    "repeats an existing note: it {why} \"{}\"; drop it or make a different point",
                     twin.title
                 ),
             );
@@ -1228,6 +1256,7 @@ impl Session<'_> {
             kind: s.kind,
             section: s.section,
             title,
+            summary,
             reasoning,
             evidence: s.evidence,
             paths,

@@ -1541,11 +1541,15 @@ impl Session<'_> {
         }
         let title = s.title.trim().to_owned();
         let reasoning = s.reasoning.trim().to_owned();
+        let summary = s.summary.as_deref().unwrap_or("").trim().to_owned();
         if title.is_empty() || title.chars().count() > MAX_TITLE || title.contains('\n') {
             problem(
                 "title",
                 format!("title must be one line of 1 to {MAX_TITLE} characters"),
             );
+        }
+        if let Some(text) = crate::suggest::ai::summary_problem(&summary) {
+            problem("summary", text);
         }
         if reasoning.is_empty() || reasoning.chars().count() > MAX_REASONING {
             problem(
@@ -1836,6 +1840,7 @@ impl Session<'_> {
                 kind: s.kind,
                 section: s.section,
                 title,
+                summary,
                 reasoning,
                 evidence: s.evidence,
                 paths,
@@ -1963,6 +1968,9 @@ struct DraftSubmission {
     #[serde(default)]
     key: Option<String>,
     title: String,
+    /// Required; optional here so a missing one is a named problem.
+    #[serde(default)]
+    summary: Option<String>,
     reasoning: String,
     #[serde(default)]
     no_change_reason: Option<String>,

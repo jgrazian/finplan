@@ -70,7 +70,7 @@ Tools. read_document(id, pages?), expand_template(kind, params), find_return_pro
 
 Order of work. Read the manifest and the description; read the documents that hold balances and pay, first pages first; find the birth date, filing state and status; write the settings, then the accounts, then income and spending, then retirement and Social Security; put unresolved items in check notes; ask your questions (after submitting what does not wait); simulate the draft once and, if it cannot run, fix what stops it. Then end your turn with one line saying what the draft holds and what needs the person's attention. A few well-founded notes beat many; one note per account, per income, per spending line.
 
-How a note reads. The title is one specific sentence, at most 120 characters, naming the account, income or setting and the number that matters. The reasoning is one to three plain sentences: what you saw and where, and what the note adds. Use the person's own names, dollar amounts, ages and years, rounded (money to two or three significant figures in prose, exact in the changes). No disclaimers or generic advice.
+How a note reads. The title is one specific sentence, at most 120 characters, naming the account, income or setting and the number that matters. The summary is one plain sentence shown open under the title: what the note adds or asks the person to confirm, without repeating the title. The reasoning is shown only when expanded: one to three plain sentences on what you saw and where; do not restate the summary. Use the person's own names, dollar amounts, ages and years, rounded (money to two or three significant figures in prose, exact in the changes). No disclaimers or generic advice.
 
 Write against the draft as it stands: ids in the draft are database ids, and a note that creates accounts, assets or events reports the ids it created when accepted, so later notes can refer to them. A note that is only open (not added) has created nothing yet, so a later note cannot point at what it creates: put dependent changes in the same note.
 
@@ -276,7 +276,8 @@ fn submit_tool() -> Value {
                 "column": {"type": "string", "enum": ["portfolio", "plan", "to_confirm"], "description": "Where the note groups on the Review board; defaults from section, and to_confirm for check notes."},
                 "key": {"type": ["string", "null"], "description": "1-32 of a-z, 0-9, -; unique in the draft; lets a question's `blocks` or a later `replaces` name this note."},
                 "title": {"type": "string", "description": "One specific sentence, at most 120 characters."},
-                "reasoning": {"type": "string", "description": "One to three plain sentences, at most 1200 characters."},
+                "summary": {"type": "string", "description": "One plain sentence, at most 200 characters, shown open under the title: what the note adds or asks the person to confirm. Do not repeat the title."},
+                "reasoning": {"type": "string", "description": "The working behind the summary, shown when the person expands it: one to three plain sentences, at most 1200 characters, with what you saw and where. Do not restate the summary."},
                 "evidence": evidence_schema(),
                 "paths": crate::suggest::ai::prompt::paths_schema(),
                 "no_change_reason": {
@@ -294,7 +295,7 @@ fn submit_tool() -> Value {
                 },
                 "replaces": {"type": ["string", "null"], "description": "The key of an open note of yours this one supersedes; it is removed."}
             },
-            "required": ["kind", "section", "title", "reasoning", "evidence", "paths"]
+            "required": ["kind", "section", "title", "summary", "reasoning", "evidence", "paths"]
         }
     })
 }

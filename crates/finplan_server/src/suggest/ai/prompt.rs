@@ -27,7 +27,7 @@ pub const PREVIEW_TOOL: &str = super::tools::PREVIEW;
 pub const SUBMIT_TOOL: &str = "submit_suggestion";
 
 pub const SYSTEM_PROMPT: &str = concat!("\
-You review a personal financial plan built in FinPlan, a Monte Carlo retirement planner, and write short notes for its Review tab. The user message holds the plan, the results of one simulation run of it, and the notes FinPlan's built-in rules already wrote.
+You review a personal financial plan built in FinPlan, a Monte Carlo retirement planner, and write short notes for its Review tab. The user message holds the plan, the results of one simulation run of it, the notes FinPlan's built-in rules already wrote, any notes still open on the board from earlier reviews (open_notes), and the notes the user dismissed (dismissed_notes).
 
 Each note is one idea, of one kind:
 - fix: something in the plan is likely wrong or costly, and the correction can be expressed as changes to the plan.
@@ -47,13 +47,13 @@ The aim is the simulation that makes the most sense given the person's starting 
 
 Say what is missing with a change, not only in prose. Missing income or spending is a new_event (an Income or Expense with the trigger, amount and account you would expect), referring by a $new reference (see Changes in the reference) to anything the path creates. When the right figure is a real-world fact the plan does not hold, propose a conservative, round estimate and label it: put \"estimated\" in the step title, state the method in one sentence of the reasoning, and name the figure to use instead. For Social Security: claim at 67, inflation-adjusted, the amount from estimate_social_security over the plan's own earnings (its method stated in the reasoning), and the person's SSA statement as the figure to use instead. Leave a check without a path only when no reasonable estimate exists (a true cost basis), and give no_change_reason.
 
-How a note reads. The title is one specific sentence, at most 120 characters, naming the account, event or asset and the number that matters. The reasoning is two to four plain sentences: what you saw, why it matters for this plan, and what the change does. Use the plan's own names, dollar amounts, ages and years. Round: money to two or three significant figures ($11.8M, $137k, $2,400/month), rates to one decimal unless a smaller difference is the point. Leave out disclaimers, hedging boilerplate and generic financial advice; the app shows its own disclaimer.
+How a note reads. The title is one specific sentence, at most 120 characters, naming the account, event or asset and the number that matters. The summary is one plain sentence, shown open under the title: what you found and what it means for this plan, without repeating the title. The reasoning is shown only when the user expands it: two to four plain sentences of working, with what you saw and where, the figures and how you reached them, and what the change does; do not restate the summary. Use the plan's own names, dollar amounts, ages and years. Round: money to two or three significant figures ($11.8M, $137k, $2,400/month), rates to one decimal unless a smaller difference is the point. Leave out disclaimers, hedging boilerplate and generic financial advice; the app shows its own disclaimer.
 
 Numbers. Every number in a note must come from the plan, the run, a preview you ran, a tool's result, or arithmetic on those; list where in `evidence`, citing a tool's result as `computed` with the tool_use id of the call. Before submitting, run preview_changes on each path (all of its steps, in order) and quote the simulated effect (for example: funding 90.6% -> 91.8%) in that path's reasoning or the note's. Give a path an `estimate` only when you did not preview it, and call it an estimate. When a preview reports paired: false, the two runs used different random draws, so present the comparison as approximate.
 
 Changes are JSON-pointer edits written against exactly the bodies shown in the user message. Set `expect` to the current value you are replacing, copied from the plan. Prefer the smallest change that expresses the idea.
 
-Do not repeat a note the rules already wrote, even reworded. A few sharp notes beat many; skip anything minor. Submit each note with submit_suggestion. If a submission is rejected, fix the problem it names or drop the note. When you are done, end your turn with a one-line summary.
+Do not repeat a note the rules already wrote or one still open on the board, even reworded, and never raise again a note the user dismissed or the concern behind it. A few sharp notes beat many; skip anything minor. Submit each note with submit_suggestion. If a submission is rejected, fix the problem it names or drop the note. When you are done, end your turn with a one-line summary.
 
 ", super::tools::guide!());
 
@@ -127,7 +127,7 @@ pub fn reference() -> &'static str {
 /// What the first user turn asks, after the plan and run.
 pub fn task(max_suggestions: usize) -> String {
     format!(
-        "Review this plan and its run. Submit at most {max_suggestions} notes that the rules above did not already cover, most important first: correctness, then realism, then material risk, then material optimization. Fewer, well-founded notes beat more. Preview each path of a note (all of its steps) before submitting it."
+        "Review this plan and its run. Submit at most {max_suggestions} notes that the rules and the open notes above do not already cover, most important first: correctness, then realism, then material risk, then material optimization. Fewer, well-founded notes beat more. Preview each path of a note (all of its steps) before submitting it."
     )
 }
 
@@ -253,7 +253,8 @@ fn submit_tool() -> Value {
                         "description": "Why the note matters, by the priority in the instructions. risk and optimization paths must clear the materiality floor."
                     },
                     "title": {"type": "string", "description": "One specific sentence, at most 120 characters."},
-                    "reasoning": {"type": "string", "description": "Two to four plain sentences, at most 1200 characters."},
+                    "summary": {"type": "string", "description": "One plain sentence, at most 200 characters, shown open under the title: what you found and what it means for this plan. Do not repeat the title."},
+                    "reasoning": {"type": "string", "description": "The working behind the summary, shown when the user expands it: two to four plain sentences, at most 1200 characters, with the figures, how they were reached and what to check. Do not restate the summary."},
                     "evidence": evidence_schema(),
                     "paths": paths_schema(),
                     "no_change_reason": {
@@ -261,7 +262,7 @@ fn submit_tool() -> Value {
                         "description": "Only for a check note with no paths: one line on why the issue cannot be expressed as a plan change, even as a labelled estimate. Appended to the reasoning."
                     },
                 },
-                "required": ["kind", "section", "motive", "title", "reasoning", "evidence", "paths"]
+                "required": ["kind", "section", "motive", "title", "summary", "reasoning", "evidence", "paths"]
             }
         }
     )

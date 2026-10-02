@@ -174,12 +174,18 @@ async fn post_message(
     .await?;
     let board = suggestions::notes_of(&state.db, scenario_id).await?;
     let rule_drafts = rules::review(&graph, &results);
-    let context = ReviewContext::build(&graph, &results, &rule_drafts).with_notes(
-        board
-            .iter()
-            .filter(|n| n.status != SuggestionStatus::Applied)
-            .map(|n| (n.kind, n.title.as_str(), all_changes(&n.paths))),
-    );
+    let context = ReviewContext::build(&graph, &results, &rule_drafts)
+        .with_notes(
+            board
+                .iter()
+                .filter(|n| n.status != SuggestionStatus::Applied)
+                .map(|n| (n.kind, n.title.as_str(), all_changes(&n.paths))),
+        )
+        .with_dismissed_notes(
+            suggestions::dismissed(&board)
+                .into_iter()
+                .map(suggestions::outline),
+        );
     let changed: bool = sqlx::query_scalar(
         "SELECT s.updated_at > r.created_at FROM scenarios s, runs r
           WHERE s.id = ?1 AND r.id = ?2",

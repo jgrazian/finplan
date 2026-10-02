@@ -82,6 +82,11 @@ pub(super) fn cost_basis_equals_value(ctx: &Ctx) -> Vec<Draft> {
         kind: Kind::Check,
         section: Section::Portfolio,
         title,
+        summary: format!(
+            "The plan treats {} of taxable holdings as having no gains, so if they were bought \
+             for less, every sale is taxed too lightly.",
+            money(at_cost)
+        ),
         reasoning,
         evidence: vec![
             Evidence::Stat {
@@ -183,6 +188,10 @@ pub(super) fn idle_bank_cash(ctx: &Ctx) -> Vec<Draft> {
             title: format!(
                 "{name} holds over two years of spending for {years} years running, peaking at {} in {peak_year}",
                 money(peak)
+            ),
+            summary: format!(
+                "{name} keeps far more cash than the plan spends, earning {rate} rather than \
+                 investment returns."
             ),
             reasoning: format!(
                 "On the median path {name} ends every year from {first} through {last} with \
@@ -302,6 +311,13 @@ pub(super) fn unused_contribution_limits(ctx: &Ctx) -> Vec<Draft> {
         kind: Kind::Check,
         section: Section::Portfolio,
         title: format!("Nothing is ever contributed to {}", list(&names)),
+        summary: format!(
+            "{} {} a contribution limit but no event pays into {}, so that tax-advantaged room \
+             goes unused.",
+            list(&names),
+            if names.len() == 1 { "has" } else { "have" },
+            if names.len() == 1 { "it" } else { "them" },
+        ),
         reasoning: format!(
             "{each} a contribution limit set ({}) but no event pays into it. {} lands in {} \
              instead, and {column}.",
@@ -416,6 +432,11 @@ pub(super) fn unmapped_or_mismatched_assets(ctx: &Ctx) -> Vec<Draft> {
                     asset.name,
                     money(value)
                 ),
+                summary: format!(
+                    "With no return profile, {} neither grows nor swings, and loses value to \
+                     inflation every year.",
+                    asset.name
+                ),
                 reasoning: format!(
                     "{} is held in the portfolio but mapped to no return profile, so the \
                      simulation keeps its price fixed in nominal dollars for the whole plan: \
@@ -448,6 +469,11 @@ pub(super) fn unmapped_or_mismatched_assets(ctx: &Ctx) -> Vec<Draft> {
                 kind: Kind::Check,
                 section: Section::Portfolio,
                 title: format!("{} moves exactly like {}", asset.name, profile.name),
+                summary: format!(
+                    "A single stock is modelled on an index with no tracking error, so the plan \
+                     understates how much its {} can swing.",
+                    money(value)
+                ),
                 reasoning: format!(
                     "{} ({}) is one company, but it is modelled on {} with no tracking error, \
                      so every year it earns exactly what the index earns. {} is held. A single \
@@ -471,6 +497,13 @@ pub(super) fn unmapped_or_mismatched_assets(ctx: &Ctx) -> Vec<Draft> {
                 kind: Kind::Check,
                 section: Section::Portfolio,
                 title: format!("{} is modelled as {}", asset.name, profile.name),
+                summary: format!(
+                    "{}'s description doesn't match the {} return profile, so its {} may grow \
+                     at the wrong rate.",
+                    asset.name,
+                    profile.name,
+                    money(value)
+                ),
                 reasoning: format!(
                     "{} ({}) is {}. {} is held.",
                     asset.name,

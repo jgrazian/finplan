@@ -9,8 +9,9 @@
 //! One pass per scenario: a newer review supersedes a running one. The review
 //! row names the current pass (`suggestion_reviews.ai_job`); a superseded pass
 //! is aborted, and one that finishes anyway finds its job no longer current
-//! and writes nothing. A pass that completes replaces the open notes earlier
-//! passes wrote, and never a client's own. A server restart leaves no pass
+//! and writes nothing. A pass that completes adds to the open notes earlier
+//! passes wrote (the review carried them over), skipping any it would
+//! repeat. A server restart leaves no pass
 //! running: [`recover`] marks them failed.
 //!
 //! The model's tools run through the same code the routes use: previews
@@ -557,16 +558,9 @@ async fn store(db: &Db, pass: &Pass, outcome: &AiOutcome) -> ApiResult<Option<us
         return Ok(None);
     }
 
-    sqlx::query(
-        "DELETE FROM suggestions
-          WHERE scenario_id = ?1 AND source = 'ai' AND status = 'open'
-            AND review_job IS NOT NULL AND applied_path IS NULL",
-    )
-    .bind(pass.scenario_id)
-    .execute(&mut *tx)
-    .await?;
-    // Dismissed or confirmed notes stay silent, an open one (a client's) is
-    // not duplicated, and one applied from this run is not raised again.
+    // Earlier passes' notes stay (the review carried them over); dismissed or
+    // confirmed notes stay silent, an open one is not duplicated, and one
+    // applied from this run is not raised again.
     let standing: HashSet<String> = sqlx::query_scalar(
         "SELECT fingerprint FROM suggestions
           WHERE scenario_id = ?1
@@ -600,7 +594,7 @@ fn suggestion(pass: &Pass, draft: &AiDraft) -> NewSuggestion {
 
 /// A draft the model's checks accepted, as a suggestion to store: its own
 /// previews become its paths' checks. `review_job` marks a review pass's
-/// notes (replaced by the next pass); `parent_id` a chat thread's.
+/// notes; `parent_id` a chat thread's.
 pub(super) fn draft_suggestion(
     run_id: i64,
     draft: &AiDraft,
@@ -644,6 +638,7 @@ pub(super) fn draft_suggestion(
         kind: draft.kind,
         section: draft.section,
         title: draft.title.clone(),
+        summary: Some(draft.summary.clone()),
         reasoning: draft.reasoning.clone(),
         evidence: draft.evidence.clone(),
         fingerprint: fingerprint(None, draft.kind, &all_changes(&paths), &draft.title),

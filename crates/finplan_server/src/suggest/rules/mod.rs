@@ -108,6 +108,8 @@ pub struct Draft {
     pub kind: Kind,
     pub section: Section,
     pub title: String,
+    /// One sentence under the title: what the rule found and why it matters.
+    pub summary: String,
     pub reasoning: String,
     pub evidence: Vec<Evidence>,
     /// The courses of action; empty unless a fix is unambiguous.

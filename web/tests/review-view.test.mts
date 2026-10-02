@@ -10,21 +10,35 @@ import {
   appliedLabel,
   board,
   checkLine,
+  citedMetrics,
+  closedText,
+  deltaLine,
+  detailActions,
   diffRow,
   evidenceLink,
+  leadOf,
+  listStatus,
   kicker,
   noteCounts,
   noteLink,
+  noteList,
   pathHeadline,
+  pathMetrics,
+  pickedNote,
   previewLine,
   problemText,
   problemsIn,
   refusalHeading,
   reviewBanner,
+  reviewedLine,
   selectedPath,
+  shortDate,
+  splitReasoning,
+  steppedNote,
   stepProblemText,
   stepProblemsIn,
   toCard,
+  undoable,
 } from "../lib/view/review.ts";
 
 const stats = (success: number, funding: number | null) => ({
@@ -92,6 +106,7 @@ function note(overrides: Record<string, unknown> = {}) {
     kind: "fix" as const,
     section: "plan" as const,
     title: "Home Purchase sells $218k of investments while USAA holds $1.04M",
+    summary: null as string | null,
     reasoning: "The Sweep runs before the down payment.",
     evidence: [],
     paths: (paths ?? (Array.isArray(changes) && changes.length === 0 ? [] : [single])) as ReturnType<typeof path>[],
@@ -131,8 +146,13 @@ test("kicker names the kind and the rule's topic, falling back to the rule then 
 test("actions follow the kind, and only open notes with changes apply or preview", () => {
   assert.deepEqual(acts(note()), ["apply", "preview", "dismiss"]);
   assert.deepEqual(acts(note({ check: { iterations: 2000, paired: true, base: stats(0.9, 0.9), edited: stats(0.9, 0.91) } })), ["apply", "dismiss"]);
-  assert.deepEqual(acts(note({ kind: "check", changes: [] })), ["confirm", "dismiss"]);
-  assert.deepEqual(acts(note({ kind: "check" })), ["apply", "confirm", "preview", "dismiss"]);
+  // A plan's notes are set aside with Dismiss alone; "It's correct" is a draft's.
+  assert.deepEqual(acts(note({ kind: "check", changes: [] })), ["dismiss"]);
+  assert.deepEqual(acts(note({ kind: "check" })), ["apply", "preview", "dismiss"]);
+  assert.deepEqual(actionsFor(note({ kind: "check", changes: [] }) as never, undefined, { confirm: true }), [
+    "confirm",
+    "dismiss",
+  ]);
   assert.deepEqual(acts(note({ kind: "stress" })), ["apply-copy", "preview", "dismiss"]);
   assert.deepEqual(acts(note({ kind: "read", changes: [] })), ["dismiss"]);
   assert.deepEqual(acts(note({ status: "applied" })), []);
@@ -213,6 +233,13 @@ test("a card carries the server's diff as rows, a removal having no `to`", () =>
   assert.equal(toCard(note()).source, undefined);
 });
 
+test("the header says when the review was written, as a local date and time", () => {
+  const at = "2026-10-02 13:40:00";
+  assert.equal(reviewedLine({ reviewed_at: at, run_id: 7 }), `Last reviewed ${new Date(`2026-10-02T13:40:00Z`).toLocaleDateString("en-US", { month: "short", day: "numeric" })} at ${clockTime(at)}`);
+  assert.match(reviewedLine({ reviewed_at: "2026-10-02T12:00:00Z", run_id: 7 }), /^Last reviewed (Oct 1|Oct 2|Oct 3) at \d\d:\d\d$/);
+  assert.equal(reviewedLine({ reviewed_at: "garbage", run_id: 7 }), "Last reviewed run #7");
+});
+
 test("the board shows open notes by section, fixes first, and counts the rest", () => {
   const review = {
     run_id: 7,
@@ -228,7 +255,7 @@ test("the board shows open notes by section, fixes first, and counts the rest", 
   };
   const view = board(review, { runCreatedAt: "2026-09-27T12:04:00Z" });
   // Clock times are local, so the expectation is too.
-  assert.equal(view.headline, `Reviewed the ${clockTime("2026-09-27T12:04:00Z")} run · 4 notes`);
+  assert.equal(view.headline, `${reviewedLine(review)} · 4 notes`);
   assert.equal(view.open, 4);
   assert.equal(view.applied, 0);
   assert.equal(view.resolved, 1);
@@ -238,8 +265,8 @@ test("the board shows open notes by section, fixes first, and counts the rest", 
 
 test("a review of an unknown run time falls back to the review's own time, then the run id", () => {
   const review = { run_id: 7, reviewed_at: "2026-09-27 12:10:00", ai: null, suggestions: [note()] };
-  assert.equal(board(review).headline, `Reviewed the ${clockTime(review.reviewed_at)} run · 1 note`);
-  assert.equal(board({ ...review, reviewed_at: "" }).headline, "Reviewed run #7 · 1 note");
+  assert.equal(board(review).headline, `Last reviewed Sep 27 at ${clockTime(review.reviewed_at)} · 1 note`);
+  assert.equal(board({ ...review, reviewed_at: "" }).headline, "Last reviewed run #7 · 1 note");
 });
 
 test("apply buttons only apply: neither label promises a run", () => {
@@ -262,9 +289,8 @@ test("applied notes stay on the board after the open ones, marked, and are count
   };
   const latest = { id: 7, created_at: "2026-09-27 12:04:00" };
   const view = board(review, { runCreatedAt: latest.created_at, latest });
-  const run = `the ${clockTime(latest.created_at)} run`;
   // The stress note went to a copy: it is not a change waiting on this plan.
-  assert.equal(view.headline, `Reviewed ${run} · 1 note · 2 applied`);
+  assert.equal(view.headline, `${reviewedLine(review)} · 1 note · 2 applied`);
   assert.equal(view.applied, 2);
   assert.equal(view.pending, 2);
   assert.deepEqual(view.columns[1].cards.map((c) => c.id), [2, 1, 4, 3]);
@@ -509,7 +535,7 @@ test("a path of several steps lists them in order: the first applyable, later on
   assert.equal(card.steps[0].reasoning, "Two more salary years cover the gap before spending steps down.");
   assert.deepEqual(card.steps[1].diff.map((r) => r.label), ["Plan › Sweep › effects › Sweep › amount"]);
   // The whole path applies at once too; already simulated, so no preview.
-  assert.deepEqual(card.actions, ["apply-path", "confirm", "dismiss"]);
+  assert.deepEqual(card.actions, ["apply-path", "dismiss"]);
   assert.equal(ACTION_LABEL["apply-path"], "Apply path");
 });
 
@@ -519,7 +545,7 @@ test("picking a single-step path shows its diff and plain Apply, no step list", 
   assert.deepEqual(card.steps, []);
   assert.deepEqual(card.diff.map((r) => r.label), ["Plan › Expenses › effects › Expense › amount"]);
   assert.equal(card.check?.text, "est. funding ~94.0% · preview to simulate");
-  assert.deepEqual(card.actions, ["apply", "confirm", "preview", "dismiss"]);
+  assert.deepEqual(card.actions, ["apply", "preview", "dismiss"]);
   assert.equal(card.pathReasoning, undefined, "this path gives no reasoning of its own");
 });
 
@@ -571,7 +597,7 @@ test("the header counts applied steps, and a fully applied path names itself", (
   const view = board(review, { runCreatedAt: latest.created_at, latest });
   assert.equal(view.applied, 1);
   assert.equal(view.pending, 1);
-  assert.equal(view.headline, `Reviewed the ${clockTime(latest.created_at)} run · 1 note · 1 applied`);
+  assert.equal(view.headline, `${reviewedLine(review)} · 1 note · 1 applied`);
   const done = started(2, { status: "applied", resolved_at: "2026-09-27 12:20:00" });
   const full = board({ ...review, suggestions: [done] }, { latest });
   assert.equal(full.applied, 2);
@@ -682,4 +708,267 @@ test("problems name created rows by what they create", () => {
     "The account this note edits no longer exists.");
   assert.equal(problemText({ kind: "invalid_body", change: 0, target: { new_asset: "vti" }, message: "price must be positive" }),
     "The edited asset would not be valid: price must be positive.");
+});
+
+// ── The note list and detail ─────────────────────────────────────────────────
+
+test("long reasoning leads with its first sentence; figures with points stay whole", () => {
+  assert.deepEqual(splitReasoning("  Short and whole.  "), { summary: "Short and whole." });
+  const lead = "VFIAX is 1464.6 × $709 = $1.04M, dated at the plan's start with a cost basis of $1.04M too.";
+  const rest = "If those lots were bought earlier for less, every sale is taxed too lightly. ".repeat(3).trim();
+  assert.deepEqual(splitReasoning(`${lead} ${rest}`), { summary: lead, more: rest });
+  // Not after an abbreviation, nor inside brackets.
+  const goog =
+    "GOOG (Alphabet Inc. Class C) is one company, but it is modelled on US Total Market with no tracking error.";
+  const tail = "A single stock swings well beyond its index; a tracking error models that spread. ".repeat(2).trim();
+  assert.deepEqual(splitReasoning(`${goog} ${tail}`), { summary: goog, more: tail });
+  // No sentence break to cut at: whole.
+  const run = "x".repeat(300);
+  assert.deepEqual(splitReasoning(run), { summary: run });
+});
+
+test("a checked path reads as from → to figures, an estimate as its rates alone", () => {
+  const base = { ...stats(0.9785, 0.9575), real_final: { p5: 2_080_000, p10: 0, p25: 0, p50: 0, p75: 0, p90: 0, p95: 0 } };
+  const edited = { ...stats(0.986, 0.961), real_final: { ...base.real_final, p5: 2_840_000 } };
+  const checked = { check: { iterations: 400, paired: true, base, edited }, estimate: null };
+  assert.equal(deltaLine(checked), "funding 95.8% → 96.1%");
+  assert.deepEqual(pathMetrics(checked as never), [
+    { label: "Funding", from: "95.8%", to: "96.1%" },
+    { label: "Success", from: "97.9%", to: "98.6%" },
+    { label: "P5 real final", from: "$2.08M", to: "$2.84M" },
+  ]);
+  const estimated = { check: null, estimate: { success_rate: null, funding_success_rate: 0.93 } };
+  assert.equal(deltaLine(estimated), "est. funding ~93.0%");
+  assert.deepEqual(pathMetrics(estimated), [{ label: "Funding", to: "~93.0%", estimate: true }]);
+  assert.equal(pathMetrics({ check: null, estimate: null }), undefined);
+});
+
+test("a note with nothing to measure cites its stats as figures", () => {
+  const evidence = [
+    { ref: "ledger", year: 2033, event_id: null, account_id: null },
+    { ref: "stat", name: "taxable_value", value: 2_250_000 },
+    { ref: "diagnostic", field: "funding_success_rate", value: 0.953 },
+  ];
+  assert.deepEqual(citedMetrics(evidence as never), [
+    { label: "Taxable value", to: "$2.25M" },
+    { label: "Funding success rate", to: "95.3%" },
+  ]);
+  const card = toCard(note({ kind: "read", changes: [], evidence }) as never);
+  assert.equal(card.delta, "Taxable value $2.25M");
+  assert.equal(card.metrics.length, 2);
+});
+
+test("the detail's primary is the apply, else Dismiss (Got it on a read note)", () => {
+  assert.deepEqual(detailActions({ kind: "fix", actions: ["apply", "preview", "dismiss"] }), {
+    primary: { action: "apply", label: "Apply" },
+    secondary: [{ action: "preview", label: "Preview" }],
+    dismiss: true,
+  });
+  // Nothing to apply: Dismiss is the primary.
+  assert.deepEqual(detailActions({ kind: "check", actions: ["dismiss"] }), {
+    primary: { action: "dismiss", label: "Dismiss" },
+    secondary: [],
+    dismiss: false,
+  });
+  assert.deepEqual(detailActions({ kind: "read", actions: ["dismiss"] }), {
+    primary: { action: "dismiss", label: "Got it" },
+    secondary: [],
+    dismiss: false,
+  });
+  assert.deepEqual(detailActions({ kind: "fix", actions: [] }), { primary: undefined, secondary: [], dismiss: false });
+});
+
+test("a closed note says where it stands; only one set aside can be undone", () => {
+  assert.equal(closedText({ kind: "fix", status: "open" }), undefined);
+  assert.equal(closedText({ kind: "check", status: "confirmed" }), "Marked as correct.");
+  assert.equal(closedText({ kind: "read", status: "dismissed" }), "Marked as read.");
+  assert.equal(closedText({ kind: "fix", status: "dismissed" }), "Dismissed.");
+  assert.equal(closedText({ kind: "fix", status: "applied", applied: "Applied · not yet run" }), "Applied · not yet run");
+  assert.equal(undoable({ status: "dismissed" }), true);
+  assert.equal(undoable({ status: "confirmed" }), true);
+  assert.equal(undoable({ status: "applied" }), false);
+  assert.equal(undoable({ status: "open" }), false);
+});
+
+test("notes applied in an earlier review stay listed as handled but are not counted as changes awaiting a run", () => {
+  const applied = {
+    status: "applied",
+    applied_path: "a",
+    resolved_at: "2026-09-20 10:00:00",
+    paths: [path({ steps: [step({ applied: true, applied_at: "2026-09-20 10:00:00" })] })],
+  };
+  const review = {
+    run_id: 9,
+    reviewed_at: "2026-09-27 12:10:00",
+    ai: null,
+    suggestions: [note({ id: 1, run_id: 3, ...applied }), note({ id: 2, run_id: 9 })],
+  };
+  const view = board(review as never);
+  assert.equal(view.applied, 0);
+  assert.equal(view.pending, 0);
+  assert.doesNotMatch(view.headline, /applied/);
+  assert.deepEqual(noteList(view, { show: "handled" }).visible.map((c) => c.id), [1]);
+  // The same note applied since this review counts.
+  const now = board({ ...review, suggestions: [note({ id: 1, run_id: 9, ...applied })] } as never);
+  assert.equal(now.applied, 1);
+});
+
+test("the list opens on the open notes; handled ones are a view of their own, with every note under All", () => {
+  const review = {
+    run_id: 7,
+    reviewed_at: "2026-09-27 12:10:00",
+    ai: null,
+    suggestions: [
+      note({ id: 1, kind: "read", section: "results", changes: [] }),
+      note({ id: 2, kind: "check", section: "portfolio", changes: [], status: "dismissed" }),
+      note({ id: 3, kind: "fix", section: "plan" }),
+      note({ id: 4, kind: "fix", section: "portfolio" }),
+      note({ id: 5, kind: "fix", section: "plan", status: "applied" }),
+    ],
+  };
+  const view = board(review as never);
+  assert.deepEqual(view.setAside.map((c) => c.id), [2]);
+
+  const open = noteList(view);
+  assert.deepEqual(open.views.map((v) => [v.label, v.count]), [["Open", 3], ["Handled", 2], ["All", 5]]);
+  assert.deepEqual(open.visible.map((c) => c.id), [4, 3, 1]);
+  assert.deepEqual(open.groups.map((g) => g.heading), ["Portfolio", "Scenario & events", "Results"]);
+  assert.equal(open.empty, undefined);
+  assert.equal(open.all.length, 5, "the position counts over every note");
+
+  // Handled notes with no date to sort by go newest id first.
+  const done = noteList(view, { show: "handled" });
+  assert.deepEqual(done.visible.map((c) => c.id), [5, 2]);
+  const [applied, dismissed] = done.groups[0].rows;
+  assert.deepEqual([dismissed.closed, dismissed.status], [true, { label: "Dismissed", tone: "dismissed" }]);
+  assert.deepEqual(applied.status, { label: "✓ Applied", tone: "done" });
+
+  assert.deepEqual(noteList(view, { show: "all" }).visible.map((c) => c.id), [4, 2, 3, 5, 1]);
+});
+
+test("the Handled view is one plain list by when notes were handled, newest first", () => {
+  const ago = (days: number, hour = 12) => {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    d.setHours(hour, 0, 0, 0);
+    return d.toISOString();
+  };
+  const review = {
+    run_id: 7,
+    reviewed_at: "",
+    ai: null,
+    suggestions: [
+      note({ id: 1, section: "results", status: "dismissed", resolved_at: ago(5) }),
+      note({ id: 2, section: "portfolio", status: "dismissed", resolved_at: ago(0, 9) }),
+      note({ id: 3, section: "plan", status: "applied", resolved_at: ago(1) }),
+      note({ id: 4, section: "portfolio", status: "confirmed", resolved_at: ago(0, 11) }),
+      note({ id: 5, section: "plan", status: "dismissed", resolved_at: null }),
+      note({ id: 6, section: "plan" }),
+    ],
+  };
+  const list = noteList(board(review as never), { show: "handled", keep: 6 });
+  assert.equal(list.groups.length, 1);
+  assert.equal(list.groups[0].heading, undefined, "no headings");
+  // The note taken back while in view heads it; the undated one closes it.
+  assert.deepEqual(list.visible.map((c) => c.id), [6, 4, 2, 3, 1, 5]);
+  // Open and All keep their sections.
+  assert.deepEqual(noteList(board(review as never), { show: "all" }).groups.map((g) => g.heading), [
+    "Portfolio",
+    "Scenario & events",
+    "Results",
+  ]);
+});
+
+test("kind chips narrow the view, counted within it; with none on, every kind shows", () => {
+  const review = {
+    run_id: 7,
+    reviewed_at: "2026-09-27 12:10:00",
+    ai: null,
+    suggestions: [
+      note({ id: 1, kind: "read", section: "results", changes: [] }),
+      note({ id: 2, kind: "check", section: "portfolio", changes: [] }),
+      note({ id: 3, kind: "fix", section: "plan" }),
+      note({ id: 4, kind: "stress", section: "results", status: "applied" }),
+    ],
+  };
+  const view = board(review as never);
+  const list = noteList(view, { kinds: ["fix", "read"] });
+  assert.deepEqual(list.kinds.map((k) => [k.label, k.count, k.on]), [
+    ["Fix", 1, true],
+    ["Stress", 0, false],
+    ["Check", 1, false],
+    ["Read", 1, true],
+  ]);
+  assert.deepEqual(list.visible.map((c) => c.id), [3, 1]);
+  assert.equal(noteList(view, { kinds: ["stress"] }).empty, "No notes match these filters.");
+  assert.equal(noteList(view, { show: "handled", kinds: ["stress"] }).visible[0].id, 4);
+});
+
+test("the note just acted on stays in the view until the reader moves on; empty views say why", () => {
+  const review = { run_id: 7, reviewed_at: "", ai: null, suggestions: [note({ id: 1, status: "dismissed" })] };
+  const view = board(review as never);
+  assert.equal(noteList(view).empty, "Nothing left to act on.");
+  assert.deepEqual(noteList(view, { keep: 1 }).visible.map((c) => c.id), [1]);
+  const none = board({ ...review, suggestions: [note({ id: 2 })] } as never);
+  assert.equal(noteList(none, { show: "handled" }).empty, "Nothing dismissed or applied yet.");
+});
+
+test("a handled note says when: a day on its pill, a day and time in the detail", () => {
+  const at = "2026-10-02 13:40:00";
+  const day = shortDate(at);
+  const when = `${day} at ${clockTime(at)}`;
+  assert.match(day ?? "", /^Oct [123]$/);
+  assert.deepEqual(listStatus({ kind: "fix", status: "dismissed", resolvedAt: at }), {
+    label: "Dismissed",
+    tone: "dismissed",
+    date: day,
+  });
+  assert.equal(closedText({ kind: "fix", status: "dismissed", resolvedAt: at }), `Dismissed on ${when}.`);
+  assert.equal(closedText({ kind: "check", status: "confirmed", resolvedAt: at }), `Marked as correct on ${when}.`);
+  assert.equal(
+    closedText({ kind: "fix", status: "applied", applied: "Applied: Retire later · not yet run", resolvedAt: at }),
+    `Applied: Retire later on ${when} · not yet run`,
+  );
+  assert.equal(closedText({ kind: "stress", status: "applied", resolvedAt: at }), `Added as a scenario on ${when}.`);
+  // The card carries it once the note is handled, and not while it is open.
+  assert.equal(toCard(note({ status: "dismissed", resolved_at: at }) as never).resolvedAt, at);
+  assert.equal(toCard(note({ resolved_at: at }) as never).resolvedAt, undefined);
+});
+
+test("a handled note's pill says what became of it", () => {
+  assert.equal(listStatus({ kind: "fix", status: "open" }), undefined);
+  assert.deepEqual(listStatus({ kind: "fix", status: "open", applied: "Started · 1 of 2 steps applied" }), {
+    label: "Started",
+    tone: "started",
+  });
+  assert.deepEqual(listStatus({ kind: "stress", status: "applied" }), { label: "✓ Added", tone: "done" });
+  assert.deepEqual(listStatus({ kind: "check", status: "confirmed" }), { label: "✓ Correct", tone: "done" });
+  assert.deepEqual(listStatus({ kind: "read", status: "dismissed" }), { label: "✓ Read", tone: "done" });
+  assert.deepEqual(listStatus({ kind: "check", status: "dismissed" }), { label: "Dismissed", tone: "dismissed" });
+});
+
+test("an author's summary leads, with the whole reasoning behind it; older notes fall back to the cut", () => {
+  assert.deepEqual(leadOf({ summary: " The lead. ", reasoning: "The working." }), {
+    summary: "The lead.",
+    more: "The working.",
+  });
+  assert.deepEqual(leadOf({ summary: "Same.", reasoning: "Same." }), { summary: "Same." });
+  assert.deepEqual(leadOf({ summary: null, reasoning: "Short and whole." }), { summary: "Short and whole." });
+  const card = toCard(note({ summary: "Lead.", reasoning: "Working." }) as never);
+  assert.deepEqual([card.summary, card.more], ["Lead.", "Working."]);
+});
+test("a stale pick falls back to the first open note; next skips closed ones and wraps", () => {
+  const card = (id: number, status = "open") => toCard(note({ id, status }) as never);
+  const visible = [card(1, "dismissed"), card(2), card(3, "applied"), card(4)];
+  assert.equal(pickedNote(visible, 3)?.id, 3);
+  assert.equal(pickedNote(visible, 99)?.id, 2);
+  assert.equal(pickedNote(visible)?.id, 2);
+  assert.equal(pickedNote([]), undefined);
+  assert.equal(steppedNote(visible, 2)?.id, 4);
+  assert.equal(steppedNote(visible, 4)?.id, 2);
+  assert.equal(steppedNote(visible, 2, -1)?.id, 1);
+  // Nothing open: plain next.
+  const closed = [card(1, "dismissed"), card(2, "applied")];
+  assert.equal(steppedNote(closed, 1)?.id, 2);
+  assert.equal(steppedNote(closed, 2)?.id, 1);
 });

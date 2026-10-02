@@ -23,6 +23,15 @@ export type Suggestion = {
   kind: SuggestionKind;
   section: SuggestionSection;
   title: string;
+  /**
+   * The note's lead: one sentence on what it found and why it matters,
+   * shown under the title. Null on notes stored before authors wrote one.
+   */
+  summary: string | null;
+  /**
+   * The working behind it — figures, assumptions, what to check — which
+   * the Review tab keeps behind a disclosure.
+   */
   reasoning: string;
   evidence: Array<Evidence>;
   /**
