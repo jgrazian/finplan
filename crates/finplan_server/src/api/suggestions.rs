@@ -48,6 +48,7 @@ use crate::error::{ApiError, ApiResult, ErrorDetail};
 use crate::observability::{JobContext, JobKind, Origin, SubmissionResult};
 use crate::runner::telemetry::{Submission, Submitted};
 use crate::state::AppState;
+use crate::suggest::ai::NoteOutline;
 use crate::suggest::ai::ReviewContext;
 use crate::suggest::rules::{self, Evidence, Kind, Section};
 use crate::suggest::{self, Change, ChangeProblem, Created, DiffLine};
@@ -65,6 +66,7 @@ pub fn router() -> Router<AppState> {
         .route("/suggestions/{id}/preview", post(preview_suggestion))
         .route("/suggestions/{id}/apply", post(apply))
         .route("/suggestions/{id}/dismiss", post(dismiss))
+        .route("/suggestions/{id}/reopen", post(reopen))
 }
 
 /// Most suggestions of one review that get a simulated check. Each is a
@@ -75,6 +77,7 @@ const REVIEW_CHECK_ITERATIONS: i64 = 2_000;
 
 const MAX_TITLE: usize = 160;
 const MAX_REASONING: usize = 4_000;
+const MAX_SUMMARY: usize = 240;
 const MAX_CHANGES: usize = 20;
 /// Most paths (courses of action) one suggestion offers.
 pub(crate) const MAX_PATHS: usize = 4;
@@ -243,6 +246,11 @@ pub struct Suggestion {
     pub kind: Kind,
     pub section: Section,
     pub title: String,
+    /// The note's lead: one sentence on what it found and why it matters,
+    /// shown under the title. Null on notes stored before authors wrote one.
+    pub summary: Option<String>,
+    /// The working behind it — figures, assumptions, what to check — which
+    /// the Review tab keeps behind a disclosure.
     pub reasoning: String,
     pub evidence: Vec<Evidence>,
     /// The courses of action, in the author's order; empty on a read note.
@@ -271,8 +279,10 @@ pub struct Suggestion {
     pub auto_added: bool,
 }
 
-/// A scenario's latest review: the run it read and the notes still standing
-/// (open or applied) against that run.
+/// A scenario's latest review: the run it read and every note of the plan's,
+/// whichever review wrote it — open (carried over from earlier reviews), or
+/// acted on: applied, or set aside (dismissed or confirmed, so they can be
+/// taken back). Drafts' notes, which have no run, are not the plan's.
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct Review {
@@ -325,6 +335,9 @@ pub struct SuggestionDraft {
     pub kind: Kind,
     pub section: Section,
     pub title: String,
+    /// One sentence shown under the title; optional for older clients.
+    #[serde(default)]
+    pub summary: Option<String>,
     pub reasoning: String,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
@@ -543,7 +556,7 @@ type Out<T> = Result<T, Failure>;
 // ── storage ─────────────────────────────────────────────────────────────────
 
 const COLUMNS: &str = "s.id, s.scenario_id, s.run_id, s.source, s.rule, s.kind, s.section, \
-                       s.title, s.reasoning, s.evidence_json, s.paths_json, \
+                       s.title, s.summary, s.reasoning, s.evidence_json, s.paths_json, \
                        s.applied_path, s.created_json, s.status, s.created_at, \
                        s.resolved_at, s.parent_id, s.note_key, s.blocked_by_json, \
                        s.board_column, s.auto_added";
@@ -562,6 +575,7 @@ pub(super) struct SuggestionRow {
     kind: String,
     section: String,
     title: String,
+    summary: Option<String>,
     reasoning: String,
     evidence_json: String,
     paths_json: String,
@@ -610,6 +624,7 @@ impl SuggestionRow {
             kind: untag(&self.kind)?,
             section: untag(&self.section)?,
             title: self.title,
+            summary: self.summary,
             reasoning: self.reasoning,
             evidence: from_json(&self.evidence_json)?,
             paths: from_json(&self.paths_json)?,
@@ -634,6 +649,7 @@ pub(super) struct NewSuggestion {
     pub kind: Kind,
     pub section: Section,
     pub title: String,
+    pub summary: Option<String>,
     pub reasoning: String,
     pub evidence: Vec<Evidence>,
     pub paths: Vec<SuggestionPath>,
@@ -665,8 +681,8 @@ pub(super) async fn insert(
         "INSERT INTO suggestions
             (scenario_id, run_id, source, rule, kind, section, title, reasoning,
              evidence_json, paths_json, fingerprint, review_job, parent_id,
-             note_key, blocked_by_json, board_column, auto_added)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17) RETURNING id",
+             note_key, blocked_by_json, board_column, auto_added, summary)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18) RETURNING id",
     )
     .bind(scenario_id)
     .bind(new.run_id)
@@ -685,6 +701,7 @@ pub(super) async fn insert(
     .bind(to_json(&new.draft.blocked_by)?)
     .bind(new.draft.column.as_ref().map(tag))
     .bind(i64::from(new.draft.auto_added))
+    .bind(&new.summary)
     .fetch_one(&mut *conn)
     .await?;
     Ok(id)
@@ -711,6 +728,27 @@ pub(super) async fn notes_of(db: &Db, scenario_id: i64) -> ApiResult<Vec<Suggest
     rows.into_iter()
         .map(SuggestionRow::into_suggestion)
         .collect()
+}
+
+/// Most dismissed notes listed for the model, newest first.
+const MAX_DISMISSED_LISTED: usize = 30;
+
+/// The notes the user set aside (dismissed, or confirmed on an older
+/// client), newest first and at most `MAX_DISMISSED_LISTED`: what the model
+/// is told the user does not want raised again.
+pub(super) fn dismissed(board: &[Suggestion]) -> Vec<&Suggestion> {
+    let mut out: Vec<&Suggestion> = board
+        .iter()
+        .filter(|n| {
+            matches!(
+                n.status,
+                SuggestionStatus::Dismissed | SuggestionStatus::Confirmed
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| b.resolved_at.cmp(&a.resolved_at).then(b.id.cmp(&a.id)));
+    out.truncate(MAX_DISMISSED_LISTED);
+    out
 }
 
 /// Iterations for previews made on a run's review notes: the review's check
@@ -750,7 +788,14 @@ pub(crate) fn fingerprint<'a>(
 ) -> String {
     let mut touched: Vec<String> = changes
         .into_iter()
-        .map(|c| format!("{}{}", target_key(&c.target), c.path))
+        .map(|c| {
+            format!(
+                "{}{}{}",
+                target_key(&c.target),
+                c.created_signature(),
+                c.path
+            )
+        })
         .collect();
     touched.sort();
     touched.dedup();
@@ -817,7 +862,10 @@ fn blank_figures(text: &str) -> String {
 // ── review ──────────────────────────────────────────────────────────────────
 
 /// `POST /scenarios/{id}/review`: run the rules over a run and store their
-/// notes, replacing the scenario's open rule notes from earlier reviews. With
+/// notes. Open notes from earlier reviews stay: a rule note the rules raise
+/// again is refreshed in place, one they no longer raise goes with its
+/// condition, and every other note is carried over, its paths walked against
+/// the plan as it now stands (one that no longer fits drops out). With
 /// a review model configured, a model-written pass over the same run starts in
 /// the background (see `review_ai`) and `Review.ai` reports it as running.
 async fn review(
@@ -840,12 +888,49 @@ async fn review(
     )
     .await?;
     let drafts = rules::review(&graph, &results);
-    // The model reads the rule notes too, so it adds to them rather than
-    // repeating them.
-    let context = state
-        .review_ai
-        .is_some()
-        .then(|| ReviewContext::build(&graph, &results, &drafts));
+
+    // The board's open notes. Rule notes are matched to this review's by
+    // fingerprint below; the rest (model-written, from a chat, a client's)
+    // are carried over if their paths still fit the plan.
+    let board = notes_of(&state.db, scenario_id).await?;
+    let open: Vec<Suggestion> = board
+        .iter()
+        .filter(|n| n.status == SuggestionStatus::Open && n.run_id.is_some())
+        .cloned()
+        .collect();
+    let open_rules: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, fingerprint FROM suggestions
+          WHERE scenario_id = ?1 AND source = 'rules' AND status = 'open'
+            AND applied_path IS NULL",
+    )
+    .bind(scenario_id)
+    .fetch_all(&state.db)
+    .await?;
+    let mut carried = Vec::new();
+    let mut dropped = Vec::new();
+    for note in open
+        .iter()
+        .filter(|n| n.source != SuggestionSource::Rules && n.applied_path.is_none())
+    {
+        match rewalk(&state.db, &user.id, &graph, note).await? {
+            Some(note) => carried.push(note),
+            None => dropped.push(note.id),
+        }
+    }
+
+    // The model reads the rule notes and the open ones too, so it adds to
+    // them rather than repeating them, and the ones the user dismissed, so
+    // it does not raise them again.
+    let context = state.review_ai.is_some().then(|| {
+        ReviewContext::build(&graph, &results, &drafts)
+            .with_open_notes(
+                carried
+                    .iter()
+                    .chain(open.iter().filter(|n| n.applied_path.is_some()))
+                    .map(outline),
+            )
+            .with_dismissed_notes(dismissed(&board).into_iter().map(outline))
+    });
 
     // Dismissed or confirmed notes stay silent; one already applied from
     // this same run is not raised again against it, and neither is one whose
@@ -940,6 +1025,7 @@ async fn review(
             kind: draft.kind,
             section: draft.section,
             title: draft.title,
+            summary: Some(draft.summary),
             reasoning: draft.reasoning,
             evidence: draft.evidence,
             paths,
@@ -951,17 +1037,23 @@ async fn review(
     }
 
     // Combined checks (every step of a path), within the review's budget:
-    // each note's recommended or first path, in board order.
-    for new in prepared
+    // each note's recommended or first path, the rules' notes in board order
+    // and then the carried ones, whose old checks were of an older run.
+    let mut budget = MAX_CHECKS_PER_REVIEW;
+    for paths in prepared
         .iter_mut()
-        .filter(|n| !n.paths.is_empty())
-        .take(MAX_CHECKS_PER_REVIEW)
+        .map(|n| &mut n.paths)
+        .chain(carried.iter_mut().map(|n| &mut n.paths))
+        .filter(|p| !p.is_empty())
     {
-        let Some(key) = SuggestionPath::default_of(&new.paths).map(|p| p.key.clone()) else {
+        if budget == 0 {
+            break;
+        }
+        budget -= 1;
+        let Some(key) = SuggestionPath::default_of(paths).map(|p| p.key.clone()) else {
             continue;
         };
-        let path = new
-            .paths
+        let path = paths
             .iter_mut()
             .find(|p| p.key == key)
             .expect("the default is one of the paths");
@@ -992,16 +1084,41 @@ async fn review(
     let request_id = job_context.as_ref().and_then(|c| c.request_id.clone());
 
     let mut tx = state.db.begin().await?;
-    sqlx::query(
-        "DELETE FROM suggestions
-          WHERE scenario_id = ?1 AND source = 'rules' AND status = 'open'
-            AND applied_path IS NULL",
-    )
-    .bind(scenario_id)
-    .execute(&mut *tx)
-    .await?;
+    // A rule note raised again keeps its row (and its chat), with this run's
+    // figures; one not raised again is gone with its condition.
+    let mut refreshed = HashSet::new();
     for new in &prepared {
-        insert(&mut tx, scenario_id, new).await?;
+        let again = open_rules
+            .iter()
+            .find(|(id, fp)| *fp == new.fingerprint && !refreshed.contains(id));
+        match again {
+            Some((id, _)) => {
+                refresh(&mut tx, *id, new).await?;
+                refreshed.insert(*id);
+            }
+            None => {
+                insert(&mut tx, scenario_id, new).await?;
+            }
+        }
+    }
+    for id in open_rules
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| !refreshed.contains(id))
+        .chain(dropped)
+    {
+        sqlx::query("DELETE FROM suggestions WHERE id = ?1 AND status = 'open'")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    for note in &carried {
+        sqlx::query("UPDATE suggestions SET run_id = ?2, paths_json = ?3 WHERE id = ?1")
+            .bind(note.id)
+            .bind(run_id)
+            .bind(to_json(&note.paths)?)
+            .execute(&mut *tx)
+            .await?;
     }
     // A new job supersedes any pass still running for this scenario: that
     // pass is no longer the review's job, so it cannot write its notes.
@@ -1059,6 +1176,76 @@ async fn review(
         .await?
         .ok_or_else(|| ApiError::internal("review vanished after it was stored"))?;
     Ok(Json(review))
+}
+
+/// A stored note as the model is shown it.
+pub(super) fn outline(note: &Suggestion) -> NoteOutline<'_> {
+    (
+        note.kind,
+        note.section,
+        note.title.as_str(),
+        all_changes(&note.paths),
+    )
+}
+
+/// A rule note raised again, given this review's run, wording and paths.
+async fn refresh(conn: &mut sqlx::SqliteConnection, id: i64, new: &NewSuggestion) -> ApiResult<()> {
+    sqlx::query(
+        "UPDATE suggestions
+            SET run_id = ?2, title = ?3, summary = ?4, reasoning = ?5, evidence_json = ?6,
+                paths_json = ?7, fingerprint = ?8
+          WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(new.run_id)
+    .bind(&new.title)
+    .bind(&new.summary)
+    .bind(&new.reasoning)
+    .bind(to_json(&new.evidence)?)
+    .bind(to_json(&new.paths)?)
+    .bind(&new.fingerprint)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// An open note carried into a new review: each path walked against the
+/// plan as it now stands, with fresh diffs and no check (that was of an
+/// older run). A path that no longer fits — the plan moved under it — drops
+/// out; `None` when a note that had paths has none left.
+async fn rewalk(
+    db: &Db,
+    user_id: &str,
+    graph: &ScenarioGraph,
+    note: &Suggestion,
+) -> ApiResult<Option<Suggestion>> {
+    let mut paths = Vec::with_capacity(note.paths.len());
+    for path in &note.paths {
+        let steps: Vec<WalkStep<'_>> = path
+            .steps
+            .iter()
+            .map(|s| WalkStep {
+                key: &s.key,
+                changes: &s.changes,
+            })
+            .collect();
+        if let Ok(walked) = paths::walk(db, user_id, graph.clone(), &steps, &Created::new()).await?
+        {
+            let mut path = path.clone();
+            for (step, diff) in path.steps.iter_mut().zip(walked.diffs) {
+                step.diff = diff;
+            }
+            path.check = None;
+            paths.push(path);
+        }
+    }
+    if !note.paths.is_empty() && paths.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(Suggestion {
+        paths,
+        ..note.clone()
+    }))
 }
 
 /// Preview `changes` against the run for a review note. A preview that is
@@ -1148,12 +1335,11 @@ async fn load_review(db: &Db, scenario_id: i64) -> ApiResult<Option<Review>> {
     let rows: Vec<SuggestionRow> = sqlx::query_as(&format!(
         "SELECT {COLUMNS} FROM suggestions s
           WHERE s.scenario_id = ?1
-            AND ((s.run_id = ?2 AND s.status IN ('open', 'applied'))
-                 OR (s.status = 'open' AND s.applied_path IS NOT NULL))
+            AND s.run_id IS NOT NULL
+            AND s.status IN ('open', 'applied', 'dismissed', 'confirmed')
           ORDER BY {ORDER}"
     ))
     .bind(scenario_id)
-    .bind(run_id)
     .fetch_all(db)
     .await?;
     let suggestions = rows
@@ -1226,6 +1412,8 @@ async fn create(
     let title = draft.title.trim().to_string();
     let reasoning = draft.reasoning.trim().to_string();
     validate_text(&title, &reasoning)?;
+    let summary = trimmed(draft.summary);
+    validate_summary(summary.as_deref())?;
     if draft.evidence.len() > MAX_EVIDENCE {
         return Err(ApiError::unprocessable(format!(
             "a suggestion cites at most {MAX_EVIDENCE} pieces of evidence"
@@ -1326,6 +1514,7 @@ async fn create(
         kind: draft.kind,
         section: draft.section,
         title,
+        summary,
         reasoning,
         evidence: draft.evidence,
         paths,
@@ -1381,6 +1570,16 @@ fn validate_text(title: &str, reasoning: &str) -> ApiResult<()> {
         )));
     }
     Ok(())
+}
+
+fn validate_summary(summary: Option<&str>) -> ApiResult<()> {
+    match summary {
+        Some(s) if s.chars().count() > MAX_SUMMARY => Err(ApiError::unprocessable(format!(
+            "a summary is at most {MAX_SUMMARY} characters"
+        ))),
+        Some(s) if s.contains('\n') => Err(ApiError::unprocessable("a summary is one line")),
+        _ => Ok(()),
+    }
 }
 
 fn validate_estimate(estimate: &SuggestionEstimate) -> ApiResult<()> {
@@ -1821,6 +2020,31 @@ async fn dismiss(
     )
     .bind(id)
     .bind(tag(&status))
+    .execute(&state.db)
+    .await?;
+    Ok(Json(fetch(&state.db, id).await?))
+}
+
+/// `POST /suggestions/{id}/reopen`: undo a dismissal or an "it's correct",
+/// putting the note back on the board as open. An applied note cannot be
+/// reopened: its changes are already in the plan.
+async fn reopen(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Suggestion>> {
+    let row = owned(&state.db, id, &user.id).await?;
+    if row.status != "dismissed" && row.status != "confirmed" {
+        return Err(ApiError::Conflict(format!(
+            "this suggestion is {}, not set aside",
+            row.status
+        )));
+    }
+    sqlx::query(
+        "UPDATE suggestions SET status = 'open', resolved_at = NULL
+          WHERE id = ?1 AND status IN ('dismissed', 'confirmed')",
+    )
+    .bind(id)
     .execute(&state.db)
     .await?;
     Ok(Json(fetch(&state.db, id).await?))

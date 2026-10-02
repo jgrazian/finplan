@@ -22,8 +22,8 @@ import { clockTime } from "./issues.ts";
  * A review is a set of notes about one run, each written against one part of
  * the plan and most offering up to four paths — courses of action, each up to
  * four ordered steps the user can apply whole or one at a time. The board
- * shows the open notes in three columns — Portfolio, Scenario & events,
- * Results — as cards: a kicker naming the kind of note, the claim, the
+ * groups the notes by section — Portfolio, Scenario & events, Results — and
+ * the Review tab lists them beside the one in hand (`noteList`); each is a card: a kicker naming the kind of note, the claim, the
  * reasoning, and for the path in hand its steps with the server's own diff of
  * each, and what the whole path did when simulated against the run (or the
  * author's estimate, until it is). A note with several paths shows them as a
@@ -37,7 +37,7 @@ export const SECTIONS: ReadonlyArray<{ id: SuggestionSection; heading: string }>
   { id: "results", heading: "Results" },
 ];
 
-const KIND_LABEL: Record<SuggestionKind, string> = {
+export const KIND_LABEL: Record<SuggestionKind, string> = {
   add: "Add",
   fix: "Fix",
   check: "Check",
@@ -81,8 +81,12 @@ export type CardAction =
   | "apply-step"
   /** Apply the whole selected path to a copy of this plan, left unrun too. */
   | "apply-copy"
-  /** Record that the note's concern is intended; it stays quiet next time. */
+  /**
+   * A draft's check note only: the fact it asks about is right. A plan's
+   * notes offer Dismiss alone, which the model is told about.
+   */
   | "confirm"
+  /** Set the note aside; it stays quiet next time, and the model is told. */
   | "dismiss"
   /** Simulate the selected path's steps against the run before deciding. */
   | "preview";
@@ -152,6 +156,16 @@ export interface CheckLine {
   basis?: string;
 }
 
+/** One figure in a note's metric strip: what the plan has, and what the note would make it. */
+export interface Metric {
+  label: string;
+  /** The reviewed run's figure; absent when the note quotes one figure alone. */
+  from?: string;
+  to: string;
+  /** The author's estimate rather than a simulation. */
+  estimate?: boolean;
+}
+
 export interface Card {
   id: number;
   kind: SuggestionKind;
@@ -160,6 +174,14 @@ export interface Card {
   kicker: string;
   title: string;
   body: string;
+  /** The note's lead, which the detail shows open under the title. */
+  summary: string;
+  /** The working behind it, behind "Reasoning"; absent when the lead is all there is. */
+  more?: string;
+  /** The selected path's result in a line, for the note list: "funding 95.8% → 96.1%". */
+  delta?: string;
+  /** The selected path's result figure by figure, else the figures the note cites. */
+  metrics: Metric[];
   /**
    * The paths to pick between, when the note offers more than one. Once a
    * step is applied the others are shown locked.
@@ -186,6 +208,8 @@ export interface Card {
    * a scenario", "Started: Retire later · 1 of 2 steps applied".
    */
   applied?: string;
+  /** When the note was applied, dismissed or confirmed; absent while open. */
+  resolvedAt?: string;
   /** Why the other paths are closed, once one is started. */
   locked?: string;
   /** "Chat about this", when AI review is on; louder on a note with no change. */
@@ -217,7 +241,7 @@ export interface Column {
 }
 
 export interface Board {
-  /** "Reviewed the 12:04 run · 9 notes · 2 applied". */
+  /** "Last reviewed Oct 2 at 12:04 · 9 notes · 2 applied". */
   headline: string;
   /** Open notes first, fixes first; applied ones stay, after them. */
   columns: Column[];
@@ -228,6 +252,8 @@ export interface Board {
   pending: number;
   /** Notes set aside, which the board does not show. */
   resolved: number;
+  /** Those notes as cards, for a list that keeps them, dimmed, with an undo. */
+  setAside: Card[];
 }
 
 /** The newest finished run, as the run history holds it. */
@@ -250,6 +276,27 @@ function stampMs(stamp: string | null | undefined): number | undefined {
   const zoned = /[zZ]$|[+-]\d\d:?\d\d$/.test(stamp);
   const ms = new Date(zoned ? stamp : `${stamp.replace(" ", "T")}Z`).getTime();
   return Number.isNaN(ms) ? undefined : ms;
+}
+
+/**
+ * When a review was written, for the Review header: "Last reviewed Oct 2 at
+ * 13:40", in local time; the run's id when the stamp cannot be read.
+ */
+export function reviewedLine(review: Pick<Review, "reviewed_at" | "run_id">): string {
+  const at = dateTime(review.reviewed_at);
+  return at ? `Last reviewed ${at}` : `Last reviewed run #${review.run_id}`;
+}
+
+/** A server stamp as a local day, "Oct 2"; undefined when it cannot be read. */
+export function shortDate(stamp: string | null | undefined): string | undefined {
+  const ms = stampMs(stamp);
+  return ms == null ? undefined : new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+/** A server stamp as a local day and time, "Oct 2 at 13:40". */
+export function dateTime(stamp: string | null | undefined): string | undefined {
+  const day = shortDate(stamp);
+  return day && `${day} at ${clockTime(stamp ?? undefined)}`;
 }
 
 /** The button a card action shows. No apply starts a run. */
@@ -361,6 +408,7 @@ export function kicker(suggestion: Pick<Suggestion, "kind" | "rule" | "section">
 export function actionsFor(
   suggestion: Pick<Suggestion, "kind" | "status" | "applied_path">,
   path?: Pick<SuggestionPath, "steps" | "check">,
+  { confirm = false }: { confirm?: boolean } = {},
 ): CardAction[] {
   if (suggestion.status !== "open") return [];
   const started = suggestion.applied_path != null;
@@ -375,7 +423,7 @@ export function actionsFor(
       break;
     case "check":
       if (editable) actions.push(apply);
-      if (!started) actions.push("confirm");
+      if (confirm && !started) actions.push("confirm");
       break;
     case "stress":
       if (editable && !started) actions.push("apply-copy");
@@ -546,7 +594,15 @@ export function toCard(
     basis,
     selected,
     chat = false,
-  }: { latest?: RunStamp; basis?: string; selected?: string; chat?: boolean } = {},
+    confirm = false,
+  }: {
+    latest?: RunStamp;
+    basis?: string;
+    selected?: string;
+    chat?: boolean;
+    /** Offer "It's correct" on check notes: a draft's, whose facts the person confirms. */
+    confirm?: boolean;
+  } = {},
 ): Card {
   const path = selectedPath(suggestion, selected);
   const check = path ? checkLine(path) : undefined;
@@ -554,6 +610,8 @@ export function toCard(
   const several = suggestion.paths.length > 1;
   const stepped = (path?.steps.length ?? 0) > 1;
   const picking = suggestion.status === "open" && several;
+  const { summary, more } = leadOf(suggestion);
+  const cited = citedMetrics(suggestion.evidence);
   return {
     id: suggestion.id,
     kind: suggestion.kind,
@@ -562,6 +620,10 @@ export function toCard(
     kicker: kicker(suggestion),
     title: suggestion.title,
     body: suggestion.reasoning,
+    summary,
+    more,
+    delta: (path && deltaLine(path)) ?? (cited[0] && `${cited[0].label} ${cited[0].to}`),
+    metrics: (path && pathMetrics(path)) ?? cited,
     paths: picking
       ? suggestion.paths.map((p) => ({
           key: p.key,
@@ -580,9 +642,10 @@ export function toCard(
     diff: path && !stepped ? (path.steps[0]?.diff ?? []).map(diffRow) : [],
     check: check && basis && suggestion.status === "open" ? { ...check, basis } : check,
     evidence: suggestion.evidence.map((e) => evidenceLink(e, names)),
-    actions: actionsFor(suggestion, path),
+    actions: actionsFor(suggestion, path, { confirm }),
     source: suggestion.source === "ai" ? "AI" : undefined,
     applied: appliedLabel(suggestion, latest),
+    resolvedAt: suggestion.status === "open" ? undefined : (suggestion.resolved_at ?? undefined),
     locked:
       picking && started ? "The other paths are closed: steps from this one are already in the plan." : undefined,
     chat: chatOffer({ enabled: chat, paths: suggestion.paths.length }),
@@ -661,7 +724,12 @@ export function board(
   const applied = byKind(review.suggestions.filter((s) => s.status === "applied"));
   const shown = [...open, ...applied];
   // Steps count, not notes: a path applied step by step is several changes.
-  const planned = shown.flatMap((s) => plannedSteps(s).map((step) => ({ s, step })));
+  // Steps applied since this review: notes of its run, and paths still under
+  // way. Notes applied in earlier reviews stay listed (as handled) but their
+  // changes are in the plan the reviewed run already read.
+  const planned = shown
+    .filter((s) => s.run_id === review.run_id || s.status === "open")
+    .flatMap((s) => plannedSteps(s).map((step) => ({ s, step })));
   const pending = planned.filter(({ s, step }) => stepAwaits(s, step, latest) === "yes").length;
   const at = clockTime(runCreatedAt) ?? clockTime(review.reviewed_at);
   const run = at ? `the ${at} run` : `run #${review.run_id}`;
@@ -680,7 +748,7 @@ export function board(
     };
   };
   return {
-    headline: `Reviewed ${run} · ${plural(openNotes, "note")}${planned.length > 0 ? ` · ${fmtInt(planned.length)} applied` : ""}`,
+    headline: `${reviewedLine(review)} · ${plural(openNotes, "note")}${planned.length > 0 ? ` · ${fmtInt(planned.length)} applied` : ""}`,
     columns: SECTIONS.map(({ id, heading }) => ({
       section: id,
       heading,
@@ -690,6 +758,9 @@ export function board(
     applied: planned.length,
     pending,
     resolved: review.suggestions.length - shown.length,
+    setAside: byKind(review.suggestions.filter((s) => s.status === "dismissed" || s.status === "confirmed")).map(
+      (s) => toCard(s, names, { latest, selected: selections[s.id], chat }),
+    ),
   };
 }
 
@@ -913,4 +984,330 @@ export function noteCounts(suggestions: readonly Suggestion[]): NoteCounts {
 export function noteLink(count: number | undefined): string | undefined {
   if (!count) return undefined;
   return `${plural(count, "review note")} →`;
+}
+
+// ── The note list and detail (design: Review notes) ────────────────────────
+
+/** Reasoning up to this long reads whole; a longer one leads with its first sentence. */
+const SUMMARY_MAX = 220;
+
+/** A lead shorter than this is a fragment, not a summary. */
+const SUMMARY_MIN = 40;
+
+/** Words whose full stop does not end a sentence. */
+const ABBREVIATION = /(?:^|[\s(])(?:Inc|Corp|Co|Ltd|Mr|Mrs|Ms|Dr|St|vs|etc|approx|e\.g|i\.e|U\.S)$/;
+
+/**
+ * A note's reasoning cut for a note with no summary of its own: its first
+ * sentence open, the rest behind "Reasoning". A sentence ends at `.`, `!` or `?` before a space
+ * and a capital, quote or bracket — so "$1.5M" and "6.00%" stay whole — and
+ * not after an abbreviation ("Inc.") or inside brackets.
+ */
+export function splitReasoning(text: string): { summary: string; more?: string } {
+  const trimmed = text.trim();
+  if (trimmed.length <= SUMMARY_MAX) return { summary: trimmed };
+  for (const end of trimmed.matchAll(/[.!?](?=\s+[A-Z“"‘'(])/g)) {
+    const summary = trimmed.slice(0, end.index + 1);
+    if (summary.length < SUMMARY_MIN || ABBREVIATION.test(summary.slice(0, -1))) continue;
+    if (summary.split("(").length !== summary.split(")").length) continue;
+    const more = trimmed.slice(end.index + 1).trim();
+    return more ? { summary, more } : { summary };
+  }
+  return { summary: trimmed };
+}
+
+/**
+ * A note's lead and what sits behind "Reasoning": the author's own summary
+ * over the whole reasoning, or for a note stored before authors wrote one,
+ * its reasoning cut at the first sentence.
+ */
+export function leadOf(suggestion: Pick<Suggestion, "summary" | "reasoning">): { summary: string; more?: string } {
+  const summary = suggestion.summary?.trim();
+  if (!summary) return splitReasoning(suggestion.reasoning);
+  const more = suggestion.reasoning.trim();
+  return more && more !== summary ? { summary, more } : { summary };
+}
+
+/** A path's result in a line for the list: simulated "a → b", else the estimate. */
+export function deltaLine(path: Pick<SuggestionPath, "check" | "estimate">): string | undefined {
+  if (path.check) {
+    const [label, from, to] = metric(path.check.base, path.check.edited);
+    return `${label} ${fmtPercent(from)} → ${fmtPercent(to)}`;
+  }
+  return pathHeadline(path);
+}
+
+/**
+ * A path's result figure by figure: the rate it quotes, success beside it,
+ * the 5th-percentile real final net worth and the median first shortfall
+ * where both sides measured them. An estimate gives its rates alone.
+ */
+export function pathMetrics(path: Pick<SuggestionPath, "check" | "estimate">): Metric[] | undefined {
+  const { check, estimate } = path;
+  if (check) {
+    const { base, edited } = check;
+    const out: Metric[] = [];
+    if (base.funding_success_rate != null && edited.funding_success_rate != null) {
+      out.push({ label: "Funding", from: fmtPercent(base.funding_success_rate), to: fmtPercent(edited.funding_success_rate) });
+    }
+    out.push({ label: "Success", from: fmtPercent(base.success_rate), to: fmtPercent(edited.success_rate) });
+    if (base.real_final && edited.real_final) {
+      out.push({ label: "P5 real final", from: fmtCompact(base.real_final.p5), to: fmtCompact(edited.real_final.p5) });
+    }
+    const was = base.funding?.median_first_shortfall_year;
+    const now = edited.funding?.median_first_shortfall_year;
+    if (was != null || now != null) {
+      out.push({
+        label: "First shortfall",
+        from: was != null ? String(was) : "none",
+        to: now != null ? String(now) : "none",
+      });
+    }
+    return out;
+  }
+  const out: Metric[] = [];
+  if (estimate?.funding_success_rate != null) {
+    out.push({ label: "Funding", to: `~${fmtPercent(estimate.funding_success_rate)}`, estimate: true });
+  }
+  if (estimate?.success_rate != null) {
+    out.push({ label: "Success", to: `~${fmtPercent(estimate.success_rate)}`, estimate: true });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/** The figures a note cites as evidence, for a note with no path to measure. */
+export function citedMetrics(evidence: readonly Evidence[], max = 4): Metric[] {
+  const out: Metric[] = [];
+  for (const e of evidence) {
+    if (e.ref === "stat") out.push({ label: humanize(e.name), to: statValue(e.name, e.value) });
+    else if (e.ref === "diagnostic") out.push({ label: humanize(e.field), to: statValue(e.field, e.value) });
+    if (out.length === max) break;
+  }
+  return out;
+}
+
+/**
+ * The pill a handled note carries in the list: done (applied, confirmed, or
+ * read), dismissed, or a path part-way applied.
+ */
+export interface RowStatus {
+  label: string;
+  tone: "done" | "dismissed" | "started";
+  /** The day it was handled, "Oct 2", when known. */
+  date?: string;
+}
+
+export function listStatus(card: Pick<Card, "kind" | "status" | "applied" | "resolvedAt">): RowStatus | undefined {
+  const status = baseStatus(card);
+  const date = shortDate(card.resolvedAt);
+  return status && date ? { ...status, date } : status;
+}
+
+function baseStatus(card: Pick<Card, "kind" | "status" | "applied">): RowStatus | undefined {
+  switch (card.status) {
+    case "applied":
+      return { label: card.kind === "stress" ? "✓ Added" : "✓ Applied", tone: "done" };
+    case "confirmed":
+      return { label: "✓ Correct", tone: "done" };
+    case "dismissed":
+      // "Got it" on a read note sets it aside: it was read, not refused.
+      return card.kind === "read" ? { label: "✓ Read", tone: "done" } : { label: "Dismissed", tone: "dismissed" };
+    case "open":
+      return card.applied ? { label: "Started", tone: "started" } : undefined;
+  }
+}
+
+/** Where a closed note stands, in the detail's action row; undefined while open. */
+export function closedText(card: Pick<Card, "kind" | "status" | "applied" | "resolvedAt">): string | undefined {
+  const at = dateTime(card.resolvedAt);
+  const on = at ? ` on ${at}` : "";
+  switch (card.status) {
+    case "applied": {
+      if (!card.applied) return card.kind === "stress" ? `Added as a scenario${on}.` : `Applied to the plan${on}.`;
+      // "Applied: Retire later · not yet run" → "Applied: Retire later on Oct 2 at 13:40 · not yet run".
+      const [lead, ...rest] = card.applied.split(" · ");
+      return [`${lead}${on}`, ...rest].join(" · ");
+    }
+    case "confirmed":
+      return `Marked as correct${on}.`;
+    case "dismissed":
+      return card.kind === "read" ? `Marked as read${on}.` : `Dismissed${on}.`;
+    case "open":
+      return undefined;
+  }
+}
+
+/** A closed note the user can take back: one set aside, not one in the plan. */
+export function undoable(card: Pick<Card, "status">): boolean {
+  return card.status === "dismissed" || card.status === "confirmed";
+}
+
+export interface DetailAction {
+  action: CardAction;
+  label: string;
+}
+
+/**
+ * The detail's buttons: one primary — the note's apply, else for a note with
+ * nothing to apply its Dismiss ("Got it" on a read note) — the rest as quiet
+ * buttons, and Dismiss as a link beside an apply.
+ */
+export function detailActions(card: Pick<Card, "kind" | "actions">): {
+  primary?: DetailAction;
+  secondary: DetailAction[];
+  dismiss: boolean;
+} {
+  const has = (a: CardAction) => card.actions.includes(a);
+  const applying = card.actions.find((a) => a === "apply" || a === "apply-path" || a === "apply-copy");
+  let primary: DetailAction | undefined;
+  if (applying) primary = { action: applying, label: ACTION_LABEL[applying] };
+  else if (has("dismiss")) primary = { action: "dismiss", label: card.kind === "read" ? "Got it" : ACTION_LABEL.dismiss };
+  const secondary = card.actions
+    .filter((a) => a !== primary?.action && a !== "dismiss")
+    .map((action) => ({ action, label: ACTION_LABEL[action] }));
+  return { primary, secondary, dismiss: has("dismiss") && primary?.action !== "dismiss" };
+}
+
+/** Which notes the list holds: those still to act on, those acted on, or every one. */
+export type NoteView = "open" | "handled" | "all";
+
+/** Acted on: applied, confirmed or dismissed. A path part-way applied is still open. */
+export function handled(card: Pick<Card, "status">): boolean {
+  return card.status !== "open";
+}
+
+/** One row of the note list; a note a chat reply wrote sits under its parent. */
+export interface NoteRow {
+  card: Card;
+  depth: number;
+  status?: RowStatus;
+  /** Acted on: its dot greys out. */
+  closed: boolean;
+}
+
+export interface NoteList {
+  views: Array<{ id: NoteView; label: string; count: number }>;
+  /** A chip per kind of note, counted within the view; off ones narrow nothing. */
+  kinds: Array<{ id: SuggestionKind; label: string; count: number; on: boolean }>;
+  /** The visible notes, by section, as the list draws them. */
+  /**
+   * The visible notes as the list draws them: under section headings, or in
+   * the Handled view as one list with no heading, newest first.
+   */
+  groups: Array<{ key: string; heading?: string; rows: NoteRow[] }>;
+  /** Why the list is empty, when it is. */
+  empty?: string;
+  /** Every note in list order, filters or not: "6 of 9" counts over it. */
+  all: Card[];
+  /** The visible ones, in order: what j and k step through. */
+  visible: Card[];
+}
+
+const VIEWS: ReadonlyArray<{ id: NoteView; label: string }> = [
+  { id: "open", label: "Open" },
+  { id: "handled", label: "Handled" },
+  { id: "all", label: "All" },
+];
+
+/** The kind chips, most pressing first; "add" only appears on a board that has one. */
+const KIND_CHIPS: readonly SuggestionKind[] = ["add", "fix", "stress", "check", "read"];
+
+/**
+ * The note list beside the detail: the board's notes by section — open,
+ * then applied, then those set aside — each followed by the notes chat
+ * replies wrote under it, narrowed to a view (open, handled, all) and, when
+ * any kind chip is on, to those kinds.
+ *
+ * `keep` stays in the list whatever the view: the note in hand, so acting on
+ * it (or taking that back) does not snatch it away mid-read.
+ */
+export function noteList(
+  view: Pick<Board, "columns" | "setAside">,
+  {
+    show = "open",
+    kinds = [],
+    keep,
+  }: { show?: NoteView; kinds?: readonly SuggestionKind[]; keep?: number } = {},
+): NoteList {
+  const bySection = SECTIONS.map(({ id, heading }) => {
+    const rows: NoteRow[] = [];
+    const add = (card: Card, depth: number) => {
+      rows.push({ card, depth, status: listStatus(card), closed: handled(card) });
+      card.children.forEach((child) => add(child, depth + 1));
+    };
+    view.columns.find((c) => c.section === id)?.cards.forEach((card) => add(card, 0));
+    view.setAside.filter((card) => card.section === id).forEach((card) => add(card, 0));
+    return { section: id, heading, rows };
+  });
+  const rows = bySection.flatMap((g) => g.rows);
+  const inView = (card: Card, v: NoteView) =>
+    v === "all" || card.id === keep || (v === "handled") === handled(card);
+  const pool = rows.filter((r) => inView(r.card, show));
+  const shown = (r: NoteRow) => inView(r.card, show) && (kinds.length === 0 || kinds.includes(r.card.kind));
+  const groups =
+    show === "handled"
+      ? byDate(rows.filter(shown))
+      : bySection
+          .map((g) => ({ key: g.section, heading: g.heading, rows: g.rows.filter(shown) }))
+          .filter((g) => g.rows.length > 0);
+  const visible = groups.flatMap((g) => g.rows.map((r) => r.card));
+  return {
+    views: VIEWS.map((v) => ({
+      ...v,
+      count: v.id === "all" ? rows.length : rows.filter((r) => (v.id === "handled") === handled(r.card)).length,
+    })),
+    kinds: KIND_CHIPS.filter((k) => k !== "add" || rows.some((r) => r.card.kind === "add")).map((k) => ({
+      id: k,
+      label: KIND_LABEL[k],
+      count: pool.filter((r) => r.card.kind === k).length,
+      on: kinds.includes(k),
+    })),
+    groups,
+    empty:
+      visible.length > 0
+        ? undefined
+        : show === "handled" && kinds.length === 0
+          ? "Nothing dismissed or applied yet."
+          : show === "open" && kinds.length === 0
+            ? "Nothing left to act on."
+            : "No notes match these filters.",
+    all: rows.map((r) => r.card),
+    visible,
+  };
+}
+
+/**
+ * Handled notes as one plain list, by when they were handled, newest first.
+ * A note taken back while in view (open again, kept) heads it, as the one in
+ * hand; one with no date closes it.
+ */
+function byDate(rows: readonly NoteRow[]): NoteList["groups"] {
+  const when = (r: NoteRow) => stampMs(r.card.resolvedAt);
+  const rank = (r: NoteRow) => (!r.closed ? 0 : when(r) == null ? 2 : 1);
+  const sorted = [...rows].sort(
+    (a, b) => rank(a) - rank(b) || (when(b) ?? 0) - (when(a) ?? 0) || b.card.id - a.card.id,
+  );
+  return sorted.length > 0 ? [{ key: "handled", rows: sorted.map((r) => ({ ...r, depth: 0 })) }] : [];
+}
+
+/** The note to show: the one picked, if it is still visible; else the first open one; else the first. */
+export function pickedNote(visible: readonly Card[], picked?: number): Card | undefined {
+  return visible.find((c) => c.id === picked) ?? visible.find((c) => c.status === "open") ?? visible[0];
+}
+
+/**
+ * The note after `current` for "Next note": the next open one in the list,
+ * wrapping round; the plain next one once none is open. `step` -1 goes back,
+ * one note at a time.
+ */
+export function steppedNote(visible: readonly Card[], current: number | undefined, step: 1 | -1 = 1): Card | undefined {
+  const at = visible.findIndex((c) => c.id === current);
+  const n = visible.length;
+  if (n === 0) return undefined;
+  if (step === -1) return visible[(Math.max(at, 0) - 1 + n) % n];
+  for (let i = 1; i < n; i++) {
+    const card = visible[(at + i + n) % n];
+    if (card.status === "open") return card;
+  }
+  return visible[(at + 1) % n];
 }

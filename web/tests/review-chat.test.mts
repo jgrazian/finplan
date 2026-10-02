@@ -43,6 +43,7 @@ function note(overrides: Record<string, unknown> = {}): Suggestion {
     kind: "fix",
     section: "plan",
     title: "Home Purchase sells $218k of investments while USAA holds $1.04M",
+    summary: null as string | null,
     reasoning: "The Sweep runs before the down payment.",
     evidence: [],
     paths: [path()],

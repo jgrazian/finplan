@@ -177,6 +177,64 @@ pub struct Change {
     pub value: Option<Value>,
 }
 
+impl Change {
+    /// What a change that creates a resource creates, for telling two notes'
+    /// creations apart: a new event by its effects (each one's kind and the
+    /// accounts and asset it moves), anything else by its name. Empty for a
+    /// change that edits, or edits inside, a resource.
+    ///
+    /// Two notes that each add an event are not the same note: an income into
+    /// USAA and a purchase from USAA into Vanguard differ in what they create.
+    pub fn created_signature(&self) -> String {
+        let created = matches!(
+            self.target,
+            ChangeTarget::NewEvent(_)
+                | ChangeTarget::NewAsset(_)
+                | ChangeTarget::NewAccount(_)
+                | ChangeTarget::NewParameter(_)
+                | ChangeTarget::NewReturnProfile(_)
+                | ChangeTarget::NewTaxConfig(_)
+        );
+        let Some(value) = self
+            .value
+            .as_ref()
+            .filter(|_| created && self.path.is_empty())
+        else {
+            return String::new();
+        };
+        if let ChangeTarget::NewEvent(_) = self.target {
+            let mut effects: Vec<String> = value
+                .get("effects")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|effect| {
+                    let kind = effect.get("kind").and_then(Value::as_str).unwrap_or("?");
+                    let moves: Vec<String> =
+                        ["from_account_id", "to_account_id", "account_id", "asset_id"]
+                            .iter()
+                            .filter_map(|field| {
+                                let id = effect.get(*field).filter(|v| !v.is_null())?;
+                                Some(match id {
+                                    Value::String(reference) => format!("{field}={reference}"),
+                                    other => format!("{field}={other}"),
+                                })
+                            })
+                            .collect();
+                    format!("{kind}({})", moves.join(","))
+                })
+                .collect();
+            effects.sort();
+            return effects.join("+");
+        }
+        value
+            .get("name")
+            .and_then(Value::as_str)
+            .map(|name| name.trim().to_lowercase())
+            .unwrap_or_default()
+    }
+}
+
 /// A field that is present — even as `null` — deserializes to `Some`.
 fn present<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Value>, D::Error> {
     Value::deserialize(de).map(Some)

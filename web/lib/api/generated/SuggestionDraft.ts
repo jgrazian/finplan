@@ -15,6 +15,10 @@ export type SuggestionDraft = {
   kind: SuggestionKind;
   section: SuggestionSection;
   title: string;
+  /**
+   * One sentence shown under the title; optional for older clients.
+   */
+  summary: string | null;
   reasoning: string;
   evidence: Array<Evidence>;
   paths: Array<SuggestionPathDraft>;

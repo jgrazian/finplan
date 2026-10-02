@@ -690,6 +690,11 @@ textarea.input {
   transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 
+.seg-count {
+  font-weight: 400;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
 .seg-opt:has(input:checked) {
   background: var(--color-raised);
   color: var(--color-text);

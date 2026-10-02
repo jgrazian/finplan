@@ -216,6 +216,16 @@ fn rules_of(drafts: &[Draft]) -> BTreeMap<&'static str, usize> {
 fn only<'a>(drafts: &'a [Draft], rule: &str) -> &'a Draft {
     let found: Vec<_> = drafts.iter().filter(|d| d.rule == rule).collect();
     assert_eq!(found.len(), 1, "one {rule} draft, got {found:#?}");
+    // Every rule writes the lead the Review tab shows under the title.
+    let summary = &found[0].summary;
+    assert!(
+        !summary.is_empty() && summary.chars().count() <= 200 && !summary.contains('\n'),
+        "{rule} summary: {summary:?}"
+    );
+    assert!(
+        summary.ends_with('.'),
+        "{rule} summary is a sentence: {summary:?}"
+    );
     found[0]
 }
 

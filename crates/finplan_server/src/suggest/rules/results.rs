@@ -103,6 +103,16 @@ pub(super) fn shortfall_account_concentration(ctx: &Ctx) -> Vec<Draft> {
         kind: Kind::Read,
         section: Section::Results,
         title,
+        summary: match top {
+            Some((account_id, _)) => format!(
+                "Shortfalls start in {}: it is the account that runs out of cash to pay the \
+                 plan's bills.",
+                ctx.account_name(account_id)
+            ),
+            None => "The failing paths run out of spendable cash, not of wealth: a funding \
+                     rule to fix."
+                .to_string(),
+        },
         reasoning: sentences.join(" "),
         evidence,
         paths: Vec::new(),
@@ -204,6 +214,15 @@ pub(super) fn success_vs_funding_gap(ctx: &Ctx) -> Vec<Draft> {
         kind: Kind::Read,
         section: Section::Results,
         title,
+        summary: if gap.is_some() {
+            "Success counts paths that end with money even if they ran short of cash on the \
+             way; the funding rate does not."
+                .to_string()
+        } else {
+            "Property you cannot spend makes up much of the final net worth that success \
+             counts."
+                .to_string()
+        },
         reasoning: sentences.join(" "),
         evidence,
         paths: Vec::new(),

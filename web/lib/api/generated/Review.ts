@@ -3,8 +3,10 @@ import type { ReviewAi } from "./ReviewAi";
 import type { Suggestion } from "./Suggestion";
 
 /**
- * A scenario's latest review: the run it read and the notes still standing
- * (open or applied) against that run.
+ * A scenario's latest review: the run it read and every note of the plan's,
+ * whichever review wrote it — open (carried over from earlier reviews), or
+ * acted on: applied, or set aside (dismissed or confirmed, so they can be
+ * taken back). Drafts' notes, which have no run, are not the plan's.
  */
 export type Review = {
   run_id: number;

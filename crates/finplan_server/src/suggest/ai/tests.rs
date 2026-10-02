@@ -341,7 +341,7 @@ fn good_note(changes: Value) -> Value {
     json!({
         "kind": "fix", "section": "plan", "motive": "correctness",
         "title": "Home Purchase sells investments while USAA already holds the down payment",
-        "reasoning": "The Sweep sells from Vanguard before the down payment even though USAA covers it. Removing it lifts funding from 90.6% to 90.8% in a paired preview.",
+        "summary": "The one-line lead.", "reasoning": "The Sweep sells from Vanguard before the down payment even though USAA covers it. Removing it lifts funding from 90.6% to 90.8% in a paired preview.",
         "evidence": [
             {"ref": "ledger", "year": 2031, "event_id": 5, "account_id": null},
             {"ref": "account_series", "account_id": 6, "date": "2030-12-31", "value": 6000},
@@ -382,7 +382,7 @@ async fn preview_then_a_rejected_then_an_accepted_note() {
                 json!({
                     "kind": "read", "section": "plan",
                     "title": "x".repeat(200),
-                    "reasoning": "Too long a title, a read note with changes, an unknown account.",
+                    "reasoning": "Too long a title, no summary, a read note with changes, an unknown account.",
                     "evidence": [
                         {"ref": "ledger", "year": 1999},
                         {"ref": "ledger", "year": 2031, "event_id": 404}
@@ -411,6 +411,7 @@ async fn preview_then_a_rejected_then_an_accepted_note() {
     assert_eq!(outcome.drafts.len(), 1);
     let draft = &outcome.drafts[0];
     assert_eq!(draft.kind, Kind::Fix);
+    assert_eq!(draft.summary, "The one-line lead.");
     let [path] = draft.paths.as_slice() else {
         panic!("one path");
     };
@@ -459,6 +460,11 @@ async fn preview_then_a_rejected_then_an_accepted_note() {
     );
     assert!(tool("preview_changes")["input_schema"]["properties"]["steps"].is_object());
     assert!(tool("submit_suggestion")["input_schema"]["properties"]["paths"].is_object());
+    let required = &tool("submit_suggestion")["input_schema"]["required"];
+    assert!(
+        required.as_array().unwrap().contains(&json!("summary")),
+        "{required}"
+    );
     for name in tools::Registry::all().names() {
         assert!(tool(name)["input_schema"].is_object(), "{name}");
     }
@@ -492,6 +498,7 @@ async fn preview_then_a_rejected_then_an_accepted_note() {
     let text = rejected["content"].as_str().unwrap();
     for needle in [
         "title must be",
+        "summary must be",
         "a read note offers no paths",
         "motive is required",
         "year 1999",
@@ -664,6 +671,7 @@ async fn notes_the_rules_already_wrote_are_refused() {
         kind: Kind::Fix,
         section: Section::Plan,
         title: "Something else entirely".into(),
+        summary: String::new(),
         reasoning: String::new(),
         evidence: Vec::new(),
         paths: vec![DraftPath::only(
@@ -686,6 +694,108 @@ async fn notes_the_rules_already_wrote_are_refused() {
     let outcome = generate(&client, &context(&[rule]), &Tools::new())
         .await
         .unwrap();
+    assert!(outcome.drafts.is_empty());
+    let result = &script.requests()[2]["messages"][4]["content"][0];
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("repeats an existing note")
+    );
+}
+
+/// Two notes that each create an event are told apart by what the events do.
+#[test]
+fn created_events_are_compared_by_what_they_do() {
+    let event = |effects: Value| -> Vec<Change> {
+        serde_json::from_value(json!([{
+            "op": "add", "target": {"new_event": "e"}, "path": "",
+            "value": {"name": "Anything", "trigger": {"kind": "Manual"}, "effects": effects}
+        }]))
+        .unwrap()
+    };
+    let social_security = event(json!([{
+        "kind": "Income", "to_account_id": 6, "amount": {"kind": "Fixed", "value": 2000},
+        "amount_mode": "Gross", "income_type": "Taxable"
+    }]));
+    let reinvest = event(json!([{
+        "kind": "AssetPurchase", "from_account_id": 6, "to_account_id": 7, "asset_id": 3,
+        "amount": {"kind": "Fixed", "value": 1}
+    }]));
+    let reworded = event(json!([{
+        "kind": "AssetPurchase", "from_account_id": 6, "to_account_id": 7, "asset_id": 3,
+        "amount": {"kind": "Fixed", "value": 999}
+    }]));
+    assert_ne!(context::edits(&social_security), context::edits(&reinvest));
+    assert_eq!(context::edits(&reinvest), context::edits(&reworded));
+
+    use crate::api::suggestions::fingerprint;
+    let print = |changes: &[Change]| fingerprint(None, Kind::Fix, changes, "t");
+    assert_ne!(print(&social_security), print(&reinvest));
+    assert_eq!(print(&reinvest), print(&reworded));
+}
+
+#[tokio::test]
+async fn notes_still_open_on_the_board_are_listed_and_refused() {
+    let g = graph();
+    let changes = remove_sweep(&g);
+    let open = context(&[]).with_open_notes([(
+        Kind::Fix,
+        Section::Plan,
+        "Home Purchase sweep sells too early",
+        serde_json::from_value::<Vec<Change>>(changes.clone()).unwrap(),
+    )]);
+    assert!(open.text.contains("<open_notes>"), "{}", open.text);
+    assert!(open.text.contains("Home Purchase sweep sells too early"));
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([call("t1", "preview_changes", json!({"changes": changes}))]),
+        ),
+        reply(
+            "tool_use",
+            json!([call("t2", "submit_suggestion", good_note(changes))]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let client = AiClient::new(settings(), script.clone(), None);
+    let outcome = generate(&client, &open, &Tools::new()).await.unwrap();
+    assert!(outcome.drafts.is_empty());
+    let result = &script.requests()[2]["messages"][4]["content"][0];
+    assert!(
+        result["content"]
+            .as_str()
+            .unwrap()
+            .contains("repeats an existing note")
+    );
+}
+
+#[tokio::test]
+async fn dismissed_notes_are_listed_as_unwanted_and_refused() {
+    let g = graph();
+    let changes = remove_sweep(&g);
+    let told = context(&[]).with_dismissed_notes([(
+        Kind::Fix,
+        Section::Plan,
+        "Stop the Home Purchase sweep",
+        serde_json::from_value::<Vec<Change>>(changes.clone()).unwrap(),
+    )]);
+    assert!(told.text.contains("<dismissed_notes>"), "{}", told.text);
+    assert!(told.text.contains("The user dismissed these notes"));
+    assert!(told.text.contains("Stop the Home Purchase sweep"));
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([call("t1", "preview_changes", json!({"changes": changes}))]),
+        ),
+        reply(
+            "tool_use",
+            json!([call("t2", "submit_suggestion", good_note(changes))]),
+        ),
+        reply("end_turn", json!([])),
+    ]);
+    let client = AiClient::new(settings(), script.clone(), None);
+    let outcome = generate(&client, &told, &Tools::new()).await.unwrap();
     assert!(outcome.drafts.is_empty());
     let result = &script.requests()[2]["messages"][4]["content"][0];
     assert!(
@@ -1008,6 +1118,7 @@ fn existing_notes_are_listed_with_what_they_change() {
         kind: Kind::Fix,
         section: Section::Plan,
         title: "Home Purchase sweep".into(),
+        summary: String::new(),
         reasoning: String::new(),
         evidence: Vec::new(),
         paths: vec![DraftPath::only(
@@ -1376,7 +1487,7 @@ async fn the_observer_sees_every_turn_tool_retry_and_note_with_reported_cost() {
                     "t2",
                     "submit_suggestion",
                     json!({"kind": "read", "section": "plan", "title": "t",
-                           "reasoning": "r", "paths": [path_of(changes.clone())]})
+                           "summary": "The one-line lead.", "reasoning": "r", "paths": [path_of(changes.clone())]})
                 )]),
                 0.02,
             ),
@@ -1781,7 +1892,7 @@ async fn a_check_needs_a_path_or_a_reason() {
     let bare = json!({
         "kind": "check", "section": "portfolio", "motive": "realism",
         "title": "Every lot's cost basis equals its value on the start date",
-        "reasoning": "All lots were bought on the start date at that day's price, so the plan assumes no built-in gains.",
+        "summary": "The one-line lead.", "reasoning": "All lots were bought on the start date at that day's price, so the plan assumes no built-in gains.",
         "evidence": [], "paths": []
     });
     let mut reasoned = bare.clone();
@@ -2861,7 +2972,7 @@ mod drafting {
     fn note(title: &str, changes: Vec<Value>, extra: Value) -> Value {
         let mut note = json!({
             "kind": "add", "section": "plan", "title": title,
-            "reasoning": "Read from the statement.",
+            "summary": "The one-line lead.", "reasoning": "Read from the statement.",
             "evidence": [{"ref": "document", "document_id": 1, "page": 1,
                           "excerpt": "Balance: $12,345.00"}],
             "paths": [{"key": "a", "label": "Add it", "recommended": true,

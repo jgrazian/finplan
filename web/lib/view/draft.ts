@@ -284,7 +284,7 @@ export function draftBoard(
   const shown = suggestions.filter((s) => s.status !== "dismissed");
   const cards = new Map<DraftColumn, DraftCard[]>(DRAFT_COLUMNS.map(({ id }) => [id, []]));
   for (const s of shown) {
-    const base = toCard(s, names, { selected: selections[s.id], chat });
+    const base = toCard(s, names, { selected: selections[s.id], chat, confirm: true });
     const card: Card = {
       ...base,
       applied: undefined,

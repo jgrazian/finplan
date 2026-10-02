@@ -2053,3 +2053,64 @@ tr:hover > * > .grip,
   border-top: 1px solid var(--color-rule);
   overflow-wrap: anywhere;
 }
+
+/* ── Review notes: the list beside the note in hand ── */
+
+.review-notes {
+  display: grid;
+  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
+  min-height: 560px;
+}
+
+.review-notes-list {
+  min-width: 0;
+  border-right: 1px solid var(--color-divider);
+}
+
+.review-notes-main {
+  min-width: 0;
+  padding: 28px 36px 36px;
+}
+
+.review-note-detail {
+  max-width: 860px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* The view switch spans the list, each option an equal share. */
+.review-notes-views .seg {
+  display: flex;
+}
+
+.review-notes-views .seg-opt {
+  flex: 1;
+  justify-content: center;
+}
+
+.review-note-row:hover:not([aria-current]) {
+  background: color-mix(in srgb, var(--color-text) 4%, transparent) !important;
+}
+
+.review-note-row:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+@media (max-width: 760px) {
+  .review-notes {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-notes-list {
+    border-right: 0;
+    border-bottom: 1px solid var(--color-divider);
+    max-height: 45vh;
+    overflow-y: auto;
+  }
+
+  .review-notes-main {
+    padding: 20px 16px 28px;
+  }
+}

@@ -15,7 +15,7 @@ use crate::api::funding::FundingDiagnostics;
 use crate::api::runs::Results;
 use crate::compile::rows::{DistributionRow, ScenarioGraph};
 use crate::suggest::read;
-use crate::suggest::rules::{Draft, Kind};
+use crate::suggest::rules::{Draft, Kind, Section};
 use crate::suggest::{Change, ChangeTarget};
 
 /// Everything one review sends the model, and what it checks replies against.
@@ -76,20 +76,22 @@ pub(super) fn edits(changes: &[Change]) -> BTreeSet<String> {
     changes
         .iter()
         .map(|c| {
-            // A resource the batch creates is named by its kind alone: its key
-            // is the author's label, not what the note is about.
+            // A resource the batch creates is named by what it creates (see
+            // `Change::created_signature`), not by its key: the key is the
+            // author's label, not what the note is about.
+            let created = |kind: &str| format!("{kind}[{}]", c.created_signature());
             let target = match &c.target {
                 ChangeTarget::Event(id) => format!("event:{id}"),
                 ChangeTarget::Asset(id) => format!("asset:{id}"),
                 ChangeTarget::Account(id) => format!("account:{id}"),
-                ChangeTarget::NewEvent(_) => "new_event".to_owned(),
-                ChangeTarget::NewAsset(_) => "new_asset".to_owned(),
-                ChangeTarget::NewAccount(_) => "new_account".to_owned(),
+                ChangeTarget::NewEvent(_) => created("new_event"),
+                ChangeTarget::NewAsset(_) => created("new_asset"),
+                ChangeTarget::NewAccount(_) => created("new_account"),
                 ChangeTarget::Parameter(id) => format!("parameter:{id}"),
-                ChangeTarget::NewParameter(_) => "new_parameter".to_owned(),
+                ChangeTarget::NewParameter(_) => created("new_parameter"),
                 ChangeTarget::Scenario => "scenario".to_owned(),
-                ChangeTarget::NewReturnProfile(_) => "new_return_profile".to_owned(),
-                ChangeTarget::NewTaxConfig(_) => "new_tax_config".to_owned(),
+                ChangeTarget::NewReturnProfile(_) => created("new_return_profile"),
+                ChangeTarget::NewTaxConfig(_) => created("new_tax_config"),
             };
             format!("{target}{}", c.path)
         })
@@ -915,6 +917,78 @@ fn render_run(out: &mut String, graph: &ScenarioGraph, results: &Results) {
         }
     }
     let _ = writeln!(out, "</run>");
+}
+
+/// A note listed for the model: its kind, section, title and changes.
+pub type NoteOutline<'n> = (Kind, Section, &'n str, Vec<Change>);
+
+impl ReviewContext {
+    /// Notes still open on the board from earlier reviews or chats: listed
+    /// for the model after the rule notes, and held to the same duplicate
+    /// check, so a new pass adds to them rather than writing them again.
+    pub fn with_open_notes<'n>(self, notes: impl IntoIterator<Item = NoteOutline<'n>>) -> Self {
+        self.with_listed("open_notes", None, notes)
+    }
+
+    /// Notes the user dismissed: listed with what that means (not wanted, so
+    /// not to be raised again, even reworded), and held to the duplicate
+    /// check so a repeat is refused rather than stored.
+    pub fn with_dismissed_notes<'n>(
+        self,
+        notes: impl IntoIterator<Item = NoteOutline<'n>>,
+    ) -> Self {
+        self.with_listed(
+            "dismissed_notes",
+            Some(
+                "The user dismissed these notes. Do not raise them again, or the same concern \
+                 in other words, and do not propose the changes they made; treat the inputs \
+                 they question as the user's choice.",
+            ),
+            notes,
+        )
+    }
+
+    fn with_listed<'n>(
+        mut self,
+        tag: &str,
+        preface: Option<&str>,
+        notes: impl IntoIterator<Item = NoteOutline<'n>>,
+    ) -> Self {
+        let notes: Vec<_> = notes.into_iter().collect();
+        if notes.is_empty() {
+            return self;
+        }
+        let _ = writeln!(self.text, "\n<{tag}>");
+        if let Some(preface) = preface {
+            let _ = writeln!(self.text, "{preface}");
+        }
+        let name = |v: serde_json::Result<Value>| {
+            v.ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        };
+        for (kind, section, title, changes) in &notes {
+            let edited = edits(changes).into_iter().collect::<Vec<_>>().join(", ");
+            let _ = writeln!(
+                self.text,
+                "- [{} / {}] {title}{}",
+                name(serde_json::to_value(kind)),
+                name(serde_json::to_value(section)),
+                if edited.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (changes: {edited})")
+                }
+            );
+        }
+        let _ = writeln!(self.text, "</{tag}>");
+        self.existing.extend(
+            notes
+                .iter()
+                .map(|(kind, _, title, changes)| Existing::new(*kind, title, changes)),
+        );
+        self
+    }
 }
 
 fn render_existing(out: &mut String, rules: &[Draft]) {

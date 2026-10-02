@@ -3679,7 +3679,7 @@ fn drop_spending(spending: i64) -> Value {
     json!({
         "run_id": null, "kind": "fix", "section": "plan",
         "title": "Spending empties checking within the year",
-        "reasoning": "Checking starts at $10,000 and pays $1,000 a month with nothing coming in.",
+        "summary": "The one-line lead.", "reasoning": "Checking starts at $10,000 and pays $1,000 a month with nothing coming in.",
         "evidence": [{"ref": "ledger", "year": 2026, "event_id": spending, "account_id": null}],
         "paths": [{
             "key": "a", "label": "Stop the spending", "reasoning": null, "recommended": true,
@@ -3714,6 +3714,10 @@ async fn a_review_stores_checked_notes_and_remembers_dismissals() {
     assert_eq!(notes.len(), 1, "{review}");
     let note = notes[0];
     assert_eq!(note["source"], "rules");
+    assert!(
+        note["summary"].as_str().is_some_and(|s| !s.is_empty()),
+        "{note}"
+    );
     assert_eq!(note["kind"], "fix");
     assert_eq!(note["section"], "plan");
     assert_eq!(note["status"], "open");
@@ -3750,8 +3754,13 @@ async fn a_review_stores_checked_notes_and_remembers_dismissals() {
         .await;
     assert_eq!(latest["suggestions"], review["suggestions"]);
 
-    // Reviewing again replaces the open notes rather than adding to them.
+    // Reviewing again refreshes the open notes rather than adding to them,
+    // and a rule note raised again keeps its row.
     let again = app.review(scenario_id).await;
+    assert_eq!(
+        by_rule(&again, "liability_payment_inflation_adjusted")[0]["id"],
+        note["id"]
+    );
     assert_eq!(
         again["suggestions"].as_array().unwrap().len(),
         review["suggestions"].as_array().unwrap().len()
@@ -3785,8 +3794,31 @@ async fn a_review_stores_checked_notes_and_remembers_dismissals() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
 
+    // Undo puts it back on the board, open; an open note has nothing to undo.
+    let (status, reopened) = app
+        .post(&format!("/api/suggestions/{id}/reopen"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{reopened}");
+    assert_eq!(reopened["status"], "open");
+    assert_eq!(reopened["resolved_at"], Value::Null);
+    let (status, _) = app
+        .post(&format!("/api/suggestions/{id}/reopen"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{id}/dismiss"),
+            json!({"as": "confirmed"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Not raised again: the review lists only the confirmed note, for undo.
     let third = app.review(scenario_id).await;
-    assert!(by_rule(&third, "liability_payment_inflation_adjusted").is_empty());
+    let standing = by_rule(&third, "liability_payment_inflation_adjusted");
+    assert_eq!(standing.len(), 1, "{third}");
+    assert_eq!(standing[0]["id"], id);
+    assert_eq!(standing[0]["status"], "confirmed");
     let (_, confirmed) = app
         .get(&format!(
             "/api/scenarios/{scenario_id}/suggestions?status=confirmed"
@@ -3802,6 +3834,109 @@ async fn a_review_stores_checked_notes_and_remembers_dismissals() {
 }
 
 #[tokio::test]
+async fn open_notes_carry_into_the_next_review_until_the_plan_moves_under_them() {
+    let mut app = TestApp::new().await;
+    app.login_as("carry@example.com").await;
+    let (scenario_id, run_id, spending, _) = app.previewable_plan().await;
+    let (status, stored) = app.suggest(scenario_id, drop_spending(spending)).await;
+    assert_eq!(status, StatusCode::CREATED, "{stored}");
+    let id = stored["id"].clone();
+
+    // A new review keeps it, re-walked against the run's plan, once.
+    let ids = |review: &Value| -> Vec<Value> {
+        review["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["source"] == "ai")
+            .map(|s| s["id"].clone())
+            .collect()
+    };
+    let first = app.review(scenario_id).await;
+    assert_eq!(ids(&first), std::slice::from_ref(&id), "{first}");
+    let again = app.review(scenario_id).await;
+    assert_eq!(ids(&again), std::slice::from_ref(&id), "{again}");
+    let note = &again["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id)
+        .unwrap()
+        .clone();
+    assert_eq!(note["status"], "open");
+    assert_eq!(note["run_id"], run_id);
+    assert!(
+        !note["paths"][0]["steps"][0]["diff"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Rule notes raised again keep their rows (pinned by the liability rule
+    // in a_review_stores_checked_notes_and_remembers_dismissals).
+    let rule_ids = |review: &Value| -> Vec<Value> {
+        review["suggestions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["source"] == "rules")
+            .map(|s| s["id"].clone())
+            .collect()
+    };
+    assert_eq!(rule_ids(&first), rule_ids(&again));
+
+    // A note set aside stays listed, as handled, through a review of a
+    // newer run.
+    let (status, read) = app
+        .suggest(
+            scenario_id,
+            json!({
+                "run_id": null, "kind": "read", "section": "results",
+                "title": "Checking runs dry in the first year",
+                "summary": "The one-line lead.", "reasoning": "Nothing refills it.",
+                "evidence": [], "paths": []
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{read}");
+    let read_id = read["id"].as_i64().unwrap();
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{read_id}/dismiss"),
+            json!({"as": "dismissed"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Once a run no longer has the event it removes, the note goes.
+    let (status, _) = app
+        .delete(&format!("/api/scenarios/{scenario_id}/events/{spending}"))
+        .await;
+    assert!(status.is_success(), "{status}");
+    let (status, run) = app
+        .post(
+            &format!("/api/scenarios/{scenario_id}/runs"),
+            json!({"iterations": 40, "seed": 7}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{run}");
+    assert_eq!(
+        app.await_run(run["id"].as_i64().unwrap()).await,
+        "succeeded"
+    );
+    let after = app.review(scenario_id).await;
+    assert_ne!(after["run_id"], run_id);
+    let listed: Vec<(Value, Value)> = after["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["source"] == "ai")
+        .map(|s| (s["id"].clone(), s["status"].clone()))
+        .collect();
+    assert_eq!(listed, [(json!(read_id), json!("dismissed"))], "{after}");
+}
+
+#[tokio::test]
 async fn a_written_suggestion_is_checked_before_it_is_stored() {
     let mut app = TestApp::new().await;
     app.login_as("draft@example.com").await;
@@ -3811,6 +3946,7 @@ async fn a_written_suggestion_is_checked_before_it_is_stored() {
     assert_eq!(status, StatusCode::CREATED, "{stored}");
     assert_eq!(stored["source"], "ai");
     assert_eq!(stored["rule"], Value::Null);
+    assert_eq!(stored["summary"], "The one-line lead.");
     assert_eq!(stored["run_id"], run_id);
     assert_eq!(stored["status"], "open");
     assert_eq!(stored["paths"][0]["check"], Value::Null);
@@ -4335,6 +4471,7 @@ async fn suggestions_belong_to_the_plans_owner() {
         ("preview", json!({"path": "a", "through_step": null})),
         ("apply", apply_path("a")),
         ("dismiss", json!({"as": "dismissed"})),
+        ("reopen", json!({})),
     ] {
         let (status, _) = intruder
             .post(&format!("/api/suggestions/{id}/{path}"), body)
@@ -4485,7 +4622,7 @@ mod review_model {
                 json!({
                     "kind": "fix", "section": "portfolio", "motive": "realism",
                     "title": "Checking starts too thin for the loan payments",
-                    "reasoning": "Checking opens at $10,000 and the loan takes $200 a month.",
+                    "summary": "The one-line lead.", "reasoning": "Checking opens at $10,000 and the loan takes $200 a month.",
                     "evidence": [],
                     "paths": [{"key": "a", "label": "Start checking at $20,000",
                                "recommended": true,
@@ -4620,7 +4757,21 @@ async fn the_model_adds_checked_notes_after_the_rule_notes() {
     app.review(scenario_id).await;
     let review = app.await_review_model(scenario_id).await;
     assert_eq!(review["ai"]["status"], "done", "{review}");
-    assert!(model_notes(&review).is_empty(), "{review}");
+    // Listed once, as dismissed (for undo), not raised again as open.
+    let notes = model_notes(&review);
+    assert_eq!(notes.len(), 1, "{review}");
+    assert_eq!(notes[0]["id"], id);
+    assert_eq!(notes[0]["status"], "dismissed");
+    // The second pass was told the user dismissed it.
+    let title = note["title"].as_str().unwrap().to_owned();
+    let told = script
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(Value::to_string)
+        .any(|r| r.contains("<dismissed_notes>") && r.contains(&title));
+    assert!(told, "no request listed the dismissed note");
     let (_, dismissed) = app
         .get(&format!(
             "/api/scenarios/{scenario_id}/suggestions?status=dismissed"
@@ -4663,7 +4814,8 @@ async fn a_new_review_supersedes_a_running_model_pass() {
     let (scenario_id, _, _) = app.reviewable_plan().await;
     let checking = app.account_named(scenario_id, "Checking").await;
     {
-        // Pass one finishes; pass two hangs; pass three replaces both.
+        // Pass one finishes; pass two hangs; pass three proposes pass one's
+        // note again.
         let mut replies = review_model::pass(checking);
         replies.push(Reply::Hang);
         replies.extend(review_model::pass(checking));
@@ -4692,8 +4844,9 @@ async fn a_new_review_supersedes_a_running_model_pass() {
     assert_eq!(last["ai"]["status"], "done", "{last}");
     let notes = model_notes(&last);
     assert_eq!(notes.len(), 1, "{last}");
-    // Pass three's note replaced pass one's open one.
-    assert_ne!(notes[0]["id"], first_id);
+    // Pass one's open note was carried over, and pass three's repeat of it
+    // was not stored again.
+    assert_eq!(notes[0]["id"], first_id);
     let (_, open) = app
         .get(&format!(
             "/api/scenarios/{scenario_id}/suggestions?status=open"

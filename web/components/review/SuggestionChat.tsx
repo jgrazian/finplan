@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { useSuggestionChat } from "@/lib/hooks/useSuggestionChat";
+import { type SuggestionChatState, useSuggestionChat } from "@/lib/hooks/useSuggestionChat";
 import { CHAT_MAX_CHARS, cardAnchor, lastQuestion, threadView } from "@/lib/view/chat";
 
 const FAINT = "color-mix(in srgb, var(--color-text) 55%, transparent)";
@@ -24,12 +24,16 @@ export function SuggestionChat({
   suggestionId,
   offline,
   onSettled,
+  chat,
 }: {
   suggestionId: number;
   offline: boolean;
   onSettled: () => void;
+  /** The thread as a parent already reads it; without one, this reads its own. */
+  chat?: SuggestionChatState;
 }) {
-  const { thread, loadError, sending, sendError, send } = useSuggestionChat(suggestionId, true, onSettled);
+  const own = useSuggestionChat(suggestionId, chat == null, onSettled);
+  const { thread, loadError, sending, sendError, send } = chat ?? own;
   const [draft, setDraft] = useState("");
   const counterId = useId();
   const view = threadView(thread, { draft, sending });

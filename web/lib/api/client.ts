@@ -315,6 +315,8 @@ export const api = {
       http.post<AppliedSuggestion>(`/suggestions/${id}/apply`, body),
     dismiss: (id: number, body: DismissSuggestion) =>
       http.post<Suggestion>(`/suggestions/${id}/dismiss`, body),
+    /** Undoes a dismissal or an "it's correct": the note is open again. 409 otherwise. */
+    reopen: (id: number) => http.post<Suggestion>(`/suggestions/${id}/reopen`, {}),
     /**
      * The follow-up thread about a note. Sending starts a model turn and
      * answers at once with the thread `running`; read it again until the
