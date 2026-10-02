@@ -1223,8 +1223,11 @@ pub fn evaluate_effect_into(
                 state_tax,
             });
 
-            // 7. If sell-to-cover, sell shares to cover the tax liability
-            if *sell_to_cover {
+            // 7. If sell-to-cover, sell shares to cover the tax liability.
+            // A stock that has gone to zero vests worth nothing and owes
+            // nothing, and dividing that zero tax by the zero price would make
+            // every figure below NaN — so there is simply nothing to sell.
+            if *sell_to_cover && current_price > 0.0 && total_tax > 0.0 {
                 let shares_to_sell = total_tax / current_price;
                 let sell_proceeds = shares_to_sell * current_price;
 

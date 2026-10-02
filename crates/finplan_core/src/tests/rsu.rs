@@ -154,6 +154,47 @@ fn test_rsu_sell_to_cover() {
     );
 }
 
+/// A vest after the stock has gone to zero is worth nothing and owes no tax,
+/// so sell-to-cover has nothing to sell. Dividing that zero tax by the zero
+/// price used to make the sale NaN, which poisoned the account's cash and
+/// failed the whole Monte Carlo run on "nonfinite terminal net worth".
+#[test]
+fn test_rsu_sell_to_cover_after_a_wipeout_stays_finite() {
+    let (config, metadata) = SimulationBuilder::new()
+        .start(2025, 1, 1)
+        .years(2)
+        .inflation(0.0)
+        // A -100% year: the floor the market clamps wide draws to.
+        .asset(AssetBuilder::new("GOOG").price(100.0).fixed_return(-1.0))
+        .account(AccountBuilder::taxable_brokerage("Brokerage").cash(0.0))
+        .event(
+            EventBuilder::rsu_vesting("RSU Vest")
+                .to_account("Brokerage")
+                .asset_in("Brokerage", "GOOG")
+                .units(100.0)
+                .sell_to_cover()
+                .on_date(jiff::civil::date(2026, 3, 15))
+                .once(),
+        )
+        .build();
+
+    let result = simulate(&config, 42).unwrap();
+    let brokerage_balance = account_balance(&result, &metadata, "Brokerage");
+    assert!(
+        brokerage_balance.is_finite(),
+        "a worthless vest must leave the balance finite, got {brokerage_balance}"
+    );
+    assert!(
+        brokerage_balance.abs() < 1e-9,
+        "a worthless vest adds nothing, got {brokerage_balance}"
+    );
+    let total_tax: f64 = result.yearly_taxes.iter().map(|t| t.total_tax).sum();
+    assert!(
+        total_tax.abs() < 1e-9,
+        "nothing vested, nothing owed: {total_tax}"
+    );
+}
+
 /// Quarterly vesting schedule: verify 4 vests over a year
 #[test]
 fn test_rsu_quarterly_vesting() {

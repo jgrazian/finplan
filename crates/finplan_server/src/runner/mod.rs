@@ -691,7 +691,13 @@ async fn execute(
     }
     let (summary, engine_seconds) = match outcome {
         Ok((Ok(summary), seconds)) => (summary, seconds),
-        Ok((Err(_), _)) => return Err(RunError::Engine),
+        Ok((Err(error), _)) => {
+            // The user sees only the public message; the log keeps the reason,
+            // without which a failure on one random path in thousands cannot
+            // be told apart from any other.
+            tracing::warn!(event = "run.engine_error", engine_error = %error);
+            return Err(RunError::Engine);
+        }
         Err(_) => return Err(RunError::EnginePanic),
     };
     let _persist = PhaseTimer::new(telemetry, JobKind::Run, Phase::Persist);
