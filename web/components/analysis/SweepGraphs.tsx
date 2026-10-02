@@ -1,6 +1,6 @@
 "use client";
 
-import { RAMP, shade, type GraphView } from "@/lib/view/sweep";
+import { shade, type GraphView } from "@/lib/view/sweep";
 import { paramTick } from "@/lib/view/analysis";
 
 /**
@@ -18,9 +18,6 @@ const AXIS_TEXT = {
   fillOpacity: 0.55,
 } as const;
 
-/** The plot's own ink, matched to the ramp's middle so a line sits in the family. */
-const INK = "var(--color-accent-700)";
-const DOT = "var(--color-accent-900)";
 /** The page's ground, for haloing a mark drawn over the dark end of the ramp. */
 const GROUND = "var(--color-bg)";
 
@@ -109,9 +106,9 @@ export function LineGraph({ view }: { view: GraphView }) {
         />
       )}
 
-      <path d={path} fill="none" stroke={INK} strokeWidth={2} />
+      <path d={path} fill="none" stroke={view.scale.ink} strokeWidth={2} />
       {drawn.map((p) => (
-        <circle key={p.i} cx={x(p.i)} cy={y(p.value)} r={3.2} fill={DOT}>
+        <circle key={p.i} cx={x(p.i)} cy={y(p.value)} r={3.2} fill={view.scale.dot}>
           <title>{`${paramTick(view.xAxis.kind, values[p.i])} — ${view.metric.format(p.value)}`}</title>
         </circle>
       ))}
@@ -190,7 +187,7 @@ export function HeatGraph({ view }: { view: GraphView }) {
           y={cellY(cell.y)}
           width={cellW}
           height={cellH}
-          fill={shade(view.colourSpan, cell.value)}
+          fill={shade(view.colourSpan, cell.value, view.scale)}
         >
           <title>
             {`${paramTick(view.xAxis.kind, view.xAxis.values[cell.x])} × ` +
@@ -454,7 +451,7 @@ export function SurfaceGraph({ view }: { view: GraphView }) {
         d:
           points.map((p, i) => `${i === 0 ? "M" : "L"} ${p?.px ?? 0} ${p?.py ?? 0}`).join(" ") +
           " Z",
-        fill: shade(view.colourSpan, mean),
+        fill: shade(view.colourSpan, mean, view.scale),
       });
     }
   }
@@ -599,16 +596,27 @@ export function GraphLegend({ view }: { view: GraphView }) {
         </span>
       )}
       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span>{view.colour.tick(view.colourSpan.low)}</span>
-        <div style={{ width: 110, display: "flex", height: 8 }}>
-          {RAMP.map((step) => (
-            <i key={step} style={{ flex: 1, background: step }} />
-          ))}
-        </div>
         <span>
-          {view.colour.tick(view.colourSpan.high)} {view.colour.short}
+          {view.colour.tick(view.colourSpan.low)}
+          {view.colour.unit}
+        </span>
+        <ScaleBar steps={view.scale.steps} width={110} />
+        <span>
+          {view.colour.tick(view.colourSpan.high)}
+          {view.colour.unit} {view.colour.short}
         </span>
       </span>
     </div>
+  );
+}
+
+/** A scale's steps side by side, low to high — the legend's key and the menu's swatch. */
+export function ScaleBar({ steps, width }: { steps: readonly string[]; width: number }) {
+  return (
+    <span style={{ width, display: "flex", height: 8, flex: "none" }} aria-hidden>
+      {steps.map((step, i) => (
+        <i key={i} style={{ flex: 1, background: step }} />
+      ))}
+    </span>
   );
 }

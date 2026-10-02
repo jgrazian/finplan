@@ -96,6 +96,26 @@
   --color-accent-2-800: #553300;
   --color-accent-2-900: #392000;
 
+  /* The Blue sequential ramp for sweep graphs, low (1) to high (16): the
+     statement blue's own hue (OKLCH 256°) stepped evenly in lightness from
+     L 0.26 to 0.97, its chroma following the accent ramp's arc. */
+  --color-ramp-blue-1: #11243e;
+  --color-ramp-blue-2: #163051;
+  --color-ramp-blue-3: #1c3c65;
+  --color-ramp-blue-4: #23487a;
+  --color-ramp-blue-5: #2a558e;
+  --color-ramp-blue-6: #3363a1;
+  --color-ramp-blue-7: #4271af;
+  --color-ramp-blue-8: #517fbc;
+  --color-ramp-blue-9: #628ec9;
+  --color-ramp-blue-10: #739cd4;
+  --color-ramp-blue-11: #85abdf;
+  --color-ramp-blue-12: #97bae9;
+  --color-ramp-blue-13: #acc9f0;
+  --color-ramp-blue-14: #c1d8f7;
+  --color-ramp-blue-15: #d8e7fc;
+  --color-ramp-blue-16: #eff6ff;
+
   /* The net-worth envelope and its median — ink, not accent. */
   --color-envelope-outer: #e7eaee;
   --color-envelope-inner: #d2d8df;
@@ -175,6 +195,25 @@
   --color-accent-2-700: #f8e2ca;
   --color-accent-2-800: #fdf3e8;
   --color-accent-2-900: #fff9f3;
+
+  /* The Blue ramp reversed, so low is still the heaviest mark against the
+     ground it sits on. */
+  --color-ramp-blue-1: #eff6ff;
+  --color-ramp-blue-2: #d8e7fc;
+  --color-ramp-blue-3: #c1d8f7;
+  --color-ramp-blue-4: #acc9f0;
+  --color-ramp-blue-5: #97bae9;
+  --color-ramp-blue-6: #85abdf;
+  --color-ramp-blue-7: #739cd4;
+  --color-ramp-blue-8: #628ec9;
+  --color-ramp-blue-9: #517fbc;
+  --color-ramp-blue-10: #4271af;
+  --color-ramp-blue-11: #3363a1;
+  --color-ramp-blue-12: #2a558e;
+  --color-ramp-blue-13: #23487a;
+  --color-ramp-blue-14: #1c3c65;
+  --color-ramp-blue-15: #163051;
+  --color-ramp-blue-16: #11243e;
 
   --color-envelope-outer: #2b2e32;
   --color-envelope-inner: #3c4045;

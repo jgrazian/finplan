@@ -3,7 +3,11 @@
 import { Button, Dropdown, Field, RangeField, SegmentedControl, StatLabel } from "@/components/ui";
 import type { SegmentOption } from "@/components/ui";
 import { paramTick } from "@/lib/view/analysis";
+import { ScaleBar } from "./SweepGraphs";
 import {
+  COLOR_SCALES,
+  COLOR_SCALE_IDS,
+  DEFAULT_SCALE,
   MAX_ELEVATION,
   METRICS,
   MIN_ELEVATION,
@@ -143,6 +147,25 @@ export function GraphInspector({
             options={axisOptions(spec.x)}
             value={spec.y}
             onChange={(y) => onChange({ ...spec, y })}
+          />
+        </Field>
+      )}
+
+      {/* Heatmap and surface only: a line is one series, always in the system
+          blue, so there is nothing for a scale to choose. */}
+      {spec.kind !== "line" && (
+        <Field label="Colour scale">
+          <Dropdown
+            ariaLabel="Colour scale"
+            options={COLOR_SCALE_IDS.map((id) => ({
+              value: id,
+              label: COLOR_SCALES[id].label,
+              detail: <ScaleBar steps={COLOR_SCALES[id].steps} width={64} />,
+            }))}
+            value={spec.scale ?? DEFAULT_SCALE}
+            onChange={(scale) =>
+              onChange({ ...spec, scale: scale === DEFAULT_SCALE ? undefined : scale })
+            }
           />
         </Field>
       )}

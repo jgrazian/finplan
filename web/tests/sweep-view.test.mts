@@ -7,7 +7,9 @@ import {
   MAX_ELEVATION,
   METRICS,
   MIN_ELEVATION,
-  RAMP,
+  COLOR_SCALES,
+  DEFAULT_SCALE,
+  colorScale,
   wrapAzimuth,
   axisNames,
   clampElevation,
@@ -192,13 +194,51 @@ test("a band is opened out so a flat sweep is not stretched into a story", () =>
   assert.deepEqual(wide, { low: 0.4, high: 0.95 });
 });
 
-test("the ramp runs dark to light across the band it was given", () => {
+test("a scale is read low to high across the band it was given", () => {
   const span = { low: 0, high: 1 };
-  assert.equal(shade(span, 0), RAMP[0]);
-  assert.equal(shade(span, 1), RAMP[RAMP.length - 1]);
+  const scale = COLOR_SCALES.viridis;
+  assert.equal(shade(span, 0, scale), scale.steps[0]);
+  assert.equal(shade(span, 1, scale), scale.steps[scale.steps.length - 1]);
   // Outside the band clamps rather than falling off the ends of the ramp.
-  assert.equal(shade(span, -5), RAMP[0]);
-  assert.equal(shade(span, 5), RAMP[RAMP.length - 1]);
+  assert.equal(shade(span, -5, scale), scale.steps[0]);
+  assert.equal(shade(span, 5, scale), scale.steps[scale.steps.length - 1]);
+});
+
+test("every scale has at least sixteen steps, each a distinct colour", () => {
+  for (const [id, scale] of Object.entries(COLOR_SCALES)) {
+    assert.ok(scale.steps.length >= 16, id);
+    assert.equal(new Set(scale.steps).size, scale.steps.length, id);
+  }
+});
+
+test("a graph's scale is kept through a stored layout, and anything else falls back", () => {
+  const stored = [
+    { id: "g1", kind: "heatmap", metric: "funding", x: "a", y: "b", held: {}, wide: false, scale: "mako" },
+    { id: "g2", kind: "heatmap", metric: "funding", x: "a", y: "b", held: {}, wide: false, scale: "turbo" },
+    { id: "g3", kind: "heatmap", metric: "funding", x: "a", y: "b", held: {}, wide: false },
+  ];
+  const parsed = parseLayout(stored);
+  assert.equal(parsed?.[0].scale, "mako");
+  assert.equal(parsed?.[1].scale, undefined, "an unknown scale is dropped, not stored");
+  assert.equal(colorScale(parsed?.[1].scale), COLOR_SCALES[DEFAULT_SCALE]);
+  assert.equal(colorScale(parsed?.[2].scale).label, "Blue");
+});
+
+test("a line is always drawn in the default scale, whatever its spec holds", () => {
+  const space = sweepSpace(results());
+  const [x] = space.axes.map((a) => a.parameter_id);
+  const spec: GraphSpec = {
+    id: "g1",
+    kind: "line",
+    metric: "funding",
+    x,
+    y: undefined,
+    held: {},
+    wide: false,
+    scale: "magma",
+  };
+  assert.equal(graphView(space, spec)?.scale, COLOR_SCALES[DEFAULT_SCALE]);
+  assert.equal(graphView(space, { ...spec, kind: "heatmap", y: space.axes[1].parameter_id })?.scale, COLOR_SCALES.magma);
 });
 
 function surfaceOver(extra: Partial<GraphSpec> = {}): GraphSpec {

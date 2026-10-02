@@ -28,6 +28,11 @@ export interface Metric {
   /** The same, short enough for an axis tick. */
   tick: (value: number) => string;
   /**
+   * What a bare tick is counted in, for where it stands alone — the legend's
+   * two ends — rather than on an axis whose heading already says so.
+   */
+  unit: string;
+  /**
    * The range to draw these values over.
    *
    * Never the metric's theoretical range: real plans cluster in the last few
@@ -61,6 +66,7 @@ const rate = (
   of: (point) => of(point) ?? undefined,
   format: (value) => fmtPercent(value),
   tick: (value) => `${Math.round(value * 100)}`,
+  unit: "%",
   span: (values) => widen(bounds(values, 0, 1), MIN_RATE_SPAN, 0, 1),
 });
 
@@ -71,6 +77,7 @@ const money = (id: MetricId, label: string, short: string, of: (p: AnalysisPoint
   of,
   format: fmtCurrency,
   tick: fmtCompact,
+  unit: "",
   span: (values) => {
     const seen = bounds(values, 0, 1);
     return widen(seen, Math.abs(seen.high || 1) * MIN_MONEY_SPAN);
@@ -117,30 +124,157 @@ function widen(span: Span, minSpan: number, clampLow?: number, clampHigh?: numbe
 // ──────────────────────────── the ramp ────────────────────────────
 
 /**
- * The heatmap and surface ramp: one hue, the design system's accent scale from
- * its `-900` step to its `-100`. The heaviest step reads as low, which puts the
- * weight of the image on the corner of the grid where the plan fails.
- *
- * Steps rather than colours, so the ramp follows the account's palette. On a
- * dark ground the scale reverses with it, and `-900` becomes the lightest tint
- * — still the heaviest mark against that ground, so the reading is unchanged.
+ * A sequential scale for the heatmap and surface: sixteen steps from low to
+ * high, plus the ink a 1-D line is drawn in so it sits in the same family.
  */
-export const RAMP = [
-  "var(--color-accent-900)",
-  "var(--color-accent-800)",
-  "var(--color-accent-700)",
-  "var(--color-accent-600)",
-  "var(--color-accent-500)",
-  "var(--color-accent-400)",
-  "var(--color-accent-300)",
-  "var(--color-accent-100)",
-] as const;
+export interface ColorScale {
+  label: string;
+  steps: readonly string[];
+  /** The line through a one-axis sweep. */
+  ink: string;
+  /** The measured points on that line. */
+  dot: string;
+}
 
-/** Where a value lands on the ramp, over a span already decided. */
-export function shade(span: Span, value: number): string {
+export type ColorScaleId = "blue" | "viridis" | "cividis" | "mako" | "magma";
+
+/**
+ * The scales a graph can be drawn in, in the order the inspector offers them.
+ *
+ * Blue is the system's own and the default. The others are the perceptually
+ * uniform maps from matplotlib (viridis, cividis, magma) and seaborn (mako),
+ * sampled at sixteen even stops. Their colours are fixed rather than tokens,
+ * so unlike Blue they do not reverse on a dark ground: there, their dark low
+ * end is the quiet one.
+ */
+export const COLOR_SCALES: Record<ColorScaleId, ColorScale> = {
+  /**
+   * One hue: the statement blue stepped from dark to light. The heaviest step
+   * reads as low, which puts the weight of the image on the corner of the
+   * grid where the plan fails and leaves the safe region quiet.
+   *
+   * Tokens rather than colours, so the ramp reverses with a dark ground and
+   * low stays the heaviest mark against it.
+   */
+  blue: {
+    label: "Blue",
+    steps: Array.from({ length: 16 }, (_, i) => `var(--color-ramp-blue-${i + 1})`),
+    ink: "var(--color-accent-700)",
+    dot: "var(--color-accent-900)",
+  },
+  /** Even in lightness and readable under every common colour-vision deficiency. */
+  viridis: {
+    label: "Viridis",
+    steps: [
+      "#440154",
+      "#481a6c",
+      "#472f7d",
+      "#414487",
+      "#39568c",
+      "#31688e",
+      "#2a788e",
+      "#23888e",
+      "#1f988b",
+      "#22a884",
+      "#35b779",
+      "#54c568",
+      "#7ad151",
+      "#a5db36",
+      "#d2e21b",
+      "#fde725",
+    ],
+    ink: "#2a788e",
+    dot: "#472f7d",
+  },
+  /** Viridis re-tuned so deuteranopes and normal vision see the same map. */
+  cividis: {
+    label: "Cividis",
+    steps: [
+      "#00224e",
+      "#002e6c",
+      "#1e3a6f",
+      "#35456c",
+      "#47516c",
+      "#575d6d",
+      "#666970",
+      "#757575",
+      "#848279",
+      "#948e77",
+      "#a59c74",
+      "#b7a96e",
+      "#c8b866",
+      "#dbc75a",
+      "#eed649",
+      "#fee838",
+    ],
+    ink: "#47516c",
+    dot: "#002e6c",
+  },
+  /** Deep blue through teal: a calm map close to the system's own hue. */
+  mako: {
+    label: "Mako",
+    steps: [
+      "#0b0405",
+      "#1d111d",
+      "#2d1d38",
+      "#382a54",
+      "#403872",
+      "#40498e",
+      "#395d9c",
+      "#3671a0",
+      "#3484a5",
+      "#3497a9",
+      "#38aaac",
+      "#45bdad",
+      "#60ceac",
+      "#91dbb4",
+      "#bbe7c8",
+      "#def5e5",
+    ],
+    ink: "#3671a0",
+    dot: "#382a54",
+  },
+  /** Black through magenta to cream: the widest lightness range of the set. */
+  magma: {
+    label: "Magma",
+    steps: [
+      "#000004",
+      "#0b0924",
+      "#20114b",
+      "#3b0f70",
+      "#57157e",
+      "#721f81",
+      "#8c2981",
+      "#a8327d",
+      "#c43c75",
+      "#de4968",
+      "#f1605d",
+      "#fa7f5e",
+      "#fe9f6d",
+      "#febf84",
+      "#fddea0",
+      "#fcfdbf",
+    ],
+    ink: "#8c2981",
+    dot: "#3b0f70",
+  },
+};
+
+export const COLOR_SCALE_IDS = Object.keys(COLOR_SCALES) as ColorScaleId[];
+
+export const DEFAULT_SCALE: ColorScaleId = "blue";
+
+/** The scale a stored graph names, or the default for anything else. */
+export function colorScale(id: ColorScaleId | undefined): ColorScale {
+  return COLOR_SCALES[id ?? DEFAULT_SCALE] ?? COLOR_SCALES[DEFAULT_SCALE];
+}
+
+/** Where a value lands on a scale, over a span already decided. */
+export function shade(span: Span, value: number, scale: ColorScale): string {
+  const steps = scale.steps;
   const width = span.high - span.low || 1;
-  const step = Math.round(clamp01((value - span.low) / width) * (RAMP.length - 1));
-  return RAMP[step];
+  const step = Math.round(clamp01((value - span.low) / width) * (steps.length - 1));
+  return steps[step];
 }
 
 function clamp01(v: number): number {
@@ -302,6 +436,11 @@ export interface GraphSpec {
    * height, which is the honest default for one measure.
    */
   colour?: MetricId;
+  /**
+   * The colour scale the graph is drawn in. Absent means the default, so a
+   * layout saved before scales existed reads unchanged.
+   */
+  scale?: ColorScaleId;
   /** Surface only: where the camera stands, in degrees. */
   azimuth?: number;
   elevation?: number;
@@ -352,6 +491,8 @@ export interface GraphView {
    */
   colour: Metric;
   colourSpan: Span;
+  /** The scale `colourSpan` is read onto; always the default for a line. */
+  scale: ColorScale;
   sampleColour: (x: number, y?: number) => number | undefined;
   /** True where colour is saying something the height is not. */
   twoMeasures: boolean;
@@ -448,6 +589,9 @@ export function graphView(space: SweepSpace, spec: GraphSpec): GraphView | undef
     span: chosen.span(drawn),
     colour,
     colourSpan: colour.span(shaded),
+    // A line carries no scale of its own: one series in the system blue. The
+    // spec keeps its choice, so a line turned back into a heatmap gets it back.
+    scale: colorScale(spec.kind === "line" ? undefined : spec.scale),
     sampleColour,
     twoMeasures: !sameMeasure,
     azimuth: wrapAzimuth(spec.azimuth ?? DEFAULT_AZIMUTH),
@@ -683,6 +827,7 @@ function parseGraph(raw: unknown): GraphSpec | undefined {
     kind,
     metric: chosen,
     colour: METRICS.find((m) => m.id === graph.colour)?.id,
+    scale: COLOR_SCALE_IDS.find((id) => id === graph.scale),
     azimuth: angle(graph.azimuth),
     elevation: angle(graph.elevation),
     x,
