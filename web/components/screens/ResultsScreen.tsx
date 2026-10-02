@@ -114,7 +114,6 @@ function ResultsContent({
   onEffortChange,
   offline,
   onRun,
-  onCancel,
 }: {
   results: ResultsData | undefined;
   run: Run | undefined;
@@ -134,7 +133,6 @@ function ResultsContent({
   /** No connection: nothing can be run, so the dial is read-only.  */
   offline?: boolean;
   onRun: () => void;
-  onCancel: () => void;
 }) {
   const [view, setView] = useState<ChartView>("fan");
   const [scaleKind, setScaleKind] = useState<ScaleKind>("linear");
@@ -149,7 +147,12 @@ function ResultsContent({
     return <EmptyState title="The run did not finish" detail={error} />;
   }
   if (active && !results) {
-    return <RunProgress run={run} onCancel={onCancel} />;
+    return (
+      <EmptyState
+        title={run?.status === "queued" ? "Queued…" : "Simulating…"}
+        detail="The run's progress shows in place of Run at the top."
+      />
+    );
   }
   if (loading && !results) {
     return <EmptyState title="Loading results…" detail="Fetching the scenario's last run." />;
@@ -195,8 +198,10 @@ function ResultsContent({
     <SplitPane
       railWidth={296}
       main={
-        <div className="results-main" style={{ padding: "22px 24px" }}>
-          {active && <RunProgress run={run} onCancel={onCancel} />}
+        <div
+          className="results-main"
+          style={{ padding: "22px 24px", opacity: active ? 0.55 : 1, transition: "opacity .2s" }}
+        >
           <SuccessRate
             fundingSuccessRate={stats.fundingSuccessRate}
             iterations={stats.numIterations}
@@ -295,42 +300,6 @@ function ResultsContent({
         </div>
       }
     />
-  );
-}
-
-/** Live progress while the worker pool chews through the iterations. */
-function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel: () => void }) {
-  const done = run?.completed_iterations ?? 0;
-  // A converging run stops when its median settles, so the bar is filling
-  // towards a ceiling it is not expected to reach. Reading it against the
-  // minimum sample instead would sit at 100% for most of the run.
-  const converging = run?.converge === true;
-  const total = (converging ? run?.max_iterations : run?.iterations) ?? 0;
-  const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
-
-  return (
-    <div className="results-progress" style={{ padding: "12px 24px", maxWidth: 520 }}>
-      <h4 style={{ margin: "0 0 4px" }}>
-        {run?.status === "queued" ? "Queued…" : "Simulating…"}
-      </h4>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ display: "flex", flex: 1, minWidth: 0, height: 10, border: "1px solid var(--color-divider)" }}>
-          <div style={{ width: `${pct}%`, background: "var(--color-accent)" }} />
-        </div>
-        <Button onClick={onCancel}>Cancel run</Button>
-      </div>
-      <p
-        style={{
-          margin: "4px 0 0",
-          fontSize: 12,
-          color: "color-mix(in srgb, var(--color-text) 58%, transparent)",
-        }}
-      >
-        {converging
-          ? `${done.toLocaleString("en-US")} iterations · sampling until the median settles, up to ${total.toLocaleString("en-US")}`
-          : `${done.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} iterations`}
-      </p>
-    </div>
   );
 }
 

@@ -2,6 +2,7 @@
 
 import { type ReactNode, useMemo } from "react";
 import { Button, Dropdown, type DropdownOption, Tag } from "@/components/ui";
+import type { Run } from "@/lib/api/types";
 import type { Scenario } from "@/lib/types";
 import { BrandMark, Wordmark } from "./Brand";
 
@@ -34,6 +35,9 @@ export function AppHeader<T extends string>({
   onAccount,
   accountOpen,
   onRun,
+  run,
+  running,
+  onCancel,
   offline,
   trailing,
 }: {
@@ -52,6 +56,11 @@ export function AppHeader<T extends string>({
   /** Account settings is what is on screen, so the avatar reads as current. */
   accountOpen?: boolean;
   onRun?: () => void;
+  /** The scenario's latest run, read for its progress while `running`. */
+  run?: Run;
+  /** A run is queued or executing: Run gives its slot to the progress. */
+  running?: boolean;
+  onCancel?: () => void;
   /** Nothing can reach the server, so a run cannot be started. */
   offline?: boolean;
   /** Extra controls between the scenario switcher and Run. */
@@ -120,15 +129,20 @@ export function AppHeader<T extends string>({
       {active?.dirty && <Tag tone="outline">results stale</Tag>}
       {trailing}
 
-      <Button
-        variant="primary"
-        shortcut="r"
-        onClick={onRun}
-        disabled={offline}
-        title={offline ? "No connection to the server." : undefined}
-      >
-        Run
-      </Button>
+      {running ? (
+        <RunProgress run={run} onCancel={onCancel} />
+      ) : (
+        <Button
+          className="app-header-run"
+          variant="primary"
+          shortcut="r"
+          onClick={onRun}
+          disabled={offline}
+          title={offline ? "No connection to the server." : undefined}
+        >
+          Run
+        </Button>
+      )}
 
       <button
         type="button"
@@ -161,5 +175,46 @@ export function AppHeader<T extends string>({
       ))}
     </nav>
     </>
+  );
+}
+
+/**
+ * Run's slot while a run is in flight: status and count over a thin fill,
+ * with Cancel at the end. It holds Run's width, so the header never reflows
+ * when a run starts or ends, and it shows from every tab.
+ */
+function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel?: () => void }) {
+  const done = run?.completed_iterations ?? 0;
+  // A converging run stops when its median settles, so the bar is filling
+  // towards a ceiling it is not expected to reach. Reading it against the
+  // minimum sample instead would sit at 100% for most of the run.
+  const converging = run?.converge === true;
+  const total = (converging ? run?.max_iterations : run?.iterations) ?? 0;
+  const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+  const queued = run?.status === "queued";
+  const f = (n: number) => n.toLocaleString("en-US");
+
+  return (
+    <div
+      className="app-header-run run-progress"
+      role="status"
+      title={
+        converging
+          ? `${f(done)} iterations · sampling until the median settles, up to ${f(total)}`
+          : `${f(done)} of ${f(total)} iterations`
+      }
+    >
+      <div className="run-progress-body">
+        <span className="run-progress-word">{queued ? "Queued" : "Simulating"}</span>
+        <span className="run-progress-count">
+          {f(done)} / {converging ? "≤" : ""}
+          {f(total)}
+        </span>
+        <i className="run-progress-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <button type="button" className="run-progress-cancel" title="Cancel run" onClick={onCancel}>
+        Cancel
+      </button>
+    </div>
   );
 }

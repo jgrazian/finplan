@@ -394,6 +394,9 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
             setCreating(false);
             start();
           }}
+          run={run.run}
+          running={run.active}
+          onCancel={run.cancel}
           offline={status.offline}
         />
 
@@ -471,7 +474,6 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onEffortChange={setEffort}
                 offline={status.offline}
                 onRun={start}
-                onCancel={run.cancel}
                 issues={issues}
                 onReviewIssue={reviewIssue}
                 onReviewEvent={reviewEvent}
