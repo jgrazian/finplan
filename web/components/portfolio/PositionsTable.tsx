@@ -86,7 +86,7 @@ export function PositionsTable({
       ) : (
         <div ref={attachList} style={listStyle}>
           <DropLine at={indicator} />
-          <Table compact>
+          <Table compact className="ledger-positions">
             <tbody>
               {order.map((positionId) => {
                 const lot = byId.get(positionId);
@@ -119,8 +119,14 @@ export function PositionsTable({
                         props={handleProps(positionId)}
                       />
                     </Td>
-                    <Td>{lot.assetId}</Td>
-                    <Td align="right" muted>
+                    <Td style={{ fontFamily: "var(--font-mono)", fontWeight: 500 }}>
+                      {lot.assetId}
+                    </Td>
+                    <Td
+                      align="right"
+                      muted
+                      style={{ fontFamily: "var(--font-mono)", fontSize: 11.5 }}
+                    >
                       {fmtUnits(lot.units)} u
                     </Td>
                     <Td align="right">{fmtCurrency(lot.value)}</Td>

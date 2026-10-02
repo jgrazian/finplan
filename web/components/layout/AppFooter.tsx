@@ -48,7 +48,9 @@ export function AppFooter() {
     <>
       <footer className="app-footer">
         <div className="app-footer-summary">
-          <strong>FINPLAN</strong>
+          <strong className="brand-word">
+            Fin<em>plan</em>
+          </strong>
           <div>
             <span>Open-source retirement planning, built for transparent assumptions.</span>
             <p className="app-footer-note">

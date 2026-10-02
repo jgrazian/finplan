@@ -220,7 +220,7 @@ export function ColumnPicker<K extends string>({
         <span
           style={{
             marginLeft: "auto",
-            fontFamily: "ui-monospace, Menlo, monospace",
+            fontFamily: "var(--font-mono)",
             fontSize: 11,
             color: "color-mix(in srgb, var(--color-text) 55%, transparent)",
           }}

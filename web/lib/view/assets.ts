@@ -111,18 +111,18 @@ function assetsTotal(rows: AssetRow[]): number {
 // ── the mix by return profile ────────────────────────────────────────
 
 /**
- * One ramp, darkest first, shared by the breakdown bar, its legend and the
+ * The categorical series, shared by the breakdown bar, its legend and the
  * table's share column — so a colour means the same profile wherever it appears.
  */
 const PROFILE_COLORS = [
-  "var(--color-accent-900)",
-  "var(--color-accent-800)",
-  "var(--color-accent-700)",
-  "var(--color-accent)",
-  "var(--color-accent-500)",
-  "var(--color-accent-400)",
-  "var(--color-accent-300)",
-  "var(--color-accent-200)",
+  "var(--color-series-1)",
+  "var(--color-series-2)",
+  "var(--color-series-3)",
+  "var(--color-series-4)",
+  "var(--color-series-5)",
+  "var(--color-series-6)",
+  "var(--color-series-7)",
+  "var(--color-series-8)",
 ];
 
 /**

@@ -113,7 +113,7 @@ export function AssetInspector({
       }}
     >
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-        <h5 style={{ margin: 0, fontFamily: "ui-monospace, Menlo, monospace", fontSize: 15 }}>
+        <h5 style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: 15 }}>
           {draft.ticker || "—"}
         </h5>
         <Tag tone="outline">asset</Tag>

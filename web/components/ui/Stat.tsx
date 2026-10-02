@@ -32,7 +32,11 @@ export function InlineStat({
 }: {
   label: ReactNode;
   value: ReactNode;
-  /** Tints the value with the accent, marking the median among percentiles. */
+  /**
+   * Marks the median among percentiles with a dashed rule under it — the
+   * same dash as the P50 line it reads off — rather than the accent, which is
+   * kept for actions.
+   */
   emphasis?: boolean;
 }) {
   return (
@@ -40,7 +44,16 @@ export function InlineStat({
       <StatLabel>{label}</StatLabel>
       <div
         className={cx("font-[var(--font-heading)] font-semibold text-[17px]")}
-        style={emphasis ? { color: "var(--color-accent-800)" } : undefined}
+        style={
+          emphasis
+            ? {
+                textDecoration: "underline dashed",
+                textDecorationColor: "var(--color-envelope-p50)",
+                textDecorationThickness: 1.5,
+                textUnderlineOffset: 5,
+              }
+            : undefined
+        }
       >
         {value}
       </div>

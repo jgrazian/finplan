@@ -63,6 +63,7 @@ export function Dialog({
         padding: "8vh 16px 16px",
         overflowY: "auto",
         background: "var(--color-scrim)",
+        backdropFilter: "blur(3px)",
       }}
     >
       <form
@@ -70,18 +71,13 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        className="dialog-panel"
         onSubmit={(e) => {
           e.preventDefault();
           onSubmit();
         }}
         style={{
           width: `min(${width}px, 100%)`,
-          background: "var(--color-bg)",
-          border: "1px solid var(--color-divider)",
-          boxShadow: "var(--shadow-lg)",
-          padding: "16px 18px 18px",
-          display: "flex",
-          flexDirection: "column",
           gap: 12,
         }}
       >

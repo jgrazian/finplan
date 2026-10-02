@@ -59,8 +59,8 @@ export function AssetMixCard({
           <StatLabel>Portfolio value by return profile</StatLabel>
           <div
             style={{
-              fontFamily: "var(--font-heading)",
-              fontWeight: 600,
+              fontFamily: "var(--font-display)",
+              fontWeight: "var(--font-display-weight)",
               fontSize: 30,
               lineHeight: 1.05,
               marginTop: 2,
@@ -131,7 +131,7 @@ function LegendEntry({
         aria-hidden
       />
       {slice.label}
-      <span style={{ fontFamily: "ui-monospace, Menlo, monospace", color: "var(--color-text)" }}>
+      <span style={{ fontFamily: "var(--font-mono)", color: "var(--color-text)" }}>
         {fmtShareFine(slice.share)}
       </span>
     </>

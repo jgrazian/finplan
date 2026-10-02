@@ -35,7 +35,7 @@ export interface CardOutcome {
 }
 
 const MONO: React.CSSProperties = {
-  font: "12px/1.55 ui-monospace, Menlo, monospace",
+  font: "12px/1.55 var(--font-mono)",
   border: "1px solid var(--color-divider)",
   padding: "8px 10px",
   display: "flex",

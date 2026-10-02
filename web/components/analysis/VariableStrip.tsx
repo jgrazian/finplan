@@ -113,7 +113,7 @@ export function VariableStrip({
         <StatLabel>swept</StatLabel>
         <span
           style={{
-            fontFamily: "ui-monospace, Menlo, monospace",
+            fontFamily: "var(--font-mono)",
             fontSize: 11.5,
             color: "color-mix(in srgb, var(--color-text) 75%, transparent)",
           }}

@@ -8,7 +8,6 @@ import { KIND_LABEL, kindOf } from "./accountKind";
 import { taxBadge } from "./taxStatus";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
-const TRACK = "color-mix(in srgb, var(--color-text) 8%, transparent)";
 
 /**
  * The account list. Selection drives the inspector; nothing is covered up.
@@ -48,18 +47,18 @@ export function AccountsTable({
   return (
     <div ref={attachList} style={listStyle}>
       <DropLine at={indicator} />
-      <Table fixed>
+      <Table fixed className="ledger-table">
         <thead>
           <tr>
             <Th style={{ width: 22, padding: 0 }} aria-label="Order" />
-            <Th style={{ width: 210 }}>Account</Th>
-            <Th style={{ width: 104 }}>Tax</Th>
-            <Th style={{ width: 150 }}>Return profile</Th>
-            <Th>Holdings</Th>
-            <Th align="right" style={{ width: 120 }}>
+            <Th style={{ width: "25%" }}>Account</Th>
+            <Th style={{ width: 98 }}>Tax</Th>
+            <Th style={{ width: "19%" }}>Return profile</Th>
+            <Th>Holdings %</Th>
+            <Th align="right" style={{ width: 112 }}>
               Balance
             </Th>
-            <Th style={{ width: 132 }}>Share</Th>
+            <Th style={{ width: 120 }}>Share</Th>
           </tr>
         </thead>
         <tbody>
@@ -69,6 +68,8 @@ export function AccountsTable({
             const badge = taxBadge(a);
             const share = shares.get(a.accountId);
             const selected = a.accountId === selectedId;
+            const color = colors.get(a.accountId);
+            const [profile, ...moreProfiles] = a.returnProfiles;
             return (
               <tr
                 key={a.accountId}
@@ -81,54 +82,48 @@ export function AccountsTable({
                 <Td style={{ padding: 0 }}>
                   <DragHandle label={a.name} props={handleProps(serverId)} />
                 </Td>
-                <Td style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                <Td title={`${a.name} · ${KIND_LABEL[kindOf(a)]}`}>
+                  <i className="ledger-swatch" style={{ background: color }} aria-hidden />
                   <strong style={{ fontWeight: 500 }}>{a.name}</strong>{" "}
-                  <span className="text-muted" style={{ fontSize: 11 }}>
+                  <span className="text-muted" style={{ fontSize: 11.5 }}>
                     {KIND_LABEL[kindOf(a)]}
                   </span>
                 </Td>
                 <Td>
                   <Tag tone={badge.tone}>{badge.label}</Tag>
                 </Td>
-                <Td
-                  style={{ fontSize: 12, overflow: "hidden", textOverflow: "ellipsis" }}
-                  title={a.returnProfileId}
-                >
-                  {a.returnProfileId}
+                <Td style={{ fontSize: 12.5 }} title={a.returnProfiles.join(", ")}>
+                  {profile}
+                  {moreProfiles.length > 0 && (
+                    <span className="text-muted"> +{moreProfiles.length}</span>
+                  )}
                 </Td>
-                <Td
-                  style={{
-                    fontSize: 12,
-                    color: "color-mix(in srgb, var(--color-text) 62%, transparent)",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                  title={a.holdings}
-                >
-                  {a.holdings}
+                <Td title={a.holdings.detail}>
+                  {/* The tickers give way before the lot count does. */}
+                  <span className="ledger-holdings">
+                    <span className="ledger-mono">{a.holdings.held}</span>
+                    {a.holdings.lots && <span>{a.holdings.lots}</span>}
+                  </span>
                 </Td>
-                <Td align="right">{fmtCurrency(a.balance)}</Td>
+                <Td align="right" style={{ fontWeight: 500 }}>
+                  {fmtCurrency(a.balance)}
+                </Td>
                 <Td>
                   {share == null ? (
                     <span style={{ fontSize: 11.5, color: MUTED }}>—</span>
                   ) : (
-                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ flex: 1, height: 7, background: TRACK }} aria-hidden>
+                    <span className="ledger-share">
+                      <span aria-hidden>
                         <i
                           style={{
-                            display: "block",
-                            height: "100%",
-                            width: `${share * 100}%`,
-                            background: colors.get(a.accountId),
+                            // A sliver stays visible: a 0.3% account still
+                            // has a share, and an empty track says it has none.
+                            width: `${Math.max(share * 100, 1.5)}%`,
+                            background: color,
                           }}
                         />
                       </span>
-                      <span
-                        style={{ fontSize: 11.5, width: 36, textAlign: "right", color: MUTED }}
-                      >
-                        {fmtShareFine(share)}
-                      </span>
+                      <span>{fmtShareFine(share)}</span>
                     </span>
                   )}
                 </Td>

@@ -1,11 +1,14 @@
 export {
-  ACCENTS,
   APPEARANCE_KEY,
-  DEFAULT_APPEARANCE,
+  DARK_STYLES,
+  DARK_STYLE_KEY,
   THEME_MODES,
-  applyAppearance,
-  parseAppearance,
+  applyDarkStyle,
+  applyThemeMode,
+  parseThemeMode,
   resolveMode,
-  type Appearance,
+  type DarkStyle,
+  type ThemeMode,
 } from "./palettes";
-export { useAppearance, useResolvedMode } from "./useAppearance";
+export { useApplyThemeMode, useResolvedMode, useThemeMode } from "./useThemeMode";
+export { useDarkStyle } from "./useDarkStyle";

@@ -241,7 +241,7 @@ export function AmountExpression({ source, effect, context, onChange, disabled, 
       {diagnostic && (
         <div role="alert" style={{ fontSize: 12, color: "var(--color-danger, #a22)" }}>
           {diagnostic.message}
-          <div style={{ fontFamily: "monospace", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+          <div style={{ fontFamily: "var(--font-mono)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
             {source.slice(0, errorStart)}<span style={{ textDecoration: "underline wavy currentColor", fontWeight: 700 }}>
               {source.slice(errorStart, errorEnd) || "▴"}
             </span>{source.slice(errorEnd)}

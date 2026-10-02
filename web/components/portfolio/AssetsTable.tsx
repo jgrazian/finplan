@@ -9,7 +9,7 @@ import type { AssetMix, AssetRow } from "@/lib/view/assets";
 const MUTED = "color-mix(in srgb, var(--color-text) 62%, transparent)";
 const FAINT = "color-mix(in srgb, var(--color-text) 40%, transparent)";
 const TRACK = "color-mix(in srgb, var(--color-text) 8%, transparent)";
-const MONO = { fontFamily: "ui-monospace, Menlo, monospace" } as const;
+const MONO = { fontFamily: "var(--font-mono)" } as const;
 
 /**
  * Declared once so the header and its rows cannot drift apart. The name is the

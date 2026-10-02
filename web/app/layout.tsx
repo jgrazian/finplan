@@ -1,6 +1,28 @@
 import type { Metadata } from "next";
-import { APPEARANCE_KEY } from "@/lib/theme";
+import { IBM_Plex_Mono, IBM_Plex_Sans, Source_Serif_4 } from "next/font/google";
+import { APPEARANCE_KEY, DARK_STYLE_KEY } from "@/lib/theme";
 import "./globals.css";
+
+/**
+ * The three Ledger faces, self-hosted by next/font at build time: no request
+ * to Google at runtime and no flash of the fallback while one is in flight.
+ * Plex Sans and Plex Mono are one superfamily, so tickers and units set in the
+ * mono belong to the same system as the controls around them. Each lands as a
+ * CSS variable on <html>, which design-system.css reads into
+ * --font-display / --font-body / --font-mono.
+ */
+const display = Source_Serif_4({
+  subsets: ["latin"],
+  style: ["normal", "italic"],
+  axes: ["opsz"],
+  variable: "--font-source-serif",
+});
+const sans = IBM_Plex_Sans({ subsets: ["latin"], variable: "--font-plex-sans" });
+const mono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
+});
 
 export const metadata: Metadata = {
   title: "FinPlan",
@@ -10,9 +32,9 @@ export const metadata: Metadata = {
 /**
  * Stamp the palette before the first paint.
  *
- * The account's real choice arrives with the session, a fetch later; without
- * this the page would paint light-blue and then swap under the reader. So the
- * last applied palette is cached locally and replayed here, inline and
+ * Mode and dark style are kept in local storage (lib/theme), and React only
+ * reads them after hydration; without this a dark device would paint light
+ * and then swap under the reader. So they are replayed here, inline and
  * blocking, which is the one place code can run before anything is drawn.
  *
  * Everything it touches is optional — no storage, bad JSON, an old shape — and
@@ -24,7 +46,7 @@ const PRE_PAINT = `try{
     :matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
   var r=document.documentElement;
   r.dataset.theme=m;
-  r.dataset.accent=a.accent==="green"||a.accent==="purple"?a.accent:"blue";
+  if(localStorage.getItem(${JSON.stringify(DARK_STYLE_KEY)})==="midnight")r.dataset.ground="midnight";
 }catch(e){}`;
 
 export default function RootLayout({
@@ -33,7 +55,11 @@ export default function RootLayout({
   return (
     // The script above writes attributes the server did not render, which is
     // the whole point of it; React is told not to call that a mismatch.
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      className={`${display.variable} ${sans.variable} ${mono.variable}`}
+      suppressHydrationWarning
+    >
       <head>
         <script dangerouslySetInnerHTML={{ __html: PRE_PAINT }} />
       </head>

@@ -27,7 +27,7 @@ import { useWorkspace } from "@/lib/hooks/useWorkspace";
 import { NavProvider, type TabId, useNav } from "@/lib/nav";
 import { resolveScenario } from "@/lib/nav/url";
 import { useServerStatus } from "@/lib/status/useServerStatus";
-import { useAppearance } from "@/lib/theme";
+import { useApplyThemeMode } from "@/lib/theme";
 import type { InflationProfile, Scenario } from "@/lib/types";
 import { BETA_ACCESS_NOTICE } from "@/lib/view/access";
 import { clockTime, pathChecks, summarizeIssues } from "@/lib/view/issues";
@@ -60,6 +60,8 @@ const AUTO_RUN_SETTLE_MS = 1_500;
  */
 export function App() {
   const session = useSession();
+  // The mode is the device's, so it holds signed in or out.
+  useApplyThemeMode();
 
   if (session.user === undefined) {
     return <main className="app-main app-main-plain">Loading…</main>;
@@ -90,11 +92,6 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   // destination rather than a fifth tab: it is about the account, not the
   // scenario the tabs all describe, so it is a tab id the header does not list.
   const nav = useNav();
-
-  // The palette is the account's, so it is applied here rather than at the
-  // root: signed out, whatever the pre-paint script replayed stands, and the
-  // login screen is not repainted in a stranger's colours on the way past.
-  useAppearance({ mode: user.theme_mode, accent: user.accent });
 
   // How hard a run should work is a property of the question being asked, not
   // of the plan, so it lives here for the session rather than on the scenario.

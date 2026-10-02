@@ -1442,30 +1442,25 @@ async fn preferences_are_bounded_by_the_servers_own_limits() {
     let (_, me) = app.get("/api/auth/me").await;
     assert_eq!(me["default_iterations"], 2000, "seeded default");
     assert_eq!(me["auto_run"], false);
-    assert_eq!(
-        me["theme_mode"], "system",
-        "a new account follows the machine"
+    assert!(
+        me.get("theme_mode").is_none() && me.get("accent").is_none(),
+        "appearance is kept on the device, not the account"
     );
-    assert_eq!(me["accent"], "blue");
 
     let (status, user) = app
         .put(
             "/api/auth/preferences",
-            json!({"default_iterations": 5000, "default_duration_years": 45, "auto_run": true,
-                   "theme_mode": "dark", "accent": "green"}),
+            json!({"default_iterations": 5000, "default_duration_years": 45, "auto_run": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(user["default_iterations"], 5000);
     assert_eq!(user["auto_run"], true);
-    assert_eq!(user["theme_mode"], "dark");
-    assert_eq!(user["accent"], "green");
 
     let (status, _) = app
         .put(
             "/api/auth/preferences",
-            json!({"default_iterations": 999_999, "default_duration_years": 45, "auto_run": true,
-                   "theme_mode": "dark", "accent": "green"}),
+            json!({"default_iterations": 999_999, "default_duration_years": 45, "auto_run": true}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "over --max-iterations");
@@ -1473,31 +1468,16 @@ async fn preferences_are_bounded_by_the_servers_own_limits() {
     let (status, _) = app
         .put(
             "/api/auth/preferences",
-            json!({"default_iterations": 5000, "default_duration_years": 0, "auto_run": false,
-                   "theme_mode": "light", "accent": "blue"}),
+            json!({"default_iterations": 5000, "default_duration_years": 0, "auto_run": false}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "a zero-year horizon");
 
-    // The palette is a closed set, so a hue the stylesheet has no ramp for is
-    // refused at the edge rather than stored and rendered as nothing.
-    let (status, _) = app
-        .put(
-            "/api/auth/preferences",
-            json!({"default_iterations": 5000, "default_duration_years": 45, "auto_run": false,
-                   "theme_mode": "light", "accent": "chartreuse"}),
-        )
-        .await;
-    assert_eq!(
-        status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "an unknown accent"
-    );
-
-    // …and the refusal did not half-write the rest of the row.
+    // …and neither refusal half-wrote the row.
     let (_, me) = app.get("/api/auth/me").await;
-    assert_eq!(me["theme_mode"], "dark");
-    assert_eq!(me["accent"], "green");
+    assert_eq!(me["default_iterations"], 5000);
+    assert_eq!(me["default_duration_years"], 45);
+    assert_eq!(me["auto_run"], true);
 }
 
 #[tokio::test]
@@ -1949,6 +1929,22 @@ async fn a_year_of_the_ledger_can_be_read_back_and_filtered() {
     )
     .await;
 
+    // A second one-off in the same year: both have to be named, not just the
+    // one that happened to fire first.
+    app.post(
+        &format!("/api/scenarios/{scenario_id}/events"),
+        json!({
+            "name": "Sell the car",
+            "fires_once": true,
+            "trigger": {"kind": "Age", "years": 45},
+            "effects": [{
+                "kind": "Income", "to_account_id": checking, "income_type": "TaxFree",
+                "amount": {"kind": "Fixed", "value": 8_000.0}
+            }]
+        }),
+    )
+    .await;
+
     let (status, run) = app
         .post(
             &format!("/api/scenarios/{scenario_id}/runs"),
@@ -1973,15 +1969,26 @@ async fn a_year_of_the_ledger_can_be_read_back_and_filtered() {
     let counted: i64 = years.iter().map(|y| y["total"].as_i64().unwrap()).sum();
     assert!(counted > 0, "the ledger index counted nothing");
 
-    // The tag marks the year an event *started*, so the monthly salary tags
+    // A tag marks the year an event *started*, so the monthly salary tags
     // only its first year, not all ten. A tag on every year would mark nothing.
-    let tagged: Vec<(i64, &str)> = years
+    // Two events starting in one year are both named, in the order they fired.
+    let tagged: Vec<(i64, Vec<&str>)> = years
         .iter()
-        .filter_map(|y| Some((y["year"].as_i64()?, y["tag"].as_str()?)))
+        .filter_map(|y| {
+            let tags: Vec<&str> = y["tags"]
+                .as_array()?
+                .iter()
+                .filter_map(|t| t.as_str())
+                .collect();
+            (!tags.is_empty()).then(|| (y["year"].as_i64().unwrap(), tags))
+        })
         .collect();
     assert_eq!(
         tagged,
-        vec![(2026, "Salary"), (2030, "Buy the boat")],
+        vec![
+            (2026, vec!["Salary"]),
+            (2030, vec!["Buy the boat", "Sell the car"])
+        ],
         "got {tagged:?}"
     );
 

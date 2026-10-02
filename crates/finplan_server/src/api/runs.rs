@@ -453,9 +453,10 @@ pub struct LedgerYear {
     pub tax: i64,
     pub event: i64,
     pub total: i64,
-    /// The name of the event that fired this year — retiring, a pension
-    /// starting — or null for a year that only did the ordinary things.
-    pub tag: Option<String>,
+    /// The names of the events that started this year — retiring, a pension
+    /// starting — in the order they fired; empty for a year that only did the
+    /// ordinary things.
+    pub tags: Vec<String>,
 }
 
 /// One flattened ledger entry.
@@ -946,7 +947,7 @@ async fn ledger_years(
                 tax: 0,
                 event: 0,
                 total: 0,
-                tag: None,
+                tags: Vec::new(),
             });
         }
         let entry = years.last_mut().expect("just pushed");
@@ -980,12 +981,11 @@ async fn ledger_years(
     .fetch_all(&state.db)
     .await?;
 
-    // Ordered by position, so a year that starts two events reads as the first.
+    // Ordered by position, so a year that starts two events lists them in the
+    // order they fired — every one of them, not just the first.
     for (year, detail, _) in firsts {
-        if let Ok(i) = years.binary_search_by_key(&year, |y| y.year)
-            && years[i].tag.is_none()
-        {
-            years[i].tag = Some(detail);
+        if let Ok(i) = years.binary_search_by_key(&year, |y| y.year) {
+            years[i].tags.push(detail);
         }
     }
     Ok(years)

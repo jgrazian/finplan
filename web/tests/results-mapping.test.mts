@@ -33,7 +33,7 @@ function fixture(series = "0.5"): Results {
     account_series: [{account_id: 1, label: "Bank", values: selected.net_worth}],
     cash_flows: [{year: 2027, income: 80, expenses: 20, contributions: 0, withdrawals: 0, appreciation: 0, net_cash_flow: 60, taxes: 8}],
     warnings: [], inflation: [{year: 2026, factor: 1}, {year: 2027, factor: selected.inflation[2]}],
-    ledger_years: [{year: 2027, cash: 1, asset: 0, tax: 0, event: 0, total: 1, tag: null}],
+    ledger_years: [{year: 2027, cash: 1, asset: 0, tax: 0, event: 0, total: 1, tags: []}],
     funding_diagnostics: null,
   };
 }

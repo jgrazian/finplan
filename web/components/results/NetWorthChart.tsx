@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import {
   ChartCanvas,
+  EventMarkers,
   FanSeries,
   type ScaleKind,
   StackedBarSeries,
@@ -15,6 +16,7 @@ import { type ChartGeometry, linePath } from "@/components/charts/geometry";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { resolveScaleKind, stackSeries } from "@/components/charts/stack";
 import type { AccountSeries, NetWorthBands } from "@/lib/types";
+import type { ChartMarker } from "@/lib/view/outcome";
 import { ChartReadout } from "./ChartReadout";
 import type { ChartView } from "./types";
 import type { YearFocus } from "./useYearFocus";
@@ -46,6 +48,8 @@ export function NetWorthChart({
   pathLabel,
   scaleKind,
   focus,
+  markers = [],
+  revealKey,
 }: {
   bands: NetWorthBands;
   accountSeries: AccountSeries[];
@@ -55,6 +59,13 @@ export function NetWorthChart({
   scaleKind: ScaleKind;
   /** The year the chart and the rail's breakdown are both pointed at. */
   focus: YearFocus;
+  /** One-off events drawn as rules through the plot. */
+  markers?: ChartMarker[];
+  /**
+   * Changes when a new run lands, which replays the marks' left-to-right
+   * reveal; switching view or percentile keeps the same key and stays still.
+   */
+  revealKey?: string | number;
 }) {
   const { hoverIndex, pinnedIndex } = focus;
   const mobile = useIsMobile();
@@ -103,22 +114,25 @@ export function NetWorthChart({
         pinnedIndex={pinnedIndex}
         onSelect={focus.pin}
       >
-        {view === "fan" && (
-          <FanSeries bands={bands} scale={scale} />
-        )}
-        {view === "stack" && <StackedSeries series={accountSeries} scale={scale} />}
-        {view === "bar" && (
-          // Only a year the reader chose steps the others back; an unattended
-          // chart is left flat rather than emphasising its last column.
-          <StackedBarSeries
-            series={accountSeries}
-            scale={scale}
-            highlight={hoverIndex ?? pinnedIndex}
-          />
-        )}
-        <path d={linePath(pathValues, scale)} fill="none" stroke="var(--color-text)" strokeWidth={2}>
-          <title>{pathLabel}: net worth, positive balances less debt</title>
-        </path>
+        <g className="chart-reveal" key={revealKey}>
+          {view === "fan" && (
+            <FanSeries bands={bands} scale={scale} />
+          )}
+          {view === "stack" && <StackedSeries series={accountSeries} scale={scale} />}
+          {view === "bar" && (
+            // Only a year the reader chose steps the others back; an unattended
+            // chart is left flat rather than emphasising its last column.
+            <StackedBarSeries
+              series={accountSeries}
+              scale={scale}
+              highlight={hoverIndex ?? pinnedIndex}
+            />
+          )}
+          <path d={linePath(pathValues, scale)} fill="none" stroke="var(--color-text)" strokeWidth={2}>
+            <title>{pathLabel}: net worth, positive balances less debt</title>
+          </path>
+        </g>
+        {markers.length > 0 && <EventMarkers markers={markers} scale={scale} />}
       </ChartCanvas>
 
       <ChartReadout

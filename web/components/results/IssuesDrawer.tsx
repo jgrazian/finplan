@@ -276,7 +276,7 @@ function Group({ title, children }: { title: string; children: ReactNode }) {
       <div style={{ padding: "12px 18px 4px" }}>
         <span
           style={{
-            font: "600 10px ui-monospace, Menlo, monospace",
+            font: "600 10px var(--font-mono)",
             letterSpacing: ".06em",
             textTransform: "uppercase",
             color: "color-mix(in srgb, var(--color-text) 45%, transparent)",

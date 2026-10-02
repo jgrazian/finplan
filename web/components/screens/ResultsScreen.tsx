@@ -24,6 +24,7 @@ import { Button, Hr } from "@/components/ui";
 import type { Percentile, ResultsData } from "@/lib/types";
 import type { PreflightIssue, Run } from "@/lib/api/types";
 import type { IssueSummary } from "@/lib/view/issues";
+import { eventMarkers } from "@/lib/view/outcome";
 import { accountBreakdown } from "@/lib/view/results";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { EmptyState } from "./EmptyState";
@@ -188,6 +189,7 @@ function ResultsContent({
   const dollars = `${results.dollarLabel}${chartScale.kind === "log" ? " · log scale" : ""}`;
   const copy = chartCopy(shownView, results.pathLabel, span, dollars, results.hasEnvelope);
   const breakdown = accountBreakdown(results.accountSeries, focus.index);
+  const markers = eventMarkers(results.cashFlows, bands.years);
 
   return (
     <SplitPane
@@ -231,6 +233,8 @@ function ResultsContent({
             pathLabel={results.pathLabel}
             scaleKind={chartScale.kind}
             focus={focus}
+            markers={markers}
+            revealKey={results.runId}
           />
 
           {/* The ledger is a desktop instrument: ten columns of figures that

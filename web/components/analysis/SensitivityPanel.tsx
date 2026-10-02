@@ -104,7 +104,7 @@ export function SensitivityPanel({
               borderBottom: "1px solid color-mix(in srgb, var(--color-text) 8%, transparent)",
             }}
           >
-            <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
               {parameter ? paramId(parameter) : row.label}
             </span>
             <span
@@ -223,6 +223,6 @@ function label(byId: Map<string, AnalysisParameter>, id: string | undefined): st
 
 function Mono({ children }: { children: React.ReactNode }) {
   return (
-    <span style={{ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>{children}</span>
+    <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>{children}</span>
   );
 }

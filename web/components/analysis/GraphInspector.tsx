@@ -3,7 +3,11 @@
 import { Button, Dropdown, Field, RangeField, SegmentedControl, StatLabel } from "@/components/ui";
 import type { SegmentOption } from "@/components/ui";
 import { paramTick } from "@/lib/view/analysis";
+import { ScaleBar } from "./SweepGraphs";
 import {
+  COLOR_SCALES,
+  COLOR_SCALE_IDS,
+  DEFAULT_SCALE,
   MAX_ELEVATION,
   METRICS,
   MIN_ELEVATION,
@@ -147,6 +151,25 @@ export function GraphInspector({
         </Field>
       )}
 
+      {/* Heatmap and surface only: a line is one series, always in the system
+          blue, so there is nothing for a scale to choose. */}
+      {spec.kind !== "line" && (
+        <Field label="Colour scale">
+          <Dropdown
+            ariaLabel="Colour scale"
+            options={COLOR_SCALE_IDS.map((id) => ({
+              value: id,
+              label: COLOR_SCALES[id].label,
+              detail: <ScaleBar steps={COLOR_SCALES[id].steps} width={64} />,
+            }))}
+            value={spec.scale ?? DEFAULT_SCALE}
+            onChange={(scale) =>
+              onChange({ ...spec, scale: scale === DEFAULT_SCALE ? undefined : scale })
+            }
+          />
+        </Field>
+      )}
+
       {/* A surface's height already carries the metric above, so its colour is
           a channel going spare. Offered only here: a heatmap has nothing but
           colour, and a line has no colour at all. */}
@@ -228,7 +251,7 @@ export function GraphInspector({
               >
                 <span
                   style={{
-                    fontFamily: "ui-monospace, Menlo, monospace",
+                    fontFamily: "var(--font-mono)",
                     fontSize: 11,
                     flex: 1,
                     minWidth: 0,

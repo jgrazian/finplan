@@ -61,6 +61,20 @@ export interface LinkedAccount {
   through: EventId[];
 }
 
+/**
+ * What an account holds, split for a one-line row: the tickers (set in the
+ * mono), the lot count (in the sans beside them), and the full breakdown for
+ * the row's title.
+ */
+export interface HoldingsLine {
+  /** `VFIAX 50 · VGPMX 17 · +6` — weights in percent, the sign dropped. */
+  held: string;
+  /** `8 lots`; absent where the account holds no lots. */
+  lots?: string;
+  /** Every holding with its weight, for the hover title. */
+  detail: string;
+}
+
 export interface Account {
   accountId: AccountId;
   /** Database id, for the mutation endpoints. */
@@ -73,6 +87,11 @@ export interface Account {
   balance: number;
   /** Name of the return profile driving this account's cash or value. */
   returnProfileId: ReturnProfileId;
+  /**
+   * The same profiles one per entry, largest holding's first, so the list can
+   * show the first and count the rest.
+   */
+  returnProfiles: ReturnProfileId[];
   /**
    * The profile row the account itself owns — a bank account's, or an
    * investment account's *cash* profile. Absent for property and liability,
@@ -91,7 +110,7 @@ export interface Account {
   /** The property or debt on the other side of this one, if an event pairs them. */
   linked: LinkedAccount[];
   /** What the account holds, in one line — the list's widest column. */
-  holdings: string;
+  holdings: HoldingsLine;
   contributionLimit?: ContributionLimit;
   positions: AssetLot[];
   /** Names of events that read or write this account. */
@@ -187,8 +206,11 @@ export interface LedgerSummary {
   asset: number;
   tax: number;
   event: number;
-  /** The year's most notable entry kind — `Penalty`, `RMD`, `Sell` — if any. */
-  tag?: string;
+  /**
+   * The events that started this year, in the order they fired — retiring, a
+   * home purchase. Empty for a year that only did the ordinary things.
+   */
+  tags: string[];
 }
 
 /** The buckets the ledger filter chips offer, plus the unfiltered view. */

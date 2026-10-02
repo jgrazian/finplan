@@ -3,6 +3,7 @@
 import { SectionHeading } from "@/components/ui";
 import type { EventId, PlanEvent } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
+import { effectFamily } from "@/lib/view/effectFamily";
 import { type Lane, axisTicks, laneOf } from "./timeline";
 
 /** Width of the name gutter, so the lanes all start on the same rule. */
@@ -94,7 +95,7 @@ export function PlanTimeline({
                   width: GUTTER,
                   flex: "none",
                   textAlign: "right",
-                  fontFamily: "ui-monospace, Menlo, monospace",
+                  fontFamily: "var(--font-mono)",
                   fontSize: 11,
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -104,7 +105,10 @@ export function PlanTimeline({
               >
                 {event.id}
               </span>
-              <span style={{ position: "relative", flex: 1, height: 10 }}>
+              <span
+                data-family={effectFamily(event.effects[0]?.kind)}
+                style={{ position: "relative", flex: 1, height: 10 }}
+              >
                 <Mark lane={lane} selected={selected} />
               </span>
             </div>
@@ -132,11 +136,13 @@ export function PlanTimeline({
   );
 }
 
-/** A point event as a dot, a span as a bar, an undated one as a dashed rule. */
+/**
+ * A point event as a dot, a span as a bar, an undated one as a dashed rule —
+ * in its effect family's colour (`--fam`, set on the lane), stronger when
+ * selected.
+ */
 function Mark({ lane, selected }: { lane: Lane; selected: boolean }) {
-  const solid = selected
-    ? "var(--color-accent-700)"
-    : "color-mix(in srgb, var(--color-accent) 34%, transparent)";
+  const solid = selected ? "var(--fam)" : "color-mix(in srgb, var(--fam) 45%, transparent)";
 
   if (lane.isPoint) {
     return (
@@ -150,7 +156,8 @@ function Mark({ lane, selected }: { lane: Lane; selected: boolean }) {
           height: 8,
           marginLeft: -4,
           borderRadius: "50%",
-          background: selected ? "var(--color-accent-900)" : solid,
+          background: solid,
+          boxShadow: selected ? "0 0 0 2px var(--color-bg), 0 0 0 3.5px var(--fam)" : undefined,
         }}
       />
     );
