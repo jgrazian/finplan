@@ -146,7 +146,7 @@ pub(crate) fn change_schema() -> Value {
             "op": {"type": "string", "enum": ["replace", "add", "remove"]},
             "target": {
                 "type": ["object", "string"],
-                "description": "Exactly one key: {\"event\": id} | {\"asset\": id} | {\"account\": id} | {\"parameter\": id} | {\"new_event\": \"<key>\"} | {\"new_asset\": \"<key>\"} | {\"new_account\": \"<key>\"} | {\"new_parameter\": \"<key>\"} | {\"new_return_profile\": \"<key>\"} | {\"new_tax_config\": \"<key>\"}. Drafts only: the bare string \"scenario\" edits the plan's own settings; the parameter and library targets are for drafts and the drafting reference.",
+                "description": "Exactly one key: {\"event\": id} | {\"asset\": id} | {\"account\": id} | {\"parameter\": id} | {\"new_event\": \"<key>\"} | {\"new_asset\": \"<key>\"} | {\"new_account\": \"<key>\"} | {\"new_parameter\": \"<key>\"} | {\"new_return_profile\": \"<key>\"} | {\"new_tax_config\": \"<key>\"}. Parameters are for reviews and drafts alike: {\"parameter\": id} changes one the plan lists (as a goal_seek answer is applied), {\"new_parameter\": \"<key>\"} adds one. Drafts only: the bare string \"scenario\" edits the plan's own settings, and the library targets (new_return_profile, new_tax_config) are for the drafting reference.",
                 "properties": {
                     "event": {"type": "integer"},
                     "asset": {"type": "integer"},
