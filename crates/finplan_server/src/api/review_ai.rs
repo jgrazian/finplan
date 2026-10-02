@@ -37,7 +37,9 @@ use tokio::sync::Semaphore;
 use tokio::task::AbortHandle;
 use tracing::{Instrument, instrument::WithSubscriber};
 
+use super::ai_activity::{Activity, ActivityObserver, AiStep};
 use super::preview;
+use super::suggestion_chat::Thread;
 use super::suggestions::{
     DraftMeta, NewSuggestion, SuggestionCheck, SuggestionEstimate, SuggestionPath,
     SuggestionSource, SuggestionStep, all_changes, fingerprint, insert,
@@ -75,6 +77,10 @@ pub struct AiReviews {
     draft_client: Arc<AiClient>,
     /// draft (scenario id) -> its running drafting segment
     draft_running: Arc<Mutex<HashMap<i64, Running>>>,
+    /// What each running chat turn has done so far (`api::suggestion_chat`).
+    chat_activity: Activity<Thread>,
+    /// What each scenario's running review pass has done so far.
+    review_activity: Activity<i64>,
 }
 
 struct Running {
@@ -113,7 +119,18 @@ impl AiReviews {
             running: Arc::new(Mutex::new(HashMap::new())),
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_PASSES)),
             draft_running: Arc::new(Mutex::new(HashMap::new())),
+            chat_activity: Default::default(),
+            review_activity: Default::default(),
         }
+    }
+
+    pub(super) fn chat_activity(&self) -> &Activity<Thread> {
+        &self.chat_activity
+    }
+
+    /// Steps of `scenario_id`'s running review pass; empty when none runs.
+    pub(super) fn review_steps(&self, scenario_id: i64) -> Vec<AiStep> {
+        self.review_activity.steps(scenario_id)
     }
 
     /// The drafting agent's client.
@@ -269,7 +286,9 @@ async fn run(state: AppState, reviews: AiReviews, pass: Pass) {
     // Records the pass's outcome and wall time however it ends — including
     // being aborted by a newer review, which reads as `superseded`.
     let mut ended = PassEnd::new(&telemetry, reviews.model());
-    let observer = PassMetrics::new(&telemetry, reviews.model());
+    let _activity = reviews.review_activity.begin(pass.scenario_id);
+    let metrics = PassMetrics::new(&telemetry, reviews.model());
+    let observer = ActivityObserver::new(&metrics, &reviews.review_activity, pass.scenario_id);
 
     let loaded = Tools::load(
         &state,

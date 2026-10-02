@@ -25,7 +25,9 @@ pub const DEFAULT_MIN_P10_PCT: f64 = 10.0;
 /// Whether requests ask for adaptive thinking and an effort level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum ThinkingMode {
-    /// Only for Anthropic models (`anthropic/...`), which support both.
+    /// For any model OpenRouter lists with the `reasoning` parameter, which
+    /// it maps the Messages `thinking` and `output_config.effort` onto —
+    /// Claude, GPT, Qwen, GLM and the rest alike.
     #[default]
     Auto,
     On,
@@ -33,10 +35,13 @@ pub enum ThinkingMode {
 }
 
 impl ThinkingMode {
-    /// Whether a request to `model` carries the thinking settings.
-    pub fn applies_to(self, model: &str) -> bool {
+    /// Whether a request to `model` carries the thinking settings, given
+    /// whether its listing says it reasons (`None`: not listed, or the
+    /// lookup failed). Unknown falls back to Anthropic models, the one family
+    /// known to take both without asking.
+    pub fn applies_to(self, model: &str, reasons: Option<bool>) -> bool {
         match self {
-            ThinkingMode::Auto => model.trim().starts_with("anthropic/"),
+            ThinkingMode::Auto => reasons.unwrap_or_else(|| model.trim().starts_with("anthropic/")),
             ThinkingMode::On => true,
             ThinkingMode::Off => false,
         }
@@ -71,8 +76,8 @@ pub struct AiConfig {
     #[arg(long = "review-model", env = "FINPLAN_REVIEW_MODEL", default_value = DEFAULT_MODEL)]
     pub model: String,
 
-    /// Adaptive thinking and effort: `auto` sends them to Anthropic models
-    /// only.
+    /// Adaptive thinking and effort: `auto` sends them to every model
+    /// OpenRouter lists as taking `reasoning`.
     #[arg(
         long = "review-thinking",
         env = "FINPLAN_REVIEW_THINKING",
@@ -105,21 +110,35 @@ pub struct AiConfig {
     )]
     pub max_previews: u32,
 
-    /// Output token ceiling per model request, thinking included.
+    /// Output token ceiling per model request, thinking included. Room for
+    /// a reasoning model's thinking and its tool calls in the same reply;
+    /// tokens are billed as used, not as allowed.
     #[arg(
         long = "review-max-tokens",
         env = "FINPLAN_REVIEW_MAX_TOKENS",
-        default_value_t = 16_000
+        default_value_t = 32_000
     )]
     pub max_tokens: u32,
 
-    /// Seconds one model request may take before it is abandoned.
+    /// Seconds one model request may take, start to finish, before it is
+    /// abandoned. Replies are streamed, so this only has to outlast the
+    /// longest answer worth waiting for; a stalled one trips the idle
+    /// timeout long before.
     #[arg(
         long = "review-timeout-secs",
         env = "FINPLAN_REVIEW_TIMEOUT_SECS",
-        default_value_t = 300
+        default_value_t = 900
     )]
     pub timeout_secs: u64,
+
+    /// Seconds a streamed reply may go without any data — before its first
+    /// event or between two — before it is abandoned and retried.
+    #[arg(
+        long = "review-idle-timeout-secs",
+        env = "FINPLAN_REVIEW_IDLE_TIMEOUT_SECS",
+        default_value_t = 90
+    )]
+    pub idle_timeout_secs: u64,
 
     /// Materiality, for notes the model files as optimization or risk: a
     /// path must move success or funding success by at least this many
@@ -161,8 +180,9 @@ impl Default for AiConfig {
             max_turns: 16,
             max_suggestions: 6,
             max_previews: 8,
-            max_tokens: 16_000,
-            timeout_secs: 300,
+            max_tokens: 32_000,
+            timeout_secs: 900,
+            idle_timeout_secs: 90,
             min_rate_pts: DEFAULT_MIN_RATE_PTS,
             min_median_pct: DEFAULT_MIN_MEDIAN_PCT,
             min_p10_pct: DEFAULT_MIN_P10_PCT,
@@ -189,6 +209,7 @@ impl fmt::Debug for AiConfig {
             .field("max_previews", &self.max_previews)
             .field("max_tokens", &self.max_tokens)
             .field("timeout_secs", &self.timeout_secs)
+            .field("idle_timeout_secs", &self.idle_timeout_secs)
             .field("min_rate_pts", &self.min_rate_pts)
             .field("min_median_pct", &self.min_median_pct)
             .field("min_p10_pct", &self.min_p10_pct)
@@ -216,6 +237,10 @@ impl AiConfig {
         Duration::from_secs(self.timeout_secs)
     }
 
+    pub fn idle_timeout(&self) -> Duration {
+        Duration::from_secs(self.idle_timeout_secs)
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.max_turns == 0 || self.max_turns > 50 {
             return Err("review max turns must be between 1 and 50".into());
@@ -231,6 +256,11 @@ impl AiConfig {
         }
         if self.timeout_secs == 0 {
             return Err("review timeout must be positive".into());
+        }
+        if self.idle_timeout_secs == 0 || self.idle_timeout_secs > self.timeout_secs {
+            return Err(
+                "review idle timeout must be positive and at most the review timeout".into(),
+            );
         }
         if self.model.trim().is_empty() {
             return Err("review model must not be empty".into());

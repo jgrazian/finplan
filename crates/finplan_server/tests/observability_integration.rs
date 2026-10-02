@@ -14,8 +14,8 @@ use tower::ServiceExt;
 use tracing::instrument::WithSubscriber;
 
 use finplan_server::suggest::ai::{
-    AiClient, BoxFuture, DEFAULT_MODEL, Reply, Request as ModelRequest, Settings, Transport,
-    TransportError,
+    AiClient, BoxFuture, DEFAULT_MODEL, Reply, Request as ModelRequest, Settings, ThinkingMode,
+    Transport, TransportError,
 };
 
 #[derive(Clone, Default)]
@@ -467,7 +467,7 @@ async fn a_review_ai_pass_is_traced_to_its_request_and_metered() {
             max_suggestions: 3,
             max_previews: 3,
             max_tokens: 2_000,
-            thinking: true,
+            thinking: ThinkingMode::On,
             effort: "high",
             max_retries: 0,
             retry_base: Duration::from_millis(1),
@@ -750,7 +750,7 @@ async fn a_chat_turn_is_traced_to_its_request_and_metered() {
             max_suggestions: 3,
             max_previews: 3,
             max_tokens: 2_000,
-            thinking: true,
+            thinking: ThinkingMode::On,
             effort: "high",
             max_retries: 0,
             retry_base: Duration::from_millis(1),

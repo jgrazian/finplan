@@ -1,6 +1,7 @@
 //! HTTP routing.
 
 pub mod accounts;
+pub mod ai_activity;
 pub mod analysis;
 pub mod archives;
 pub mod assets;

@@ -32,6 +32,9 @@ pub struct ReviewContext {
     pub(super) dates: HashSet<String>,
     /// Notes already written, for the duplicate check.
     pub(super) existing: Vec<Existing>,
+    /// Board notes a submission may rewrite in place (`replaces`): open, with
+    /// nothing applied. Only a chat lists any.
+    pub(super) editable: HashSet<i64>,
     /// The run's failure aggregates with names, for `failure_profile`.
     pub(super) failure_profile: Option<Value>,
     /// Text of each document the session may cite, by id, page by page. An
@@ -49,6 +52,9 @@ pub(super) struct Existing {
     pub kind: Kind,
     pub title: String,
     pub edits: BTreeSet<String>,
+    /// The board note's id, where it is one; a note that replaces it is not
+    /// its duplicate.
+    pub id: Option<i64>,
 }
 
 impl Existing {
@@ -57,6 +63,7 @@ impl Existing {
             kind,
             title: normalize(title),
             edits: edits(changes),
+            id: None,
         }
     }
 }
@@ -143,6 +150,7 @@ impl ReviewContext {
             documents: HashMap::new(),
             answers: HashSet::new(),
             description: None,
+            editable: HashSet::new(),
         }
     }
 
@@ -161,6 +169,7 @@ impl ReviewContext {
             documents: HashMap::new(),
             answers: HashSet::new(),
             description: None,
+            editable: HashSet::new(),
         }
     }
 

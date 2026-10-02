@@ -153,7 +153,7 @@ export function usePlanChat(scenarioId: number, onSettled: () => void): PlanChat
     setSendError(undefined);
     try {
       await api.planChat.clear(scenarioId);
-      take({ scenario_id: scenarioId, status: "idle", error: null, messages: [] });
+      take({ scenario_id: scenarioId, status: "idle", error: null, messages: [], activity: [] });
       return true;
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));

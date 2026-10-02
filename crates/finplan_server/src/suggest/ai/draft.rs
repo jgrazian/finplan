@@ -703,11 +703,13 @@ pub async fn run(
         if session.usage.turns >= settings.max_turns {
             break DraftStop::TurnLimit;
         }
-        let request = client.request_with(
-            system_blocks(),
-            super::typed_tools(&prompt::tools(&client.registry)),
-            &messages,
-        );
+        let request = client
+            .request_with(
+                system_blocks(),
+                super::typed_tools(&prompt::tools(&client.registry)),
+                &messages,
+            )
+            .await;
         let reply = match request {
             Ok(request) => client.create(&request, observer).await,
             Err(error) => Err(error),
@@ -1844,6 +1846,8 @@ impl Session<'_> {
                 reasoning,
                 evidence: s.evidence,
                 paths,
+                // A draft's notes replace by key (`DraftNote::replaces`).
+                replaces: None,
             },
             key: s.key,
             blocked_by,
@@ -1940,6 +1944,7 @@ fn existing(kind: Kind, title: &str, changes: &[Change]) -> context::Existing {
         kind,
         title: context::normalize(title),
         edits: draft_edits(changes),
+        id: None,
     }
 }
 

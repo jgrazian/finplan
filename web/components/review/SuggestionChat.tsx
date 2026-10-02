@@ -1,6 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
+import { ChatActivity } from "@/components/chat/ChatActivity";
 import { type SuggestionChatState, useSuggestionChat } from "@/lib/hooks/useSuggestionChat";
 import { CHAT_MAX_CHARS, cardAnchor, lastQuestion, threadView } from "@/lib/view/chat";
 
@@ -114,7 +115,9 @@ export function SuggestionChat({
         </ol>
       )}
 
-      {view.status && (
+      {view.activity.length > 0 ? (
+        <ChatActivity lines={view.activity} />
+      ) : view.status && (
         <p
           role="status"
           aria-live="polite"

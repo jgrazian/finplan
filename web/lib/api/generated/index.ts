@@ -10,6 +10,7 @@ export type { AccountReconciliation } from "./AccountReconciliation";
 export type { AccountSeries } from "./AccountSeries";
 export type { AiDrafts } from "./AiDrafts";
 export type { AiPlanChat } from "./AiPlanChat";
+export type { AiStep } from "./AiStep";
 export type { Allocation } from "./Allocation";
 export type { AmountMode } from "./AmountMode";
 export type { AmountSpec } from "./AmountSpec";

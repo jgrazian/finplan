@@ -11,6 +11,7 @@ export type { ApplySuggestion } from "./generated/ApplySuggestion.ts";
 export type { ChangeProblem } from "./generated/ChangeProblem.ts";
 export type { ChangeProblemsBody } from "./generated/ChangeProblemsBody.ts";
 export type { ChatMessage } from "./generated/ChatMessage.ts";
+export type { AiStep } from "./generated/AiStep.ts";
 export type { ChatRequest } from "./generated/ChatRequest.ts";
 export type { ChatRole } from "./generated/ChatRole.ts";
 export type { DismissSuggestion } from "./generated/DismissSuggestion.ts";

@@ -59,8 +59,8 @@ pub use config::{
 };
 pub use context::{NoteOutline, ReviewContext, render_path};
 pub use transport::{
-    BoxFuture, ModelPrice, OpenRouterSettings, OpenRouterTransport, Reply, Request, Transport,
-    TransportError,
+    BoxFuture, ModelInfo, ModelPrice, OpenRouterSettings, OpenRouterTransport, Reply, Request,
+    Transport, TransportError,
 };
 
 use crate::api::suggestion_paths::{self, PathShape, StepShape};
@@ -86,6 +86,15 @@ pub trait Observer: Send + Sync {
     fn submission(&self, _accepted: bool) {}
     /// The motive a parsed submission gave, and whether it was accepted.
     fn motive(&self, _motive: AiMotive, _accepted: bool) {}
+    /// A model request about to go out; [`Observer::turn`] reports its answer.
+    fn thinking(&self) {}
+    /// A tool call about to be served, by the name the model called.
+    fn tool_started(&self, _name: &str) {}
+    /// That call served; `failed` when the model is handed an error.
+    fn tool_finished(&self, _name: &str, _failed: bool) {}
+    /// What the model said alongside its tool calls — narration on the way,
+    /// not the answer, which is the reply that ends the turn.
+    fn narration(&self, _text: &str) {}
 }
 
 /// An observer that records nothing.
@@ -128,6 +137,9 @@ pub struct AiDraft {
     pub evidence: Vec<Evidence>,
     /// The courses of action; empty on a read note.
     pub paths: Vec<AiPath>,
+    /// The board note this one rewrites in place, keeping its id and thread;
+    /// `None` for a new note.
+    pub replaces: Option<i64>,
 }
 
 impl AiDraft {
@@ -272,9 +284,11 @@ pub struct Settings {
     pub max_suggestions: usize,
     pub max_previews: u32,
     pub max_tokens: u32,
-    /// Send adaptive thinking and `output_config.effort`.
-    pub thinking: bool,
-    /// `output_config.effort`, when `thinking` is on.
+    /// When to send adaptive thinking and `output_config.effort`; `Auto` is
+    /// settled per model by [`AiClient::thinks`].
+    pub thinking: ThinkingMode,
+    /// `output_config.effort` for Anthropic models, when `thinking` is on;
+    /// other models get [`OTHER_EFFORT`] (see [`AiClient::effort`]).
     pub effort: &'static str,
     pub max_retries: u32,
     /// First retry delay; doubles after, then a random 50–100% of it is
@@ -348,7 +362,7 @@ impl Settings {
             max_suggestions: cfg.max_suggestions,
             max_previews: cfg.max_previews,
             max_tokens: cfg.max_tokens,
-            thinking: cfg.thinking.applies_to(&cfg.model),
+            thinking: cfg.thinking,
             // Intelligence-sensitive work: the note quality is the product.
             effort: "high",
             max_retries: 3,
@@ -372,12 +386,15 @@ pub struct AiClient {
     zdr: bool,
     /// The shared tools this client's requests offer and its loop serves.
     registry: Registry,
-    /// The model's listed prices, when last looked up.
-    prices: tokio::sync::Mutex<Option<(Instant, Option<ModelPrice>)>>,
+    /// The model's listing, when last looked up. Shared with the clients
+    /// derived from this one (chat, drafts), which ask the same model.
+    listing: Listing,
 }
 
-/// How long a price lookup stands: prices change rarely, and a failed
-/// lookup is not retried on every request.
+type Listing = Arc<tokio::sync::Mutex<Option<(Instant, Option<ModelInfo>)>>>;
+
+/// How long a listing lookup stands: prices and parameters change rarely,
+/// and a failed lookup is not retried on every request.
 const PRICE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const PRICE_RETRY: Duration = Duration::from_secs(10 * 60);
 
@@ -397,6 +414,7 @@ impl AiClient {
                 .map(str::trim)
                 .filter(|r| !r.is_empty()),
             timeout: cfg.timeout(),
+            idle_timeout: cfg.idle_timeout(),
         })?;
         Ok(Some(Self::new(
             Settings::from_config(cfg),
@@ -413,7 +431,7 @@ impl AiClient {
             secret,
             zdr: false,
             registry: Registry::all(),
-            prices: tokio::sync::Mutex::new(None),
+            listing: Listing::default(),
         }
     }
 
@@ -437,7 +455,7 @@ impl AiClient {
             secret: self.secret.clone(),
             zdr: cfg.require_zdr,
             registry: draft::shared_tools(),
-            prices: tokio::sync::Mutex::new(None),
+            listing: self.listing.clone(),
         }
     }
 
@@ -509,39 +527,55 @@ impl AiClient {
         }
     }
 
-    /// The model's listed prices, looked up once and kept for [`PRICE_TTL`];
-    /// `None` when they are unknown. A failed lookup is logged and retried
+    /// The model's listing, looked up once and kept for [`PRICE_TTL`];
+    /// `None` when it is not listed. A failed lookup is logged and retried
     /// after [`PRICE_RETRY`].
-    async fn price(&self) -> Option<ModelPrice> {
-        let mut cached = self.prices.lock().await;
-        if let Some((at, price)) = *cached {
-            let ttl = if price.is_some() {
+    async fn listing(&self) -> Option<ModelInfo> {
+        let mut cached = self.listing.lock().await;
+        if let Some((at, info)) = *cached {
+            let ttl = if info.is_some() {
                 PRICE_TTL
             } else {
                 PRICE_RETRY
             };
             if at.elapsed() < ttl {
-                return price;
+                return info;
             }
         }
-        let price = match self.transport.price(&self.settings.model).await {
-            Ok(price) => {
-                if price.is_none() {
-                    tracing::info!(event = "review_ai.price_unlisted", model = %self.settings.model);
+        let info = match self.transport.model_info(&self.settings.model).await {
+            Ok(info) => {
+                if info.is_none() {
+                    tracing::info!(event = "review_ai.model_unlisted", model = %self.settings.model);
                 }
-                price
+                info
             }
             Err(error) => {
                 tracing::warn!(
-                    event = "review_ai.price_lookup_failed",
+                    event = "review_ai.model_lookup_failed",
                     model = %self.settings.model,
                     error = %self.scrub(&error.to_string()),
                 );
                 None
             }
         };
-        *cached = Some((Instant::now(), price));
-        price
+        *cached = Some((Instant::now(), info));
+        info
+    }
+
+    /// The model's listed prices; `None` when they are unknown.
+    async fn price(&self) -> Option<ModelPrice> {
+        self.listing().await.and_then(|info| info.price)
+    }
+
+    /// Whether this client's requests carry thinking and effort. `Auto`
+    /// asks the listing, so only a model that is `Auto` pays for a lookup.
+    pub async fn thinks(&self) -> bool {
+        let mode = self.settings.thinking;
+        let reasons = match mode {
+            ThinkingMode::Auto => self.listing().await.map(|info| info.reasons),
+            ThinkingMode::On | ThinkingMode::Off => None,
+        };
+        mode.applies_to(&self.settings.model, reasons)
     }
 
     /// Exponential, capped, with jitter so concurrent reviews that hit the
@@ -552,7 +586,7 @@ impl AiClient {
         ceiling.mul_f64(rand::rng().random_range(0.5..=1.0))
     }
 
-    fn request(&self, messages: &[AnthropicMessage]) -> Result<Request, AiError> {
+    async fn request(&self, messages: &[AnthropicMessage]) -> Result<Request, AiError> {
         let mut reference = AnthropicSystemTextBlock::text(prompt::reference());
         // The static instructions stay cached whatever happens after them.
         reference.cache_control = Some(CacheControl::ephemeral());
@@ -564,11 +598,12 @@ impl AiClient {
             tools(&self.registry),
             messages,
         )
+        .await
     }
 
     /// One request with its own instructions and tools: the review's, or the
     /// drafting agent's.
-    fn request_with(
+    async fn request_with(
         &self,
         system: Vec<AnthropicSystemTextBlock>,
         tools: Vec<AnthropicTool>,
@@ -576,6 +611,9 @@ impl AiClient {
     ) -> Result<Request, AiError> {
         let settings = &self.settings;
         let provider = transport::provider_preferences(self.zdr);
+        // First, so it sits inside every request's cached prefix.
+        let mut system = system;
+        system.insert(0, AnthropicSystemTextBlock::text(prompt::WRITING_STYLE));
 
         let mut builder = Request::builder();
         builder
@@ -585,10 +623,10 @@ impl AiClient {
             .system(AnthropicSystemPrompt::Blocks(system))
             .tools(tools)
             .provider(provider);
-        if settings.thinking {
+        if self.thinks().await {
             builder
                 .thinking(AnthropicThinking::adaptive())
-                .output_config(AnthropicOutputConfig::with_effort(effort(settings.effort)));
+                .output_config(AnthropicOutputConfig::with_effort(effort(self.effort())));
         }
         builder
             .build()
@@ -656,6 +694,24 @@ fn stop_label(stop_reason: &str) -> &'static str {
     }
 }
 
+/// Effort for a reasoning model that is not Claude. OpenRouter turns an
+/// effort into a share of `max_tokens` for reasoning on such models (high is
+/// about 80%, medium about 50%), and their reasoning runs long: at high, GLM
+/// spent a whole request's budget thinking and never reached a tool call.
+/// Claude takes the effort natively and paces its thinking across turns.
+const OTHER_EFFORT: &str = "medium";
+
+impl AiClient {
+    /// The effort this client's requests carry when they think.
+    fn effort(&self) -> &'static str {
+        if self.settings.model.trim().starts_with("anthropic/") {
+            self.settings.effort
+        } else {
+            OTHER_EFFORT
+        }
+    }
+}
+
 fn effort(level: &str) -> AnthropicOutputEffort {
     serde_json::from_value(Value::String(level.to_owned())).unwrap_or(AnthropicOutputEffort::High)
 }
@@ -699,6 +755,9 @@ struct Submission {
     evidence: Vec<Evidence>,
     #[serde(default)]
     paths: Vec<SubmittedPath>,
+    /// A board note to rewrite in place rather than add beside.
+    #[serde(default)]
+    replaces: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -838,6 +897,7 @@ struct Session<'a> {
 impl Session<'_> {
     /// Serve one tool call, then log and count it.
     async fn run_tool(&mut self, call_id: &str, name: &str, input: &Value) -> (String, bool) {
+        self.observer.tool_started(name);
         let started = Instant::now();
         let (output, is_error, report) = if name == prompt::SUBMIT_TOOL {
             self.submit(input)
@@ -845,6 +905,7 @@ impl Session<'_> {
             self.serve(call_id, name, input).await
         };
         let seconds = started.elapsed().as_secs_f64();
+        self.observer.tool_finished(name, is_error);
         self.observer.tool(report.tool, report.outcome, seconds);
         if report.tool == AiTool::Submit {
             let accepted = report.outcome == AiToolOutcome::Accepted;
@@ -1096,6 +1157,24 @@ impl Session<'_> {
             }
         }
 
+        let replaces = s.replaces;
+        if let Some(id) = replaces {
+            if !self.context.editable.contains(&id) {
+                problem(
+                    "replaces",
+                    format!(
+                        "note #{id} cannot be rewritten: only an open note on this board with \
+                         no step applied can be; submit a new note instead"
+                    ),
+                );
+            } else if self.drafts.iter().any(|d| d.replaces == Some(id)) {
+                problem(
+                    "replaces",
+                    format!("note #{id} was already rewritten this turn"),
+                );
+            }
+        }
+
         let normalized = context::normalize(&title);
         let all: Vec<Change> = s.paths.iter().flat_map(|p| p.batches()).flatten().collect();
         let edits = context::edits(&all);
@@ -1104,9 +1183,17 @@ impl Session<'_> {
             .iter()
             .map(|d| context::Existing::new(d.kind, &d.title, &d.all_changes()))
             .collect();
-        if let Some(twin) = self.context.existing.iter().chain(&accepted).find(|n| {
-            n.title == normalized || (!edits.is_empty() && n.edits == edits && n.kind == s.kind)
-        }) {
+        let twin = self
+            .context
+            .existing
+            .iter()
+            .chain(&accepted)
+            // The note being rewritten is not its own duplicate.
+            .filter(|n| replaces.is_none() || n.id != replaces)
+            .find(|n| {
+                n.title == normalized || (!edits.is_empty() && n.edits == edits && n.kind == s.kind)
+            });
+        if let Some(twin) = twin {
             // Say which test matched, so a note refused by mistake can be told
             // apart from a real repeat.
             let why = if twin.title == normalized {
@@ -1117,10 +1204,17 @@ impl Session<'_> {
                     edits.iter().cloned().collect::<Vec<_>>().join(", ")
                 )
             };
+            // A twin the model may rewrite is the likeliest intent: say how.
+            let fix = match twin.id.filter(|id| self.context.editable.contains(id)) {
+                Some(id) => format!(
+                    "to change that note, submit this one with \"replaces\": {id}; otherwise drop it or make a different point"
+                ),
+                None => "drop it or make a different point".to_owned(),
+            };
             problem(
                 "duplicate",
                 format!(
-                    "repeats an existing note: it {why} \"{}\"; drop it or make a different point",
+                    "repeats an existing note: it {why} \"{}\"; {fix}",
                     twin.title
                 ),
             );
@@ -1260,6 +1354,7 @@ impl Session<'_> {
             reasoning,
             evidence: s.evidence,
             paths,
+            replaces,
         })
     }
 
@@ -1620,11 +1715,12 @@ pub async fn generate_observed(
 ) -> Result<AiOutcome, AiError> {
     let settings = client.settings();
     let started = Instant::now();
+    let thinking = client.thinks().await;
     tracing::info!(
         event = "review_ai.started",
         run_id = input.run_id,
         model = %settings.model,
-        thinking = settings.thinking,
+        thinking,
         max_turns = settings.max_turns,
         max_suggestions = settings.max_suggestions,
         max_previews = settings.max_previews,
@@ -1671,7 +1767,8 @@ async fn converse(
         if session.usage.turns >= settings.max_turns {
             break Stop::TurnLimit;
         }
-        let reply = match client.request(&messages) {
+        observer.thinking();
+        let reply = match client.request(&messages).await {
             Ok(request) => client.create(&request, observer).await,
             Err(error) => Err(error),
         };
@@ -1765,6 +1862,9 @@ async fn converse(
             }
         }
 
+        if let Some(said) = summary.as_deref().filter(|_| !said.is_empty()) {
+            observer.narration(said);
+        }
         let mut results = Vec::new();
         for part in &content {
             let AnthropicContentPart::ToolUse {

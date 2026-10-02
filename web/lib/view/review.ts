@@ -13,6 +13,7 @@ import type {
   SuggestionStep,
 } from "../api/suggestions.ts";
 import { fmtCompact, fmtInt, fmtPercent } from "../format.ts";
+import { reviewActivity } from "./activity.ts";
 import { type ChatOffer, chatOffer } from "./chat.ts";
 import { clockTime } from "./issues.ts";
 
@@ -780,7 +781,7 @@ export function aiLine(review: Pick<Review, "ai">): AiLine | undefined {
   if (ai == null) return undefined;
   switch (ai.status) {
     case "running":
-      return { text: "AI review in progress… rule notes shown below", running: true };
+      return { text: reviewActivity(ai.activity), running: true };
     case "failed":
       return {
         text: `The AI review did not finish${ai.error ? `: ${ai.error}` : ""}. The rule notes below are unaffected; review again to retry.`,

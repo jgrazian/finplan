@@ -486,8 +486,8 @@ async fn beta_direct_requests_cannot_bypass_compute_limits() {
 mod drafts {
     use super::*;
     use finplan_server::suggest::ai::{
-        AiClient, BoxFuture, DEFAULT_MODEL, Reply, Request as ModelRequest, Settings, Transport,
-        TransportError,
+        AiClient, BoxFuture, DEFAULT_MODEL, Reply, Request as ModelRequest, Settings, ThinkingMode,
+        Transport, TransportError,
     };
     use std::sync::Arc;
 
@@ -506,7 +506,7 @@ mod drafts {
             max_suggestions: 1,
             max_previews: 1,
             max_tokens: 1_024,
-            thinking: false,
+            thinking: ThinkingMode::Off,
             effort: "high",
             max_retries: 0,
             retry_base: std::time::Duration::from_millis(1),

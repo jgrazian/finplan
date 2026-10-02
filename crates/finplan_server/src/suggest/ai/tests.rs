@@ -143,7 +143,7 @@ fn settings() -> Settings {
         max_suggestions: 6,
         max_previews: 8,
         max_tokens: 16_000,
-        thinking: true,
+        thinking: ThinkingMode::On,
         effort: "high",
         max_retries: 3,
         retry_base: Duration::ZERO,
@@ -160,8 +160,8 @@ fn settings() -> Settings {
 struct Script {
     replies: Mutex<VecDeque<Result<Value, TransportError>>>,
     requests: Mutex<Vec<Value>>,
-    /// What `price` answers, and how often it was asked.
-    price: Option<ModelPrice>,
+    /// What `model_info` answers, and how often it was asked.
+    info: Option<ModelInfo>,
     price_lookups: Mutex<u32>,
 }
 
@@ -174,9 +174,19 @@ impl Script {
     }
 
     fn priced(replies: Vec<Result<Value, TransportError>>, price: ModelPrice) -> Arc<Self> {
+        Self::listed(
+            replies,
+            ModelInfo {
+                price: Some(price),
+                reasons: false,
+            },
+        )
+    }
+
+    fn listed(replies: Vec<Result<Value, TransportError>>, info: ModelInfo) -> Arc<Self> {
         Arc::new(Self {
             replies: Mutex::new(replies.into()),
-            price: Some(price),
+            info: Some(info),
             ..Self::default()
         })
     }
@@ -207,13 +217,13 @@ impl Transport for Script {
         })
     }
 
-    fn price<'a>(
+    fn model_info<'a>(
         &'a self,
         _model: &'a str,
-    ) -> BoxFuture<'a, Result<Option<ModelPrice>, TransportError>> {
+    ) -> BoxFuture<'a, Result<Option<ModelInfo>, TransportError>> {
         Box::pin(async move {
             *self.price_lookups.lock().unwrap() += 1;
-            Ok(self.price)
+            Ok(self.info)
         })
     }
 }
@@ -442,8 +452,10 @@ async fn preview_then_a_rejected_then_an_accepted_note() {
     assert!(first.get("fallbacks").is_none());
     assert_eq!(first["provider"]["require_parameters"], true);
     assert_eq!(first["provider"]["data_collection"], "deny");
-    assert_eq!(first["system"][1]["cache_control"]["type"], "ephemeral");
+    // The writing style, the instructions, then the cached reference.
+    assert_eq!(first["system"][2]["cache_control"]["type"], "ephemeral");
     assert!(first["system"][0].get("cache_control").is_none());
+    assert!(first["system"][1].get("cache_control").is_none());
     let tool = |name: &str| {
         first["tools"]
             .as_array()
@@ -768,6 +780,78 @@ async fn notes_still_open_on_the_board_are_listed_and_refused() {
             .unwrap()
             .contains("repeats an existing note")
     );
+}
+
+/// One submission of `good_note` against `context`, after its preview, with
+/// `replaces` set as given; the drafts it produced and what the submit call
+/// was told.
+async fn submit_against(context: ReviewContext, replaces: Option<i64>) -> (Vec<AiDraft>, String) {
+    let g = graph();
+    let changes = remove_sweep(&g);
+    let mut note = good_note(changes.clone());
+    if let Some(id) = replaces {
+        note["replaces"] = json!(id);
+    }
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([call("t1", "preview_changes", json!({"changes": changes}))]),
+        ),
+        reply("tool_use", json!([call("t2", "submit_suggestion", note)])),
+        reply("end_turn", json!([])),
+    ]);
+    let client = AiClient::new(settings(), script.clone(), None);
+    let outcome = generate(&client, &context, &Tools::new()).await.unwrap();
+    let told = script.requests()[2]["messages"][4]["content"][0]["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    (outcome.drafts, told)
+}
+
+fn board_note(id: i64, editable: bool) -> chat::BoardNote<'static> {
+    let g = graph();
+    chat::BoardNote {
+        id,
+        kind: Kind::Fix,
+        title: "Home Purchase sweep sells too early",
+        changes: serde_json::from_value(remove_sweep(&g)).unwrap(),
+        editable,
+    }
+}
+
+#[tokio::test]
+async fn an_open_note_can_be_rewritten_in_place_by_naming_it() {
+    // Without `replaces`, the twin is refused — and told how to edit it.
+    let (drafts, told) =
+        submit_against(context(&[]).with_notes([board_note(71, true)]), None).await;
+    assert!(drafts.is_empty());
+    assert!(told.contains("repeats an existing note"), "{told}");
+    assert!(told.contains("\\\"replaces\\\": 71"), "{told}");
+
+    // Naming it rewrites it: the twin is the note itself, not a duplicate.
+    let (drafts, told) =
+        submit_against(context(&[]).with_notes([board_note(71, true)]), Some(71)).await;
+    assert_eq!(drafts.len(), 1, "{told}");
+    assert_eq!(drafts[0].replaces, Some(71));
+}
+
+#[tokio::test]
+async fn only_an_editable_note_on_the_board_can_be_rewritten() {
+    // Applied in part, or not open: listed, but not editable.
+    let (drafts, told) =
+        submit_against(context(&[]).with_notes([board_note(71, false)]), Some(71)).await;
+    assert!(drafts.is_empty());
+    assert!(told.contains("note #71 cannot be rewritten"), "{told}");
+    assert!(
+        !told.contains("\\\"replaces\\\": 71"),
+        "an uneditable twin is not offered for rewriting: {told}"
+    );
+
+    // Not on the board at all — and a review pass lists no editable notes.
+    let (drafts, told) = submit_against(context(&[]), Some(9)).await;
+    assert!(drafts.is_empty());
+    assert!(told.contains("note #9 cannot be rewritten"), "{told}");
 }
 
 #[tokio::test]
@@ -1212,10 +1296,7 @@ fn config_switches_on_only_with_a_key() {
     let client = AiClient::from_config(&on).unwrap().unwrap();
     assert_eq!(client.settings().model, config::DEFAULT_MODEL);
     assert_eq!(client.settings().effort, "high");
-    assert!(
-        client.settings().thinking,
-        "auto thinks on Anthropic models"
-    );
+    assert_eq!(client.settings().thinking, ThinkingMode::Auto);
 
     for bad in [
         AiConfig {
@@ -1284,27 +1365,40 @@ fn config_defaults_point_at_openrouter() {
 }
 
 #[test]
-fn thinking_is_sent_to_anthropic_models_unless_overridden() {
-    assert!(ThinkingMode::Auto.applies_to("anthropic/claude-opus-5.5"));
-    assert!(!ThinkingMode::Auto.applies_to("openai/gpt-5"));
-    assert!(!ThinkingMode::Auto.applies_to("google/gemini-3-pro"));
-    assert!(ThinkingMode::On.applies_to("openai/gpt-5"));
-    assert!(!ThinkingMode::Off.applies_to("anthropic/claude-opus-5.5"));
-
-    let other = AiConfig {
-        enabled: true,
-        openrouter_api_key: Some(KEY.into()),
-        model: "openai/gpt-5".into(),
-        ..AiConfig::default()
-    };
-    assert!(!Settings::from_config(&other).thinking);
-
-    // Without thinking, neither field goes on the wire.
+fn every_request_asks_for_compact_technical_writing_ahead_of_its_instructions() {
     let script = Script::new(vec![reply("end_turn", json!([]))]);
+    let request = first_request("z-ai/glm-5.3-flash", ThinkingMode::On, script);
+    let system = request["system"].as_array().unwrap();
+    assert_eq!(system[0]["text"], prompt::WRITING_STYLE);
+    assert!(prompt::WRITING_STYLE.contains("ASD-STE100"));
+    assert!(
+        system[1]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("You review")
+    );
+}
+
+#[test]
+fn auto_thinking_follows_the_listing_and_falls_back_to_anthropic() {
+    // Listed: whatever the listing says, whoever made the model.
+    assert!(ThinkingMode::Auto.applies_to("qwen/qwen3.8-max-prime", Some(true)));
+    assert!(ThinkingMode::Auto.applies_to("openai/gpt-6-sol", Some(true)));
+    assert!(!ThinkingMode::Auto.applies_to("openai/gpt-4.1", Some(false)));
+    // Unknown: only Anthropic models.
+    assert!(ThinkingMode::Auto.applies_to("anthropic/claude-opus-5.5", None));
+    assert!(!ThinkingMode::Auto.applies_to("z-ai/glm-5.3-flash", None));
+    // Explicit settings ignore the listing.
+    assert!(ThinkingMode::On.applies_to("openai/gpt-4.1", Some(false)));
+    assert!(!ThinkingMode::Off.applies_to("anthropic/claude-opus-5.5", Some(true)));
+}
+
+/// The first request a one-turn review sends to `model` under `thinking`.
+fn first_request(model: &str, thinking: ThinkingMode, script: Arc<Script>) -> Value {
     let client = AiClient::new(
         Settings {
-            model: "openai/gpt-5".into(),
-            thinking: false,
+            model: model.into(),
+            thinking,
             ..settings()
         },
         script.clone(),
@@ -1316,11 +1410,309 @@ fn thinking_is_sent_to_anthropic_models_unless_overridden() {
     runtime
         .block_on(generate(&client, &context(&[]), &Tools::new()))
         .unwrap();
-    let request = &script.requests()[0];
-    assert_eq!(request["model"], "openai/gpt-5");
+    script.requests()[0].clone()
+}
+
+#[test]
+fn reasoning_models_get_thinking_and_effort_on_the_wire() {
+    let listed = |reasons| {
+        Script::listed(
+            vec![reply("end_turn", json!([]))],
+            ModelInfo {
+                price: None,
+                reasons,
+            },
+        )
+    };
+    for model in [
+        "anthropic/claude-opus-5.5",
+        "z-ai/glm-5.3-flash",
+        "qwen/qwen3.8-max-prime",
+        "openai/gpt-6-sol",
+    ] {
+        let request = first_request(model, ThinkingMode::Auto, listed(true));
+        assert_eq!(request["model"], model);
+        assert_eq!(request["thinking"]["type"], "adaptive", "{model}");
+        // Claude takes high effort natively; others spend a share of
+        // max_tokens on it, and at high they ran out before a tool call.
+        let effort = if model.starts_with("anthropic/") {
+            "high"
+        } else {
+            "medium"
+        };
+        assert_eq!(request["output_config"]["effort"], effort, "{model}");
+        // `require_parameters` is why a non-reasoning model must not get them.
+        assert_eq!(request["provider"]["require_parameters"], true);
+    }
+
+    // Listed without `reasoning`: neither field goes on the wire.
+    let request = first_request("openai/gpt-4.1", ThinkingMode::Auto, listed(false));
     assert!(request.get("thinking").is_none());
     assert!(request.get("output_config").is_none());
-    assert_eq!(request["provider"]["require_parameters"], true);
+
+    // Unlisted, or the lookup failed: Anthropic still thinks, others do not.
+    let unlisted = || Script::new(vec![reply("end_turn", json!([]))]);
+    let request = first_request("anthropic/claude-opus-5.5", ThinkingMode::Auto, unlisted());
+    assert_eq!(request["thinking"]["type"], "adaptive");
+    let request = first_request("z-ai/glm-5.3-flash", ThinkingMode::Auto, unlisted());
+    assert!(request.get("thinking").is_none());
+
+    // Off wins over the listing.
+    let request = first_request("openai/gpt-6-sol", ThinkingMode::Off, listed(true));
+    assert!(request.get("thinking").is_none());
+    assert!(request.get("output_config").is_none());
+}
+
+// ── streaming ───────────────────────────────────────────────────────────────
+
+/// Fold `events` (as they arrive on the wire) the way the transport does.
+fn fold(events: &[Value]) -> Result<Reply, TransportError> {
+    let mut reply = transport::Accumulator::default();
+    for event in events {
+        let event = serde_json::from_value(event.clone()).expect("a stream event");
+        if reply.push(event)? {
+            break;
+        }
+    }
+    reply.finish()
+}
+
+fn message_start() -> Value {
+    json!({"type": "message_start", "message": {
+        "id": "msg_1", "type": "message", "role": "assistant", "model": "z-ai/glm-5.3-flash",
+        "content": [], "stop_reason": null,
+        "usage": {"input_tokens": 100, "output_tokens": 1, "cache_read_input_tokens": 50}
+    }})
+}
+
+#[test]
+fn a_streamed_reply_folds_into_the_reply_a_plain_request_returns() {
+    let events = [
+        message_start(),
+        json!({"type": "ping"}),
+        json!({"type": "content_block_start", "index": 0,
+               "content_block": {"type": "thinking", "thinking": "", "signature": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+               "delta": {"type": "thinking_delta", "thinking": "The sweep "}}),
+        json!({"type": "content_block_delta", "index": 0,
+               "delta": {"type": "thinking_delta", "thinking": "is redundant."}}),
+        json!({"type": "content_block_delta", "index": 0,
+               "delta": {"type": "signature_delta", "signature": "sig-1"}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "content_block_start", "index": 1,
+               "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 1,
+               "delta": {"type": "text_delta", "text": "Checking "}}),
+        json!({"type": "content_block_delta", "index": 1,
+               "delta": {"type": "text_delta", "text": "it."}}),
+        json!({"type": "content_block_stop", "index": 1}),
+        json!({"type": "content_block_start", "index": 2,
+               "content_block": {"type": "tool_use", "id": "t1", "name": "preview", "input": {}}}),
+        json!({"type": "content_block_delta", "index": 2,
+               "delta": {"type": "input_json_delta", "partial_json": "{\"changes\": [{\"op\""}}),
+        json!({"type": "content_block_delta", "index": 2,
+               "delta": {"type": "input_json_delta", "partial_json": ": \"remove\"}]}"}}),
+        json!({"type": "content_block_stop", "index": 2}),
+        json!({"type": "message_delta",
+               "delta": {"stop_reason": "tool_use", "stop_sequence": null},
+               "usage": {"output_tokens": 240, "cost": 0.0012}}),
+        json!({"type": "message_stop"}),
+    ];
+    let reply = serde_json::to_value(fold(&events).unwrap()).unwrap();
+    assert_eq!(reply["stop_reason"], "tool_use");
+    assert_eq!(reply["model"], "z-ai/glm-5.3-flash");
+    assert_eq!(
+        reply["content"],
+        json!([
+            {"type": "thinking", "thinking": "The sweep is redundant.", "signature": "sig-1"},
+            {"type": "text", "text": "Checking it."},
+            {"type": "tool_use", "id": "t1", "name": "preview",
+             "input": {"changes": [{"op": "remove"}]}},
+        ])
+    );
+    // Running totals replace; what the delta leaves out is kept.
+    assert_eq!(reply["usage"]["input_tokens"], 100);
+    assert_eq!(reply["usage"]["cache_read_input_tokens"], 50);
+    assert_eq!(reply["usage"]["output_tokens"], 240);
+    assert_eq!(reply["usage"]["cost"], 0.0012);
+}
+
+#[test]
+fn a_tool_call_with_no_arguments_keeps_its_empty_input() {
+    let events = [
+        message_start(),
+        json!({"type": "content_block_start", "index": 0,
+               "content_block": {"type": "tool_use", "id": "t1", "name": "plan", "input": {}}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "tool_use"},
+               "usage": {"output_tokens": 5}}),
+        json!({"type": "message_stop"}),
+    ];
+    let reply = serde_json::to_value(fold(&events).unwrap()).unwrap();
+    assert_eq!(reply["content"][0]["input"], json!({}));
+}
+
+#[test]
+fn a_cut_off_stream_is_retried_and_a_stream_error_keeps_its_status() {
+    let cut = fold(&[
+        message_start(),
+        json!({"type": "content_block_start", "index": 0,
+               "content_block": {"type": "text", "text": ""}}),
+    ])
+    .unwrap_err();
+    assert!(matches!(cut, TransportError::Network(_)), "{cut:?}");
+    assert!(cut.retryable());
+
+    let overloaded = fold(&[
+        message_start(),
+        json!({"type": "error", "error": {"type": "overloaded_error", "message": "busy"}}),
+    ])
+    .unwrap_err();
+    assert!(
+        matches!(overloaded, TransportError::Status { status: 529, .. }),
+        "{overloaded:?}"
+    );
+    assert!(overloaded.retryable());
+
+    let invalid = fold(&[
+        message_start(),
+        json!({"type": "error", "error": {"type": "invalid_request_error", "message": "no"}}),
+    ])
+    .unwrap_err();
+    assert!(!invalid.retryable(), "{invalid:?}");
+
+    let torn = fold(&[
+        message_start(),
+        json!({"type": "content_block_start", "index": 0,
+               "content_block": {"type": "tool_use", "id": "t1", "name": "plan", "input": {}}}),
+        json!({"type": "content_block_delta", "index": 0,
+               "delta": {"type": "input_json_delta", "partial_json": "{\"a\":"}}),
+        json!({"type": "content_block_stop", "index": 0}),
+    ])
+    .unwrap_err();
+    assert!(matches!(torn, TransportError::Decode(_)), "{torn:?}");
+}
+
+/// A local `/messages` that answers every request with `frames`, each sent
+/// after its delay, and then holds the connection open for `hang`. Returns
+/// the API root to point a transport at.
+async fn sse_server(frames: Vec<(Duration, Value)>, hang: Duration) -> String {
+    use axum::body::{Body, Bytes};
+    use futures_util::StreamExt;
+
+    let app = axum::Router::new().route(
+        "/api/v1/messages",
+        axum::routing::post(move || {
+            let frames = frames.clone();
+            async move {
+                let body = futures_util::stream::iter(frames)
+                    .then(|(delay, event)| async move {
+                        tokio::time::sleep(delay).await;
+                        let kind = event["type"].as_str().unwrap_or_default().to_owned();
+                        Ok::<_, std::io::Error>(Bytes::from(format!(
+                            "event: {kind}\ndata: {event}\n\n"
+                        )))
+                    })
+                    .chain(futures_util::stream::once(async move {
+                        tokio::time::sleep(hang).await;
+                        Ok(Bytes::new())
+                    }));
+                axum::response::Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from_stream(body))
+                    .unwrap()
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/api/v1")
+}
+
+fn streaming_transport(base_url: &str, idle: Duration) -> OpenRouterTransport {
+    OpenRouterTransport::new(&OpenRouterSettings {
+        base_url,
+        api_key: KEY,
+        app_title: "finplan tests",
+        referer: None,
+        timeout: Duration::from_secs(30),
+        idle_timeout: idle,
+    })
+    .unwrap()
+}
+
+fn tiny_request() -> Request {
+    let mut builder = Request::builder();
+    builder
+        .model("z-ai/glm-5.3-flash")
+        .max_tokens(64u32)
+        .messages(vec![AnthropicMessage::user("hello")]);
+    builder.build().unwrap()
+}
+
+#[tokio::test]
+async fn the_transport_streams_a_slow_reply_to_the_end() {
+    // Each gap is under the idle timeout; together they are well over it, as
+    // a long answer from a slow model would be.
+    let gap = Duration::from_millis(120);
+    let frames = vec![
+        (Duration::ZERO, message_start()),
+        (
+            gap,
+            json!({"type": "content_block_start", "index": 0,
+                     "content_block": {"type": "text", "text": ""}}),
+        ),
+        (
+            gap,
+            json!({"type": "content_block_delta", "index": 0,
+                     "delta": {"type": "text_delta", "text": "Slow "}}),
+        ),
+        (
+            gap,
+            json!({"type": "content_block_delta", "index": 0,
+                     "delta": {"type": "text_delta", "text": "but alive."}}),
+        ),
+        (gap, json!({"type": "content_block_stop", "index": 0})),
+        (
+            gap,
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                     "usage": {"output_tokens": 4}}),
+        ),
+        (gap, json!({"type": "message_stop"})),
+    ];
+    let base = sse_server(frames, Duration::from_secs(5)).await;
+    let transport = streaming_transport(&base, Duration::from_millis(400));
+    let reply = transport.send(&tiny_request()).await.unwrap();
+    let reply = serde_json::to_value(reply).unwrap();
+    assert_eq!(reply["stop_reason"], "end_turn");
+    assert_eq!(
+        reply["content"],
+        json!([{"type": "text", "text": "Slow but alive."}])
+    );
+    assert_eq!(reply["usage"]["input_tokens"], 100);
+}
+
+#[tokio::test]
+async fn a_stream_that_goes_quiet_trips_the_idle_timeout() {
+    let frames = vec![
+        (Duration::ZERO, message_start()),
+        (
+            Duration::ZERO,
+            json!({"type": "content_block_start", "index": 0,
+                                "content_block": {"type": "text", "text": ""}}),
+        ),
+    ];
+    let base = sse_server(frames, Duration::from_secs(30)).await;
+    let transport = streaming_transport(&base, Duration::from_millis(300));
+    let started = Instant::now();
+    let error = transport.send(&tiny_request()).await.unwrap_err();
+    assert!(matches!(error, TransportError::Network(_)), "{error:?}");
+    assert!(error.retryable());
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "abandoned on silence, not at the request timeout"
+    );
 }
 
 #[test]
@@ -1433,6 +1825,14 @@ struct Recorder {
     retries: Mutex<Vec<AiRetryReason>>,
     submissions: Mutex<Vec<bool>>,
     motives: Mutex<Vec<(AiMotive, bool)>>,
+    /// The progress hooks, as one line each.
+    activity: Mutex<Vec<String>>,
+}
+
+impl Recorder {
+    fn log(&self, line: String) {
+        self.activity.lock().unwrap().push(line);
+    }
 }
 
 impl Observer for Recorder {
@@ -1452,6 +1852,56 @@ impl Observer for Recorder {
     fn motive(&self, motive: AiMotive, accepted: bool) {
         self.motives.lock().unwrap().push((motive, accepted));
     }
+    fn thinking(&self) {
+        self.log("thinking".into());
+    }
+    fn tool_started(&self, name: &str) {
+        self.log(format!("start {name}"));
+    }
+    fn tool_finished(&self, name: &str, failed: bool) {
+        self.log(format!(
+            "finish {name}{}",
+            if failed { " failed" } else { "" }
+        ));
+    }
+    fn narration(&self, text: &str) {
+        self.log(format!("said {text}"));
+    }
+}
+
+#[tokio::test]
+async fn the_observer_hears_progress_as_it_happens() {
+    let g = graph();
+    let changes = remove_sweep(&g);
+    let script = Script::new(vec![
+        reply(
+            "tool_use",
+            json!([
+                {"type": "text", "text": "Let me preview removing the sweep."},
+                call("t1", "preview_changes", json!({"changes": changes})),
+                call("t2", "no_such_tool", json!({})),
+            ]),
+        ),
+        reply("end_turn", json!([{"type": "text", "text": "The answer."}])),
+    ]);
+    let client = AiClient::new(settings(), script, None);
+    let recorder = Recorder::default();
+    generate_observed(&client, &context(&[]), &Tools::new(), &recorder)
+        .await
+        .unwrap();
+    assert_eq!(
+        *recorder.activity.lock().unwrap(),
+        vec![
+            "thinking",
+            "said Let me preview removing the sweep.",
+            "start preview_changes",
+            "finish preview_changes",
+            "start no_such_tool",
+            "finish no_such_tool failed",
+            // The answer itself is the turn's reply, not narration.
+            "thinking",
+        ]
+    );
 }
 
 /// A reply whose usage carries OpenRouter's `cost`.
@@ -2043,9 +2493,12 @@ fn the_submit_tool_requires_a_motive_and_offers_a_no_change_reason() {
 /// exactly what it was.
 #[test]
 fn a_drafting_client_requires_zero_data_retention_and_review_does_not() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
     let wire = |client: &AiClient| {
-        let request = client
-            .request(&[AnthropicMessage::user("hello")])
+        let request = runtime
+            .block_on(client.request(&[AnthropicMessage::user("hello")]))
             .expect("request builds");
         serde_json::to_value(&request).unwrap()
     };
@@ -3203,7 +3656,9 @@ mod drafting {
             assert!(names.contains(&expected), "{expected} missing in {names:?}");
         }
         assert!(!names.contains(&"preview_changes"));
-        assert_eq!(requests[0]["system"].as_array().unwrap().len(), 3);
+        // The writing style, then the draft's own blocks.
+        assert_eq!(requests[0]["system"].as_array().unwrap().len(), 4);
+        assert_eq!(requests[0]["system"][0]["text"], prompt::WRITING_STYLE);
     }
 
     fn request_count(script: &Script) -> usize {

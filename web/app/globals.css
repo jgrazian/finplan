@@ -2114,3 +2114,81 @@ tr:hover > * > .grip,
     padding: 20px 16px 28px;
   }
 }
+
+/* ── Chat activity ─────────────────────────────────────────────────────────
+   A running chat turn's steps (components/chat/ChatActivity.tsx): a quiet
+   record of what the model did, the step in progress pulsing at the end. */
+
+.chat-activity {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--color-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+.chat-activity li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  animation: fade-in 240ms var(--ease) both;
+}
+
+.chat-activity-mark {
+  flex: 0 0 12px;
+  text-align: center;
+  font-size: 11px;
+}
+
+.chat-activity-text {
+  overflow-wrap: anywhere;
+}
+
+.chat-activity [data-tone="working"] {
+  color: var(--color-text);
+  font-style: italic;
+}
+
+/* The step in progress: a dot that breathes. */
+.chat-activity [data-tone="working"] .chat-activity-mark::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  animation: chat-activity-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-activity [data-tone="said"] .chat-activity-text {
+  font-style: italic;
+}
+
+.chat-activity [data-tone="said"] .chat-activity-text::before {
+  content: "“";
+}
+
+.chat-activity [data-tone="said"] .chat-activity-text::after {
+  content: "”";
+}
+
+.chat-activity [data-tone="failed"] .chat-activity-mark {
+  color: var(--color-accent-2);
+}
+
+@keyframes chat-activity-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { AiStep } from "../lib/api/generated/AiStep.ts";
 import type { Change } from "../lib/api/generated/Change.ts";
 import type { DraftColumn } from "../lib/api/generated/DraftColumn.ts";
 import { clockTime } from "../lib/view/issues.ts";
@@ -423,13 +424,10 @@ test("the Review tab opens on Notes, and Chat is a sub-tab in the query", async 
 
 test("the model pass reads as running, failed or stopped early, and says nothing otherwise", () => {
   const ai = (status: "running" | "done" | "failed", error: string | null = null) => ({
-    ai: { status, stop: null, error, started_at: "2026-09-27 12:10:00", finished_at: null },
+    ai: { status, stop: null, error, started_at: "2026-09-27 12:10:00", finished_at: null, activity: [] },
   });
   assert.equal(aiLine({ ai: null }), undefined);
-  assert.deepEqual(aiLine(ai("running")), {
-    text: "AI review in progress… rule notes shown below",
-    running: true,
-  });
+  assert.deepEqual(aiLine(ai("running")), { text: "AI review in progress…", running: true });
   const failed = aiLine(ai("failed", "the review model could not be reached"));
   assert.equal(failed?.running, false);
   assert.match(failed?.text ?? "", /did not finish: the review model could not be reached/);
@@ -437,6 +435,35 @@ test("the model pass reads as running, failed or stopped early, and says nothing
   assert.doesNotMatch(failed?.text ?? "", /Claude/, "the provider may not be Anthropic");
   assert.equal(aiLine(ai("done")), undefined);
   assert.match(aiLine(ai("done", "the review model stopped partway through"))?.text ?? "", /stopped early/);
+});
+
+test("a running model pass names the last tool it called", () => {
+  const running = (activity: AiStep[]) => ({
+    ai: { status: "running" as const, stop: null, error: null, started_at: "", finished_at: null, activity },
+  });
+  // Nothing called yet, or only thinking: the generic line.
+  assert.equal(aiLine(running([{ kind: "thinking", done: false }]))?.text, "AI review in progress…");
+  // A call in progress reads as under way...
+  assert.equal(
+    aiLine(
+      running([
+        { kind: "tool", name: "preview_changes", done: true, failed: false },
+        { kind: "narration", text: "Checking the taxes next." },
+        { kind: "tool", name: "estimate_taxes", done: false, failed: false },
+      ]),
+    )?.text,
+    "AI review: Estimating taxes…",
+  );
+  // ...and stays named while the model thinks about its result.
+  assert.equal(
+    aiLine(
+      running([
+        { kind: "tool", name: "goal_seek", done: true, failed: false },
+        { kind: "thinking", done: false },
+      ]),
+    )?.text,
+    "AI review: Searching for the amount that reaches the goal",
+  );
 });
 
 // ── Paths of steps ───────────────────────────────────────────────────────────

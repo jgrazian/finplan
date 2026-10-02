@@ -8,9 +8,12 @@
  * chat. It never edits the plan; the user applies what it wrote.
  */
 import type { AiPlanChat, ChatMessage, SuggestionThread } from "../api/suggestions.ts";
+import { type ActivityLine, activityLines, runningStatus } from "./activity.ts";
+
+export type { ActivityLine } from "./activity.ts";
 
 /** What both kinds of thread share. */
-export type ChatThread = Pick<SuggestionThread, "status" | "error" | "messages">;
+export type ChatThread = Pick<SuggestionThread, "status" | "error" | "messages" | "activity">;
 
 /** Longest message the server takes. */
 export const CHAT_MAX_CHARS = 2_000;
@@ -60,8 +63,13 @@ export type ThreadState = "empty" | "idle" | "running" | "failed" | "full";
 export interface ThreadView {
   lines: ChatLine[];
   state: ThreadState;
-  /** "Thinking…" while a turn runs; the failure's words when it failed. */
+  /**
+   * While a turn runs, what it is doing now ("Thinking…", "Simulating the
+   * change…"); the failure's words when it failed.
+   */
   status?: string;
+  /** What the running turn has done so far, oldest first; empty otherwise. */
+  activity: ActivityLine[];
   /** Offer to send the last message again (after a failed turn). */
   retry?: string;
   /** Whether the box takes a message now. */
@@ -134,6 +142,7 @@ export function threadView(
           ? "empty"
           : "idle";
   const over = draft.length > CHAT_MAX_CHARS;
+  const activity = running ? activityLines(thread?.activity ?? []) : [];
   const blocked =
     full && !running
       ? spent
@@ -143,8 +152,9 @@ export function threadView(
   return {
     lines: messages.map(chatLine),
     state,
+    activity,
     status: running
-      ? "Thinking…"
+      ? runningStatus(activity)
       : failed
         ? `The reply did not arrive: ${thread?.error ?? "the model could not answer"}.`
         : undefined,

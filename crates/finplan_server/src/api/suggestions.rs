@@ -315,6 +315,8 @@ pub struct ReviewAi {
     pub error: Option<String>,
     pub started_at: String,
     pub finished_at: Option<String>,
+    /// What the running pass has done so far; empty unless `running`.
+    pub activity: Vec<super::ai_activity::AiStep>,
 }
 
 #[derive(Debug, Default, Deserialize, TS)]
@@ -1172,7 +1174,7 @@ async fn review(
         );
     }
 
-    let review = load_review(&state.db, scenario_id)
+    let review = load_review(&state, scenario_id)
         .await?
         .ok_or_else(|| ApiError::internal("review vanished after it was stored"))?;
     Ok(Json(review))
@@ -1316,11 +1318,13 @@ impl ReviewRow {
             error: self.ai_error.clone(),
             started_at: self.ai_started_at.clone().unwrap_or_default(),
             finished_at: self.ai_finished_at.clone(),
+            activity: Vec::new(),
         })
     }
 }
 
-async fn load_review(db: &Db, scenario_id: i64) -> ApiResult<Option<Review>> {
+async fn load_review(state: &AppState, scenario_id: i64) -> ApiResult<Option<Review>> {
+    let db = &state.db;
     let latest: Option<ReviewRow> = sqlx::query_as(
         "SELECT run_id, reviewed_at, ai_status, ai_stop, ai_error, ai_started_at, ai_finished_at
            FROM suggestion_reviews WHERE scenario_id = ?1",
@@ -1346,9 +1350,15 @@ async fn load_review(db: &Db, scenario_id: i64) -> ApiResult<Option<Review>> {
         .into_iter()
         .map(SuggestionRow::into_suggestion)
         .collect::<ApiResult<_>>()?;
+    let mut ai = latest.ai();
+    if let (Some(ai), Some(reviews)) = (&mut ai, &state.review_ai)
+        && ai.status == ReviewAiStatus::Running
+    {
+        ai.activity = reviews.review_steps(scenario_id);
+    }
     Ok(Some(Review {
         run_id,
-        ai: latest.ai(),
+        ai,
         reviewed_at: latest.reviewed_at,
         suggestions,
     }))
@@ -1361,7 +1371,7 @@ async fn latest_review(
     Path(scenario_id): Path<i64>,
 ) -> ApiResult<Json<Option<Review>>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    Ok(Json(load_review(&state.db, scenario_id).await?))
+    Ok(Json(load_review(&state, scenario_id).await?))
 }
 
 // ── list and create ─────────────────────────────────────────────────────────

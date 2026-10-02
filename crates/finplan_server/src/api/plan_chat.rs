@@ -35,9 +35,8 @@ use super::runs::{self, ResultsQuery};
 use super::suggestion_chat::{
     self, ChatMessage, ChatRequest, MAX_MESSAGE, ThreadStatus, Turn, tag,
 };
-use super::suggestions::{self, Suggestion, SuggestionStatus, all_changes};
+use super::suggestions::{self, Suggestion, SuggestionStatus};
 use crate::auth::session::CurrentUser;
-use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobContext, JobKind, Origin};
 use crate::runner::telemetry::Submitted;
@@ -65,20 +64,22 @@ pub struct PlanThread {
     pub error: Option<String>,
     /// Oldest first.
     pub messages: Vec<ChatMessage>,
+    /// What the running turn has done so far; empty unless `running`.
+    pub activity: Vec<super::ai_activity::AiStep>,
 }
 
 fn thread_of(scenario_id: i64) -> suggestion_chat::Thread {
     suggestion_chat::Thread::Plan(scenario_id)
 }
 
-async fn load(db: &Db, scenario_id: i64) -> ApiResult<PlanThread> {
-    let (status, error, messages) =
-        suggestion_chat::load_messages(db, thread_of(scenario_id)).await?;
+async fn load(state: &AppState, scenario_id: i64) -> ApiResult<PlanThread> {
+    let loaded = suggestion_chat::load_messages(state, thread_of(scenario_id)).await?;
     Ok(PlanThread {
         scenario_id,
-        status,
-        error,
-        messages,
+        status: loaded.status,
+        error: loaded.error,
+        messages: loaded.messages,
+        activity: loaded.activity,
     })
 }
 
@@ -89,7 +90,7 @@ async fn thread(
     Path(scenario_id): Path<i64>,
 ) -> ApiResult<Json<PlanThread>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    Ok(Json(load(&state.db, scenario_id).await?))
+    Ok(Json(load(&state, scenario_id).await?))
 }
 
 /// `DELETE /scenarios/{id}/chat`: forget the thread. The notes it added stay
@@ -175,12 +176,7 @@ async fn post_message(
     let board = suggestions::notes_of(&state.db, scenario_id).await?;
     let rule_drafts = rules::review(&graph, &results);
     let context = ReviewContext::build(&graph, &results, &rule_drafts)
-        .with_notes(
-            board
-                .iter()
-                .filter(|n| n.status != SuggestionStatus::Applied)
-                .map(|n| (n.kind, n.title.as_str(), all_changes(&n.paths))),
-        )
+        .with_notes(suggestion_chat::board_notes(&board))
         .with_dismissed_notes(
             suggestions::dismissed(&board)
                 .into_iter()
@@ -246,7 +242,7 @@ async fn post_message(
         message.chars().count(),
     );
 
-    Ok(Json(load(&state.db, scenario_id).await?))
+    Ok(Json(load(&state, scenario_id).await?))
 }
 
 /// The plan's board, for the model: the review it is about, whether the plan

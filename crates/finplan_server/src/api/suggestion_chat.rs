@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{Instrument, instrument::WithSubscriber};
 use ts_rs::TS;
 
+use super::ai_activity::{ActivityObserver, AiStep};
 use super::preview;
 use super::review_ai::{self, AiReviews, PassMetrics, Tools, draft_suggestion, pass_outcome};
 use super::runs::{self, ResultsQuery};
@@ -54,7 +55,7 @@ use crate::observability::{
 };
 use crate::runner::telemetry::{Attempt, Submitted};
 use crate::state::AppState;
-use crate::suggest::ai::chat::{self, ChatInput, ChatRole as ModelRole, Subject};
+use crate::suggest::ai::chat::{self, BoardNote, ChatInput, ChatRole as ModelRole, Subject};
 use crate::suggest::ai::{AiError, AiOutcome, ReviewContext, stop_tag};
 use crate::suggest::rules;
 
@@ -69,7 +70,7 @@ const MAX_USER_MESSAGES: i64 = 20;
 
 /// A thread: a note's ("Chat about this") or a plan's (`api::plan_chat`).
 /// Names the tables it lives in and what its turns report as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) enum Thread {
     Note(i64),
     Plan(i64),
@@ -182,6 +183,8 @@ pub struct SuggestionThread {
     pub error: Option<String>,
     /// Oldest first.
     pub messages: Vec<ChatMessage>,
+    /// What the running turn has done so far; empty unless `running`.
+    pub activity: Vec<AiStep>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -199,7 +202,7 @@ async fn thread(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<SuggestionThread>> {
     suggestions::owned(&state.db, id, &user.id).await?;
-    Ok(Json(load_thread(&state.db, id).await?))
+    Ok(Json(load_thread(&state, id).await?))
 }
 
 /// `POST /suggestions/{id}/chat`: add the user's message and start a turn.
@@ -243,12 +246,7 @@ async fn post_message(
     let rule_drafts = rules::review(&graph, &results);
     // The model must repeat neither this note nor any other still standing.
     let context = ReviewContext::build(&graph, &results, &rule_drafts)
-        .with_notes(
-            board
-                .iter()
-                .filter(|n| n.status != SuggestionStatus::Applied)
-                .map(|n| (n.kind, n.title.as_str(), all_changes(&n.paths))),
-        )
+        .with_notes(board_notes(&board))
         .with_dismissed_notes(
             suggestions::dismissed(&board)
                 .into_iter()
@@ -300,7 +298,7 @@ async fn post_message(
         message.chars().count(),
     );
 
-    Ok(Json(load_thread(&state.db, id).await?))
+    Ok(Json(load_thread(&state, id).await?))
 }
 
 /// Take the thread for a new turn on the caller's write transaction: create
@@ -396,11 +394,18 @@ struct MessageRow {
     created_at: String,
 }
 
-/// A thread's current turn status, its failure message, and its messages.
-pub(super) async fn load_messages(
-    db: &Db,
-    thread: Thread,
-) -> ApiResult<(ThreadStatus, Option<String>, Vec<ChatMessage>)> {
+/// A thread as its readers see it.
+pub(super) struct Loaded {
+    pub status: ThreadStatus,
+    pub error: Option<String>,
+    pub messages: Vec<ChatMessage>,
+    pub activity: Vec<AiStep>,
+}
+
+/// A thread's current turn status, its failure message, its messages, and
+/// what the running turn has done so far.
+pub(super) async fn load_messages(state: &AppState, thread: Thread) -> ApiResult<Loaded> {
+    let db = &state.db;
     let (threads, messages, key) = thread.tables();
     let head: Option<(String, Option<String>)> = sqlx::query_as(&format!(
         "SELECT status, error FROM {threads} WHERE {key} = ?1"
@@ -436,16 +441,26 @@ pub(super) async fn load_messages(
         })
         .collect();
     let error = (status == ThreadStatus::Failed).then_some(error).flatten();
-    Ok((status, error, messages))
-}
-
-async fn load_thread(db: &Db, id: i64) -> ApiResult<SuggestionThread> {
-    let (status, error, messages) = load_messages(db, Thread::Note(id)).await?;
-    Ok(SuggestionThread {
-        suggestion_id: id,
+    let activity = match (&state.review_ai, status) {
+        (Some(reviews), ThreadStatus::Running) => reviews.chat_activity().steps(thread),
+        _ => Vec::new(),
+    };
+    Ok(Loaded {
         status,
         error,
         messages,
+        activity,
+    })
+}
+
+async fn load_thread(state: &AppState, id: i64) -> ApiResult<SuggestionThread> {
+    let loaded = load_messages(state, Thread::Note(id)).await?;
+    Ok(SuggestionThread {
+        suggestion_id: id,
+        status: loaded.status,
+        error: loaded.error,
+        messages: loaded.messages,
+        activity: loaded.activity,
     })
 }
 
@@ -659,6 +674,7 @@ pub(super) fn start(state: &AppState, reviews: AiReviews, turn: Turn, message_ch
 
 async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
     let thread = turn.thread;
+    let _activity = reviews.chat_activity().begin(thread);
     let telemetry = state.telemetry.clone();
     let Ok(_permit) = reviews.permits().acquire_owned().await else {
         return;
@@ -668,7 +684,8 @@ async fn run(state: AppState, reviews: AiReviews, turn: Turn) {
     let mut attempt = Attempt::new(&telemetry, &turn.job_context, turn.submitted.clone());
     let started = Instant::now();
     let model = reviews.model().to_owned();
-    let observer = PassMetrics::new(&telemetry, &model);
+    let metrics = PassMetrics::new(&telemetry, &model);
+    let observer = ActivityObserver::new(&metrics, reviews.chat_activity(), thread);
     let finish = |outcome: AiPassOutcome| {
         telemetry.review_chat_turn(&model, outcome, started.elapsed().as_secs_f64());
     };
@@ -829,6 +846,65 @@ async fn fail(db: &Db, thread: Thread, job: &str, message: &str) {
     }
 }
 
+/// The board's notes a chat must not repeat: all but the applied ones, each
+/// marked editable when a submission may rewrite it in place — open, with no
+/// step applied.
+pub(super) fn board_notes(board: &[Suggestion]) -> impl Iterator<Item = BoardNote<'_>> {
+    board
+        .iter()
+        .filter(|n| n.status != SuggestionStatus::Applied)
+        .map(|n| BoardNote {
+            id: n.id,
+            kind: n.kind,
+            title: n.title.as_str(),
+            changes: all_changes(&n.paths),
+            editable: n.status == SuggestionStatus::Open
+                && !n.paths.iter().flat_map(|p| &p.steps).any(|st| st.applied),
+        })
+}
+
+/// Rewrite note `id` in place with `new`, keeping its id, thread, parent and
+/// place on the board. It becomes the review model's note against the turn's
+/// run (so a later review does not replace it as it would a rule note).
+/// `false`, and nothing written, when it is no longer open or a step of it
+/// has been applied since the turn read the board.
+async fn rewrite(
+    conn: &mut sqlx::SqliteConnection,
+    scenario_id: i64,
+    id: i64,
+    new: &suggestions::NewSuggestion,
+) -> ApiResult<bool> {
+    let evidence =
+        serde_json::to_string(&new.evidence).map_err(|e| ApiError::internal(e.to_string()))?;
+    let paths = serde_json::to_string(&new.paths).map_err(|e| ApiError::internal(e.to_string()))?;
+    let affected = sqlx::query(
+        "UPDATE suggestions
+            SET run_id = ?3, source = ?4, rule = NULL, kind = ?5, section = ?6, title = ?7,
+                summary = ?8, reasoning = ?9, evidence_json = ?10, paths_json = ?11,
+                fingerprint = ?12, applied_path = NULL, review_job = NULL
+          WHERE id = ?1 AND scenario_id = ?2 AND status = 'open'
+            AND NOT EXISTS (
+                SELECT 1 FROM json_each(paths_json) AS p, json_each(p.value, '$.steps') AS st
+                 WHERE json_extract(st.value, '$.applied') = 1)",
+    )
+    .bind(id)
+    .bind(scenario_id)
+    .bind(new.run_id)
+    .bind(tag(&new.source))
+    .bind(tag(&new.kind))
+    .bind(tag(&new.section))
+    .bind(&new.title)
+    .bind(&new.summary)
+    .bind(&new.reasoning)
+    .bind(evidence)
+    .bind(paths)
+    .bind(&new.fingerprint)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    Ok(affected == 1)
+}
+
 /// Store the answer and the notes it added, and mark the thread idle —
 /// unless the thread is gone (its note was deleted, or the plan's thread
 /// cleared) or no longer this turn's, in which case nothing is written and
@@ -860,8 +936,10 @@ async fn store(db: &Db, turn: &Turn, outcome: &AiOutcome) -> ApiResult<Option<Ve
 
     // As a review pass: dismissed or confirmed notes stay silent, an open one
     // is not duplicated, and one applied from this run is not raised again.
-    let standing: HashSet<String> = sqlx::query_scalar(
-        "SELECT fingerprint FROM suggestions
+    // A note being rewritten does not stand in the way of its own revision.
+    let rewritten: HashSet<i64> = outcome.drafts.iter().filter_map(|d| d.replaces).collect();
+    let standing: HashSet<String> = sqlx::query_as::<_, (i64, String)>(
+        "SELECT id, fingerprint FROM suggestions
           WHERE scenario_id = ?1
             AND (status IN ('open', 'dismissed', 'confirmed')
                  OR (status = 'applied' AND run_id = ?2))",
@@ -871,6 +949,8 @@ async fn store(db: &Db, turn: &Turn, outcome: &AiOutcome) -> ApiResult<Option<Ve
     .fetch_all(&mut *tx)
     .await?
     .into_iter()
+    .filter(|(id, _)| !rewritten.contains(id))
+    .map(|(_, fingerprint)| fingerprint)
     .collect();
 
     let mut seen = HashSet::new();
@@ -881,7 +961,14 @@ async fn store(db: &Db, turn: &Turn, outcome: &AiOutcome) -> ApiResult<Option<Ve
         if standing.contains(&new.fingerprint) || !seen.insert(new.fingerprint.clone()) {
             continue;
         }
-        stored.push(insert(&mut tx, turn.scenario_id, &new).await?);
+        match draft.replaces {
+            Some(id) => {
+                if rewrite(&mut tx, turn.scenario_id, id, &new).await? {
+                    stored.push(id);
+                }
+            }
+            None => stored.push(insert(&mut tx, turn.scenario_id, &new).await?),
+        }
     }
     sqlx::query(&format!(
         "INSERT INTO {messages} ({key}, role, text, suggestion_ids)

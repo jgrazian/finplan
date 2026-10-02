@@ -1,6 +1,7 @@
 "use client";
 
 import { type ReactNode, useId, useState } from "react";
+import { ChatActivity } from "@/components/chat/ChatActivity";
 import { ChatBubble, ChatText } from "@/components/chat/ChatBubble";
 import { Button } from "@/components/ui";
 import type { AiPlanChat } from "@/lib/api/suggestions";
@@ -124,7 +125,11 @@ export function PlanChat({
           </li>
         ))}
 
-        {view.status && (
+        {view.activity.length > 0 ? (
+          <li>
+            <ChatActivity lines={view.activity} />
+          </li>
+        ) : view.status && (
           <li
             role="status"
             aria-live="polite"

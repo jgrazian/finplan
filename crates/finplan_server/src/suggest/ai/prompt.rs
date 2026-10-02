@@ -26,6 +26,14 @@ use crate::suggest::{Change, ChangeOp, ChangeTarget};
 pub const PREVIEW_TOOL: &str = super::tools::PREVIEW;
 pub const SUBMIT_TOOL: &str = "submit_suggestion";
 
+/// How the model writes everything — its reasoning, notes, summaries and
+/// chat answers: compact and technical, so a reasoning model spends its
+/// output budget on the problem rather than on prose, and the user reads
+/// plain, exact sentences. Sent to every review, chat and drafting request,
+/// ahead of their own instructions.
+pub const WRITING_STYLE: &str = "\
+Writing style. Write everything about 80% of the way to ASD-STE100 Simplified Technical English: your reasoning and thinking, note titles, summaries and reasoning, path and step text, and chat answers. Use short declarative sentences, one idea per sentence, active voice, present tense, one word for one meaning, no filler and no restating. Use figures, account and event names, and the plan's own terms. Length limits and formats set elsewhere still apply.";
+
 pub const SYSTEM_PROMPT: &str = concat!("\
 You review a personal financial plan built in FinPlan, a Monte Carlo retirement planner, and write short notes for its Review tab. The user message holds the plan, the results of one simulation run of it, the notes FinPlan's built-in rules already wrote, any notes still open on the board from earlier reviews (open_notes), and the notes the user dismissed (dismissed_notes).
 
@@ -241,7 +249,7 @@ fn submit_tool() -> Value {
     json!(
         {
             "name": SUBMIT_TOOL,
-            "description": "Add one note to the Review tab. The server checks every path's steps against the plan and the evidence against the run, and either accepts the note (returning the diffs the user will see) or rejects it with the problems to fix. Accepted notes cannot be edited; submit only finished notes.",
+            "description": "Add one note to the Review tab. The server checks every path's steps against the plan and the evidence against the run, and either accepts the note (returning the diffs the user will see) or rejects it with the problems to fix. Submit only finished notes. In a chat, a note already on the board that is open with nothing applied can be rewritten in place: submit the whole revised note with `replaces` set to its id.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -260,6 +268,10 @@ fn submit_tool() -> Value {
                     "no_change_reason": {
                         "type": ["string", "null"],
                         "description": "Only for a check note with no paths: one line on why the issue cannot be expressed as a plan change, even as a labelled estimate. Appended to the reasoning."
+                    },
+                    "replaces": {
+                        "type": ["integer", "null"],
+                        "description": "Only in a chat: the id (#N) of an open note on the board, with nothing applied, that this submission rewrites in place — a different figure, option or wording. The note keeps its id and thread; send the complete revised note, not just what changed. Omit to add a new note."
                     },
                 },
                 "required": ["kind", "section", "motive", "title", "summary", "reasoning", "evidence", "paths"]

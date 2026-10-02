@@ -13,6 +13,7 @@ import {
   settled,
   threadView,
 } from "../lib/view/chat.ts";
+import { toolLabel } from "../lib/view/activity.ts";
 import { board, parentOf, toCard } from "../lib/view/review.ts";
 
 // ── fixtures ────────────────────────────────────────────────────────────────
@@ -63,7 +64,7 @@ function review(suggestions: Suggestion[], ai: unknown = ON): Review {
 }
 
 function thread(overrides: Partial<SuggestionThread> = {}): SuggestionThread {
-  return { suggestion_id: 1, status: "idle", error: null, messages: [], ...overrides };
+  return { suggestion_id: 1, status: "idle", error: null, messages: [], activity: [], ...overrides };
 }
 
 function message(id: number, role: "user" | "assistant", text: string, suggestion_ids: number[] = []) {
@@ -247,6 +248,7 @@ function planThread(messages: number) {
   return {
     status: "idle" as const,
     error: null,
+    activity: [],
     messages: Array.from({ length: messages }, (_, i) => ({
       id: i + 1,
       role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
@@ -273,4 +275,61 @@ test("a plan's thread has no message cap, only the month's allowance", () => {
 test("the allowance reads as what is left of the month", () => {
   assert.equal(allowanceLine({ remaining: 12, per_month: 200 }), "12 of 200 messages left this month");
   assert.equal(allowanceLine({ remaining: 1_500, per_month: 2_000 }), "1,500 of 2,000 messages left this month");
+});
+
+// ── activity ────────────────────────────────────────────────────────────────
+
+test("a running turn shows what it is doing, and only the request in flight as thinking", () => {
+  const running = thread({
+    status: "running",
+    activity: [
+      { kind: "thinking", done: true },
+      { kind: "narration", text: "Let me simulate adding 200 shares a quarter." },
+      { kind: "tool", name: "preview_changes", done: true, failed: false },
+      { kind: "tool", name: "validate_changes", done: true, failed: true },
+      { kind: "retry", reason: "rate_limit" },
+      { kind: "tool", name: "goal_seek", done: false, failed: false },
+    ],
+  });
+  const view = threadView(running);
+  assert.equal(view.state, "running");
+  assert.equal(view.status, "Searching for the amount that reaches the goal…");
+  assert.deepEqual(
+    view.activity.map((line) => [line.text, line.tone]),
+    [
+      ["Let me simulate adding 200 shares a quarter.", "said"],
+      ["Simulating the change", "done"],
+      ["Checking the change", "failed"],
+      ["The model is busy, trying again", "notice"],
+      ["Searching for the amount that reaches the goal", "working"],
+    ],
+  );
+});
+
+test("between tool calls the status is thinking again", () => {
+  const view = threadView(
+    thread({
+      status: "running",
+      activity: [
+        { kind: "tool", name: "preview_changes", done: true, failed: false },
+        { kind: "thinking", done: false },
+      ],
+    }),
+  );
+  assert.equal(view.status, "Thinking…");
+  assert.deepEqual(view.activity.at(-1), { key: "1", text: "Thinking", tone: "working" });
+});
+
+test("a turn that has not reported yet reads as thinking, and a settled one shows no activity", () => {
+  assert.equal(threadView(thread({ status: "running" })).status, "Thinking…");
+  assert.equal(threadView(undefined, { sending: true }).status, "Thinking…");
+  const idle = threadView(
+    thread({ status: "idle", activity: [{ kind: "tool", name: "preview_changes", done: true, failed: false }] }),
+  );
+  assert.deepEqual(idle.activity, []);
+});
+
+test("an unknown tool reads as its name", () => {
+  assert.equal(toolLabel("estimate_taxes"), "Estimating taxes");
+  assert.equal(toolLabel("read_document"), "Using read document");
 });

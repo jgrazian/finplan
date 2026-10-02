@@ -39,6 +39,7 @@ lettre = { version = "0.11", default-features = false, features = ["builder", "s
 # openrouter-rs speaks reqwest 0.12 + rustls, the same TLS stack lettre pulls
 # in; reqwest is named directly only to hand it a client with our timeout.
 openrouter-rs = "0.16"
+futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 # Text layers of PDF uploads (documents::pdf); nothing else of the crate is used.
 lopdf = { version = "0.45", default-features = false }

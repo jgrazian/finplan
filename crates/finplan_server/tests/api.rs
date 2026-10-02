@@ -4588,7 +4588,7 @@ mod review_model {
                 max_suggestions: 3,
                 max_previews: 3,
                 max_tokens: 2_000,
-                thinking: true,
+                thinking: finplan_server::suggest::ai::ThinkingMode::On,
                 effort: "high",
                 max_retries: 0,
                 retry_base: Duration::from_millis(1),
@@ -5327,6 +5327,98 @@ async fn plan_chat_proposes_changes_as_notes_and_leaves_the_plan_alone() {
             .iter()
             .any(|s| s["id"] == note_id)
     );
+}
+
+/// A chat turn that rewrites note `id` in place: checking to start at `value`.
+fn chat_turn_rewriting(checking: i64, id: i64, value: f64) -> Vec<Reply> {
+    use review_model::call;
+    let changes = json!([{
+        "op": "replace", "target": {"account": checking}, "path": "/cash_value",
+        "expect": 10_000.0, "value": value
+    }]);
+    vec![
+        Reply::Message(call("t1", "preview_changes", json!({"changes": changes}))),
+        Reply::Message(call(
+            "t2",
+            "submit_suggestion",
+            json!({
+                "kind": "fix", "section": "portfolio", "motive": "realism",
+                "title": format!("Checking should start at ${value}"),
+                "summary": "The one-line lead.", "reasoning": "A larger cushion for the loan payments.",
+                "evidence": [],
+                "paths": [{"key": "a", "label": format!("Start checking at ${value}"),
+                           "recommended": true,
+                           "steps": [{"key": "a", "title": "Raise checking", "changes": changes}]}],
+                "replaces": id,
+            }),
+        )),
+        Reply::Message(chat_answer("I changed the note.")),
+    ]
+}
+
+#[tokio::test]
+async fn plan_chat_rewrites_an_open_note_in_place_and_leaves_an_applied_one() {
+    let script = Script::new(vec![]);
+    let mut app = TestApp::with_review_ai(script.client()).await;
+    let (scenario_id, checking) = app.plan_chat_ready("rewrite@example.com", &script).await;
+
+    script.push(chat_turn_adding_a_note(checking));
+    app.plan_chat(scenario_id, "Put $20,000 in checking.").await;
+    let thread = app.await_plan_chat(scenario_id).await;
+    let note_id = thread["messages"][1]["suggestion_ids"][0].as_i64().unwrap();
+    let ai_notes = |review: &Value| model_notes(review).len();
+    let (_, before) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+
+    // Asked for a different figure, the model rewrites the note it wrote.
+    script.push(chat_turn_rewriting(checking, note_id, 25_000.0));
+    app.plan_chat(scenario_id, "Make it $25,000 instead.").await;
+    let thread = app.await_plan_chat(scenario_id).await;
+    assert_eq!(thread["status"], "idle", "{thread}");
+    assert_eq!(thread["messages"][3]["suggestion_ids"], json!([note_id]));
+    let (_, review) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    assert_eq!(ai_notes(&review), ai_notes(&before), "rewritten, not added");
+    let note = review["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == note_id)
+        .unwrap();
+    assert_eq!(note["status"], "open");
+    assert_eq!(note["title"], "Checking should start at $25000");
+    assert_eq!(note["paths"][0]["label"], "Start checking at $25000");
+    assert_eq!(
+        note["paths"][0]["steps"][0]["changes"][0]["value"], 25_000.0,
+        "{note}"
+    );
+
+    // Once applied, it is no longer the model's to rewrite.
+    let (status, _) = app
+        .post(
+            &format!("/api/suggestions/{note_id}/apply"),
+            apply_path("a"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    script.push(chat_turn_rewriting(checking, note_id, 30_000.0));
+    app.plan_chat(scenario_id, "Now $30,000.").await;
+    app.await_plan_chat(scenario_id).await;
+    let told = script.requests.lock().unwrap().last().unwrap().to_string();
+    assert!(told.contains("cannot be rewritten"), "{told}");
+    let (_, review) = app
+        .get(&format!("/api/scenarios/{scenario_id}/review"))
+        .await;
+    let note = review["suggestions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == note_id)
+        .unwrap();
+    assert_eq!(note["status"], "applied");
+    assert_eq!(note["title"], "Checking should start at $25000");
 }
 
 #[tokio::test]

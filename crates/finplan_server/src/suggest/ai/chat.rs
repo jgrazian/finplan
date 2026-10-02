@@ -72,6 +72,16 @@ impl Subject<'_> {
     }
 }
 
+/// A note on the board, as a chat's context lists it.
+pub struct BoardNote<'n> {
+    pub id: i64,
+    pub kind: Kind,
+    pub title: &'n str,
+    pub changes: Vec<Change>,
+    /// Open with nothing applied: a submission may rewrite it in place.
+    pub editable: bool,
+}
+
 /// One chat turn's input.
 pub struct ChatInput<'a> {
     /// The run the board reviews, as a review pass reads it.
@@ -83,36 +93,36 @@ pub struct ChatInput<'a> {
 }
 
 impl ReviewContext {
-    /// Add notes already on the board to the ones the model must not repeat.
-    pub fn with_notes<'n>(
-        mut self,
-        notes: impl IntoIterator<Item = (Kind, &'n str, Vec<Change>)>,
-    ) -> Self {
-        self.existing.extend(
-            notes
-                .into_iter()
-                .map(|(kind, title, changes)| Existing::new(kind, title, &changes)),
-        );
+    /// Add notes already on the board to the ones the model must not repeat,
+    /// and let it rewrite the editable ones in place (`replaces`).
+    pub fn with_notes<'n>(mut self, notes: impl IntoIterator<Item = BoardNote<'n>>) -> Self {
+        for note in notes {
+            if note.editable {
+                self.editable.insert(note.id);
+            }
+            let mut existing = Existing::new(note.kind, note.title, &note.changes);
+            existing.id = Some(note.id);
+            self.existing.push(existing);
+        }
         self
     }
 }
 
 impl AiClient {
-    /// This client with a chat turn's note cap. Shares the transport, and
-    /// starts from the prices already looked up.
+    /// This client with a chat turn's note cap. Shares the transport and the
+    /// model listing already looked up.
     fn for_chat(&self, max_suggestions: usize) -> AiClient {
         let settings = Settings {
             max_suggestions: self.settings.max_suggestions.min(max_suggestions),
             ..self.settings.clone()
         };
-        let prices = self.prices.try_lock().ok().and_then(|cached| *cached);
         AiClient {
             settings,
             transport: self.transport.clone(),
             secret: self.secret.clone(),
             zdr: self.zdr,
             registry: self.registry.clone(),
-            prices: tokio::sync::Mutex::new(prices),
+            listing: self.listing.clone(),
         }
     }
 }
@@ -128,12 +138,13 @@ pub async fn answer(
     let chat = client.for_chat(input.subject.max_suggestions());
     let settings = &chat.settings;
     let started = Instant::now();
+    let thinking = chat.thinks().await;
     // Sizes and counts only: never the messages themselves.
     tracing::info!(
         event = "review_chat.model_started",
         run_id = input.context.run_id,
         model = %settings.model,
-        thinking = settings.thinking,
+        thinking,
         max_turns = settings.max_turns,
         max_suggestions = settings.max_suggestions,
         max_previews = settings.max_previews,
@@ -169,8 +180,11 @@ fn plan_instructions(max_suggestions: usize) -> String {
          exactly the change asked for; when the request is ambiguous, ask rather than \
          guess. Describe consequences, not what the user should do: offer options and \
          what each does to the plan, and leave the choice to them. Do not recommend \
-         specific securities or funds. Do not resubmit a note already on the review. \
-         Finish by saying whether you added a note and what it would change, or why not."
+         specific securities or funds. Do not resubmit a note already on the review: to \
+         change one (a different figure, option or wording), submit the whole revised \
+         note with replaces set to its #id, which rewrites it in place; only open notes \
+         with nothing applied can be rewritten. Finish by saying whether you added or \
+         changed a note and what it would change, or why not."
     )
 }
 
@@ -181,10 +195,14 @@ fn note_instructions(max_suggestions: usize) -> String {
          the run's own figures. Plain text only: no markdown headings, at most about \
          1,200 characters. If a concrete change to the plan would address it, preview \
          it with preview_changes, then submit it with submit_suggestion as a new note \
-         (at most {max_suggestions} this turn); it is shown linked to this note. Do not \
-         resubmit this note or any other already on the board. When the note flags a \
-         problem without a change, prefer proposing one over only explaining it. Finish \
-         your answer by saying whether you added a suggestion and what it does, or why not."
+         (at most {max_suggestions} this turn); it is shown linked to this note. When \
+         the user asks to change this note itself (a different figure, option or \
+         wording), submit the whole revised note with replaces set to this note's #id \
+         instead, which rewrites it in place; only an open note with nothing applied can \
+         be rewritten. Do not otherwise resubmit this note or any other already on the \
+         board. When the note flags a problem without a change, prefer proposing one \
+         over only explaining it. Finish your answer by saying whether you added or \
+         changed a suggestion and what it does, or why not."
     )
 }
 
@@ -343,6 +361,7 @@ mod tests {
             documents: Default::default(),
             answers: Default::default(),
             description: None,
+            editable: Default::default(),
         };
         let history = vec![
             (ChatRole::User, "first".to_owned()),
