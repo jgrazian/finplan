@@ -1,14 +1,20 @@
-import type { Accent, ThemeMode } from "@/lib/api/types";
-
 /**
  * The palette, as the app talks about it.
  *
  * The colours themselves live in `app/design-system.css` — this module only
  * names the choices and says which attribute carries them, so there is one
  * place that knows the stylesheet's contract and no component has to.
+ *
+ * Both choices are the device's, not the account's: they are about the screen
+ * in front of you, so they live in local storage and apply the moment they
+ * are picked. There is one accent, the Ledger blue; nothing chooses it.
  */
 
-/** What the account can choose, in the order the controls offer it. */
+// ── Mode (this device) ───────────────────────────────────────────────────
+
+export type ThemeMode = "light" | "dark" | "system";
+
+/** What the controls offer, in order. */
 export const THEME_MODES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
@@ -16,42 +22,33 @@ export const THEME_MODES: ReadonlyArray<{ value: ThemeMode; label: string }> = [
 ];
 
 /**
- * The accent hues, with the swatch each one shows in the picker.
+ * Read by the pre-paint script in `app/layout.tsx` too. Keep them in step.
  *
- * Two swatches per hue because the base accent differs by ground: on dark it
- * is the light ramp's `-400` step, which is what lifts it clear of the page.
- * A picker that showed only the light base would be describing a palette the
- * viewer is not currently looking at.
+ * Holds `{ "mode": … }` — the same key and shape the account's appearance was
+ * cached under before it moved here, so a device keeps the mode it last had.
  */
-export const ACCENTS: ReadonlyArray<{
-  value: Accent;
-  label: string;
-  light: string;
-  dark: string;
-}> = [
-  { value: "blue", label: "Blue", light: "#2f5f9e", dark: "#93b7e7" },
-  { value: "green", label: "Green", light: "#028653", dark: "#7bc89c" },
-  { value: "purple", label: "Purple", light: "#8359ae", dark: "#c3a4e8" },
-];
+export const APPEARANCE_KEY = "finplan.appearance";
 
-/** What the appearance controls hold, and what gets stamped on `<html>`. */
-export interface Appearance {
-  mode: ThemeMode;
-  accent: Accent;
+/** Narrow whatever came back from storage; anything else is `system`. */
+export function parseThemeMode(raw: string | null): ThemeMode {
+  try {
+    const held = JSON.parse(raw ?? "{}") as { mode?: unknown };
+    return THEME_MODES.find((m) => m.value === held?.mode)?.value ?? "system";
+  } catch {
+    return "system";
+  }
 }
 
-export const DEFAULT_APPEARANCE: Appearance = { mode: "system", accent: "blue" };
-
-/** The key the pre-paint script in `app/layout.tsx` reads. Keep them in step. */
-export const APPEARANCE_KEY = "finplan.appearance";
+export function serializeThemeMode(mode: ThemeMode): string {
+  return JSON.stringify({ mode });
+}
 
 /**
  * Resolve `system` against the machine.
  *
  * The stylesheet has no `prefers-color-scheme` branch by design: resolving
  * here means the dark mapping is written once rather than duplicated for the
- * media query, and it is the only way the preview below a "System" control can
- * show what the viewer will actually get.
+ * media query.
  */
 export function resolveMode(mode: ThemeMode): "light" | "dark" {
   if (mode !== "system") return mode;
@@ -59,26 +56,9 @@ export function resolveMode(mode: ThemeMode): "light" | "dark" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-/**
- * Stamp a palette onto an element — `<html>` for the app, a preview box for
- * the picker. Both read the same tokens, so the preview cannot drift from the
- * thing it previews.
- */
-export function applyAppearance(el: HTMLElement, appearance: Appearance): void {
-  el.dataset.theme = resolveMode(appearance.mode);
-  el.dataset.accent = appearance.accent;
-}
-
-/** Narrow whatever came back from storage; anything else is the default. */
-export function parseAppearance(raw: unknown): Appearance {
-  if (typeof raw !== "object" || raw === null) return DEFAULT_APPEARANCE;
-  const held = raw as Record<string, unknown>;
-  const mode = THEME_MODES.find((m) => m.value === held.mode)?.value;
-  const accent = ACCENTS.find((a) => a.value === held.accent)?.value;
-  return {
-    mode: mode ?? DEFAULT_APPEARANCE.mode,
-    accent: accent ?? DEFAULT_APPEARANCE.accent,
-  };
+/** Stamp the resolved ground as `data-theme`, all the stylesheet reads. */
+export function applyThemeMode(el: HTMLElement, mode: ThemeMode): void {
+  el.dataset.theme = resolveMode(mode);
 }
 
 // ── Dark style (this device) ─────────────────────────────────────────────

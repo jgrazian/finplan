@@ -1442,30 +1442,25 @@ async fn preferences_are_bounded_by_the_servers_own_limits() {
     let (_, me) = app.get("/api/auth/me").await;
     assert_eq!(me["default_iterations"], 2000, "seeded default");
     assert_eq!(me["auto_run"], false);
-    assert_eq!(
-        me["theme_mode"], "system",
-        "a new account follows the machine"
+    assert!(
+        me.get("theme_mode").is_none() && me.get("accent").is_none(),
+        "appearance is kept on the device, not the account"
     );
-    assert_eq!(me["accent"], "blue");
 
     let (status, user) = app
         .put(
             "/api/auth/preferences",
-            json!({"default_iterations": 5000, "default_duration_years": 45, "auto_run": true,
-                   "theme_mode": "dark", "accent": "green"}),
+            json!({"default_iterations": 5000, "default_duration_years": 45, "auto_run": true}),
         )
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(user["default_iterations"], 5000);
     assert_eq!(user["auto_run"], true);
-    assert_eq!(user["theme_mode"], "dark");
-    assert_eq!(user["accent"], "green");
 
     let (status, _) = app
         .put(
             "/api/auth/preferences",
-            json!({"default_iterations": 999_999, "default_duration_years": 45, "auto_run": true,
-                   "theme_mode": "dark", "accent": "green"}),
+            json!({"default_iterations": 999_999, "default_duration_years": 45, "auto_run": true}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "over --max-iterations");
@@ -1473,31 +1468,16 @@ async fn preferences_are_bounded_by_the_servers_own_limits() {
     let (status, _) = app
         .put(
             "/api/auth/preferences",
-            json!({"default_iterations": 5000, "default_duration_years": 0, "auto_run": false,
-                   "theme_mode": "light", "accent": "blue"}),
+            json!({"default_iterations": 5000, "default_duration_years": 0, "auto_run": false}),
         )
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "a zero-year horizon");
 
-    // The palette is a closed set, so a hue the stylesheet has no ramp for is
-    // refused at the edge rather than stored and rendered as nothing.
-    let (status, _) = app
-        .put(
-            "/api/auth/preferences",
-            json!({"default_iterations": 5000, "default_duration_years": 45, "auto_run": false,
-                   "theme_mode": "light", "accent": "chartreuse"}),
-        )
-        .await;
-    assert_eq!(
-        status,
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "an unknown accent"
-    );
-
-    // …and the refusal did not half-write the rest of the row.
+    // …and neither refusal half-wrote the row.
     let (_, me) = app.get("/api/auth/me").await;
-    assert_eq!(me["theme_mode"], "dark");
-    assert_eq!(me["accent"], "green");
+    assert_eq!(me["default_iterations"], 5000);
+    assert_eq!(me["default_duration_years"], 45);
+    assert_eq!(me["auto_run"], true);
 }
 
 #[tokio::test]

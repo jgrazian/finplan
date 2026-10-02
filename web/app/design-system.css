@@ -18,23 +18,19 @@
    below. */
 
 /* ── Palettes ──────────────────────────────────────────────────────────────
-   Six token sets: a light or dark ground × a blue, green or purple accent.
-   `data-theme` and `data-accent` carry the choice, and they travel as a pair —
-   an accent alone would name a ramp without saying which ground it is for.
+   Two token sets: a light ground and a dark one, carried by `data-theme`.
+   There is one accent, the Ledger statement blue; the mode and the dark
+   style (below) are chosen per device, in lib/theme.
 
-   They are matched on any element, not just `:root`, so a preview can hold a
-   palette the page is not wearing. That is also why the ramps are written out
-   rather than pointed at through a shared `--accent-*` indirection: `var()` is
-   substituted at computed-value time, so a descendant inherits the resolved
-   colour and re-pointing the source below the root would change nothing.
+   They are matched on any element, not just `:root`, so a fragment can hold a
+   palette the page is not wearing.
 
    Ramps are generated in OKLCH on one shared lightness scale (0.97 → 0.26)
-   with a chroma arc that peaks at the base step. The Ledger blue is a deeper,
-   quieter statement blue (base L 0.48, C 0.11 at 256°); green sits at 158°,
-   purple at 305°, and the supporting brass at 70°.
+   with a chroma arc that peaks at the base step: the blue's base is L 0.48,
+   C 0.11 at 256°, the supporting brass sits at 70°.
 
-   Light grounds take step 600 as the base accent. Dark ramps are the light
-   ramp reversed and re-spaced: `-100` becomes the darkest tint, the light
+   Light grounds take step 600 as the base accent. The dark ramp is the light
+   one reversed and re-spaced: `-100` becomes the darkest tint, the light
    `-400` step becomes the base accent — which is what lifts it clear of the
    dark ground — and a new lightest tint enters at 900.
 
@@ -75,8 +71,20 @@
   --color-neutral-800: #3d434a;
   --color-neutral-900: #272b30;
 
-  /* The secondary accent does not follow `data-accent`: it is the system's
-     own supporting brass, and stays put while the primary hue turns. */
+  /* The statement blue: actions and the current place, never a chart. */
+  --color-accent: #2f5f9e;
+  --color-accent-100: #eff6ff;
+  --color-accent-200: #dbe9fc;
+  --color-accent-300: #bad3f5;
+  --color-accent-400: #93b7e7;
+  --color-accent-500: #5b88c5;
+  --color-accent-600: #2f5f9e;
+  --color-accent-700: #244a7c;
+  --color-accent-800: #19365b;
+  --color-accent-900: #11243e;
+
+  /* The secondary accent: the system's own supporting brass, for event
+     markers and the fragile band. */
   --color-accent-2: #b77a24;
   --color-accent-2-100: #fdf3e8;
   --color-accent-2-200: #f3dfc4;
@@ -146,6 +154,17 @@
   --color-neutral-800: #e4e7eb;
   --color-neutral-900: #f1f3f5;
 
+  --color-accent: #93b7e7;
+  --color-accent-100: #11243e;
+  --color-accent-200: #19365b;
+  --color-accent-300: #244a7c;
+  --color-accent-400: #2f5f9e;
+  --color-accent-500: #5b88c5;
+  --color-accent-600: #bad3f5;
+  --color-accent-700: #dbe9fc;
+  --color-accent-800: #eff6ff;
+  --color-accent-900: #f7faff;
+
   --color-accent-2: #dda96b;
   --color-accent-2-100: #392000;
   --color-accent-2-200: #553300;
@@ -189,87 +208,6 @@
   --color-surface: #17191c;
   --color-raised: #1d1f22;
   --shadow-lg: 0 4px 12px rgb(0 0 0 / 0.35), 0 28px 70px rgb(0 0 0 / 0.5);
-}
-
-/* ── Accent ramps, one per ground × hue ── */
-
-:root,
-[data-theme="light"][data-accent="blue"] {
-  --color-accent: #2f5f9e;
-  --color-accent-100: #eff6ff;
-  --color-accent-200: #dbe9fc;
-  --color-accent-300: #bad3f5;
-  --color-accent-400: #93b7e7;
-  --color-accent-500: #5b88c5;
-  --color-accent-600: #2f5f9e;
-  --color-accent-700: #244a7c;
-  --color-accent-800: #19365b;
-  --color-accent-900: #11243e;
-}
-
-[data-theme="light"][data-accent="green"] {
-  --color-accent: #028653;
-  --color-accent-100: #ecf9f1;
-  --color-accent-200: #d1efdc;
-  --color-accent-300: #abe0c0;
-  --color-accent-400: #7bc89c;
-  --color-accent-500: #42ab76;
-  --color-accent-600: #028653;
-  --color-accent-700: #00653d;
-  --color-accent-800: #00482a;
-  --color-accent-900: #002f1a;
-}
-
-[data-theme="light"][data-accent="purple"] {
-  --color-accent: #8359ae;
-  --color-accent-100: #f7f3fe;
-  --color-accent-200: #ece0fc;
-  --color-accent-300: #dbc6f7;
-  --color-accent-400: #c3a4e8;
-  --color-accent-500: #a67fd1;
-  --color-accent-600: #8359ae;
-  --color-accent-700: #643f88;
-  --color-accent-800: #482c63;
-  --color-accent-900: #2e1c41;
-}
-
-[data-theme="dark"][data-accent="blue"] {
-  --color-accent: #93b7e7;
-  --color-accent-100: #11243e;
-  --color-accent-200: #19365b;
-  --color-accent-300: #244a7c;
-  --color-accent-400: #2f5f9e;
-  --color-accent-500: #5b88c5;
-  --color-accent-600: #bad3f5;
-  --color-accent-700: #dbe9fc;
-  --color-accent-800: #eff6ff;
-  --color-accent-900: #f7faff;
-}
-
-[data-theme="dark"][data-accent="green"] {
-  --color-accent: #7bc89c;
-  --color-accent-100: #002f1a;
-  --color-accent-200: #00482a;
-  --color-accent-300: #00653d;
-  --color-accent-400: #028653;
-  --color-accent-500: #42ab76;
-  --color-accent-600: #abe0c0;
-  --color-accent-700: #d1efdc;
-  --color-accent-800: #ecf9f1;
-  --color-accent-900: #f5fcf7;
-}
-
-[data-theme="dark"][data-accent="purple"] {
-  --color-accent: #c3a4e8;
-  --color-accent-100: #2e1c41;
-  --color-accent-200: #482c63;
-  --color-accent-300: #643f88;
-  --color-accent-400: #8359ae;
-  --color-accent-500: #a67fd1;
-  --color-accent-600: #dbc6f7;
-  --color-accent-700: #ece0fc;
-  --color-accent-800: #f7f3fe;
-  --color-accent-900: #fbf9ff;
 }
 
 /* ── Type, measure and shape — unchanged by the palette ── */

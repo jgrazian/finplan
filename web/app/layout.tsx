@@ -32,9 +32,9 @@ export const metadata: Metadata = {
 /**
  * Stamp the palette before the first paint.
  *
- * The account's real choice arrives with the session, a fetch later; without
- * this the page would paint light-blue and then swap under the reader. So the
- * last applied palette is cached locally and replayed here, inline and
+ * Mode and dark style are kept in local storage (lib/theme), and React only
+ * reads them after hydration; without this a dark device would paint light
+ * and then swap under the reader. So they are replayed here, inline and
  * blocking, which is the one place code can run before anything is drawn.
  *
  * Everything it touches is optional — no storage, bad JSON, an old shape — and
@@ -46,7 +46,6 @@ const PRE_PAINT = `try{
     :matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";
   var r=document.documentElement;
   r.dataset.theme=m;
-  r.dataset.accent=a.accent==="green"||a.accent==="purple"?a.accent:"blue";
   if(localStorage.getItem(${JSON.stringify(DARK_STYLE_KEY)})==="midnight")r.dataset.ground="midnight";
 }catch(e){}`;
 
