@@ -444,6 +444,8 @@ pub fn compile(graph: &ScenarioGraph) -> ApiResult<CompiledScenario> {
                 state_rate: cfg.state_rate,
                 capital_gains_rate: cfg.capital_gains_rate,
                 early_withdrawal_penalty_rate: cfg.early_withdrawal_penalty_rate,
+                standard_deduction: cfg.standard_deduction,
+                age_65_extra_deduction: cfg.age_65_extra_deduction,
             }
         }
         None => TaxConfig::default(),

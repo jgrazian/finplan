@@ -259,17 +259,27 @@ pub struct MonteCarloStats {
 
 ```rust
 pub struct TaxConfig {
-    pub federal_brackets: Vec<TaxBracket>,
-    pub long_term_capital_gains_brackets: Vec<TaxBracket>,
-    pub short_term_capital_gains_rate: f64,  // Usually same as income
+    pub federal_brackets: Vec<TaxBracket>,   // ascending, first at 0
+    pub state_rate: f64,                     // flat, on all taxed income
+    pub capital_gains_rate: f64,             // flat, long-term gains
+    pub early_withdrawal_penalty_rate: f64,  // TaxDeferred before 59.5
+    pub standard_deduction: f64,             // in the brackets' dollars
+    pub age_65_extra_deduction: f64,         // from the year the person turns 65
 }
 
 pub struct TaxBracket {
-    pub min_income: f64,
-    pub max_income: Option<f64>,
+    pub threshold: f64,  // income where this bracket begins
     pub rate: f64,
 }
 ```
+
+Each tax year the simulation rebuilds the brackets it charges with
+(`SimulationState::index_federal_brackets`): the year's deduction (plus the
+65+ extra once the person counts as 65, which needs a birth date) becomes a 0%
+band and lifts every threshold by the same amount, then every threshold is
+scaled by the path's cumulative inflation through the prior year. Tax on
+`income` is then tax on `income - deduction` under the configured brackets,
+and both hold steady in real terms.
 
 ## Ledger Entries (`model/state_event.rs`)
 

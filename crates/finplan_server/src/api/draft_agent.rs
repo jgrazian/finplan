@@ -912,11 +912,14 @@ impl DraftTools {
             state_rate: f64,
             capital_gains_rate: f64,
             early_withdrawal_penalty_rate: f64,
+            standard_deduction: f64,
+            age_65_extra_deduction: f64,
             brackets: i64,
         }
         let taxes: Vec<TaxRow> = sqlx::query_as(
             "SELECT t.id, t.name, t.description, t.state_rate, t.capital_gains_rate,
-                    t.early_withdrawal_penalty_rate,
+                    t.early_withdrawal_penalty_rate, t.standard_deduction,
+                    t.age_65_extra_deduction,
                     (SELECT count(*) FROM tax_brackets b WHERE b.tax_config_id = t.id) AS brackets
                FROM tax_configs t WHERE t.user_id = ?1 ORDER BY t.id",
         )
@@ -941,6 +944,8 @@ impl DraftTools {
                     state_rate: t.state_rate,
                     capital_gains_rate: t.capital_gains_rate,
                     early_withdrawal_penalty_rate: t.early_withdrawal_penalty_rate,
+                    standard_deduction: t.standard_deduction,
+                    age_65_extra_deduction: t.age_65_extra_deduction,
                     brackets: t.brackets as usize,
                 })
                 .collect(),
@@ -1093,6 +1098,8 @@ impl ToolHost for DraftTools {
             state_rate: config.state_rate,
             capital_gains_rate: config.capital_gains_rate,
             early_withdrawal_penalty_rate: config.early_withdrawal_penalty_rate,
+            standard_deduction: config.standard_deduction,
+            age_65_extra_deduction: config.age_65_extra_deduction,
         })
     }
 

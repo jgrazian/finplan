@@ -7,5 +7,15 @@ export type CreateTaxConfig = {
   state_rate: number;
   capital_gains_rate: number;
   early_withdrawal_penalty_rate: number;
+  /**
+   * Federal standard deduction for the brackets' year and filing status,
+   * in dollars (default 0). Indexed to inflation with the brackets.
+   */
+  standard_deduction: number;
+  /**
+   * Extra standard deduction from the tax year the person turns 65, in
+   * dollars (default 0); for a married couple, both spouses' together.
+   */
+  age_65_extra_deduction: number;
   federal_brackets: Array<Bracket>;
 };

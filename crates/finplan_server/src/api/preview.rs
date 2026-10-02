@@ -622,7 +622,8 @@ pub(crate) async fn load_assumptions(
             continue;
         }
         let config: Option<TaxConfigRow> = sqlx::query_as(
-            "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate
+            "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate,
+                   standard_deduction, age_65_extra_deduction
                FROM tax_configs WHERE id = ?1 AND user_id = ?2",
         )
         .bind(id)

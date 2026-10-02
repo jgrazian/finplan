@@ -840,6 +840,8 @@ impl ToolHost for Tools<'_> {
             state_rate: config.state_rate,
             capital_gains_rate: config.capital_gains_rate,
             early_withdrawal_penalty_rate: config.early_withdrawal_penalty_rate,
+            standard_deduction: config.standard_deduction,
+            age_65_extra_deduction: config.age_65_extra_deduction,
         })
     }
 

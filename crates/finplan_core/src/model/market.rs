@@ -495,6 +495,24 @@ impl Market {
         Ok(self.profile_daily[idx].powi(days as i32))
     }
 
+    /// Cumulative inflation from the simulation start to the start of
+    /// simulation year `year_index`: 1.0 for year 0, then the product of
+    /// `1 + rate` over the years before it. Past the sampled horizon the
+    /// factor holds at its final value.
+    #[must_use]
+    pub fn inflation_factor_at_year(&self, year_index: usize) -> f64 {
+        match self.inflation_cumulative.get(year_index) {
+            Some(&factor) => factor,
+            None => match (
+                self.inflation_cumulative.last(),
+                self.inflation_rates.last(),
+            ) {
+                (Some(&cum), Some(&rate)) => cum * (1.0 + compoundable(rate)),
+                _ => 1.0,
+            },
+        }
+    }
+
     /// Get cumulative inflation factors for each year of the simulation.
     ///
     /// Returns a vector where index i represents the cumulative inflation from

@@ -597,8 +597,8 @@ pub(crate) async fn restore_graph(
         None
     };
     graph.scenario.tax_config_id = if let Some(tax) = &graph.tax_config {
-        let id:i64 = sqlx::query_scalar("INSERT INTO tax_configs(user_id,name,state_rate,capital_gains_rate,early_withdrawal_penalty_rate) VALUES(?,?,?,?,?) RETURNING id")
-            .bind(user).bind(format!("{} [{suffix}]",tax.name)).bind(tax.state_rate).bind(tax.capital_gains_rate).bind(tax.early_withdrawal_penalty_rate).fetch_one(&mut **tx).await?;
+        let id:i64 = sqlx::query_scalar("INSERT INTO tax_configs(user_id,name,state_rate,capital_gains_rate,early_withdrawal_penalty_rate,standard_deduction,age_65_extra_deduction) VALUES(?,?,?,?,?,?,?) RETURNING id")
+            .bind(user).bind(format!("{} [{suffix}]",tax.name)).bind(tax.state_rate).bind(tax.capital_gains_rate).bind(tax.early_withdrawal_penalty_rate).bind(tax.standard_deduction).bind(tax.age_65_extra_deduction).fetch_one(&mut **tx).await?;
         for bracket in &graph.tax_brackets {
             sqlx::query("INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(?,?,?)")
                 .bind(id)

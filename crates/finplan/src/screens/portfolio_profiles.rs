@@ -406,9 +406,17 @@ impl PortfolioProfilesScreen {
         let selected_idx = state.portfolio_profiles_state.selected_config_index;
 
         let tax_config = &state.data().parameters.tax_config;
+        let (deduction, _) = tax_config.federal_brackets.deductions();
         let federal_desc = match &tax_config.federal_brackets {
-            FederalBracketsPreset::Single2024 => "2024 Single".to_string(),
-            FederalBracketsPreset::MarriedJoint2024 => "2024 Married Joint".to_string(),
+            FederalBracketsPreset::Single2024 => {
+                format!("2024 Single, {} deduction", format_currency(deduction))
+            }
+            FederalBracketsPreset::MarriedJoint2024 => {
+                format!(
+                    "2024 Married Joint, {} deduction",
+                    format_currency(deduction)
+                )
+            }
             FederalBracketsPreset::Custom { brackets } => {
                 if brackets.is_empty() {
                     "Custom (empty)".to_string()

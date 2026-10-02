@@ -661,8 +661,6 @@ fn consolidate_lots(state: &mut SimulationState, cutoff_year: i16) {
 }
 
 fn advance_time(state: &mut SimulationState) {
-    state.maybe_rollover_year();
-
     let previous = state.timeline.current_date;
     let next_checkpoint = find_next_checkpoint(state);
     let days_passed = crate::date_math::fast_days_between(previous, next_checkpoint);
@@ -681,6 +679,10 @@ fn advance_time(state: &mut SimulationState) {
     // whose events trigger off balances or net worth the year's snapshot landed
     // on a different date in every iteration.
     state.timeline.current_date = next_checkpoint;
+
+    // Open the new tax year before the checkpoint's events run, so their
+    // income is taxed in, and summarized under, the year it happens in.
+    state.maybe_rollover_year();
 
     // Capture year-end balances for RMD calculations (December 31)
     let dec_31 = jiff::civil::date(previous.year(), 12, 31);

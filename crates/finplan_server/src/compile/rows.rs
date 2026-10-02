@@ -240,6 +240,11 @@ pub struct TaxConfigRow {
     pub state_rate: f64,
     pub capital_gains_rate: f64,
     pub early_withdrawal_penalty_rate: f64,
+    /// Absent from archives written before the column existed.
+    #[serde(default)]
+    pub standard_deduction: f64,
+    #[serde(default)]
+    pub age_65_extra_deduction: f64,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -451,7 +456,8 @@ impl ScenarioGraph {
         let (tax_config, tax_brackets) = match scenario.tax_config_id {
             Some(id) => {
                 let cfg: Option<TaxConfigRow> = sqlx::query_as(
-                    "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate
+                    "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate,
+                   standard_deduction, age_65_extra_deduction
                        FROM tax_configs WHERE id = ?1 AND user_id = ?2",
                 )
                 .bind(id)
@@ -474,7 +480,8 @@ impl ScenarioGraph {
 
         let mut tax_configs = HashMap::new();
         let config_rows: Vec<TaxConfigRow> = sqlx::query_as(
-            "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate
+            "SELECT id, name, state_rate, capital_gains_rate, early_withdrawal_penalty_rate,
+                   standard_deduction, age_65_extra_deduction
                FROM tax_configs WHERE user_id = ?1",
         )
         .bind(user_id)

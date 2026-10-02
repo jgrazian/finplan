@@ -27,6 +27,14 @@ pub struct TaxConfig {
     /// Applies to withdrawals from `TaxDeferred` accounts before age 59.5
     #[serde(default = "default_early_withdrawal_penalty_rate")]
     pub early_withdrawal_penalty_rate: f64,
+    /// Federal standard deduction, in the same dollars as the brackets. Each
+    /// year's first dollars of ordinary income up to it are untaxed.
+    #[serde(default)]
+    pub standard_deduction: f64,
+    /// Additional standard deduction from the tax year the filer turns 65.
+    /// Needs a birth date; for a couple, enter the total for both spouses.
+    #[serde(default)]
+    pub age_65_extra_deduction: f64,
 }
 
 fn default_early_withdrawal_penalty_rate() -> f64 {
@@ -70,7 +78,30 @@ impl Default for TaxConfig {
             state_rate: 0.05,
             capital_gains_rate: 0.15,
             early_withdrawal_penalty_rate: 0.10,
+            standard_deduction: 0.0,
+            age_65_extra_deduction: 0.0,
         }
+    }
+}
+
+impl TaxConfig {
+    /// The federal brackets over gross ordinary income: `deduction` becomes a
+    /// 0% band at the bottom and every threshold moves up by it, which taxes
+    /// income exactly as the brackets would tax `income - deduction`.
+    #[must_use]
+    pub fn brackets_with_deduction(brackets: &[TaxBracket], deduction: f64) -> Vec<TaxBracket> {
+        if deduction <= 0.0 {
+            return brackets.to_vec();
+        }
+        std::iter::once(TaxBracket {
+            threshold: 0.0,
+            rate: 0.0,
+        })
+        .chain(brackets.iter().map(|b| TaxBracket {
+            threshold: b.threshold + deduction,
+            rate: b.rate,
+        }))
+        .collect()
     }
 }
 

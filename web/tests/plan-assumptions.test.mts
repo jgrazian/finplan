@@ -25,6 +25,8 @@ function config(over: Partial<TaxConfig>): TaxConfig {
     state_rate: 0.05,
     capital_gains_rate: 0.15,
     early_withdrawal_penalty_rate: 0.1,
+    standard_deduction: 0,
+    age_65_extra_deduction: 0,
     federal_brackets: [
       { threshold: 0, rate: 0.1 },
       { threshold: 100_000, rate: 0.32 },
@@ -62,6 +64,11 @@ test("a tax choice reports the top bracket, not the first or the last listed", (
     ],
   });
   assert.equal(toTaxChoices([unordered])[0].detail, "top 37% · state 5%");
+});
+
+test("a tax configuration's detail names its standard deduction", () => {
+  const [seeded] = toTaxChoices([config({ standard_deduction: 14_600 })]);
+  assert.equal(seeded.detail, "top 37% · state 5% · $14.6k deduction");
 });
 
 test("a tax configuration with no description says what it charges instead", () => {

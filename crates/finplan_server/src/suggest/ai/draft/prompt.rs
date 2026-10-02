@@ -320,6 +320,8 @@ pub struct LibraryTax {
     pub state_rate: f64,
     pub capital_gains_rate: f64,
     pub early_withdrawal_penalty_rate: f64,
+    pub standard_deduction: f64,
+    pub age_65_extra_deduction: f64,
     pub brackets: usize,
 }
 
@@ -464,10 +466,12 @@ pub fn render_context(parts: &ContextParts<'_>) -> String {
     for t in parts.taxes {
         let _ = writeln!(
             out,
-            "- #{} {}: {} federal brackets, state {}, long-term capital gains {}, early-withdrawal penalty {}{}",
+            "- #{} {}: {} federal brackets, standard deduction {} (+{} from 65), state {}, long-term capital gains {}, early-withdrawal penalty {}{}",
             t.id,
             t.name,
             t.brackets,
+            money(t.standard_deduction),
+            money(t.age_65_extra_deduction),
             pct(t.state_rate),
             pct(t.capital_gains_rate),
             pct(t.early_withdrawal_penalty_rate),

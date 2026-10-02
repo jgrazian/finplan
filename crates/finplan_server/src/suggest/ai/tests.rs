@@ -1141,7 +1141,7 @@ fn the_static_prefix_is_stable_and_names_the_body_types() {
     assert_eq!(reference, prompt::reference());
     for needle in [
         "no correlation between profiles",
-        "not inflation-indexed",
+        "indexed each year to the path's simulated inflation",
         "type EventBody",
         "type EffectSpec",
         "type Change",

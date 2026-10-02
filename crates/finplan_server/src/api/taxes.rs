@@ -38,6 +38,10 @@ pub struct TaxConfig {
     pub state_rate: f64,
     pub capital_gains_rate: f64,
     pub early_withdrawal_penalty_rate: f64,
+    /// Federal standard deduction, in the brackets' dollars.
+    pub standard_deduction: f64,
+    /// Added to the deduction from the tax year the person turns 65.
+    pub age_65_extra_deduction: f64,
     pub federal_brackets: Vec<Bracket>,
 }
 
@@ -53,6 +57,14 @@ pub struct CreateTaxConfig {
     pub capital_gains_rate: f64,
     #[serde(default = "default_penalty")]
     pub early_withdrawal_penalty_rate: f64,
+    /// Federal standard deduction for the brackets' year and filing status,
+    /// in dollars (default 0). Indexed to inflation with the brackets.
+    #[serde(default)]
+    pub standard_deduction: f64,
+    /// Extra standard deduction from the tax year the person turns 65, in
+    /// dollars (default 0); for a married couple, both spouses' together.
+    #[serde(default)]
+    pub age_65_extra_deduction: f64,
     pub federal_brackets: Vec<Bracket>,
 }
 
@@ -77,6 +89,10 @@ pub struct UpdateTaxConfig {
     pub capital_gains_rate: Option<f64>,
     #[serde(default)]
     pub early_withdrawal_penalty_rate: Option<f64>,
+    #[serde(default)]
+    pub standard_deduction: Option<f64>,
+    #[serde(default)]
+    pub age_65_extra_deduction: Option<f64>,
     /// Replaces the whole bracket table when present.
     #[serde(default)]
     pub federal_brackets: Option<Vec<Bracket>>,
@@ -126,9 +142,10 @@ fn validate_brackets(brackets: &[Bracket]) -> ApiResult<Vec<Bracket>> {
 }
 
 async fn load(state: &AppState, id: i64, user_id: &str) -> ApiResult<TaxConfig> {
-    let row: Option<(i64, String, Option<String>, f64, f64, f64)> = sqlx::query_as(
+    #[allow(clippy::type_complexity)]
+    let row: Option<(i64, String, Option<String>, f64, f64, f64, f64, f64)> = sqlx::query_as(
         "SELECT id, name, description, state_rate, capital_gains_rate,
-                early_withdrawal_penalty_rate
+                early_withdrawal_penalty_rate, standard_deduction, age_65_extra_deduction
            FROM tax_configs WHERE id = ?1 AND user_id = ?2",
     )
     .bind(id)
@@ -136,8 +153,16 @@ async fn load(state: &AppState, id: i64, user_id: &str) -> ApiResult<TaxConfig> 
     .fetch_optional(&state.db)
     .await?;
 
-    let (id, name, description, state_rate, capital_gains_rate, early) =
-        row.ok_or(ApiError::NotFound("tax config"))?;
+    let (
+        id,
+        name,
+        description,
+        state_rate,
+        capital_gains_rate,
+        early,
+        standard_deduction,
+        age_65_extra_deduction,
+    ) = row.ok_or(ApiError::NotFound("tax config"))?;
 
     let brackets: Vec<(f64, f64)> = sqlx::query_as(
         "SELECT threshold, rate FROM tax_brackets WHERE tax_config_id = ?1 ORDER BY threshold",
@@ -153,6 +178,8 @@ async fn load(state: &AppState, id: i64, user_id: &str) -> ApiResult<TaxConfig> 
         state_rate,
         capital_gains_rate,
         early_withdrawal_penalty_rate: early,
+        standard_deduction,
+        age_65_extra_deduction,
         federal_brackets: brackets
             .into_iter()
             .map(|(threshold, rate)| Bracket { threshold, rate })
@@ -217,8 +244,8 @@ pub(crate) async fn create_in(
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO tax_configs
             (user_id, name, description, state_rate, capital_gains_rate,
-             early_withdrawal_penalty_rate)
-         VALUES (?1,?2,?3,?4,?5,?6) RETURNING id",
+             early_withdrawal_penalty_rate, standard_deduction, age_65_extra_deduction)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8) RETURNING id",
     )
     .bind(user_id)
     .bind(body.name.trim())
@@ -226,6 +253,8 @@ pub(crate) async fn create_in(
     .bind(body.state_rate)
     .bind(body.capital_gains_rate)
     .bind(body.early_withdrawal_penalty_rate)
+    .bind(body.standard_deduction)
+    .bind(body.age_65_extra_deduction)
     .fetch_one(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?;
@@ -241,9 +270,28 @@ pub(crate) async fn create_in(
     Ok(id)
 }
 
-/// What creating `body` would refuse: rates outside 0..1 (the table's CHECKs)
-/// and a bad bracket table. Returns the brackets, sorted.
+/// Deductions are dollar amounts: finite and not negative (the table's CHECKs).
+fn validate_deductions(deductions: [(&str, Option<f64>); 2]) -> ApiResult<()> {
+    for (name, amount) in deductions {
+        if let Some(amount) = amount
+            && !(amount.is_finite() && amount >= 0.0)
+        {
+            return Err(ApiError::bad_request(format!(
+                "{name} is a dollar amount of 0 or more"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// What creating `body` would refuse: rates outside 0..1 and deductions below
+/// zero (the table's CHECKs), and a bad bracket table. Returns the brackets,
+/// sorted.
 pub(crate) fn checked(body: &CreateTaxConfig) -> ApiResult<Vec<Bracket>> {
+    validate_deductions([
+        ("standard_deduction", Some(body.standard_deduction)),
+        ("age_65_extra_deduction", Some(body.age_65_extra_deduction)),
+    ])?;
     for (name, rate) in [
         ("state_rate", body.state_rate),
         ("capital_gains_rate", body.capital_gains_rate),
@@ -269,6 +317,10 @@ async fn update(
 ) -> ApiResult<Json<TaxConfig>> {
     // Confirm ownership up front so a miss is a 404, not a silent no-op.
     load(&state, id, &user.id).await?;
+    validate_deductions([
+        ("standard_deduction", body.standard_deduction),
+        ("age_65_extra_deduction", body.age_65_extra_deduction),
+    ])?;
 
     let brackets = body
         .federal_brackets
@@ -285,6 +337,8 @@ async fn update(
             state_rate                    = COALESCE(?5, state_rate),
             capital_gains_rate            = COALESCE(?6, capital_gains_rate),
             early_withdrawal_penalty_rate = COALESCE(?7, early_withdrawal_penalty_rate),
+            standard_deduction            = COALESCE(?8, standard_deduction),
+            age_65_extra_deduction        = COALESCE(?9, age_65_extra_deduction),
             updated_at                    = datetime('now')
           WHERE id = ?1 AND user_id = ?2",
     )
@@ -295,6 +349,8 @@ async fn update(
     .bind(body.state_rate)
     .bind(body.capital_gains_rate)
     .bind(body.early_withdrawal_penalty_rate)
+    .bind(body.standard_deduction)
+    .bind(body.age_65_extra_deduction)
     .execute(&mut *tx)
     .await
     .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?
@@ -378,6 +434,8 @@ impl ActivityFields for CreateTaxConfig {
         "state_rate",
         "capital_gains_rate",
         "early_withdrawal_penalty_rate",
+        "standard_deduction",
+        "age_65_extra_deduction",
         "federal_brackets",
     ];
 }
@@ -389,6 +447,8 @@ impl ActivityFields for UpdateTaxConfig {
         "state_rate",
         "capital_gains_rate",
         "early_withdrawal_penalty_rate",
+        "standard_deduction",
+        "age_65_extra_deduction",
         "federal_brackets",
     ];
 }

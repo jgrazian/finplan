@@ -183,9 +183,10 @@ pub async fn seed_user_library(db: &Db, user_id: &str) -> ApiResult<()> {
     let tax_config_id: i64 = sqlx::query_scalar(
         "INSERT INTO tax_configs
             (user_id, name, description, state_rate, capital_gains_rate,
-             early_withdrawal_penalty_rate)
-         VALUES (?1, 'US Federal 2024 (single)', '2024 federal brackets, 5% state, 15% LTCG',
-                 0.05, 0.15, 0.10)
+             early_withdrawal_penalty_rate, standard_deduction, age_65_extra_deduction)
+         VALUES (?1, 'US Federal 2024 (single)',
+                 '2024 federal brackets and standard deduction, 5% state, 15% LTCG',
+                 0.05, 0.15, 0.10, 14600.0, 1950.0)
          RETURNING id",
     )
     .bind(user_id)

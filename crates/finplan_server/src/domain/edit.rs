@@ -997,6 +997,8 @@ pub(crate) fn create_tax_config(
                     state_rate: body.state_rate,
                     capital_gains_rate: body.capital_gains_rate,
                     early_withdrawal_penalty_rate: body.early_withdrawal_penalty_rate,
+                    standard_deduction: body.standard_deduction,
+                    age_65_extra_deduction: body.age_65_extra_deduction,
                 },
                 brackets: brackets
                     .iter()

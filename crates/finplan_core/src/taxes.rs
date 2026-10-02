@@ -233,7 +233,24 @@ mod tests {
             state_rate: 0.05,
             capital_gains_rate: 0.15,
             early_withdrawal_penalty_rate: 0.10,
+            ..TaxConfig::default()
         }
+    }
+
+    #[test]
+    fn test_deduction_is_a_zero_bracket() {
+        let config = test_tax_config();
+        let brackets = TaxConfig::brackets_with_deduction(&config.federal_brackets, 15_000.0);
+        // $50,000 gross is taxed like $35,000 under the plain brackets.
+        let with = calculate_federal_tax(50_000.0, &brackets);
+        let without = calculate_federal_tax(35_000.0, &config.federal_brackets);
+        assert!((with - without).abs() < 1e-9);
+        assert_eq!(calculate_federal_tax(15_000.0, &brackets), 0.0);
+        // A zero deduction leaves the brackets alone.
+        assert_eq!(
+            TaxConfig::brackets_with_deduction(&config.federal_brackets, 0.0).len(),
+            config.federal_brackets.len()
+        );
     }
 
     #[test]

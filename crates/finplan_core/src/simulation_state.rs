@@ -3,7 +3,7 @@ use crate::error::{LookupError, Result, SimulationError};
 use crate::model::{
     Account, AccountFlavor, AccountId, AssetCoord, AssetId, AssetInfo, Event, EventEffect, EventId,
     EventTrigger, LedgerEntry, Market, ParameterId, ParameterValue, ReturnProfileId, RmdTable,
-    SimulationWarning, StateEvent, TaxConfig, TaxSummary, WealthSnapshot,
+    SimulationWarning, StateEvent, TaxBracket, TaxConfig, TaxSummary, WealthSnapshot,
 };
 use rand::SeedableRng;
 use rustc_hash::FxHashMap;
@@ -290,8 +290,14 @@ pub struct SimTaxState {
     pub ytd_tax: TaxSummary,
     /// Yearly tax summaries
     pub yearly_taxes: Vec<TaxSummary>,
-    /// Tax configuration
+    /// Tax configuration for the current tax year. Its federal brackets are
+    /// rebuilt at every year rollover: the year's standard deduction folded in
+    /// as a 0% band, then every threshold indexed to inflation.
     pub config: TaxConfig,
+    /// The configured federal brackets, in simulation-start dollars
+    pub base_federal_brackets: Vec<TaxBracket>,
+    /// First tax year the filer counts as 65, if a birth date was given
+    pub age_65_tax_year: Option<i16>,
 }
 
 #[derive(Debug, Clone)]
@@ -492,7 +498,7 @@ impl SimulationState {
         // This ensures market sampling and effect randomness are independent
         let effect_rng = rand::rngs::SmallRng::seed_from_u64(seed.wrapping_add(0x005E_ED0F_F5E7));
 
-        Ok(Self {
+        let mut state = Self {
             timeline: SimTimeline {
                 current_date: start_date,
                 start_date,
@@ -529,6 +535,13 @@ impl SimulationState {
                 },
                 yearly_taxes: Vec::new(),
                 config: params.tax_config.clone(),
+                base_federal_brackets: params.tax_config.federal_brackets.clone(),
+                // The IRS counts you 65 the day before your 65th birthday, so a
+                // January 1st birthday reaches it in the prior tax year.
+                age_65_tax_year: params
+                    .birth_date
+                    .and_then(|birth| birth.yesterday().ok())
+                    .map(|day_before| day_before.year() + 65),
             },
             history: SimHistory { ledger: Vec::new() },
             pending_triggers: Vec::new(),
@@ -536,7 +549,10 @@ impl SimulationState {
             diagnostics: crate::model::PathDiagnostics::default(),
             rng: RefCell::new(effect_rng),
             collect_ledger: params.collect_ledger,
-        })
+        };
+        // The first tax year never rolls over, so build its brackets here.
+        state.index_federal_brackets(start_date.year());
+        Ok(state)
     }
 
     /// Calculate total net worth across all accounts
@@ -693,6 +709,34 @@ impl SimulationState {
         }
     }
 
+    /// Rebuild the federal brackets for `tax_year`: fold in that year's
+    /// standard deduction (plus the extra once the filer is 65), then scale
+    /// every threshold by this path's cumulative inflation, as the IRS indexes
+    /// both each year. The factor is the inflation through the end of the
+    /// prior year, so the first tax year keeps the configured amounts.
+    pub(crate) fn index_federal_brackets(&mut self, tax_year: i16) {
+        let years_elapsed = (tax_year - self.timeline.start_date.year()).max(0) as usize;
+        let factor = self
+            .portfolio
+            .market
+            .inflation_factor_at_year(years_elapsed);
+        let config = &mut self.taxes.config;
+        let mut deduction = config.standard_deduction;
+        if self
+            .taxes
+            .age_65_tax_year
+            .is_some_and(|year| tax_year >= year)
+        {
+            deduction += config.age_65_extra_deduction;
+        }
+        let mut brackets =
+            TaxConfig::brackets_with_deduction(&self.taxes.base_federal_brackets, deduction);
+        for bracket in &mut brackets {
+            bracket.threshold *= factor;
+        }
+        config.federal_brackets = brackets;
+    }
+
     /// Check if we've crossed into a new year and finalize previous year's taxes
     pub fn maybe_rollover_year(&mut self) {
         let current_year = self.timeline.current_date.year();
@@ -702,6 +746,7 @@ impl SimulationState {
                 year: current_year,
                 ..Default::default()
             };
+            self.index_federal_brackets(current_year);
 
             // Reset YTD flow accumulators (for flow limits)
             for (event_id, last_period) in &mut self.event_state.event_flow_last_period_key {

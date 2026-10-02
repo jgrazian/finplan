@@ -7,6 +7,8 @@ export type UpdateTaxConfig = {
   state_rate?: number | null;
   capital_gains_rate?: number | null;
   early_withdrawal_penalty_rate?: number | null;
+  standard_deduction?: number | null;
+  age_65_extra_deduction?: number | null;
   /**
    * Replaces the whole bracket table when present.
    */

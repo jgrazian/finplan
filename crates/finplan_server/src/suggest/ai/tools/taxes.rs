@@ -7,8 +7,8 @@
 //! a return computes it: the standard deduction, the year's brackets for the
 //! filing status, a state rate and payroll tax. The *plan model* is only given
 //! when the plan's own tax settings are supplied: what the engine charges on
-//! the same income, which applies its brackets to ordinary income with no
-//! standard deduction.
+//! the same income, through its brackets and its standard deduction (before
+//! any 65+ extra).
 
 use finplan_core::model::{TaxBracket, TaxConfig};
 use finplan_core::taxes::{
@@ -60,6 +60,8 @@ pub fn config_for(year: i32, status: FilingStatus, state_rate: f64) -> Option<Ta
         state_rate,
         capital_gains_rate: 0.15,
         early_withdrawal_penalty_rate: 0.10,
+        // `run` takes the deduction off the income itself.
+        ..TaxConfig::default()
     })
 }
 
@@ -179,13 +181,23 @@ pub fn run(input: &Value, plan: Option<&TaxConfig>) -> Result<Value, String> {
     });
     notes.push("Estimate only: no credits, itemized deductions, state deductions, local taxes or phase-outs. Payroll tax is the employee share.".into());
     if let Some(plan) = plan {
-        // What the engine would charge on the same ordinary income.
-        let charged = calculate_tax_deferred_withdrawal_tax(adjusted, plan, 0.0);
+        // What the engine would charge on the same ordinary income, with the
+        // deduction folded into its brackets as the simulation does.
+        let engine = TaxConfig {
+            federal_brackets: TaxConfig::brackets_with_deduction(
+                &plan.federal_brackets,
+                plan.standard_deduction,
+            ),
+            ..plan.clone()
+        };
+        let charged = calculate_tax_deferred_withdrawal_tax(adjusted, &engine, 0.0);
         out["plan_model"] = json!({
             "federal_tax": round2(charged.federal_tax),
             "state_tax": round2(charged.state_tax),
             "total_tax": round2(charged.total_tax),
-            "note": "What the plan's own tax settings charge on this income: the engine applies its brackets to ordinary income directly, with no standard deduction and no payroll tax, so it usually charges more federal tax than a return would.",
+            "standard_deduction": plan.standard_deduction,
+            "age_65_extra_deduction": plan.age_65_extra_deduction,
+            "note": "What the plan's own tax settings charge on this income in the plan's first year: its brackets after its standard deduction (before any 65+ extra), a flat state rate on the whole income, and no payroll tax or credits. Later years index the brackets and deduction to inflation.",
         });
     }
     out["notes"] = json!(notes);

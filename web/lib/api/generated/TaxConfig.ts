@@ -8,5 +8,13 @@ export type TaxConfig = {
   state_rate: number;
   capital_gains_rate: number;
   early_withdrawal_penalty_rate: number;
+  /**
+   * Federal standard deduction, in the brackets' dollars.
+   */
+  standard_deduction: number;
+  /**
+   * Added to the deduction from the tax year the person turns 65.
+   */
+  age_65_extra_deduction: number;
   federal_brackets: Array<Bracket>;
 };

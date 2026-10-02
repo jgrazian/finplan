@@ -37,11 +37,17 @@ export function toInflationChoices(profiles: InflationProfile[]): AssumptionChoi
   }));
 }
 
+/** `14600` → `$14.6k`, `29200` → `$29.2k`. */
+function thousands(value: number): string {
+  return `$${Number((value / 1000).toFixed(1))}k`;
+}
+
 /**
  * Tax configurations. The detail is the top federal bracket and the flat state
  * rate: the top bracket because it is what the plan's largest withdrawals are
  * charged at, the state rate because it is the figure that most often differs
- * between two otherwise identical configurations.
+ * between two otherwise identical configurations. A standard deduction joins
+ * them when there is one, since a config without one taxes every dollar.
  */
 export function toTaxChoices(configs: TaxConfig[]): AssumptionChoice[] {
   return configs.map((config) => {
@@ -49,7 +55,11 @@ export function toTaxChoices(configs: TaxConfig[]): AssumptionChoice[] {
     return {
       id: config.id,
       name: config.name,
-      detail: `top ${pct(top * 100)} · state ${pct(config.state_rate * 100)}`,
+      detail:
+        `top ${pct(top * 100)} · state ${pct(config.state_rate * 100)}` +
+        (config.standard_deduction > 0
+          ? ` · ${thousands(config.standard_deduction)} deduction`
+          : ""),
       note:
         config.description ??
         `${pct(config.capital_gains_rate * 100)} long-term gains, ${pct(

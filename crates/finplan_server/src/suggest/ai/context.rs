@@ -552,9 +552,11 @@ pub(super) fn render_plan(out: &mut String, graph: &ScenarioGraph) {
             .collect();
         let _ = writeln!(
             out,
-            "Taxes: {}. Federal brackets: {}. State {}. Long-term capital gains {}. Early-withdrawal penalty {}.",
+            "Taxes: {}. Federal brackets: {}. Standard deduction {} (+{} from the tax year the person turns 65). State {}. Long-term capital gains {}. Early-withdrawal penalty {}.",
             tax.name,
             brackets.join(", "),
+            money(tax.standard_deduction),
+            money(tax.age_65_extra_deduction),
             pct(tax.state_rate),
             pct(tax.capital_gains_rate),
             pct(tax.early_withdrawal_penalty_rate)

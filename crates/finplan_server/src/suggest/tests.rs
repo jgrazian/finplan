@@ -1041,6 +1041,8 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
                 state_rate: 0.0,
                 capital_gains_rate: 0.2,
                 early_withdrawal_penalty_rate: 0.1,
+                standard_deduction: 0.0,
+                age_65_extra_deduction: 0.0,
             },
             brackets: vec![crate::compile::rows::TaxBracketRow {
                 threshold: 0.0,

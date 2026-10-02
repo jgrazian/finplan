@@ -154,6 +154,19 @@ pub enum FederalBracketsPreset {
     Custom { brackets: Vec<TaxBracketData> },
 }
 
+impl FederalBracketsPreset {
+    /// The 2024 standard deduction and its 65+ extra that go with each
+    /// preset's brackets (the joint extra covers both spouses). Custom
+    /// brackets carry no deduction.
+    pub fn deductions(&self) -> (f64, f64) {
+        match self {
+            Self::Single2024 => (14_600.0, 1_950.0),
+            Self::MarriedJoint2024 => (29_200.0, 2.0 * 1_550.0),
+            Self::Custom { .. } => (0.0, 0.0),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaxBracketData {
     pub threshold: f64,
@@ -162,6 +175,7 @@ pub struct TaxBracketData {
 
 impl TaxConfigData {
     pub fn to_tax_config(&self) -> TaxConfig {
+        let (standard_deduction, age_65_extra_deduction) = self.federal_brackets.deductions();
         let federal_brackets = match &self.federal_brackets {
             FederalBracketsPreset::Single2024 => TaxConfig::default().federal_brackets,
             FederalBracketsPreset::MarriedJoint2024 => {
@@ -211,6 +225,8 @@ impl TaxConfigData {
             state_rate: self.state_rate,
             capital_gains_rate: self.capital_gains_rate,
             early_withdrawal_penalty_rate: 0.10,
+            standard_deduction,
+            age_65_extra_deduction,
         }
     }
 }

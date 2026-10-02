@@ -608,6 +608,9 @@ async fn registration_seeds_a_usable_library() {
     let brackets = taxes[0]["federal_brackets"].as_array().unwrap();
     assert_eq!(brackets.len(), 7);
     assert_eq!(brackets[0]["threshold"], 0.0);
+    // The 2024 single deduction goes with the 2024 single brackets.
+    assert_eq!(taxes[0]["standard_deduction"], 14_600.0);
+    assert_eq!(taxes[0]["age_65_extra_deduction"], 1_950.0);
 }
 
 #[tokio::test]
@@ -1162,6 +1165,49 @@ async fn the_same_seed_produces_the_same_answer() {
         means[0], means[1],
         "a fixed seed must give identical results across runs"
     );
+}
+
+#[tokio::test]
+async fn a_tax_configs_deductions_round_trip_and_reject_negatives() {
+    let mut app = TestApp::new().await;
+    app.login_as("deduction@example.com").await;
+    let brackets = json!([{"threshold": 0.0, "rate": 0.1}]);
+
+    // Left out, a config has no deduction: the engine taxes as before.
+    let (status, plain) = app
+        .post(
+            "/api/tax-configs",
+            json!({"name": "Plain", "federal_brackets": brackets}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(plain["standard_deduction"], 0.0);
+    assert_eq!(plain["age_65_extra_deduction"], 0.0);
+
+    let path = format!("/api/tax-configs/{}", plain["id"]);
+    let (status, updated) = app
+        .patch(
+            &path,
+            json!({"standard_deduction": 29_200.0, "age_65_extra_deduction": 3_100.0}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["standard_deduction"], 29_200.0);
+    assert_eq!(updated["age_65_extra_deduction"], 3_100.0);
+
+    // A patch that leaves them out keeps them.
+    let (_, renamed) = app.patch(&path, json!({"name": "Joint"})).await;
+    assert_eq!(renamed["standard_deduction"], 29_200.0);
+
+    let (status, _) = app.patch(&path, json!({"standard_deduction": -1.0})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = app
+        .post(
+            "/api/tax-configs",
+            json!({"name": "Negative", "age_65_extra_deduction": -5.0, "federal_brackets": brackets}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

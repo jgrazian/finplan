@@ -176,6 +176,6 @@ merging a partial tree into an existing one has no sensible semantics, so the
 old tree is deleted and rewritten in one transaction.
 
 Registration seeds the new user a starter library — eight return profiles, two
-inflation profiles, and the 2024 US federal brackets — because a scenario cannot
-reference a profile that does not exist. They are ordinary rows and can be
-edited or deleted.
+inflation profiles, and the 2024 US federal brackets with their standard
+deduction — because a scenario cannot reference a profile that does not exist.
+They are ordinary rows and can be edited or deleted.

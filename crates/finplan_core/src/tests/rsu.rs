@@ -287,3 +287,109 @@ fn test_rsu_grant_convenience() {
         "Brokerage should have shares from RSU vesting"
     );
 }
+
+/// Federal bracket thresholds are indexed to inflation each tax year, so the
+/// same nominal income is taxed less once prices have risen.
+#[test]
+fn test_federal_brackets_index_to_inflation() {
+    // $50,000 FMV vests in 2025 and again in 2027, at 10% inflation.
+    let vest = |name: &str, year: i16| {
+        EventBuilder::rsu_vesting(name)
+            .to_account("Brokerage")
+            .asset_in("Brokerage", "GOOG")
+            .units(250.0)
+            .on_date(jiff::civil::date(year, 3, 15))
+            .once()
+    };
+    let (config, _metadata) = SimulationBuilder::new()
+        .start(2025, 1, 1)
+        .years(3)
+        .inflation(0.10)
+        .asset(AssetBuilder::new("GOOG").price(200.0).fixed_return(0.0))
+        .account(AccountBuilder::taxable_brokerage("Brokerage").cash(0.0))
+        .event(vest("Vest 2025", 2025))
+        .event(vest("Vest 2027", 2027))
+        .build();
+
+    let result = simulate(&config, 42).unwrap();
+    let federal = |year: i16| {
+        result
+            .yearly_taxes
+            .iter()
+            .find(|t| t.year == year)
+            .map(|t| t.federal_tax)
+            .unwrap()
+    };
+
+    // 2025, configured brackets: 10% to $11,600, 12% to $47,150, then 22%.
+    let expected_2025 = 11_600.0 * 0.10 + 35_550.0 * 0.12 + 2_850.0 * 0.22;
+    assert!((federal(2025) - expected_2025).abs() < 0.01);
+
+    // 2027, thresholds scaled by 1.1^2: the whole $50,000 stays under 22%.
+    let (t1, t2) = (11_600.0 * 1.21, 47_150.0 * 1.21);
+    let expected_2027 = t1 * 0.10 + (50_000.0 - t1) * 0.12;
+    assert!(t2 > 50_000.0);
+    assert!(
+        (federal(2027) - expected_2027).abs() < 0.01,
+        "2027 federal tax {} != {expected_2027}",
+        federal(2027)
+    );
+}
+
+/// The standard deduction shields each year's first income, is indexed with
+/// the brackets, and grows by the 65+ extra from the year the filer turns 65.
+#[test]
+fn test_standard_deduction_and_age_65_extra() {
+    use crate::model::TaxConfig;
+
+    let federal_by_year = |birth: jiff::civil::Date| {
+        let vest = |name: &str, year: i16| {
+            EventBuilder::rsu_vesting(name)
+                .to_account("Brokerage")
+                .asset_in("Brokerage", "GOOG")
+                .units(250.0)
+                .on_date(jiff::civil::date(year, 3, 15))
+                .once()
+        };
+        let (config, _metadata) = SimulationBuilder::new()
+            .start(2025, 1, 1)
+            .years(3)
+            .inflation(0.10)
+            .birth_date_obj(birth)
+            .tax_config(TaxConfig {
+                standard_deduction: 15_000.0,
+                age_65_extra_deduction: 2_000.0,
+                ..TaxConfig::default()
+            })
+            .asset(AssetBuilder::new("GOOG").price(200.0).fixed_return(0.0))
+            .account(AccountBuilder::taxable_brokerage("Brokerage").cash(0.0))
+            .event(vest("Vest 2025", 2025))
+            .event(vest("Vest 2026", 2026))
+            .build();
+        let result = simulate(&config, 42).unwrap();
+        result
+            .yearly_taxes
+            .iter()
+            .map(|t| (t.year, t.federal_tax))
+            .collect::<Vec<_>>()
+    };
+    // $50,000 of income against brackets at 10% from $11,600 and 12% from
+    // $47,150, all moved up by the deduction and scaled by inflation.
+    let expected = |deduction: f64, factor: f64| {
+        let zero_top = deduction * factor;
+        let ten_top = (deduction + 11_600.0) * factor;
+        (ten_top - zero_top) * 0.10 + (50_000.0 - ten_top) * 0.12
+    };
+    let close = |a: f64, b: f64| (a - b).abs() < 0.01;
+
+    // Turns 65 in mid-2026: the extra starts with the 2026 tax year.
+    let taxes = federal_by_year(jiff::civil::date(1961, 6, 15));
+    assert!(close(taxes[0].1, expected(15_000.0, 1.0)), "{taxes:?}");
+    assert!(close(taxes[1].1, expected(17_000.0, 1.1)), "{taxes:?}");
+
+    // Born January 1st, 1961: counted 65 on December 31st, 2025.
+    let taxes = federal_by_year(jiff::civil::date(1961, 1, 1));
+    assert!(close(taxes[0].1, expected(17_000.0, 1.0)), "{taxes:?}");
+    let taxes = federal_by_year(jiff::civil::date(1961, 1, 2));
+    assert!(close(taxes[0].1, expected(15_000.0, 1.0)), "{taxes:?}");
+}
