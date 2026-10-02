@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Blueprint, Table, Td, Th } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { fmtCurrency } from "@/lib/format";
@@ -317,6 +317,125 @@ const MILESTONE = {
   boxShadow: "inset 2px 0 0 color-mix(in srgb, var(--color-accent) 45%, transparent)",
 };
 
+/** How many event names a row spells out before it counts the rest. */
+const TAGS_SHOWN = 1;
+
+/**
+ * The events that started this year, by name. One fits beside the count; any
+ * more fold into a `+N` chip that opens the full list, so a busy year never
+ * widens the column past its neighbours.
+ */
+function EventTags({ year, tags }: { year: number; tags: string[] }) {
+  if (tags.length === 0) return null;
+  const shown = tags.slice(0, TAGS_SHOWN);
+  return (
+    <>
+      {shown.map((tag, i) => (
+        // The event's own name, as the user wrote it — so no case transform —
+        // clipped rather than allowed to widen the column.
+        <span key={`${i}-${tag}`} className="tag tag-outline" title={tag} style={EVENT_TAG}>
+          {tag}
+        </span>
+      ))}
+      {tags.length > TAGS_SHOWN && (
+        <MoreEvents year={year} tags={tags} hidden={tags.length - TAGS_SHOWN} />
+      )}
+    </>
+  );
+}
+
+/**
+ * The `+N` chip and the list it opens. A native `popover="auto"`: it sits in
+ * the top layer, so the table's scroll box cannot clip it, and outside clicks
+ * and Escape dismiss it without any wiring here. Clicks on either stop at
+ * them — the row they sit in expands on click.
+ */
+function MoreEvents({ year, tags, hidden }: { year: number; tags: string[]; hidden: number }) {
+  const id = useId();
+  const anchor = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const pop = panel.current;
+    const chip = anchor.current;
+    if (!pop || !chip) return;
+    // Under the chip, right edges aligned, flipped above when the viewport
+    // has no room below; kept in place while the page scrolls under it.
+    const place = () => {
+      const rect = chip.getBoundingClientRect();
+      const box = pop.getBoundingClientRect();
+      const edge = 12;
+      const below = rect.bottom + 6;
+      const top =
+        below + box.height <= window.innerHeight - edge ? below : rect.top - 6 - box.height;
+      const left = Math.max(edge, Math.min(rect.right - box.width, window.innerWidth - edge - box.width));
+      pop.style.top = `${Math.max(edge, top)}px`;
+      pop.style.left = `${left}px`;
+    };
+    const onToggle = (event: Event) => {
+      const open = (event as ToggleEvent).newState === "open";
+      if (open) {
+        place();
+        window.addEventListener("scroll", place, true);
+        window.addEventListener("resize", place);
+      } else {
+        window.removeEventListener("scroll", place, true);
+        window.removeEventListener("resize", place);
+      }
+    };
+    pop.addEventListener("toggle", onToggle);
+    return () => {
+      pop.removeEventListener("toggle", onToggle);
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, []);
+
+  return (
+    <>
+      <button
+        ref={anchor}
+        type="button"
+        className="tag tag-outline event-more"
+        popoverTarget={id}
+        aria-label={`${hidden} more event${hidden === 1 ? "" : "s"} in ${year}`}
+        onClick={(e) => e.stopPropagation()}
+        style={EVENT_TAG}
+      >
+        +{hidden}
+      </button>
+      <div
+        ref={panel}
+        id={id}
+        popover="auto"
+        className="event-popover"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="event-popover-head">
+          {year} · {tags.length} events started
+        </div>
+        <ul>
+          {tags.map((tag, i) => (
+            <li key={`${i}-${tag}`}>{tag}</li>
+          ))}
+        </ul>
+      </div>
+    </>
+  );
+}
+
+const EVENT_TAG = {
+  // `.tag` is inline-flex, where an ellipsis has nothing to apply to;
+  // inline-block gives the text a block box to be clipped in.
+  display: "inline-block",
+  marginRight: 6,
+  maxWidth: 160,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  verticalAlign: "middle",
+} as const;
+
 const EXPANDED = {
   background: "color-mix(in srgb, var(--color-accent) 14%, transparent)",
   boxShadow: "inset 2px 0 0 var(--color-accent)",
@@ -352,7 +471,7 @@ function YearRow({
         className={hasLedger && count > 0 ? "rowsel" : undefined}
         onClick={hasLedger && count > 0 ? onToggle : undefined}
         aria-expanded={hasLedger && count > 0 ? open : undefined}
-        style={open ? EXPANDED : row.ledger.tag ? MILESTONE : undefined}
+        style={open ? EXPANDED : row.ledger.tags.length > 0 ? MILESTONE : undefined}
       >
         {hasLedger && (
           <Td
@@ -372,28 +491,7 @@ function YearRow({
         ))}
         {hasLedger && (
           <Td align="right" style={{ whiteSpace: "nowrap" }}>
-            {row.ledger.tag && (
-              // The event's own name, as the user wrote it — so no case
-              // transform — clipped rather than allowed to widen the column.
-              <span
-                className="tag tag-outline"
-                title={row.ledger.tag}
-                style={{
-                  // `.tag` is inline-flex, where an ellipsis has nothing to
-                  // apply to; inline-block gives the text a block box to be
-                  // clipped in.
-                  display: "inline-block",
-                  marginRight: 8,
-                  maxWidth: 160,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  verticalAlign: "middle",
-                }}
-              >
-                {row.ledger.tag}
-              </span>
-            )}
+            <EventTags year={row.year} tags={row.ledger.tags} />
             <span
               style={{
                 fontFamily: "var(--font-mono)",

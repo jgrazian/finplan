@@ -26,8 +26,8 @@ test("the drawn scale starts at 50% and clamps both ends", () => {
   assert.equal(successScalePosition(1.2), 1);
 });
 
-const flow = (year: number, tag?: string) =>
-  ({ year, ledger: { total: 1, cash: 0, asset: 0, tax: 0, event: 0, tag } }) as YearlyCashFlow;
+const flow = (year: number, ...tags: string[]) =>
+  ({ year, ledger: { total: 1, cash: 0, asset: 0, tax: 0, event: 0, tags } }) as YearlyCashFlow;
 
 test("markers come from tagged years on the chart, never the plan's first year", () => {
   const markers = eventMarkers(
@@ -37,6 +37,18 @@ test("markers come from tagged years on the chart, never the plan's first year",
   assert.deepEqual(markers, [
     { index: 6, year: 2032, label: "Home Purchase" },
     { index: 11, year: 2037, label: "Retirement" },
+  ]);
+});
+
+test("two events starting in one year are both marked, in the order they fired", () => {
+  const markers = eventMarkers(
+    [flow(2026, "Salary"), flow(2030, "Buy the boat", "Sell the car"), flow(2031, "Retirement")],
+    [2026, 2027, 2028, 2029, 2030, 2031],
+  );
+  assert.deepEqual(markers, [
+    { index: 4, year: 2030, label: "Buy the boat" },
+    { index: 4, year: 2030, label: "Sell the car" },
+    { index: 5, year: 2031, label: "Retirement" },
   ]);
 });
 

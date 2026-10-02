@@ -1994,3 +1994,62 @@ tr:hover > * > .grip,
   height: 27px;
   padding-block: 0;
 }
+
+/* ── Cash-flow ledger: the events behind a year's +N ───────────────────── */
+
+.event-more {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  background: transparent;
+  cursor: pointer;
+}
+
+.event-more:hover {
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.event-more:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* Positioned by the chip (CashFlowLedger) in viewport coordinates. */
+.event-popover {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  min-width: 180px;
+  max-width: 280px;
+  padding: 8px 0 6px;
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  text-align: left;
+  white-space: normal;
+  cursor: default;
+}
+
+.event-popover-head {
+  padding: 0 12px 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+}
+
+.event-popover ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.event-popover li {
+  padding: 4px 12px;
+  border-top: 1px solid var(--color-rule);
+  overflow-wrap: anywhere;
+}

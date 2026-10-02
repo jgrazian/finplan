@@ -16,8 +16,9 @@ export type LedgerYear = {
   event: number;
   total: number;
   /**
-   * The name of the event that fired this year — retiring, a pension
-   * starting — or null for a year that only did the ordinary things.
+   * The names of the events that started this year — retiring, a pension
+   * starting — in the order they fired; empty for a year that only did the
+   * ordinary things.
    */
-  tag: string | null;
+  tags: Array<string>;
 };

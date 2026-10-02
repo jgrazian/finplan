@@ -67,20 +67,20 @@ export interface ChartMarker {
 }
 
 /**
- * One marker per year whose ledger names a one-off event — the home purchase,
- * the retirement — on the years the chart draws. The plan's first year is
- * skipped: everything that starts with the plan "fires" there, and a rule on
- * the y axis says nothing.
+ * One marker per event that starts in a year the chart draws — the home
+ * purchase, the retirement — so two starting in the same year are both named,
+ * in the order they fired. The plan's first year is skipped: everything that
+ * starts with the plan "fires" there, and a rule on the y axis says nothing.
  */
 export function eventMarkers(cashFlows: YearlyCashFlow[], years: number[]): ChartMarker[] {
   const indexOf = new Map(years.map((year, index) => [year, index]));
   const markers: ChartMarker[] = [];
   for (const flow of cashFlows) {
-    const label = flow.ledger.tag;
     const index = indexOf.get(flow.year);
-    if (!label || index == null || index === 0) continue;
-    markers.push({ index, year: flow.year, label });
+    if (index == null || index === 0) continue;
+    for (const label of flow.ledger.tags) markers.push({ index, year: flow.year, label });
   }
+  // Stable, so same-year markers keep their firing order.
   return markers.sort((a, b) => a.index - b.index);
 }
 

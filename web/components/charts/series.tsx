@@ -133,6 +133,13 @@ export function EventMarkers({
     return { ...m, x, width, start: flip ? x - width : x };
   });
   const rows = stackLabels(placed.map((p) => ({ x: p.start, width: p.width })));
+  // Events starting in the same year share one rule, dropped from whichever
+  // of their labels sits highest; each label keeps its own dot.
+  const ruleFrom = new Map<number, number>();
+  placed.forEach((p, i) => {
+    const top = ruleFrom.get(p.index);
+    if (top == null || rows[i] < rows[top]) ruleFrom.set(p.index, i);
+  });
 
   return (
     <g pointerEvents="none" className="event-markers">
@@ -142,15 +149,17 @@ export function EventMarkers({
         return (
           <g key={`${p.index}-${p.label}`}>
             <title>{`${p.label} · ${p.year}`}</title>
-            <line
-              x1={p.x}
-              x2={p.x}
-              y1={y + 3}
-              y2={scale.baseline}
-              stroke="var(--color-text)"
-              strokeOpacity={0.28}
-              strokeDasharray="2 3"
-            />
+            {ruleFrom.get(p.index) === i && (
+              <line
+                x1={p.x}
+                x2={p.x}
+                y1={y + 3}
+                y2={scale.baseline}
+                stroke="var(--color-text)"
+                strokeOpacity={0.28}
+                strokeDasharray="2 3"
+              />
+            )}
             <circle cx={p.x} cy={y - 3} r={2.5} fill="var(--color-accent-2)" />
             <text
               x={flip ? p.x - 6 : p.x + 6}

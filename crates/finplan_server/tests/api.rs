@@ -1929,6 +1929,22 @@ async fn a_year_of_the_ledger_can_be_read_back_and_filtered() {
     )
     .await;
 
+    // A second one-off in the same year: both have to be named, not just the
+    // one that happened to fire first.
+    app.post(
+        &format!("/api/scenarios/{scenario_id}/events"),
+        json!({
+            "name": "Sell the car",
+            "fires_once": true,
+            "trigger": {"kind": "Age", "years": 45},
+            "effects": [{
+                "kind": "Income", "to_account_id": checking, "income_type": "TaxFree",
+                "amount": {"kind": "Fixed", "value": 8_000.0}
+            }]
+        }),
+    )
+    .await;
+
     let (status, run) = app
         .post(
             &format!("/api/scenarios/{scenario_id}/runs"),
@@ -1953,15 +1969,26 @@ async fn a_year_of_the_ledger_can_be_read_back_and_filtered() {
     let counted: i64 = years.iter().map(|y| y["total"].as_i64().unwrap()).sum();
     assert!(counted > 0, "the ledger index counted nothing");
 
-    // The tag marks the year an event *started*, so the monthly salary tags
+    // A tag marks the year an event *started*, so the monthly salary tags
     // only its first year, not all ten. A tag on every year would mark nothing.
-    let tagged: Vec<(i64, &str)> = years
+    // Two events starting in one year are both named, in the order they fired.
+    let tagged: Vec<(i64, Vec<&str>)> = years
         .iter()
-        .filter_map(|y| Some((y["year"].as_i64()?, y["tag"].as_str()?)))
+        .filter_map(|y| {
+            let tags: Vec<&str> = y["tags"]
+                .as_array()?
+                .iter()
+                .filter_map(|t| t.as_str())
+                .collect();
+            (!tags.is_empty()).then(|| (y["year"].as_i64().unwrap(), tags))
+        })
         .collect();
     assert_eq!(
         tagged,
-        vec![(2026, "Salary"), (2030, "Buy the boat")],
+        vec![
+            (2026, vec!["Salary"]),
+            (2030, vec!["Buy the boat", "Sell the car"])
+        ],
         "got {tagged:?}"
     );
 

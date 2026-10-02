@@ -252,7 +252,7 @@ export function accountBreakdown(
   };
 }
 
-const NO_LEDGER: LedgerSummary = { total: 0, cash: 0, asset: 0, tax: 0, event: 0 };
+const NO_LEDGER: LedgerSummary = { total: 0, cash: 0, asset: 0, tax: 0, event: 0, tags: [] };
 
 function toCashFlows(
   results: Results,
@@ -287,7 +287,7 @@ function toCashFlows(
             asset: ledger.asset,
             tax: ledger.tax,
             event: ledger.event,
-            tag: ledger.tag ?? undefined,
+            tags: ledger.tags,
           }
         : NO_LEDGER,
     };

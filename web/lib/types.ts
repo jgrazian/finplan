@@ -206,8 +206,11 @@ export interface LedgerSummary {
   asset: number;
   tax: number;
   event: number;
-  /** The year's most notable entry kind — `Penalty`, `RMD`, `Sell` — if any. */
-  tag?: string;
+  /**
+   * The events that started this year, in the order they fired — retiring, a
+   * home purchase. Empty for a year that only did the ordinary things.
+   */
+  tags: string[];
 }
 
 /** The buckets the ledger filter chips offer, plus the unfiltered view. */
