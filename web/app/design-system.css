@@ -502,24 +502,23 @@ input {
   cursor: not-allowed;
 }
 
-/* Primary is a lit slab: the accent with a faint highlight along its top edge
-   and a contact shadow in its own hue, so it reads as the one thing to press. */
+/* Primary is a flat fill of the accent: no highlight, no glow, no shadow. Its
+   weight comes from being the one solid button on the page, which is enough
+   to read as the thing to press. */
 .btn-primary {
   background: var(--color-accent);
-  border-color: color-mix(in oklab, var(--color-accent) 80%, var(--color-text));
+  border-color: var(--color-accent);
   color: var(--color-bg);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 0.18),
-    0 1px 2px color-mix(in srgb, var(--color-accent) 40%, transparent),
-    0 4px 12px -4px color-mix(in srgb, var(--color-accent) 55%, transparent);
 }
 
 .btn-primary:hover:not(:disabled) {
   background: color-mix(in oklab, var(--color-accent) 88%, var(--color-text));
+  border-color: color-mix(in oklab, var(--color-accent) 88%, var(--color-text));
 }
 
 .btn-primary:active:not(:disabled) {
   background: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
+  border-color: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
 }
 
 .btn-secondary {
