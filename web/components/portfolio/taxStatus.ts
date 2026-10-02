@@ -15,7 +15,7 @@ const TONES: Record<TaxStatus, TagTone> = {
 
 /** Display label + tag tone for an account's tax treatment. */
 export function taxBadge(account: Account): { label: string; tone: TagTone } {
-  if (!account.taxStatus) return { label: "n/a", tone: "outline" };
+  if (!account.taxStatus) return { label: "n/a", tone: "quiet" };
   return { label: LABELS[account.taxStatus], tone: TONES[account.taxStatus] };
 }
 

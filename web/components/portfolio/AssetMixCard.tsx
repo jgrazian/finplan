@@ -60,7 +60,7 @@ export function AssetMixCard({
           <div
             style={{
               fontFamily: "var(--font-display)",
-              fontWeight: 500,
+              fontWeight: "var(--font-display-weight)",
               fontSize: 30,
               lineHeight: 1.05,
               marginTop: 2,

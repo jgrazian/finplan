@@ -21,14 +21,10 @@
   --font-body: var(--font-body);
 }
 
-/* The desk: a faint wash of the accent falling from the top-left corner, so
-   the page takes the account's hue before a single control does. */
+/* The desk: plain cool paper. The accent is kept for actions and the
+   current place, so the page takes no hue until a control does. */
 body {
-  background:
-    radial-gradient(1100px 520px at 0% -8%, color-mix(in srgb, var(--color-accent) 11%, transparent), transparent 70%),
-    radial-gradient(900px 480px at 100% 0%, color-mix(in srgb, var(--color-accent-2) 8%, transparent), transparent 70%),
-    var(--color-ground);
-  background-attachment: fixed;
+  background: var(--color-ground);
   min-height: 100dvh;
 }
 
@@ -71,8 +67,8 @@ body {
 
 .brand-word em {
   font-style: italic;
-  font-weight: 450;
-  color: var(--color-accent-700);
+  font-weight: 500;
+  color: var(--color-accent);
 }
 
 /* ── Project footer ─────────────────────────────────────────────────────── */
@@ -254,7 +250,7 @@ body {
 
 .stat-v {
   font-family: var(--font-display);
-  font-weight: 520;
+  font-weight: var(--font-display-weight);
   font-size: 27px;
   line-height: 1.05;
   letter-spacing: -0.02em;
@@ -648,7 +644,7 @@ tr:hover > * > .grip,
   border: 0;
   background: transparent;
   font-family: var(--font-display);
-  font-weight: 540;
+  font-weight: var(--font-display-weight);
   font-size: 14.5px;
   border-radius: 6px;
   color: var(--color-text);
@@ -1814,4 +1810,187 @@ tr:hover > * > .grip,
 .kind-dot[data-family="marker"] {
   background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--fam);
+}
+
+/* ── Accounts (Ledger) ─────────────────────────────────────────────────────
+   The summary strip over the accounts table, and the table's one-line rows.
+   Net worth, the account mix and the tax mix share one card, each mix as a
+   single stacked bar, so the strip is one line of height and the table
+   starts higher on the page. */
+
+.ledger-strip {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1.5fr) minmax(0, 1.1fr);
+  gap: 28px;
+  align-items: start;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+}
+
+.ledger-strip .stat-l {
+  margin: 0;
+}
+
+.ledger-strip-figure {
+  font-family: var(--font-display);
+  font-weight: var(--font-display-weight);
+  font-size: 30px;
+  line-height: 1.05;
+  letter-spacing: -0.015em;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+.ledger-strip-meta {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+.ledger-strip-meta strong,
+.ledger-strip-head strong,
+.ledger-strip-legend strong {
+  font-weight: 400;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-strip-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ledger-strip-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.ledger-strip-head > span {
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+/* One bar split by share; the 1px gap is the card showing through, so
+   neighbouring segments never run together. */
+.ledger-bar {
+  display: flex;
+  gap: 1px;
+  height: 8px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.ledger-bar > i {
+  display: block;
+  min-width: 2px;
+}
+
+.ledger-strip-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+.ledger-strip-legend > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.ledger-strip-legend i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 1px;
+}
+
+/* Rows fixed at 34px and kept to one line: anything that would wrap is cut
+   with an ellipsis and carried whole in the cell's title. */
+.ledger-table td {
+  height: 34px;
+  padding-block: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ledger-table th {
+  font-size: 10px;
+  padding-block: 0 6px;
+}
+
+.ledger-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 1px;
+  vertical-align: 0;
+}
+
+.ledger-holdings {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ledger-holdings > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ledger-holdings > span + span {
+  flex: none;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+.ledger-mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: -0.02em;
+  color: color-mix(in srgb, var(--color-text) 78%, transparent);
+}
+
+.ledger-share {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 8px;
+  align-items: center;
+}
+
+.ledger-share > span:first-child {
+  height: 5px;
+  border-radius: 1px;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.ledger-share > span:first-child > i {
+  display: block;
+  height: 100%;
+}
+
+.ledger-share > span:last-child {
+  text-align: right;
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
+}
+
+/* The inspector's positions: 27px rows, so a typical brokerage account's
+   lots all fit without the rail scrolling. */
+.ledger-positions td {
+  height: 27px;
+  padding-block: 0;
 }

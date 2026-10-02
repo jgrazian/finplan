@@ -316,7 +316,7 @@ function Answer({
         <div
           style={{
             fontFamily: "var(--font-display)",
-            fontWeight: 500,
+            fontWeight: "var(--font-display-weight)",
             fontSize: 34,
             lineHeight: 1.05,
             color: outcome.best

@@ -219,7 +219,7 @@
 
   .mobile-pushed-title {
     font-family: var(--font-display);
-    font-weight: 560;
+    font-weight: var(--font-display-weight);
     font-size: 18px;
     white-space: nowrap;
     overflow: hidden;

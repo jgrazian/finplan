@@ -56,7 +56,7 @@ export function SuccessRate({
               className="success-pct"
               style={{
                 fontFamily: "var(--font-display)",
-                fontWeight: 500,
+                fontWeight: "var(--font-display-weight)",
                 fontSize: 68,
                 lineHeight: 1,
                 letterSpacing: "-0.035em",

@@ -1,22 +1,28 @@
 import type { Metadata } from "next";
-import { Geist_Mono, Instrument_Sans, Newsreader } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans, Source_Serif_4 } from "next/font/google";
 import { APPEARANCE_KEY, DARK_STYLE_KEY } from "@/lib/theme";
 import "./globals.css";
 
 /**
- * The three Almanac faces, self-hosted by next/font at build time: no request
+ * The three Ledger faces, self-hosted by next/font at build time: no request
  * to Google at runtime and no flash of the fallback while one is in flight.
- * Each lands as a CSS variable on <html>, which design-system.css reads into
+ * Plex Sans and Plex Mono are one superfamily, so tickers and units set in the
+ * mono belong to the same system as the controls around them. Each lands as a
+ * CSS variable on <html>, which design-system.css reads into
  * --font-display / --font-body / --font-mono.
  */
-const display = Newsreader({
+const display = Source_Serif_4({
   subsets: ["latin"],
   style: ["normal", "italic"],
   axes: ["opsz"],
-  variable: "--font-newsreader",
+  variable: "--font-source-serif",
 });
-const sans = Instrument_Sans({ subsets: ["latin"], axes: ["wdth"], variable: "--font-instrument" });
-const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
+const sans = IBM_Plex_Sans({ subsets: ["latin"], variable: "--font-plex-sans" });
+const mono = IBM_Plex_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-plex-mono",
+});
 
 export const metadata: Metadata = {
   title: "FinPlan",

@@ -17,6 +17,7 @@ import type {
   Account,
   AccountId,
   AssetLot,
+  HoldingsLine,
   LinkedAccount,
   TaxStatus,
 } from "@/lib/types";
@@ -51,6 +52,7 @@ export function toViewAccounts(
       };
     });
 
+    const profilesHeld = profileLabels(account, positions, assetById, profileName);
     return {
       accountId: String(account.id),
       serverId: account.id,
@@ -58,7 +60,8 @@ export function toViewAccounts(
       flavor: account.flavor,
       taxStatus: taxStatusOf(account),
       balance: balanceOf(account, positions),
-      returnProfileId: profileLabel(account, assetById, profileName),
+      returnProfileId: profilesHeld.join(", "),
+      returnProfiles: profilesHeld,
       returnProfileServerId: ownProfileOf(account),
       cashValue: cashValueOf(account),
       holdings: holdingsLabel(account, positions, assetById),
@@ -142,11 +145,17 @@ function ownProfileOf(account: ApiAccount): number | undefined {
   }
 }
 
-function profileLabel(
+/**
+ * The profiles an account grows by, one per entry. An investment account's
+ * are its holdings' profiles, largest holding's first, so a list that shows
+ * only the first shows the one that moves the balance most.
+ */
+function profileLabels(
   account: ApiAccount,
+  positions: AssetLot[],
   assetById: Map<number, Asset>,
   profileName: Map<number, string>,
-): string {
+): string[] {
   // Null as well as undefined: an unmapped asset has no profile to name, and
   // the dash is the honest answer for both.
   const name = (id: number | null | undefined) =>
@@ -154,26 +163,23 @@ function profileLabel(
 
   switch (account.flavor) {
     case "Bank":
-      return name(account.return_profile_id);
+      return [name(account.return_profile_id)];
     case "Investment": {
       // What the account grows by is its holdings' profiles; the cash profile
       // only applies to an idle balance.
-      const held = [
-        ...new Set(
-          account.positions.map((lot) =>
-            name(assetById.get(lot.asset_id)?.return_profile_id),
-          ),
-        ),
-      ];
-      return held.length > 0
-        ? held.join(", ")
-        : `${name(account.cash_return_profile_id)} (cash)`;
+      const byProfile = new Map<string, number>();
+      for (const lot of positions) {
+        const label = name(assetById.get(lot.assetServerId)?.return_profile_id);
+        byProfile.set(label, (byProfile.get(label) ?? 0) + lot.value);
+      }
+      const held = [...byProfile].sort((a, b) => b[1] - a[1]).map(([label]) => label);
+      return held.length > 0 ? held : [`${name(account.cash_return_profile_id)} (cash)`];
     }
     case "Property":
-      return name(assetById.get(account.asset_id)?.return_profile_id);
+      return [name(assetById.get(account.asset_id)?.return_profile_id)];
     case "Liability":
       // A liability compounds at its own interest rate, not a market profile.
-      return `${(account.interest_rate * 100).toFixed(2)}% interest`;
+      return [`${(account.interest_rate * 100).toFixed(2)}% interest`];
   }
 }
 
@@ -181,26 +187,29 @@ function profileLabel(
 const HOLDINGS_SHOWN = 2;
 
 /**
- * `SPY 78% · BND 22% · 3 lots` — the thing you would otherwise open the drawer
- * to check, which is the whole reason the column earns its width.
+ * `VFIAX 50 · VGPMX 17 · +6` beside `8 lots` — the thing you would otherwise
+ * open the drawer to check, which is the whole reason the column earns its
+ * width. The weights drop their % sign so the line fits a fixed-height row;
+ * the title carries the full breakdown.
  */
 function holdingsLabel(
   account: ApiAccount,
   positions: AssetLot[],
   assetById: Map<number, Asset>,
-): string {
+): HoldingsLine {
+  const only = (held: string): HoldingsLine => ({ held, detail: held });
   switch (account.flavor) {
     case "Bank":
-      return "Cash — untracked";
+      return only("Cash — untracked");
     case "Property":
-      return assetById.get(account.asset_id)?.name ?? `asset ${account.asset_id}`;
+      return only(assetById.get(account.asset_id)?.name ?? `asset ${account.asset_id}`);
     case "Liability":
-      return `Owes ${fmtCurrency(account.principal)}`;
+      return only(`Owes ${fmtCurrency(account.principal)}`);
     case "Investment":
       break;
   }
 
-  if (positions.length === 0) return "Cash — untracked";
+  if (positions.length === 0) return only("Cash — untracked");
 
   // Lots of the same ticker are one holding on this line; which lot a sale
   // comes out of is the liquidation strategy's business, not the list's.
@@ -210,16 +219,21 @@ function holdingsLabel(
   }
   const held = [...byAsset].sort((a, b) => b[1] - a[1]);
   const total = held.reduce((sum, [, value]) => sum + value, 0);
+  const weight = (value: number) => Math.round((value / total) * 100);
 
   const named = held
     .slice(0, HOLDINGS_SHOWN)
-    .map(([name, value]) =>
-      total > 0 ? `${name} ${Math.round((value / total) * 100)}%` : name,
-    );
+    .map(([name, value]) => (total > 0 ? `${name} ${weight(value)}` : name));
   const rest = held.length - named.length;
-  if (rest > 0) named.push(`+${rest} more`);
-  named.push(`${positions.length} lot${positions.length === 1 ? "" : "s"}`);
-  return named.join(" · ");
+  if (rest > 0) named.push(`+${rest}`);
+
+  return {
+    held: named.join(" · "),
+    lots: `${positions.length} lot${positions.length === 1 ? "" : "s"}`,
+    detail: held
+      .map(([name, value]) => (total > 0 ? `${name} ${weight(value)}%` : name))
+      .join(" · "),
+  };
 }
 
 /**
@@ -331,7 +345,7 @@ export interface CompositionSlice {
 export interface TaxBand {
   label: string;
   value: number;
-  /** Fraction of the largest band, so the bars are read against each other. */
+  /** Fraction of the investable pool, so the bands stack into one bar. */
   share: number;
   color: string;
 }
@@ -349,10 +363,15 @@ export interface PortfolioSummary {
   invested: number;
 }
 
+/**
+ * Three steps of the neutral ink rather than accent tints: tax treatment is an
+ * ordered reading of one pool, not three identities, and the accent stays for
+ * actions. The ramp reverses with the ground, so dark-to-light holds in both.
+ */
 const TAX_BANDS: ReadonlyArray<{ label: string; status: TaxStatus; color: string }> = [
-  { label: "Deferred", status: "TaxDeferred", color: "var(--color-accent-900)" },
-  { label: "Taxable", status: "Taxable", color: "var(--color-accent-700)" },
-  { label: "Tax-free", status: "TaxFree", color: "var(--color-accent-500)" },
+  { label: "Deferred", status: "TaxDeferred", color: "var(--color-neutral-900)" },
+  { label: "Taxable", status: "Taxable", color: "var(--color-neutral-500)" },
+  { label: "Tax-free", status: "TaxFree", color: "var(--color-neutral-300)" },
 ];
 
 /**
@@ -384,11 +403,13 @@ export function portfolioSummary(accounts: Account[]): PortfolioSummary {
       .filter((a) => a.taxStatus === band.status)
       .reduce((sum, a) => sum + a.balance, 0),
   );
-  const largest = Math.max(0, ...totals);
+  // Clamped at zero: an overdrawn cash balance can push a band negative, and
+  // a stacked bar has no way to draw less than nothing.
+  const pool = totals.reduce((sum, v) => sum + Math.max(v, 0), 0);
   const taxBands = TAX_BANDS.map((band, i) => ({
     label: band.label,
     value: totals[i],
-    share: largest > 0 ? totals[i] / largest : 0,
+    share: pool > 0 ? Math.max(totals[i], 0) / pool : 0,
     color: band.color,
   }));
 

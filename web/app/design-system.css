@@ -1,14 +1,20 @@
-/* Almanac — design-system tokens and component classes.
+/* Ledger — design-system tokens and component classes.
 
-   A warm, editorial ledger: paper and ink rather than blueprint and steel.
-   The page is a desk (`--color-ground`) with one sheet laid on it
-   (`--color-bg`); controls are raised a step off the sheet (`--color-raised`)
-   and wells sink a step into it (`--color-surface`). Display type is a serif
-   for the figures a plan is read by; everything a hand touches is a grotesk.
+   A cool statement page: paper and ink, read slowly and returned to. The page
+   is a desk (`--color-ground`) with one sheet laid on it (`--color-bg`);
+   controls are raised a step off the sheet (`--color-raised`) and wells sink a
+   step into it (`--color-surface`). Display type is a serif for the figures a
+   plan is read by; everything a hand touches is a grotesk, and machine values
+   (tickers, units) are its mono sibling.
+
+   The accent is for actions and the current place. Charts do not wear it: the
+   net-worth envelope is drawn in the neutral ink (`--color-envelope-*`), so a
+   change of accent never changes what a chart means and the envelope never
+   reads as one of the account series.
 
    This file is the source of truth for the look, so retune it here. */
 /* The faces are loaded by next/font in app/layout.tsx, which sets the
-   --font-newsreader / --font-instrument / --font-geist-mono variables read
+   --font-source-serif / --font-plex-sans / --font-plex-mono variables read
    below. */
 
 /* ── Palettes ──────────────────────────────────────────────────────────────
@@ -22,10 +28,10 @@
    substituted at computed-value time, so a descendant inherits the resolved
    colour and re-pointing the source below the root would change nothing.
 
-   Every ramp is generated in OKLCH on one shared lightness scale (0.97 → 0.27)
-   with a chroma arc that peaks at the base step, so step 500 of any hue
-   carries the same visual weight. Blue sits at 256°, green at 158°, purple at
-   305°, and the supporting brass at 70°.
+   Ramps are generated in OKLCH on one shared lightness scale (0.97 → 0.26)
+   with a chroma arc that peaks at the base step. The Ledger blue is a deeper,
+   quieter statement blue (base L 0.48, C 0.11 at 256°); green sits at 158°,
+   purple at 305°, and the supporting brass at 70°.
 
    Light grounds take step 600 as the base accent. Dark ramps are the light
    ramp reversed and re-spaced: `-100` becomes the darkest tint, the light
@@ -44,63 +50,76 @@
   color-scheme: light;
 
   /* The desk the sheet lies on, the sheet itself, a well sunk into it and a
-     control raised off it. */
-  --color-ground: #ece8df;
-  --color-bg: #fbf9f5;
-  --color-surface: #f2efe8;
+     control raised off it. Cool greys at hue 248°, almost no chroma. */
+  --color-ground: #e5e7e9;
+  --color-bg: #f8f9fa;
+  --color-surface: #eef0f2;
   --color-raised: #ffffff;
-  --color-text: #1e1c19;
-  --color-divider: color-mix(in srgb, #1e1c19 13%, transparent);
+  --color-text: #191c20;
+  --color-divider: color-mix(in srgb, #191c20 13%, transparent);
   /* The hairline between rows of one table — quieter than a section edge. */
-  --color-rule: color-mix(in srgb, #1e1c19 7%, transparent);
+  --color-rule: color-mix(in srgb, #191c20 7%, transparent);
   /* The scrim behind a dialog. Its own token rather than a neutral step,
      because the neutral ramp reverses with the ground and a scrim must not:
      it darkens the page in both themes. */
-  --color-scrim: color-mix(in srgb, #1e1c19 36%, transparent);
+  --color-scrim: color-mix(in srgb, #191c20 36%, transparent);
 
-  /* Warm neutrals: the paper's own grey, hue 80° at near-zero chroma. */
-  --color-neutral-100: #f6f4f0;
-  --color-neutral-200: #e9e6e0;
-  --color-neutral-300: #d6d2cb;
-  --color-neutral-400: #b9b4ac;
-  --color-neutral-500: #9a958d;
-  --color-neutral-600: #7c776f;
-  --color-neutral-700: #5f5a53;
-  --color-neutral-800: #44403a;
-  --color-neutral-900: #2d2a26;
+  /* Cool neutrals: the paper's own grey, hue 255° at near-zero chroma. */
+  --color-neutral-100: #f1f3f5;
+  --color-neutral-200: #e4e7eb;
+  --color-neutral-300: #cfd3d8;
+  --color-neutral-400: #b1b5bb;
+  --color-neutral-500: #91969d;
+  --color-neutral-600: #6a7078;
+  --color-neutral-700: #4a525c;
+  --color-neutral-800: #3d434a;
+  --color-neutral-900: #272b30;
 
   /* The secondary accent does not follow `data-accent`: it is the system's
      own supporting brass, and stays put while the primary hue turns. */
-  --color-accent-2: #c4852f;
+  --color-accent-2: #b77a24;
   --color-accent-2-100: #fdf3e8;
-  --color-accent-2-200: #f8e2ca;
+  --color-accent-2-200: #f3dfc4;
   --color-accent-2-300: #efca9f;
   --color-accent-2-400: #dda96b;
-  --color-accent-2-500: #c4852f;
+  --color-accent-2-500: #b77a24;
   --color-accent-2-600: #9b6203;
   --color-accent-2-700: #754901;
   --color-accent-2-800: #553300;
   --color-accent-2-900: #392000;
 
-  /* Categorical series — identity, never magnitude. Validated as a set
-     (dataviz validate_palette.js, light, on the sheet): worst adjacent CVD
-     ΔE 9.9, worst adjacent normal-vision ΔE 18.7. Slot 4 sits under 3:1, so
-     every chart that uses it keeps its legend and a table view. Assign in
-     this order; never cycle a ninth. */
-  --color-series-1: #2f6fb3;
-  --color-series-2: #d0643a;
-  --color-series-3: #1c9a7a;
-  --color-series-4: #c9900e;
-  --color-series-5: #d06a92;
-  --color-series-6: #4f8a2b;
-  --color-series-7: #6650b5;
-  --color-series-8: #c2453f;
+  /* The net-worth envelope and its median — ink, not accent. */
+  --color-envelope-outer: #e7eaee;
+  --color-envelope-inner: #d2d8df;
+  --color-envelope-p50: #4a525c;
 
-  /* Elevation — warm ink-tinted, two layers: a tight contact shadow that
+  /* Categorical series — identity, never magnitude. The validated hues and
+     order, with chroma pulled back to C ≈ 0.09 so the account bar sits on the
+     paper rather than shouting over it (OKLCH, in order: 0.52 0.09 250 ·
+     0.62 0.11 45 · 0.58 0.08 175 · 0.70 0.10 85 · 0.63 0.09 355 ·
+     0.56 0.09 135 · 0.48 0.09 295 · 0.54 0.12 25).
+
+     dataviz validate_palette.js, light, on the raised surface: lightness band
+     pass; normal-vision ΔE 15.0 (pass); worst adjacent CVD ΔE 6.1 — the floor
+     band, legal only with secondary encoding, which every use here has (a
+     legend or a labelled row, and 1px gaps between stacked segments). Slot 4
+     sits under 3:1, so it never carries text. The chroma check reports these
+     as below its 0.10 floor; that is the point of the set. Assign in this
+     order; never cycle a ninth. */
+  --color-series-1: #3e6c9b;
+  --color-series-2: #bc6f4c;
+  --color-series-3: #3f8a78;
+  --color-series-4: #bb9951;
+  --color-series-5: #b4728c;
+  --color-series-6: #5d8049;
+  --color-series-7: #61538b;
+  --color-series-8: #a94f4a;
+
+  /* Elevation — cool ink-tinted, two layers: a tight contact shadow that
      seats the box and a wide ambient one that lifts it. */
-  --shadow-sm: 0 1px 1px rgb(52 40 22 / 0.05), 0 1px 3px rgb(52 40 22 / 0.06);
-  --shadow-md: 0 1px 2px rgb(52 40 22 / 0.05), 0 6px 18px rgb(52 40 22 / 0.08);
-  --shadow-lg: 0 2px 6px rgb(52 40 22 / 0.06), 0 22px 56px rgb(52 40 22 / 0.16);
+  --shadow-sm: 0 1px 1px rgb(20 30 45 / 0.05), 0 1px 3px rgb(20 30 45 / 0.06);
+  --shadow-md: 0 1px 2px rgb(20 30 45 / 0.05), 0 6px 18px rgb(20 30 45 / 0.08);
+  --shadow-lg: 0 2px 6px rgb(20 30 45 / 0.06), 0 22px 56px rgb(20 30 45 / 0.16);
 }
 
 /* The neutral ramp reverses with the ground, so `.tag-neutral` keeps reading
@@ -108,24 +127,24 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --color-ground: #11100f;
-  --color-bg: #1b1a18;
-  --color-surface: #23211e;
-  --color-raised: #292724;
-  --color-text: #ede9e2;
-  --color-divider: color-mix(in srgb, #ede9e2 14%, transparent);
-  --color-rule: color-mix(in srgb, #ede9e2 7%, transparent);
+  --color-ground: #101214;
+  --color-bg: #191b1e;
+  --color-surface: #202226;
+  --color-raised: #25282c;
+  --color-text: #e6e8eb;
+  --color-divider: color-mix(in srgb, #e6e8eb 14%, transparent);
+  --color-rule: color-mix(in srgb, #e6e8eb 7%, transparent);
   --color-scrim: color-mix(in srgb, #000 60%, transparent);
 
-  --color-neutral-100: #2d2a26;
-  --color-neutral-200: #44403a;
-  --color-neutral-300: #5f5a53;
-  --color-neutral-400: #7c776f;
-  --color-neutral-500: #9a958d;
-  --color-neutral-600: #b9b4ac;
-  --color-neutral-700: #d6d2cb;
-  --color-neutral-800: #e9e6e0;
-  --color-neutral-900: #f6f4f0;
+  --color-neutral-100: #272b30;
+  --color-neutral-200: #3d434a;
+  --color-neutral-300: #4a525c;
+  --color-neutral-400: #6a7078;
+  --color-neutral-500: #91969d;
+  --color-neutral-600: #b1b5bb;
+  --color-neutral-700: #cfd3d8;
+  --color-neutral-800: #e4e7eb;
+  --color-neutral-900: #f1f3f5;
 
   --color-accent-2: #dda96b;
   --color-accent-2-100: #392000;
@@ -138,16 +157,21 @@
   --color-accent-2-800: #fdf3e8;
   --color-accent-2-900: #fff9f3;
 
-  /* The same eight hues stepped into the dark band (OKLCH L 0.48–0.67) and
-     re-validated against the dark sheet: worst adjacent CVD ΔE 9.4, all ≥ 3:1. */
-  --color-series-1: #4f8acb;
-  --color-series-2: #d56c40;
-  --color-series-3: #1f9e7c;
-  --color-series-4: #be8a12;
-  --color-series-5: #cf6f97;
-  --color-series-6: #629a38;
-  --color-series-7: #8573d8;
-  --color-series-8: #d9534d;
+  --color-envelope-outer: #2b2e32;
+  --color-envelope-inner: #3c4045;
+  --color-envelope-p50: #bfc5cc;
+
+  /* The same eight muted hues re-stepped into the dark band (OKLCH L
+     0.56–0.67, same chroma and hue) and validated against the raised dark
+     surface: worst adjacent CVD ΔE 8.4, normal-vision ΔE 16.2, all ≥ 3:1. */
+  --color-series-1: #6190c1;
+  --color-series-2: #ac603d;
+  --color-series-3: #3c8775;
+  --color-series-4: #b19047;
+  --color-series-5: #9e5d77;
+  --color-series-6: #7a9f66;
+  --color-series-7: #8d7eba;
+  --color-series-8: #b05550;
 
   /* On a dark ground the ink tint disappears; what reads as elevation is
      ambient darkness under the box plus a faint lit top edge. */
@@ -160,10 +184,10 @@
    inverted — a near-black sheet on a lifted desk, controls a half-step up
    from the sheet. Only the grounds move; ink, ramps and series stay. */
 [data-theme="dark"][data-ground="midnight"] {
-  --color-ground: #2b2824;
-  --color-bg: #121110;
-  --color-surface: #191816;
-  --color-raised: #1f1d1b;
+  --color-ground: #2a2d31;
+  --color-bg: #111214;
+  --color-surface: #17191c;
+  --color-raised: #1d1f22;
   --shadow-lg: 0 4px 12px rgb(0 0 0 / 0.35), 0 28px 70px rgb(0 0 0 / 0.5);
 }
 
@@ -171,16 +195,16 @@
 
 :root,
 [data-theme="light"][data-accent="blue"] {
-  --color-accent: #3570bd;
+  --color-accent: #2f5f9e;
   --color-accent-100: #eff6ff;
-  --color-accent-200: #d7e8ff;
-  --color-accent-300: #b4d4fe;
-  --color-accent-400: #8ab7f4;
-  --color-accent-500: #5e95df;
-  --color-accent-600: #3570bd;
-  --color-accent-700: #205395;
-  --color-accent-800: #153b6c;
-  --color-accent-900: #0c2648;
+  --color-accent-200: #dbe9fc;
+  --color-accent-300: #bad3f5;
+  --color-accent-400: #93b7e7;
+  --color-accent-500: #5b88c5;
+  --color-accent-600: #2f5f9e;
+  --color-accent-700: #244a7c;
+  --color-accent-800: #19365b;
+  --color-accent-900: #11243e;
 }
 
 [data-theme="light"][data-accent="green"] {
@@ -210,16 +234,16 @@
 }
 
 [data-theme="dark"][data-accent="blue"] {
-  --color-accent: #8ab7f4;
-  --color-accent-100: #0c2648;
-  --color-accent-200: #153b6c;
-  --color-accent-300: #205395;
-  --color-accent-400: #3570bd;
-  --color-accent-500: #5e95df;
-  --color-accent-600: #b4d4fe;
-  --color-accent-700: #d7e8ff;
+  --color-accent: #93b7e7;
+  --color-accent-100: #11243e;
+  --color-accent-200: #19365b;
+  --color-accent-300: #244a7c;
+  --color-accent-400: #2f5f9e;
+  --color-accent-500: #5b88c5;
+  --color-accent-600: #bad3f5;
+  --color-accent-700: #dbe9fc;
   --color-accent-800: #eff6ff;
-  --color-accent-900: #f7fafe;
+  --color-accent-900: #f7faff;
 }
 
 [data-theme="dark"][data-accent="green"] {
@@ -252,12 +276,15 @@
 
 :root {
   /* The serif is for what a plan is read by: titles and headline figures. */
-  --font-display: var(--font-newsreader), Georgia, "Times New Roman", serif;
+  --font-display: var(--font-source-serif), Georgia, "Times New Roman", serif;
+  /* One weight for every serif figure and title: Source Serif holds its
+     colour at semibold, where a lighter cut goes grey beside Plex. */
+  --font-display-weight: 600;
   /* The heading voice for everything a hand touches — buttons, tabs, labels. */
-  --font-heading: var(--font-instrument), system-ui, sans-serif;
+  --font-heading: var(--font-plex-sans), system-ui, sans-serif;
   --font-heading-weight: 600;
-  --font-body: var(--font-instrument), system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, Menlo, monospace;
+  --font-body: var(--font-plex-sans), system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, Menlo, monospace;
 
   --space-1: 3.4px;
   --space-2: 6.8px;
@@ -335,7 +362,6 @@ body {
   font-size: 14.5px;
   line-height: 1.55;
   font-weight: 400;
-  font-feature-settings: "ss01";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
@@ -354,14 +380,14 @@ h6 {
   margin: 0 0 var(--space-2);
 }
 
-/* Titles are set in the serif at a text optical size, a touch lighter than
-   the grotesk's semibold so the two voices weigh the same on the page. */
+/* Titles are set in the serif at a text optical size, at the display weight
+   so a title holds its own beside the grotesk's semibold labels. */
 h1,
 h2,
 h3,
 h4 {
   font-family: var(--font-display);
-  font-weight: 540;
+  font-weight: var(--font-display-weight);
   font-optical-sizing: auto;
   font-variant-numeric: lining-nums;
   letter-spacing: -0.012em;
@@ -727,7 +753,7 @@ textarea.input {
 
 .card-title {
   font-family: var(--font-display);
-  font-weight: 540;
+  font-weight: var(--font-display-weight);
   font-size: 18px;
   line-height: 1.2;
 }
@@ -790,6 +816,13 @@ textarea.input {
   background: var(--color-neutral-100);
   border-color: var(--color-rule);
   color: var(--color-neutral-800);
+}
+
+/* A placeholder value — "n/a" — present so the column stays aligned, and
+   quiet so it never reads as a status. */
+.tag-quiet {
+  border-color: var(--color-rule);
+  color: color-mix(in srgb, var(--color-text) 58%, transparent);
 }
 
 .tag-outline {
@@ -893,7 +926,7 @@ textarea.input {
 
 .dialog-title {
   font-family: var(--font-display);
-  font-weight: 540;
+  font-weight: var(--font-display-weight);
   font-size: 21px;
 }
 

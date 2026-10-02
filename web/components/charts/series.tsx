@@ -8,6 +8,8 @@ import { stackSeries } from "./stack";
 /**
  * Pointwise real envelope: the outer band (P10–P90) light, the inner band
  * (P25–P75) darker over it, and the P50. None of them is a coherent path.
+ * Drawn in the neutral ink rather than the accent, so the envelope means the
+ * same thing whichever accent is chosen and never reads as an account series.
  * The scale is set by the inner band, so the outer one may run off the top
  * and is clipped there by the scale's own clamp.
  */
@@ -21,19 +23,18 @@ export function FanSeries({
   const [lo, hi] = bands.outer;
   return (
     <g>
-      <path d={bandPath(bands.high, bands.low, scale)} fill="var(--color-accent)" fillOpacity={0.12}>
+      <path d={bandPath(bands.high, bands.low, scale)} fill="var(--color-envelope-outer)">
         <title>{`Pointwise real P${lo}–P${hi}`}</title>
       </path>
       {bands.upperQuartile.length > 0 && (
         <path
           d={bandPath(bands.upperQuartile, bands.lowerQuartile, scale)}
-          fill="var(--color-accent)"
-          fillOpacity={0.22}
+          fill="var(--color-envelope-inner)"
         >
           <title>Pointwise real P25–P75</title>
         </path>
       )}
-      <path d={linePath(bands.p50, scale)} fill="none" stroke="var(--color-accent-700)" strokeWidth={2} strokeDasharray="6 4">
+      <path d={linePath(bands.p50, scale)} fill="none" stroke="var(--color-envelope-p50)" strokeWidth={2} strokeDasharray="6 4">
         <title>Pointwise real P50 across all iterations (not a path)</title>
       </path>
     </g>

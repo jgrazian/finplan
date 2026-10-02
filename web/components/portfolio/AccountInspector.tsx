@@ -133,42 +133,53 @@ export function AccountInspector({
         <div
           style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}
         >
-          <h5 style={{ margin: 0 }}>{draft.name.trim() || account.name}</h5>
+          <h4 style={{ margin: 0, fontSize: 18 }}>{draft.name.trim() || account.name}</h4>
           <Tag tone={badge.tone}>{badge.label}</Tag>
         </div>
-        <DirtyField label="Name" changed={changed.name} style={{ marginTop: 8 }}>
-          <CompactInput
-            value={draft.name}
-            readOnly={offline}
-            aria-label="Account name"
-            onChange={(e) => set("name", e.target.value)}
-          />
-        </DirtyField>
-        <DirtyField label="Kind" changed={changed.kind} style={{ marginTop: 8 }}>
-          <Dropdown
-            className="dd-field"
-            options={KINDS.map((kind) => ({
-              value: kind,
-              label: KIND_LABEL[kind],
-              // Locked rather than hidden: a menu that silently omits three of
-              // five kinds does not explain why this one cannot become them.
-              disabled: !isReachable(account, kind),
-              detail: isReachable(account, kind) ? undefined : "separate flavor",
-            }))}
-            value={draft.kind}
-            disabled={offline}
-            onChange={(kind: AccountKind) => {
-              setDraft((d) => ({
-                ...d,
-                kind,
-                taxStatus: taxStatusFor(kind, pristine.taxStatus),
-                // A brokerage has no contribution limit for the engine to read.
-                contributionLimit: kind === "retirement" ? d.contributionLimit : null,
-              }));
-            }}
-            ariaLabel="Kind"
-          />
-        </DirtyField>
+        {/* Side by side, like the terms below: two short fields in one row
+            leave room for the positions table to show every lot. */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+            gap: 10,
+            marginTop: 8,
+          }}
+        >
+          <DirtyField label="Name" changed={changed.name}>
+            <CompactInput
+              value={draft.name}
+              readOnly={offline}
+              aria-label="Account name"
+              onChange={(e) => set("name", e.target.value)}
+            />
+          </DirtyField>
+          <DirtyField label="Kind" changed={changed.kind}>
+            <Dropdown
+              className="dd-field"
+              options={KINDS.map((kind) => ({
+                value: kind,
+                label: KIND_LABEL[kind],
+                // Locked rather than hidden: a menu that silently omits three of
+                // five kinds does not explain why this one cannot become them.
+                disabled: !isReachable(account, kind),
+                detail: isReachable(account, kind) ? undefined : "separate flavor",
+              }))}
+              value={draft.kind}
+              disabled={offline}
+              onChange={(kind: AccountKind) => {
+                setDraft((d) => ({
+                  ...d,
+                  kind,
+                  taxStatus: taxStatusFor(kind, pristine.taxStatus),
+                  // A brokerage has no contribution limit for the engine to read.
+                  contributionLimit: kind === "retirement" ? d.contributionLimit : null,
+                }));
+              }}
+              ariaLabel="Kind"
+            />
+          </DirtyField>
+        </div>
       </div>
 
       {warning && <ConversionNote>{warning}</ConversionNote>}

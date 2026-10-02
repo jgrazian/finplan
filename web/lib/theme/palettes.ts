@@ -29,7 +29,7 @@ export const ACCENTS: ReadonlyArray<{
   light: string;
   dark: string;
 }> = [
-  { value: "blue", label: "Blue", light: "#3570bd", dark: "#8ab7f4" },
+  { value: "blue", label: "Blue", light: "#2f5f9e", dark: "#93b7e7" },
   { value: "green", label: "Green", light: "#028653", dark: "#7bc89c" },
   { value: "purple", label: "Purple", light: "#8359ae", dark: "#c3a4e8" },
 ];

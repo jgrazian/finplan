@@ -163,11 +163,12 @@ export function ChartCanvas({
               x2={scale.x(hoverIndex)}
               y1={geo.top}
               y2={scale.baseline}
-              stroke="var(--color-accent-900)"
+              stroke="var(--color-text)"
+              strokeOpacity={0.55}
               strokeWidth={1}
             />
             {hoverY != null && (
-              <circle cx={scale.x(hoverIndex)} cy={hoverY} r={3.5} fill="var(--color-accent-900)" />
+              <circle cx={scale.x(hoverIndex)} cy={hoverY} r={3.5} fill="var(--color-text)" />
             )}
           </g>
         )}
