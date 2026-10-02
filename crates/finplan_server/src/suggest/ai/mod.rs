@@ -854,20 +854,6 @@ impl ToolReport {
 /// message the model reads.
 type Problem = (&'static str, Value);
 
-fn change_problem_kind(problem: &ChangeProblem) -> &'static str {
-    match problem {
-        ChangeProblem::Stale { .. } => "change_stale",
-        ChangeProblem::BadPath { .. } => "change_bad_path",
-        ChangeProblem::InvalidBody { .. } => "change_invalid_body",
-        ChangeProblem::UnknownTarget { .. } => "change_unknown_target",
-        ChangeProblem::UnsupportedOp { .. } => "change_unsupported_op",
-        ChangeProblem::DuplicateKey { .. } => "change_duplicate_key",
-        ChangeProblem::UnknownReference { .. } => "change_unknown_reference",
-        ChangeProblem::WrongReferenceKind { .. } => "change_wrong_reference_kind",
-        ChangeProblem::ReferenceCycle { .. } => "change_reference_cycle",
-    }
-}
-
 /// The output of a tool call that succeeded, kept for the session so a note
 /// can cite it as `Evidence::Computed`.
 #[derive(Debug, Clone)]
@@ -972,6 +958,7 @@ impl Session<'_> {
         let mut report = ToolReport::new(tool, out.outcome);
         report.paired = out.paired;
         report.problems = out.problems;
+        report.problem_kinds = out.problem_kinds;
         (text, out.is_error, report)
     }
 
@@ -1244,7 +1231,7 @@ impl Session<'_> {
                 Ok(diffs) => diffs,
                 Err((step, found)) => {
                     let step_key = path.steps.get(step).map_or("", |s| s.key.as_str());
-                    let kind = found.first().map_or("change", change_problem_kind);
+                    let kind = found.first().map_or("change", ChangeProblem::log_kind);
                     change_problems.push((
                         kind,
                         json!({

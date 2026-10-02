@@ -304,6 +304,23 @@ pub enum ChangeProblem {
     },
 }
 
+impl ChangeProblem {
+    /// The problem's kind as a fixed label, for logs and metrics.
+    pub fn log_kind(&self) -> &'static str {
+        match self {
+            ChangeProblem::Stale { .. } => "change_stale",
+            ChangeProblem::BadPath { .. } => "change_bad_path",
+            ChangeProblem::InvalidBody { .. } => "change_invalid_body",
+            ChangeProblem::UnknownTarget { .. } => "change_unknown_target",
+            ChangeProblem::UnsupportedOp { .. } => "change_unsupported_op",
+            ChangeProblem::DuplicateKey { .. } => "change_duplicate_key",
+            ChangeProblem::UnknownReference { .. } => "change_unknown_reference",
+            ChangeProblem::WrongReferenceKind { .. } => "change_wrong_reference_kind",
+            ChangeProblem::ReferenceCycle { .. } => "change_reference_cycle",
+        }
+    }
+}
+
 /// One line of a server-rendered diff: `from` is absent for an addition, `to`
 /// for a removal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

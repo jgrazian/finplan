@@ -2564,6 +2564,16 @@ async fn validate_changes_is_free_and_reports_diffs_or_problems() {
                 call("v1", "validate_changes", json!({"steps": [good]})),
                 call("v2", "validate_changes", json!({"steps": [stale]})),
                 call("v3", "validate_changes", json!({"steps": []})),
+                call(
+                    "v4",
+                    "validate_changes",
+                    json!({"steps": [{"key": "a", "title": "Remove the sweep", "changes": good}]}),
+                ),
+                call(
+                    "v5",
+                    "validate_changes",
+                    json!({"steps": [[{"op": "replace", "target": {"events": 1}, "path": ""}]]}),
+                ),
             ]),
         ),
         reply("end_turn", json!([])),
@@ -2582,6 +2592,12 @@ async fn validate_changes_is_free_and_reports_diffs_or_problems() {
     // A dry run is informational, not an error; an unusable call is.
     assert!(!result_for(&requests, 1, "v2").1);
     assert!(result_for(&requests, 1, "v3").1);
+    // A note's step object reads as the step it holds.
+    assert_eq!(json_result(&requests, 1, "v4")["valid"], true);
+    // A change that does not parse is named by its place.
+    let (text, is_error) = result_for(&requests, 1, "v5");
+    assert!(is_error);
+    assert!(text.starts_with("step 1, change 1:"), "{text}");
     assert_eq!(outcome.usage.previews, 0, "validation spends no preview");
     assert_eq!(*tools.previews.lock().unwrap(), 0);
 }

@@ -139,6 +139,8 @@ pub struct ToolOutput {
     pub paired: Option<bool>,
     /// Problems found with the call's changes.
     pub problems: usize,
+    /// The kinds of those problems, or why the input was refused, for logs.
+    pub problem_kinds: Vec<&'static str>,
     /// Simulations run, to count against the loop's preview budget.
     pub previews_spent: u32,
     /// Goal seeks run, to count against the session's few.
@@ -156,6 +158,7 @@ impl ToolOutput {
             outcome: AiToolOutcome::Ok,
             paired: None,
             problems: 0,
+            problem_kinds: Vec::new(),
             previews_spent: 0,
             goal_seeks_spent: 0,
             previewed: Vec::new(),
