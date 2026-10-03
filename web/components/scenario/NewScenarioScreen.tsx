@@ -14,12 +14,11 @@ import {
   type SegmentOption,
 } from "@/components/ui";
 import { CreateAccountLink, useGuest } from "@/components/auth/GuestContext";
-import { api } from "@/lib/api/client";
-import { http } from "@/lib/api/http";
 import type { Entitlements } from "@/lib/api/generated/Entitlements";
 import type { SetupPlan } from "@/lib/api/generated/SetupPlan";
 import type { Profile, Scenario, TaxConfig, UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { type PlanHome, planApiFor, planCapabilities } from "@/lib/nav";
 import { addYears, money, yearsBetween } from "@/lib/view/format";
 import { DescribeSetup } from "./DescribeSetup";
 import { SetupBar } from "./SetupBar";
@@ -162,6 +161,10 @@ interface NewScenarioProps {
   returnProfiles?: Profile[];
   /** What the account may do; `ai_drafts` null (or absent) hides Describe & upload. */
   access?: Entitlements;
+  /** Where the plan will be kept. The libraries above are that home's. */
+  home: PlanHome;
+  /** Offered only when there is a choice, i.e. local mode is on. */
+  onHomeChange?: (home: PlanHome) => void;
   onClose: () => void;
   onCreated: (s: Scenario) => void;
   /** A draft is opened on Review; it stays a draft until Create & run. */
@@ -178,25 +181,45 @@ type Mode = "guided" | "describe" | "blank";
  * alone, and, where the server has AI drafts on, Describe & upload.
  */
 export function NewScenarioScreen(props: NewScenarioProps) {
-  const [mode, setMode] = useState<Mode>("guided");
+  const [chosen, setMode] = useState<Mode>("guided");
   // Held here rather than in the questions, so a look at Describe & upload
   // does not send Guided back to its first step.
   const [step, setStep] = useState(0);
   const access = props.access;
   const drafts = access?.ai_drafts ?? null;
-  const describable = access != null && drafts != null && props.onReviewDraft != null && props.onDraftCreated != null;
+  const { guest, restricted } = useGuest();
+  // Drafts are written by the server for a plan it stores, so a plan kept on
+  // this device cannot have one: Describe & upload is the locked state AI
+  // features show there, and Guided is where the person lands instead.
+  const capabilities = planCapabilities(props.home, { account: !guest });
+  const mode: Mode = !capabilities.ai && chosen === "describe" ? "guided" : chosen;
+  const describable =
+    capabilities.ai && access != null && drafts != null && props.onReviewDraft != null && props.onDraftCreated != null;
   // A hosted guest has no AI drafts: Describe & upload stays in the list,
   // locked, with the way to unlock it beside it.
-  const { restricted } = useGuest();
-  const locked = restricted && drafts == null;
+  const lockedForGuest = capabilities.ai && restricted && drafts == null;
+  const lockedForHome = !capabilities.ai && drafts != null;
+  const locked = lockedForGuest || lockedForHome;
   const modeSwitch = (
     <>
-      <ModeSwitch mode={mode} describable={describable} locked={locked} onChange={setMode} />
-      {locked && (
+      {props.onHomeChange && <HomeSwitch home={props.home} onChange={props.onHomeChange} />}
+      <ModeSwitch
+        mode={mode}
+        describable={describable}
+        locked={locked}
+        lockedTitle={
+          lockedForHome
+            ? capabilities.cloudOnlyReason
+            : "Create a free account to describe your plan and upload statements."
+        }
+        onChange={setMode}
+      />
+      {lockedForGuest && (
         <span className="ns-mut">
           AI drafts and document upload need an account. <CreateAccountLink />.
         </span>
       )}
+      {lockedForHome && <span className="ns-mut">{capabilities.cloudOnlyReason}.</span>}
     </>
   );
   if (access && drafts && props.onReviewDraft && props.onDraftCreated && mode === "describe") {
@@ -216,6 +239,8 @@ export function NewScenarioScreen(props: NewScenarioProps) {
   return (
     <GuidedSetup
       {...props}
+      // The answers hold ids from one home's library; another home has its own.
+      key={props.home}
       blank={mode === "blank"}
       step={step}
       onStep={setStep}
@@ -224,16 +249,36 @@ export function NewScenarioScreen(props: NewScenarioProps) {
   );
 }
 
+/** Where the new plan lives; shown only when local mode gives a choice. */
+function HomeSwitch({ home, onChange }: { home: PlanHome; onChange: (home: PlanHome) => void }) {
+  const options: SegmentOption<PlanHome>[] = [
+    { value: "local", label: "This device", title: "The plan stays in this browser." },
+    { value: "cloud", label: "Cloud", title: "The plan is saved to your FinPlan account." },
+  ];
+  return (
+    <SegmentedControl
+      name="new-scenario-home"
+      ariaLabel="Where to keep it"
+      options={options}
+      value={home}
+      onChange={onChange}
+    />
+  );
+}
+
 function ModeSwitch({
   mode,
   describable,
   locked,
+  lockedTitle,
   onChange,
 }: {
   mode: Mode;
   describable: boolean;
-  /** Shown but disabled: the account would have it, a guest does not. */
+  /** Shown but disabled: the account would have it, a guest or a local plan does not. */
   locked: boolean;
+  /** Why it is disabled, as the tooltip. */
+  lockedTitle?: string;
   onChange: (mode: Mode) => void;
 }) {
   const options: SegmentOption<Mode>[] = [
@@ -245,7 +290,7 @@ function ModeSwitch({
             value: "describe" as const,
             label: "Describe & upload",
             disabled: true,
-            title: "Create a free account to describe your plan and upload statements.",
+            title: lockedTitle,
           },
         ]
       : []),
@@ -273,7 +318,10 @@ function GuidedSetup(
   const { blank, onStep: setStep } = props;
   const [profiles, setProfiles] = useState(props.returnProfiles ?? []);
   const [stepError, setStepError] = useState<string>();
-  const key = `finplan-setup-v1:${props.defaults.id}`;
+  // A cloud plan's draft keeps its original key; a local plan's is its own,
+  // since the profile ids in it belong to that home's library.
+  const api = planApiFor(props.home);
+  const key = `finplan-setup-v1:${props.defaults.id}${props.home === "local" ? ":local" : ""}`;
   const [draft, setDraft] = useState<SetupDraft>(() => {
     const profileIds = defaultReturnProfileIds(props.returnProfiles ?? []);
     const empty: SetupDraft = {
@@ -358,7 +406,7 @@ function GuidedSetup(
         }));
       })
       .catch(() => {});
-  }, [props.returnProfiles]);
+  }, [api, props.returnProfiles]);
   useEffect(() => {
     try {
       localStorage.setItem(key, JSON.stringify(draft));
@@ -499,7 +547,7 @@ function GuidedSetup(
     }
     submit.run(async () => {
       const plan = setupPlanOf(draft);
-      const result = await http.post<{ scenario_id: number }>("/scenarios/setup", {
+      const result = await api.scenarios.setup({
         ...plan,
         cash,
         retirement_401k: retirement401k,

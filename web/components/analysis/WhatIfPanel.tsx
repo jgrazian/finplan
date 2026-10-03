@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Dialog, Field, Input } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import { ApiError } from "@/lib/api/http";
 import type {
   AnalysisParameter,
@@ -99,6 +99,7 @@ export function WhatIfPanel({
   /** Save as scenario made a copy: open it. */
   onScenarioCreated: (created: Scenario) => void;
 }) {
+  const api = usePlanApi();
   const ctx = useMemo<WhatIfContext>(() => {
     const axis = planAxis(scenario);
     return {
@@ -200,7 +201,7 @@ export function WhatIfPanel({
       );
     }, RUN_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [runnable, key, tooMany, requested, scenario.id]);
+  }, [api, runnable, key, tooMany, requested, scenario.id]);
 
   // Leaving the screen withdraws the question, and the server stops on it.
   useEffect(() => () => quickFlight.current?.abort(), []);

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui";
 import { download } from "@/components/account/download";
-import { api } from "@/lib/api/client";
+import { planApiFor } from "@/lib/nav";
 import { guestNotice } from "@/lib/view/guest";
 import { useGuest } from "./GuestContext";
 
@@ -24,7 +24,7 @@ export function GuestBanner() {
     try {
       download(
         `finplan-${new Date().toISOString().slice(0, 10)}.json`,
-        await api.archives.exportAll(),
+        await planApiFor("cloud").archives.exportAll(),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not export.");

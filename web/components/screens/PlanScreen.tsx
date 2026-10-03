@@ -12,7 +12,7 @@ import {
 } from "@/components/plan";
 import { DeleteScenarioDialog } from "@/components/scenario/DeleteScenarioDialog";
 import { Button, Dialog, SegmentedControl } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { Event as ApiEvent, EventBody, UpdateScenario } from "@/lib/api/types";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
@@ -87,6 +87,7 @@ export function PlanScreen({
   /** The scenario itself was deleted from its strip. */
   onScenarioDeleted?: (id: number) => void;
 }) {
+  const api = usePlanApi();
   const [deletingScenario, setDeletingScenario] = useState(false);
   const [savedAt, setSavedAt] = useState<Map<number, number>>(new Map());
   const [lastEventId, setLastEventId] = useState<string>();

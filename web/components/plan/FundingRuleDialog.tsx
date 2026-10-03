@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { DateInput, Dialog, Field, NumberInput, Select } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { Account } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 export function FundingRuleDialog({ scenarioId, accounts, onClose, onSaved }: {
@@ -10,6 +10,7 @@ export function FundingRuleDialog({ scenarioId, accounts, onClose, onSaved }: {
     onClose: () => void;
     onSaved: () => void;
 }) {
+  const api = usePlanApi();
     const [source, setSource] = useState(0);
     const [target, setTarget] = useState(0);
     const [amount, setAmount] = useState(0);

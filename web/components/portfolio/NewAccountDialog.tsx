@@ -10,7 +10,7 @@ import {
   Input,
   NumberInput,
 } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type {
   Account as ApiAccount,
   Asset,
@@ -72,6 +72,7 @@ export function NewAccountDialog({
   /** A ticker made here, so the screen can reload and keep it selectable. */
   onAssetCreated: (asset: Asset) => void;
 }) {
+  const api = usePlanApi();
   const [flavor, setFlavor] = useState<Flavor>("Bank");
   const [name, setName] = useState("");
   const [cash, setCash] = useState(0);

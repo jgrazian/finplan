@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import { historyApi } from "@/lib/api/history";
 import type { Results, Run } from "@/lib/api/types";
 import type { RunInputs } from "@/lib/api/generated/RunInputs";
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui";
 const money=(v:number)=>v.toLocaleString("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0});
 const rate=(v:number|null)=>v == null ? "Not measured — rerun" : `${(v*100).toFixed(1)}%`;
 export function RunHistory({history,selectedRunId,onSelectRun,inputs}:{history:Run[];selectedRunId?:number;onSelectRun:(id:number)=>void;inputs?:RunInputs}) {
+  const api = usePlanApi();
   const [access,setAccess]=useState<Entitlements>();
   const pro=access?.pro ?? false;
   const [plans,setPlans]=useState<{id:number;name:string}[]>([]);
@@ -21,27 +22,27 @@ export function RunHistory({history,selectedRunId,onSelectRun,inputs}:{history:R
   const [compare,setCompare]=useState<number>();
   const [comparison,setComparison]=useState<{left:Results;right:Results;inputs:RunInputs;leftId:number;rightId:number}>();
   useEffect(()=>{let live=true;historyApi.entitlements().then(e=>live && setAccess(e)).catch(()=>{if(live)setError("Could not load access to comparisons and reports. Reload to try again.");});return()=>{live=false;};},[]);
-  useEffect(()=>{let live=true;api.scenarios.list().then(plans=>live && setPlans(plans)).catch(()=>{});return()=>{live=false;};},[]);
+  useEffect(()=>{let live=true;api.scenarios.list().then(plans=>live && setPlans(plans)).catch(()=>{});return()=>{live=false;};},[api]);
   useEffect(()=>{
     if(compareScenario == null) return;
     let live=true;
     api.runs.list(compareScenario).then(runs=>live && setOtherRuns({scenarioId:compareScenario,runs})).catch((e:Error)=>live && setError(e.message));
     return()=>{live=false;};
-  },[compareScenario]);
+  },[api,compareScenario]);
   useEffect(()=>{
     if(!pro || !selectedRunId || !compare || selectedRunId === compare) return;
     let live=true;
-    historyApi.compare(selectedRunId,compare)
+    api.runs.compare(selectedRunId,compare)
       .then(({left,right})=>{if(live)setComparison({left:left.results,right:right.results,inputs:right.inputs,leftId:selectedRunId,rightId:compare});})
       .catch((e:Error)=>live && setError(e.message));
     return()=>{live=false;};
-  },[selectedRunId,compare,pro]);
+  },[api,selectedRunId,compare,pro]);
   async function printReport(){
     if(!selectedRunId || !inputs || !pro) return;
     const target=window.open("","_blank");
     if(!target){setError("Allow the report window to open, then retry.");return;}
     try{
-      const bundle=await historyApi.report(selectedRunId);
+      const bundle=await api.runs.report(selectedRunId);
       target.document.open();target.document.write(reportHtml(bundle.results,bundle.inputs));target.document.close();
       target.focus();target.print();
     }catch(e){target.close();setError(e instanceof Error ? e.message:String(e));}
@@ -49,7 +50,7 @@ export function RunHistory({history,selectedRunId,onSelectRun,inputs}:{history:R
   async function downloadInputs(){
     if(!selectedRunId) return;
     try{
-      const archive=await historyApi.archive(selectedRunId);
+      const archive=await api.runs.archive(selectedRunId);
       const url=URL.createObjectURL(new Blob([JSON.stringify(archive,null,2)],{type:"application/json"}));
       const link=document.createElement("a");link.href=url;link.download=`finplan-run-${selectedRunId}-inputs.json`;link.click();
       setTimeout(()=>URL.revokeObjectURL(url),1000);

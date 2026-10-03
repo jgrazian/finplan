@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api/client";
 import type { WhatIfEntry } from "@/lib/api/types";
+import { usePlanApi } from "@/lib/nav/plan";
 import { useAsync } from "./useAsync";
 
 /**
@@ -24,7 +24,8 @@ const EMPTY: WhatIfEntry[] = [];
  * costs a click, not the plan.
  */
 export function useWhatIfStack(scenarioId: number) {
-  const stored = useAsync(() => api.whatIf.get(scenarioId), [scenarioId]);
+  const api = usePlanApi();
+  const stored = useAsync(() => api.whatIf.get(scenarioId), [api, scenarioId]);
   const [edited, setEdited] = useState<{ scenarioId: number; entries: WhatIfEntry[] }>();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const queued = useRef<{ scenarioId: number; entries: WhatIfEntry[] }>(undefined);
@@ -35,7 +36,7 @@ export function useWhatIfStack(scenarioId: number) {
     queued.current = undefined;
     if (pending == null) return;
     void api.whatIf.save(pending.scenarioId, { entries: pending.entries }).catch(() => {});
-  }, []);
+  }, [api]);
 
   const setEntries = useCallback(
     (entries: WhatIfEntry[]) => {

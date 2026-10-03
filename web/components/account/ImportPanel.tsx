@@ -2,12 +2,11 @@
 
 import { useState } from "react";
 import { Button, Field, Input } from "@/components/ui";
-import { api } from "@/lib/api/client";
+
 import { scenarioDestination, toHref } from "@/lib/nav/url";
-import { http } from "@/lib/api/http";
+import { planApiFor } from "@/lib/nav/api";
 import type { PlanArchive } from "@/lib/api/generated/PlanArchive";
 import type { ArchivePreview } from "@/lib/api/generated/ArchivePreview";
-import type { ArchiveImported } from "@/lib/api/generated/ArchiveImported";
 
 export function ImportPanel({ disabled }: { disabled?: boolean }) {
   const [pending, setPending] = useState<{ archive: PlanArchive; preview: ArchivePreview; key: string }>();
@@ -26,7 +25,7 @@ export function ImportPanel({ disabled }: { disabled?: boolean }) {
         setBusy(true);
         try {
           const archive: PlanArchive = JSON.parse(await file.text());
-          const preview = await http.post<ArchivePreview>("/archives/preview", archive);
+          const preview = await planApiFor("cloud").archives.preview(archive);
           setPending({ archive, preview, key: crypto.randomUUID() });
         } catch (e) { setError(e instanceof Error ? e.message : "Could not read archive."); }
         finally { setBusy(false); }
@@ -41,10 +40,10 @@ export function ImportPanel({ disabled }: { disabled?: boolean }) {
       <Button disabled={busy || disabled} onClick={async () => {
         setBusy(true); setError(undefined);
         try {
-          const restored = await http.post<ArchiveImported>("/archives/import", {
-            archive: pending.archive, name_prefix: prefix, request_id: pending.key,
+          const restored = await planApiFor("cloud").archives.import({
+            archive: pending.archive, name_prefix: prefix, request_id: pending.key, from_guest: false,
           });
-          const scenario = await api.scenarios.get(restored.scenario_ids[0]);
+          const scenario = await planApiFor("cloud").scenarios.get(restored.scenario_ids[0]);
           window.location.assign(toHref(scenarioDestination(scenario.slug, "plan")));
         } catch (e) { setError(e instanceof Error ? e.message : "Import failed. You can retry safely."); }
         finally { setBusy(false); }

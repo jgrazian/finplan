@@ -1,11 +1,11 @@
 import type { Scenario } from "@/lib/api/types";
 
-import { http } from "@/lib/api/http";
+import { planApiFor } from "@/lib/nav/api";
 import type { PlanArchive } from "@/lib/api/generated/PlanArchive";
 
 /** Consistent server snapshot, including all referenced assumptions. */
 export async function collectScenario(scenario: Scenario): Promise<PlanArchive> {
-  return http.get<PlanArchive>(`/scenarios/${scenario.id}/archive`);
+  return planApiFor("cloud").scenarios.archive(scenario.id);
 }
 
 /** Hand the browser a file. Nothing leaves the machine. */
