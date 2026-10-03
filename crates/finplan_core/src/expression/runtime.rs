@@ -174,7 +174,7 @@ impl Expression {
                         .find(|&child| values[child].is_none())),
                 }
             })()
-            .map_err(&error)?;
+            .map_err(error)?;
             if let Some(child) = dependency {
                 pending.push(child);
                 continue;
