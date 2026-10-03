@@ -246,7 +246,7 @@ async fn plan(
     scenario_id: i64,
     user_id: &str,
 ) -> ApiResult<(compile::CompiledScenario, Vec<PlanParameter>)> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, user_id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, user_id).await?;
     let compiled = compile::compile(&graph)?;
     let params = parameters(&compiled);
     Ok((compiled, params))
@@ -343,7 +343,7 @@ pub(crate) async fn prepare(
             },
         );
     }
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let compiled = compile::compile(&graph)?;
     let available = parameters(&compiled);
     // A what-if can be all shocks and one-offs, so it is the one analysis that

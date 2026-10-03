@@ -234,7 +234,7 @@ async fn plan_with_spend_parameter(d: &Draft) -> ScenarioGraph {
         }))
         .unwrap(),
     );
-    let mut graph = ScenarioGraph::load(&d.state.db, d.scenario, &d.user.id)
+    let mut graph = crate::db::graph::load(&d.state.db, d.scenario, &d.user.id)
         .await
         .unwrap();
     load_profiles(&d.state.db, &d.user.id, &mut graph, [d.profile].into())
@@ -404,7 +404,7 @@ async fn an_ai_goal_seek_over_an_age_searches_a_grid_and_reports_years() {
         }))
         .unwrap(),
     );
-    let mut graph = ScenarioGraph::load(&d.state.db, d.scenario, &d.user.id)
+    let mut graph = crate::db::graph::load(&d.state.db, d.scenario, &d.user.id)
         .await
         .unwrap();
     load_profiles(&d.state.db, &d.user.id, &mut graph, [d.profile].into())

@@ -458,7 +458,7 @@ async fn preflight(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<PreflightReport>> {
-    let g = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let g = crate::db::graph::load(&state.db, id, &user.id).await?;
     Ok(Json(review(&g)))
 }
 pub fn review(g: &ScenarioGraph) -> PreflightReport {

@@ -36,7 +36,7 @@ use super::runs::{self, Run};
 use super::scenarios::{SCENARIO_COLUMNS, Scenario};
 use super::suggestions::{self, ApplySuggestion, ApplyTo, SuggestionPath};
 use crate::auth::session::CurrentUser;
-use crate::compile::{self, rows::ScenarioGraph};
+use crate::compile;
 use crate::db::Db;
 use crate::documents;
 use crate::error::{ApiError, ApiResult};
@@ -512,7 +512,7 @@ async fn create_and_run(
 ) -> ApiResult<(StatusCode, Json<DraftCreated>)> {
     let add_open = body.and_then(|Json(b)| b.add_open).unwrap_or(false);
     // A draft that cannot run says why now, before it stops being a draft.
-    let graph = match ScenarioGraph::load(&state.db, id, &user.id).await {
+    let graph = match crate::db::graph::load(&state.db, id, &user.id).await {
         Ok(graph) if super::is_draft(&state.db, id).await? => graph,
         Ok(_) | Err(ApiError::NotFound(_)) => return Err(ApiError::NotFound("draft")),
         Err(err) => return Err(err),
@@ -529,7 +529,10 @@ async fn create_and_run(
     }
     let (graph, added) = if add_open {
         let added = add_open_notes(&state, &user, id).await?;
-        (ScenarioGraph::load(&state.db, id, &user.id).await?, added)
+        (
+            crate::db::graph::load(&state.db, id, &user.id).await?,
+            added,
+        )
     } else {
         (graph, 0)
     };

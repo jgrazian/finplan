@@ -404,7 +404,7 @@ pub async fn apply_steps_sql(
 ) -> ApiResult<Result<Created, StepProblems>> {
     let mut created = seeded.clone();
     for (step, changes) in steps.iter().enumerate() {
-        let live = ScenarioGraph::load_connection(tx, scenario_id, user_id).await?;
+        let live = crate::db::graph::load_connection(tx, scenario_id, user_id).await?;
         let resolved = match resolve_with(&live, changes, &created) {
             Ok(resolved) => resolved,
             Err(problems) => return Ok(Err(StepProblems { step, problems })),

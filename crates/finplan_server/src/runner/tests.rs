@@ -41,7 +41,7 @@ async fn fixture() -> (Db, RunQueue, String, tempfile::TempDir) {
     (db, queue, user, directory)
 }
 async fn insert(db: &Db, user: &str, valid: bool) -> i64 {
-    let graph = ScenarioGraph::load(db, 1, user).await.unwrap();
+    let graph = crate::db::graph::load(db, 1, user).await.unwrap();
     let (snapshot, _) = inputs::snapshot(&graph).unwrap();
     sqlx::query_scalar("INSERT INTO runs(scenario_id,user_id,iterations,seed,snapshot_json,model_version) VALUES (1,?,3,42,?,?) RETURNING id")
         .bind(user).bind(valid.then_some(snapshot)).bind(inputs::MODEL_VERSION).fetch_one(db).await.unwrap()

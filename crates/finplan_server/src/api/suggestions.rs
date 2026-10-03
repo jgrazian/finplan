@@ -1898,7 +1898,7 @@ pub(super) async fn apply(
             }
             // Read the live plan inside the write lock, walk the path over
             // it in memory, and clone the result.
-            let live = ScenarioGraph::load_connection(&mut tx, scenario_id, &user.id).await?;
+            let live = crate::db::graph::load_connection(&mut tx, scenario_id, &user.id).await?;
             let stepped = match suggest::resolve_steps(&live, &batches, &seeded)? {
                 Ok(stepped) => stepped,
                 Err(failed) => {

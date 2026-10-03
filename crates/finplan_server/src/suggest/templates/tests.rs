@@ -76,7 +76,7 @@ impl Fixture {
     }
 
     async fn graph(&self) -> ScenarioGraph {
-        ScenarioGraph::load(&self.db, self.scenario, &self.user)
+        crate::db::graph::load(&self.db, self.scenario, &self.user)
             .await
             .unwrap()
     }

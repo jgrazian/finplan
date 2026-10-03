@@ -1071,9 +1071,7 @@ mod tests {
             .unwrap();
         sqlx::query("INSERT INTO scenarios(id,user_id,name,start_date,duration_years) VALUES (1,?,'Test','2026-01-01',1)")
             .bind(&user).execute(&db).await.unwrap();
-        let graph = crate::compile::rows::ScenarioGraph::load(&db, 1, &user)
-            .await
-            .unwrap();
+        let graph = crate::db::graph::load(&db, 1, &user).await.unwrap();
         let config = crate::compile::compile(&graph).unwrap().config;
         (AnalysisJobs::new(db, 1), user, config)
     }

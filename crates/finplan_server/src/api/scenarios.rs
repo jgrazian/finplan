@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
-use crate::compile::{self, rows::ScenarioGraph};
+use crate::compile;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
@@ -364,7 +364,7 @@ async fn duplicate(
     Path(id): Path<i64>,
     Json(Submitted { body, fields }): Json<Submitted<DuplicateRequest>>,
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
-    let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, id, &user.id).await?;
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     crate::billing::check_plan_slot(&mut tx, &user.id, &state.config, 1).await?;
     let new_id = crate::domain::clone_into(&mut tx, &graph, body.name.trim()).await?;
@@ -413,7 +413,7 @@ async fn compile_check(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<CompileReport>> {
-    let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, id, &user.id).await?;
     let compiled = compile::compile(&graph)?;
 
     Ok(Json(CompileReport {

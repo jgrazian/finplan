@@ -23,7 +23,8 @@ use std::collections::{HashMap, HashSet};
 use sqlx::SqliteConnection;
 
 use crate::compile::rows::{
-    EffectRow, ScenarioGraph, TransferAmountRow, TriggerRow, WithdrawalItemRow, WithdrawalSourceRow,
+    EffectRow, ScenarioGraph, Table, TransferAmountRow, TriggerRow, WithdrawalItemRow,
+    WithdrawalSourceRow,
 };
 use crate::error::{ApiError, ApiResult};
 
@@ -291,10 +292,9 @@ impl RowBatch {
     pub(crate) fn merge_into(&self, graph: &mut ScenarioGraph) -> ApiResult<Placed> {
         self.check_references(graph)?;
 
-        let next = |ids: &mut dyn Iterator<Item = i64>| ids.max().unwrap_or(0) + 1;
-        let mut next_amount = next(&mut graph.amounts.keys().copied());
-        let mut next_trigger = next(&mut graph.triggers.keys().copied());
-        let mut next_effect = next(&mut graph.effects.keys().copied());
+        let mut next_amount = graph.next_id(Table::Amounts);
+        let mut next_trigger = graph.next_id(Table::Triggers);
+        let mut next_effect = graph.next_id(Table::Effects);
 
         let mut placed = Placed {
             ids: Vec::with_capacity(self.rows.len()),

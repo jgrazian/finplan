@@ -13,6 +13,8 @@ use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+pub use finplan_plan::specs::CatchUpSpec;
+
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
@@ -116,19 +118,6 @@ impl PlanType {
             PlanType::Roth401k | PlanType::RothIra | PlanType::Hsa => TaxStatus::TaxFree,
         }
     }
-}
-
-/// Extra contribution room from `from_age` through `through_age` (inclusive;
-/// null for no upper bound), on top of the account's contribution limit. Age
-/// is the one reached by December 31 of the contribution year. Tiers do not
-/// stack: the largest that applies wins.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct CatchUpSpec {
-    pub from_age: u8,
-    #[serde(default)]
-    pub through_age: Option<u8>,
-    pub amount: f64,
 }
 
 /// The flavor-specific half of an account.
@@ -657,7 +646,7 @@ async fn update(
 ) -> ApiResult<Json<Account>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let rename_graph = if body.name.is_some() {
-        Some(crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?)
+        Some(crate::db::graph::load(&state.db, scenario_id, &user.id).await?)
     } else {
         None
     };
@@ -768,7 +757,7 @@ async fn destroy(
     Path((scenario_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    let graph = crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let mut conn = state.db.acquire().await?;
     destroy_in(&mut conn, &graph, scenario_id, id).await?;
     drop(conn);

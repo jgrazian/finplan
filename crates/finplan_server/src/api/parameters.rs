@@ -149,7 +149,7 @@ async fn list(
     user: CurrentUser,
     Path(scenario_id): Path<i64>,
 ) -> ApiResult<Json<Vec<NamedParameter>>> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     graph
         .parameters
         .iter()
@@ -207,7 +207,7 @@ async fn update(
     Path((scenario_id, parameter_id)): Path<(i64, i64)>,
     Json(body): Json<ParameterBody>,
 ) -> ApiResult<Json<NamedParameter>> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let uses = usages(&graph, parameter_id)?;
     let mut tx = state.db.begin().await?;
     update_in(&mut tx, &graph, scenario_id, parameter_id, &body).await?;
@@ -269,7 +269,7 @@ async fn destroy(
     user: CurrentUser,
     Path((scenario_id, parameter_id)): Path<(i64, i64)>,
 ) -> ApiResult<StatusCode> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let mut conn = state.db.acquire().await?;
     destroy_in(&mut conn, &graph, scenario_id, parameter_id).await?;
     drop(conn);

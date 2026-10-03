@@ -468,7 +468,7 @@ async fn list(
     user: CurrentUser,
     Path(scenario_id): Path<i64>,
 ) -> ApiResult<Json<Vec<Event>>> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let mut out = Vec::with_capacity(graph.events.len());
     for event in &graph.events {
         out.push(read_event(&graph, event.id)?);
@@ -515,7 +515,7 @@ async fn fetch(
     user: CurrentUser,
     Path((scenario_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<Event>> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     Ok(Json(read_event(&graph, id)?))
 }
 
@@ -526,7 +526,7 @@ async fn create(
     Json(Submitted { body, fields }): Json<Submitted<EventBody>>,
 ) -> ApiResult<(StatusCode, Json<Event>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    let current = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let current = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     super::expressions::validate_tree(&current, &body.effects)?;
 
     let mut tx = state.db.begin().await?;
@@ -546,7 +546,7 @@ async fn create(
     );
     super::touch_scenario(&state.db, scenario_id).await?;
 
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     Ok((StatusCode::CREATED, Json(read_event(&graph, id)?)))
 }
 
@@ -562,7 +562,7 @@ async fn replace(
     Json(Submitted { body, fields }): Json<Submitted<EventBody>>,
 ) -> ApiResult<Json<Event>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    let current = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let current = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     super::expressions::validate_tree(&current, &body.effects)?;
 
     let exists: Option<i64> =
@@ -590,7 +590,7 @@ async fn replace(
     );
     super::touch_scenario(&state.db, scenario_id).await?;
 
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     Ok(Json(read_event(&graph, id)?))
 }
 

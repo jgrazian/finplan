@@ -31,7 +31,7 @@ use crate::api::scenarios::UpdateScenario;
 use crate::api::taxes::{self, CreateTaxConfig};
 use crate::compile::rows::{
     AccountRow, AssetRow, BankRow, DistributionRow, EventRow, InflationEntry, InvestmentRow,
-    LiabilityRow, ParameterRow, PositionRow, PropertyRow, ReturnProfileRow, ScenarioGraph,
+    LiabilityRow, ParameterRow, PositionRow, PropertyRow, ReturnProfileRow, ScenarioGraph, Table,
     TaxBracketRow, TaxConfigEntry, TaxConfigRow,
 };
 use crate::error::{ApiError, ApiResult};
@@ -59,7 +59,7 @@ pub(crate) fn create_event(graph: &mut ScenarioGraph, body: &EventBody) -> ApiRe
                 "an event with that name already exists".into(),
             ));
         }
-        let id = g.events.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+        let id = g.next_id(Table::Events);
         let sort_order = body
             .sort_order
             .unwrap_or_else(|| g.events.iter().map(|e| e.sort_order).max().unwrap_or(-1) + 1);
@@ -209,7 +209,7 @@ pub(crate) fn create_asset(graph: &mut ScenarioGraph, body: &CreateAsset) -> Api
         if body.tracking_error.is_some_and(|t| t < 0.0) {
             return Err(ApiError::bad_request("tracking_error cannot be negative"));
         }
-        let id = g.assets.iter().map(|a| a.id).max().unwrap_or(0) + 1;
+        let id = g.next_id(Table::Assets);
         let sort_order = body
             .sort_order
             .unwrap_or_else(|| g.assets.iter().map(|a| a.sort_order).max().unwrap_or(-1) + 1);
@@ -305,7 +305,7 @@ pub(crate) fn create_account(graph: &mut ScenarioGraph, body: &CreateAccount) ->
                 "an account with that name already exists".into(),
             ));
         }
-        let id = g.accounts.iter().map(|a| a.id).max().unwrap_or(0) + 1;
+        let id = g.next_id(Table::Accounts);
         let sort_order = body
             .sort_order
             .unwrap_or_else(|| g.accounts.iter().map(|a| a.sort_order).max().unwrap_or(-1) + 1);
@@ -439,7 +439,7 @@ fn replace_detail(
                     contribution_limit: *contribution_limit,
                     contribution_period: contribution_period.map(|p| p.as_str().to_string()),
                     plan_type: plan_type.map(|p| p.as_str().to_string()),
-                    catch_up: sqlx::types::Json(catch_up.clone()),
+                    catch_up: catch_up.clone(),
                 },
             );
         }
@@ -710,7 +710,7 @@ pub(crate) fn create_parameter(graph: &mut ScenarioGraph, body: &ParameterBody) 
                 "a parameter with that name already exists".into(),
             ));
         }
-        let id = g.parameters.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        let id = g.next_id(Table::Parameters);
         g.parameters.push(parameter_row(id, name, body));
         Ok(id)
     })
@@ -871,14 +871,6 @@ pub(crate) fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) 
 
 // ── the caller's return profiles and tax configs ─────────────────────────────
 
-/// Ids for rows that exist only in memory start above every real id a run
-/// snapshot (which keeps just the library rows a run used) could be missing.
-const IN_MEMORY_ID_FLOOR: i64 = 1_000_000_000;
-
-fn next_library_id(existing: impl Iterator<Item = i64>) -> i64 {
-    existing.max().unwrap_or(0).max(IN_MEMORY_ID_FLOOR) + 1
-}
-
 /// Add a return profile to the caller's library, as `POST /return-profiles`
 /// would. Returns its id, which exists only in this graph.
 pub(crate) fn create_return_profile(
@@ -897,7 +889,7 @@ pub(crate) fn create_return_profile(
             ));
         }
         let distribution_id = add_distribution(g, &body.distribution);
-        let id = next_library_id(g.return_profiles.keys().copied());
+        let id = g.next_id(Table::ReturnProfiles);
         g.return_profiles.insert(
             id,
             ReturnProfileRow {
@@ -922,7 +914,7 @@ fn add_distribution(graph: &mut ScenarioGraph, spec: &DistributionSpec) -> i64 {
         _ => (None, None),
     };
     let mut row = DistributionRow {
-        id: next_library_id(graph.distributions.keys().copied()),
+        id: graph.next_id(Table::Distributions),
         kind: String::new(),
         rate: None,
         mean: None,
@@ -991,7 +983,7 @@ pub(crate) fn create_tax_config(
                 "a tax config with that name already exists".into(),
             ));
         }
-        let id = next_library_id(g.tax_configs.keys().copied());
+        let id = g.next_id(Table::TaxConfigs);
         g.tax_configs.insert(
             id,
             TaxConfigEntry {
@@ -1050,14 +1042,7 @@ pub(crate) fn create_position(
             ));
         }
         held_asset(g, body.asset_id)?;
-        let id = g
-            .positions
-            .values()
-            .flatten()
-            .map(|p| p.id)
-            .max()
-            .unwrap_or(0)
-            + 1;
+        let id = g.next_id(Table::Positions);
         g.positions
             .entry(account_id)
             .or_default()

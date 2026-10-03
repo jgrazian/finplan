@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::funding::FundingDiagnostics;
 use crate::auth::session::CurrentUser;
-use crate::compile::{self, rows::ScenarioGraph};
+use crate::compile;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobContext, JobKind, Origin};
 use crate::runner::telemetry::Submission;
@@ -230,7 +230,7 @@ pub(crate) async fn create_run(
     let reserved = state.runs.reserve(admission, Origin::Request)?;
     let dispatch_guard = state.runs.submission_guard().await;
     let mut tx = state.db.begin().await?;
-    let graph = ScenarioGraph::load_connection(&mut tx, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load_connection(&mut tx, scenario_id, &user.id).await?;
     compile::compile(&graph)?;
     let cost = ceiling
         .unwrap_or(iterations)
@@ -1173,7 +1173,7 @@ async fn input_hash(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<InputHash>> {
-    let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, id, &user.id).await?;
     let (_, input_hash) = crate::runner::inputs::snapshot(&graph)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(InputHash { input_hash }))

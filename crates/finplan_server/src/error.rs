@@ -112,6 +112,18 @@ impl ApiError {
     }
 }
 
+impl From<finplan_plan::PlanError> for ApiError {
+    fn from(error: finplan_plan::PlanError) -> Self {
+        use finplan_plan::PlanError;
+        match error {
+            PlanError::Invalid(message) => ApiError::BadRequest(message),
+            PlanError::Unprocessable(message) => ApiError::Unprocessable(message),
+            PlanError::NotFound(what) => ApiError::NotFound(what),
+            PlanError::Conflict(message) => ApiError::Conflict(message),
+        }
+    }
+}
+
 #[derive(Serialize, TS)]
 #[ts(export)]
 pub struct ErrorBody {

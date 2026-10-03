@@ -494,7 +494,7 @@ async fn apply(
     Path(scenario_id): Path<i64>,
     Json(body): Json<ApplyWhatIf>,
 ) -> ApiResult<Json<Scenario>> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let compiled = compile::compile(&graph)?;
     let available = parameters(&compiled);
     let resolved = resolve(&graph, &available, &body.layers)?;

@@ -298,7 +298,7 @@ impl Plan {
     }
 
     async fn load(&self) -> ScenarioGraph {
-        ScenarioGraph::load(&self.db, self.id, &self.user)
+        crate::db::graph::load(&self.db, self.id, &self.user)
             .await
             .unwrap()
     }

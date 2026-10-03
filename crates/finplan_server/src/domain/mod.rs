@@ -138,7 +138,7 @@ pub(crate) async fn clone_into_mapped(
             .bind(inv.contribution_limit)
             .bind(&inv.contribution_period)
             .bind(&inv.plan_type)
-            .bind(&inv.catch_up)
+            .bind(sqlx::types::Json(&inv.catch_up))
             .execute(&mut **tx)
             .await?;
         }

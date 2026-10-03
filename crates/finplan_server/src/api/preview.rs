@@ -314,7 +314,7 @@ async fn draft_preview(
     iterations: Option<usize>,
     limit: Limit,
 ) -> ApiResult<Preview> {
-    let mut graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let mut graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let mut outcome = Preview {
         base_run_id: None,
         iterations: 0,
@@ -437,7 +437,7 @@ pub async fn simulate_draft(
     iterations: Option<usize>,
 ) -> ApiResult<DraftSimulation> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    let mut graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let mut graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let all = || steps.iter().flatten();
     load_profiles(
         &state.db,
@@ -536,7 +536,10 @@ pub(crate) async fn base_snapshot(
     run_id: Option<i64>,
 ) -> ApiResult<(Option<i64>, ScenarioGraph)> {
     if run_id.is_none() && super::is_draft(db, scenario_id).await? {
-        return Ok((None, ScenarioGraph::load(db, scenario_id, user_id).await?));
+        return Ok((
+            None,
+            crate::db::graph::load(db, scenario_id, user_id).await?,
+        ));
     }
     let run = base_run(db, scenario_id, run_id).await?;
     let graph = run

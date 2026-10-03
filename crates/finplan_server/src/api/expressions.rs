@@ -58,7 +58,7 @@ async fn validate(
     Path(scenario_id): Path<i64>,
     Json(body): Json<ExpressionValidationRequest>,
 ) -> ApiResult<Json<ExpressionValidation>> {
-    let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     Ok(Json(validate_effect(&graph, &body.effect)?))
 }
 

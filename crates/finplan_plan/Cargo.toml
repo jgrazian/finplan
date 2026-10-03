@@ -1,0 +1,21 @@
+[package]
+name = "finplan_plan"
+version = "0.12.2"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = "1"
+# `deserialize_with` fields (the PATCH double-options) spell their TS shape
+# with `#[ts(...)]`, so ts-rs ignoring that serde attribute is expected.
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
+
+# `FromRow` for the row structs, which `finplan_server` reads straight from
+# SQLite. Off by default so the plan model builds without a database driver.
+sqlx = { version = "0.8", default-features = false, features = ["derive", "json"], optional = true }
+
+[features]
+sqlx = ["dep:sqlx"]
+# Pretty-prints the generated TypeScript; only wanted while regenerating the
+# bindings (`scripts/gen-bindings.sh`), because `format` drags in dprint.
+ts-format = ["ts-rs/format"]

@@ -92,7 +92,7 @@ mod tests {
 
         let k401 = graph.investment.get_mut(&3).unwrap();
         k401.plan_type = Some("Traditional401k".to_string());
-        k401.catch_up = sqlx::types::Json(vec![
+        k401.catch_up = vec![
             CatchUpSpec {
                 from_age: 50,
                 through_age: Some(59),
@@ -103,14 +103,14 @@ mod tests {
                 through_age: None,
                 amount: 11_250.0,
             },
-        ]);
+        ];
         let roth = graph.investment.get_mut(&2).unwrap();
         roth.plan_type = Some("RothIra".to_string());
-        roth.catch_up = sqlx::types::Json(vec![CatchUpSpec {
+        roth.catch_up = vec![CatchUpSpec {
             from_age: 50,
             through_age: Some(120),
             amount: 1_000.0,
-        }]);
+        }];
 
         graph.parameters.push(ParameterRow {
             id: 1,

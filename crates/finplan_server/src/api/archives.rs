@@ -73,7 +73,7 @@ async fn export_one(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<PlanArchive>> {
-    let graph = ScenarioGraph::load(&state.db, id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, id, &user.id).await?;
     let archive = pack(vec![graph])?;
     state.telemetry.mutation(
         Resource::Archive,
@@ -134,7 +134,7 @@ async fn export_all(
     .await?;
     let mut graphs = Vec::new();
     for id in ids {
-        graphs.push(ScenarioGraph::load_connection(&mut tx, id, &user.id).await?);
+        graphs.push(crate::db::graph::load_connection(&mut tx, id, &user.id).await?);
     }
     tx.commit().await?;
     let count = graphs.len() as u64;

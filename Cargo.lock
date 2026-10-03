@@ -1440,6 +1440,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "finplan_plan"
+version = "0.12.2"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sqlx",
+ "ts-rs",
+]
+
+[[package]]
 name = "finplan_server"
 version = "0.12.2"
 dependencies = [
@@ -1448,6 +1458,7 @@ dependencies = [
  "base64ct",
  "clap",
  "finplan_core",
+ "finplan_plan",
  "futures-util",
  "jiff",
  "lettre",

@@ -9,6 +9,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use sqlx::{Connection, SqliteConnection};
 use thiserror::Error;
 
+pub mod graph;
+
 pub type Db = sqlx::SqlitePool;
 
 pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");

@@ -252,7 +252,7 @@ async fn update(
 ) -> ApiResult<Json<Asset>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let rename_graph = if body.name.is_some() {
-        Some(crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?)
+        Some(crate::db::graph::load(&state.db, scenario_id, &user.id).await?)
     } else {
         None
     };
@@ -345,7 +345,7 @@ async fn destroy(
     Path((scenario_id, id)): Path<(i64, i64)>,
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
-    let graph = crate::compile::rows::ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
     let mut conn = state.db.acquire().await?;
     destroy_in(&mut conn, &graph, scenario_id, id).await?;
     drop(conn);

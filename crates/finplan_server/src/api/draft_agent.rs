@@ -824,7 +824,7 @@ impl DraftTools {
             user: user.clone(),
             scenario_id,
             job: job.to_owned(),
-            graph: Mutex::new(ScenarioGraph::load(&state.db, scenario_id, &user.id).await?),
+            graph: Mutex::new(crate::db::graph::load(&state.db, scenario_id, &user.id).await?),
             library: Mutex::new(Vec::new()),
         };
         tools.refresh().await?;
@@ -835,7 +835,7 @@ impl DraftTools {
     async fn refresh(&self) -> ApiResult<()> {
         let db = &self.state.db;
         let uid = &self.user.id;
-        let mut graph = ScenarioGraph::load(db, self.scenario_id, uid).await?;
+        let mut graph = crate::db::graph::load(db, self.scenario_id, uid).await?;
         let rows: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
             "SELECT id, name, description, asset_class FROM return_profiles
               WHERE user_id = ?1 ORDER BY sort_order, id",

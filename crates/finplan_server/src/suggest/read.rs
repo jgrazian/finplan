@@ -85,7 +85,7 @@ pub(crate) fn account(graph: &ScenarioGraph, id: i64) -> Option<Value> {
                     _ => None,
                 },
                 plan_type: inv.plan_type.as_deref().and_then(PlanType::parse),
-                catch_up: inv.catch_up.0.clone(),
+                catch_up: inv.catch_up.clone(),
             }
         }
         "Property" => {
