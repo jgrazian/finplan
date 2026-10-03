@@ -847,10 +847,25 @@ async fn canceling_stops_a_running_job_and_refunds_one_that_never_started() {
         big_cost,
         "no refund once it ran"
     );
-    let (status, third) = app
-        .offload(&cookie, &snapshot, &version, json!({"iterations": 20}))
-        .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{third}");
+    // The canceled queued job's admission is released by its own task, and the
+    // running one holds its until the engine notices (as a stored run does), so
+    // capacity comes back shortly rather than instantly: retry while busy.
+    let third = {
+        let mut attempt = 0;
+        loop {
+            let (status, body) = app
+                .offload(&cookie, &snapshot, &version, json!({"iterations": 20}))
+                .await;
+            if status == StatusCode::ACCEPTED {
+                break body;
+            }
+            assert_eq!(status, StatusCode::CONFLICT, "{body}");
+            assert!(message(&body).contains("capacity"), "{body}");
+            attempt += 1;
+            assert!(attempt < 200, "capacity never came back after cancel");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    };
     let job = app.await_job(&cookie, third["id"].as_i64().unwrap()).await;
     assert_eq!(job["status"], "succeeded", "{job}");
     assert_eq!(count(&app, "compute_jobs").await, 1);
