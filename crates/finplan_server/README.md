@@ -42,7 +42,10 @@ Configuration comes from flags or environment variables:
 | `DATABASE_URL` | `sqlite://finplan.db` | SQLite database |
 | `FINPLAN_DB_POOL` | `8` | Pool size |
 | `FINPLAN_SIM_WORKERS` | `2` | Concurrent Monte Carlo runs |
-| `FINPLAN_MAX_ITERATIONS` | `50000` | Per-run iteration cap |
+| `FINPLAN_MAX_ITERATIONS` | `50000` | Per-run iteration cap (also the ceiling for offloaded runs) |
+| `FINPLAN_LOCAL_MODE` | `true` | Plans live in the browser and the engine runs there (spec 19); served as `local_mode` on `/api/health`. Set `false` on a self-hosted server that should keep plans itself |
+| `FINPLAN_OFFLOAD_BUDGET_FREE` | `20000000` | Cost units a Free account may offload per calendar month (UTC) |
+| `FINPLAN_OFFLOAD_BUDGET_PRO` | `1000000000` | Cost units a Pro account may offload per calendar month (UTC). Self-hosted and beta accounts count as Pro |
 | `FINPLAN_SECURE_COOKIES` | `false` | Set `Secure` on session cookies (enable behind TLS) |
 | `FINPLAN_CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
 | `FINPLAN_LOG_FORMAT` | `auto` | `json`, `text`, or `auto` (JSON when hosted, text locally) |
@@ -144,6 +147,50 @@ POST /api/runs/7/cancel      ->     {"status":"canceled"}
 
 `GET /runs/{id}/results` defaults to the median path for its per-account series
 and cash flows; pass `?series=mean` or `?series=0.95` to select another.
+
+## Server offload
+
+A plan kept in the browser can send a run here when the device is too slow
+(spec 19). The plan leaves the device for this, so it is an explicit per-run
+action, and the server keeps none of it.
+
+```
+POST   /api/compute/runs      {snapshot, model_version, settings}  -> 202 {"id":7}
+GET    /api/compute/runs/7    -> {id, status, completed_iterations, iterations, seed,
+                                  error, expires_at, results?}
+DELETE /api/compute/runs/7    -> 204 (cancels and deletes)
+GET    /api/compute/budget    -> {monthly, used, remaining, resets_at, available,
+                                  unavailable_reason}
+```
+
+`snapshot` is `finplan_plan::snapshot::snapshot` output (a `ScenarioGraph`, as
+an object or as its JSON text). `settings` is the run subset of `CreateRun`:
+`iterations`, `percentiles`, `seed`, `converge`. The body is capped at 2 MB
+(413), `model_version` must equal the server's (409 "Reload FinPlan to
+update"), and a guest is refused (403): an account is needed to charge a budget
+to. The job id is the `compute_jobs` row id; every route is owner-only (404
+otherwise).
+
+The snapshot is compiled in the request and handed to a runner worker in memory
+(offload shares the `FINPLAN_SIM_WORKERS` slots with stored runs); it is never
+written to the database or a log. No scenario and no `run_*` row is created.
+`compute_jobs` holds status, progress, the cost charged and, on success, the
+`RunResults` JSON from the same `finplan_plan::results::project` a stored run
+persists, so a seeded offload and a stored run of the same graph agree exactly.
+Results expire an hour after the job ends and the hourly maintenance loop
+purges them. A job still open when the process restarts is failed and refunded.
+
+Cost is `iterations x duration_years x max(accounts + assets + events, 1)` (a
+converging run is costed at its ceiling), the formula `create_run` uses, and is
+charged to `monthly_offload_spend` at admission. A 403 with code
+`offload_budget_spent` says when it resets; `offload_run_exceeds_budget` says
+the run is bigger than the whole month. A job canceled before it started, or
+failed by the server, is refunded; one that ran and was canceled or whose
+results were deleted is not. Logs and metrics carry user, cost, duration and
+outcome (`finplan_offload_cost_units_total`, and the `kind="offload"` job
+series), never plan contents.
+
+`GET /api/health` answers `{"status":"ok","local_mode":true,"model_version":"..."}`.
 
 ## Endpoints
 

@@ -5,6 +5,7 @@ pub mod ai_activity;
 pub mod analysis;
 pub mod archives;
 pub mod assets;
+pub mod compute;
 pub mod contact;
 pub mod documents;
 pub mod draft_agent;
@@ -29,8 +30,9 @@ pub mod what_if;
 
 use std::collections::HashSet;
 
-use axum::Router;
+use axum::extract::State;
 use axum::routing::get;
+use axum::{Json, Router};
 use serde::Deserialize;
 use ts_rs::TS;
 
@@ -59,6 +61,7 @@ pub fn router(config: &crate::config::ServerConfig) -> Router<AppState> {
         .merge(suggestion_chat::router())
         .merge(plan_chat::router())
         .merge(archives::router())
+        .merge(compute::router())
         .merge(onboarding::router())
         .merge(contact::router())
         .merge(drafts::router())
@@ -66,8 +69,27 @@ pub fn router(config: &crate::config::ServerConfig) -> Router<AppState> {
         .nest("/billing", crate::billing::router())
 }
 
-async fn health() -> &'static str {
-    "ok"
+/// What `GET /health` says: the server is up, and how it is set up. It answers
+/// without a session so the web can read it before anyone signs in.
+#[derive(serde::Serialize, TS)]
+#[ts(export)]
+pub struct Health {
+    #[ts(type = "\"ok\"")]
+    pub status: &'static str,
+    /// Plans live in the browser by default and the engine runs there
+    /// (`FINPLAN_LOCAL_MODE`, spec 19). False on a server that keeps plans.
+    pub local_mode: bool,
+    /// The engine's `MODEL_VERSION`. A browser bundle built for another one
+    /// is stale; offload refuses it.
+    pub model_version: &'static str,
+}
+
+async fn health(State(state): State<AppState>) -> Json<Health> {
+    Json(Health {
+        status: "ok",
+        local_mode: state.config.local_mode,
+        model_version: finplan_plan::snapshot::MODEL_VERSION,
+    })
 }
 
 /// Confirm the scenario exists and belongs to the caller.

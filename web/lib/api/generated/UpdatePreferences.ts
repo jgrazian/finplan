@@ -4,4 +4,10 @@ export type UpdatePreferences = {
   default_iterations: number;
   default_duration_years: number;
   auto_run: boolean;
+  /**
+   * Where a new plan is created by default: `"local"` or `"cloud"`. Left
+   * as it is when absent, so a client that predates the preference keeps
+   * working.
+   */
+  default_plan_home?: "local" | "cloud" | null;
 };

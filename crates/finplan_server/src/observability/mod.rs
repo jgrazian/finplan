@@ -15,8 +15,8 @@ pub use events::EventFields;
 pub(crate) use http::HttpFailure;
 pub use http::{metrics_router, request_telemetry};
 pub use metrics::{QueueSnapshot, RunningGuard, Telemetry};
-pub(crate) use runtime::purge_sessions;
 pub use runtime::{ObservabilityRuntime, sample};
+pub(crate) use runtime::{purge_compute_jobs, purge_sessions};
 
 macro_rules! bounded_enum {
     ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
@@ -64,7 +64,7 @@ bounded_enum!(ErrorClass {
     QueueClosed => "queue_closed", Unavailable => "unavailable", Clock => "clock",
     TaskPanic => "task_panic", Upstream => "upstream"
 });
-bounded_enum!(JobKind { Run => "run", Sweep => "sweep", Sensitivity => "sensitivity", Solve => "solve", WhatIf => "what_if", Preview => "preview", ReviewAi => "review_ai", ReviewChat => "review_chat", PlanChat => "plan_chat" });
+bounded_enum!(JobKind { Run => "run", Sweep => "sweep", Sensitivity => "sensitivity", Solve => "solve", WhatIf => "what_if", Preview => "preview", ReviewAi => "review_ai", ReviewChat => "review_chat", PlanChat => "plan_chat", Offload => "offload" });
 bounded_enum!(Outcome { Succeeded => "succeeded", Failed => "failed", Canceled => "canceled", Interrupted => "interrupted" });
 // Who is asking, for admission counters: spec 17 guest load on the board.
 bounded_enum!(Tier { Guest => "guest", Free => "free", Pro => "pro" });

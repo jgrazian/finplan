@@ -69,6 +69,10 @@ pub struct UserResponse {
     pub default_duration_years: i64,
     /// Re-run the active scenario by itself once an edit has settled.
     pub auto_run: bool,
+    /// Where a new plan is created by default (spec 19): on this device or on
+    /// FinPlan's server. Every account starts on `"local"`.
+    #[ts(type = "\"local\" | \"cloud\"")]
+    pub default_plan_home: String,
     pub created_at: String,
     /// A guest (spec 17): `email` is a placeholder never to be shown, and the
     /// account screens do not apply.
@@ -77,7 +81,7 @@ pub struct UserResponse {
 
 const USER_COLUMNS: &str =
     "id, email, email_verified_at, display_name, birth_date, default_iterations,
-     default_duration_years, auto_run, created_at, kind = 'guest' AS guest";
+     default_duration_years, auto_run, default_plan_home, created_at, kind = 'guest' AS guest";
 
 pub(super) async fn load_user(state: &AppState, id: &str) -> ApiResult<Json<UserResponse>> {
     let row: Option<UserResponse> =
@@ -338,11 +342,17 @@ async fn update_profile(
 }
 
 #[derive(Deserialize, TS)]
-#[ts(export)]
+#[ts(export, optional_fields = nullable)]
 pub struct UpdatePreferences {
     pub default_iterations: i64,
     pub default_duration_years: i64,
     pub auto_run: bool,
+    /// Where a new plan is created by default: `"local"` or `"cloud"`. Left
+    /// as it is when absent, so a client that predates the preference keeps
+    /// working.
+    #[serde(default)]
+    #[ts(optional, type = "\"local\" | \"cloud\" | null")]
+    pub default_plan_home: Option<String>,
 }
 
 async fn update_preferences(
@@ -362,16 +372,25 @@ async fn update_preferences(
             "default duration must be between 1 and 120 years",
         ));
     }
+    if let Some(home) = body.default_plan_home.as_deref()
+        && !matches!(home, "local" | "cloud")
+    {
+        return Err(ApiError::bad_request(
+            "default plan home must be \"local\" or \"cloud\"",
+        ));
+    }
 
     let changed = sqlx::query(
         "UPDATE users
             SET default_iterations = ?1, default_duration_years = ?2, auto_run = ?3,
+                default_plan_home = COALESCE(?4, default_plan_home),
                 updated_at = datetime('now')
-          WHERE id = ?4",
+          WHERE id = ?5",
     )
     .bind(body.default_iterations)
     .bind(body.default_duration_years)
     .bind(body.auto_run)
+    .bind(body.default_plan_home.as_deref())
     .bind(&user.id)
     .execute(&state.db)
     .await?
@@ -605,6 +624,10 @@ impl ActivityFields for UpdateUserProfile {
 }
 
 impl ActivityFields for UpdatePreferences {
-    const FIELDS: &'static [&'static str] =
-        &["default_iterations", "default_duration_years", "auto_run"];
+    const FIELDS: &'static [&'static str] = &[
+        "default_iterations",
+        "default_duration_years",
+        "auto_run",
+        "default_plan_home",
+    ];
 }

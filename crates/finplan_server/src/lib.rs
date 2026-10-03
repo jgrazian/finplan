@@ -28,6 +28,7 @@ pub mod domain;
 pub mod error;
 pub mod mail;
 pub mod observability;
+pub mod offload;
 pub mod runner;
 pub mod seed;
 pub mod state;
@@ -93,6 +94,17 @@ pub async fn build_with(
             );
         })?;
     observability::purge_sessions(&db, &telemetry).await;
+    // Offloaded runs are held in memory, so any still open belonged to a process
+    // that is gone.
+    match offload::fail_orphans(&db).await {
+        Ok(0) => {}
+        Ok(count) => tracing::info!(event = "recovery.offload_jobs_failed", count),
+        Err(_) => tracing::warn!(
+            event = "recovery.offload_jobs_failed",
+            error_class = "database"
+        ),
+    }
+    observability::purge_compute_jobs(&db, &telemetry).await;
 
     let runs = runner::spawn_with_telemetry(db.clone(), config.sim_workers, telemetry.clone());
     runner::requeue_orphans(&db, &runs, &config).await?;
