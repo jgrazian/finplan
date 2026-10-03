@@ -11,6 +11,7 @@
 pub mod compile;
 pub mod error;
 pub mod graph;
+pub mod results;
 pub mod snapshot;
 pub mod specs;
 
