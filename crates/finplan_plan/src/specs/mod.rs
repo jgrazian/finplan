@@ -8,6 +8,8 @@ use ts_rs::TS;
 
 pub mod accounts;
 pub mod assets;
+pub mod events;
+pub mod parameters;
 pub mod profiles;
 pub mod scenarios;
 pub mod taxes;
