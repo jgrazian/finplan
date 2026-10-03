@@ -470,7 +470,12 @@ async fn starting_needs_something_to_draft_from_and_a_model_and_a_failure_can_be
     script.push(vec![Reply::Message(end())]);
     let (status, again) = app.post(&path, json!({"description": "I am 41."})).await;
     assert_eq!(status, StatusCode::OK, "{again}");
-    assert_eq!(again["state"], "drafting");
+    // The scripted model answers at once, so the restart can already have
+    // finished by the time the response is read.
+    assert!(
+        again["state"] == "drafting" || again["state"] == "ready",
+        "{again}"
+    );
     assert_eq!(again["error"], Value::Null);
     let ready = app.await_draft(id, &["ready", "failed"]).await;
     assert_eq!(ready["state"], "ready", "{ready}");
