@@ -14,6 +14,8 @@ use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
+pub use finplan_plan::specs::scenarios::{CreateScenario, UpdateScenario, validate_date};
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/scenarios", get(list).post(create))
@@ -67,54 +69,6 @@ pub(crate) const SCENARIO_COLUMNS: &str =
      (SELECT st.success_rate FROM run_stats st JOIN runs r ON r.id = st.run_id
        WHERE r.scenario_id = scenarios.id AND r.status = 'succeeded'
        ORDER BY r.finished_at DESC LIMIT 1) AS last_success_rate";
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, optional_fields = nullable)]
-pub struct CreateScenario {
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    pub start_date: String,
-    #[serde(default)]
-    pub birth_date: Option<String>,
-    #[serde(default = "default_duration")]
-    pub duration_years: i64,
-    #[serde(default)]
-    pub inflation_profile_id: Option<i64>,
-    #[serde(default)]
-    pub tax_config_id: Option<i64>,
-}
-
-fn default_duration() -> i64 {
-    30
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, optional_fields = nullable)]
-pub struct UpdateScenario {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub start_date: Option<String>,
-    #[serde(default)]
-    pub birth_date: Option<String>,
-    #[serde(default)]
-    pub duration_years: Option<i64>,
-    #[serde(default)]
-    pub inflation_profile_id: Option<i64>,
-    #[serde(default)]
-    pub tax_config_id: Option<i64>,
-    #[serde(default)]
-    pub collect_ledger: Option<bool>,
-}
-
-fn validate_date(text: &str, field: &str) -> ApiResult<String> {
-    text.parse::<jiff::civil::Date>()
-        .map(|d| d.to_string())
-        .map_err(|e| ApiError::bad_request(format!("invalid {field} '{text}': {e}")))
-}
 
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<Scenario>>> {
     let rows: Vec<Scenario> = sqlx::query_as(&format!(

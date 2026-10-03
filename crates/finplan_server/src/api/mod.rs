@@ -34,7 +34,7 @@ use std::collections::HashSet;
 
 use axum::Router;
 use axum::routing::get;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::db::Db;
@@ -71,21 +71,6 @@ pub fn router(config: &crate::config::ServerConfig) -> Router<AppState> {
 
 async fn health() -> &'static str {
     "ok"
-}
-
-/// Distinguish "field absent" from "field present and null". Serde collapses
-/// the two into `None` for a plain `Option`; wrapping the deserialize in a
-/// second layer keeps them apart.
-///
-/// Every PATCH body here reads an absent field as "unchanged", which on its own
-/// makes clearing a nullable column unsayable — this is how `null` gets to mean
-/// it.
-pub(crate) fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::deserialize(de).map(Some)
 }
 
 /// Confirm the scenario exists and belongs to the caller.

@@ -6,9 +6,29 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub mod accounts;
+pub mod assets;
+pub mod profiles;
+pub mod scenarios;
+pub mod taxes;
 mod tree;
 
 pub use tree::*;
+
+/// Distinguish "field absent" from "field present and null". Serde collapses
+/// the two into `None` for a plain `Option`; wrapping the deserialize in a
+/// second layer keeps them apart.
+///
+/// Every PATCH body here reads an absent field as "unchanged", which on its own
+/// makes clearing a nullable column unsayable — this is how `null` gets to mean
+/// it.
+pub fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(de).map(Some)
+}
 
 /// Extra contribution room from `from_age` through `through_age` (inclusive;
 /// null for no upper bound), on top of the account's contribution limit. Age

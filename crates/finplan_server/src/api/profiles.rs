@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::{Sqlite, Transaction};
 
 use super::ReorderRequest;
@@ -15,6 +15,10 @@ use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
+
+pub use finplan_plan::specs::profiles::{
+    AssetClass, CreateProfile, DistributionSpec, UpdateProfile, check_inflation_kind,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -35,305 +39,52 @@ pub fn router() -> Router<AppState> {
         )
         .route("/history-presets", get(list_presets))
 }
-
-/// What kind of holding a profile describes.
+/// Write `spec` (and the regimes nested in it) to `distributions`, nested
+/// rows first so the parent can point at them. Returns the new row's id.
 ///
-/// A profile's *name* is the user's — renamed, translated, duplicated — so it
-/// cannot be what a client matches on when it decides which profile a ticker
-/// belongs to. This is the stable half: a stored fact about what the assumption
-/// is for, which survives everything that can happen to a name.
-///
-/// Null on a profile is the ordinary state and not a defect. It means nobody
-/// has said what the profile is for, so nothing picks it automatically — which
-/// is exactly right for a profile someone built by hand.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub enum AssetClass {
-    UsEquity,
-    UsSmallCap,
-    GlobalEquity,
-    IntlEquity,
-    Bonds,
-    Reit,
-    Cash,
-    Commodity,
-    Crypto,
-    Balanced,
-}
+/// What the row holds, and what it refuses, is [`DistributionSpec::columns`];
+/// this is only the SQL.
+fn insert_distribution<'a>(
+    spec: &'a DistributionSpec,
+    tx: &'a mut Transaction<'_, Sqlite>,
+    user_id: &'a str,
+    depth: usize,
+) -> std::pin::Pin<Box<dyn Future<Output = ApiResult<i64>> + Send + 'a>> {
+    Box::pin(async move {
+        let columns = spec.columns(depth)?;
 
-impl AssetClass {
-    const ALL: [AssetClass; 10] = [
-        AssetClass::UsEquity,
-        AssetClass::UsSmallCap,
-        AssetClass::GlobalEquity,
-        AssetClass::IntlEquity,
-        AssetClass::Bonds,
-        AssetClass::Reit,
-        AssetClass::Cash,
-        AssetClass::Commodity,
-        AssetClass::Crypto,
-        AssetClass::Balanced,
-    ];
-
-    /// Stored as its own name, so the column reads as itself in a query.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            AssetClass::UsEquity => "UsEquity",
-            AssetClass::UsSmallCap => "UsSmallCap",
-            AssetClass::GlobalEquity => "GlobalEquity",
-            AssetClass::IntlEquity => "IntlEquity",
-            AssetClass::Bonds => "Bonds",
-            AssetClass::Reit => "Reit",
-            AssetClass::Cash => "Cash",
-            AssetClass::Commodity => "Commodity",
-            AssetClass::Crypto => "Crypto",
-            AssetClass::Balanced => "Balanced",
-        }
-    }
-
-    /// Text that names no class reads as none rather than as an error: a column
-    /// written by a newer build should leave an older one working.
-    pub(crate) fn parse(text: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|c| c.as_str() == text)
-    }
-}
-
-/// The distribution shapes a profile can take. `RegimeSwitching` nests two more
-/// distributions, so this mirrors the recursive Rust enum.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(tag = "kind")]
-#[ts(export)]
-pub enum DistributionSpec {
-    None,
-    Fixed {
-        rate: f64,
-    },
-    Normal {
-        mean: f64,
-        std_dev: f64,
-    },
-    LogNormal {
-        mean: f64,
-        std_dev: f64,
-    },
-    StudentT {
-        mean: f64,
-        scale: f64,
-        df: f64,
-    },
-    RegimeSwitching {
-        bull: Box<DistributionSpec>,
-        bear: Box<DistributionSpec>,
-        bull_to_bear_prob: f64,
-        bear_to_bull_prob: f64,
-    },
-    Bootstrap {
-        preset: String,
-        #[serde(default)]
-        block_size: Option<i64>,
-    },
-}
-
-impl DistributionSpec {
-    /// What the `distributions` table's CHECKs and the preset list would
-    /// refuse, as a bad request rather than a database error. `depth` counts
-    /// nested regimes.
-    pub(crate) fn validate(&self, depth: usize) -> ApiResult<()> {
-        if depth > 8 {
-            return Err(ApiError::bad_request(
-                "distribution nests too deeply; regime models may not be recursive beyond 8 levels",
-            ));
-        }
-        let finite = |values: &[f64]| {
-            if values.iter().all(|v| v.is_finite()) {
-                Ok(())
-            } else {
-                Err(ApiError::bad_request("distribution figures must be finite"))
-            }
+        let (bull_id, bear_id) = match columns.regimes {
+            Some((bull, bear)) => (
+                Some(insert_distribution(bull, tx, user_id, depth + 1).await?),
+                Some(insert_distribution(bear, tx, user_id, depth + 1).await?),
+            ),
+            None => (None, None),
         };
-        match self {
-            DistributionSpec::None => {}
-            DistributionSpec::Fixed { rate } => finite(&[*rate])?,
-            DistributionSpec::Normal { mean, std_dev }
-            | DistributionSpec::LogNormal { mean, std_dev } => {
-                finite(&[*mean, *std_dev])?;
-                if *std_dev < 0.0 {
-                    return Err(ApiError::bad_request("std_dev cannot be negative"));
-                }
-            }
-            DistributionSpec::StudentT { mean, scale, df } => {
-                finite(&[*mean, *scale, *df])?;
-                if *df <= 0.0 {
-                    return Err(ApiError::bad_request("df must be positive"));
-                }
-            }
-            DistributionSpec::RegimeSwitching {
-                bull,
-                bear,
-                bull_to_bear_prob,
-                bear_to_bull_prob,
-            } => {
-                for p in [bull_to_bear_prob, bear_to_bull_prob] {
-                    if !(0.0..=1.0).contains(p) {
-                        return Err(ApiError::bad_request(
-                            "regime switching probabilities are between 0 and 1",
-                        ));
-                    }
-                }
-                bull.validate(depth + 1)?;
-                bear.validate(depth + 1)?;
-            }
-            DistributionSpec::Bootstrap { preset, block_size } => {
-                if !HISTORY_PRESETS.contains(&preset.as_str()) {
-                    return Err(ApiError::bad_request(format!(
-                        "unknown history preset '{preset}'; expected one of {}",
-                        HISTORY_PRESETS.join(", ")
-                    )));
-                }
-                if block_size.is_some_and(|b| b < 1) {
-                    return Err(ApiError::bad_request("block_size must be at least 1"));
-                }
-            }
-        }
-        Ok(())
-    }
 
-    fn insert<'a>(
-        &'a self,
-        tx: &'a mut Transaction<'_, Sqlite>,
-        user_id: &'a str,
-        depth: usize,
-    ) -> std::pin::Pin<Box<dyn Future<Output = ApiResult<i64>> + Send + 'a>> {
-        Box::pin(async move {
-            if depth > 8 {
-                return Err(ApiError::bad_request(
-                    "distribution nests too deeply; regime models may not be recursive beyond 8 levels",
-                ));
-            }
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO distributions
+                (user_id, kind, rate, mean, std_dev, scale, df, bull_id, bear_id,
+                 bull_to_bear_prob, bear_to_bull_prob, history_preset, block_size)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) RETURNING id",
+        )
+        .bind(user_id)
+        .bind(columns.kind)
+        .bind(columns.rate)
+        .bind(columns.mean)
+        .bind(columns.std_dev)
+        .bind(columns.scale)
+        .bind(columns.df)
+        .bind(bull_id)
+        .bind(bear_id)
+        .bind(columns.bull_to_bear_prob)
+        .bind(columns.bear_to_bull_prob)
+        .bind(columns.history_preset)
+        .bind(columns.block_size)
+        .fetch_one(&mut **tx)
+        .await?;
 
-            let (bull_id, bear_id) = match self {
-                DistributionSpec::RegimeSwitching { bull, bear, .. } => (
-                    Some(bull.insert(tx, user_id, depth + 1).await?),
-                    Some(bear.insert(tx, user_id, depth + 1).await?),
-                ),
-                _ => (None, None),
-            };
-
-            let (kind, rate, mean, std_dev, scale, df, btb, btbull, preset, block) = match self {
-                DistributionSpec::None => {
-                    ("None", None, None, None, None, None, None, None, None, None)
-                }
-                DistributionSpec::Fixed { rate } => (
-                    "Fixed",
-                    Some(*rate),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
-                DistributionSpec::Normal { mean, std_dev } => (
-                    "Normal",
-                    None,
-                    Some(*mean),
-                    Some(*std_dev),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
-                DistributionSpec::LogNormal { mean, std_dev } => (
-                    "LogNormal",
-                    None,
-                    Some(*mean),
-                    Some(*std_dev),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
-                DistributionSpec::StudentT { mean, scale, df } => (
-                    "StudentT",
-                    None,
-                    Some(*mean),
-                    None,
-                    Some(*scale),
-                    Some(*df),
-                    None,
-                    None,
-                    None,
-                    None,
-                ),
-                DistributionSpec::RegimeSwitching {
-                    bull_to_bear_prob,
-                    bear_to_bull_prob,
-                    ..
-                } => (
-                    "RegimeSwitching",
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Some(*bull_to_bear_prob),
-                    Some(*bear_to_bull_prob),
-                    None,
-                    None,
-                ),
-                DistributionSpec::Bootstrap { preset, block_size } => {
-                    if !HISTORY_PRESETS.contains(&preset.as_str()) {
-                        return Err(ApiError::bad_request(format!(
-                            "unknown history preset '{preset}'; expected one of {}",
-                            HISTORY_PRESETS.join(", ")
-                        )));
-                    }
-                    (
-                        "Bootstrap",
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        Some(preset.as_str()),
-                        *block_size,
-                    )
-                }
-            };
-
-            let id: i64 = sqlx::query_scalar(
-                "INSERT INTO distributions
-                    (user_id, kind, rate, mean, std_dev, scale, df, bull_id, bear_id,
-                     bull_to_bear_prob, bear_to_bull_prob, history_preset, block_size)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) RETURNING id",
-            )
-            .bind(user_id)
-            .bind(kind)
-            .bind(rate)
-            .bind(mean)
-            .bind(std_dev)
-            .bind(scale)
-            .bind(df)
-            .bind(bull_id)
-            .bind(bear_id)
-            .bind(btb)
-            .bind(btbull)
-            .bind(preset)
-            .bind(block)
-            .fetch_one(&mut **tx)
-            .await?;
-
-            Ok(id)
-        })
-    }
+        Ok(id)
+    })
 }
 
 /// One `return_profiles` row, before its distribution is assembled. Named
@@ -454,34 +205,6 @@ pub struct Profile {
     /// empty when nothing references it: an omitted key would make the
     /// generated TypeScript claim a field the wire format does not carry.
     pub used_by: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, optional_fields = nullable)]
-pub struct CreateProfile {
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub asset_class: Option<AssetClass>,
-    pub distribution: DistributionSpec,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, optional_fields = nullable)]
-pub struct UpdateProfile {
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    /// Doubly optional: absent leaves the class alone, an explicit null
-    /// unclassifies the profile. Every other field here reads absent as
-    /// "unchanged", which would otherwise make unclassifying unsayable.
-    #[serde(default, deserialize_with = "crate::api::double_option")]
-    #[ts(optional)]
-    pub asset_class: Option<Option<AssetClass>>,
-    #[serde(default)]
-    pub distribution: Option<DistributionSpec>,
 }
 
 /// Every asset or account currently referencing a return profile.
@@ -628,7 +351,7 @@ pub(crate) async fn create_return_in(
     body: &CreateProfile,
 ) -> ApiResult<i64> {
     body.distribution.validate(0)?;
-    let distribution_id = body.distribution.insert(tx, user_id, 0).await?;
+    let distribution_id = insert_distribution(&body.distribution, tx, user_id, 0).await?;
 
     sqlx::query_scalar(
         "INSERT INTO return_profiles
@@ -668,7 +391,7 @@ async fn update_return(
     // A new distribution is inserted and swapped in rather than updated in
     // place, so the old row stays intact for anything mid-flight reading it.
     let distribution_id = match &body.distribution {
-        Some(spec) => spec.insert(&mut tx, &user.id, 0).await?,
+        Some(spec) => insert_distribution(spec, &mut tx, &user.id, 0).await?,
         None => old_distribution,
     };
 
@@ -779,18 +502,6 @@ async fn delete_return(
 // ── inflation profiles ──────────────────────────────────────────────────────
 
 /// `InflationProfile` has no StudentT or RegimeSwitching variant, so reject
-/// those here rather than at compile time.
-fn check_inflation_kind(spec: &DistributionSpec) -> ApiResult<()> {
-    match spec {
-        DistributionSpec::StudentT { .. } | DistributionSpec::RegimeSwitching { .. } => {
-            Err(ApiError::bad_request(
-                "inflation profiles support None, Fixed, Normal, LogNormal or Bootstrap",
-            ))
-        }
-        _ => Ok(()),
-    }
-}
-
 async fn list_inflation(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -857,7 +568,7 @@ async fn create_inflation(
     check_inflation_kind(&body.distribution)?;
 
     let mut tx = state.db.begin().await?;
-    let distribution_id = body.distribution.insert(&mut tx, &user.id, 0).await?;
+    let distribution_id = insert_distribution(&body.distribution, &mut tx, &user.id, 0).await?;
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO inflation_profiles (user_id, name, description, distribution_id, sort_order)
