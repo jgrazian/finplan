@@ -170,3 +170,66 @@ fn test_simulation_basic() {
         Some(jiff::civil::date(2030, 2, 5))
     );
 }
+
+/// Random returns, several batches, fixed seed: the summary must not depend on
+/// whether the batches ran on the rayon pool (`parallel`) or in sequence. The
+/// literals below were recorded with the `parallel` feature on and must hold
+/// with `--no-default-features` too.
+#[test]
+fn seeded_summary_is_identical_with_and_without_parallel() {
+    let params = SimulationConfig {
+        start_date: Some(jiff::civil::date(2020, 2, 5)),
+        duration_years: 10,
+        birth_date: None,
+        inflation_profile: InflationProfile::Fixed(0.02),
+        return_profiles: HashMap::from([(
+            ReturnProfileId(0),
+            ReturnProfile::Normal {
+                mean: 0.06,
+                std_dev: 0.15,
+            },
+        )]),
+        asset_returns: HashMap::from([(AssetId(1), ReturnProfileId(0))]),
+        events: vec![],
+        accounts: vec![Account {
+            account_id: AccountId(1),
+            flavor: AccountFlavor::Investment(InvestmentContainer {
+                tax_status: TaxStatus::Taxable,
+                cash: Cash {
+                    value: 0.0,
+                    return_profile_id: ReturnProfileId(0),
+                },
+                positions: vec![AssetLot {
+                    asset_id: AssetId(1),
+                    purchase_date: jiff::civil::date(2020, 2, 5),
+                    units: 10_000.0,
+                    cost_basis: 10_000.0,
+                }],
+                contribution_limit: None,
+            }),
+        }],
+        ..Default::default()
+    };
+    let mc_config = MonteCarloConfig {
+        iterations: 203,
+        seed: Some(7),
+        parallel_batches: 4,
+        ..Default::default()
+    };
+
+    let a = monte_carlo_simulate_with_config(&params, &mc_config).unwrap();
+    let b = monte_carlo_simulate_with_config(&params, &mc_config).unwrap();
+    assert_eq!(a.stats.mean_final_net_worth, b.stats.mean_final_net_worth);
+    assert_eq!(a.stats.percentile_values, b.stats.percentile_values);
+
+    assert_eq!(a.stats.mean_final_net_worth, 17220.955290741847);
+    assert_eq!(a.stats.std_dev_final_net_worth, 7365.488287601848);
+    assert_eq!(
+        a.stats.percentile_values,
+        vec![
+            (0.05, 7340.971975896122),
+            (0.5, 16476.744380555585),
+            (0.95, 29748.52627559062),
+        ]
+    );
+}

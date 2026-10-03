@@ -360,6 +360,10 @@ pub struct MonteCarloConfig {
     pub parallel_batches: usize,
     /// Optional seed for reproducible results. If None, a random seed is generated.
     /// The seed determines the sequence of random numbers used across all iterations.
+    ///
+    /// On `wasm32` there is no OS entropy source, so `None` is rejected with
+    /// `SimulationError::Config`; draw a seed in JavaScript with
+    /// `crypto.getRandomValues` and pass it here.
     pub seed: Option<u64>,
 }
 

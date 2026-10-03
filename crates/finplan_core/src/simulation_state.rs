@@ -349,6 +349,21 @@ fn collect_age_trigger_dates(
     }
 }
 
+/// Start date for a config that gives none: today in the system time zone.
+/// `wasm32` has neither clock nor zone database, so the caller must supply one.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::unnecessary_wraps)]
+fn default_start_date() -> std::result::Result<jiff::civil::Date, SimulationError> {
+    Ok(jiff::Zoned::now().date())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn default_start_date() -> std::result::Result<jiff::civil::Date, SimulationError> {
+    Err(SimulationError::Config(
+        "start_date is required on wasm32: there is no system clock or time zone".into(),
+    ))
+}
+
 impl SimulationState {
     pub fn from_parameters(
         params: &SimulationConfig,
@@ -367,9 +382,10 @@ impl SimulationState {
         }
 
         let mut rng = rand::rngs::SmallRng::seed_from_u64(seed);
-        let start_date = params
-            .start_date
-            .unwrap_or_else(|| jiff::Zoned::now().date());
+        let start_date = match params.start_date {
+            Some(date) => date,
+            None => default_start_date()?,
+        };
         let end_date = crate::model::TriggerOffset::Years(params.duration_years as i32)
             .add_to_date(start_date);
 

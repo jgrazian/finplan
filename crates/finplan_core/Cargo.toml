@@ -5,12 +5,25 @@ edition = "2024"
 
 [dependencies]
 jiff = { workspace = true }
-rand = { workspace = true }
+# `rand` without its default features: the default `os_rng`/`thread_rng` pull in
+# getrandom's OS backend, which does not exist on wasm32-unknown-unknown. Core
+# only needs the seedable generators; the OS-backed `rand::rng()` fallback for
+# unseeded runs is enabled for non-wasm targets below.
+rand = { version = "0.9.2", default-features = false, features = ["std", "std_rng", "small_rng"] }
 rand_distr = { workspace = true }
 serde = { workspace = true }
 
-rayon = "1.11.0"
+rayon = { version = "1.11.0", optional = true }
 rustc-hash = "2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rand = { version = "0.9.2", default-features = false, features = ["thread_rng"] }
+
+[features]
+default = ["parallel"]
+# Run Monte Carlo batches (and optimizer grid points) on the rayon thread pool.
+# Without it the same batches run sequentially, with identical results.
+parallel = ["dep:rayon"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
