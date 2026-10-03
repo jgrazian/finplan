@@ -11,6 +11,7 @@ use thiserror::Error;
 
 pub(crate) mod batch;
 pub mod graph;
+pub mod library;
 
 pub type Db = sqlx::SqlitePool;
 

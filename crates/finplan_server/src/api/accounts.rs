@@ -11,6 +11,7 @@ use axum::{Json, Router};
 use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
+use crate::db::Db;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use finplan_plan::specs::{CatchUpSpec, repayment_of};
 
@@ -256,6 +257,18 @@ async fn list(
     Ok(Json(out))
 }
 
+/// Renumber the scenario's accounts to read as `ids`, as the route does once
+/// it has checked the scenario is the caller's. Returns the rows renumbered.
+pub(crate) async fn reorder_in(db: &Db, scenario_id: i64, ids: &[i64]) -> ApiResult<u64> {
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE scenario_id = ?1 ORDER BY sort_order, id",
+    )
+    .bind(scenario_id)
+    .fetch_all(db)
+    .await?;
+    super::apply_order(db, "accounts", &current, ids).await
+}
+
 /// Put the scenario's accounts in the order the body names.
 async fn reorder(
     State(state): State<AppState>,
@@ -265,14 +278,7 @@ async fn reorder(
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
-    let current: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE scenario_id = ?1 ORDER BY sort_order, id",
-    )
-    .bind(scenario_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let affected = super::apply_order(&state.db, "accounts", &current, &body.ids).await?;
+    let affected = reorder_in(&state.db, scenario_id, &body.ids).await?;
 
     if affected > 0 {
         state.telemetry.mutation(
@@ -527,6 +533,28 @@ async fn list_positions(
     Ok(Json(rows))
 }
 
+/// Renumber one account's lots to read as `ids`, as the route does once it has
+/// checked the scenario is the caller's. Returns the rows renumbered.
+pub(crate) async fn reorder_positions_in(
+    db: &Db,
+    scenario_id: i64,
+    account_id: i64,
+    ids: &[i64],
+) -> ApiResult<u64> {
+    // The join is what confines the renumbering to the caller's scenario: a
+    // position id on its own says nothing about who owns the account under it.
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT p.id FROM positions p JOIN accounts a ON a.id = p.account_id
+          WHERE p.account_id = ?1 AND a.scenario_id = ?2
+          ORDER BY p.sort_order, p.purchase_date, p.id",
+    )
+    .bind(account_id)
+    .bind(scenario_id)
+    .fetch_all(db)
+    .await?;
+    super::apply_order(db, "positions", &current, ids).await
+}
+
 /// Put one account's lots in the order the body names.
 async fn reorder_positions(
     State(state): State<AppState>,
@@ -536,19 +564,7 @@ async fn reorder_positions(
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
-    // The join is what confines the renumbering to the caller's scenario: a
-    // position id on its own says nothing about who owns the account under it.
-    let current: Vec<i64> = sqlx::query_scalar(
-        "SELECT p.id FROM positions p JOIN accounts a ON a.id = p.account_id
-          WHERE p.account_id = ?1 AND a.scenario_id = ?2
-          ORDER BY p.sort_order, p.purchase_date, p.id",
-    )
-    .bind(id)
-    .bind(scenario_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let affected = super::apply_order(&state.db, "positions", &current, &body.ids).await?;
+    let affected = reorder_positions_in(&state.db, scenario_id, id, &body.ids).await?;
 
     if affected > 0 {
         state.telemetry.mutation(

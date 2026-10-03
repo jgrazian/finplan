@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
+use crate::db::Db;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
@@ -43,7 +44,7 @@ pub struct TaxConfig {
     pub federal_brackets: Vec<Bracket>,
 }
 
-async fn load(state: &AppState, id: i64, user_id: &str) -> ApiResult<TaxConfig> {
+async fn load(db: &Db, id: i64, user_id: &str) -> ApiResult<TaxConfig> {
     #[allow(clippy::type_complexity)]
     let row: Option<(i64, String, Option<String>, f64, f64, f64, f64, f64)> = sqlx::query_as(
         "SELECT id, name, description, state_rate, capital_gains_rate,
@@ -52,7 +53,7 @@ async fn load(state: &AppState, id: i64, user_id: &str) -> ApiResult<TaxConfig> 
     )
     .bind(id)
     .bind(user_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(db)
     .await?;
 
     let (
@@ -70,7 +71,7 @@ async fn load(state: &AppState, id: i64, user_id: &str) -> ApiResult<TaxConfig> 
         "SELECT threshold, rate FROM tax_brackets WHERE tax_config_id = ?1 ORDER BY threshold",
     )
     .bind(id)
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?;
 
     Ok(TaxConfig {
@@ -98,7 +99,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Jso
 
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
-        out.push(load(&state, id, &user.id).await?);
+        out.push(load(&state.db, id, &user.id).await?);
     }
     Ok(Json(out))
 }
@@ -108,7 +109,7 @@ async fn fetch(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<Json<TaxConfig>> {
-    Ok(Json(load(&state, id, &user.id).await?))
+    Ok(Json(load(&state.db, id, &user.id).await?))
 }
 
 async fn create(
@@ -131,7 +132,10 @@ async fn create(
         },
     );
 
-    Ok((StatusCode::CREATED, Json(load(&state, id, &user.id).await?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(load(&state.db, id, &user.id).await?),
+    ))
 }
 
 /// Insert a tax config and its bracket table, as `POST /tax-configs` does;
@@ -178,8 +182,32 @@ async fn update(
     Path(id): Path<i64>,
     Json(Submitted { body, fields }): Json<Submitted<UpdateTaxConfig>>,
 ) -> ApiResult<Json<TaxConfig>> {
+    update_in(&state.db, &user.id, id, &body).await?;
+
+    state.telemetry.mutation(
+        Resource::TaxConfig,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+
+    Ok(Json(load(&state.db, id, &user.id).await?))
+}
+
+/// Apply a tax config update, as `PATCH /tax-configs/{id}` does, and mark every
+/// plan using it as changed.
+pub(crate) async fn update_in(
+    db: &Db,
+    user_id: &str,
+    id: i64,
+    body: &UpdateTaxConfig,
+) -> ApiResult<()> {
     // Confirm ownership up front so a miss is a 404, not a silent no-op.
-    load(&state, id, &user.id).await?;
+    load(db, id, user_id).await?;
     validate_deductions([
         ("standard_deduction", body.standard_deduction),
         ("age_65_extra_deduction", body.age_65_extra_deduction),
@@ -191,7 +219,7 @@ async fn update(
         .map(validate_brackets)
         .transpose()?;
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = db.begin().await?;
 
     let affected = sqlx::query(
         "UPDATE tax_configs SET
@@ -206,7 +234,7 @@ async fn update(
           WHERE id = ?1 AND user_id = ?2",
     )
     .bind(id)
-    .bind(&user.id)
+    .bind(user_id)
     .bind(body.name.as_deref().map(str::trim))
     .bind(&body.description)
     .bind(body.state_rate)
@@ -240,21 +268,9 @@ async fn update(
     }
 
     sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE tax_config_id = ?1 AND user_id = ?2")
-        .bind(id).bind(&user.id).execute(&mut *tx).await?;
+        .bind(id).bind(user_id).execute(&mut *tx).await?;
     tx.commit().await?;
-
-    state.telemetry.mutation(
-        Resource::TaxConfig,
-        Operation::Updated,
-        &EventFields {
-            user_id: Some(&user.id),
-            resource_id: Some(id),
-            fields: &fields,
-            ..Default::default()
-        },
-    );
-
-    Ok(Json(load(&state, id, &user.id).await?))
+    Ok(())
 }
 
 async fn destroy(
@@ -262,20 +278,7 @@ async fn destroy(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-    let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE tax_config_id = ?1 AND user_id = ?2")
-        .bind(id).bind(&user.id).execute(&mut *tx).await?;
-    let affected = sqlx::query("DELETE FROM tax_configs WHERE id = ?1 AND user_id = ?2")
-        .bind(id)
-        .bind(&user.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("tax config"));
-    }
-    tx.commit().await?;
+    destroy_in(&state.db, &user.id, id).await?;
 
     state.telemetry.mutation(
         Resource::TaxConfig,
@@ -288,6 +291,26 @@ async fn destroy(
     );
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete a tax config, as `DELETE /tax-configs/{id}` does: the plans using it
+/// are left with none, and marked as changed.
+pub(crate) async fn destroy_in(db: &Db, user_id: &str, id: i64) -> ApiResult<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE tax_config_id = ?1 AND user_id = ?2")
+        .bind(id).bind(user_id).execute(&mut *tx).await?;
+    let affected = sqlx::query("DELETE FROM tax_configs WHERE id = ?1 AND user_id = ?2")
+        .bind(id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("tax config"));
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 impl ActivityFields for CreateTaxConfig {

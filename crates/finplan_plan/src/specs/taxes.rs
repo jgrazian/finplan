@@ -9,7 +9,7 @@ use crate::error::{PlanError, PlanResult};
 /// What a second tax config of the same name is refused with.
 pub const NAME_TAKEN: &str = "a tax config with that name already exists";
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Bracket {
     pub threshold: f64,
@@ -126,6 +126,20 @@ pub fn validate_deductions(deductions: [(&str, Option<f64>); 2]) -> PlanResult<(
     Ok(())
 }
 
+/// Rates are fractions: the table's `BETWEEN 0 AND 1` CHECKs.
+pub fn validate_rates(rates: [(&str, Option<f64>); 3]) -> PlanResult<()> {
+    for (name, rate) in rates {
+        if let Some(rate) = rate
+            && !(0.0..=1.0).contains(&rate)
+        {
+            return Err(PlanError::invalid(format!(
+                "{name} is a fraction between 0 and 1"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// What creating `body` would refuse: rates outside 0..1 and deductions below
 /// zero (the table's CHECKs), and a bad bracket table. Returns the brackets,
 /// sorted.
@@ -134,19 +148,13 @@ pub fn checked(body: &CreateTaxConfig) -> PlanResult<Vec<Bracket>> {
         ("standard_deduction", Some(body.standard_deduction)),
         ("age_65_extra_deduction", Some(body.age_65_extra_deduction)),
     ])?;
-    for (name, rate) in [
-        ("state_rate", body.state_rate),
-        ("capital_gains_rate", body.capital_gains_rate),
+    validate_rates([
+        ("state_rate", Some(body.state_rate)),
+        ("capital_gains_rate", Some(body.capital_gains_rate)),
         (
             "early_withdrawal_penalty_rate",
-            body.early_withdrawal_penalty_rate,
+            Some(body.early_withdrawal_penalty_rate),
         ),
-    ] {
-        if !(0.0..=1.0).contains(&rate) {
-            return Err(PlanError::invalid(format!(
-                "{name} is a fraction between 0 and 1"
-            )));
-        }
-    }
+    ])?;
     validate_brackets(&body.federal_brackets)
 }

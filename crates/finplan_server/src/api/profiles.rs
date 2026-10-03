@@ -10,16 +10,17 @@ use sqlx::{Sqlite, Transaction};
 use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
+use crate::db::Db;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use finplan_plan::compile::HISTORY_PRESETS;
 use ts_rs::TS;
 
-use finplan_plan::specs::profiles::NAME_TAKEN;
 use finplan_plan::specs::profiles::{
     AssetClass, CreateProfile, DistributionSpec, UpdateProfile, check_inflation_kind,
 };
+use finplan_plan::specs::profiles::{INFLATION_NAME_TAKEN, NAME_TAKEN};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -209,7 +210,7 @@ pub struct Profile {
 }
 
 /// Every asset or account currently referencing a return profile.
-async fn references(state: &AppState, profile_id: i64) -> ApiResult<Vec<String>> {
+async fn references(db: &Db, profile_id: i64) -> ApiResult<Vec<String>> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT name FROM assets WHERE return_profile_id = ?1
          UNION ALL
@@ -220,7 +221,7 @@ async fn references(state: &AppState, profile_id: i64) -> ApiResult<Vec<String>>
           WHERE i.cash_return_profile_id = ?1",
     )
     .bind(profile_id)
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?;
     Ok(rows.into_iter().map(|(n,)| n).collect())
 }
@@ -245,10 +246,22 @@ async fn list_return(
             description: row.description,
             asset_class: row.asset_class.as_deref().and_then(AssetClass::parse),
             distribution: load_distribution(&state, row.distribution_id, 0).await?,
-            used_by: references(&state, row.id).await?,
+            used_by: references(&state.db, row.id).await?,
         });
     }
     Ok(Json(out))
+}
+
+/// Renumber the user's return-profile library to read as `ids`. Returns the
+/// rows renumbered.
+pub(crate) async fn reorder_return_in(db: &Db, user_id: &str, ids: &[i64]) -> ApiResult<u64> {
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM return_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    super::apply_order(db, "return_profiles", &current, ids).await
 }
 
 /// Put the user's return-profile library in the order the body names.
@@ -260,14 +273,7 @@ async fn reorder_return(
     user: CurrentUser,
     Json(body): Json<ReorderRequest>,
 ) -> ApiResult<StatusCode> {
-    let current: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM return_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let affected = super::apply_order(&state.db, "return_profiles", &current, &body.ids).await?;
+    let affected = reorder_return_in(&state.db, &user.id, &body.ids).await?;
 
     if affected > 0 {
         state.telemetry.mutation(
@@ -306,7 +312,7 @@ async fn fetch_return(
         description: row.description,
         asset_class: row.asset_class.as_deref().and_then(AssetClass::parse),
         distribution: load_distribution(&state, row.distribution_id, 0).await?,
-        used_by: references(&state, row.id).await?,
+        used_by: references(&state.db, row.id).await?,
     }))
 }
 
@@ -378,21 +384,45 @@ async fn update_return(
     Path(id): Path<i64>,
     Json(Submitted { body, fields }): Json<Submitted<UpdateProfile>>,
 ) -> ApiResult<Json<Profile>> {
+    update_return_in(&state.db, &user.id, id, &body).await?;
+
+    state.telemetry.mutation(
+        Resource::ReturnProfile,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+
+    fetch_return(State(state), user, Path(id)).await
+}
+
+/// Apply a return-profile update, as `PATCH /return-profiles/{id}` does, and
+/// mark every plan using it as changed.
+pub(crate) async fn update_return_in(
+    db: &Db,
+    user_id: &str,
+    id: i64,
+    body: &UpdateProfile,
+) -> ApiResult<()> {
     let existing: Option<i64> = sqlx::query_scalar(
         "SELECT distribution_id FROM return_profiles WHERE id = ?1 AND user_id = ?2",
     )
     .bind(id)
-    .bind(&user.id)
-    .fetch_optional(&state.db)
+    .bind(user_id)
+    .fetch_optional(db)
     .await?;
     let old_distribution = existing.ok_or(ApiError::NotFound("return profile"))?;
 
-    let mut tx = state.db.begin().await?;
+    let mut tx = db.begin().await?;
 
     // A new distribution is inserted and swapped in rather than updated in
     // place, so the old row stays intact for anything mid-flight reading it.
     let distribution_id = match &body.distribution {
-        Some(spec) => insert_distribution(spec, &mut tx, &user.id, 0).await?,
+        Some(spec) => insert_distribution(spec, &mut tx, user_id, 0).await?,
         None => old_distribution,
     };
 
@@ -410,7 +440,7 @@ async fn update_return(
           WHERE id = ?1 AND user_id = ?2",
     )
     .bind(id)
-    .bind(&user.id)
+    .bind(user_id)
     .bind(body.name.as_deref().map(str::trim))
     .bind(&body.description)
     .bind(distribution_id)
@@ -444,24 +474,12 @@ async fn update_return(
              WHERE i.cash_return_profile_id = ?1)",
     )
     .bind(id)
-    .bind(&user.id)
+    .bind(user_id)
     .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
-
-    state.telemetry.mutation(
-        Resource::ReturnProfile,
-        Operation::Updated,
-        &EventFields {
-            user_id: Some(&user.id),
-            resource_id: Some(id),
-            fields: &fields,
-            ..Default::default()
-        },
-    );
-
-    fetch_return(State(state), user, Path(id)).await
+    Ok(())
 }
 
 async fn delete_return(
@@ -469,24 +487,7 @@ async fn delete_return(
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-    let used = references(&state, id).await?;
-    if !used.is_empty() {
-        return Err(ApiError::Conflict(format!(
-            "return profile is still used by: {}",
-            used.join(", ")
-        )));
-    }
-
-    let affected = sqlx::query("DELETE FROM return_profiles WHERE id = ?1 AND user_id = ?2")
-        .bind(id)
-        .bind(&user.id)
-        .execute(&state.db)
-        .await?
-        .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("return profile"));
-    }
+    delete_return_in(&state.db, &user.id, id).await?;
 
     state.telemetry.mutation(
         Resource::ReturnProfile,
@@ -498,6 +499,29 @@ async fn delete_return(
         },
     );
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete a return profile nothing uses, as `DELETE /return-profiles/{id}`.
+pub(crate) async fn delete_return_in(db: &Db, user_id: &str, id: i64) -> ApiResult<()> {
+    let used = references(db, id).await?;
+    if !used.is_empty() {
+        return Err(ApiError::Conflict(format!(
+            "return profile is still used by: {}",
+            used.join(", ")
+        )));
+    }
+
+    let affected = sqlx::query("DELETE FROM return_profiles WHERE id = ?1 AND user_id = ?2")
+        .bind(id)
+        .bind(user_id)
+        .execute(db)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("return profile"));
+    }
+    Ok(())
 }
 
 // ── inflation profiles ──────────────────────────────────────────────────────
@@ -531,20 +555,25 @@ async fn list_inflation(
     Ok(Json(out))
 }
 
+/// Renumber the user's inflation-profile library to read as `ids`. Returns the
+/// rows renumbered.
+pub(crate) async fn reorder_inflation_in(db: &Db, user_id: &str, ids: &[i64]) -> ApiResult<u64> {
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM inflation_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    super::apply_order(db, "inflation_profiles", &current, ids).await
+}
+
 /// Put the user's inflation-profile library in the order the body names.
 async fn reorder_inflation(
     State(state): State<AppState>,
     user: CurrentUser,
     Json(body): Json<ReorderRequest>,
 ) -> ApiResult<StatusCode> {
-    let current: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM inflation_profiles WHERE user_id = ?1 ORDER BY sort_order, name",
-    )
-    .bind(&user.id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let affected = super::apply_order(&state.db, "inflation_profiles", &current, &body.ids).await?;
+    let affected = reorder_inflation_in(&state.db, &user.id, &body.ids).await?;
 
     if affected > 0 {
         state.telemetry.mutation(
@@ -566,26 +595,8 @@ async fn create_inflation(
     user: CurrentUser,
     Json(Submitted { body, fields }): Json<Submitted<CreateProfile>>,
 ) -> ApiResult<(StatusCode, Json<Profile>)> {
-    check_inflation_kind(&body.distribution)?;
-
     let mut tx = state.db.begin().await?;
-    let distribution_id = insert_distribution(&body.distribution, &mut tx, &user.id, 0).await?;
-
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO inflation_profiles (user_id, name, description, distribution_id, sort_order)
-         VALUES (?1,?2,?3,?4,
-                 (SELECT COALESCE(MAX(sort_order), -1) + 1
-                    FROM inflation_profiles WHERE user_id = ?1))
-         RETURNING id",
-    )
-    .bind(&user.id)
-    .bind(body.name.trim())
-    .bind(&body.description)
-    .bind(distribution_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "an inflation profile with that name already exists"))?;
-
+    let id = create_inflation_in(&mut tx, &user.id, &body).await?;
     tx.commit().await?;
 
     state.telemetry.mutation(
@@ -612,25 +623,38 @@ async fn create_inflation(
     ))
 }
 
+/// Insert an inflation profile and its distribution, as `POST
+/// /inflation-profiles` does; returns its id.
+pub(crate) async fn create_inflation_in(
+    tx: &mut Transaction<'_, Sqlite>,
+    user_id: &str,
+    body: &CreateProfile,
+) -> ApiResult<i64> {
+    check_inflation_kind(&body.distribution)?;
+    let distribution_id = insert_distribution(&body.distribution, tx, user_id, 0).await?;
+
+    sqlx::query_scalar(
+        "INSERT INTO inflation_profiles (user_id, name, description, distribution_id, sort_order)
+         VALUES (?1,?2,?3,?4,
+                 (SELECT COALESCE(MAX(sort_order), -1) + 1
+                    FROM inflation_profiles WHERE user_id = ?1))
+         RETURNING id",
+    )
+    .bind(user_id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(distribution_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, INFLATION_NAME_TAKEN))
+}
+
 async fn delete_inflation(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-    let mut tx = state.db.begin().await?;
-    sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE inflation_profile_id = ?1 AND user_id = ?2")
-        .bind(id).bind(&user.id).execute(&mut *tx).await?;
-    let affected = sqlx::query("DELETE FROM inflation_profiles WHERE id = ?1 AND user_id = ?2")
-        .bind(id)
-        .bind(&user.id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-
-    if affected == 0 {
-        return Err(ApiError::NotFound("inflation profile"));
-    }
-    tx.commit().await?;
+    delete_inflation_in(&state.db, &user.id, id).await?;
 
     state.telemetry.mutation(
         Resource::InflationProfile,
@@ -643,6 +667,26 @@ async fn delete_inflation(
     );
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Delete an inflation profile, as `DELETE /inflation-profiles/{id}` does:
+/// the plans using it are left with none, and marked as changed.
+pub(crate) async fn delete_inflation_in(db: &Db, user_id: &str, id: i64) -> ApiResult<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("UPDATE scenarios SET updated_at = datetime('now') WHERE inflation_profile_id = ?1 AND user_id = ?2")
+        .bind(id).bind(user_id).execute(&mut *tx).await?;
+    let affected = sqlx::query("DELETE FROM inflation_profiles WHERE id = ?1 AND user_id = ?2")
+        .bind(id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
+    if affected == 0 {
+        return Err(ApiError::NotFound("inflation profile"));
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// One bootstrap history the engine ships with, and the observations behind it.

@@ -27,10 +27,9 @@ pub mod suggestions;
 pub mod taxes;
 pub mod what_if;
 
-use std::collections::HashSet;
-
 use axum::Router;
 use axum::routing::get;
+use finplan_plan::edit::reconcile;
 use serde::Deserialize;
 use ts_rs::TS;
 
@@ -103,26 +102,6 @@ pub(crate) async fn is_draft(db: &Db, scenario_id: i64) -> ApiResult<bool> {
 #[ts(export)]
 pub struct ReorderRequest {
     pub ids: Vec<i64>,
-}
-
-/// The order `requested` asks for, reconciled against what the collection
-/// actually holds.
-///
-/// Named rows come first, in the order named; anything the caller did not name
-/// keeps its place behind them. An id that is not in the collection is dropped
-/// rather than refused: a list a beat out of date — a row deleted in another
-/// tab, one belonging to a scenario the caller does not own — should still
-/// reorder under the user's hand rather than fail there.
-fn reconcile(current: &[i64], requested: &[i64]) -> Vec<i64> {
-    let known: HashSet<i64> = current.iter().copied().collect();
-    let mut placed: HashSet<i64> = HashSet::new();
-    let mut order: Vec<i64> = requested
-        .iter()
-        .copied()
-        .filter(|id| known.contains(id) && placed.insert(*id))
-        .collect();
-    order.extend(current.iter().copied().filter(|id| !placed.contains(id)));
-    order
 }
 
 /// Renumber `table`'s `sort_order` so the collection reads back as `requested`.

@@ -1047,6 +1047,7 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
                 standard_deduction: 0.0,
                 age_65_extra_deduction: 0.0,
             },
+            description: None,
             brackets: vec![crate::graph::TaxBracketRow {
                 threshold: 0.0,
                 rate: 0.2,
@@ -1058,6 +1059,8 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
         crate::graph::InflationEntry {
             name: "Three percent".into(),
             distribution_id: plan.inflation_distribution_id.unwrap(),
+            description: None,
+            sort_order: 0,
         },
     );
     let r = resolve(&plan, &batch).unwrap();

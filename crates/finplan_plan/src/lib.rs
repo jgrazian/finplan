@@ -10,11 +10,13 @@
 
 pub mod batch;
 pub mod compile;
+pub mod create;
 pub mod edit;
 pub mod error;
 pub mod expression_refs;
 pub mod expressions;
 pub mod graph;
+pub mod library;
 pub mod results;
 pub mod rules;
 pub mod snapshot;

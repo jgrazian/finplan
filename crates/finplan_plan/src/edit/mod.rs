@@ -17,6 +17,9 @@
 //! Every operation is atomic: it works on a copy and only replaces `graph` once
 //! everything has succeeded, the way the route's transaction would roll back.
 //!
+//! [`apply`] is the single entry point: one [`EditOp`] per write route the web
+//! calls, run on a graph, reporting the id of a row it created.
+//!
 //! What does not carry over from the database:
 //!
 //!   * references are checked against this plan only, where a foreign key
@@ -30,18 +33,19 @@ use crate::error::{PlanError, PlanResult};
 use crate::expression_refs::{self, Entity};
 use crate::expressions::validate_tree;
 use crate::graph::{
-    AccountRow, AssetRow, EventRow, InflationEntry, ParameterRow, PositionRow, ReturnProfileRow,
-    ScenarioGraph, Table, TaxBracketRow, TaxConfigEntry, TaxConfigRow,
+    AccountRow, AssetRow, EventRow, InflationEntry, ParameterRow, PositionRow, ScenarioGraph,
+    Table, TaxConfigEntry,
 };
+use crate::library;
 use crate::specs::accounts::{
     self, CreateAccount, CreatePosition, DetailRow, FlavorSpec, UpdateAccount, UpdatePosition,
 };
 use crate::specs::assets::{self, CreateAsset, UpdateAsset};
 use crate::specs::events::{self, EventBody, lower_tree};
 use crate::specs::parameters::{self, ParameterBody};
-use crate::specs::profiles::{self, CreateProfile, DistributionSpec};
+use crate::specs::profiles::CreateProfile;
 use crate::specs::scenarios::{UpdateScenario, validate_date};
-use crate::specs::taxes::{self, CreateTaxConfig};
+use crate::specs::taxes::CreateTaxConfig;
 
 /// Run `edit` on a copy of `graph`, keeping the result only if it succeeds.
 fn atomically<T>(
@@ -700,7 +704,9 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
         if let Some(id) = body.tax_config_id
             && g.scenario.tax_config_id != Some(id)
         {
-            let TaxConfigEntry { config, brackets } = g
+            let TaxConfigEntry {
+                config, brackets, ..
+            } = g
                 .tax_configs
                 .get(&id)
                 .cloned()
@@ -715,6 +721,7 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
             let InflationEntry {
                 name,
                 distribution_id,
+                ..
             } = g
                 .inflation_profiles
                 .get(&id)
@@ -751,91 +758,136 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
 /// Add a return profile to the caller's library, as `POST /return-profiles`
 /// would. Returns its id, which exists only in this graph.
 pub fn create_return_profile(graph: &mut ScenarioGraph, body: &CreateProfile) -> PlanResult<i64> {
-    body.distribution.validate(0)?;
     atomically(graph, |g| {
-        let name = body.name.trim();
-        if name.is_empty() {
-            return Err(PlanError::invalid("a return profile needs a name"));
-        }
-        if g.return_profiles.values().any(|p| p.name == name) {
-            return Err(PlanError::Conflict(profiles::NAME_TAKEN.into()));
-        }
-        let distribution_id = add_distribution(g, &body.distribution, 0)?;
         let id = g.next_id(Table::ReturnProfiles);
-        g.return_profiles.insert(
+        let sort_order = g
+            .return_profiles
+            .values()
+            .map(|p| p.sort_order)
+            .max()
+            .map_or(0, |max| max + 1);
+        let new = library::new_return_profile(
+            body,
+            g.return_profiles.values().map(|p| p.name.as_str()),
             id,
-            ReturnProfileRow {
-                asset_class: body.asset_class.map(|c| c.as_str().to_string()),
-                id,
-                name: name.to_string(),
-                description: body.description.clone(),
-                distribution_id,
-            },
-        );
+            g.next_id(Table::Distributions),
+            sort_order,
+        )?;
+        for row in new.distributions {
+            g.distributions.insert(row.id, row);
+        }
+        g.return_profiles.insert(id, new.profile.row());
         Ok(id)
     })
-}
-
-/// The `distributions` rows for `spec`, children first; returns the root's id.
-///
-/// What each row holds is [`DistributionSpec::columns`], as for the route's
-/// insert. The spec has been validated, so it cannot refuse.
-fn add_distribution(
-    graph: &mut ScenarioGraph,
-    spec: &DistributionSpec,
-    depth: usize,
-) -> PlanResult<i64> {
-    let columns = spec.columns(depth)?;
-    let (bull_id, bear_id) = match columns.regimes {
-        Some((bull, bear)) => (
-            Some(add_distribution(graph, bull, depth + 1)?),
-            Some(add_distribution(graph, bear, depth + 1)?),
-        ),
-        None => (None, None),
-    };
-    let id = graph.next_id(Table::Distributions);
-    graph
-        .distributions
-        .insert(id, columns.into_row(id, bull_id, bear_id));
-    Ok(id)
 }
 
 /// Add a tax config to the caller's library, as `POST /tax-configs` would.
 /// Returns its id, which exists only in this graph.
 pub fn create_tax_config(graph: &mut ScenarioGraph, body: &CreateTaxConfig) -> PlanResult<i64> {
-    let brackets = taxes::checked(body)?;
     atomically(graph, |g| {
-        let name = body.name.trim();
-        if name.is_empty() {
-            return Err(PlanError::invalid("a tax config needs a name"));
-        }
-        if g.tax_configs.values().any(|c| c.config.name == name) {
-            return Err(PlanError::Conflict(taxes::NAME_TAKEN.into()));
-        }
         let id = g.next_id(Table::TaxConfigs);
-        g.tax_configs.insert(
+        let config = library::new_tax_config(
+            body,
+            g.tax_configs.values().map(|c| c.config.name.as_str()),
             id,
-            TaxConfigEntry {
-                config: TaxConfigRow {
-                    id,
-                    name: name.to_string(),
-                    state_rate: body.state_rate,
-                    capital_gains_rate: body.capital_gains_rate,
-                    early_withdrawal_penalty_rate: body.early_withdrawal_penalty_rate,
-                    standard_deduction: body.standard_deduction,
-                    age_65_extra_deduction: body.age_65_extra_deduction,
-                },
-                brackets: brackets
-                    .iter()
-                    .map(|b| TaxBracketRow {
-                        threshold: b.threshold,
-                        rate: b.rate,
-                    })
-                    .collect(),
-            },
-        );
+        )?;
+        g.tax_configs.insert(id, config.entry());
         Ok(id)
     })
+}
+
+// ── ordering ─────────────────────────────────────────────────────────────────
+
+/// The order `requested` asks for, reconciled against what the collection
+/// actually holds.
+///
+/// Named rows come first, in the order named; anything the caller did not name
+/// keeps its place behind them. An id that is not in the collection is dropped
+/// rather than refused: a list a beat out of date — a row deleted in another
+/// tab, one belonging to a scenario the caller does not own — should still
+/// reorder under the user's hand rather than fail there.
+pub fn reconcile(current: &[i64], requested: &[i64]) -> Vec<i64> {
+    let known: HashSet<i64> = current.iter().copied().collect();
+    let mut placed: HashSet<i64> = HashSet::new();
+    let mut order: Vec<i64> = requested
+        .iter()
+        .copied()
+        .filter(|id| known.contains(id) && placed.insert(*id))
+        .collect();
+    order.extend(current.iter().copied().filter(|id| !placed.contains(id)));
+    order
+}
+
+/// Put the plan's events in the order `ids` names, as
+/// `POST /scenarios/{id}/events/reorder` would: [`reconcile`]d against the
+/// events, and only if that moves anything, every event's `sort_order` becomes
+/// its place. Never refused.
+pub fn reorder_events(graph: &mut ScenarioGraph, ids: &[i64]) {
+    let current: Vec<i64> = ranked(graph.events.iter().map(|e| (e.sort_order, e.id)));
+    renumber(&current, ids, |id, rank| {
+        if let Some(e) = graph.events.iter_mut().find(|e| e.id == id) {
+            e.sort_order = rank;
+        }
+    });
+    sort_events(graph);
+}
+
+/// Put the plan's assets in the order `ids` names; see [`reorder_events`].
+pub fn reorder_assets(graph: &mut ScenarioGraph, ids: &[i64]) {
+    let current: Vec<i64> = ranked(graph.assets.iter().map(|a| (a.sort_order, a.id)));
+    renumber(&current, ids, |id, rank| {
+        if let Some(a) = graph.assets.iter_mut().find(|a| a.id == id) {
+            a.sort_order = rank;
+        }
+    });
+    graph.assets.sort_by_key(|a| (a.sort_order, a.id));
+}
+
+/// Put the plan's accounts in the order `ids` names; see [`reorder_events`].
+pub fn reorder_accounts(graph: &mut ScenarioGraph, ids: &[i64]) {
+    let current: Vec<i64> = ranked(graph.accounts.iter().map(|a| (a.sort_order, a.id)));
+    renumber(&current, ids, |id, rank| {
+        if let Some(a) = graph.accounts.iter_mut().find(|a| a.id == id) {
+            a.sort_order = rank;
+        }
+    });
+    graph.accounts.sort_by_key(|a| (a.sort_order, a.id));
+}
+
+/// Put one account's lots in the order `ids` names, as
+/// `POST …/accounts/{account}/positions/reorder` would. A lot's place is its
+/// place in the account's list (the graph does not carry the column the route
+/// numbers), so the list itself is rearranged. An account with no lots, or
+/// none by that id, has nothing to reorder, and that is not an error.
+pub fn reorder_positions(graph: &mut ScenarioGraph, account_id: i64, ids: &[i64]) {
+    let Some(lots) = graph.positions.get_mut(&account_id) else {
+        return;
+    };
+    let current: Vec<i64> = lots.iter().map(|p| p.id).collect();
+    let order = reconcile(&current, ids);
+    if order == current {
+        return;
+    }
+    lots.sort_by_key(|p| order.iter().position(|id| *id == p.id));
+}
+
+/// Row ids in the order a list route reads them: by `sort_order`, then id.
+fn ranked(rows: impl Iterator<Item = (i64, i64)>) -> Vec<i64> {
+    let mut rows: Vec<(i64, i64)> = rows.collect();
+    rows.sort();
+    rows.into_iter().map(|(_, id)| id).collect()
+}
+
+/// `api::apply_order`'s renumbering: nothing when the list would not move,
+/// else every row's `sort_order` is its rank in the reconciled order.
+pub(crate) fn renumber(current: &[i64], requested: &[i64], mut set: impl FnMut(i64, i64)) {
+    let order = reconcile(current, requested);
+    if order == current {
+        return;
+    }
+    for (rank, id) in order.into_iter().enumerate() {
+        set(id, rank as i64);
+    }
 }
 
 // ── positions ────────────────────────────────────────────────────────────────
@@ -1087,6 +1139,9 @@ fn collect_orphans(graph: &mut ScenarioGraph) {
         );
     }
 }
+
+mod op;
+pub use op::{EditOp, EditOutcome, apply};
 
 #[cfg(test)]
 mod tests;

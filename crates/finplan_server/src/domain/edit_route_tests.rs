@@ -1814,3 +1814,981 @@ async fn created_tax_configs_match_the_route() {
         assert_eq!(status(sql), status(err), "{}", body.name);
     }
 }
+
+// ── reorders ────────────────────────────────────────────────────────────────
+
+/// Requests that move things, name some of them, repeat and invent ids, name
+/// none, and ask for what already is.
+fn reorder_requests(current: &[i64]) -> Vec<Vec<i64>> {
+    vec![
+        current.iter().rev().copied().collect(),
+        vec![current[2], current[0]],
+        vec![current[1], current[1], 9999, current[current.len() - 1]],
+        vec![],
+        current.to_vec(),
+        vec![9999],
+    ]
+}
+
+fn edit_op(value: Value) -> EditOp {
+    serde_json::from_value(value).expect("edit op")
+}
+
+#[tokio::test]
+async fn reorders_match_the_routes() {
+    let plan = Plan::new().await;
+    let ids = &plan.ids;
+    for body in [
+        json!({"asset_id": ids.bnd, "units": 10.0, "cost_basis": 900.0}),
+        json!({"asset_id": ids.vfiax, "purchase_date": "2030-02-03", "units": 4.0, "cost_basis": 2000.0}),
+        json!({"asset_id": ids.bnd, "purchase_date": "2024-02-03", "units": 5.0, "cost_basis": 300.0}),
+    ] {
+        plan.add_position(ids.vanguard, &new_position(body))
+            .await
+            .unwrap();
+    }
+    let mut mem = plan.load().await;
+
+    for round in 0..2 {
+        for what in ["assets", "accounts", "events", "positions"] {
+            // The list in the order its route reads it, as it is now.
+            let now = |mem: &ScenarioGraph| -> Vec<i64> {
+                match what {
+                    "assets" => mem.assets.iter().map(|a| a.id).collect(),
+                    "accounts" => mem.accounts.iter().map(|a| a.id).collect(),
+                    "events" => mem.events.iter().map(|e| e.id).collect(),
+                    _ => mem.positions[&ids.vanguard].iter().map(|p| p.id).collect(),
+                }
+            };
+            let requests = reorder_requests(&now(&mem));
+            for (i, request) in requests.into_iter().enumerate() {
+                // The fifth asks for the order it already has.
+                let current = now(&mem);
+                let request = if i == 4 { current.clone() } else { request };
+                let (sql, op) = match what {
+                    "assets" => (
+                        assets::reorder_in(&plan.db, plan.id, &request).await,
+                        json!({"op": "reorder_assets", "ids": request}),
+                    ),
+                    "accounts" => (
+                        accounts::reorder_in(&plan.db, plan.id, &request).await,
+                        json!({"op": "reorder_accounts", "ids": request}),
+                    ),
+                    "events" => (
+                        events::reorder_in(&plan.db, plan.id, &request).await,
+                        json!({"op": "reorder_events", "ids": request}),
+                    ),
+                    _ => (
+                        accounts::reorder_positions_in(&plan.db, plan.id, ids.vanguard, &request)
+                            .await,
+                        json!({"op": "reorder_positions", "account_id": ids.vanguard,
+                               "ids": request}),
+                    ),
+                };
+                let outcome = apply(&mut mem, &edit_op(op)).unwrap();
+                assert_eq!(outcome, EditOutcome { id: None });
+                let moved = sql.unwrap();
+                assert_same(&plan, &mem, &format!("round {round}: {what} {request:?}")).await;
+                // Asking for the order it already has renumbers nothing.
+                if request == current {
+                    assert_eq!(moved, 0, "{what}");
+                }
+                assert_eq!(now(&mem).len(), current.len());
+            }
+        }
+    }
+
+    // Never refused: an account with no lots, or that does not exist, has
+    // nothing to reorder.
+    for account in [ids.usaa, 9999] {
+        assert_eq!(
+            accounts::reorder_positions_in(&plan.db, plan.id, account, &[1, 2])
+                .await
+                .unwrap(),
+            0
+        );
+        apply(
+            &mut mem,
+            &edit_op(json!({"op": "reorder_positions", "account_id": account, "ids": [1, 2]})),
+        )
+        .unwrap();
+    }
+    assert_same(&plan, &mem, "reordering lots that are not there").await;
+}
+
+// ── the library ─────────────────────────────────────────────────────────────
+
+use finplan_plan::library::{self, Library, LibraryOp, apply_library};
+
+/// A distribution as a tree without ids, as [`shape`] does for a graph's.
+fn library_shape(lib: &Library, id: i64) -> Value {
+    let row = lib.distributions.iter().find(|d| d.id == id).unwrap();
+    let mut out = json!({
+        "kind": row.kind, "rate": row.rate, "mean": row.mean, "std_dev": row.std_dev,
+        "scale": row.scale, "df": row.df, "up": row.bull_to_bear_prob,
+        "down": row.bear_to_bull_prob, "preset": row.history_preset, "block": row.block_size,
+    });
+    if let (Some(bull), Some(bear)) = (row.bull_id, row.bear_id) {
+        out["bull"] = library_shape(lib, bull);
+        out["bear"] = library_shape(lib, bear);
+    }
+    out
+}
+
+/// The library with each profile's distribution inlined, so two libraries that
+/// number their distributions differently compare equal.
+fn library_canon(lib: &Library) -> Value {
+    let profile = |p: &Value| {
+        let mut p = p.clone();
+        let id = p["distribution_id"].as_i64().unwrap();
+        p.as_object_mut().unwrap().remove("distribution_id");
+        p["distribution"] = library_shape(lib, id);
+        p
+    };
+    let value = serde_json::to_value(lib).unwrap();
+    json!({
+        "return_profiles": value["return_profiles"].as_array().unwrap().iter().map(profile).collect::<Vec<_>>(),
+        "inflation_profiles": value["inflation_profiles"].as_array().unwrap().iter().map(profile).collect::<Vec<_>>(),
+        "tax_configs": value["tax_configs"],
+    })
+}
+
+/// A plan graph without the distribution ids the library numbers differently.
+fn plan_view(graph: &ScenarioGraph) -> Value {
+    let mut value = serde_json::to_value(graph).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.remove("distributions");
+    object.remove("inflation_distribution_id");
+    for profile in object["return_profiles"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        profile.as_object_mut().unwrap().remove("distribution_id");
+    }
+    value
+}
+
+impl Plan {
+    /// The user's library as the database has it, without the rows the route
+    /// leaves behind when it replaces or deletes a distribution.
+    async fn library(&self) -> Library {
+        let mut library = crate::db::library::load(&self.db, &self.user)
+            .await
+            .unwrap();
+        library.prune_distributions();
+        library
+    }
+
+    /// Switch the plan onto the tax config and inflation profile, in the
+    /// database and in `mem`.
+    async fn assume(&self, mem: &mut ScenarioGraph, lib: &Library, tax: i64, inflation: i64) {
+        let body: finplan_plan::specs::scenarios::UpdateScenario = serde_json::from_value(
+            json!({"tax_config_id": tax, "inflation_profile_id": inflation}),
+        )
+        .unwrap();
+        {
+            let mut conn = self.db.acquire().await.unwrap();
+            crate::api::scenarios::update_in(&mut conn, &self.user, self.id, &body)
+                .await
+                .unwrap();
+        }
+        lib.attach(mem);
+        update_scenario(mem, &body).unwrap();
+        mem.scenario.updated_at = self.load().await.scenario.updated_at;
+    }
+}
+
+/// The library and the plan agree with the database after `what`.
+async fn assert_library_same(plan: &Plan, lib: &Library, mem: &mut ScenarioGraph, what: &str) {
+    let stored = plan.library().await;
+    assert_eq!(
+        library_canon(&stored),
+        library_canon(lib),
+        "{what}: libraries differ"
+    );
+    for (a, b) in stored.return_profiles.iter().zip(&lib.return_profiles) {
+        assert_eq!((a.id, a.sort_order), (b.id, b.sort_order), "{what}");
+    }
+    assert_eq!(
+        stored.tax_configs.iter().map(|t| t.id).collect::<Vec<_>>(),
+        lib.tax_configs.iter().map(|t| t.id).collect::<Vec<_>>(),
+        "{what}"
+    );
+    // The plan follows once the library is attached again.
+    lib.attach(mem);
+    let loaded = plan.load().await;
+    mem.scenario.updated_at = loaded.scenario.updated_at.clone();
+    assert_eq!(plan_view(&loaded), plan_view(mem), "{what}: plans differ");
+    assert_eq!(
+        Library::from_graph(&loaded).tax_configs,
+        lib.tax_configs,
+        "{what}"
+    );
+}
+
+fn profile_body(value: Value) -> finplan_plan::specs::profiles::CreateProfile {
+    serde_json::from_value(value).unwrap()
+}
+
+fn profile_update(value: Value) -> finplan_plan::specs::profiles::UpdateProfile {
+    serde_json::from_value(value).unwrap()
+}
+
+fn library_op(value: Value) -> LibraryOp {
+    serde_json::from_value(value).expect("library op")
+}
+
+#[tokio::test]
+async fn return_profile_edits_match_the_routes() {
+    use crate::api::profiles;
+    let plan = Plan::new().await;
+    let mut lib = plan.library().await;
+    let mut mem = plan.load().await;
+    let ids = &plan.ids;
+
+    // Create: all three of the fixture's profiles are in use, so make more.
+    for body in [
+        json!({"name": " US broad ", "asset_class": "UsEquity", "description": "index funds",
+               "distribution": {"kind": "Bootstrap", "preset": "sp500", "block_size": 3}}),
+        json!({"name": "Regimes",
+               "distribution": {"kind": "RegimeSwitching", "bull_to_bear_prob": 0.1,
+                   "bear_to_bull_prob": 0.3,
+                   "bull": {"kind": "Normal", "mean": 0.1, "std_dev": 0.12},
+                   "bear": {"kind": "StudentT", "mean": -0.05, "scale": 0.2, "df": 4.0}}}),
+        json!({"name": "Savings", "asset_class": "Cash", "distribution": {"kind": "Fixed", "rate": 0.02}}),
+    ] {
+        let sql = {
+            let mut tx = plan.db.begin().await.unwrap();
+            let id = profiles::create_return_in(&mut tx, &plan.user, &profile_body(body.clone()))
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            id
+        };
+        let out = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "create_return_profile", "body": body})),
+        )
+        .unwrap();
+        assert_eq!(out.id, Some(sql), "{body}");
+        assert_library_same(&plan, &lib, &mut mem, &body.to_string()).await;
+    }
+    let regimes = lib
+        .return_profiles
+        .iter()
+        .find(|p| p.name == "Regimes")
+        .unwrap()
+        .id;
+    let broad = lib
+        .return_profiles
+        .iter()
+        .find(|p| p.name == "US broad")
+        .unwrap()
+        .id;
+
+    // Update: a new shape replaces the old, a class can be cleared.
+    for (id, edit) in [
+        (
+            broad,
+            json!({"name": " Broad market ", "description": "VTI and friends"}),
+        ),
+        (broad, json!({"asset_class": null})),
+        (broad, json!({"asset_class": "GlobalEquity"})),
+        (
+            regimes,
+            json!({"distribution": {"kind": "Normal", "mean": 0.06, "std_dev": 0.1}}),
+        ),
+        (
+            regimes,
+            json!({"distribution": {"kind": "RegimeSwitching", "bull_to_bear_prob": 0.2,
+                "bear_to_bull_prob": 0.4,
+                "bull": {"kind": "Fixed", "rate": 0.08}, "bear": {"kind": "None"}}}),
+        ),
+        (ids.cash, json!({"description": "T-bills"})),
+    ] {
+        profiles::update_return_in(&plan.db, &plan.user, id, &profile_update(edit.clone()))
+            .await
+            .unwrap();
+        apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "update_return_profile", "id": id, "body": edit})),
+        )
+        .unwrap();
+        assert_library_same(&plan, &lib, &mut mem, &edit.to_string()).await;
+    }
+
+    // Reorder.
+    for i in 0..6 {
+        let order = lib.return_profile_order();
+        let request = if i == 4 {
+            order.clone()
+        } else {
+            reorder_requests(&order).swap_remove(i)
+        };
+        let sql = profiles::reorder_return_in(&plan.db, &plan.user, &request)
+            .await
+            .unwrap();
+        apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "reorder_return_profiles", "ids": request})),
+        )
+        .unwrap();
+        assert_library_same(&plan, &lib, &mut mem, &format!("reorder {request:?}")).await;
+        if request == order {
+            assert_eq!(sql, 0);
+        }
+    }
+
+    // Delete what nothing uses; what is in use is refused alike, naming it.
+    for id in [regimes, broad] {
+        profiles::delete_return_in(&plan.db, &plan.user, id)
+            .await
+            .unwrap();
+        apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "delete_return_profile", "id": id})),
+        )
+        .unwrap();
+        assert_library_same(&plan, &lib, &mut mem, &format!("delete {id}")).await;
+    }
+    let before = lib.clone();
+    for id in [ids.equity, ids.bonds, ids.cash, 9999] {
+        let sql = profiles::delete_return_in(&plan.db, &plan.user, id)
+            .await
+            .unwrap_err();
+        let err = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "delete_return_profile", "id": id})),
+        )
+        .unwrap_err();
+        assert_eq!(sql.to_string(), err.to_string(), "{id}");
+        assert_eq!(status(sql), status(err));
+    }
+    assert_eq!(lib, before);
+    assert_library_same(&plan, &lib, &mut mem, "after refused deletes").await;
+
+    // Refused alike (the SQL accepts a blank name; the edit does not).
+    for edit in [
+        json!({"name": "Bonds"}),
+        json!({"distribution": {"kind": "Bootstrap", "preset": "nonsense"}}),
+        json!({"distribution": {"kind": "Normal", "mean": 0.1, "std_dev": -1.0}}),
+    ] {
+        profiles::update_return_in(
+            &plan.db,
+            &plan.user,
+            ids.cash,
+            &profile_update(edit.clone()),
+        )
+        .await
+        .unwrap_err();
+        let err = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "update_return_profile", "id": ids.cash, "body": edit})),
+        )
+        .unwrap_err();
+        assert!(!err.to_string().is_empty());
+    }
+    let taken = profile_update(json!({"name": "Bonds"}));
+    let sql = profiles::update_return_in(&plan.db, &plan.user, ids.cash, &taken)
+        .await
+        .unwrap_err();
+    let err = apply_library(
+        &mut lib,
+        std::slice::from_ref(&mem),
+        &library_op(
+            json!({"op": "update_return_profile", "id": ids.cash, "body": {"name": "Bonds"}}),
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(sql.to_string(), err.to_string());
+    let sql = profiles::update_return_in(&plan.db, &plan.user, 9999, &taken)
+        .await
+        .unwrap_err();
+    let err = apply_library(
+        &mut lib,
+        std::slice::from_ref(&mem),
+        &library_op(json!({"op": "update_return_profile", "id": 9999, "body": {"name": "X"}})),
+    )
+    .unwrap_err();
+    assert_eq!(sql.to_string(), err.to_string());
+    assert_eq!(lib, before);
+    assert_library_same(&plan, &lib, &mut mem, "after refused updates").await;
+
+    // A blank name is stricter in the edit.
+    let blank = library_op(json!({"op": "create_return_profile",
+        "body": {"name": "  ", "distribution": {"kind": "None"}}}));
+    assert!(matches!(
+        apply_library(&mut lib, &[], &blank),
+        Err(finplan_plan::PlanError::Invalid(_))
+    ));
+}
+
+#[tokio::test]
+async fn inflation_profile_edits_match_the_routes() {
+    use crate::api::profiles;
+    let plan = Plan::new().await;
+    let mut lib = plan.library().await;
+    let mut mem = plan.load().await;
+
+    for body in [
+        json!({"name": "Steady", "description": "two and a half", "distribution": {"kind": "Fixed", "rate": 0.025}}),
+        json!({"name": "Wobbly", "distribution": {"kind": "Normal", "mean": 0.03, "std_dev": 0.02}}),
+        json!({"name": "History", "distribution": {"kind": "Bootstrap", "preset": "us_agg_bonds"}}),
+    ] {
+        let sql = {
+            let mut tx = plan.db.begin().await.unwrap();
+            let id =
+                profiles::create_inflation_in(&mut tx, &plan.user, &profile_body(body.clone()))
+                    .await
+                    .unwrap();
+            tx.commit().await.unwrap();
+            id
+        };
+        let out = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "create_inflation_profile", "body": body})),
+        )
+        .unwrap();
+        assert_eq!(out.id, Some(sql), "{body}");
+        assert_library_same(&plan, &lib, &mut mem, &body.to_string()).await;
+    }
+
+    // Refused alike: a kind inflation cannot take, a taken name.
+    for body in [
+        json!({"name": "T", "distribution": {"kind": "StudentT", "mean": 0.0, "scale": 1.0, "df": 4.0}}),
+        json!({"name": "Steady", "distribution": {"kind": "None"}}),
+    ] {
+        let mut tx = plan.db.begin().await.unwrap();
+        let sql = profiles::create_inflation_in(&mut tx, &plan.user, &profile_body(body.clone()))
+            .await
+            .unwrap_err();
+        drop(tx);
+        let err = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "create_inflation_profile", "body": body})),
+        )
+        .unwrap_err();
+        assert_eq!(sql.to_string(), err.to_string(), "{body}");
+    }
+
+    for i in 0..6 {
+        let order = lib.inflation_profile_order();
+        let request = if i == 4 {
+            order.clone()
+        } else {
+            reorder_requests(&order).swap_remove(i)
+        };
+        let sql = profiles::reorder_inflation_in(&plan.db, &plan.user, &request)
+            .await
+            .unwrap();
+        apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "reorder_inflation_profiles", "ids": request})),
+        )
+        .unwrap();
+        assert_library_same(&plan, &lib, &mut mem, &format!("reorder {request:?}")).await;
+        if request == order {
+            assert_eq!(sql, 0);
+        }
+    }
+
+    // Deleting the profile a plan uses leaves the plan with none.
+    let steady = lib
+        .inflation_profiles
+        .iter()
+        .find(|p| p.name == "Steady")
+        .unwrap()
+        .id;
+    let tax = scalar(
+        &plan.db,
+        "INSERT INTO tax_configs(user_id,name) VALUES (?,'Any') RETURNING id",
+        &[json!(plan.user)],
+    )
+    .await;
+    scalar(
+        &plan.db,
+        "INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES (?,0,0.1) RETURNING id",
+        &[json!(tax)],
+    )
+    .await;
+    lib = plan.library().await;
+    plan.assume(&mut mem, &lib, tax, steady).await;
+    assert_eq!(mem.scenario.inflation_profile_id, Some(steady));
+    for id in [steady, 9999] {
+        let sql = profiles::delete_inflation_in(&plan.db, &plan.user, id).await;
+        let out = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "delete_inflation_profile", "id": id})),
+        );
+        assert_eq!(sql.is_ok(), out.is_ok(), "{id}");
+        if let (Err(sql), Err(err)) = (sql, out) {
+            assert_eq!(sql.to_string(), err.to_string());
+        }
+        assert_library_same(&plan, &lib, &mut mem, &format!("delete {id}")).await;
+    }
+    assert_eq!(mem.scenario.inflation_profile_id, None);
+    assert_eq!(mem.inflation_profile_name, None);
+    assert_eq!(mem.scenario.tax_config_id, Some(tax));
+}
+
+fn tax_body(value: Value) -> finplan_plan::specs::taxes::CreateTaxConfig {
+    serde_json::from_value(value).unwrap()
+}
+
+fn tax_update(value: Value) -> finplan_plan::specs::taxes::UpdateTaxConfig {
+    serde_json::from_value(value).unwrap()
+}
+
+#[tokio::test]
+async fn tax_config_edits_match_the_routes() {
+    use crate::api::taxes;
+    let plan = Plan::new().await;
+    let mut lib = plan.library().await;
+    let mut mem = plan.load().await;
+
+    for body in [
+        json!({"name": " Single, CO ", "state_rate": 0.044, "description": "Colorado",
+               "federal_brackets": [{"threshold": 11000.0, "rate": 0.12}, {"threshold": 0.0, "rate": 0.10}]}),
+        json!({"name": "Flat", "capital_gains_rate": 0.2, "standard_deduction": 14600.0,
+               "age_65_extra_deduction": 1950.0,
+               "federal_brackets": [{"threshold": 0.0, "rate": 0.2}]}),
+    ] {
+        let sql = {
+            let mut tx = plan.db.begin().await.unwrap();
+            let id = taxes::create_in(&mut tx, &plan.user, &tax_body(body.clone()))
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            id
+        };
+        let out = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "create_tax_config", "body": body})),
+        )
+        .unwrap();
+        assert_eq!(out.id, Some(sql), "{body}");
+        assert_library_same(&plan, &lib, &mut mem, &body.to_string()).await;
+    }
+    let co = lib
+        .tax_configs
+        .iter()
+        .find(|t| t.name == "Single, CO")
+        .unwrap()
+        .id;
+    let flat = lib
+        .tax_configs
+        .iter()
+        .find(|t| t.name == "Flat")
+        .unwrap()
+        .id;
+
+    // The plan uses one, so an update reaches it through `attach`.
+    let inflation = scalar(
+        &plan.db,
+        "INSERT INTO inflation_profiles(user_id,name,distribution_id) VALUES (?,'Any',?) RETURNING id",
+        &[json!(plan.user), json!(plan.library().await.return_profiles[0].distribution_id)],
+    )
+    .await;
+    lib = plan.library().await;
+    plan.assume(&mut mem, &lib, co, inflation).await;
+
+    for (id, edit) in [
+        (co, json!({"state_rate": 0.05, "name": "Colorado single"})),
+        (
+            co,
+            json!({"federal_brackets": [{"threshold": 0.0, "rate": 0.1},
+                                          {"threshold": 20000.0, "rate": 0.2},
+                                          {"threshold": 90000.0, "rate": 0.3}]}),
+        ),
+        (
+            co,
+            json!({"standard_deduction": 15000.0, "age_65_extra_deduction": 2000.0,
+                    "capital_gains_rate": 0.18, "early_withdrawal_penalty_rate": 0.0,
+                    "description": "Updated"}),
+        ),
+        (flat, json!({"name": "Flat tax"})),
+    ] {
+        taxes::update_in(&plan.db, &plan.user, id, &tax_update(edit.clone()))
+            .await
+            .unwrap();
+        apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "update_tax_config", "id": id, "body": edit})),
+        )
+        .unwrap();
+        assert_library_same(&plan, &lib, &mut mem, &edit.to_string()).await;
+    }
+    assert_eq!(mem.tax_brackets.len(), 3);
+    assert_eq!(mem.tax_config.as_ref().unwrap().name, "Colorado single");
+
+    // Refused alike.
+    let before = lib.clone();
+    for (id, edit) in [
+        (co, json!({"name": "Flat tax"})),
+        (co, json!({"federal_brackets": []})),
+        (
+            co,
+            json!({"federal_brackets": [{"threshold": 5.0, "rate": 0.1}]}),
+        ),
+        (
+            co,
+            json!({"federal_brackets": [{"threshold": 0.0, "rate": 10.0}]}),
+        ),
+        (co, json!({"standard_deduction": -1.0})),
+        (9999, json!({"state_rate": 0.1})),
+    ] {
+        let sql = taxes::update_in(&plan.db, &plan.user, id, &tax_update(edit.clone()))
+            .await
+            .unwrap_err();
+        let err = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "update_tax_config", "id": id, "body": edit})),
+        )
+        .unwrap_err();
+        assert_eq!(sql.to_string(), err.to_string(), "{edit}");
+        assert_eq!(status(sql), status(err));
+    }
+    assert_eq!(lib, before);
+    // Rates outside 0..1 hit a CHECK in the table; the edit says so up front.
+    let bad_rate = apply_library(
+        &mut lib,
+        &[],
+        &library_op(json!({"op": "update_tax_config", "id": co, "body": {"state_rate": 4.4}})),
+    );
+    assert!(matches!(bad_rate, Err(finplan_plan::PlanError::Invalid(_))));
+    taxes::update_in(
+        &plan.db,
+        &plan.user,
+        co,
+        &tax_update(json!({"state_rate": 4.4})),
+    )
+    .await
+    .unwrap_err();
+    assert_library_same(&plan, &lib, &mut mem, "after refused tax updates").await;
+
+    // Deleting the one in use leaves the plan with none; deleting nothing is
+    // refused alike.
+    for id in [co, 9999] {
+        let sql = taxes::destroy_in(&plan.db, &plan.user, id).await;
+        let out = apply_library(
+            &mut lib,
+            std::slice::from_ref(&mem),
+            &library_op(json!({"op": "delete_tax_config", "id": id})),
+        );
+        assert_eq!(sql.is_ok(), out.is_ok(), "{id}");
+        if let (Err(sql), Err(err)) = (sql, out) {
+            assert_eq!(sql.to_string(), err.to_string());
+        }
+        assert_library_same(&plan, &lib, &mut mem, &format!("delete {id}")).await;
+    }
+    assert_eq!(mem.scenario.tax_config_id, None);
+    assert!(mem.tax_config.is_none() && mem.tax_brackets.is_empty());
+    assert_eq!(mem.scenario.inflation_profile_id, Some(inflation));
+}
+
+// ── attaching a library ─────────────────────────────────────────────────────
+
+/// For a user with the starter library, a plan that uses it, and a library
+/// edited since: a graph read back from JSON and attached is the graph a load
+/// builds, and hashes alike.
+#[tokio::test]
+async fn an_attached_library_gives_the_graph_a_load_builds() {
+    let plan = Plan::new().await;
+    crate::seed::seed_user_library(&plan.db, &plan.user)
+        .await
+        .unwrap();
+    let mut lib = plan.library().await;
+    let mut mem = plan.load().await;
+
+    // The starter library edited a little, with a regime profile and a
+    // replaced distribution, so there are orphans in the database.
+    let tax = lib.tax_configs[0].id;
+    let inflation = lib.inflation_profiles[1].id;
+    plan.assume(&mut mem, &lib, tax, inflation).await;
+    let mut ops = vec![
+        json!({"op": "create_return_profile", "body": {"name": "Regimes",
+            "distribution": {"kind": "RegimeSwitching", "bull_to_bear_prob": 0.1,
+                "bear_to_bull_prob": 0.3,
+                "bull": {"kind": "Normal", "mean": 0.1, "std_dev": 0.12},
+                "bear": {"kind": "Fixed", "rate": -0.02}}}}),
+        json!({"op": "update_tax_config", "id": tax, "body": {"description": "edited"}}),
+    ];
+    ops.push(json!({"op": "reorder_return_profiles", "ids": [3, 1]}));
+    for op in ops {
+        let op = library_op(op);
+        match &op {
+            LibraryOp::CreateReturnProfile { body } => {
+                let mut tx = plan.db.begin().await.unwrap();
+                crate::api::profiles::create_return_in(&mut tx, &plan.user, body)
+                    .await
+                    .unwrap();
+                tx.commit().await.unwrap();
+            }
+            LibraryOp::UpdateTaxConfig { id, body } => {
+                // `UpdateTaxConfig` is not `Clone`; rebuild it from what is set.
+                let again = tax_update(json!({"description": body.description}));
+                crate::api::taxes::update_in(&plan.db, &plan.user, *id, &again)
+                    .await
+                    .unwrap();
+            }
+            LibraryOp::ReorderReturnProfiles { ids } => {
+                crate::api::profiles::reorder_return_in(&plan.db, &plan.user, ids)
+                    .await
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        apply_library(&mut lib, std::slice::from_ref(&mem), &op).unwrap();
+    }
+    assert_eq!(library_canon(&lib), library_canon(&plan.library().await));
+
+    // From the database as a load builds it, against: load, drop the library,
+    // read the library from the database, attach it.
+    let loaded = plan.load().await;
+    let db_library = crate::db::library::load(&plan.db, &plan.user)
+        .await
+        .unwrap();
+    assert_eq!(Library::from_graph(&loaded), db_library);
+
+    let mut stripped = loaded.clone();
+    stripped.return_profiles.clear();
+    stripped.distributions.clear();
+    stripped.tax_configs.clear();
+    stripped.inflation_profiles.clear();
+    stripped.tax_config = None;
+    stripped.tax_brackets.clear();
+    stripped.inflation_profile_name = None;
+    stripped.inflation_distribution_id = None;
+    db_library.attach(&mut stripped);
+    assert_eq!(
+        serde_json::to_value(&stripped).unwrap(),
+        serde_json::to_value(&loaded).unwrap()
+    );
+    assert_eq!(Library::from_graph(&stripped), db_library);
+    assert_eq!(
+        finplan_plan::snapshot::snapshot(&stripped).unwrap(),
+        finplan_plan::snapshot::snapshot(&loaded).unwrap()
+    );
+    assert!(loaded.tax_config.is_some() && loaded.inflation_profile_name.is_some());
+
+    // The same through the JSON a local store keeps, which drops the tables
+    // `ScenarioGraph` does not serialize and the order columns.
+    let mut stored: ScenarioGraph =
+        serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
+    assert!(stored.tax_configs.is_empty() && stored.inflation_profiles.is_empty());
+    db_library.attach(&mut stored);
+    assert_eq!(
+        serde_json::to_value(&stored).unwrap(),
+        serde_json::to_value(&loaded).unwrap()
+    );
+    assert_eq!(Library::from_graph(&stored), db_library);
+
+    // A library without what the plan names clears the reference, as the
+    // foreign key would have.
+    let mut fewer = db_library.clone();
+    fewer.tax_configs.clear();
+    let mut cleared = loaded.clone();
+    fewer.attach(&mut cleared);
+    assert_eq!(cleared.scenario.tax_config_id, None);
+    assert!(cleared.tax_config.is_none() && cleared.tax_brackets.is_empty());
+
+    // The starter library is what seeding writes.
+    let db = crate::db::connect("sqlite::memory:", 1).await.unwrap();
+    sqlx::query("INSERT INTO users(id,email,password_hash) VALUES ('s','s@example.test','x')")
+        .execute(&db)
+        .await
+        .unwrap();
+    crate::seed::seed_user_library(&db, "s").await.unwrap();
+    assert_eq!(
+        crate::db::library::load(&db, "s").await.unwrap(),
+        library::seed()
+    );
+}
+
+// ── new plans ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn new_plans_match_the_route() {
+    use crate::api::scenarios;
+    use finplan_plan::create::new_plan;
+    use finplan_plan::specs::scenarios::CreateScenario;
+    let plan = Plan::new().await;
+    crate::seed::seed_user_library(&plan.db, &plan.user)
+        .await
+        .unwrap();
+    let lib = plan.library().await;
+    let (tax, inflation) = (lib.tax_configs[0].id, lib.inflation_profiles[0].id);
+    let create = |value: Value| -> CreateScenario { serde_json::from_value(value).unwrap() };
+
+    for (body, name) in [
+        (json!({"name": "Bare", "start_date": "2026-01-01"}), "bare"),
+        (
+            json!({"name": "  Full  ", "description": "everything", "start_date": "2027-02-03",
+                   "birth_date": "1980-12-31", "duration_years": 12,
+                   "inflation_profile_id": inflation, "tax_config_id": tax}),
+            "full",
+        ),
+        (
+            json!({"name": "Taxed", "start_date": "2026-06-01", "duration_years": 120,
+                   "tax_config_id": tax}),
+            "taxed",
+        ),
+    ] {
+        let body = create(body);
+        let id = {
+            let mut conn = plan.db.acquire().await.unwrap();
+            let (start, birth) = scenarios::check_new(&mut conn, &plan.user, &body)
+                .await
+                .unwrap();
+            drop(conn);
+            let mut tx = plan.db.begin().await.unwrap();
+            let id = scenarios::insert_new(&mut tx, &plan.user, &body, &start, birth.as_deref())
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            id
+        };
+        let stored = crate::db::graph::load(&plan.db, id, &plan.user)
+            .await
+            .unwrap();
+        let mut mem = new_plan(&body, &lib, id, "2026-10-03 14:05:09").unwrap();
+        assert_eq!(mem.scenario.user_id, finplan_plan::create::LOCAL_USER_ID);
+        assert_eq!(mem.scenario.created_at, "2026-10-03 14:05:09");
+        // What the server's user is called is the only other difference.
+        mem.scenario.user_id = stored.scenario.user_id.clone();
+        mem.scenario.created_at = stored.scenario.created_at.clone();
+        mem.scenario.updated_at = stored.scenario.updated_at.clone();
+        assert_eq!(
+            serde_json::to_value(&stored).unwrap(),
+            serde_json::to_value(&mem).unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            finplan_plan::snapshot::snapshot(&stored).unwrap().1,
+            finplan_plan::snapshot::snapshot(&mem).unwrap().1,
+            "{name}"
+        );
+        assert_eq!(
+            Library::from_graph(&stored),
+            Library::from_graph(&mem),
+            "{name}"
+        );
+    }
+
+    // Refused alike.
+    for body in [
+        json!({"name": "A", "start_date": "2026-01-01", "tax_config_id": 9999}),
+        json!({"name": "A", "start_date": "2026-01-01", "inflation_profile_id": 9999}),
+        json!({"name": "A", "start_date": "someday"}),
+        json!({"name": "A", "start_date": "2026-01-01", "birth_date": "2026-13-01"}),
+        json!({"name": "   ", "start_date": "2026-01-01"}),
+    ] {
+        let body = create(body);
+        let mut conn = plan.db.acquire().await.unwrap();
+        let sql = scenarios::check_new(&mut conn, &plan.user, &body)
+            .await
+            .unwrap_err();
+        let err = new_plan(&body, &lib, 1, "2026-10-03 14:05:09").unwrap_err();
+        assert_eq!(sql.to_string(), err.to_string());
+        assert_eq!(status(sql), status(err));
+    }
+    // A horizon the table's CHECK refuses is refused up front.
+    for years in [0, 121] {
+        let body =
+            create(json!({"name": "A", "start_date": "2026-01-01", "duration_years": years}));
+        assert!(new_plan(&body, &lib, 1, "now").is_err());
+    }
+}
+
+#[tokio::test]
+async fn duplicates_match_the_route() {
+    use finplan_plan::create::duplicate;
+    let plan = Plan::new().await;
+    plan.create(&plan.branching()).await.unwrap();
+    plan.create(&plan.drawdown()).await.unwrap();
+    plan.create(&plan.move_house()).await.unwrap();
+    let graph = plan.load().await;
+
+    let id = super::clone_scenario(&plan.db, &graph, "Copy")
+        .await
+        .unwrap();
+    let stored = crate::db::graph::load(&plan.db, id, &plan.user)
+        .await
+        .unwrap();
+    let mem = duplicate(&graph, id, "  Copy ", "2026-10-03 14:05:09").unwrap();
+
+    // The route numbers every row afresh, so compare what the numbers mean:
+    // the scenario, the rows' names and the plan as the engine reads it.
+    let names = |g: &ScenarioGraph| {
+        (
+            g.assets.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
+            g.accounts
+                .iter()
+                .map(|a| a.name.clone())
+                .collect::<Vec<_>>(),
+            g.events
+                .iter()
+                .map(|e| (e.name.clone(), e.sort_order))
+                .collect::<Vec<_>>(),
+            g.parameters
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>(),
+            (
+                g.triggers.len(),
+                g.effects.len(),
+                g.amounts.len(),
+                g.withdrawal_sources.len(),
+            ),
+            g.positions.values().map(Vec::len).sum::<usize>(),
+        )
+    };
+    assert_eq!(names(&stored), names(&mem));
+    let scenario = |g: &ScenarioGraph| {
+        let s = &g.scenario;
+        (
+            s.name.clone(),
+            s.description.clone(),
+            s.start_date.clone(),
+            s.birth_date.clone(),
+            s.duration_years,
+            s.inflation_profile_id,
+            s.tax_config_id,
+            s.collect_ledger,
+        )
+    };
+    assert_eq!(scenario(&stored), scenario(&mem));
+    assert_eq!(mem.scenario.id, id);
+    assert_eq!(mem.scenario.created_at, "2026-10-03 14:05:09");
+    let config = |g: &ScenarioGraph| canonical(&compile::compile(g).unwrap().config);
+    assert_eq!(config(&stored), config(&mem));
+    assert_eq!(config(&graph), config(&mem));
+    assert_eq!(
+        serde_json::to_value(&graph.events).unwrap(),
+        serde_json::to_value(&mem.events).unwrap(),
+        "ids are kept"
+    );
+
+    assert_eq!(
+        status(
+            super::clone_scenario(&plan.db, &graph, "")
+                .await
+                .unwrap_err()
+        ),
+        status(duplicate(&graph, 1, "  ", "now").unwrap_err())
+    );
+}

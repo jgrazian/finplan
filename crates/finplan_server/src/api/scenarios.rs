@@ -102,44 +102,12 @@ async fn create(
     Json(Submitted { body, fields }): Json<Submitted<CreateScenario>>,
 ) -> ApiResult<(StatusCode, Json<Scenario>)> {
     let mut conn = state.db.acquire().await?;
-    owned_assumptions(
-        &mut conn,
-        &user.id,
-        body.inflation_profile_id,
-        body.tax_config_id,
-    )
-    .await?;
+    let (start_date, birth_date) = check_new(&mut conn, &user.id, &body).await?;
     drop(conn);
-    let start_date = validate_date(&body.start_date, "start_date")?;
-    let birth_date = body
-        .birth_date
-        .as_deref()
-        .map(|d| validate_date(d, "birth_date"))
-        .transpose()?;
-
-    if body.name.trim().is_empty() {
-        return Err(ApiError::bad_request("scenario name cannot be empty"));
-    }
 
     let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
     crate::billing::check_plan_slot(&mut tx, &user.id, &state.config, 1).await?;
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO scenarios
-            (user_id, name, description, start_date, birth_date, duration_years,
-             inflation_profile_id, tax_config_id)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8) RETURNING id",
-    )
-    .bind(&user.id)
-    .bind(body.name.trim())
-    .bind(&body.description)
-    .bind(&start_date)
-    .bind(&birth_date)
-    .bind(body.duration_years)
-    .bind(body.inflation_profile_id)
-    .bind(body.tax_config_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
+    let id = insert_new(&mut tx, &user.id, &body, &start_date, birth_date.as_deref()).await?;
 
     tx.commit().await?;
 
@@ -163,6 +131,56 @@ async fn create(
     .await?;
 
     Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// What `POST /scenarios` checks before it takes a plan slot: the assumptions
+/// are the caller's, the dates parse, the name is not blank. Returns the start
+/// and birth dates as stored.
+pub(crate) async fn check_new(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    body: &CreateScenario,
+) -> ApiResult<(String, Option<String>)> {
+    owned_assumptions(conn, user_id, body.inflation_profile_id, body.tax_config_id).await?;
+    let start_date = validate_date(&body.start_date, "start_date")?;
+    let birth_date = body
+        .birth_date
+        .as_deref()
+        .map(|d| validate_date(d, "birth_date"))
+        .transpose()?;
+
+    if body.name.trim().is_empty() {
+        return Err(ApiError::bad_request("scenario name cannot be empty"));
+    }
+    Ok((start_date, birth_date))
+}
+
+/// Insert the scenario row `POST /scenarios` creates, from what [`check_new`]
+/// returned; returns its id.
+pub(crate) async fn insert_new(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    user_id: &str,
+    body: &CreateScenario,
+    start_date: &str,
+    birth_date: Option<&str>,
+) -> ApiResult<i64> {
+    sqlx::query_scalar(
+        "INSERT INTO scenarios
+            (user_id, name, description, start_date, birth_date, duration_years,
+             inflation_profile_id, tax_config_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(body.name.trim())
+    .bind(&body.description)
+    .bind(start_date)
+    .bind(birth_date)
+    .bind(body.duration_years)
+    .bind(body.inflation_profile_id)
+    .bind(body.tax_config_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))
 }
 
 async fn update(

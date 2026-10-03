@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
+use crate::db::Db;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
@@ -41,6 +42,17 @@ async fn list(
     Ok(Json(out))
 }
 
+/// Renumber the scenario's events to read as `ids`, as the route does once it
+/// has checked the scenario is the caller's. Returns the rows renumbered.
+pub(crate) async fn reorder_in(db: &Db, scenario_id: i64, ids: &[i64]) -> ApiResult<u64> {
+    let current: Vec<i64> =
+        sqlx::query_scalar("SELECT id FROM events WHERE scenario_id = ?1 ORDER BY sort_order, id")
+            .bind(scenario_id)
+            .fetch_all(db)
+            .await?;
+    super::apply_order(db, "events", &current, ids).await
+}
+
 /// Put the scenario's events in the order the body names.
 async fn reorder(
     State(state): State<AppState>,
@@ -50,13 +62,7 @@ async fn reorder(
 ) -> ApiResult<StatusCode> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
 
-    let current: Vec<i64> =
-        sqlx::query_scalar("SELECT id FROM events WHERE scenario_id = ?1 ORDER BY sort_order, id")
-            .bind(scenario_id)
-            .fetch_all(&state.db)
-            .await?;
-
-    let affected = super::apply_order(&state.db, "events", &current, &body.ids).await?;
+    let affected = reorder_in(&state.db, scenario_id, &body.ids).await?;
 
     if affected > 0 {
         state.telemetry.mutation(

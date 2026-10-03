@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::specs::CatchUpSpec;
 
@@ -32,8 +33,9 @@ pub struct ScenarioRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+#[ts(export)]
 pub struct DistributionRow {
     pub id: i64,
     pub kind: String,
@@ -59,6 +61,11 @@ pub struct ReturnProfileRow {
     pub name: String,
     pub description: Option<String>,
     pub distribution_id: i64,
+    /// Where the library lists it. Not part of a plan's input, so it is left
+    /// out of the serialized graph (and the snapshot hash) and reads back as
+    /// zero from one.
+    #[serde(skip)]
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,6 +291,8 @@ pub struct TaxBracketRow {
 #[derive(Debug, Clone)]
 pub struct TaxConfigEntry {
     pub config: TaxConfigRow,
+    /// The library's note on it; not part of a plan's input.
+    pub description: Option<String>,
     pub brackets: Vec<TaxBracketRow>,
 }
 
@@ -293,6 +302,10 @@ pub struct TaxConfigEntry {
 pub struct InflationEntry {
     pub name: String,
     pub distribution_id: i64,
+    /// The library's note on it, and where it lists it; not part of a plan's
+    /// input.
+    pub description: Option<String>,
+    pub sort_order: i64,
 }
 
 /// Every row backing one scenario, indexed for in-memory tree assembly.

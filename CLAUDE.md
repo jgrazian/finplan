@@ -99,7 +99,9 @@ anything doing I/O; CI builds it for `wasm32-unknown-unknown` with
 - `graph.rs` - row structs and `ScenarioGraph` (the plan as loaded), `next_id`
 - `specs/` - API request/response specs (ts-rs exported) and their validation
 - `batch.rs` - `RowBatch`: specs lowered to rows; `merge_into` a graph (the server's SQL sink is `db::batch::insert`)
-- `edit/` - every write route as an in-memory edit of a `ScenarioGraph` (preview)
+- `edit/` - every write route as an in-memory edit of a `ScenarioGraph` (preview); `edit::apply(graph, &EditOp)` is the single entry point
+- `library.rs` - the user's return/inflation profiles and tax configs as a `Library` value: `attach` to a graph, `LibraryOp`/`apply_library`, the starter `seed()`
+- `create.rs` - `new_plan` and `duplicate` (the twins of `POST /scenarios` and `/duplicate`)
 - `compile/` - `ScenarioGraph` -> `SimulationConfig`
 - `snapshot.rs` - canonical input snapshot, its hash, `MODEL_VERSION`
 - `results/` - `project()` a `MonteCarloSummary` into the results bodies; ledger, funding views

@@ -11,6 +11,9 @@ use crate::graph::DistributionRow;
 /// What a second return profile of the same name is refused with.
 pub const NAME_TAKEN: &str = "a return profile with that name already exists";
 
+/// What a second inflation profile of the same name is refused with.
+pub const INFLATION_NAME_TAKEN: &str = "an inflation profile with that name already exists";
+
 /// What kind of holding a profile describes.
 ///
 /// A profile's *name* is the user's — renamed, translated, duplicated — so it
