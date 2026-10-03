@@ -13,6 +13,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - uses: pnpm/action-setup@v4
         with:
           package_json_file: web/package.json
@@ -24,6 +25,12 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # finplan_plan is what the browser runs (spec 19): it and the engine must
+      # build for wasm, and the plan crate must not pick up server dependencies.
+      - name: Plan crate builds for wasm32 without server dependencies
+        run: |
+          cargo build -p finplan_core -p finplan_plan --no-default-features --target wasm32-unknown-unknown
+          ! cargo tree -p finplan_plan --no-default-features -e normal | grep -E "sqlx|tokio|axum|hyper|reqwest"
       - run: ./scripts/gen-bindings.sh
       - run: git diff --exit-code -- web/lib/api/generated
       - run: pnpm install --frozen-lockfile
