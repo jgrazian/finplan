@@ -58,7 +58,8 @@ number on screen.
 | TUI entry | `crates/finplan/src/main.rs` |
 | App event loop | `crates/finplan/src/app.rs:116` - `App::run()` |
 | Server entry | `crates/finplan_server/src/main.rs` |
-| DB -> engine config | `crates/finplan_server/src/compile/mod.rs` - `compile()` |
+| Plan graph -> engine config | `crates/finplan_plan/src/compile/mod.rs` - `compile()` |
+| Load a plan from SQLite | `crates/finplan_server/src/db/graph.rs` - `load()` |
 | Schema | `crates/finplan_server/migrations/0001_init.sql` |
 
 ## finplan_core Navigation
