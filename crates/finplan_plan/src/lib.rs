@@ -10,6 +10,7 @@
 
 pub mod batch;
 pub mod compile;
+pub mod edit;
 pub mod error;
 pub mod expression_refs;
 pub mod expressions;

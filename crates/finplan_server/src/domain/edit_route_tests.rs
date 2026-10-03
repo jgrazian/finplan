@@ -10,7 +10,6 @@
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
 
-use super::*;
 use crate::api::accounts::{self, CreateAccount, CreatePosition, UpdateAccount, UpdatePosition};
 use crate::api::assets::{self, CreateAsset, UpdateAsset};
 use crate::api::events::{self, EventBody, read_event};
@@ -18,7 +17,8 @@ use crate::api::expressions::validate_tree;
 use crate::api::row_batch::RowBatch;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::db::Db;
-use crate::error::ApiError;
+use crate::error::{ApiError, ApiResult};
+use finplan_plan::edit::*;
 
 struct Plan {
     db: Db,
@@ -613,8 +613,8 @@ fn canonical(config: &finplan_core::config::SimulationConfig) -> Vec<String> {
     ]
 }
 
-fn status(err: ApiError) -> axum::http::StatusCode {
-    err.into_response().status()
+fn status(err: impl Into<ApiError>) -> axum::http::StatusCode {
+    err.into().into_response().status()
 }
 
 // ── events ──────────────────────────────────────────────────────────────────
@@ -1033,32 +1033,6 @@ async fn position_edits_match_the_route() {
 }
 
 // ── the batch itself ────────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn orphan_rows_do_not_change_what_compiles() {
-    let plan = Plan::new().await;
-    let mut graph = plan.load().await;
-    let before = canonical(&compile::compile(&graph).unwrap().config);
-
-    // Rows no event reaches: an amount tree, and a detached condition with a
-    // child.
-    let mut batch = RowBatch::for_graph(&graph);
-    crate::api::specs::AmountSpec::Max {
-        left: Box::new(crate::api::specs::AmountSpec::Fixed { value: 1.0 }),
-        right: Box::new(crate::api::specs::AmountSpec::SourceBalance),
-    }
-    .lower(&mut batch, 0)
-    .unwrap();
-    serde_json::from_value::<crate::api::specs::TriggerSpec>(json!({"kind": "Or", "children": [
-        {"kind": "Age", "years": 50}]}))
-    .unwrap()
-    .lower(&mut batch, crate::api::specs::TriggerParent::Detached, 0)
-    .unwrap();
-    batch.merge_into(&mut graph).unwrap();
-
-    let after = canonical(&compile::compile(&graph).unwrap().config);
-    assert_eq!(before, after);
-}
 
 #[tokio::test]
 async fn the_batch_writes_rows_in_lowering_order_with_local_links_resolved() {
@@ -1574,10 +1548,11 @@ async fn deleting_something_still_in_use_is_refused_and_says_what() {
     assert_eq!(serde_json::to_value(&mem).unwrap(), before);
 }
 
-fn status_of(err: &ApiError) -> axum::http::StatusCode {
+fn status_of(err: &finplan_plan::PlanError) -> axum::http::StatusCode {
+    use finplan_plan::PlanError;
     match err {
-        ApiError::Conflict(_) => axum::http::StatusCode::CONFLICT,
-        ApiError::NotFound(_) => axum::http::StatusCode::NOT_FOUND,
+        PlanError::Conflict(_) => axum::http::StatusCode::CONFLICT,
+        PlanError::NotFound(_) => axum::http::StatusCode::NOT_FOUND,
         _ => axum::http::StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
@@ -1768,7 +1743,7 @@ async fn created_return_profiles_match_the_route() {
     let blank = profile(json!({"name": "  ", "distribution": {"kind": "None"}}));
     assert!(matches!(
         create_return_profile(&mut mem, &blank),
-        Err(ApiError::BadRequest(_))
+        Err(finplan_plan::PlanError::Invalid(_))
     ));
 }
 

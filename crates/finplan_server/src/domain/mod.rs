@@ -1,6 +1,10 @@
 //! Cross-table operations that do not belong to a single route module.
 
-pub(crate) mod edit;
+pub(crate) use finplan_plan::edit;
+
+#[cfg(test)]
+#[path = "edit_route_tests.rs"]
+mod edit_route_tests;
 
 use std::collections::HashMap;
 use std::pin::Pin;

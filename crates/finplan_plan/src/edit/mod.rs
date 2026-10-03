@@ -17,30 +17,30 @@
 
 use std::collections::HashSet;
 
-use crate::api::accounts::{
-    CreateAccount, CreatePosition, FlavorSpec, UpdateAccount, UpdatePosition,
-};
-use crate::api::assets::{CreateAsset, UpdateAsset};
-use crate::api::events::{EventBody, lower_tree};
-use crate::api::expression_refs::{self, Entity};
-use crate::api::expressions::validate_tree;
-use crate::api::parameters::{self, ParameterBody};
-use crate::api::profiles::{CreateProfile, DistributionSpec};
-use crate::api::row_batch::RowBatch;
-use crate::api::scenarios::UpdateScenario;
-use crate::api::taxes::{self, CreateTaxConfig};
-use crate::compile::rows::{
+use crate::batch::RowBatch;
+use crate::error::{PlanError, PlanResult};
+use crate::expression_refs::{self, Entity};
+use crate::expressions::validate_tree;
+use crate::graph::{
     AccountRow, AssetRow, BankRow, DistributionRow, EventRow, InflationEntry, InvestmentRow,
     LiabilityRow, ParameterRow, PositionRow, PropertyRow, ReturnProfileRow, ScenarioGraph, Table,
     TaxBracketRow, TaxConfigEntry, TaxConfigRow,
 };
-use crate::error::{ApiError, ApiResult};
+use crate::specs::accounts::{
+    CreateAccount, CreatePosition, FlavorSpec, UpdateAccount, UpdatePosition,
+};
+use crate::specs::assets::{CreateAsset, UpdateAsset};
+use crate::specs::events::{EventBody, lower_tree};
+use crate::specs::parameters::{self, ParameterBody};
+use crate::specs::profiles::{CreateProfile, DistributionSpec};
+use crate::specs::scenarios::UpdateScenario;
+use crate::specs::taxes::{self, CreateTaxConfig};
 
 /// Run `edit` on a copy of `graph`, keeping the result only if it succeeds.
 fn atomically<T>(
     graph: &mut ScenarioGraph,
-    edit: impl FnOnce(&mut ScenarioGraph) -> ApiResult<T>,
-) -> ApiResult<T> {
+    edit: impl FnOnce(&mut ScenarioGraph) -> PlanResult<T>,
+) -> PlanResult<T> {
     let mut staged = graph.clone();
     let out = edit(&mut staged)?;
     *graph = staged;
@@ -50,12 +50,12 @@ fn atomically<T>(
 // ── events ───────────────────────────────────────────────────────────────────
 
 /// Add an event, as `POST /scenarios/{id}/events` would. Returns its new id.
-pub(crate) fn create_event(graph: &mut ScenarioGraph, body: &EventBody) -> ApiResult<i64> {
+pub fn create_event(graph: &mut ScenarioGraph, body: &EventBody) -> PlanResult<i64> {
     validate_tree(graph, &body.effects)?;
     atomically(graph, |g| {
         let name = body.name.trim();
         if g.events.iter().any(|e| e.name == name) {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "an event with that name already exists".into(),
             ));
         }
@@ -78,19 +78,15 @@ pub(crate) fn create_event(graph: &mut ScenarioGraph, body: &EventBody) -> ApiRe
 }
 
 /// Rewrite an event wholesale, as `PUT /scenarios/{id}/events/{event}` would.
-pub(crate) fn replace_event(
-    graph: &mut ScenarioGraph,
-    event_id: i64,
-    body: &EventBody,
-) -> ApiResult<()> {
+pub fn replace_event(graph: &mut ScenarioGraph, event_id: i64, body: &EventBody) -> PlanResult<()> {
     validate_tree(graph, &body.effects)?;
     atomically(graph, |g| {
         if !g.events.iter().any(|e| e.id == event_id) {
-            return Err(ApiError::NotFound("event"));
+            return Err(PlanError::NotFound("event"));
         }
         let name = body.name.trim();
         if g.events.iter().any(|e| e.id != event_id && e.name == name) {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "an event with that name already exists".into(),
             ));
         }
@@ -98,7 +94,7 @@ pub(crate) fn replace_event(
             .events
             .iter_mut()
             .find(|e| e.id == event_id)
-            .ok_or(ApiError::NotFound("event"))?;
+            .ok_or(PlanError::NotFound("event"))?;
         row.name = name.to_string();
         row.description = body.description.clone();
         row.fires_once = i64::from(body.fires_once);
@@ -136,7 +132,7 @@ pub(crate) fn replace_event(
 /// Refused while another event's root trigger or top-level effect points at
 /// it. Like the route, that check does not look inside nested conditions or
 /// `Random` branches: a reference there is removed by the cascade.
-pub(crate) fn delete_event(graph: &mut ScenarioGraph, event_id: i64) -> ApiResult<()> {
+pub fn delete_event(graph: &mut ScenarioGraph, event_id: i64) -> PlanResult<()> {
     atomically(graph, |g| {
         let name_of = |id: i64| g.events.iter().find(|e| e.id == id).map(|e| e.name.clone());
         let mut referrers: Vec<String> = g
@@ -155,14 +151,14 @@ pub(crate) fn delete_event(graph: &mut ScenarioGraph, event_id: i64) -> ApiResul
         referrers.sort();
         referrers.dedup();
         if !referrers.is_empty() {
-            return Err(ApiError::Conflict(format!(
+            return Err(PlanError::Conflict(format!(
                 "event is referenced by: {}",
                 referrers.join(", ")
             )));
         }
 
         if !g.events.iter().any(|e| e.id == event_id) {
-            return Err(ApiError::NotFound("event"));
+            return Err(PlanError::NotFound("event"));
         }
         let mut doomed = Doomed::default();
         doomed.events.insert(event_id);
@@ -172,7 +168,7 @@ pub(crate) fn delete_event(graph: &mut ScenarioGraph, event_id: i64) -> ApiResul
     })
 }
 
-fn write_tree(graph: &mut ScenarioGraph, event_id: i64, body: &EventBody) -> ApiResult<()> {
+fn write_tree(graph: &mut ScenarioGraph, event_id: i64, body: &EventBody) -> PlanResult<()> {
     let mut batch = RowBatch::for_graph(graph);
     lower_tree(&mut batch, event_id, body)?;
     batch.merge_into(graph)?;
@@ -187,27 +183,27 @@ fn sort_events(graph: &mut ScenarioGraph) {
 
 /// Apply an asset update, as `PATCH /scenarios/{id}/assets/{asset}` would.
 /// Add an asset, as `POST /scenarios/{id}/assets` would. Returns its new id.
-pub(crate) fn create_asset(graph: &mut ScenarioGraph, body: &CreateAsset) -> ApiResult<i64> {
+pub fn create_asset(graph: &mut ScenarioGraph, body: &CreateAsset) -> PlanResult<i64> {
     // The route checks the profile is the caller's before anything else; the
     // graph carries the caller's whole profile library.
     if let Some(profile_id) = body.return_profile_id
         && !graph.return_profiles.contains_key(&profile_id)
     {
-        return Err(ApiError::NotFound("return profile"));
+        return Err(PlanError::NotFound("return profile"));
     }
     if body.initial_price <= 0.0 {
-        return Err(ApiError::bad_request("initial_price must be positive"));
+        return Err(PlanError::invalid("initial_price must be positive"));
     }
     atomically(graph, |g| {
         let name = body.name.trim();
         if g.assets.iter().any(|a| a.name == name) {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "an asset with that name already exists".into(),
             ));
         }
         // CHECK constraint on the table.
         if body.tracking_error.is_some_and(|t| t < 0.0) {
-            return Err(ApiError::bad_request("tracking_error cannot be negative"));
+            return Err(PlanError::invalid("tracking_error cannot be negative"));
         }
         let id = g.next_id(Table::Assets);
         let sort_order = body
@@ -227,36 +223,36 @@ pub(crate) fn create_asset(graph: &mut ScenarioGraph, body: &CreateAsset) -> Api
     })
 }
 
-pub(crate) fn update_asset(
+pub fn update_asset(
     graph: &mut ScenarioGraph,
     asset_id: i64,
     body: &UpdateAsset,
-) -> ApiResult<()> {
+) -> PlanResult<()> {
     // The route checks the profile is the caller's before anything else; the
     // graph carries the caller's whole profile library.
     if let Some(Some(profile_id)) = body.return_profile_id
         && !graph.return_profiles.contains_key(&profile_id)
     {
-        return Err(ApiError::NotFound("return profile"));
+        return Err(PlanError::NotFound("return profile"));
     }
     atomically(graph, |g| {
         if !g.assets.iter().any(|a| a.id == asset_id) {
-            return Err(ApiError::NotFound("asset"));
+            return Err(PlanError::NotFound("asset"));
         }
         let name = body.name.as_deref().map(str::trim);
         if let Some(name) = name
             && g.assets.iter().any(|a| a.id != asset_id && a.name == name)
         {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "an asset with that name already exists".into(),
             ));
         }
         // CHECK constraints on the table.
         if body.initial_price.is_some_and(|p| p <= 0.0) {
-            return Err(ApiError::bad_request("initial_price must be positive"));
+            return Err(PlanError::invalid("initial_price must be positive"));
         }
         if body.tracking_error.flatten().is_some_and(|t| t < 0.0) {
-            return Err(ApiError::bad_request("tracking_error cannot be negative"));
+            return Err(PlanError::invalid("tracking_error cannot be negative"));
         }
         let renamed = match name {
             Some(name) => expression_refs::rerendered(g, Entity::Asset(asset_id), name)?,
@@ -267,7 +263,7 @@ pub(crate) fn update_asset(
             .assets
             .iter_mut()
             .find(|a| a.id == asset_id)
-            .ok_or(ApiError::NotFound("asset"))?;
+            .ok_or(PlanError::NotFound("asset"))?;
         if let Some(name) = name {
             row.name = name.to_string();
         }
@@ -296,12 +292,12 @@ pub(crate) fn update_asset(
 
 /// Add an account and its detail row, as `POST /scenarios/{id}/accounts`
 /// would. Returns its new id.
-pub(crate) fn create_account(graph: &mut ScenarioGraph, body: &CreateAccount) -> ApiResult<i64> {
+pub fn create_account(graph: &mut ScenarioGraph, body: &CreateAccount) -> PlanResult<i64> {
     body.flavor.validate()?;
     atomically(graph, |g| {
         let name = body.name.trim();
         if g.accounts.iter().any(|a| a.name == name) {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "an account with that name already exists".into(),
             ));
         }
@@ -323,26 +319,26 @@ pub(crate) fn create_account(graph: &mut ScenarioGraph, body: &CreateAccount) ->
 }
 
 /// Apply an account update, as `PATCH /scenarios/{id}/accounts/{account}` would.
-pub(crate) fn update_account(
+pub fn update_account(
     graph: &mut ScenarioGraph,
     account_id: i64,
     body: &UpdateAccount,
-) -> ApiResult<()> {
+) -> PlanResult<()> {
     atomically(graph, |g| {
         let existing_flavor = g
             .accounts
             .iter()
             .find(|a| a.id == account_id)
             .map(|a| a.flavor.clone())
-            .ok_or(ApiError::NotFound("account"))?;
+            .ok_or(PlanError::NotFound("account"))?;
 
         if body.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
-            return Err(ApiError::bad_request("an account needs a name"));
+            return Err(PlanError::invalid("an account needs a name"));
         }
         if let Some(flavor) = &body.flavor {
             flavor.validate()?;
             if flavor.name() != existing_flavor {
-                return Err(ApiError::Conflict(format!(
+                return Err(PlanError::Conflict(format!(
                     "cannot change account flavor from {existing_flavor} to {}; \
                      create a new account instead",
                     flavor.name()
@@ -356,7 +352,7 @@ pub(crate) fn update_account(
                 .iter()
                 .any(|a| a.id != account_id && a.name == name)
         {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "an account with that name already exists".into(),
             ));
         }
@@ -369,7 +365,7 @@ pub(crate) fn update_account(
             .accounts
             .iter_mut()
             .find(|a| a.id == account_id)
-            .ok_or(ApiError::NotFound("account"))?;
+            .ok_or(PlanError::NotFound("account"))?;
         if let Some(name) = name {
             row.name = name.to_string();
         }
@@ -394,12 +390,12 @@ fn replace_detail(
     graph: &mut ScenarioGraph,
     account_id: i64,
     flavor: &FlavorSpec,
-) -> ApiResult<()> {
+) -> PlanResult<()> {
     let profile = |id: i64| {
         if graph.return_profiles.contains_key(&id) {
             Ok(())
         } else {
-            Err(ApiError::bad_request(format!(
+            Err(PlanError::invalid(format!(
                 "return profile {id} does not exist"
             )))
         }
@@ -445,7 +441,7 @@ fn replace_detail(
         }
         FlavorSpec::Property { asset_id, value } => {
             if !graph.assets.iter().any(|a| a.id == *asset_id) {
-                return Err(ApiError::bad_request(format!(
+                return Err(PlanError::invalid(format!(
                     "asset {asset_id} does not exist in this plan"
                 )));
             }
@@ -470,7 +466,7 @@ fn replace_detail(
                     .find(|a| a.id == repayment.from_account_id)
                     .map(|a| a.flavor.as_str());
                 if !matches!(payer, Some("Bank" | "Investment")) {
-                    return Err(ApiError::bad_request(
+                    return Err(PlanError::invalid(
                         "a loan is repaid from a bank or investment account in the same plan",
                     ));
                 }
@@ -495,19 +491,19 @@ fn replace_detail(
 /// Stricter than the route, which lets the schema's cascades quietly delete the
 /// lots, events and amounts that name the asset: a change batch that deletes it
 /// must first remove what still points at it, so nothing disappears unseen.
-pub(crate) fn delete_asset(graph: &mut ScenarioGraph, asset_id: i64) -> ApiResult<()> {
+pub fn delete_asset(graph: &mut ScenarioGraph, asset_id: i64) -> PlanResult<()> {
     atomically(graph, |g| {
         if !g.assets.iter().any(|a| a.id == asset_id) {
-            return Err(ApiError::NotFound("asset"));
+            return Err(PlanError::NotFound("asset"));
         }
         if expression_refs::used_by(g, Entity::Asset(asset_id))? {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "asset is referenced by an amount expression".into(),
             ));
         }
         let referrers = referrers(g, Held::Asset(asset_id));
         if !referrers.is_empty() {
-            return Err(ApiError::Conflict(format!(
+            return Err(PlanError::Conflict(format!(
                 "asset is still used by: {}",
                 referrers.join(", ")
             )));
@@ -520,19 +516,19 @@ pub(crate) fn delete_asset(graph: &mut ScenarioGraph, asset_id: i64) -> ApiResul
 /// Delete an account, as `DELETE /scenarios/{id}/accounts/{account}` would,
 /// with the same extra strictness as [`delete_asset`]. A loan repaid from the
 /// account loses its payer, as the schema's `SET NULL` does.
-pub(crate) fn delete_account(graph: &mut ScenarioGraph, account_id: i64) -> ApiResult<()> {
+pub fn delete_account(graph: &mut ScenarioGraph, account_id: i64) -> PlanResult<()> {
     atomically(graph, |g| {
         if !g.accounts.iter().any(|a| a.id == account_id) {
-            return Err(ApiError::NotFound("account"));
+            return Err(PlanError::NotFound("account"));
         }
         if expression_refs::used_by(g, Entity::Account(account_id))? {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "account is referenced by an amount expression".into(),
             ));
         }
         let referrers = referrers(g, Held::Account(account_id));
         if !referrers.is_empty() {
-            return Err(ApiError::Conflict(format!(
+            return Err(PlanError::Conflict(format!(
                 "account is still used by: {}",
                 referrers.join(", ")
             )));
@@ -702,11 +698,11 @@ fn amount_events(graph: &ScenarioGraph, id: i64, out: &mut HashSet<i64>, depth: 
 
 /// Add a named parameter, as `POST /scenarios/{id}/parameters` would. Returns
 /// its new id.
-pub(crate) fn create_parameter(graph: &mut ScenarioGraph, body: &ParameterBody) -> ApiResult<i64> {
+pub fn create_parameter(graph: &mut ScenarioGraph, body: &ParameterBody) -> PlanResult<i64> {
     let name = parameters::validate(body)?.to_owned();
     atomically(graph, |g| {
         if g.parameters.iter().any(|p| p.name == name) {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "a parameter with that name already exists".into(),
             ));
         }
@@ -719,24 +715,24 @@ pub(crate) fn create_parameter(graph: &mut ScenarioGraph, body: &ParameterBody) 
 /// Rewrite a parameter, as `PATCH /scenarios/{id}/parameters/{parameter}`
 /// would: a rename rewrites the expressions that use it, and a change of type
 /// is refused while anything does.
-pub(crate) fn update_parameter(
+pub fn update_parameter(
     graph: &mut ScenarioGraph,
     parameter_id: i64,
     body: &ParameterBody,
-) -> ApiResult<()> {
+) -> PlanResult<()> {
     let name = parameters::validate(body)?.to_owned();
     atomically(graph, |g| {
         let old = g
             .parameters
             .iter()
             .find(|p| p.id == parameter_id)
-            .ok_or(ApiError::NotFound("parameter"))?;
+            .ok_or(PlanError::NotFound("parameter"))?;
         let (kind, ..) = body.value.fields();
         if old.kind != kind
             && (!parameters::usages(g, parameter_id)?.is_empty()
                 || expression_refs::used_by(g, Entity::Parameter(parameter_id))?)
         {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "remove references before changing parameter type".into(),
             ));
         }
@@ -744,7 +740,7 @@ pub(crate) fn update_parameter(
             .iter()
             .any(|p| p.id != parameter_id && p.name == name)
         {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "a parameter with that name already exists".into(),
             ));
         }
@@ -757,7 +753,7 @@ pub(crate) fn update_parameter(
             .parameters
             .iter_mut()
             .find(|p| p.id == parameter_id)
-            .ok_or(ApiError::NotFound("parameter"))?;
+            .ok_or(PlanError::NotFound("parameter"))?;
         *row = parameter_row(parameter_id, name, body);
         set_sources(g, renamed);
         Ok(())
@@ -765,7 +761,7 @@ pub(crate) fn update_parameter(
 }
 
 /// Delete a parameter nothing uses, as `DELETE /scenarios/{id}/parameters/{parameter}`.
-pub(crate) fn delete_parameter(graph: &mut ScenarioGraph, parameter_id: i64) -> ApiResult<()> {
+pub fn delete_parameter(graph: &mut ScenarioGraph, parameter_id: i64) -> PlanResult<()> {
     parameters::delete_refusal(graph, parameter_id)?;
     graph.parameters.retain(|p| p.id != parameter_id);
     Ok(())
@@ -790,18 +786,18 @@ fn parameter_row(id: i64, name: String, body: &ParameterBody) -> ParameterRow {
 /// omits are left alone. Switching the tax config or inflation profile needs
 /// the target in the graph's library ([`ScenarioGraph::tax_configs`]), which a
 /// live load has and a run snapshot has only for what the caller loaded.
-pub(crate) fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> ApiResult<()> {
+pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> PlanResult<()> {
     if body
         .name
         .as_deref()
         .is_some_and(|name| name.trim().is_empty())
     {
-        return Err(ApiError::bad_request("scenario name cannot be empty"));
+        return Err(PlanError::invalid("scenario name cannot be empty"));
     }
     let date = |text: &str, field: &str| {
         text.parse::<jiff::civil::Date>()
             .map(|d| d.to_string())
-            .map_err(|e| ApiError::bad_request(format!("invalid {field} '{text}': {e}")))
+            .map_err(|e| PlanError::invalid(format!("invalid {field} '{text}': {e}")))
     };
     let start_date = body
         .start_date
@@ -815,7 +811,7 @@ pub(crate) fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) 
         .transpose()?;
     // CHECK constraint on the table.
     if body.duration_years.is_some_and(|y| !(1..=120).contains(&y)) {
-        return Err(ApiError::bad_request(
+        return Err(PlanError::invalid(
             "duration_years must be between 1 and 120",
         ));
     }
@@ -827,7 +823,7 @@ pub(crate) fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) 
                 .tax_configs
                 .get(&id)
                 .cloned()
-                .ok_or(ApiError::NotFound("tax config"))?;
+                .ok_or(PlanError::NotFound("tax config"))?;
             g.scenario.tax_config_id = Some(id);
             g.tax_config = Some(config);
             g.tax_brackets = brackets;
@@ -842,7 +838,7 @@ pub(crate) fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) 
                 .inflation_profiles
                 .get(&id)
                 .cloned()
-                .ok_or(ApiError::NotFound("inflation profile"))?;
+                .ok_or(PlanError::NotFound("inflation profile"))?;
             g.scenario.inflation_profile_id = Some(id);
             g.inflation_distribution_id = Some(distribution_id);
             g.inflation_profile_name = Some(name);
@@ -873,18 +869,15 @@ pub(crate) fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) 
 
 /// Add a return profile to the caller's library, as `POST /return-profiles`
 /// would. Returns its id, which exists only in this graph.
-pub(crate) fn create_return_profile(
-    graph: &mut ScenarioGraph,
-    body: &CreateProfile,
-) -> ApiResult<i64> {
+pub fn create_return_profile(graph: &mut ScenarioGraph, body: &CreateProfile) -> PlanResult<i64> {
     body.distribution.validate(0)?;
     atomically(graph, |g| {
         let name = body.name.trim();
         if name.is_empty() {
-            return Err(ApiError::bad_request("a return profile needs a name"));
+            return Err(PlanError::invalid("a return profile needs a name"));
         }
         if g.return_profiles.values().any(|p| p.name == name) {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "a return profile with that name already exists".into(),
             ));
         }
@@ -968,18 +961,15 @@ fn add_distribution(graph: &mut ScenarioGraph, spec: &DistributionSpec) -> i64 {
 
 /// Add a tax config to the caller's library, as `POST /tax-configs` would.
 /// Returns its id, which exists only in this graph.
-pub(crate) fn create_tax_config(
-    graph: &mut ScenarioGraph,
-    body: &CreateTaxConfig,
-) -> ApiResult<i64> {
+pub fn create_tax_config(graph: &mut ScenarioGraph, body: &CreateTaxConfig) -> PlanResult<i64> {
     let brackets = taxes::checked(body)?;
     atomically(graph, |g| {
         let name = body.name.trim();
         if name.is_empty() {
-            return Err(ApiError::bad_request("a tax config needs a name"));
+            return Err(PlanError::invalid("a tax config needs a name"));
         }
         if g.tax_configs.values().any(|c| c.config.name == name) {
-            return Err(ApiError::Conflict(
+            return Err(PlanError::Conflict(
                 "a tax config with that name already exists".into(),
             ));
         }
@@ -1016,28 +1006,28 @@ pub(crate) fn create_tax_config(
 ///
 /// The route appends at the account's highest `sort_order` + 1, which always
 /// sorts last, so appending to the account's list reproduces its order.
-pub(crate) fn create_position(
+pub fn create_position(
     graph: &mut ScenarioGraph,
     account_id: i64,
     body: &CreatePosition,
-) -> ApiResult<i64> {
+) -> PlanResult<i64> {
     atomically(graph, |g| {
         match g.accounts.iter().find(|a| a.id == account_id) {
             Some(a) if a.flavor == "Investment" => {}
             Some(a) => {
-                return Err(ApiError::Conflict(format!(
+                return Err(PlanError::Conflict(format!(
                     "positions can only be held in Investment accounts, not {}",
                     a.flavor
                 )));
             }
-            None => return Err(ApiError::NotFound("account")),
+            None => return Err(PlanError::NotFound("account")),
         }
         let purchase_date = match body.purchase_date.as_deref() {
             Some(d) => purchase_date(d)?,
             None => g.scenario.start_date.clone(),
         };
         if body.units < 0.0 || body.cost_basis < 0.0 {
-            return Err(ApiError::bad_request(
+            return Err(PlanError::invalid(
                 "units and cost_basis must be non-negative",
             ));
         }
@@ -1064,14 +1054,14 @@ pub(crate) fn create_position(
 /// `sort_order` and only then by `purchase_date`, so a new date can only move
 /// a lot among lots sharing its `sort_order` — which lots added through the
 /// route never do.)
-pub(crate) fn update_position(
+pub fn update_position(
     graph: &mut ScenarioGraph,
     account_id: i64,
     position_id: i64,
     body: &UpdatePosition,
-) -> ApiResult<()> {
+) -> PlanResult<()> {
     if body.units.is_some_and(|u| u < 0.0) || body.cost_basis.is_some_and(|b| b < 0.0) {
-        return Err(ApiError::bad_request(
+        return Err(PlanError::invalid(
             "units and cost_basis must be non-negative",
         ));
     }
@@ -1088,7 +1078,7 @@ pub(crate) fn update_position(
             .positions
             .get_mut(&account_id)
             .and_then(|lots| lots.iter_mut().find(|p| p.id == position_id))
-            .ok_or(ApiError::NotFound("position"))?;
+            .ok_or(PlanError::NotFound("position"))?;
         if let Some(asset_id) = body.asset_id {
             row.asset_id = asset_id;
         }
@@ -1106,19 +1096,19 @@ pub(crate) fn update_position(
 }
 
 /// Remove a lot, as `DELETE …/positions/{position}` would.
-pub(crate) fn delete_position(
+pub fn delete_position(
     graph: &mut ScenarioGraph,
     account_id: i64,
     position_id: i64,
-) -> ApiResult<()> {
+) -> PlanResult<()> {
     let lots = graph
         .positions
         .get_mut(&account_id)
-        .ok_or(ApiError::NotFound("position"))?;
+        .ok_or(PlanError::NotFound("position"))?;
     let before = lots.len();
     lots.retain(|p| p.id != position_id);
     if lots.len() == before {
-        return Err(ApiError::NotFound("position"));
+        return Err(PlanError::NotFound("position"));
     }
     // `load` only keys accounts that hold something.
     if lots.is_empty() {
@@ -1128,18 +1118,18 @@ pub(crate) fn delete_position(
 }
 
 /// A lot's date, parsed the way the routes parse it.
-fn purchase_date(text: &str) -> ApiResult<String> {
+fn purchase_date(text: &str) -> PlanResult<String> {
     text.parse::<jiff::civil::Date>()
         .map(|d| d.to_string())
-        .map_err(|e| ApiError::bad_request(format!("invalid purchase_date '{text}': {e}")))
+        .map_err(|e| PlanError::invalid(format!("invalid purchase_date '{text}': {e}")))
 }
 
 /// The foreign key on `positions.asset_id`, narrowed to this plan.
-fn held_asset(graph: &ScenarioGraph, asset_id: i64) -> ApiResult<()> {
+fn held_asset(graph: &ScenarioGraph, asset_id: i64) -> PlanResult<()> {
     if graph.assets.iter().any(|a| a.id == asset_id) {
         Ok(())
     } else {
-        Err(ApiError::bad_request(format!(
+        Err(PlanError::invalid(format!(
             "asset {asset_id} does not exist in this plan"
         )))
     }
@@ -1279,5 +1269,4 @@ fn collect_orphans(graph: &mut ScenarioGraph) {
 }
 
 #[cfg(test)]
-#[path = "edit_tests.rs"]
 mod tests;
