@@ -41,6 +41,11 @@ pub enum ApiError {
     #[error("{0}")]
     Unprocessable(String),
 
+    /// A refusal with a code of its own, for the few cases a client tells apart
+    /// by code rather than by status (a spent offload budget, say).
+    #[error("{2}")]
+    Coded(StatusCode, &'static str, String),
+
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
@@ -89,6 +94,7 @@ impl ApiError {
             ApiError::UnsupportedMedia(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             ApiError::RateLimited { .. } => StatusCode::TOO_MANY_REQUESTS,
             ApiError::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::Coded(status, _, _) => *status,
             ApiError::Database(_) | ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -107,6 +113,7 @@ impl ApiError {
             ApiError::UnsupportedMedia(_) => "unsupported_media",
             ApiError::RateLimited { .. } => "rate_limited",
             ApiError::Unprocessable(_) => "unprocessable",
+            ApiError::Coded(_, code, _) => code,
             ApiError::Database(_) | ApiError::Internal(_) => "internal",
         }
     }

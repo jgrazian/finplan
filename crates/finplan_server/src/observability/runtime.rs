@@ -114,6 +114,7 @@ impl ObservabilityRuntime {
                                 _ = async {
                                     purge_sessions(&db, &telemetry).await;
                                     purge_guests(&db, &telemetry, guest_retention_days).await;
+                                    purge_compute_jobs(&db, &telemetry).await;
                                 } => {}
                             }
                         }
@@ -213,6 +214,19 @@ pub(crate) async fn purge_sessions(db: &Db, telemetry: &Telemetry) {
     }
 }
 
+/// Offloaded runs whose results have expired (`offload`, spec 19).
+pub(crate) async fn purge_compute_jobs(db: &Db, telemetry: &Telemetry) {
+    match crate::offload::purge_expired(db).await {
+        Ok(count) => {
+            telemetry.recovered_error(Component::Run, ErrorClass::Database);
+            if count > 0 {
+                tracing::info!(event = "maintenance.compute_jobs_purged", count);
+            }
+        }
+        Err(_) => telemetry.recoverable_error(Component::Run, ErrorClass::Database),
+    }
+}
+
 pub(crate) async fn purge_guests(db: &Db, telemetry: &Telemetry, retention_days: i64) {
     match auth::guest::purge(db, retention_days).await {
         Ok((empty, with_plans)) => {
@@ -242,6 +256,8 @@ mod tests {
             guest_access: true,
             guest_max_iterations: 100,
             guest_retention_days: 30,
+            local_mode: true,
+            offload: Default::default(),
             local_mail_sink: None,
             bind: "127.0.0.1:0".into(),
             database_url: "sqlite::memory:".into(),

@@ -95,6 +95,8 @@ impl TestApp {
             guest_access: true,
             guest_max_iterations: 100,
             guest_retention_days: 30,
+            local_mode: true,
+            offload: Default::default(),
             local_mail_sink: None,
             cors_origins: vec!["http://localhost:3000".into()],
         };

@@ -29,6 +29,8 @@ fn config() -> ServerConfig {
         guest_access: true,
         guest_max_iterations: GUEST_CAP,
         guest_retention_days: 30,
+        local_mode: true,
+        offload: Default::default(),
         local_mail_sink: None,
         bind: "127.0.0.1:0".into(),
         database_url: "sqlite::memory:".into(),

@@ -1,4 +1,5 @@
 //! Bounded background Monte Carlo execution with persisted restart recovery.
+pub mod compute;
 pub mod store;
 pub(crate) mod telemetry;
 #[cfg(test)]
@@ -51,8 +52,10 @@ pub struct RunQueue {
     tx: mpsc::Sender<Work>,
     #[cfg(test)]
     hooks: Arc<StdMutex<HashMap<i64, Arc<tests::Hook>>>>,
-    #[cfg(test)]
+    /// The worker slots, shared with offloaded compute jobs (`compute`).
     worker_permits: Arc<Semaphore>,
+    /// Cancel flags of offloaded compute jobs, queued or running, by job id.
+    compute_flags: Arc<StdMutex<HashMap<i64, Arc<AtomicBool>>>>,
     db: Db,
     telemetry: Telemetry,
     // Held across claim and flag registration, and across cancel's transition.
@@ -294,8 +297,8 @@ pub fn spawn_with_telemetry(db: Db, workers: usize, telemetry: Telemetry) -> Run
     let queue = RunQueue {
         #[cfg(test)]
         hooks: hooks.clone(),
-        #[cfg(test)]
         worker_permits: permits.clone(),
+        compute_flags: Arc::default(),
         tx,
         db: db.clone(),
         telemetry: telemetry.clone(),
@@ -455,6 +458,39 @@ pub async fn requeue_orphans(
     Ok(())
 }
 
+/// The engine settings of a run, shared by stored runs and offloaded compute
+/// jobs so the same settings and seed give the same results in both.
+///
+/// On a converging run (`converge_ceiling` set) `iterations` is the minimum
+/// sample before the metric is tested, and the ceiling is the most it may take.
+pub(crate) fn mc_config(
+    iterations: i64,
+    seed: Option<i64>,
+    batch_size: i64,
+    parallel_batches: i64,
+    compute_mean: bool,
+    converge_ceiling: Option<i64>,
+    percentiles: Vec<f64>,
+) -> MonteCarloConfig {
+    MonteCarloConfig {
+        iterations: iterations as usize,
+        percentiles: if percentiles.is_empty() {
+            vec![0.10, 0.50, 0.90]
+        } else {
+            percentiles
+        },
+        compute_mean,
+        convergence: converge_ceiling.map(|ceiling| ConvergenceConfig {
+            max_iterations: ceiling as usize,
+            relative_threshold: 0.01,
+            ..ConvergenceConfig::default()
+        }),
+        batch_size: batch_size as usize,
+        parallel_batches: parallel_batches as usize,
+        seed: seed.map(|s| s as u64),
+    }
+}
+
 #[derive(Debug)]
 enum RunError {
     Db,
@@ -556,29 +592,18 @@ async fn execute(
             .map_err(|_| RunError::Preparation)?;
     let compiled = compile::compile(&graph).map_err(|_| RunError::Preparation)?;
 
-    // On a converging run `iterations` is the minimum sample before the metric
-    // is tested, and `max_iterations` the ceiling. The row always carries a
-    // ceiling when `converge` is set; falling back to the minimum only makes
-    // such a run behave like the fixed one it would otherwise have been.
-    let convergence = (converge != 0).then(|| ConvergenceConfig {
-        max_iterations: max_iterations.unwrap_or(iterations) as usize,
-        relative_threshold: 0.01,
-        ..ConvergenceConfig::default()
-    });
-
-    let mc_config = MonteCarloConfig {
-        iterations: iterations as usize,
-        percentiles: if percentiles.is_empty() {
-            vec![0.10, 0.50, 0.90]
-        } else {
-            percentiles
-        },
-        compute_mean: compute_mean != 0,
-        convergence,
-        batch_size: batch_size as usize,
-        parallel_batches: parallel_batches as usize,
-        seed: seed.map(|s| s as u64),
-    };
+    let mc_config = mc_config(
+        iterations,
+        seed,
+        batch_size,
+        parallel_batches,
+        compute_mean != 0,
+        // The row always carries a ceiling when `converge` is set; falling back
+        // to the minimum only makes such a run behave like the fixed one it
+        // would otherwise have been.
+        (converge != 0).then(|| max_iterations.unwrap_or(iterations)),
+        percentiles,
+    );
 
     drop(prepare);
     drop(preparation_lease);
