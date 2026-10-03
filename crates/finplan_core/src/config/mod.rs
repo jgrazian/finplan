@@ -134,7 +134,11 @@ pub struct SimulationConfig {
     pub tax_config: TaxConfig,
 
     // === Your Situation ===
-    /// Start date for the simulation
+    /// Start date for the simulation.
+    ///
+    /// When `None`, native builds use today's date in the system time zone.
+    /// On `wasm32` there is no system clock or time zone, so `None` is a
+    /// configuration error: the caller must supply a date.
     pub start_date: Option<jiff::civil::Date>,
 
     /// Birth date for age-based triggers and RMD calculations

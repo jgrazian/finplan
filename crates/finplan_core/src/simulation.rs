@@ -15,6 +15,7 @@ use crate::model::{
 };
 use crate::simulation_state::SimulationState;
 use rand::{RngCore, SeedableRng};
+#[cfg(feature = "parallel")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
 // Re-export for backwards compatibility
@@ -898,6 +899,25 @@ struct MonteCarloInternalResult {
     funding: crate::model::FundingDiagnostics,
 }
 
+/// Base seed for a run whose `MonteCarloConfig::seed` is `None`.
+///
+/// Native builds draw it from the OS-seeded thread RNG. `wasm32` has no OS
+/// entropy source without JavaScript glue, so there the caller must supply a
+/// seed (draw it with `crypto.getRandomValues`) and this is a config error.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::unnecessary_wraps)]
+fn unseeded_batch_seed() -> Result<u64, SimulationError> {
+    Ok(rand::rng().next_u64())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn unseeded_batch_seed() -> Result<u64, SimulationError> {
+    Err(SimulationError::Config(
+        "seed is required on wasm32: no OS entropy source; supply one drawn from crypto.getRandomValues"
+            .into(),
+    ))
+}
+
 /// Core Monte Carlo engine. All three public MC functions delegate here.
 fn monte_carlo_core(
     params: &SimulationConfig,
@@ -954,7 +974,10 @@ fn monte_carlo_core(
     let mut online_stats = OnlineStats::new();
     let mut mean_accumulators: Option<MeanAccumulators> = None;
     let mut funding = crate::model::FundingAccumulator::default();
-    let mut batch_seed: u64 = config.seed.unwrap_or_else(|| rand::rng().next_u64());
+    let mut batch_seed: u64 = match config.seed {
+        Some(seed) => seed,
+        None => unseeded_batch_seed()?,
+    };
     let mut converged = false;
     let mut final_convergence_value: Option<f64> = None;
 
@@ -1002,8 +1025,11 @@ fn monte_carlo_core(
             Option<RealAccumulator>,
             crate::model::FundingAccumulator,
         );
-        let batch_outputs: Result<Vec<BatchOutput>, SimulationError> = (0..num_batches)
-            .into_par_iter()
+        #[cfg(feature = "parallel")]
+        let batch_indices = (0..num_batches).into_par_iter();
+        #[cfg(not(feature = "parallel"))]
+        let batch_indices = 0..num_batches;
+        let batch_outputs: Result<Vec<BatchOutput>, SimulationError> = batch_indices
             .map(|local_batch_idx| {
                 if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(SimulationError::Cancelled);

@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
 use crate::config::SimulationConfig;
@@ -102,8 +103,11 @@ pub fn optimize_grid_search(
 
     // Propagate invalid candidates/simulation failures instead of silently
     // presenting configuration errors as an infeasible search.
-    let results: Result<Vec<EvaluationRecord>, SimulationError> = grid_points
-        .par_iter()
+    #[cfg(feature = "parallel")]
+    let points = grid_points.par_iter();
+    #[cfg(not(feature = "parallel"))]
+    let points = grid_points.iter();
+    let results: Result<Vec<EvaluationRecord>, SimulationError> = points
         .map(|values| evaluate(base_config, opt_config, values))
         .collect();
 
