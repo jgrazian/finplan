@@ -42,8 +42,10 @@ Every request/response type in `finplan_server` derives `ts_rs::TS`, and
 regenerate and commit, or the frontend types silently drift from the server.
 Export settings (destination, `i64 -> number`) live in `.cargo/config.toml`.
 
-ts-rs exports from a generated test, so a plain `cargo test` also refreshes the
-bindings — `git diff --exit-code web/lib/api/generated` is the drift check.
+ts-rs exports from a generated test. A plain `cargo test` writes them to the
+scratch `target/ts-bindings/` (unformatted), never to `web/`; only
+`gen-bindings.sh` writes the committed, formatted files. Running it and then
+`git diff --exit-code web/lib/api/generated` is the drift check.
 
 Only `web/lib/view/*` maps the generated shapes onto the screens' view models,
 so a server-side change surfaces there as a type error rather than as a wrong

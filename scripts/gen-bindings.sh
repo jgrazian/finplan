@@ -9,7 +9,9 @@
 # result is committed, so `git diff --exit-code web/lib/api/generated` in CI
 # catches bindings that have drifted from the server.
 #
-# Configuration (export directory, i64 -> number) lives in .cargo/config.toml.
+# The i64 -> number setting lives in .cargo/config.toml. Its export directory is
+# a scratch one under target/, so that a plain `cargo test` leaves the committed
+# files alone; this script points ts-rs at the web app instead.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +20,7 @@ out="$root/web/lib/api/generated"
 # Stale files would otherwise survive a type being renamed or deleted.
 rm -rf "$out"
 mkdir -p "$out"
+export TS_RS_EXPORT_DIR="$out"
 
 # Types that live in finplan_plan are exported by that crate's own tests, so
 # it needs its own run (and the same formatting feature).
