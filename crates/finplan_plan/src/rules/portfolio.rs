@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::{Ctx, Draft, Evidence, Kind, Section, list, money};
-use crate::api::specs::EffectSpec;
+use crate::specs::EffectSpec;
 
 /// A lot counts as bought at today's price when its basis is within this
 /// fraction of units × initial price.

@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use serde_json::json;
 
 use super::*;
-use crate::api::funding::{AccountCount, FundingDiagnostics, YearCount};
-use crate::api::runs::{AccountSeries, Band, CashFlow, InflationPoint, Stats};
+use crate::results::funding::{AccountCount, FundingDiagnostics, YearCount};
+use crate::results::view::{AccountSeries, Band, CashFlow, InflationPoint, Stats};
 use crate::suggest::{ChangeOp, ChangeTarget, ResolvedChange, resolve};
 
 const FIRST: i64 = 2026;
@@ -23,10 +23,7 @@ const LAST: i64 = 2095;
 
 fn graph() -> ScenarioGraph {
     // Born 1996: Home Purchase (age 35) in 2031, Retirement (age 40) in 2036.
-    serde_json::from_str(include_str!(
-        "../../../../finplan_plan/testdata/default_snapshot.json"
-    ))
-    .unwrap()
+    serde_json::from_str(include_str!("../../testdata/default_snapshot.json")).unwrap()
 }
 
 fn f(year: i64) -> f64 {

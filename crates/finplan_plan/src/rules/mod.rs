@@ -7,7 +7,7 @@
 //! entry points back at where. A draft offers paths — courses of action, each
 //! ordered steps of [`Change`]s — only when a fix is unambiguous, and every
 //! path's changes resolve against the graph the draft came from
-//! (`super::resolve`), `expect` included.
+//! (`crate::suggest::resolve`), `expect` included.
 //!
 //! Path-level facts (balances, cash flows) come from the shown path — the
 //! terminal-median-ranked one unless the caller asked for another — so notes
@@ -26,11 +26,11 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::Change;
-use crate::api::events::Event;
-use crate::api::runs::Results;
-use crate::api::specs::{AmountSpec, OffsetUnit, TriggerSpec};
-use crate::compile::rows::ScenarioGraph;
+use crate::graph::ScenarioGraph;
+use crate::results::view::Results;
+use crate::specs::events::Event;
+use crate::specs::{AmountSpec, OffsetUnit, TriggerSpec};
+use crate::suggest::Change;
 
 /// What a note asks of the reader. Declared in severity order: the review
 /// lists fixes first.
@@ -239,7 +239,7 @@ impl<'a> Ctx<'a> {
         rows.sort_by_key(|e| (e.sort_order, e.id));
         let events = rows
             .into_iter()
-            .filter_map(|e| crate::api::events::read_event(graph, e.id).ok())
+            .filter_map(|e| crate::specs::events::read_event(graph, e.id).ok())
             .collect();
         let dates = results
             .bands

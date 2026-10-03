@@ -1,7 +1,7 @@
 //! Notes on events: effects that do something other than what they appear to.
 
 use super::{Ctx, Draft, DraftPath, Evidence, Kind, Section, clip, fixed_amount, money, year_of};
-use crate::api::specs::{AmountSpec, EffectSpec, Interval, TriggerSpec};
+use crate::specs::{AmountSpec, EffectSpec, Interval, TriggerSpec};
 use crate::suggest::{Change, ChangeOp, ChangeTarget};
 
 /// A one-off event that sweeps investments into an account and then pays an

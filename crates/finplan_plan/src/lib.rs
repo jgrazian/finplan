@@ -16,6 +16,7 @@ pub mod expression_refs;
 pub mod expressions;
 pub mod graph;
 pub mod results;
+pub mod rules;
 pub mod snapshot;
 pub mod specs;
 pub mod suggest;
