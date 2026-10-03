@@ -205,31 +205,10 @@ pub(crate) async fn update_in(
     id: i64,
     body: &UpdateScenario,
 ) -> ApiResult<()> {
-    if body
-        .name
-        .as_deref()
-        .is_some_and(|name| name.trim().is_empty())
-    {
-        return Err(ApiError::bad_request("scenario name cannot be empty"));
-    }
-    // CHECK constraint on the table.
-    if body.duration_years.is_some_and(|y| !(1..=120).contains(&y)) {
-        return Err(ApiError::bad_request(
-            "duration_years must be between 1 and 120",
-        ));
-    }
+    body.check_name()?;
+    body.check_duration()?;
     owned_assumptions(conn, user_id, body.inflation_profile_id, body.tax_config_id).await?;
-
-    let start_date = body
-        .start_date
-        .as_deref()
-        .map(|d| validate_date(d, "start_date"))
-        .transpose()?;
-    let birth_date = body
-        .birth_date
-        .as_deref()
-        .map(|d| validate_date(d, "birth_date"))
-        .transpose()?;
+    let (start_date, birth_date) = body.dates()?;
 
     // COALESCE leaves any field the caller omitted untouched.
     let affected = sqlx::query(

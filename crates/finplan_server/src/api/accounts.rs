@@ -23,6 +23,10 @@ pub use finplan_plan::specs::accounts::{
     ContributionPeriod, CreateAccount, CreatePosition, FlavorSpec, PlanType, TaxStatus,
     UpdateAccount, UpdatePosition,
 };
+use finplan_plan::specs::accounts::{
+    DetailRow, NAME_TAKEN, check_loan_payer, check_lot_figures, check_lot_home,
+};
+use finplan_plan::specs::scenarios::validate_date;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -177,93 +181,77 @@ async fn load_account(state: &AppState, scenario_id: i64, id: i64) -> ApiResult<
 
 /// Write the detail row for `flavor`. Assumes any previous detail row for this
 /// account has already been removed.
+///
+/// What each flavor stores is [`FlavorSpec::detail_row`]; this is only the SQL
+/// and the checks that need to see the table.
 async fn insert_detail(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     account_id: i64,
     flavor: &FlavorSpec,
 ) -> ApiResult<()> {
-    match flavor {
-        FlavorSpec::Bank {
-            cash_value,
-            return_profile_id,
-        } => {
+    match flavor.detail_row(account_id) {
+        DetailRow::Bank(row) => {
             sqlx::query(
                 "INSERT INTO account_bank (account_id, cash_value, return_profile_id)
                  VALUES (?1,?2,?3)",
             )
-            .bind(account_id)
-            .bind(cash_value)
-            .bind(return_profile_id)
+            .bind(row.account_id)
+            .bind(row.cash_value)
+            .bind(row.return_profile_id)
             .execute(&mut **tx)
             .await?;
         }
-        FlavorSpec::Investment {
-            tax_status,
-            cash_value,
-            cash_return_profile_id,
-            contribution_limit,
-            contribution_period,
-            plan_type,
-            catch_up,
-        } => {
+        DetailRow::Investment(row) => {
             sqlx::query(
                 "INSERT INTO account_investment
                     (account_id, tax_status, cash_value, cash_return_profile_id,
                      contribution_limit, contribution_period, plan_type, catch_up)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             )
-            .bind(account_id)
-            .bind(tax_status.as_str())
-            .bind(cash_value)
-            .bind(cash_return_profile_id)
-            .bind(contribution_limit)
-            .bind(contribution_period.map(|p| p.as_str()))
-            .bind(plan_type.map(|p| p.as_str()))
-            .bind(sqlx::types::Json(catch_up))
+            .bind(row.account_id)
+            .bind(&row.tax_status)
+            .bind(row.cash_value)
+            .bind(row.cash_return_profile_id)
+            .bind(row.contribution_limit)
+            .bind(&row.contribution_period)
+            .bind(&row.plan_type)
+            .bind(sqlx::types::Json(&row.catch_up))
             .execute(&mut **tx)
             .await?;
         }
-        FlavorSpec::Property { asset_id, value } => {
+        DetailRow::Property(row) => {
             sqlx::query(
                 "INSERT INTO account_property (account_id, asset_id, value) VALUES (?1,?2,?3)",
             )
-            .bind(account_id)
-            .bind(asset_id)
-            .bind(value)
+            .bind(row.account_id)
+            .bind(row.asset_id)
+            .bind(row.value)
             .execute(&mut **tx)
             .await?;
         }
-        FlavorSpec::Liability {
-            principal,
-            interest_rate,
-            repayment,
-        } => {
-            if let Some(repayment) = repayment {
+        DetailRow::Liability(row) => {
+            if let Some(payer_id) = row.repay_from_account_id {
                 // The payer has to be a cash-holding account in the same plan.
                 let payer: Option<String> = sqlx::query_scalar(
                     "SELECT p.flavor FROM accounts p JOIN accounts a ON a.scenario_id = p.scenario_id
                       WHERE a.id = ?1 AND p.id = ?2",
                 )
                 .bind(account_id)
-                .bind(repayment.from_account_id)
+                .bind(payer_id)
                 .fetch_optional(&mut **tx)
                 .await?;
-                if !matches!(payer.as_deref(), Some("Bank" | "Investment")) {
-                    return Err(ApiError::bad_request(
-                        "a loan is repaid from a bank or investment account in the same plan",
-                    ));
-                }
+                check_loan_payer(payer.as_deref())?;
             }
             sqlx::query(
                 "INSERT INTO account_liability
                     (account_id, principal, interest_rate, repay_from_account_id, term_months)
                  VALUES (?1,?2,?3,?4,?5)",
             )
-            .bind(account_id)
-            .bind(principal)
-            .bind(interest_rate)
-            .bind(repayment.map(|r| r.from_account_id))
-            .bind(repayment.map(|r| i64::from(r.term_months)))
+            .bind(row.account_id)
+            .bind(row.principal)
+            .bind(row.interest_rate)
+            .bind(row.repay_from_account_id)
+            .bind(row.term_months)
             .execute(&mut **tx)
             .await?;
         }
@@ -386,7 +374,7 @@ pub(crate) async fn create_in(
     .bind(body.sort_order)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an account with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?;
 
     insert_detail(tx, id, &body.flavor).await?;
     Ok(id)
@@ -442,22 +430,7 @@ pub(crate) async fn update_in(
             .await?;
     let existing_flavor = existing_flavor.ok_or(ApiError::NotFound("account"))?;
 
-    // An absent name leaves the stored one alone; a blank one is a mistake, and
-    // COALESCE would write it as the account's name.
-    if body.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
-        return Err(ApiError::bad_request("an account needs a name"));
-    }
-
-    if let Some(flavor) = &body.flavor {
-        flavor.validate()?;
-        if flavor.name() != existing_flavor {
-            return Err(ApiError::Conflict(format!(
-                "cannot change account flavor from {existing_flavor} to {}; \
-                 create a new account instead",
-                flavor.name()
-            )));
-        }
-    }
+    body.check(&existing_flavor)?;
 
     let affected = sqlx::query(
         "UPDATE accounts SET
@@ -474,7 +447,7 @@ pub(crate) async fn update_in(
     .bind(body.sort_order)
     .execute(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an account with that name already exists"))?
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?
     .rows_affected();
 
     if affected == 0 {
@@ -539,13 +512,7 @@ pub(crate) async fn destroy_in(
     scenario_id: i64,
     id: i64,
 ) -> ApiResult<()> {
-    if live.accounts.iter().any(|a| a.id == id)
-        && super::expression_refs::used_by(live, super::expression_refs::Entity::Account(id))?
-    {
-        return Err(ApiError::Conflict(
-            "account is referenced by an amount expression".into(),
-        ));
-    }
+    super::expression_refs::refuse_if_used(live, super::expression_refs::Entity::Account(id))?;
 
     let affected = sqlx::query("DELETE FROM accounts WHERE id = ?1 AND scenario_id = ?2")
         .bind(id)
@@ -666,21 +633,10 @@ pub(crate) async fn add_position_in(
             .fetch_optional(&mut **tx)
             .await?;
 
-    match flavor.as_deref() {
-        Some("Investment") => {}
-        Some(other) => {
-            return Err(ApiError::Conflict(format!(
-                "positions can only be held in Investment accounts, not {other}"
-            )));
-        }
-        None => return Err(ApiError::NotFound("account")),
-    }
+    check_lot_home(flavor.as_deref())?;
 
     let purchase_date = match body.purchase_date.as_deref() {
-        Some(d) => d
-            .parse::<jiff::civil::Date>()
-            .map_err(|e| ApiError::bad_request(format!("invalid purchase_date '{d}': {e}")))?
-            .to_string(),
+        Some(d) => validate_date(d, "purchase_date")?,
         None => {
             sqlx::query_scalar::<_, String>("SELECT start_date FROM scenarios WHERE id = ?1")
                 .bind(scenario_id)
@@ -689,11 +645,7 @@ pub(crate) async fn add_position_in(
         }
     };
 
-    if body.units < 0.0 || body.cost_basis < 0.0 {
-        return Err(ApiError::bad_request(
-            "units and cost_basis must be non-negative",
-        ));
-    }
+    check_lot_figures(Some(body.units), Some(body.cost_basis))?;
 
     let position_id: i64 = sqlx::query_scalar(
         "INSERT INTO positions (account_id, asset_id, purchase_date, units, cost_basis, sort_order)
@@ -764,19 +716,12 @@ pub(crate) async fn update_position_in(
 ) -> ApiResult<()> {
     // Same rule as the insert: a lot is non-negative in both figures, and a
     // date has to be a date before it reaches the engine's timeline.
-    if body.units.is_some_and(|u| u < 0.0) || body.cost_basis.is_some_and(|b| b < 0.0) {
-        return Err(ApiError::bad_request(
-            "units and cost_basis must be non-negative",
-        ));
-    }
-    let purchase_date = match body.purchase_date.as_deref() {
-        Some(d) => Some(
-            d.parse::<jiff::civil::Date>()
-                .map_err(|e| ApiError::bad_request(format!("invalid purchase_date '{d}': {e}")))?
-                .to_string(),
-        ),
-        None => None,
-    };
+    check_lot_figures(body.units, body.cost_basis)?;
+    let purchase_date = body
+        .purchase_date
+        .as_deref()
+        .map(|d| validate_date(d, "purchase_date"))
+        .transpose()?;
 
     // The join is what confines the write to the caller's scenario: the
     // position id alone says nothing about who owns the account under it.

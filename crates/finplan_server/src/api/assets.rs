@@ -15,6 +15,7 @@ use crate::state::AppState;
 use ts_rs::TS;
 
 pub use finplan_plan::specs::assets::{CreateAsset, UpdateAsset};
+use finplan_plan::specs::assets::{NAME_TAKEN, check_initial_price};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -132,9 +133,7 @@ pub(crate) async fn create_in(
     scenario_id: i64,
     body: &CreateAsset,
 ) -> ApiResult<i64> {
-    if body.initial_price <= 0.0 {
-        return Err(ApiError::bad_request("initial_price must be positive"));
-    }
+    check_initial_price(body.initial_price)?;
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO assets
@@ -154,7 +153,7 @@ pub(crate) async fn create_in(
     .bind(body.sort_order)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?;
     Ok(id)
 }
 
@@ -269,7 +268,7 @@ pub(crate) async fn update_in(
     .bind(retrack)
     .execute(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an asset with that name already exists"))?
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?
     .rows_affected();
 
     if affected == 0 {
@@ -321,13 +320,7 @@ pub(crate) async fn destroy_in(
     scenario_id: i64,
     id: i64,
 ) -> ApiResult<()> {
-    if live.assets.iter().any(|a| a.id == id)
-        && super::expression_refs::used_by(live, super::expression_refs::Entity::Asset(id))?
-    {
-        return Err(ApiError::Conflict(
-            "asset is referenced by an amount expression".into(),
-        ));
-    }
+    super::expression_refs::refuse_if_used(live, super::expression_refs::Entity::Asset(id))?;
 
     // `account_property.asset_id` is ON DELETE RESTRICT, so deleting an asset a
     // property account is built on fails at the database. Report that clearly.

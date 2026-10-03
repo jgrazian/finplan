@@ -16,6 +16,7 @@ use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
+use finplan_plan::specs::profiles::NAME_TAKEN;
 pub use finplan_plan::specs::profiles::{
     AssetClass, CreateProfile, DistributionSpec, UpdateProfile, check_inflation_kind,
 };
@@ -368,7 +369,7 @@ pub(crate) async fn create_return_in(
     .bind(distribution_id)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "a return profile with that name already exists"))
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))
 }
 
 async fn update_return(
@@ -417,7 +418,7 @@ async fn update_return(
     .bind(reclassify)
     .execute(&mut *tx)
     .await
-    .map_err(|e| on_unique_violation(e, "a return profile with that name already exists"))?
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?
     .rows_affected();
 
     if affected == 0 {

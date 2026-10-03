@@ -115,6 +115,10 @@ pub struct ParameterBody {
     pub name: String,
     pub value: ParameterValueSpec,
 }
+
+/// What a second parameter of the same name is refused with.
+pub const NAME_TAKEN: &str = "a parameter with that name already exists";
+
 pub fn validate(body: &ParameterBody) -> PlanResult<&str> {
     let name = body.name.trim();
     if name.is_empty() || name.len() > 120 {
@@ -124,6 +128,26 @@ pub fn validate(body: &ParameterBody) -> PlanResult<&str> {
     }
     body.value.validate()?;
     Ok(name)
+}
+
+/// The refusal for giving a parameter a different type while anything still
+/// reads it. `old_kind` is the type it has now.
+pub fn check_retype(
+    graph: &ScenarioGraph,
+    parameter_id: i64,
+    old_kind: &str,
+    body: &ParameterBody,
+) -> PlanResult<()> {
+    let (kind, ..) = body.value.fields();
+    if old_kind != kind
+        && (!usages(graph, parameter_id)?.is_empty()
+            || expression_refs::used_by(graph, expression_refs::Entity::Parameter(parameter_id))?)
+    {
+        return Err(PlanError::Conflict(
+            "remove references before changing parameter type".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The refusal a parameter's deletion meets, if any: it is used by an event.

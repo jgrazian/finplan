@@ -14,10 +14,10 @@ use crate::api::accounts::{self, CreateAccount, CreatePosition, UpdateAccount, U
 use crate::api::assets::{self, CreateAsset, UpdateAsset};
 use crate::api::events::{self, EventBody, read_event};
 use crate::api::expressions::validate_tree;
-use crate::api::row_batch::RowBatch;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
+use finplan_plan::batch::RowBatch;
 use finplan_plan::edit::*;
 
 struct Plan {
@@ -1056,7 +1056,7 @@ async fn the_batch_writes_rows_in_lowering_order_with_local_links_resolved() {
 
     // Within each table, ids ascend in batch order: rows are written in the
     // order they were lowered. Withdrawal rows have no id of their own.
-    use crate::api::row_batch::BatchRow;
+    use finplan_plan::batch::BatchRow;
     let mut last = [0_i64; 3];
     for (i, row) in batch.rows().iter().enumerate() {
         let id = placed.id(i as i64 + 1);

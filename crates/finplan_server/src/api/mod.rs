@@ -20,7 +20,6 @@ pub mod preview;
 pub mod profiles;
 pub mod reports;
 pub mod review_ai;
-pub(crate) mod row_batch;
 pub mod runs;
 pub mod scenarios;
 pub mod specs;

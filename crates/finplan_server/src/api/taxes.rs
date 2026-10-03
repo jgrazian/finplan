@@ -13,6 +13,7 @@ use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 use ts_rs::TS;
 
+use finplan_plan::specs::taxes::NAME_TAKEN;
 pub use finplan_plan::specs::taxes::{
     Bracket, CreateTaxConfig, UpdateTaxConfig, checked, validate_brackets, validate_deductions,
 };
@@ -158,7 +159,7 @@ pub(crate) async fn create_in(
     .bind(body.age_65_extra_deduction)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?;
 
     for bracket in &brackets {
         sqlx::query("INSERT INTO tax_brackets (tax_config_id, threshold, rate) VALUES (?1,?2,?3)")
@@ -215,7 +216,7 @@ async fn update(
     .bind(body.age_65_extra_deduction)
     .execute(&mut *tx)
     .await
-    .map_err(|e| on_unique_violation(e, "a tax config with that name already exists"))?
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?
     .rows_affected();
 
     if affected == 0 {

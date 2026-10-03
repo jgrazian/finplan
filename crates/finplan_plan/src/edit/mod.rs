@@ -1,10 +1,18 @@
 //! Plan edits applied to an in-memory [`ScenarioGraph`] instead of the database.
 //!
-//! Each operation mirrors one write route — the same validation, the same rows
-//! (lowered through the same [`RowBatch`] the route inserts), the same cascades
-//! and orphan collection the schema performs — so compiling the edited graph
-//! gives what compiling the plan would give after the route had run. That is
-//! what lets a change be previewed from a run's snapshot without writing.
+//! Each operation is the in-memory twin of one write route. They agree because
+//! they share code, not because they were written alike: the request specs
+//! and their checks (`specs::*`, `expressions`, `expression_refs`), the
+//! lowering of an event's trees into a [`RowBatch`], and the pure steps the
+//! route's SQL would otherwise repeat (a flavor's detail row, a distribution's
+//! columns, the refusals and their messages) are plan-crate functions that the
+//! route calls to decide what to write and this module calls to decide what to
+//! put in the graph. What stays in the route is what only a database can say:
+//! ownership, foreign keys across scenarios, unique constraints, and the SQL
+//! itself. Compiling the edited graph gives what compiling the plan would give
+//! after the route had run, which is what lets a change be previewed from a
+//! run's snapshot without writing; the server's `domain::edit_route_tests`
+//! hold the two to that.
 //!
 //! Every operation is atomic: it works on a copy and only replaces `graph` once
 //! everything has succeeded, the way the route's transaction would roll back.
@@ -22,18 +30,17 @@ use crate::error::{PlanError, PlanResult};
 use crate::expression_refs::{self, Entity};
 use crate::expressions::validate_tree;
 use crate::graph::{
-    AccountRow, AssetRow, BankRow, DistributionRow, EventRow, InflationEntry, InvestmentRow,
-    LiabilityRow, ParameterRow, PositionRow, PropertyRow, ReturnProfileRow, ScenarioGraph, Table,
-    TaxBracketRow, TaxConfigEntry, TaxConfigRow,
+    AccountRow, AssetRow, EventRow, InflationEntry, ParameterRow, PositionRow, ReturnProfileRow,
+    ScenarioGraph, Table, TaxBracketRow, TaxConfigEntry, TaxConfigRow,
 };
 use crate::specs::accounts::{
-    CreateAccount, CreatePosition, FlavorSpec, UpdateAccount, UpdatePosition,
+    self, CreateAccount, CreatePosition, DetailRow, FlavorSpec, UpdateAccount, UpdatePosition,
 };
-use crate::specs::assets::{CreateAsset, UpdateAsset};
-use crate::specs::events::{EventBody, lower_tree};
+use crate::specs::assets::{self, CreateAsset, UpdateAsset};
+use crate::specs::events::{self, EventBody, lower_tree};
 use crate::specs::parameters::{self, ParameterBody};
-use crate::specs::profiles::{CreateProfile, DistributionSpec};
-use crate::specs::scenarios::UpdateScenario;
+use crate::specs::profiles::{self, CreateProfile, DistributionSpec};
+use crate::specs::scenarios::{UpdateScenario, validate_date};
 use crate::specs::taxes::{self, CreateTaxConfig};
 
 /// Run `edit` on a copy of `graph`, keeping the result only if it succeeds.
@@ -55,9 +62,7 @@ pub fn create_event(graph: &mut ScenarioGraph, body: &EventBody) -> PlanResult<i
     atomically(graph, |g| {
         let name = body.name.trim();
         if g.events.iter().any(|e| e.name == name) {
-            return Err(PlanError::Conflict(
-                "an event with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(events::NAME_TAKEN.into()));
         }
         let id = g.next_id(Table::Events);
         let sort_order = body
@@ -86,9 +91,7 @@ pub fn replace_event(graph: &mut ScenarioGraph, event_id: i64, body: &EventBody)
         }
         let name = body.name.trim();
         if g.events.iter().any(|e| e.id != event_id && e.name == name) {
-            return Err(PlanError::Conflict(
-                "an event with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(events::NAME_TAKEN.into()));
         }
         let row = g
             .events
@@ -151,10 +154,7 @@ pub fn delete_event(graph: &mut ScenarioGraph, event_id: i64) -> PlanResult<()> 
         referrers.sort();
         referrers.dedup();
         if !referrers.is_empty() {
-            return Err(PlanError::Conflict(format!(
-                "event is referenced by: {}",
-                referrers.join(", ")
-            )));
+            return Err(events::referenced_by(&referrers));
         }
 
         if !g.events.iter().any(|e| e.id == event_id) {
@@ -191,15 +191,11 @@ pub fn create_asset(graph: &mut ScenarioGraph, body: &CreateAsset) -> PlanResult
     {
         return Err(PlanError::NotFound("return profile"));
     }
-    if body.initial_price <= 0.0 {
-        return Err(PlanError::invalid("initial_price must be positive"));
-    }
+    assets::check_initial_price(body.initial_price)?;
     atomically(graph, |g| {
         let name = body.name.trim();
         if g.assets.iter().any(|a| a.name == name) {
-            return Err(PlanError::Conflict(
-                "an asset with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(assets::NAME_TAKEN.into()));
         }
         // CHECK constraint on the table.
         if body.tracking_error.is_some_and(|t| t < 0.0) {
@@ -243,13 +239,11 @@ pub fn update_asset(
         if let Some(name) = name
             && g.assets.iter().any(|a| a.id != asset_id && a.name == name)
         {
-            return Err(PlanError::Conflict(
-                "an asset with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(assets::NAME_TAKEN.into()));
         }
         // CHECK constraints on the table.
-        if body.initial_price.is_some_and(|p| p <= 0.0) {
-            return Err(PlanError::invalid("initial_price must be positive"));
+        if let Some(price) = body.initial_price {
+            assets::check_initial_price(price)?;
         }
         if body.tracking_error.flatten().is_some_and(|t| t < 0.0) {
             return Err(PlanError::invalid("tracking_error cannot be negative"));
@@ -297,9 +291,7 @@ pub fn create_account(graph: &mut ScenarioGraph, body: &CreateAccount) -> PlanRe
     atomically(graph, |g| {
         let name = body.name.trim();
         if g.accounts.iter().any(|a| a.name == name) {
-            return Err(PlanError::Conflict(
-                "an account with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(accounts::NAME_TAKEN.into()));
         }
         let id = g.next_id(Table::Accounts);
         let sort_order = body
@@ -332,19 +324,7 @@ pub fn update_account(
             .map(|a| a.flavor.clone())
             .ok_or(PlanError::NotFound("account"))?;
 
-        if body.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
-            return Err(PlanError::invalid("an account needs a name"));
-        }
-        if let Some(flavor) = &body.flavor {
-            flavor.validate()?;
-            if flavor.name() != existing_flavor {
-                return Err(PlanError::Conflict(format!(
-                    "cannot change account flavor from {existing_flavor} to {}; \
-                     create a new account instead",
-                    flavor.name()
-                )));
-            }
-        }
+        body.check(&existing_flavor)?;
 
         let name = body.name.as_deref().map(str::trim);
         if let Some(name) = name
@@ -352,9 +332,7 @@ pub fn update_account(
                 .iter()
                 .any(|a| a.id != account_id && a.name == name)
         {
-            return Err(PlanError::Conflict(
-                "an account with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(accounts::NAME_TAKEN.into()));
         }
         let renamed = match name {
             Some(name) => expression_refs::rerendered(g, Entity::Account(account_id), name)?,
@@ -400,87 +378,35 @@ fn replace_detail(
             )))
         }
     };
-    match flavor {
-        FlavorSpec::Bank {
-            cash_value,
-            return_profile_id,
-        } => {
-            profile(*return_profile_id)?;
-            graph.bank.insert(
-                account_id,
-                BankRow {
-                    account_id,
-                    cash_value: *cash_value,
-                    return_profile_id: *return_profile_id,
-                },
-            );
+    match flavor.detail_row(account_id) {
+        DetailRow::Bank(row) => {
+            profile(row.return_profile_id)?;
+            graph.bank.insert(account_id, row);
         }
-        FlavorSpec::Investment {
-            tax_status,
-            cash_value,
-            cash_return_profile_id,
-            contribution_limit,
-            contribution_period,
-            plan_type,
-            catch_up,
-        } => {
-            profile(*cash_return_profile_id)?;
-            graph.investment.insert(
-                account_id,
-                InvestmentRow {
-                    account_id,
-                    tax_status: tax_status.as_str().to_string(),
-                    cash_value: *cash_value,
-                    cash_return_profile_id: *cash_return_profile_id,
-                    contribution_limit: *contribution_limit,
-                    contribution_period: contribution_period.map(|p| p.as_str().to_string()),
-                    plan_type: plan_type.map(|p| p.as_str().to_string()),
-                    catch_up: catch_up.clone(),
-                },
-            );
+        DetailRow::Investment(row) => {
+            profile(row.cash_return_profile_id)?;
+            graph.investment.insert(account_id, row);
         }
-        FlavorSpec::Property { asset_id, value } => {
-            if !graph.assets.iter().any(|a| a.id == *asset_id) {
+        DetailRow::Property(row) => {
+            if !graph.assets.iter().any(|a| a.id == row.asset_id) {
                 return Err(PlanError::invalid(format!(
-                    "asset {asset_id} does not exist in this plan"
+                    "asset {} does not exist in this plan",
+                    row.asset_id
                 )));
             }
-            graph.property.insert(
-                account_id,
-                PropertyRow {
-                    account_id,
-                    asset_id: *asset_id,
-                    value: *value,
-                },
-            );
+            graph.property.insert(account_id, row);
         }
-        FlavorSpec::Liability {
-            principal,
-            interest_rate,
-            repayment,
-        } => {
-            if let Some(repayment) = repayment {
-                let payer = graph
-                    .accounts
-                    .iter()
-                    .find(|a| a.id == repayment.from_account_id)
-                    .map(|a| a.flavor.as_str());
-                if !matches!(payer, Some("Bank" | "Investment")) {
-                    return Err(PlanError::invalid(
-                        "a loan is repaid from a bank or investment account in the same plan",
-                    ));
-                }
+        DetailRow::Liability(row) => {
+            if let Some(payer) = row.repay_from_account_id {
+                accounts::check_loan_payer(
+                    graph
+                        .accounts
+                        .iter()
+                        .find(|a| a.id == payer)
+                        .map(|a| a.flavor.as_str()),
+                )?;
             }
-            graph.liability.insert(
-                account_id,
-                LiabilityRow {
-                    account_id,
-                    principal: *principal,
-                    interest_rate: *interest_rate,
-                    repay_from_account_id: repayment.map(|r| r.from_account_id),
-                    term_months: repayment.map(|r| i64::from(r.term_months)),
-                },
-            );
+            graph.liability.insert(account_id, row);
         }
     }
     Ok(())
@@ -496,11 +422,7 @@ pub fn delete_asset(graph: &mut ScenarioGraph, asset_id: i64) -> PlanResult<()> 
         if !g.assets.iter().any(|a| a.id == asset_id) {
             return Err(PlanError::NotFound("asset"));
         }
-        if expression_refs::used_by(g, Entity::Asset(asset_id))? {
-            return Err(PlanError::Conflict(
-                "asset is referenced by an amount expression".into(),
-            ));
-        }
+        expression_refs::refuse_if_used(g, Entity::Asset(asset_id))?;
         let referrers = referrers(g, Held::Asset(asset_id));
         if !referrers.is_empty() {
             return Err(PlanError::Conflict(format!(
@@ -521,11 +443,7 @@ pub fn delete_account(graph: &mut ScenarioGraph, account_id: i64) -> PlanResult<
         if !g.accounts.iter().any(|a| a.id == account_id) {
             return Err(PlanError::NotFound("account"));
         }
-        if expression_refs::used_by(g, Entity::Account(account_id))? {
-            return Err(PlanError::Conflict(
-                "account is referenced by an amount expression".into(),
-            ));
-        }
+        expression_refs::refuse_if_used(g, Entity::Account(account_id))?;
         let referrers = referrers(g, Held::Account(account_id));
         if !referrers.is_empty() {
             return Err(PlanError::Conflict(format!(
@@ -702,9 +620,7 @@ pub fn create_parameter(graph: &mut ScenarioGraph, body: &ParameterBody) -> Plan
     let name = parameters::validate(body)?.to_owned();
     atomically(graph, |g| {
         if g.parameters.iter().any(|p| p.name == name) {
-            return Err(PlanError::Conflict(
-                "a parameter with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(parameters::NAME_TAKEN.into()));
         }
         let id = g.next_id(Table::Parameters);
         g.parameters.push(parameter_row(id, name, body));
@@ -727,22 +643,12 @@ pub fn update_parameter(
             .iter()
             .find(|p| p.id == parameter_id)
             .ok_or(PlanError::NotFound("parameter"))?;
-        let (kind, ..) = body.value.fields();
-        if old.kind != kind
-            && (!parameters::usages(g, parameter_id)?.is_empty()
-                || expression_refs::used_by(g, Entity::Parameter(parameter_id))?)
-        {
-            return Err(PlanError::Conflict(
-                "remove references before changing parameter type".into(),
-            ));
-        }
+        parameters::check_retype(g, parameter_id, &old.kind, body)?;
         if g.parameters
             .iter()
             .any(|p| p.id != parameter_id && p.name == name)
         {
-            return Err(PlanError::Conflict(
-                "a parameter with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(parameters::NAME_TAKEN.into()));
         }
         let renamed = if name != old.name {
             expression_refs::rerendered(g, Entity::Parameter(parameter_id), &name)?
@@ -787,34 +693,9 @@ fn parameter_row(id: i64, name: String, body: &ParameterBody) -> ParameterRow {
 /// the target in the graph's library ([`ScenarioGraph::tax_configs`]), which a
 /// live load has and a run snapshot has only for what the caller loaded.
 pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> PlanResult<()> {
-    if body
-        .name
-        .as_deref()
-        .is_some_and(|name| name.trim().is_empty())
-    {
-        return Err(PlanError::invalid("scenario name cannot be empty"));
-    }
-    let date = |text: &str, field: &str| {
-        text.parse::<jiff::civil::Date>()
-            .map(|d| d.to_string())
-            .map_err(|e| PlanError::invalid(format!("invalid {field} '{text}': {e}")))
-    };
-    let start_date = body
-        .start_date
-        .as_deref()
-        .map(|d| date(d, "start_date"))
-        .transpose()?;
-    let birth_date = body
-        .birth_date
-        .as_deref()
-        .map(|d| date(d, "birth_date"))
-        .transpose()?;
-    // CHECK constraint on the table.
-    if body.duration_years.is_some_and(|y| !(1..=120).contains(&y)) {
-        return Err(PlanError::invalid(
-            "duration_years must be between 1 and 120",
-        ));
-    }
+    body.check_name()?;
+    let (start_date, birth_date) = body.dates()?;
+    body.check_duration()?;
     atomically(graph, |g| {
         if let Some(id) = body.tax_config_id
             && g.scenario.tax_config_id != Some(id)
@@ -877,11 +758,9 @@ pub fn create_return_profile(graph: &mut ScenarioGraph, body: &CreateProfile) ->
             return Err(PlanError::invalid("a return profile needs a name"));
         }
         if g.return_profiles.values().any(|p| p.name == name) {
-            return Err(PlanError::Conflict(
-                "a return profile with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(profiles::NAME_TAKEN.into()));
         }
-        let distribution_id = add_distribution(g, &body.distribution);
+        let distribution_id = add_distribution(g, &body.distribution, 0)?;
         let id = g.next_id(Table::ReturnProfiles);
         g.return_profiles.insert(
             id,
@@ -898,65 +777,27 @@ pub fn create_return_profile(graph: &mut ScenarioGraph, body: &CreateProfile) ->
 }
 
 /// The `distributions` rows for `spec`, children first; returns the root's id.
-fn add_distribution(graph: &mut ScenarioGraph, spec: &DistributionSpec) -> i64 {
-    let (bull_id, bear_id) = match spec {
-        DistributionSpec::RegimeSwitching { bull, bear, .. } => (
-            Some(add_distribution(graph, bull)),
-            Some(add_distribution(graph, bear)),
+///
+/// What each row holds is [`DistributionSpec::columns`], as for the route's
+/// insert. The spec has been validated, so it cannot refuse.
+fn add_distribution(
+    graph: &mut ScenarioGraph,
+    spec: &DistributionSpec,
+    depth: usize,
+) -> PlanResult<i64> {
+    let columns = spec.columns(depth)?;
+    let (bull_id, bear_id) = match columns.regimes {
+        Some((bull, bear)) => (
+            Some(add_distribution(graph, bull, depth + 1)?),
+            Some(add_distribution(graph, bear, depth + 1)?),
         ),
-        _ => (None, None),
+        None => (None, None),
     };
-    let mut row = DistributionRow {
-        id: graph.next_id(Table::Distributions),
-        kind: String::new(),
-        rate: None,
-        mean: None,
-        std_dev: None,
-        scale: None,
-        df: None,
-        bull_id,
-        bear_id,
-        bull_to_bear_prob: None,
-        bear_to_bull_prob: None,
-        history_preset: None,
-        block_size: None,
-    };
-    match spec {
-        DistributionSpec::None => row.kind = "None".into(),
-        DistributionSpec::Fixed { rate } => {
-            row.kind = "Fixed".into();
-            row.rate = Some(*rate);
-        }
-        DistributionSpec::Normal { mean, std_dev } => {
-            row.kind = "Normal".into();
-            (row.mean, row.std_dev) = (Some(*mean), Some(*std_dev));
-        }
-        DistributionSpec::LogNormal { mean, std_dev } => {
-            row.kind = "LogNormal".into();
-            (row.mean, row.std_dev) = (Some(*mean), Some(*std_dev));
-        }
-        DistributionSpec::StudentT { mean, scale, df } => {
-            row.kind = "StudentT".into();
-            (row.mean, row.scale, row.df) = (Some(*mean), Some(*scale), Some(*df));
-        }
-        DistributionSpec::RegimeSwitching {
-            bull_to_bear_prob,
-            bear_to_bull_prob,
-            ..
-        } => {
-            row.kind = "RegimeSwitching".into();
-            row.bull_to_bear_prob = Some(*bull_to_bear_prob);
-            row.bear_to_bull_prob = Some(*bear_to_bull_prob);
-        }
-        DistributionSpec::Bootstrap { preset, block_size } => {
-            row.kind = "Bootstrap".into();
-            row.history_preset = Some(preset.clone());
-            row.block_size = *block_size;
-        }
-    }
-    let id = row.id;
-    graph.distributions.insert(id, row);
-    id
+    let id = graph.next_id(Table::Distributions);
+    graph
+        .distributions
+        .insert(id, columns.into_row(id, bull_id, bear_id));
+    Ok(id)
 }
 
 /// Add a tax config to the caller's library, as `POST /tax-configs` would.
@@ -969,9 +810,7 @@ pub fn create_tax_config(graph: &mut ScenarioGraph, body: &CreateTaxConfig) -> P
             return Err(PlanError::invalid("a tax config needs a name"));
         }
         if g.tax_configs.values().any(|c| c.config.name == name) {
-            return Err(PlanError::Conflict(
-                "a tax config with that name already exists".into(),
-            ));
+            return Err(PlanError::Conflict(taxes::NAME_TAKEN.into()));
         }
         let id = g.next_id(Table::TaxConfigs);
         g.tax_configs.insert(
@@ -1012,25 +851,17 @@ pub fn create_position(
     body: &CreatePosition,
 ) -> PlanResult<i64> {
     atomically(graph, |g| {
-        match g.accounts.iter().find(|a| a.id == account_id) {
-            Some(a) if a.flavor == "Investment" => {}
-            Some(a) => {
-                return Err(PlanError::Conflict(format!(
-                    "positions can only be held in Investment accounts, not {}",
-                    a.flavor
-                )));
-            }
-            None => return Err(PlanError::NotFound("account")),
-        }
+        accounts::check_lot_home(
+            g.accounts
+                .iter()
+                .find(|a| a.id == account_id)
+                .map(|a| a.flavor.as_str()),
+        )?;
         let purchase_date = match body.purchase_date.as_deref() {
-            Some(d) => purchase_date(d)?,
+            Some(d) => validate_date(d, "purchase_date")?,
             None => g.scenario.start_date.clone(),
         };
-        if body.units < 0.0 || body.cost_basis < 0.0 {
-            return Err(PlanError::invalid(
-                "units and cost_basis must be non-negative",
-            ));
-        }
+        accounts::check_lot_figures(Some(body.units), Some(body.cost_basis))?;
         held_asset(g, body.asset_id)?;
         let id = g.next_id(Table::Positions);
         g.positions
@@ -1060,15 +891,11 @@ pub fn update_position(
     position_id: i64,
     body: &UpdatePosition,
 ) -> PlanResult<()> {
-    if body.units.is_some_and(|u| u < 0.0) || body.cost_basis.is_some_and(|b| b < 0.0) {
-        return Err(PlanError::invalid(
-            "units and cost_basis must be non-negative",
-        ));
-    }
+    accounts::check_lot_figures(body.units, body.cost_basis)?;
     let date = body
         .purchase_date
         .as_deref()
-        .map(purchase_date)
+        .map(|d| validate_date(d, "purchase_date"))
         .transpose()?;
     atomically(graph, |g| {
         if let Some(asset_id) = body.asset_id {
@@ -1115,13 +942,6 @@ pub fn delete_position(
         graph.positions.remove(&account_id);
     }
     Ok(())
-}
-
-/// A lot's date, parsed the way the routes parse it.
-fn purchase_date(text: &str) -> PlanResult<String> {
-    text.parse::<jiff::civil::Date>()
-        .map(|d| d.to_string())
-        .map_err(|e| PlanError::invalid(format!("invalid purchase_date '{text}': {e}")))
 }
 
 /// The foreign key on `positions.asset_id`, narrowed to this plan.

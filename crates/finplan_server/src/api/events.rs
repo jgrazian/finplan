@@ -14,6 +14,7 @@ use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 
 pub use finplan_plan::specs::events::{Event, EventBody, lower_tree, read_event};
+use finplan_plan::specs::events::{NAME_TAKEN, referenced_by};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -253,7 +254,7 @@ pub(crate) async fn create_in(
     .bind(body.sort_order)
     .fetch_one(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?;
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?;
 
     write_tree(tx, scenario_id, id, body).await?;
     Ok(id)
@@ -281,7 +282,7 @@ pub(crate) async fn replace_in(
     .bind(body.sort_order)
     .execute(&mut **tx)
     .await
-    .map_err(|e| on_unique_violation(e, "an event with that name already exists"))?
+    .map_err(|e| on_unique_violation(e, NAME_TAKEN))?
     .rows_affected();
 
     if affected == 0 {
@@ -325,10 +326,7 @@ pub(crate) async fn destroy_in(
     .await?;
 
     if !referrers.is_empty() {
-        return Err(ApiError::Conflict(format!(
-            "event is referenced by: {}",
-            referrers.join(", ")
-        )));
+        return Err(referenced_by(&referrers).into());
     }
 
     let affected = sqlx::query("DELETE FROM events WHERE id = ?1 AND scenario_id = ?2")

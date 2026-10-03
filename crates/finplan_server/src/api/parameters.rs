@@ -12,6 +12,7 @@ use axum::{
     routing::get,
 };
 
+use finplan_plan::specs::parameters::{NAME_TAKEN, check_retype};
 pub use finplan_plan::specs::parameters::{
     NamedParameter, ParameterBody, ParameterUsage, ParameterValueSpec, delete_refusal, usages,
     validate,
@@ -84,7 +85,7 @@ pub(crate) async fn create_in(
     let (kind, number, date, years, months) = body.value.fields();
     sqlx::query_scalar("INSERT INTO named_parameters (scenario_id,name,kind,number_value,date_value,age_years,age_months) VALUES (?1,?2,?3,?4,?5,?6,?7) RETURNING id")
         .bind(scenario_id).bind(&name).bind(kind).bind(number).bind(date).bind(years).bind(months).fetch_one(&mut *conn).await
-        .map_err(|e| on_unique_violation(e,"a parameter with that name already exists"))
+        .map_err(|e| on_unique_violation(e,NAME_TAKEN))
 }
 async fn update(
     State(state): State<AppState>,
@@ -124,20 +125,10 @@ pub(crate) async fn update_in(
         .ok_or(ApiError::NotFound("parameter"))?;
     let name = validate(body)?.to_owned();
     let (kind, number, date, years, months) = body.value.fields();
-    if old.kind != kind
-        && (!usages(live, parameter_id)?.is_empty()
-            || super::expression_refs::used_by(
-                live,
-                super::expression_refs::Entity::Parameter(parameter_id),
-            )?)
-    {
-        return Err(ApiError::Conflict(
-            "remove references before changing parameter type".into(),
-        ));
-    }
+    check_retype(live, parameter_id, &old.kind, body)?;
     sqlx::query("UPDATE named_parameters SET name=?1,kind=?2,number_value=?3,date_value=?4,age_years=?5,age_months=?6 WHERE id=?7 AND scenario_id=?8")
         .bind(&name).bind(kind).bind(number).bind(date).bind(years).bind(months).bind(parameter_id).bind(scenario_id).execute(&mut **tx).await
-        .map_err(|e| on_unique_violation(e,"a parameter with that name already exists"))?;
+        .map_err(|e| on_unique_violation(e,NAME_TAKEN))?;
     if name != old.name {
         super::expression_refs::rerender(
             tx,

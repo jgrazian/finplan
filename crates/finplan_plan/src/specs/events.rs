@@ -13,6 +13,16 @@ use crate::batch::RowBatch;
 use crate::error::{PlanError, PlanResult};
 use crate::graph::ScenarioGraph;
 
+/// What a second event of the same name is refused with.
+pub const NAME_TAKEN: &str = "an event with that name already exists";
+
+/// The refusal for deleting an event that other events' triggers or effects
+/// name: deleting it would cascade those conditions away unseen. `referrers`
+/// are those events' names.
+pub fn referenced_by(referrers: &[String]) -> PlanError {
+    PlanError::Conflict(format!("event is referenced by: {}", referrers.join(", ")))
+}
+
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct Event {

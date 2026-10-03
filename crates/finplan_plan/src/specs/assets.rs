@@ -3,6 +3,19 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
+use crate::error::{PlanError, PlanResult};
+
+/// What a second asset of the same name is refused with.
+pub const NAME_TAKEN: &str = "an asset with that name already exists";
+
+/// An asset's price is what a unit costs, so it is above zero.
+pub fn check_initial_price(price: f64) -> PlanResult<()> {
+    if price <= 0.0 {
+        return Err(PlanError::invalid("initial_price must be positive"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct CreateAsset {

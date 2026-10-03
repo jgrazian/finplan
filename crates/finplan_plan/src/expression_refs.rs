@@ -33,6 +33,23 @@ pub fn used_by(graph: &ScenarioGraph, entity: Entity) -> PlanResult<bool> {
     Ok(false)
 }
 
+/// The refusal for deleting an account or asset (or parameter) that an amount
+/// expression names. An id the plan does not hold is no reference: whoever is
+/// deleting it reports that instead.
+pub fn refuse_if_used(graph: &ScenarioGraph, entity: Entity) -> PlanResult<()> {
+    let (noun, held) = match entity {
+        Entity::Account(id) => ("account", graph.accounts.iter().any(|a| a.id == id)),
+        Entity::Asset(id) => ("asset", graph.assets.iter().any(|a| a.id == id)),
+        Entity::Parameter(id) => ("parameter", graph.parameters.iter().any(|p| p.id == id)),
+    };
+    if held && used_by(graph, entity)? {
+        return Err(PlanError::Conflict(format!(
+            "{noun} is referenced by an amount expression"
+        )));
+    }
+    Ok(())
+}
+
 /// The expression sources a rename rewrites, as `(amount id, new source)`.
 ///
 /// `graph` is the plan before the rename. Only expressions that reference the

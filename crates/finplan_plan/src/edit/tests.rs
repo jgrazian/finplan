@@ -8,7 +8,10 @@ use serde_json::json;
 
 use super::*;
 use crate::compile;
+use crate::error::{PlanError, PlanResult};
 use crate::graph::ScenarioGraph;
+use crate::specs::parameters::ParameterBody;
+use crate::specs::profiles::CreateProfile;
 use crate::specs::{AmountSpec, TriggerParent, TriggerSpec};
 
 /// The anonymized default plan the other tests in this crate start from.
@@ -65,4 +68,240 @@ fn orphan_rows_do_not_change_what_compiles() {
 
     let after = canonical(&compile::compile(&graph).unwrap().config);
     assert_eq!(before, after);
+}
+
+fn body(value: serde_json::Value) -> EventBody {
+    serde_json::from_value(value).expect("event body")
+}
+
+/// An edit that is refused leaves the graph exactly as it was.
+fn refused<T: std::fmt::Debug>(
+    graph: &mut ScenarioGraph,
+    edit: impl FnOnce(&mut ScenarioGraph) -> PlanResult<T>,
+) -> PlanError {
+    let before = serde_json::to_value(&*graph).unwrap();
+    let err = edit(graph).unwrap_err();
+    assert_eq!(serde_json::to_value(&*graph).unwrap(), before, "{err}");
+    err
+}
+
+#[test]
+fn a_taken_name_is_refused_with_the_shared_message() {
+    let mut graph = default_graph();
+    let taken = body(json!({"name": " Salary ", "trigger": {"kind": "Manual"}}));
+    assert_eq!(
+        refused(&mut graph, |g| create_event(g, &taken)),
+        PlanError::Conflict(events::NAME_TAKEN.into())
+    );
+
+    let asset: CreateAsset =
+        serde_json::from_value(json!({"name": "VFIAX", "initial_price": 1.0})).unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| create_asset(g, &asset)),
+        PlanError::Conflict(assets::NAME_TAKEN.into())
+    );
+
+    let account: CreateAccount = serde_json::from_value(json!({
+        "name": "Vanguard", "flavor": "Bank", "return_profile_id": 6
+    }))
+    .unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| create_account(g, &account)),
+        PlanError::Conflict(accounts::NAME_TAKEN.into())
+    );
+}
+
+#[test]
+fn an_asset_must_cost_something() {
+    let mut graph = default_graph();
+    let free: CreateAsset =
+        serde_json::from_value(json!({"name": "Free", "initial_price": 0.0})).unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| create_asset(g, &free)),
+        PlanError::invalid("initial_price must be positive")
+    );
+    let update: UpdateAsset = serde_json::from_value(json!({"initial_price": -1.0})).unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| update_asset(g, 1, &update)),
+        PlanError::invalid("initial_price must be positive")
+    );
+}
+
+#[test]
+fn an_account_cannot_change_flavor() {
+    let mut graph = default_graph();
+    let to_bank: UpdateAccount = serde_json::from_value(json!({
+        "flavor": "Bank", "cash_value": 1.0, "return_profile_id": 6
+    }))
+    .unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| update_account(g, 1, &to_bank)),
+        PlanError::Conflict(
+            "cannot change account flavor from Investment to Bank; create a new account instead"
+                .into()
+        )
+    );
+    let blank: UpdateAccount = serde_json::from_value(json!({"name": "  "})).unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| update_account(g, 1, &blank)),
+        PlanError::invalid("an account needs a name")
+    );
+}
+
+#[test]
+fn lots_belong_in_investment_accounts_and_are_not_negative() {
+    let mut graph = default_graph();
+    let lot =
+        |value: serde_json::Value| -> CreatePosition { serde_json::from_value(value).unwrap() };
+    let bank = graph.bank.keys().copied().next().unwrap();
+
+    assert_eq!(
+        refused(&mut graph, |g| create_position(
+            g,
+            bank,
+            &lot(json!({"asset_id": 1, "units": 1.0, "cost_basis": 1.0}))
+        )),
+        PlanError::Conflict("positions can only be held in Investment accounts, not Bank".into())
+    );
+    assert_eq!(
+        refused(&mut graph, |g| create_position(
+            g,
+            9999,
+            &lot(json!({"asset_id": 1, "units": 1.0, "cost_basis": 1.0}))
+        )),
+        PlanError::NotFound("account")
+    );
+    assert_eq!(
+        refused(&mut graph, |g| create_position(
+            g,
+            1,
+            &lot(json!({"asset_id": 1, "units": -1.0, "cost_basis": 1.0}))
+        )),
+        PlanError::invalid("units and cost_basis must be non-negative")
+    );
+    let date = refused(&mut graph, |g| {
+        create_position(
+            g,
+            1,
+            &lot(
+                json!({"asset_id": 1, "purchase_date": "someday", "units": 1.0, "cost_basis": 1.0}),
+            ),
+        )
+    });
+    assert!(
+        matches!(&date, PlanError::Invalid(m) if m.starts_with("invalid purchase_date 'someday'"))
+    );
+
+    let before = graph.positions[&1].len();
+    let id = create_position(
+        &mut graph,
+        1,
+        &lot(json!({"asset_id": 1, "units": 2.0, "cost_basis": 3.0})),
+    )
+    .unwrap();
+    assert_eq!(graph.positions[&1].len(), before + 1);
+    assert_eq!(
+        graph.positions[&1].last().unwrap().purchase_date,
+        graph.scenario.start_date
+    );
+    delete_position(&mut graph, 1, id).unwrap();
+    assert_eq!(graph.positions[&1].len(), before);
+}
+
+#[test]
+fn scenario_settings_are_checked_name_then_dates_then_horizon() {
+    let mut graph = default_graph();
+    let update =
+        |value: serde_json::Value| -> UpdateScenario { serde_json::from_value(value).unwrap() };
+
+    let all_bad = update(json!({"name": " ", "start_date": "x", "duration_years": 0}));
+    assert_eq!(
+        refused(&mut graph, |g| update_scenario(g, &all_bad)),
+        PlanError::invalid("scenario name cannot be empty")
+    );
+    let dates_and_horizon = update(json!({"birth_date": "x", "duration_years": 0}));
+    let err = refused(&mut graph, |g| update_scenario(g, &dates_and_horizon));
+    assert!(matches!(&err, PlanError::Invalid(m) if m.starts_with("invalid birth_date 'x'")));
+    let horizon = update(json!({"duration_years": 121}));
+    assert_eq!(
+        refused(&mut graph, |g| update_scenario(g, &horizon)),
+        PlanError::invalid("duration_years must be between 1 and 120")
+    );
+    assert_eq!(
+        refused(&mut graph, |g| update_scenario(
+            g,
+            &update(json!({"tax_config_id": 9999}))
+        )),
+        PlanError::NotFound("tax config")
+    );
+}
+
+#[test]
+fn parameter_names_are_unique_and_a_missing_one_cannot_be_deleted() {
+    let mut graph = default_graph();
+    let parameter =
+        |value: serde_json::Value| -> ParameterBody { serde_json::from_value(value).unwrap() };
+    let id = create_parameter(
+        &mut graph,
+        &parameter(json!({"name": "Floor", "value": {"kind": "Money", "value": 5.0}})),
+    )
+    .unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| create_parameter(
+            g,
+            &parameter(json!({"name": " Floor", "value": {"kind": "Rate", "value": 0.1}}))
+        )),
+        PlanError::Conflict(parameters::NAME_TAKEN.into())
+    );
+    // Nothing reads it yet, so it may change type; then it is deleted.
+    update_parameter(
+        &mut graph,
+        id,
+        &parameter(json!({"name": "Floor", "value": {"kind": "Rate", "value": 0.1}})),
+    )
+    .unwrap();
+    delete_parameter(&mut graph, id).unwrap();
+    assert_eq!(
+        refused(&mut graph, |g| delete_parameter(g, id)),
+        PlanError::NotFound("parameter")
+    );
+}
+
+#[test]
+fn a_regime_switching_profile_places_its_regimes_first() {
+    let mut graph = default_graph();
+    let before = graph.distributions.len();
+    let profile: CreateProfile = serde_json::from_value(json!({
+        "name": "Regimes",
+        "distribution": {"kind": "RegimeSwitching", "bull_to_bear_prob": 0.1,
+            "bear_to_bull_prob": 0.3,
+            "bull": {"kind": "Normal", "mean": 0.1, "std_dev": 0.12},
+            "bear": {"kind": "StudentT", "mean": -0.05, "scale": 0.2, "df": 4.0}}
+    }))
+    .unwrap();
+    let id = create_return_profile(&mut graph, &profile).unwrap();
+    assert_eq!(graph.distributions.len(), before + 3);
+
+    let root = &graph.distributions[&graph.return_profiles[&id].distribution_id];
+    assert_eq!(root.kind, "RegimeSwitching");
+    let (bull, bear) = (root.bull_id.unwrap(), root.bear_id.unwrap());
+    assert!(bull < bear && bear < root.id, "children are placed first");
+    assert_eq!(graph.distributions[&bull].kind, "Normal");
+    assert_eq!(graph.distributions[&bear].df, Some(4.0));
+    assert_eq!(root.bull_to_bear_prob, Some(0.1));
+}
+
+#[test]
+fn deleting_what_events_use_is_refused() {
+    let mut graph = default_graph();
+    // The default plan's events pay into and spend from its accounts.
+    let err = refused(&mut graph, |g| delete_account(g, 6));
+    assert!(
+        matches!(&err, PlanError::Conflict(m) if m.contains("event ")),
+        "{err}"
+    );
+    assert_eq!(
+        refused(&mut graph, |g| delete_account(g, 9999)),
+        PlanError::NotFound("account")
+    );
 }

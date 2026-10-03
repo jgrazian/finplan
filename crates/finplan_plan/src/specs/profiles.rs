@@ -6,6 +6,10 @@ use ts_rs::TS;
 
 use crate::compile::HISTORY_PRESETS;
 use crate::error::{PlanError, PlanResult};
+use crate::graph::DistributionRow;
+
+/// What a second return profile of the same name is refused with.
+pub const NAME_TAKEN: &str = "a return profile with that name already exists";
 
 /// What kind of holding a profile describes.
 ///
@@ -87,6 +91,28 @@ pub struct DistributionColumns<'a> {
     pub history_preset: Option<&'a str>,
     pub block_size: Option<i64>,
     pub regimes: Option<(&'a DistributionSpec, &'a DistributionSpec)>,
+}
+
+impl DistributionColumns<'_> {
+    /// The row these columns make, given its own id and those of the nested
+    /// regimes' rows (placed first, if there are any).
+    pub fn into_row(self, id: i64, bull_id: Option<i64>, bear_id: Option<i64>) -> DistributionRow {
+        DistributionRow {
+            id,
+            kind: self.kind.to_string(),
+            rate: self.rate,
+            mean: self.mean,
+            std_dev: self.std_dev,
+            scale: self.scale,
+            df: self.df,
+            bull_id,
+            bear_id,
+            bull_to_bear_prob: self.bull_to_bear_prob,
+            bear_to_bull_prob: self.bear_to_bull_prob,
+            history_preset: self.history_preset.map(str::to_string),
+            block_size: self.block_size,
+        }
+    }
 }
 
 /// The distribution shapes a profile can take. `RegimeSwitching` nests two more

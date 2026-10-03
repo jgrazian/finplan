@@ -6,6 +6,10 @@ use ts_rs::TS;
 
 use super::{CatchUpSpec, RepaymentSpec};
 use crate::error::{PlanError, PlanResult};
+use crate::graph::{BankRow, InvestmentRow, LiabilityRow, PropertyRow};
+
+/// What a second account of the same name is refused with.
+pub const NAME_TAKEN: &str = "an account with that name already exists";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -200,6 +204,105 @@ impl FlavorSpec {
     }
 }
 
+/// The detail row a [`FlavorSpec`] writes, with the columns as stored.
+#[derive(Debug, Clone)]
+pub enum DetailRow {
+    Bank(BankRow),
+    Investment(InvestmentRow),
+    Property(PropertyRow),
+    Liability(LiabilityRow),
+}
+
+impl FlavorSpec {
+    /// The detail row for account `account_id`: the pure half of writing the
+    /// flavor, which the route inserts into its table and an in-memory edit
+    /// into the graph. What the references in it must point at is checked by
+    /// whoever writes it, against what it can see.
+    pub fn detail_row(&self, account_id: i64) -> DetailRow {
+        match self {
+            FlavorSpec::Bank {
+                cash_value,
+                return_profile_id,
+            } => DetailRow::Bank(BankRow {
+                account_id,
+                cash_value: *cash_value,
+                return_profile_id: *return_profile_id,
+            }),
+            FlavorSpec::Investment {
+                tax_status,
+                cash_value,
+                cash_return_profile_id,
+                contribution_limit,
+                contribution_period,
+                plan_type,
+                catch_up,
+            } => DetailRow::Investment(InvestmentRow {
+                account_id,
+                tax_status: tax_status.as_str().to_string(),
+                cash_value: *cash_value,
+                cash_return_profile_id: *cash_return_profile_id,
+                contribution_limit: *contribution_limit,
+                contribution_period: contribution_period.map(|p| p.as_str().to_string()),
+                plan_type: plan_type.map(|p| p.as_str().to_string()),
+                catch_up: catch_up.clone(),
+            }),
+            FlavorSpec::Property { asset_id, value } => DetailRow::Property(PropertyRow {
+                account_id,
+                asset_id: *asset_id,
+                value: *value,
+            }),
+            FlavorSpec::Liability {
+                principal,
+                interest_rate,
+                repayment,
+            } => DetailRow::Liability(LiabilityRow {
+                account_id,
+                principal: *principal,
+                interest_rate: *interest_rate,
+                repay_from_account_id: repayment.map(|r| r.from_account_id),
+                term_months: repayment.map(|r| i64::from(r.term_months)),
+            }),
+        }
+    }
+}
+
+/// A loan is repaid from a cash-holding account in the same plan. `payer` is
+/// the flavor of the account named as the payer, or `None` when the plan has
+/// no such account.
+pub fn check_loan_payer(payer: Option<&str>) -> PlanResult<()> {
+    if matches!(payer, Some("Bank" | "Investment")) {
+        Ok(())
+    } else {
+        Err(PlanError::invalid(
+            "a loan is repaid from a bank or investment account in the same plan",
+        ))
+    }
+}
+
+/// Lots only exist inside investment accounts; the engine has nowhere to put
+/// them on a bank, property or liability account. `flavor` is the flavor of the
+/// account the lot would go in, or `None` when the plan has no such account.
+pub fn check_lot_home(flavor: Option<&str>) -> PlanResult<()> {
+    match flavor {
+        Some("Investment") => Ok(()),
+        Some(other) => Err(PlanError::Conflict(format!(
+            "positions can only be held in Investment accounts, not {other}"
+        ))),
+        None => Err(PlanError::NotFound("account")),
+    }
+}
+
+/// A lot is non-negative in both figures. Each is `None` where an update
+/// leaves it alone.
+pub fn check_lot_figures(units: Option<f64>, cost_basis: Option<f64>) -> PlanResult<()> {
+    if units.is_some_and(|u| u < 0.0) || cost_basis.is_some_and(|b| b < 0.0) {
+        return Err(PlanError::invalid(
+            "units and cost_basis must be non-negative",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct CreateAccount {
@@ -245,6 +348,30 @@ pub struct CreatePosition {
     pub purchase_date: Option<String>,
     pub units: f64,
     pub cost_basis: f64,
+}
+
+impl UpdateAccount {
+    /// What an update is refused for before anything is written, given the
+    /// flavor the account already has: a blank name (an absent one leaves the
+    /// stored name alone, but a blank one is a mistake that COALESCE would
+    /// write), a flavor detail that does not hold together, and a change of
+    /// flavor.
+    pub fn check(&self, existing_flavor: &str) -> PlanResult<()> {
+        if self.name.as_deref().is_some_and(|n| n.trim().is_empty()) {
+            return Err(PlanError::invalid("an account needs a name"));
+        }
+        if let Some(flavor) = &self.flavor {
+            flavor.validate()?;
+            if flavor.name() != existing_flavor {
+                return Err(PlanError::Conflict(format!(
+                    "cannot change account flavor from {existing_flavor} to {}; \
+                     create a new account instead",
+                    flavor.name()
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Every field of a lot is resizable in place. Absent means unchanged, so a

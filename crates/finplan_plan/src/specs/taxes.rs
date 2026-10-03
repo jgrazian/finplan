@@ -6,6 +6,9 @@ use ts_rs::TS;
 
 use crate::error::{PlanError, PlanResult};
 
+/// What a second tax config of the same name is refused with.
+pub const NAME_TAKEN: &str = "a tax config with that name already exists";
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Bracket {

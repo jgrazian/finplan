@@ -7,7 +7,7 @@ use sqlx::{Sqlite, Transaction};
 
 use crate::compile::rows::ScenarioGraph;
 use crate::error::ApiResult;
-pub(crate) use finplan_plan::expression_refs::{Entity, rerendered, used_by};
+pub(crate) use finplan_plan::expression_refs::{Entity, refuse_if_used, rerendered};
 
 /// Render all expressions against new metadata from their compiled ID references.
 /// The existing graph supplies the old names; callers update metadata and SQL in
