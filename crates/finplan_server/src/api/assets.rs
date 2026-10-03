@@ -4,7 +4,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
 
 use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
@@ -12,9 +11,8 @@ use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
-use ts_rs::TS;
 
-pub use finplan_plan::specs::assets::{CreateAsset, UpdateAsset};
+pub use finplan_plan::specs::assets::{Asset, CreateAsset, UpdateAsset};
 use finplan_plan::specs::assets::{NAME_TAKEN, check_initial_price};
 
 pub fn router() -> Router<AppState> {
@@ -25,22 +23,6 @@ pub fn router() -> Router<AppState> {
             "/scenarios/{scenario_id}/assets/{id}",
             get(fetch).patch(update).delete(destroy),
         )
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow, TS)]
-#[ts(export)]
-pub struct Asset {
-    pub id: i64,
-    /// The ticker symbol (the Ticker column), e.g. `VBTLX`.
-    pub name: String,
-    /// The fund's full name (the Name column).
-    pub description: Option<String>,
-    pub initial_price: f64,
-    /// Null while the asset is unmapped — it has a price, but nothing yet
-    /// making it move. A run compiles such an asset at flat zero growth.
-    pub return_profile_id: Option<i64>,
-    pub tracking_error: Option<f64>,
-    pub sort_order: i64,
 }
 
 const COLUMNS: &str =

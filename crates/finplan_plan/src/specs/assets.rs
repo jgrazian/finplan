@@ -1,6 +1,6 @@
 //! Asset request bodies.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::{PlanError, PlanResult};
@@ -14,6 +14,23 @@ pub fn check_initial_price(price: f64) -> PlanResult<()> {
         return Err(PlanError::invalid("initial_price must be positive"));
     }
     Ok(())
+}
+
+#[derive(Debug, Serialize, TS)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+#[ts(export)]
+pub struct Asset {
+    pub id: i64,
+    /// The ticker symbol (the Ticker column), e.g. `VBTLX`.
+    pub name: String,
+    /// The fund's full name (the Name column).
+    pub description: Option<String>,
+    pub initial_price: f64,
+    /// Null while the asset is unmapped — it has a price, but nothing yet
+    /// making it move. A run compiles such an asset at flat zero growth.
+    pub return_profile_id: Option<i64>,
+    pub tracking_error: Option<f64>,
+    pub sort_order: i64,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

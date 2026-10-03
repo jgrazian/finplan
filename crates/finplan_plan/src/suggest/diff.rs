@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use super::pointer::approx_eq;
 use super::{ChangeTarget, Delta, DiffLine};
-use crate::compile::rows::ScenarioGraph;
+use crate::graph::ScenarioGraph;
 
 /// Display names for the ids a body can hold.
 #[derive(Debug, Clone, Default)]

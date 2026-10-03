@@ -11,6 +11,29 @@ use crate::graph::{BankRow, InvestmentRow, LiabilityRow, PropertyRow};
 /// What a second account of the same name is refused with.
 pub const NAME_TAKEN: &str = "an account with that name already exists";
 
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct Account {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub sort_order: i64,
+    #[serde(flatten)]
+    pub flavor: FlavorSpec,
+    pub positions: Vec<Position>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+#[ts(export)]
+pub struct Position {
+    pub id: i64,
+    pub asset_id: i64,
+    pub purchase_date: String,
+    pub units: f64,
+    pub cost_basis: f64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum TaxStatus {

@@ -1899,27 +1899,29 @@ pub(super) async fn apply(
             // Read the live plan inside the write lock, walk the path over
             // it in memory, and clone the result.
             let live = crate::db::graph::load_connection(&mut tx, scenario_id, &user.id).await?;
-            let stepped = match suggest::resolve_steps(&live, &batches, &seeded)? {
-                Ok(stepped) => stepped,
-                Err(failed) => {
-                    return Err(Failure::stale_or_invalid(
-                        &body.path,
-                        &step_key(failed.step),
-                        failed.problems,
-                        STALE,
-                    ));
-                }
-            };
+            let stepped =
+                match suggest::resolve_steps(&live, &batches, &seeded).map_err(ApiError::from)? {
+                    Ok(stepped) => stepped,
+                    Err(failed) => {
+                        return Err(Failure::stale_or_invalid(
+                            &body.path,
+                            &step_key(failed.step),
+                            failed.problems,
+                            STALE,
+                        ));
+                    }
+                };
             if let Err(err) = crate::compile::compile(&stepped.graph) {
                 let last = batches.last().expect("at least one step");
                 let problem = suggest::plan_problem(
-                    err.into(),
+                    err,
                     last.len().saturating_sub(1),
                     last.last()
                         .map_or(suggest::ChangeTarget::NewEvent(String::new()), |c| {
                             c.target.clone()
                         }),
-                )?;
+                )
+                .map_err(ApiError::from)?;
                 return Err(Failure::invalid(vec![StepProblems {
                     path: body.path.clone(),
                     step: step_key(batches.len() - 1),

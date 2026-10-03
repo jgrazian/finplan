@@ -7,8 +7,8 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::api::events::EventBody;
-use crate::api::specs::{AmountSpec, EffectSpec};
+use crate::specs::events::EventBody;
+use crate::specs::{AmountSpec, EffectSpec};
 
 fn graph() -> ScenarioGraph {
     serde_json::from_str(include_str!(
@@ -451,7 +451,7 @@ fn create_an_asset_an_account_holding_it_and_an_event_funding_it() {
     assert_eq!(id("brokerage"), 9);
     assert_eq!(id("contribution"), 8);
     assert_eq!(plan.positions[&9][0].asset_id, 15);
-    let event = crate::api::events::read_event(&plan, 8).unwrap();
+    let event = crate::specs::events::read_event(&plan, 8).unwrap();
     assert!(matches!(
         event.effects[0],
         EffectSpec::CashTransfer {
@@ -551,7 +551,7 @@ fn new_events_are_written_after_the_new_events_they_follow() {
         .unwrap()
         .unwrap();
     assert!(created["first"].id < created["second"].id);
-    let second = crate::api::events::read_event(&plan, created["second"].id).unwrap();
+    let second = crate::specs::events::read_event(&plan, created["second"].id).unwrap();
     assert_eq!(
         serde_json::to_value(&second.trigger).unwrap()["event_id"],
         json!(created["first"].id)
@@ -702,7 +702,7 @@ fn a_new_parameter_is_written_before_the_event_that_uses_it() {
             assert_eq!((floor.as_str(), age.as_str()), ("floor", "age"));
             assert!(matches!(
                 body.trigger,
-                crate::api::specs::TriggerSpec::AgeParameter { parameter_id: -3 }
+                crate::specs::TriggerSpec::AgeParameter { parameter_id: -3 }
             ));
         }
         other => panic!("unexpected {other:?}"),
@@ -1037,8 +1037,8 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
 
     plan.tax_configs.insert(
         9,
-        crate::compile::rows::TaxConfigEntry {
-            config: crate::compile::rows::TaxConfigRow {
+        crate::graph::TaxConfigEntry {
+            config: crate::graph::TaxConfigRow {
                 id: 9,
                 name: "Flat".into(),
                 state_rate: 0.0,
@@ -1047,7 +1047,7 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
                 standard_deduction: 0.0,
                 age_65_extra_deduction: 0.0,
             },
-            brackets: vec![crate::compile::rows::TaxBracketRow {
+            brackets: vec![crate::graph::TaxBracketRow {
                 threshold: 0.0,
                 rate: 0.2,
             }],
@@ -1055,7 +1055,7 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
     );
     plan.inflation_profiles.insert(
         8,
-        crate::compile::rows::InflationEntry {
+        crate::graph::InflationEntry {
             name: "Three percent".into(),
             distribution_id: plan.inflation_distribution_id.unwrap(),
         },

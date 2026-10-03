@@ -1,7 +1,5 @@
 //! Cross-table operations that do not belong to a single route module.
 
-pub(crate) use finplan_plan::edit;
-
 #[cfg(test)]
 #[path = "edit_route_tests.rs"]
 mod edit_route_tests;

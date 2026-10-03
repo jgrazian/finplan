@@ -731,7 +731,9 @@ pub(crate) fn edited(
             let target = changes
                 .last()
                 .map_or(ChangeTarget::NewEvent(String::new()), |c| c.target.clone());
-            suggest::plan_problem(err.into(), change, target).map(Err)
+            suggest::plan_problem(err, change, target)
+                .map(Err)
+                .map_err(ApiError::from)
         }
     }
 }

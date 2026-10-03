@@ -7,7 +7,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
 
 use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
@@ -17,11 +16,10 @@ pub use finplan_plan::specs::{CatchUpSpec, RepaymentSpec, repayment_of};
 
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
-use ts_rs::TS;
 
 pub use finplan_plan::specs::accounts::{
-    ContributionPeriod, CreateAccount, CreatePosition, FlavorSpec, PlanType, TaxStatus,
-    UpdateAccount, UpdatePosition,
+    Account, ContributionPeriod, CreateAccount, CreatePosition, FlavorSpec, PlanType, Position,
+    TaxStatus, UpdateAccount, UpdatePosition,
 };
 use finplan_plan::specs::accounts::{
     DetailRow, NAME_TAKEN, check_loan_payer, check_lot_figures, check_lot_home,
@@ -48,28 +46,6 @@ pub fn router() -> Router<AppState> {
             "/scenarios/{scenario_id}/accounts/{id}/positions/{position_id}",
             axum::routing::patch(update_position).delete(delete_position),
         )
-}
-
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct Account {
-    pub id: i64,
-    pub name: String,
-    pub description: Option<String>,
-    pub sort_order: i64,
-    #[serde(flatten)]
-    pub flavor: FlavorSpec,
-    pub positions: Vec<Position>,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow, TS)]
-#[ts(export)]
-pub struct Position {
-    pub id: i64,
-    pub asset_id: i64,
-    pub purchase_date: String,
-    pub units: f64,
-    pub cost_basis: f64,
 }
 
 async fn load_account(state: &AppState, scenario_id: i64, id: i64) -> ApiResult<Account> {

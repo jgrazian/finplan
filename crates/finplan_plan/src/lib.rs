@@ -18,5 +18,6 @@ pub mod graph;
 pub mod results;
 pub mod snapshot;
 pub mod specs;
+pub mod suggest;
 
 pub use error::{PlanError, PlanResult};
