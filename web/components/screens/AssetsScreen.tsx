@@ -21,7 +21,7 @@ import {
   ProfileLibraryTable,
 } from "@/components/profiles";
 import { Button, Dropdown, Tooltip } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { Profile, UpdateAsset, UpdateProfile } from "@/lib/api/types";
 import { fmtCurrency } from "@/lib/format";
 import { useAsync } from "@/lib/hooks/useAsync";
@@ -83,6 +83,7 @@ export function AssetsScreen({
   /** Writes are being refused: nothing here can be added, remapped or edited. */
   offline?: boolean;
 }) {
+  const api = usePlanApi();
   const [addingAsset, setAddingAsset] = useState(false);
   const [addingProfile, setAddingProfile] = useState(false);
   /** Server ids ticked for a bulk remap; cleared once one lands. */
@@ -100,9 +101,10 @@ export function AssetsScreen({
   const mobile = useIsMobile();
 
   // The histories a Bootstrap profile resamples, series and all. A static
-  // table the server owns, fetched once on mount rather than threaded through
-  // the workspace — which reloads after every edit, and this never changes.
-  const presets = useAsync(() => api.historyPresets(), []);
+  // table the engine owns (whichever home it runs in), fetched once on mount
+  // rather than threaded through the workspace — which reloads after every
+  // edit, and this never changes.
+  const presets = useAsync(() => api.historyPresets(), [api]);
   const histories = useMemo(() => presets.data ?? [], [presets.data]);
 
   // A resampled profile arrives with no mean, no spread and no shape, because

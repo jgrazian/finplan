@@ -2,6 +2,7 @@
 
 import { createContext, type ReactNode, useContext } from "react";
 import { Button } from "@/components/ui";
+import { homeOf, useOpenPlanRef } from "@/lib/nav";
 import { CREATE_ACCOUNT, SIGN_UP_FOR_ITERATIONS } from "@/lib/view/guest";
 
 /**
@@ -54,12 +55,28 @@ export function CreateAccountLink({ label = CREATE_ACCOUNT }: { label?: string }
 /** "Sign up free for 1,000 iterations", for a guest held to the guest cap; nothing otherwise. */
 export function IterationUpsell() {
   const { restricted } = useGuest();
-  if (!restricted) return null;
+  // The cap is the server's. A plan on this device runs on the visitor's own
+  // CPU, so there is no limit for an account to lift.
+  const local = homeOf(useOpenPlanRef()) === "local";
+  if (!restricted || local) return null;
   return <CreateAccountLink label={SIGN_UP_FOR_ITERATIONS} />;
 }
 
-/** A feature the guest limits switch off, in the place its screen would be. */
-export function LockedFeature({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * A feature switched off, in the place its screen would be. For a guest the way
+ * out is an account; a caller whose reason is not that (a local plan's AI
+ * features need the plan in the cloud) passes its own `action`, or `null` for
+ * none.
+ */
+export function LockedFeature({
+  title,
+  children,
+  action,
+}: {
+  title: string;
+  children: ReactNode;
+  action?: ReactNode;
+}) {
   const { openSignUp } = useGuest();
   return (
     <div role="status" style={{ padding: "40px 24px", maxWidth: 520 }}>
@@ -74,9 +91,13 @@ export function LockedFeature({ title, children }: { title: string; children: Re
       >
         {children}
       </p>
-      <Button variant="primary" onClick={openSignUp}>
-        {CREATE_ACCOUNT}
-      </Button>
+      {action === undefined ? (
+        <Button variant="primary" onClick={openSignUp}>
+          {CREATE_ACCOUNT}
+        </Button>
+      ) : (
+        action
+      )}
     </div>
   );
 }

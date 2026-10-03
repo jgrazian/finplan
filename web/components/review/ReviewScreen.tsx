@@ -2,7 +2,8 @@
 
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CreateAccountLink, useGuest } from "@/components/auth/GuestContext";
+import { CreateAccountLink, LockedFeature, useGuest } from "@/components/auth/GuestContext";
+import { usePlanCapabilities } from "@/lib/hooks/usePlanCapabilities";
 import { Button, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/http";
@@ -43,6 +44,18 @@ const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
  * and, where it could, simulated.
  */
 export function ReviewScreen({ draft, ...props }: ReviewScreenProps) {
+  const capabilities = usePlanCapabilities();
+  // Review notes, plan chat and drafts are written by the server about a plan
+  // it stores. A local plan gets the locked state rather than a request the
+  // server could only answer with a stranger's plan of the same number.
+  if (!capabilities.ai) {
+    return (
+      <LockedFeature title="AI review needs a cloud plan" action={null}>
+        {capabilities.cloudOnlyReason}. Review notes, plan chat and AI drafts run on FinPlan&apos;s
+        servers, so the plan has to live there; nothing is sent until you move it.
+      </LockedFeature>
+    );
+  }
   return draft ? (
     <DraftReview
       scenario={draft.scenario}

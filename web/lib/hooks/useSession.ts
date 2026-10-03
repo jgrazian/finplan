@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
+import { planApiFor } from "@/lib/nav/api";
 import { ApiError } from "@/lib/api/http";
 import { serverMonitor } from "@/lib/status/monitor";
 import type { PlanArchive } from "@/lib/api/generated/PlanArchive";
@@ -142,7 +143,7 @@ export function useSession(): Session {
       setBusy(true);
       setError(undefined);
       try {
-        archive = await api.archives.exportAll();
+        archive = await planApiFor("cloud").archives.exportAll();
       } catch {
         setError("Could not read your guest plan, so you have not been signed in. Try again.");
         setBusy(false);
@@ -167,7 +168,7 @@ export function useSession(): Session {
     const plans = archive.plans.length;
     setAdoption({ plans, busy: true });
     try {
-      await api.archives.import({
+      await planApiFor("cloud").archives.import({
         archive,
         name_prefix: GUEST_PLAN_PREFIX,
         request_id: key,

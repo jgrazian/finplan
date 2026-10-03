@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo } from "react";
-import { api } from "@/lib/api/client";
+import { planApiFor } from "@/lib/nav/api";
+import { homeOf } from "@/lib/nav/url";
 import type {
   Account as ApiAccount,
   Asset,
@@ -57,10 +58,18 @@ export interface Workspace {
   reload: () => void;
 }
 
-/** Everything the Portfolio and Plan screens read, for one scenario. */
-export function useWorkspace(scenarioId: number | undefined): Workspace {
+/**
+ * Everything the Portfolio and Plan screens read, for one scenario.
+ *
+ * `planRef` names the plan's home (`l12`, or a cloud slug), which also owns the
+ * profile and tax libraries read alongside it. Ids are only unique within a
+ * home, so the home is part of what a loaded workspace is keyed on.
+ */
+export function useWorkspace(scenarioId: number | undefined, planRef: string | undefined): Workspace {
+  const home = homeOf(planRef);
   const { data, error, loading, reload } = useAsync(async () => {
     if (scenarioId == null) return undefined;
+    const api = planApiFor(home);
     // Independent reads; one round trip's latency rather than seven.
     const [scenario, accounts, assets, events, parameters, returnProfiles, inflationProfiles, taxConfigs] =
       await Promise.all([
@@ -73,11 +82,11 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
         api.inflationProfiles.list(),
         api.taxConfigs.list(),
       ]);
-    return { scenario, accounts, assets, events, parameters, returnProfiles, inflationProfiles, taxConfigs };
-  }, [scenarioId]);
+    return { home, scenario, accounts, assets, events, parameters, returnProfiles, inflationProfiles, taxConfigs };
+  }, [scenarioId, home]);
 
   return useMemo(() => {
-    if (!data || data.scenario.id !== scenarioId) {
+    if (!data || data.home !== home || data.scenario.id !== scenarioId) {
       return {
         scenario: undefined,
         params: undefined,
@@ -132,5 +141,5 @@ export function useWorkspace(scenarioId: number | undefined): Workspace {
       error,
       reload,
     };
-  }, [data, loading, error, reload, scenarioId]);
+  }, [data, loading, error, reload, scenarioId, home]);
 }

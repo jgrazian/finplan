@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Blueprint, Table, Td, Th } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import { fmtCurrency } from "@/lib/format";
 import type {
   LedgerCategory,
@@ -709,6 +709,7 @@ function useLedgerYear(
   factor: number,
   filter: LedgerFilter,
 ): LedgerState {
+  const api = usePlanApi();
   const [loaded, setLoaded] = useState<Loaded>();
   const category = filter === "all" ? undefined : filter;
 
@@ -749,7 +750,7 @@ function useLedgerYear(
     return () => {
       live = false;
     };
-  }, [category, factor, runId, series, year]);
+  }, [api, category, factor, runId, series, year]);
 
   if (runId == null) return IDLE;
   if (

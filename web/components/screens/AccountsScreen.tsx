@@ -12,7 +12,7 @@ import {
   type AccountDraft,
 } from "@/components/portfolio";
 import { Button, Tooltip } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type {
   Account as ApiAccount,
   Asset,
@@ -102,6 +102,7 @@ export function AccountsScreen({
   /** Writes are being refused, so add, edit and delete cannot be offered. */
   offline?: boolean;
 }) {
+  const api = usePlanApi();
   const [creating, setCreating] = useState(false);
   /**
    * What the form under the positions table is doing, if anything: adding a lot

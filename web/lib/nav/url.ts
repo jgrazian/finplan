@@ -7,6 +7,9 @@
  *
  *     /plan?scenario=s8a4f21b7c903&sel=Retire+at+65
  *
+ * A plan kept in this browser is `scenario=l12` rather than a slug; see
+ * `homeOf`.
+ *
  * Values are written in each screen's own vocabulary — an account is its
  * display name, not its row id — so the URL stays readable and survives a
  * database that renumbers. Nothing here validates that a name still exists:
@@ -92,12 +95,59 @@ export function scenarioDestination(scenario: string, tab: TabId): NavState {
   return { scenario, tab, section: DEFAULT_SECTION[tab] };
 }
 
-/** Resolve owned slugs, accepting old numeric bookmarks until canonicalized. */
+/**
+ * Where a plan lives. Each plan has exactly one home (spec 19): the browser
+ * (`local`) or the server (`cloud`).
+ */
+export type PlanHome = "local" | "cloud";
+
+/**
+ * A local plan's ref is `l` and its numeric id; a cloud slug is `s` and hex, so
+ * the first character alone says which home answers. Nothing else starts with
+ * `l`, which is what lets `?scenario=` carry both without a second parameter.
+ */
+const LOCAL_REF = /^l(\d+)$/;
+
+/** The home a plan ref names. A legacy numeric bookmark and no ref at all are the cloud's. */
+export function homeOf(ref: string | undefined): PlanHome {
+  return ref != null && LOCAL_REF.test(ref) ? "local" : "cloud";
+}
+
+/** The local row id inside a local ref (`l12` is 12); undefined for anything else. */
+export function localPlanId(ref: string | undefined): number | undefined {
+  const match = ref == null ? null : LOCAL_REF.exec(ref);
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * The ref for a plan in `home`. A local plan is its id, prefixed once (so a ref
+ * passes through unchanged); a cloud plan is its slug.
+ */
+export function planRef(home: PlanHome, idOrSlug: number | string): string {
+  if (home === "cloud") return String(idOrSlug);
+  const text = String(idOrSlug);
+  return LOCAL_REF.test(text) ? text : `l${text}`;
+}
+
+/**
+ * The open plan out of a list that may hold both homes.
+ *
+ * Local plans are listed with `slug = "l<id>"`, and cloud rows and local rows
+ * number their ids independently, so a bare id is ambiguous across homes. The
+ * slug is matched first; after that an `l<id>` ref finds a local row by id and
+ * a bare number — an old bookmark from before slugs — finds a cloud row only,
+ * never a local one that happens to share the number.
+ */
 export function resolveScenario<T extends { id: number; slug: string }>(
   scenarios: readonly T[],
   reference: string | undefined,
 ): T | undefined {
+  const local = localPlanId(reference);
   return scenarios.find((scenario) => scenario.slug === reference)
-    ?? scenarios.find((scenario) => String(scenario.id) === reference)
+    ?? scenarios.find((scenario) =>
+      local != null
+        ? homeOf(scenario.slug) === "local" && scenario.id === local
+        : homeOf(scenario.slug) === "cloud" && String(scenario.id) === reference,
+    )
     ?? scenarios[0];
 }

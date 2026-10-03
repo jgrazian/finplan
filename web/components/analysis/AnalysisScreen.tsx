@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { LockedFeature, useGuest } from "@/components/auth/GuestContext";
+import { usePlanCapabilities } from "@/lib/hooks/usePlanCapabilities";
 import { SubTabBar } from "@/components/layout";
 import { EmptyState } from "@/components/screens/EmptyState";
 import type { SegmentOption } from "@/components/ui";
@@ -66,10 +67,13 @@ export function AnalysisScreen({
 
   // Analysis runs many simulations a request, which the guest limits switch
   // off: the server refuses what-if, sweep and goal seek alike for a guest.
+  // The limits are the server's, so they do not follow a plan kept on this
+  // device, which runs on the visitor's own CPU.
   const { restricted } = useGuest();
+  const { home } = usePlanCapabilities();
 
   let body;
-  if (restricted) {
+  if (restricted && home === "cloud") {
     body = (
       <LockedFeature title="Analysis needs an account">
         What-if, Sweep and Solve each run many simulations of your plan. Create a free account

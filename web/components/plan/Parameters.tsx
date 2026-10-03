@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button, CompactInput, Dialog, CurrencyInput, DateInput, Dropdown, Field, NumberInput, rowStyle } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { NamedParameter, ParameterValueSpec } from "@/lib/api/types";
 
 type Kind = ParameterValueSpec["kind"];
@@ -70,6 +70,7 @@ export function ParameterEditor({ parameter, scenarioId, onSaved, onDeleted, onS
   onSelectEvent: (name: string) => void;
   offline?: boolean;
 }) {
+  const api = usePlanApi();
   const [name, setName] = useState(parameter.name);
   const [value, setValue] = useState<ParameterValueSpec>(parameter.value);
   const [busy, setBusy] = useState(false);

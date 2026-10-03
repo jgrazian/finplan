@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CurrencyInput, Dialog, DialogRow, Dropdown, Field, Input } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { Profile } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { tickerDefaults } from "@/lib/tickers";
@@ -30,6 +30,7 @@ export function NewAssetDialog({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  const api = usePlanApi();
   const [ticker, setTicker] = useState("");
   const [price, setPrice] = useState(100);
   /** Null while the name is still the ticker's; a string once it is the user's. */
