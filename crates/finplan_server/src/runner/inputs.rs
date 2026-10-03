@@ -42,7 +42,10 @@ pub fn snapshot(graph: &ScenarioGraph) -> Result<(String, String), serde_json::E
         scenario.remove("updated_at");
         scenario.remove("created_at");
     }
-    let bytes = serde_json::to_vec(&fingerprint)?;
+    // With serde_json's preserve_order (enabled for the whole workspace build
+    // by another crate), `remove` swaps the last key into the gap. Sort again
+    // so the hash is the same however the workspace's features unify.
+    let bytes = serde_json::to_vec(&canonical_json(fingerprint))?;
     let hash = format!("{:x}", Sha256::digest(bytes));
     Ok((json, hash))
 }
