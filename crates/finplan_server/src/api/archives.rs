@@ -15,10 +15,11 @@ use ts_rs::TS;
 
 use crate::{
     auth::session::CurrentUser,
-    compile::{self, rows::ScenarioGraph},
     error::{ApiError, ApiResult},
     state::AppState,
 };
+use finplan_plan::compile;
+use finplan_plan::graph::ScenarioGraph;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -156,7 +157,7 @@ pub(crate) fn pack(graphs: Vec<ScenarioGraph>) -> ApiResult<PlanArchive> {
         .into_iter()
         .map(|mut graph| {
             graph.scenario.user_id.clear();
-            crate::runner::inputs::snapshot(&graph)
+            finplan_plan::snapshot::snapshot(&graph)
                 .map_err(|e| ApiError::internal(e.to_string()))
                 .and_then(|(json, _)| {
                     serde_json::from_str(&json).map_err(|e| ApiError::internal(e.to_string()))

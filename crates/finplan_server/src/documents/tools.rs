@@ -16,7 +16,7 @@ use ts_rs::TS;
 use super::classify::DocumentKind;
 use super::data::{AccountData, Transaction};
 use super::store::Document;
-use crate::compile::rows::{AccountRow, ScenarioGraph};
+use finplan_plan::graph::{AccountRow, ScenarioGraph};
 
 fn cents(x: f64) -> f64 {
     (x * 100.0).round() / 100.0

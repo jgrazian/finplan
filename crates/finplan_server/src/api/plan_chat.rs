@@ -42,7 +42,7 @@ use crate::observability::{JobContext, JobKind, Origin};
 use crate::runner::telemetry::Submitted;
 use crate::state::AppState;
 use crate::suggest::ai::ReviewContext;
-use crate::suggest::rules;
+use finplan_plan::rules;
 
 /// Most messages of the thread the model reads, newest last. Older ones stay
 /// on screen; the model works from the plan and the board as they are now.

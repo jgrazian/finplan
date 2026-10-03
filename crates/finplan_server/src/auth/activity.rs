@@ -203,8 +203,8 @@ impl<'de, V: Visitor<'de>> Visitor<'de> for KeyVisitor<'_, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::{accounts::UpdateAccount, assets::UpdateAsset};
     use crate::auth::routes::UpdateUserProfile;
+    use finplan_plan::specs::{accounts::UpdateAccount, assets::UpdateAsset};
 
     #[test]
     fn records_present_null_and_default_fields_but_never_unknown_keys_or_values() {

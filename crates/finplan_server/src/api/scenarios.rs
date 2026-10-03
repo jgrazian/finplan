@@ -8,13 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
-use crate::compile;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
+use finplan_plan::compile;
 use ts_rs::TS;
 
-pub use finplan_plan::specs::scenarios::{CreateScenario, UpdateScenario, validate_date};
+use finplan_plan::specs::scenarios::{CreateScenario, UpdateScenario, validate_date};
 
 pub fn router() -> Router<AppState> {
     Router::new()

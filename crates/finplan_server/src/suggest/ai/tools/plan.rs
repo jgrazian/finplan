@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use super::{ToolEnv, ToolOutput};
 use crate::api::suggestions::MAX_STEPS;
 use crate::observability::AiToolOutcome;
-use crate::suggest::Change;
 use crate::suggest::ai::prompt::change_schema;
+use finplan_plan::suggest::Change;
 
 /// Most changes in one step.
 pub const MAX_CHANGES: usize = 12;

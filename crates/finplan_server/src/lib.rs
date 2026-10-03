@@ -5,22 +5,22 @@
 //! ```text
 //!   api/       axum handlers; JSON in, JSON out
 //!   domain/    cross-table operations (scenario cloning)
-//!   compile/   stored rows  ->  finplan_core::SimulationConfig
 //!   runner/    background Monte Carlo execution and result persistence
 //!   analysis/  sweeps, sensitivity and goal seeks, held in memory
-//!   suggest/   structured plan edits (`Change`) resolved over a graph, pure
+//!   suggest/   writing plan edits through the routes' SQL, and the model-backed review
 //! ```
 //!
 //! The database schema is normalized around the *domain*, not around the
 //! engine's in-memory types: stable ids, class-table inheritance for account
 //! flavors, and self-referential tables for the recursive trigger, amount and
-//! effect trees. `compile` is the only module that bridges the two worlds.
+//! effect trees. `finplan_plan::compile` is the one place that bridges the two
+//! worlds: the plan as a value (rows, specs, edits, compiling, results
+//! projection) lives in the `finplan_plan` crate, which has no database.
 
 pub mod analysis;
 pub mod api;
 pub mod auth;
 pub mod billing;
-pub mod compile;
 pub mod config;
 pub mod db;
 pub mod documents;

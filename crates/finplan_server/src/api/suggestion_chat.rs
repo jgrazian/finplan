@@ -46,7 +46,6 @@ use super::suggestions::{
     self, Suggestion, SuggestionSource, SuggestionStatus, all_changes, insert,
 };
 use crate::auth::session::CurrentUser;
-use crate::compile::rows::ScenarioGraph;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{
@@ -57,7 +56,8 @@ use crate::runner::telemetry::{Attempt, Submitted};
 use crate::state::AppState;
 use crate::suggest::ai::chat::{self, BoardNote, ChatInput, ChatRole as ModelRole, Subject};
 use crate::suggest::ai::{AiError, AiOutcome, ReviewContext, stop_tag};
-use crate::suggest::rules;
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::rules;
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/suggestions/{id}/chat", get(thread).post(post_message))

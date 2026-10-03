@@ -22,8 +22,8 @@ use super::context::Existing;
 use super::{
     AiClient, AiError, AiOutcome, Observer, ReviewContext, Settings, Stop, ToolHost, converse, text,
 };
-use crate::suggest::Change;
-use crate::suggest::rules::Kind;
+use finplan_plan::rules::Kind;
+use finplan_plan::suggest::Change;
 
 /// Most notes one chat turn on a note may add.
 pub const MAX_CHAT_SUGGESTIONS: usize = 2;

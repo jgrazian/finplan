@@ -65,8 +65,8 @@ pub use transport::{
 
 use crate::api::suggestion_paths::{self, PathShape, StepShape};
 use crate::observability::{AiCostSource, AiMotive, AiRetryReason, AiTool, AiToolOutcome};
-use crate::suggest::rules::{Evidence, Kind, Section};
-use crate::suggest::{Change, ChangeProblem, DiffLine};
+use finplan_plan::rules::{Evidence, Kind, Section};
+use finplan_plan::suggest::{Change, ChangeProblem, DiffLine};
 use tools::{MAX_CHANGES, Registry, ToolEnv, batch_key};
 
 /// What a review needs from the rest of the server: [`ToolHost`], the plan

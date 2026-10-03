@@ -12,14 +12,14 @@ use serde_json::{Value, json};
 use tracing::Instrument;
 
 use super::*;
-use crate::api::funding::{AccountCount, FundingDiagnostics, YearCount};
-use crate::api::runs::{
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::results::funding::{AccountCount, FundingDiagnostics, YearCount};
+use finplan_plan::results::view::{
     AccountSeries, Band, CashFlow, InflationPoint, RealNetWorthSummary, RealQuantilePoint,
     RealTerminalStats, Results, Stats,
 };
-use crate::compile::rows::ScenarioGraph;
-use crate::suggest::rules::{Draft, DraftPath};
-use crate::suggest::{read, resolve};
+use finplan_plan::rules::{Draft, DraftPath};
+use finplan_plan::suggest::{read, resolve};
 
 const KEY: &str = "sk-or-v1-test-SECRET-123";
 
@@ -356,7 +356,8 @@ impl ToolHost for Tools {
         &self,
         steps: &[Vec<Change>],
     ) -> Result<Vec<Vec<DiffLine>>, (usize, Vec<ChangeProblem>)> {
-        match crate::suggest::resolve_steps(&self.graph, steps, &Default::default()).unwrap() {
+        match finplan_plan::suggest::resolve_steps(&self.graph, steps, &Default::default()).unwrap()
+        {
             Ok(stepped) => Ok(stepped
                 .steps
                 .iter()
@@ -1238,7 +1239,7 @@ fn the_context_reads_like_the_plan_and_run() {
 #[test]
 fn the_context_shows_parameters_yearly_bands_and_withdrawal_rates() {
     let mut g = graph();
-    g.parameters.push(crate::compile::rows::ParameterRow {
+    g.parameters.push(finplan_plan::graph::ParameterRow {
         id: 3,
         name: "monthly_expenses".into(),
         kind: "Money".into(),

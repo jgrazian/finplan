@@ -40,7 +40,7 @@ use serde_json::{Value, json};
 
 use super::BoxFuture;
 use crate::observability::{AiTool, AiToolOutcome};
-use crate::suggest::{Change, ChangeProblem, DiffLine};
+use finplan_plan::suggest::{Change, ChangeProblem, DiffLine};
 
 pub use plan::{MAX_CHANGES, batch_key};
 pub use runs::PathRank;

@@ -45,7 +45,6 @@ use super::suggestions::{
     SuggestionSource, SuggestionStep, all_changes, fingerprint, insert,
 };
 use crate::auth::session::CurrentUser;
-use crate::compile::rows::ScenarioGraph;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{
@@ -59,7 +58,8 @@ use crate::suggest::ai::{
     AiClient, AiDraft, AiError, AiOutcome, BoxFuture, LedgerSum, Observer, ReviewContext, Stop,
     ToolHost, TurnReport, render_breakdown, render_path, stop_tag,
 };
-use crate::suggest::{self, Change, ChangeProblem, Created, DiffLine};
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 
 /// Model-written passes running at once, across every scenario. Each holds a
 /// conversation open for minutes and previews as it goes.
@@ -317,7 +317,9 @@ async fn run(state: AppState, reviews: AiReviews, pass: Pass) {
             return;
         }
     };
-    match suggest::ai::generate_observed(&reviews.client, &pass.context, &tools, &observer).await {
+    match crate::suggest::ai::generate_observed(&reviews.client, &pass.context, &tools, &observer)
+        .await
+    {
         Ok(outcome) => {
             let stop = stop_tag(&outcome.stop);
             let accepted = outcome.drafts.len();

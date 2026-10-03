@@ -3,8 +3,8 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::suggest::ChangeOp;
-use crate::suggest::templates::{
+use finplan_plan::suggest::ChangeOp;
+use finplan_plan::templates::{
     RowRef, allocation_asset, bank_account, investment_account, position,
 };
 
@@ -109,7 +109,7 @@ impl Draft {
 }
 
 fn spending(amount: f64) -> Vec<Change> {
-    serde_json::from_value::<crate::suggest::templates::TemplateRequest>(json!({
+    serde_json::from_value::<finplan_plan::templates::TemplateRequest>(json!({
         "kind": "recurring_expense", "name": "Living", "from_account_id": {"$new": "checking"},
         "amount": amount, "fund_from_investments": true,
     }))
@@ -182,7 +182,7 @@ async fn a_step_that_cannot_apply_is_a_result_naming_the_step() {
 async fn a_plan_that_does_not_compile_says_why() {
     // An age-based end with no birth date to count from.
     let d = Draft::new(None).await;
-    let salary = serde_json::from_value::<crate::suggest::templates::TemplateRequest>(json!({
+    let salary = serde_json::from_value::<finplan_plan::templates::TemplateRequest>(json!({
         "kind": "salary", "to_account_id": {"$new": "checking"}, "annual_amount": 80000,
         "end": {"kind": "Age", "years": 65},
     }))
@@ -216,7 +216,7 @@ async fn plan_with_spend_parameter(d: &Draft) -> ScenarioGraph {
             _ => {}
         }
     }
-    let template = serde_json::from_value::<crate::suggest::templates::TemplateRequest>(json!({
+    let template = serde_json::from_value::<finplan_plan::templates::TemplateRequest>(json!({
         "kind": "recurring_expense", "name": "Living", "from_account_id": {"$new": "checking"},
         "amount": 40_000.0, "inflation_adjusted": false,
     }))
@@ -375,7 +375,7 @@ async fn an_ai_goal_seek_over_an_age_searches_a_grid_and_reports_years() {
     let d = Draft::new(Some("1980-01-01")).await;
     // Spending of $70,000 a year that starts when the person reaches the
     // `retire` age parameter: the later, the more the savings carry.
-    let template = serde_json::from_value::<crate::suggest::templates::TemplateRequest>(json!({
+    let template = serde_json::from_value::<finplan_plan::templates::TemplateRequest>(json!({
         "kind": "recurring_expense", "name": "Living", "from_account_id": {"$new": "checking"},
         "amount": 70_000.0, "inflation_adjusted": false,
         "start": {"kind": "Age", "years": 50},

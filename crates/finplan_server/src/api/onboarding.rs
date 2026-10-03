@@ -1,17 +1,8 @@
 //! Guided setup writes the same account, position and event records as advanced editing.
-use crate::api::specs::Interval;
 use crate::observability::{EventFields, Operation, Resource};
-use crate::suggest::{
-    Change, Created, apply_steps_sql,
-    templates::{
-        Allocation, Employee401k, RecurringExpenseParams, RowRef, SalaryParams, Template, When,
-        allocation_asset, bank_account, expand_template, investment_account, parameter, position,
-    },
-};
+use crate::suggest::apply_steps_sql;
 use crate::{
-    api::parameters::ParameterValueSpec,
     auth::session::CurrentUser,
-    compile::rows::ScenarioGraph,
     error::{ApiError, ApiResult},
     state::AppState,
 };
@@ -19,6 +10,14 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     routing::{get, post},
+};
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::specs::Interval;
+use finplan_plan::specs::parameters::ParameterValueSpec;
+use finplan_plan::suggest::{Change, Created};
+use finplan_plan::templates::{
+    Allocation, Employee401k, RecurringExpenseParams, RowRef, SalaryParams, Template, When,
+    allocation_asset, bank_account, expand_template, investment_account, parameter, position,
 };
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -472,7 +471,7 @@ pub fn review(g: &ScenarioGraph) -> PreflightReport {
             record_id,
         })
     };
-    if let Err(e) = crate::compile::compile(g) {
+    if let Err(e) = finplan_plan::compile::compile(g) {
         add("invalid_plan", "error", e.to_string(), "plan", None);
     }
     for a in &g.assets {
@@ -506,7 +505,7 @@ pub fn review(g: &ScenarioGraph) -> PreflightReport {
         .filter(|e| e.enabled != 0)
         .map(|e| e.id)
         .collect();
-    let enabled_effect = |e: &&crate::compile::rows::EffectRow| {
+    let enabled_effect = |e: &&finplan_plan::graph::EffectRow| {
         e.event_id.is_some_and(|id| active_events.contains(&id))
     };
     if !g

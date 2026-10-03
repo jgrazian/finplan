@@ -42,7 +42,6 @@ use super::review_ai;
 use super::runs::{self, ResultsQuery};
 use super::suggestion_paths::{self as paths, PathShape, StepShape, WalkStep};
 use crate::auth::session::CurrentUser;
-use crate::compile::rows::ScenarioGraph;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult, ErrorDetail};
 use crate::observability::{JobContext, JobKind, Origin, SubmissionResult};
@@ -50,8 +49,9 @@ use crate::runner::telemetry::{Submission, Submitted};
 use crate::state::AppState;
 use crate::suggest::ai::NoteOutline;
 use crate::suggest::ai::ReviewContext;
-use crate::suggest::rules::{self, Evidence, Kind, Section};
-use crate::suggest::{self, Change, ChangeProblem, Created, DiffLine};
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::rules::{self, Evidence, Kind, Section};
+use finplan_plan::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -1861,7 +1861,7 @@ pub(super) async fn apply(
         ApplyTo::Plan => {
             // Each step is resolved against the plan as the ones before it
             // left it in the database, checked in memory, then written.
-            match suggest::apply_steps_sql(&mut tx, scenario_id, &user.id, &batches, &seeded)
+            match crate::suggest::apply_steps_sql(&mut tx, scenario_id, &user.id, &batches, &seeded)
                 .await?
             {
                 Ok(created) => (scenario_id, created),
@@ -1911,7 +1911,7 @@ pub(super) async fn apply(
                         ));
                     }
                 };
-            if let Err(err) = crate::compile::compile(&stepped.graph) {
+            if let Err(err) = finplan_plan::compile::compile(&stepped.graph) {
                 let last = batches.last().expect("at least one step");
                 let problem = suggest::plan_problem(
                     err,

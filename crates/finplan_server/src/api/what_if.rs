@@ -23,16 +23,17 @@ use crate::analysis::params::{ParamKind, PlanParameter, parameters};
 use crate::analysis::results::{AnalysisOutcome, WhatIfOutcome};
 use crate::api::analysis::CreateAnalysis;
 use crate::auth::session::CurrentUser;
-use crate::compile::{self, CompiledScenario, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{JobKind as MetricKind, Origin};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 use finplan_core::analysis::SweepProgress;
+use finplan_plan::compile::{self, CompiledScenario};
+use finplan_plan::graph::ScenarioGraph;
 
-use super::events::EventBody;
 use super::scenarios::Scenario;
-use super::specs::{AmountSpec, EffectSpec, TriggerSpec};
+use finplan_plan::specs::events::EventBody;
+use finplan_plan::specs::{AmountSpec, EffectSpec, TriggerSpec};
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -589,8 +590,8 @@ async fn apply(
                         EffectSpec::Income {
                             to_account_id: account_id,
                             amount: AmountSpec::Fixed { value: *amount },
-                            amount_mode: super::specs::AmountMode::Gross,
-                            income_type: super::specs::IncomeType::TaxFree,
+                            amount_mode: finplan_plan::specs::AmountMode::Gross,
+                            income_type: finplan_plan::specs::IncomeType::TaxFree,
                         },
                     )
                 };

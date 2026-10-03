@@ -4,9 +4,9 @@
 //! user is given a small library of market assumptions and a default tax table
 //! at registration. These are ordinary rows: the user can edit or delete them.
 
-use crate::api::profiles::AssetClass;
 use crate::db::Db;
 use crate::error::ApiResult;
+use finplan_plan::specs::profiles::AssetClass;
 
 /// (name, description, distribution kind, mean/rate, std_dev, asset class)
 ///

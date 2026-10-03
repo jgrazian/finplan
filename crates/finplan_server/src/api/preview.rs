@@ -28,22 +28,22 @@ use finplan_core::simulation::monte_carlo_simulate_with_progress;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::api::funding::{FundingDiagnostics, funding_view};
 use crate::auth::session::CurrentUser;
 use crate::billing::Entitlements;
-use crate::compile::rows::{
-    DistributionRow, InflationEntry, ReturnProfileRow, ScenarioGraph, TaxBracketRow,
-    TaxConfigEntry, TaxConfigRow,
-};
-use crate::compile::{self, CompiledScenario};
 use crate::config::ServerConfig;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobKind as MetricKind, Origin, Tier};
-use crate::runner::inputs::MODEL_VERSION;
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
-use crate::suggest::{
+use finplan_plan::compile::{self, CompiledScenario};
+use finplan_plan::graph::{
+    DistributionRow, InflationEntry, ReturnProfileRow, ScenarioGraph, TaxBracketRow,
+    TaxConfigEntry, TaxConfigRow,
+};
+use finplan_plan::results::funding::{FundingDiagnostics, funding_view};
+use finplan_plan::snapshot::MODEL_VERSION;
+use finplan_plan::suggest::{
     self, Change, ChangeProblem, ChangeTarget, Created, DiffLine, Names, Resolved,
 };
 

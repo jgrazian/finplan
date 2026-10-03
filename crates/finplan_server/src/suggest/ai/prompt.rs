@@ -11,17 +11,18 @@ use serde_json::{Value, json};
 use ts_rs::{Config, TS};
 
 use super::tools::Registry;
-use crate::api::accounts::{
-    Account, ContributionPeriod, CreateAccount, FlavorSpec, Position, RepaymentSpec, TaxStatus,
+use finplan_plan::rules::{Evidence, Kind, Section};
+use finplan_plan::specs::RepaymentSpec;
+use finplan_plan::specs::accounts::{
+    Account, ContributionPeriod, CreateAccount, FlavorSpec, Position, TaxStatus,
 };
-use crate::api::assets::{Asset, CreateAsset};
-use crate::api::events::EventBody;
-use crate::api::specs::{
+use finplan_plan::specs::assets::{Asset, CreateAsset};
+use finplan_plan::specs::events::EventBody;
+use finplan_plan::specs::{
     AmountMode, AmountSpec, AssetRef, Comparison, EffectSpec, FinancingSpec, IncomeType, Interval,
     LotMethod, OffsetUnit, TriggerSpec, WithdrawalSourcesSpec, WithdrawalStrategy,
 };
-use crate::suggest::rules::{Evidence, Kind, Section};
-use crate::suggest::{Change, ChangeOp, ChangeTarget};
+use finplan_plan::suggest::{Change, ChangeOp, ChangeTarget};
 
 pub const PREVIEW_TOOL: &str = super::tools::PREVIEW;
 pub const SUBMIT_TOOL: &str = "submit_suggestion";

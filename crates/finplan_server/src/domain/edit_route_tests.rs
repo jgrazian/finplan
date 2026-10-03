@@ -2,7 +2,7 @@
 //! leaves the database.
 //!
 //! Each test applies the same edit twice — through the route's SQL half, then
-//! reloading, and through `domain::edit` on a graph loaded beforehand — and
+//! reloading, and through `finplan_plan::edit` on a graph loaded beforehand — and
 //! compares the two graphs whole. With one scenario in the database, SQLite
 //! hands out `max(id) + 1` for new rows exactly as the in-memory merge does, so
 //! even the row ids agree and the comparison needs no normalizing.
@@ -10,15 +10,19 @@
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
 
-use crate::api::accounts::{self, CreateAccount, CreatePosition, UpdateAccount, UpdatePosition};
-use crate::api::assets::{self, CreateAsset, UpdateAsset};
-use crate::api::events::{self, EventBody, read_event};
-use crate::api::expressions::validate_tree;
-use crate::compile::{self, rows::ScenarioGraph};
+use crate::api::accounts;
+use crate::api::assets;
+use crate::api::events;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use finplan_plan::batch::RowBatch;
+use finplan_plan::compile;
 use finplan_plan::edit::*;
+use finplan_plan::expressions::validate_tree;
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::specs::accounts::{CreateAccount, CreatePosition, UpdateAccount, UpdatePosition};
+use finplan_plan::specs::assets::{CreateAsset, UpdateAsset};
+use finplan_plan::specs::events::{EventBody, lower_tree, read_event};
 
 struct Plan {
     db: Db,
@@ -1048,7 +1052,7 @@ async fn the_batch_writes_rows_in_lowering_order_with_local_links_resolved() {
             .fetch_one(&mut *tx)
             .await
             .unwrap();
-    events::lower_tree(&mut batch, event, &body).unwrap();
+    lower_tree(&mut batch, event, &body).unwrap();
     let placed = crate::db::batch::insert(&mut tx, plan.id, &batch)
         .await
         .unwrap();
@@ -1249,7 +1253,8 @@ async fn created_assets_and_accounts_match_the_route() {
 /// second edits what the first created by its key.
 #[tokio::test]
 async fn a_batch_with_references_writes_the_same_rows_to_sql_and_memory() {
-    use crate::suggest::{Change, Created, apply_steps_sql, resolve_steps};
+    use crate::suggest::apply_steps_sql;
+    use finplan_plan::suggest::{Change, Created, resolve_steps};
 
     let plan = Plan::new().await;
     let ids = &plan.ids;
@@ -1299,14 +1304,14 @@ async fn a_batch_with_references_writes_the_same_rows_to_sql_and_memory() {
 
 // ── parameters ──────────────────────────────────────────────────────────────
 
-fn parameter(value: Value) -> crate::api::parameters::ParameterBody {
+fn parameter(value: Value) -> finplan_plan::specs::parameters::ParameterBody {
     serde_json::from_value(value).expect("parameter body")
 }
 
 impl Plan {
     async fn create_parameter(
         &self,
-        body: &crate::api::parameters::ParameterBody,
+        body: &finplan_plan::specs::parameters::ParameterBody,
     ) -> ApiResult<i64> {
         let mut conn = self.db.acquire().await?;
         crate::api::parameters::create_in(&mut conn, self.id, body).await
@@ -1315,7 +1320,7 @@ impl Plan {
     async fn update_parameter(
         &self,
         id: i64,
-        body: &crate::api::parameters::ParameterBody,
+        body: &finplan_plan::specs::parameters::ParameterBody,
     ) -> ApiResult<()> {
         let live = self.load().await;
         let mut tx = self.db.begin().await?;
@@ -1596,7 +1601,7 @@ async fn scenario_settings_match_the_route() {
     let mut mem = plan.load().await;
     assert!(mem.tax_configs.contains_key(&tax) && mem.inflation_profiles.contains_key(&inflation));
 
-    let update = |value: Value| -> crate::api::scenarios::UpdateScenario {
+    let update = |value: Value| -> finplan_plan::specs::scenarios::UpdateScenario {
         serde_json::from_value(value).unwrap()
     };
     for edit in [
@@ -1661,7 +1666,8 @@ fn shape(graph: &ScenarioGraph, id: i64) -> Value {
 
 #[tokio::test]
 async fn created_return_profiles_match_the_route() {
-    use crate::api::profiles::{self, CreateProfile};
+    use crate::api::profiles;
+    use finplan_plan::specs::profiles::CreateProfile;
     let plan = Plan::new().await;
     let mut mem = plan.load().await;
     let profile = |value: Value| -> CreateProfile { serde_json::from_value(value).unwrap() };
@@ -1749,7 +1755,8 @@ async fn created_return_profiles_match_the_route() {
 
 #[tokio::test]
 async fn created_tax_configs_match_the_route() {
-    use crate::api::taxes::{self, CreateTaxConfig};
+    use crate::api::taxes;
+    use finplan_plan::specs::taxes::CreateTaxConfig;
     let plan = Plan::new().await;
     let mut mem = plan.load().await;
     let config = |value: Value| -> CreateTaxConfig { serde_json::from_value(value).unwrap() };

@@ -7,8 +7,8 @@ use finplan_core::model::{CalendarAge, ParameterId, ParameterValue};
 use finplan_core::optimization::OptimizableParameter;
 use jiff::civil::Date;
 
-use crate::compile::CompiledScenario;
 use crate::error::{ApiError, ApiResult};
+use finplan_plan::compile::CompiledScenario;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {

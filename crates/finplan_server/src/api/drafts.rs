@@ -36,7 +36,6 @@ use super::runs::{self, Run};
 use super::scenarios::{SCENARIO_COLUMNS, Scenario};
 use super::suggestions::{self, ApplySuggestion, ApplyTo, SuggestionPath};
 use crate::auth::session::CurrentUser;
-use crate::compile;
 use crate::db::Db;
 use crate::documents;
 use crate::error::{ApiError, ApiResult};
@@ -44,6 +43,7 @@ use crate::observability::{EventFields, Operation, Resource};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 use crate::suggest::ai::draft::DraftQuestion;
+use finplan_plan::compile;
 
 pub fn router() -> Router<AppState> {
     Router::new()

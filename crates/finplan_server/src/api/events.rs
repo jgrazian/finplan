@@ -1,5 +1,5 @@
 //! Event CRUD. Triggers and effects travel as nested JSON and are exploded into
-//! the self-referential tables by `api::specs`.
+//! the self-referential tables by `finplan_plan::specs`.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -13,7 +13,7 @@ use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 
-pub use finplan_plan::specs::events::{Event, EventBody, lower_tree, read_event};
+use finplan_plan::specs::events::{Event, EventBody, lower_tree, read_event};
 use finplan_plan::specs::events::{NAME_TAKEN, referenced_by};
 
 pub fn router() -> Router<AppState> {
@@ -92,7 +92,7 @@ async fn create(
 ) -> ApiResult<(StatusCode, Json<Event>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let current = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
-    super::expressions::validate_tree(&current, &body.effects)?;
+    finplan_plan::expressions::validate_tree(&current, &body.effects)?;
 
     let mut tx = state.db.begin().await?;
     let id = create_in(&mut tx, scenario_id, &body).await?;
@@ -128,7 +128,7 @@ async fn replace(
 ) -> ApiResult<Json<Event>> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     let current = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
-    super::expressions::validate_tree(&current, &body.effects)?;
+    finplan_plan::expressions::validate_tree(&current, &body.effects)?;
 
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT id FROM events WHERE id = ?1 AND scenario_id = ?2")

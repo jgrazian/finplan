@@ -1,7 +1,6 @@
 //! Named, typed scenario inputs.
 use crate::{
     auth::session::CurrentUser,
-    compile::rows::ScenarioGraph,
     error::{ApiError, ApiResult, on_unique_violation},
     state::AppState,
 };
@@ -11,11 +10,11 @@ use axum::{
     http::StatusCode,
     routing::get,
 };
+use finplan_plan::graph::ScenarioGraph;
 
 use finplan_plan::specs::parameters::{NAME_TAKEN, check_retype};
-pub use finplan_plan::specs::parameters::{
-    NamedParameter, ParameterBody, ParameterUsage, ParameterValueSpec, delete_refusal, usages,
-    validate,
+use finplan_plan::specs::parameters::{
+    NamedParameter, ParameterBody, delete_refusal, usages, validate,
 };
 
 pub fn router() -> Router<AppState> {
@@ -133,7 +132,7 @@ pub(crate) async fn update_in(
         super::expression_refs::rerender(
             tx,
             live,
-            super::expression_refs::Entity::Parameter(parameter_id),
+            finplan_plan::expression_refs::Entity::Parameter(parameter_id),
             &name,
         )
         .await?;

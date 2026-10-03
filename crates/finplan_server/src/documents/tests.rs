@@ -7,7 +7,7 @@ use super::redact::{parse_birth_date, parse_date, redact};
 use super::store::{Document, DocumentStatus};
 use super::tools::{self, PositionStatus};
 use super::{clean_filename, ingest, ofx, tabular};
-use crate::compile::rows::ScenarioGraph;
+use finplan_plan::graph::ScenarioGraph;
 
 fn masked(text: &str) -> String {
     redact(text).text

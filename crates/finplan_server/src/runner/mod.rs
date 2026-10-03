@@ -1,12 +1,9 @@
 //! Bounded background Monte Carlo execution with persisted restart recovery.
-pub mod inputs;
-pub mod ledger;
 pub mod store;
 pub(crate) mod telemetry;
 #[cfg(test)]
 mod tests;
 
-use crate::compile::{self, rows::ScenarioGraph};
 use crate::config::ServerConfig;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
@@ -16,6 +13,8 @@ use crate::observability::{
 };
 use finplan_core::model::{ConvergenceConfig, MonteCarloConfig, MonteCarloProgress};
 use finplan_core::simulation::monte_carlo_simulate_with_progress;
+use finplan_plan::compile;
+use finplan_plan::graph::ScenarioGraph;
 use finplan_plan::results::{RunSettings, project};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -549,7 +548,7 @@ async fn execute(
             .bind(run_id)
             .fetch_one(db)
             .await?;
-    if version.as_deref() != Some(inputs::MODEL_VERSION) {
+    if version.as_deref() != Some(finplan_plan::snapshot::MODEL_VERSION) {
         return Err(RunError::Preparation);
     }
     let graph: ScenarioGraph =

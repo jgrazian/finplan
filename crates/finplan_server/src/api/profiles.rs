@@ -10,14 +10,14 @@ use sqlx::{Sqlite, Transaction};
 use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
-use crate::compile::HISTORY_PRESETS;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
+use finplan_plan::compile::HISTORY_PRESETS;
 use ts_rs::TS;
 
 use finplan_plan::specs::profiles::NAME_TAKEN;
-pub use finplan_plan::specs::profiles::{
+use finplan_plan::specs::profiles::{
     AssetClass, CreateProfile, DistributionSpec, UpdateProfile, check_inflation_kind,
 };
 
@@ -672,7 +672,7 @@ async fn list_presets() -> Json<Vec<HistoryPreset>> {
             .filter_map(|id| {
                 // Every id in the table resolves; `filter_map` rather than an
                 // unwrap so a mismatch drops one row instead of the process.
-                let history = crate::compile::historical_returns(id).ok()?;
+                let history = finplan_plan::compile::historical_returns(id).ok()?;
                 Some(HistoryPreset {
                     id: (*id).to_string(),
                     name: history.name.to_string(),

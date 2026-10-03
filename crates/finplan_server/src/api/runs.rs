@@ -6,21 +6,21 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
-use crate::api::funding::FundingDiagnostics;
 use crate::auth::session::CurrentUser;
-use crate::compile;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobContext, JobKind, Origin};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
+use finplan_plan::compile;
+use finplan_plan::results::funding::FundingDiagnostics;
 use finplan_plan::results::shape::{
     LEDGER_PAGE_MAX, check_category, factor_for, path_id, resolve_series, year_of,
 };
 use ts_rs::TS;
 
 // The result shapes live in `finplan_plan`, where the in-memory projection builds
-// them too; they are re-exported so the rest of the server keeps its paths.
-pub use finplan_plan::results::view::*;
+// them too.
+use finplan_plan::results::view::*;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -251,7 +251,7 @@ pub(crate) async fn create_run(
         ));
     }
 
-    let (snapshot, input_hash) = crate::runner::inputs::snapshot(&graph)
+    let (snapshot, input_hash) = finplan_plan::snapshot::snapshot(&graph)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let effective_seed = body.seed.unwrap_or_else(|| {
         if state.limited_guest(user) {
@@ -278,7 +278,7 @@ pub(crate) async fn create_run(
     .bind(ceiling)
     .bind(snapshot)
     .bind(input_hash)
-    .bind(crate::runner::inputs::MODEL_VERSION)
+    .bind(finplan_plan::snapshot::MODEL_VERSION)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -904,7 +904,7 @@ async fn input_hash(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<InputHash>> {
     let graph = crate::db::graph::load(&state.db, id, &user.id).await?;
-    let (_, input_hash) = crate::runner::inputs::snapshot(&graph)
+    let (_, input_hash) = finplan_plan::snapshot::snapshot(&graph)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
     Ok(Json(InputHash { input_hash }))
 }

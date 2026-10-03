@@ -12,7 +12,7 @@
 
 use serde_json::{Value, json};
 
-use crate::api::profiles::AssetClass;
+use finplan_plan::specs::profiles::AssetClass;
 
 /// One of the user's return profiles, as the drafting agent sees the library.
 #[derive(Debug, Clone, PartialEq)]

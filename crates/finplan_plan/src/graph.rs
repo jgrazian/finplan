@@ -318,7 +318,7 @@ pub struct ScenarioGraph {
     pub tax_config: Option<TaxConfigRow>,
     pub tax_brackets: Vec<TaxBracketRow>,
     /// The caller's whole tax config and inflation profile libraries, so an
-    /// in-memory edit can switch the scenario onto another (`domain::edit`).
+    /// in-memory edit can switch the scenario onto another (`edit`).
     /// Filled by a live load only: they are not part of a run's input
     /// snapshot, which keeps just the ones the run used, so whoever edits a
     /// snapshot loads the ones its changes name first.

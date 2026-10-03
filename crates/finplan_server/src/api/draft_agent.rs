@@ -44,7 +44,6 @@ use super::suggestions::{
     self, ApplySuggestion, ApplyTo, DraftMeta, Failure, NewSuggestion, all_changes, fingerprint,
 };
 use crate::auth::session::CurrentUser;
-use crate::compile::rows::ScenarioGraph;
 use crate::db::Db;
 use crate::documents::{self, store};
 use crate::error::{ApiError, ApiResult};
@@ -57,7 +56,8 @@ use crate::suggest::ai::draft::{
 };
 use crate::suggest::ai::tools::{PathRank, ToolHost, unavailable};
 use crate::suggest::ai::{AiError, BoxFuture};
-use crate::suggest::{self, Change, ChangeProblem, Created, DiffLine};
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::suggest::{self, Change, ChangeProblem, Created, DiffLine};
 
 /// Most characters of a description.
 const MAX_DESCRIPTION: usize = 4_000;
@@ -677,10 +677,10 @@ async fn prepare(
     let documents = store::load_all(&state.db, scenario_id).await?;
     let notes = host.note_lines().await?;
     let (profiles, taxes, inflation) = host.library(state).await?;
-    let presets: Vec<(String, String, i32, usize)> = crate::compile::HISTORY_PRESETS
+    let presets: Vec<(String, String, i32, usize)> = finplan_plan::compile::HISTORY_PRESETS
         .iter()
         .filter_map(|id| {
-            let history = crate::compile::historical_returns(id).ok()?;
+            let history = finplan_plan::compile::historical_returns(id).ok()?;
             Some((
                 (*id).to_owned(),
                 history.name.to_string(),
@@ -863,7 +863,7 @@ impl DraftTools {
                 description,
                 asset_class: class
                     .as_deref()
-                    .and_then(crate::api::profiles::AssetClass::parse),
+                    .and_then(finplan_plan::specs::profiles::AssetClass::parse),
             })
             .collect();
         Ok(())

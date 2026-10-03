@@ -12,7 +12,7 @@ use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
 
-pub use finplan_plan::specs::assets::{Asset, CreateAsset, UpdateAsset};
+use finplan_plan::specs::assets::{Asset, CreateAsset, UpdateAsset};
 use finplan_plan::specs::assets::{NAME_TAKEN, check_initial_price};
 
 pub fn router() -> Router<AppState> {
@@ -218,7 +218,7 @@ async fn update(
 /// before the change, needed only when `body` renames the asset.
 pub(crate) async fn update_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    rename_graph: Option<&crate::compile::rows::ScenarioGraph>,
+    rename_graph: Option<&finplan_plan::graph::ScenarioGraph>,
     scenario_id: i64,
     id: i64,
     body: &UpdateAsset,
@@ -260,7 +260,7 @@ pub(crate) async fn update_in(
         super::expression_refs::rerender(
             tx,
             graph,
-            super::expression_refs::Entity::Asset(id),
+            finplan_plan::expression_refs::Entity::Asset(id),
             name.trim(),
         )
         .await?;
@@ -298,11 +298,14 @@ async fn destroy(
 /// through this too, inside its transaction.
 pub(crate) async fn destroy_in(
     conn: &mut sqlx::SqliteConnection,
-    live: &crate::compile::rows::ScenarioGraph,
+    live: &finplan_plan::graph::ScenarioGraph,
     scenario_id: i64,
     id: i64,
 ) -> ApiResult<()> {
-    super::expression_refs::refuse_if_used(live, super::expression_refs::Entity::Asset(id))?;
+    finplan_plan::expression_refs::refuse_if_used(
+        live,
+        finplan_plan::expression_refs::Entity::Asset(id),
+    )?;
 
     // `account_property.asset_id` is ON DELETE RESTRICT, so deleting an asset a
     // property account is built on fails at the database. Report that clearly.

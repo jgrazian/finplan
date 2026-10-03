@@ -11,12 +11,12 @@ use std::fmt::Write as _;
 
 use serde_json::{Value, json};
 
-use crate::api::funding::FundingDiagnostics;
-use crate::api::runs::Results;
-use crate::compile::rows::{DistributionRow, ScenarioGraph};
-use crate::suggest::read;
-use crate::suggest::rules::{Draft, Kind, Section};
-use crate::suggest::{Change, ChangeTarget};
+use finplan_plan::graph::{DistributionRow, ScenarioGraph};
+use finplan_plan::results::funding::FundingDiagnostics;
+use finplan_plan::results::view::Results;
+use finplan_plan::rules::{Draft, Kind, Section};
+use finplan_plan::suggest::read;
+use finplan_plan::suggest::{Change, ChangeTarget};
 
 /// Everything one review sends the model, and what it checks replies against.
 #[derive(Debug, Clone)]
@@ -233,7 +233,7 @@ fn failure_profile(graph: &ScenarioGraph, f: &FundingDiagnostics) -> Value {
         id.and_then(|id| graph.events.iter().find(|e| e.id == id))
             .map(|e| e.name.clone())
     };
-    let years = |list: &[crate::api::funding::YearCount]| -> Vec<Value> {
+    let years = |list: &[finplan_plan::results::funding::YearCount]| -> Vec<Value> {
         list.iter()
             .map(|y| json!({"year": y.year, "age": age(y.year), "iterations": y.count, "share_of_failed": share(y.count, f.failed)}))
             .collect()
@@ -308,7 +308,11 @@ fn investable_at_start(graph: &ScenarioGraph, results: &Results) -> HashMap<i64,
 }
 
 /// One row of the yearly cash-flow table.
-fn cash_flow_row(c: &crate::api::runs::CashFlow, age: &str, start: &HashMap<i64, f64>) -> String {
+fn cash_flow_row(
+    c: &finplan_plan::results::view::CashFlow,
+    age: &str,
+    start: &HashMap<i64, f64>,
+) -> String {
     let rate = start
         .get(&c.year)
         .filter(|&&balance| balance > 0.0)

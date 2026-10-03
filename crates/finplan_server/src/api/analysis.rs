@@ -25,12 +25,13 @@ use crate::analysis::jobs::JobSpec;
 use crate::analysis::params::{PlanParameter, parameters};
 use crate::analysis::results::{AnalysisOutcome, AnalysisParameter, CachedSweep};
 use crate::auth::session::CurrentUser;
-use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobKind as MetricKind, Origin, Tier};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 use finplan_core::config::SimulationConfig;
+use finplan_plan::compile;
+use finplan_plan::graph::ScenarioGraph;
 
 pub fn router() -> Router<AppState> {
     Router::new()

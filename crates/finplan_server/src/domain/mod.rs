@@ -9,9 +9,9 @@ use std::pin::Pin;
 
 use sqlx::{Sqlite, Transaction};
 
-use crate::compile::rows::ScenarioGraph;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
+use finplan_plan::graph::ScenarioGraph;
 
 type Remap = HashMap<i64, i64>;
 type Fut<'a, T> = Pin<Box<dyn Future<Output = ApiResult<T>> + Send + 'a>>;

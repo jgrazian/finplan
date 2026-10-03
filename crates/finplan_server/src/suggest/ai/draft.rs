@@ -54,9 +54,9 @@ use crate::api::suggestion_paths::{self, PathShape, StepShape, valid_key};
 use crate::api::suggestions::DraftColumn;
 use crate::documents::store::DocumentPage;
 use crate::observability::{AiTool, AiToolOutcome};
-use crate::suggest::rules::{Evidence, Kind, Section};
-use crate::suggest::templates::TemplateRequest;
-use crate::suggest::{Change, ChangeProblem, ChangeTarget};
+use finplan_plan::rules::{Evidence, Kind, Section};
+use finplan_plan::suggest::{Change, ChangeProblem, ChangeTarget};
+use finplan_plan::templates::TemplateRequest;
 
 /// Questions a whole draft may ask.
 pub const MAX_QUESTIONS: usize = 3;

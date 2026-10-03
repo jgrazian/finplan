@@ -330,7 +330,7 @@ impl Telemetry {
         build
             .get_or_create(&labels([
                 ("version", env!("CARGO_PKG_VERSION")),
-                ("model_version", crate::runner::inputs::MODEL_VERSION),
+                ("model_version", finplan_plan::snapshot::MODEL_VERSION),
             ]))
             .set(1);
         let processing_min = metric!(

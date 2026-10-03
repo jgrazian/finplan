@@ -1,11 +1,12 @@
 //! Paid report/comparison views over immutable saved run inputs and results.
-use super::runs::{self, Results, ResultsQuery, RunInputs};
+use super::runs::{self, ResultsQuery, RunInputs};
 use crate::{auth::session::CurrentUser, error::ApiResult, state::AppState};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
     routing::{get, post},
 };
+use finplan_plan::results::view::Results;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 pub fn router() -> Router<AppState> {

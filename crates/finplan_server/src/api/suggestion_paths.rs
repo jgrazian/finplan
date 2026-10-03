@@ -11,11 +11,12 @@
 use std::collections::HashSet;
 
 use super::preview;
-use crate::compile::{self, rows::ScenarioGraph};
 use crate::db::Db;
 use crate::error::ApiResult;
-use crate::suggest::rules::Kind;
-use crate::suggest::{self, Change, ChangeProblem, ChangeTarget, Created, DiffLine};
+use finplan_plan::compile;
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::rules::Kind;
+use finplan_plan::suggest::{self, Change, ChangeProblem, ChangeTarget, Created, DiffLine};
 
 use super::suggestions::{MAX_PATHS, MAX_STEPS};
 

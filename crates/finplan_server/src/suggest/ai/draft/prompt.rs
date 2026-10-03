@@ -15,15 +15,15 @@ use ts_rs::{Config, TS};
 
 use super::profiles::LibraryProfile;
 use super::{AnswerType, DraftQuestion};
-use crate::api::parameters::{ParameterBody, ParameterValueSpec};
-use crate::api::profiles::{CreateProfile, DistributionSpec};
-use crate::api::scenarios::UpdateScenario;
-use crate::api::taxes::{Bracket, CreateTaxConfig};
-use crate::compile::rows::ScenarioGraph;
 use crate::documents::DocumentManifest;
 use crate::suggest::ai::context;
 use crate::suggest::ai::tools::{Registry, facts};
-use crate::suggest::templates::{
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::specs::parameters::{ParameterBody, ParameterValueSpec};
+use finplan_plan::specs::profiles::{CreateProfile, DistributionSpec};
+use finplan_plan::specs::scenarios::UpdateScenario;
+use finplan_plan::specs::taxes::{Bracket, CreateTaxConfig};
+use finplan_plan::templates::{
     EmployerMatchParams, HomePurchaseParams, JobLossParams, LargeExpenseParams, MarketCrashParams,
     NewRef, RecurringExpenseParams, RetirementParams, RetirementSpending, RowRef, SalaryParams,
     SocialSecurityParams, Template, TemplateKind, TemplateRequest, When,
@@ -517,7 +517,7 @@ pub fn render_context(parts: &ContextParts<'_>) -> String {
     let _ = writeln!(
         out,
         "\nPlan settings (the `scenario` target's body): {}",
-        crate::suggest::read::scenario(parts.graph)
+        finplan_plan::suggest::read::scenario(parts.graph)
     );
 
     if !parts.notes.is_empty() {

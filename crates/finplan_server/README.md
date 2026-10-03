@@ -89,7 +89,6 @@ deployment are separate from the server instrumentation.
 ```
 api/       axum handlers; JSON in, JSON out
 domain/    cross-table operations (scenario deep-clone)
-compile/   stored rows  ->  finplan_core::SimulationConfig
 runner/    background execution and result persistence
 ```
 
@@ -100,7 +99,7 @@ runner/    background execution and result persistence
 `Vec`s with them. Those are *simulation-local indices*, valid only for one
 `SimulationConfig`, and they are deliberately never persisted.
 
-The database uses stable primary keys instead. `compile::IdMap` is the seam: it
+The database uses stable primary keys instead. `finplan_plan::compile::IdMap` is the seam: it
 interns database ids into a gapless `0..n` range at compile time and keeps the
 reverse direction so engine output can be attributed back to real rows. This is
 what lets an account be renamed, reordered, or deleted without invalidating
@@ -118,7 +117,7 @@ memory layout:
   `TransferAmount` and `EventEffect` are recursive in Rust, so `triggers`,
   `transfer_amounts` and `effects` carry parent links, with `CHECK` constraints
   asserting the columns each variant requires. The API still speaks nested JSON;
-  `api::specs` flattens on write and rebuilds on read.
+  `finplan_plan::specs` flattens on write and rebuilds on read.
 - **Results are decomposed, not blobbed.** A finished run writes normalized rows
   — `run_stats`, `run_net_worth_points`, `run_account_points`, `run_cash_flows`,
   `run_taxes`, `run_warnings` — so the UI can query one percentile band or one

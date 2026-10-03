@@ -14,7 +14,7 @@ use crate::state::AppState;
 use ts_rs::TS;
 
 use finplan_plan::specs::taxes::NAME_TAKEN;
-pub use finplan_plan::specs::taxes::{
+use finplan_plan::specs::taxes::{
     Bracket, CreateTaxConfig, UpdateTaxConfig, checked, validate_brackets, validate_deductions,
 };
 

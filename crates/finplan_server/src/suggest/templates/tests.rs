@@ -4,9 +4,10 @@
 
 use serde_json::{Value, json};
 
-use super::*;
-use crate::compile::rows::ScenarioGraph;
-use crate::suggest::{Change, ChangeOp, ChangeTarget, Created, RefKind, apply_steps_sql};
+use crate::suggest::apply_steps_sql;
+use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::suggest::{Change, ChangeOp, ChangeTarget, Created, RefKind};
+use finplan_plan::templates::*;
 
 struct Fixture {
     db: crate::db::Db,
@@ -67,7 +68,10 @@ impl Fixture {
     }
 
     /// Apply the steps in order to the stored plan.
-    async fn apply(&self, steps: &[Vec<Change>]) -> Result<Created, crate::suggest::StepProblems> {
+    async fn apply(
+        &self,
+        steps: &[Vec<Change>],
+    ) -> Result<Created, finplan_plan::suggest::StepProblems> {
         let mut tx = self.db.begin().await.unwrap();
         let created = apply_steps_sql(&mut tx, self.scenario, &self.user, steps, &Created::new())
             .await
@@ -109,9 +113,9 @@ fn request(value: Value) -> TemplateRequest {
     serde_json::from_value(value).unwrap()
 }
 
-fn event(g: &ScenarioGraph, name: &str) -> crate::api::events::Event {
+fn event(g: &ScenarioGraph, name: &str) -> finplan_plan::specs::events::Event {
     let id = g.events.iter().find(|e| e.name == name).unwrap().id;
-    crate::api::events::read_event(g, id).unwrap()
+    finplan_plan::specs::events::read_event(g, id).unwrap()
 }
 
 #[tokio::test]
@@ -182,7 +186,7 @@ async fn every_template_applies_and_compiles_and_prefixes_keep_expansions_apart(
     f.apply(&steps).await.unwrap_or_else(|p| panic!("{p:?}"));
 
     let g = f.graph().await;
-    crate::compile::compile(&g).expect("the plan compiles");
+    finplan_plan::compile::compile(&g).expect("the plan compiles");
     for name in [
         "Salary",
         "Employer 401(k) match",

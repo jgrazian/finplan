@@ -7,9 +7,7 @@
 //! halves (`sql`) and everything that talks to a model.
 
 pub mod ai;
-pub mod rules;
 mod sql;
-pub mod templates;
+mod templates;
 
-pub use finplan_plan::suggest::*;
 pub use sql::{apply_steps_sql, apply_to_sql};

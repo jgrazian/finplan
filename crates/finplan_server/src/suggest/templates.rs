@@ -1,9 +1,8 @@
-//! Templates now live in [`finplan_plan::templates`]; this module re-exports
-//! them and maps their error onto the server's.
+//! Templates live in [`finplan_plan::templates`]; this module maps their error
+//! onto the server's and tests them against a stored plan.
 
 use crate::error::ApiError;
-
-pub use finplan_plan::templates::*;
+use finplan_plan::templates::TemplateError;
 
 impl From<TemplateError> for ApiError {
     fn from(e: TemplateError) -> Self {
