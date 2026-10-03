@@ -681,9 +681,19 @@ pub(crate) async fn load_assumptions(
             .bind(id)
             .fetch_all(db)
             .await?;
-            graph
-                .tax_configs
-                .insert(id, TaxConfigEntry { config, brackets });
+            let description: Option<String> =
+                sqlx::query_scalar("SELECT description FROM tax_configs WHERE id = ?1")
+                    .bind(id)
+                    .fetch_one(db)
+                    .await?;
+            graph.tax_configs.insert(
+                id,
+                TaxConfigEntry {
+                    config,
+                    description,
+                    brackets,
+                },
+            );
         }
     }
     let mut distributions = Vec::new();
@@ -691,20 +701,23 @@ pub(crate) async fn load_assumptions(
         if graph.inflation_profiles.contains_key(&id) {
             continue;
         }
-        let row: Option<(String, i64)> = sqlx::query_as(
-            "SELECT name, distribution_id FROM inflation_profiles WHERE id = ?1 AND user_id = ?2",
+        let row: Option<(String, i64, Option<String>, i64)> = sqlx::query_as(
+            "SELECT name, distribution_id, description, sort_order
+               FROM inflation_profiles WHERE id = ?1 AND user_id = ?2",
         )
         .bind(id)
         .bind(user_id)
         .fetch_optional(db)
         .await?;
-        if let Some((name, distribution_id)) = row {
+        if let Some((name, distribution_id, description, sort_order)) = row {
             distributions.push(distribution_id);
             graph.inflation_profiles.insert(
                 id,
                 InflationEntry {
                     name,
                     distribution_id,
+                    description,
+                    sort_order,
                 },
             );
         }

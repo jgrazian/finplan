@@ -12,6 +12,10 @@ pub fn snapshot(graph: &ScenarioGraph) -> Result<(String, String), serde_json::E
     profiles.extend(graph.bank.values().map(|a| a.return_profile_id));
     profiles.extend(graph.investment.values().map(|a| a.cash_return_profile_id));
     graph.return_profiles.retain(|id, _| profiles.contains(id));
+    // Library order is not an input of a run.
+    for profile in graph.return_profiles.values_mut() {
+        profile.sort_order = 0;
+    }
     let mut pending: Vec<_> = graph
         .return_profiles
         .values()
@@ -214,6 +218,22 @@ mod tests {
         assert_eq!(value["parameters"].as_array().unwrap().len(), 2);
         assert_eq!(value["effect_children"][0][1], 10);
         assert!(!value["tax_brackets"].as_array().unwrap().is_empty());
+    }
+
+    /// Where a profile sits in the library is not an input of a run, so
+    /// reordering the library must not make a stored run stale.
+    #[test]
+    fn library_order_is_not_part_of_the_hash() {
+        let base = default_graph();
+        let mut moved = base.clone();
+        for (n, profile) in moved.return_profiles.values_mut().enumerate() {
+            profile.sort_order = 10 + n as i64;
+        }
+        assert_eq!(snapshot(&base).unwrap(), snapshot(&moved).unwrap());
+        // ...but the graph itself keeps it, for a store that serializes one.
+        let json = serde_json::to_string(&moved).unwrap();
+        let back: ScenarioGraph = serde_json::from_str(&json).unwrap();
+        assert!(back.return_profiles.values().all(|p| p.sort_order >= 10));
     }
 
     #[test]

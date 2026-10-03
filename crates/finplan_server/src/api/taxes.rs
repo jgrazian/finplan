@@ -4,18 +4,17 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
-use serde::Serialize;
 
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
-use ts_rs::TS;
 
 use finplan_plan::specs::taxes::NAME_TAKEN;
 use finplan_plan::specs::taxes::{
-    Bracket, CreateTaxConfig, UpdateTaxConfig, checked, validate_brackets, validate_deductions,
+    Bracket, CreateTaxConfig, TaxConfig, UpdateTaxConfig, checked, validate_brackets,
+    validate_deductions,
 };
 
 pub fn router() -> Router<AppState> {
@@ -25,22 +24,6 @@ pub fn router() -> Router<AppState> {
             "/tax-configs/{id}",
             get(fetch).patch(update).delete(destroy),
         )
-}
-
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct TaxConfig {
-    pub id: i64,
-    pub name: String,
-    pub description: Option<String>,
-    pub state_rate: f64,
-    pub capital_gains_rate: f64,
-    pub early_withdrawal_penalty_rate: f64,
-    /// Federal standard deduction, in the brackets' dollars.
-    pub standard_deduction: f64,
-    /// Added to the deduction from the tax year the person turns 65.
-    pub age_65_extra_deduction: f64,
-    pub federal_brackets: Vec<Bracket>,
 }
 
 async fn load(state: &AppState, id: i64, user_id: &str) -> ApiResult<TaxConfig> {

@@ -106,7 +106,7 @@ pub async fn load_connection(
     // Return profiles live in the user's library; pull the whole library so
     // any row the scenario references is present.
     let profile_rows: Vec<ReturnProfileRow> = sqlx::query_as(
-        "SELECT id, name, description, distribution_id, asset_class
+        "SELECT id, name, description, distribution_id, asset_class, sort_order
            FROM return_profiles WHERE user_id = ?1",
     )
     .bind(user_id)
@@ -180,6 +180,15 @@ pub async fn load_connection(
     .bind(user_id)
     .fetch_all(&mut *db)
     .await?;
+    let tax_descriptions: HashMap<i64, Option<String>> =
+        sqlx::query_as::<_, (i64, Option<String>)>(
+            "SELECT id, description FROM tax_configs WHERE user_id = ?1",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *db)
+        .await?
+        .into_iter()
+        .collect();
     for config in config_rows {
         let brackets: Vec<TaxBracketRow> = sqlx::query_as(
             "SELECT threshold, rate FROM tax_brackets
@@ -188,25 +197,36 @@ pub async fn load_connection(
         .bind(config.id)
         .fetch_all(&mut *db)
         .await?;
-        tax_configs.insert(config.id, TaxConfigEntry { config, brackets });
-    }
-    let inflation_profiles: HashMap<i64, InflationEntry> = sqlx::query_as::<_, (i64, String, i64)>(
-        "SELECT id, name, distribution_id FROM inflation_profiles WHERE user_id = ?1",
-    )
-    .bind(user_id)
-    .fetch_all(&mut *db)
-    .await?
-    .into_iter()
-    .map(|(id, name, distribution_id)| {
-        (
-            id,
-            InflationEntry {
-                name,
-                distribution_id,
+        tax_configs.insert(
+            config.id,
+            TaxConfigEntry {
+                description: tax_descriptions.get(&config.id).cloned().flatten(),
+                config,
+                brackets,
             },
+        );
+    }
+    let inflation_profiles: HashMap<i64, InflationEntry> =
+        sqlx::query_as::<_, (i64, String, i64, Option<String>, i64)>(
+            "SELECT id, name, distribution_id, description, sort_order
+           FROM inflation_profiles WHERE user_id = ?1",
         )
-    })
-    .collect();
+        .bind(user_id)
+        .fetch_all(&mut *db)
+        .await?
+        .into_iter()
+        .map(|(id, name, distribution_id, description, sort_order)| {
+            (
+                id,
+                InflationEntry {
+                    name,
+                    distribution_id,
+                    description,
+                    sort_order,
+                },
+            )
+        })
+        .collect();
 
     let events: Vec<EventRow> = sqlx::query_as(
         "SELECT id, name, description, fires_once, enabled, sort_order

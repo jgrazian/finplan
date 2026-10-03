@@ -101,6 +101,8 @@ anything doing I/O; CI builds it for `wasm32-unknown-unknown` with
 - `batch.rs` - `RowBatch`: specs lowered to rows; `merge_into` a graph (the server's SQL sink is `db::batch::insert`)
 - `edit/` - every write route as an in-memory edit of a `ScenarioGraph` (preview)
 - `compile/` - `ScenarioGraph` -> `SimulationConfig`
+- `read.rs` - every plan-shaped GET body (accounts, assets, events, parameters, profiles, tax configs, compile report, preflight) built from a graph; the server's routes and the local store answer with it
+- `preflight.rs`, `archive.rs` - the pre-run review; `PlanArchive` pack/unpack/preview and the import checks
 - `snapshot.rs` - canonical input snapshot, its hash, `MODEL_VERSION`
 - `results/` - `project()` a `MonteCarloSummary` into the results bodies; ledger, funding views
 - `suggest/`, `templates/`, `rules/` - review-note changes, templates and rule-based notes

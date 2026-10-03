@@ -3237,6 +3237,9 @@ mod real_estate_cases;
 #[path = "cases/results_projection.rs"]
 mod results_projection_cases;
 
+#[path = "cases/plan_reads.rs"]
+mod plan_reads_cases;
+
 #[path = "cases/what_if.rs"]
 mod what_if_cases;
 

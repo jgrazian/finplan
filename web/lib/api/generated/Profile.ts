@@ -2,6 +2,10 @@
 import type { AssetClass } from "./AssetClass";
 import type { DistributionSpec } from "./DistributionSpec";
 
+/**
+ * A return or inflation profile of the caller's library, as the profile
+ * routes return it.
+ */
 export type Profile = {
   id: number;
   name: string;
