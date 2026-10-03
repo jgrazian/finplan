@@ -6,6 +6,10 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+mod tree;
+
+pub use tree::*;
+
 /// Extra contribution room from `from_age` through `through_age` (inclusive;
 /// null for no upper bound), on top of the account's contribution limit. Age
 /// is the one reached by December 31 of the contribution year. Tiers do not

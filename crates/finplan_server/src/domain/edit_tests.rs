@@ -1075,7 +1075,9 @@ async fn the_batch_writes_rows_in_lowering_order_with_local_links_resolved() {
             .await
             .unwrap();
     events::lower_tree(&mut batch, event, &body).unwrap();
-    let placed = batch.insert(&mut tx, plan.id).await.unwrap();
+    let placed = crate::db::batch::insert(&mut tx, plan.id, &batch)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
 
     // Within each table, ids ascend in batch order: rows are written in the

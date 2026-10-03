@@ -9,6 +9,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, S
 use sqlx::{Connection, SqliteConnection};
 use thiserror::Error;
 
+pub(crate) mod batch;
 pub mod graph;
 
 pub type Db = sqlx::SqlitePool;

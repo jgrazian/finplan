@@ -680,9 +680,9 @@ pub(crate) async fn write_tree(
     event_id: i64,
     body: &EventBody,
 ) -> ApiResult<()> {
-    let mut batch = RowBatch::for_scenario(tx, scenario_id).await?;
+    let mut batch = crate::db::batch::batch_for_scenario(tx, scenario_id).await?;
     lower_tree(&mut batch, event_id, body)?;
-    batch.insert(tx, scenario_id).await?;
+    crate::db::batch::insert(tx, scenario_id, &batch).await?;
     Ok(())
 }
 

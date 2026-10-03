@@ -120,6 +120,7 @@ impl From<finplan_plan::PlanError> for ApiError {
             PlanError::Unprocessable(message) => ApiError::Unprocessable(message),
             PlanError::NotFound(what) => ApiError::NotFound(what),
             PlanError::Conflict(message) => ApiError::Conflict(message),
+            PlanError::Internal(message) => ApiError::Internal(message),
         }
     }
 }

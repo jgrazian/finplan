@@ -14,6 +14,9 @@ pub enum PlanError {
     NotFound(&'static str),
     /// The request clashes with the plan as it stands.
     Conflict(String),
+    /// A bug in the plan code itself (a lowering that broke its own
+    /// invariant), not something the caller can fix.
+    Internal(String),
 }
 
 impl fmt::Display for PlanError {
@@ -22,6 +25,7 @@ impl fmt::Display for PlanError {
             PlanError::Invalid(message)
             | PlanError::Unprocessable(message)
             | PlanError::Conflict(message) => f.write_str(message),
+            PlanError::Internal(message) => write!(f, "internal error: {message}"),
             PlanError::NotFound(what) => write!(f, "{what} not found"),
         }
     }
@@ -36,6 +40,10 @@ impl PlanError {
 
     pub fn unprocessable(message: impl Into<String>) -> Self {
         PlanError::Unprocessable(message.into())
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        PlanError::Internal(message.into())
     }
 }
 
