@@ -104,6 +104,17 @@ pub struct Library {
     pub distributions: Vec<DistributionRow>,
 }
 
+/// How the library's list routes order profiles: `ORDER BY sort_order, name`.
+/// [`crate::read`] orders its library lists with the same keys.
+pub(crate) fn listed(sort_order: i64, name: &str) -> (i64, &str) {
+    (sort_order, name)
+}
+
+/// How the tax config list route orders: `ORDER BY name`.
+pub(crate) fn listed_by_name(name: &str) -> &str {
+    name
+}
+
 impl LibraryReturnProfile {
     pub(crate) fn row(&self) -> ReturnProfileRow {
         ReturnProfileRow {
@@ -294,21 +305,21 @@ impl Library {
     /// Return profile ids as the list route orders them: `sort_order, name`.
     pub fn return_profile_order(&self) -> Vec<i64> {
         let mut rows: Vec<&LibraryReturnProfile> = self.return_profiles.iter().collect();
-        rows.sort_by(|a, b| (a.sort_order, &a.name).cmp(&(b.sort_order, &b.name)));
+        rows.sort_by_key(|p| listed(p.sort_order, &p.name));
         rows.into_iter().map(|p| p.id).collect()
     }
 
     /// Inflation profile ids as the list route orders them: `sort_order, name`.
     pub fn inflation_profile_order(&self) -> Vec<i64> {
         let mut rows: Vec<&LibraryInflationProfile> = self.inflation_profiles.iter().collect();
-        rows.sort_by(|a, b| (a.sort_order, &a.name).cmp(&(b.sort_order, &b.name)));
+        rows.sort_by_key(|p| listed(p.sort_order, &p.name));
         rows.into_iter().map(|p| p.id).collect()
     }
 
     /// Tax config ids as the list route orders them: by name.
     pub fn tax_config_order(&self) -> Vec<i64> {
         let mut rows: Vec<&LibraryTaxConfig> = self.tax_configs.iter().collect();
-        rows.sort_by(|a, b| a.name.cmp(&b.name));
+        rows.sort_by_key(|t| listed_by_name(&t.name));
         rows.into_iter().map(|t| t.id).collect()
     }
 
@@ -672,7 +683,7 @@ fn delete_return_profile(
     plans: &[ScenarioGraph],
     id: i64,
 ) -> PlanResult<()> {
-    let used = return_profile_users(plans, id);
+    let used = crate::read::profile_users_across(plans, id);
     if !used.is_empty() {
         return Err(PlanError::Conflict(format!(
             "return profile is still used by: {}",
@@ -685,42 +696,6 @@ fn delete_return_profile(
         return Err(PlanError::NotFound("return profile"));
     }
     Ok(())
-}
-
-/// Every asset or account across `plans` that holds the return profile: the
-/// route's `references` query, in its order (assets, then bank accounts, then
-/// investment accounts' cash).
-pub fn return_profile_users(plans: &[ScenarioGraph], profile_id: i64) -> Vec<String> {
-    let mut assets = Vec::new();
-    let mut banks = Vec::new();
-    let mut investments = Vec::new();
-    for plan in plans {
-        assets.extend(
-            plan.assets
-                .iter()
-                .filter(|a| a.return_profile_id == Some(profile_id))
-                .map(|a| a.name.clone()),
-        );
-        for account in &plan.accounts {
-            if plan
-                .bank
-                .get(&account.id)
-                .is_some_and(|b| b.return_profile_id == profile_id)
-            {
-                banks.push(account.name.clone());
-            }
-            if plan
-                .investment
-                .get(&account.id)
-                .is_some_and(|i| i.cash_return_profile_id == profile_id)
-            {
-                investments.push(account.name.clone());
-            }
-        }
-    }
-    assets.extend(banks);
-    assets.extend(investments);
-    assets
 }
 
 fn update_tax_config(library: &mut Library, id: i64, body: &UpdateTaxConfig) -> PlanResult<()> {

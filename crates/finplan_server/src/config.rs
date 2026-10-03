@@ -18,10 +18,46 @@ pub enum HostedAccessMode {
     Beta,
 }
 
+/// Server offload of local runs (spec 19, `api::compute`): the monthly budget
+/// in cost units, `iterations x duration_years x max(accounts + assets +
+/// events, 1)`, the same units `create_run` uses to refuse oversized runs. A
+/// typical plan at 1,000 iterations costs a few hundred thousand.
+#[derive(Debug, Clone, Args)]
+pub struct OffloadConfig {
+    /// Cost units a Free account may offload each calendar month (UTC).
+    #[arg(
+        long = "offload-budget-free",
+        env = "FINPLAN_OFFLOAD_BUDGET_FREE",
+        default_value_t = 20_000_000
+    )]
+    pub budget_free: i64,
+
+    /// Cost units a Pro account (and any self-hosted or beta account) may
+    /// offload each calendar month (UTC).
+    #[arg(
+        long = "offload-budget-pro",
+        env = "FINPLAN_OFFLOAD_BUDGET_PRO",
+        default_value_t = 1_000_000_000
+    )]
+    pub budget_pro: i64,
+}
+
+impl Default for OffloadConfig {
+    fn default() -> Self {
+        Self {
+            budget_free: 20_000_000,
+            budget_pro: 1_000_000_000,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct ServerConfig {
     #[command(flatten)]
     pub mail: crate::mail::MailConfig,
+    /// Server offload of local runs: monthly budgets.
+    #[command(flatten)]
+    pub offload: OffloadConfig,
     /// AI review notes (`suggest::ai`).
     #[command(flatten)]
     pub review_ai: crate::suggest::ai::AiConfig,
@@ -62,6 +98,13 @@ pub struct ServerConfig {
     /// self-hosted deployments always allow guests, uncapped.
     #[arg(long, env = "FINPLAN_GUEST_ACCESS", default_value_t = true, action = clap::ArgAction::Set)]
     pub guest_access: bool,
+
+    /// Local mode (spec 19): plans live in the visitor's browser by default and
+    /// the engine runs there too. Served to the web on `/api/health`. A
+    /// self-hosted operator who wants plans on their own server sets this to
+    /// false.
+    #[arg(long, env = "FINPLAN_LOCAL_MODE", default_value_t = true, action = clap::ArgAction::Set)]
+    pub local_mode: bool,
 
     /// Iterations a hosted guest may run on any simulation path.
     #[arg(long, env = "FINPLAN_GUEST_MAX_ITERATIONS", default_value_t = 100)]
@@ -147,6 +190,9 @@ impl ServerConfig {
         }
         if self.max_iterations == 0 {
             return Err("maximum iterations must be positive".into());
+        }
+        if self.offload.budget_free < 0 || self.offload.budget_pro < 0 {
+            return Err("offload budgets must not be negative".into());
         }
         Ok(())
     }

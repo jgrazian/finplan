@@ -1,9 +1,58 @@
 //! Scenario request bodies, and the date check they share.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::{PlanError, PlanResult};
+
+/// Whether a scenario is a plan or an AI-guided draft still being written.
+/// Drafts never appear in the scenario list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(feature = "sqlx", sqlx(type_name = "TEXT", rename_all = "lowercase"))]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum ScenarioStatus {
+    Draft,
+    Active,
+}
+
+/// A scenario as `GET /scenarios/{id}` returns it.
+#[derive(Debug, Serialize, TS)]
+#[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
+#[ts(export)]
+pub struct Scenario {
+    pub id: i64,
+    pub slug: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub start_date: String,
+    pub birth_date: Option<String>,
+    pub duration_years: i64,
+    pub inflation_profile_id: Option<i64>,
+    pub tax_config_id: Option<i64>,
+    pub collect_ledger: bool,
+    pub status: ScenarioStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    /// When this scenario last produced results, and what they said. Carried
+    /// on the row so a list of scenarios can be shown with its own history
+    /// without a request per scenario.
+    pub last_run_at: Option<String>,
+    pub last_success_rate: Option<f64>,
+}
+
+/// What lowering a scenario for the engine produced, without running it.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct CompileReport {
+    pub ok: bool,
+    pub accounts: usize,
+    pub assets: usize,
+    pub events: usize,
+    pub return_profiles: usize,
+    pub duration_years: usize,
+}
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]

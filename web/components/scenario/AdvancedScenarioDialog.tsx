@@ -10,7 +10,7 @@ import {
   NumberInput,
   Select,
 } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { Profile, Scenario, TaxConfig, UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { addYears, yearsBetween } from "@/lib/view/format";
@@ -36,6 +36,7 @@ export function AdvancedScenarioDialog({
   onClose: () => void;
   onCreated: (scenario: Scenario) => void;
 }) {
+  const api = usePlanApi();
   const [name, setName] = useState("");
   const [start, setStart] = useState(new Date().toISOString().slice(0, 10));
   const [birth, setBirth] = useState(defaults.birth_date ?? "");

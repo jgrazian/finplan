@@ -1038,6 +1038,7 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
     plan.tax_configs.insert(
         9,
         crate::graph::TaxConfigEntry {
+            description: None,
             config: crate::graph::TaxConfigRow {
                 id: 9,
                 name: "Flat".into(),
@@ -1047,7 +1048,6 @@ fn a_scenario_switches_onto_a_library_row_the_caller_loaded() {
                 standard_deduction: 0.0,
                 age_65_extra_deduction: 0.0,
             },
-            description: None,
             brackets: vec![crate::graph::TaxBracketRow {
                 threshold: 0.0,
                 rate: 0.2,

@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Blueprint, Button, CompactInput, CurrencyInput, Dropdown, Field } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { Asset, Profile } from "@/lib/api/types";
 import { tickerDefaults } from "@/lib/tickers";
 
@@ -40,6 +40,7 @@ export function NewAssetInline({
   onCreated: (asset: Asset) => void;
   onCancel: () => void;
 }) {
+  const api = usePlanApi();
   const [name, setName] = useState(suggestedName ?? "");
   const [price, setPrice] = useState(100);
   const [busy, setBusy] = useState(false);

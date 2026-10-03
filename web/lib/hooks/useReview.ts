@@ -22,7 +22,16 @@ const POLL_MS = 3_000;
  * The scenario's last review, shared by the Review tab and the "review note"
  * hooks on Portfolio and Plan, so both show the same notes.
  */
-export function useReview(scenarioId: number | undefined): ReviewState {
+export function useReview(
+  rawScenarioId: number | undefined,
+  /**
+   * Whether the plan's home has reviews at all. A local plan has none to read
+   * (they are written by the server against a stored plan, and a local plan's
+   * id means nothing there), so it is never asked: the board is simply empty.
+   */
+  available = true,
+): ReviewState {
+  const scenarioId = available ? rawScenarioId : undefined;
   const [loaded, setLoaded] = useState<{ id?: number; review?: Review | null; error?: Error }>({});
   const [nonce, setNonce] = useState(0);
   const [reviewing, setReviewing] = useState(false);

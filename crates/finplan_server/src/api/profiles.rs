@@ -4,7 +4,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
 use sqlx::{Sqlite, Transaction};
 
 use super::ReorderRequest;
@@ -14,11 +13,13 @@ use crate::db::Db;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
-use finplan_plan::compile::HISTORY_PRESETS;
-use ts_rs::TS;
+use finplan_plan::graph::DistributionRow;
+use finplan_plan::read;
+use std::collections::HashMap;
 
 use finplan_plan::specs::profiles::{
-    AssetClass, CreateProfile, DistributionSpec, UpdateProfile, check_inflation_kind,
+    AssetClass, CreateProfile, DistributionSpec, HistoryPreset, Profile, UpdateProfile,
+    check_inflation_kind,
 };
 use finplan_plan::specs::profiles::{INFLATION_NAME_TAKEN, NAME_TAKEN};
 
@@ -101,112 +102,21 @@ struct ProfileRow {
     distribution_id: i64,
 }
 
-/// One `distributions` row, as read back for reassembly.
-#[derive(Debug, sqlx::FromRow)]
-struct DistRow {
-    kind: String,
-    rate: Option<f64>,
-    mean: Option<f64>,
-    std_dev: Option<f64>,
-    scale: Option<f64>,
-    df: Option<f64>,
-    bull_id: Option<i64>,
-    bear_id: Option<i64>,
-    bull_to_bear_prob: Option<f64>,
-    bear_to_bull_prob: Option<f64>,
-    history_preset: Option<String>,
-    block_size: Option<i64>,
-}
-
-/// Rebuild a nested `DistributionSpec` from its rows.
-async fn load_distribution(state: &AppState, id: i64, depth: usize) -> ApiResult<DistributionSpec> {
-    if depth > 8 {
-        return Err(ApiError::internal("distribution graph is cyclic"));
-    }
-
-    let row: Option<DistRow> = sqlx::query_as(
-        "SELECT kind, rate, mean, std_dev, scale, df, bull_id, bear_id,
+/// Every distribution of the user's library, keyed by id, for reassembling
+/// the nested [`DistributionSpec`] of a profile (`finplan_plan::read`).
+async fn load_distributions(
+    state: &AppState,
+    user_id: &str,
+) -> ApiResult<HashMap<i64, DistributionRow>> {
+    let rows: Vec<DistributionRow> = sqlx::query_as(
+        "SELECT id, kind, rate, mean, std_dev, scale, df, bull_id, bear_id,
                 bull_to_bear_prob, bear_to_bull_prob, history_preset, block_size
-           FROM distributions WHERE id = ?1",
+           FROM distributions WHERE user_id = ?1",
     )
-    .bind(id)
-    .fetch_optional(&state.db)
+    .bind(user_id)
+    .fetch_all(&state.db)
     .await?;
-
-    let DistRow {
-        kind,
-        rate,
-        mean,
-        std_dev,
-        scale,
-        df,
-        bull_id,
-        bear_id,
-        bull_to_bear_prob: btb,
-        bear_to_bull_prob: btbull,
-        history_preset: preset,
-        block_size: block,
-    } = row.ok_or(ApiError::NotFound("distribution"))?;
-
-    Ok(match kind.as_str() {
-        "Fixed" => DistributionSpec::Fixed {
-            rate: rate.unwrap_or_default(),
-        },
-        "Normal" => DistributionSpec::Normal {
-            mean: mean.unwrap_or_default(),
-            std_dev: std_dev.unwrap_or_default(),
-        },
-        "LogNormal" => DistributionSpec::LogNormal {
-            mean: mean.unwrap_or_default(),
-            std_dev: std_dev.unwrap_or_default(),
-        },
-        "StudentT" => DistributionSpec::StudentT {
-            mean: mean.unwrap_or_default(),
-            scale: scale.unwrap_or_default(),
-            df: df.unwrap_or(5.0),
-        },
-        "RegimeSwitching" => DistributionSpec::RegimeSwitching {
-            bull: Box::new(
-                Box::pin(load_distribution(
-                    state,
-                    bull_id.unwrap_or_default(),
-                    depth + 1,
-                ))
-                .await?,
-            ),
-            bear: Box::new(
-                Box::pin(load_distribution(
-                    state,
-                    bear_id.unwrap_or_default(),
-                    depth + 1,
-                ))
-                .await?,
-            ),
-            bull_to_bear_prob: btb.unwrap_or_default(),
-            bear_to_bull_prob: btbull.unwrap_or_default(),
-        },
-        "Bootstrap" => DistributionSpec::Bootstrap {
-            preset: preset.unwrap_or_else(|| "sp500".to_string()),
-            block_size: block,
-        },
-        _ => DistributionSpec::None,
-    })
-}
-
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct Profile {
-    pub id: i64,
-    pub name: String,
-    pub description: Option<String>,
-    /// What the profile is for, where anyone has said. Null is the normal
-    /// state for a hand-made profile and simply means nothing auto-selects it.
-    pub asset_class: Option<AssetClass>,
-    pub distribution: DistributionSpec,
-    /// Names of assets and accounts pointing at this profile. Always present,
-    /// empty when nothing references it: an omitted key would make the
-    /// generated TypeScript claim a field the wire format does not carry.
-    pub used_by: Vec<String>,
+    Ok(rows.into_iter().map(|row| (row.id, row)).collect())
 }
 
 /// Every asset or account currently referencing a return profile.
@@ -238,6 +148,7 @@ async fn list_return(
     .fetch_all(&state.db)
     .await?;
 
+    let distributions = load_distributions(&state, &user.id).await?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         out.push(Profile {
@@ -245,7 +156,7 @@ async fn list_return(
             name: row.name,
             description: row.description,
             asset_class: row.asset_class.as_deref().and_then(AssetClass::parse),
-            distribution: load_distribution(&state, row.distribution_id, 0).await?,
+            distribution: read::distribution(&distributions, row.distribution_id)?,
             used_by: references(&state.db, row.id).await?,
         });
     }
@@ -306,12 +217,13 @@ async fn fetch_return(
 
     let row = row.ok_or(ApiError::NotFound("return profile"))?;
 
+    let distributions = load_distributions(&state, &user.id).await?;
     Ok(Json(Profile {
         id: row.id,
         name: row.name,
         description: row.description,
         asset_class: row.asset_class.as_deref().and_then(AssetClass::parse),
-        distribution: load_distribution(&state, row.distribution_id, 0).await?,
+        distribution: read::distribution(&distributions, row.distribution_id)?,
         used_by: references(&state.db, row.id).await?,
     }))
 }
@@ -539,6 +451,7 @@ async fn list_inflation(
     .fetch_all(&state.db)
     .await?;
 
+    let distributions = load_distributions(&state, &user.id).await?;
     let mut out = Vec::with_capacity(rows.len());
     for (id, name, description, distribution_id) in rows {
         out.push(Profile {
@@ -548,7 +461,7 @@ async fn list_inflation(
             // Inflation is not a holding, so it has no class to be one of; the
             // two share a wire shape, not a meaning for every field of it.
             asset_class: None,
-            distribution: load_distribution(&state, distribution_id, 0).await?,
+            distribution: read::distribution(&distributions, distribution_id)?,
             used_by: Vec::new(),
         });
     }
@@ -689,43 +602,8 @@ pub(crate) async fn delete_inflation_in(db: &Db, user_id: &str, id: i64) -> ApiR
     Ok(())
 }
 
-/// One bootstrap history the engine ships with, and the observations behind it.
-///
-/// The years are sent, not a mean and a spread. A resampled history has no
-/// closed-form summary — that is the whole reason to pick one over a Normal —
-/// so a client that only had two figures could not draw it, and one that drew
-/// a bell from them would be drawing the distribution the user declined.
-/// Eleven series of at most a century of `f64` is a few kilobytes.
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct HistoryPreset {
-    /// The value a `Bootstrap` distribution stores.
-    pub id: String,
-    /// Display name, e.g. `S&P 500`.
-    pub name: String,
-    /// Calendar year of `returns[0]`.
-    pub start_year: i32,
-    /// Annual total returns as fractions, one per year.
-    pub returns: Vec<f64>,
-}
-
 async fn list_presets() -> Json<Vec<HistoryPreset>> {
-    Json(
-        HISTORY_PRESETS
-            .iter()
-            .filter_map(|id| {
-                // Every id in the table resolves; `filter_map` rather than an
-                // unwrap so a mismatch drops one row instead of the process.
-                let history = finplan_plan::compile::historical_returns(id).ok()?;
-                Some(HistoryPreset {
-                    id: (*id).to_string(),
-                    name: history.name.to_string(),
-                    start_year: i32::from(history.start_year),
-                    returns: history.returns.to_vec(),
-                })
-            })
-            .collect(),
-    )
+    Json(finplan_plan::read::history_presets())
 }
 
 impl ActivityFields for CreateProfile {

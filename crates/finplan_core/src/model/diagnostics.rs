@@ -178,7 +178,10 @@ fn median(values: &mut [f64]) -> Option<f64> {
 }
 
 /// Mergeable per-batch state behind `FundingDiagnostics`.
-#[derive(Debug, Clone, Default)]
+///
+/// Serializable because a batch can run in another process (a WebAssembly
+/// worker) and hand this back to be merged.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FundingAccumulator {
     iterations: usize,
     failed: usize,

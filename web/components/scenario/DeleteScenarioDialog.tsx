@@ -1,7 +1,7 @@
 "use client";
 
 import { Dialog } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 
 /**
@@ -19,6 +19,7 @@ export function DeleteScenarioDialog({
   onClose: () => void;
   onDeleted: (id: number) => void;
 }) {
+  const api = usePlanApi();
   const submit = useSubmit();
   return (
     <Dialog

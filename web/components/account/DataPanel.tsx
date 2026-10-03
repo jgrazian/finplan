@@ -1,7 +1,6 @@
 "use client";
 
-import { http } from "@/lib/api/http";
-import type { PlanArchive } from "@/lib/api/generated/PlanArchive";
+import { planApiFor } from "@/lib/nav/api";
 import { ImportPanel } from "./ImportPanel";
 import { useState } from "react";
 import { Blueprint, Button, Hr, Table, Td, Th } from "@/components/ui";
@@ -55,7 +54,7 @@ export function DataPanel({
     setExporting("all");
     exportJob.run(
       async () =>
-        download(`finplan-${new Date().toISOString().slice(0, 10)}.json`, await http.get<PlanArchive>("/archives")),
+        download(`finplan-${new Date().toISOString().slice(0, 10)}.json`, await planApiFor("cloud").archives.exportAll()),
       () => setExporting(undefined),
     );
   };

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Dialog, Dropdown, Field, Input } from "@/components/ui";
-import { api } from "@/lib/api/client";
+import { usePlanApi } from "@/lib/nav";
 import type { AssetClass, HistoryPreset, Profile } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { ASSET_CLASSES, CLASS_LABEL } from "@/lib/tickers";
@@ -32,6 +32,7 @@ export function NewProfileDialog({
   onClose: () => void;
   onCreated: (profile: Profile) => void;
 }) {
+  const api = usePlanApi();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [assetClass, setAssetClass] = useState<AssetClass | null>(null);

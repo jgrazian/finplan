@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { EffectSpec } from "@/lib/api/types";
-import { api } from "@/lib/api/client";
+import type { EffectSpec, ExpressionValidation } from "@/lib/api/types";
+import { usePlanApi } from "@/lib/nav";
 import { Button, Dropdown, Field } from "@/components/ui";
 import { Note, type TriggerContext, accountOptions, assetOptions } from "./TriggerFields";
 import { byteSpanToText, completionToken, nameInsertion, parameterReference, replaceText, type TextRange } from "./amountDraft";
 
-type Validation = Awaited<ReturnType<typeof api.expressions.validate>>;
+type Validation = ExpressionValidation;
 /**
  * The DSL's functions, with what each one reads — the Insert function menu's
  * rows, and the completion list. Wording follows spec/14_expression_dsl.md.
@@ -61,6 +61,7 @@ export function AmountExpression({ source, effect, context, onChange, disabled, 
   onChange: (next: string) => void;
   disabled?: boolean;
 }) {
+  const api = usePlanApi();
   const input = useRef<HTMLTextAreaElement>(null);
   const [selection, setSelection] = useState<TextRange>({ start: source.length, end: source.length });
   const [validated, setValidated] = useState<{ key: string; result: Validation } | null>(null);
@@ -116,7 +117,7 @@ export function AmountExpression({ source, effect, context, onChange, disabled, 
         .finally(() => { if (active) setCheckingKey(null); });
     }, 350);
     return () => { active = false; clearTimeout(timer); };
-  }, [source, effect, context.scenarioId, requestKey]);
+  }, [api, source, effect, context.scenarioId, requestKey]);
 
   function commit(range: TextRange, value: string) {
     const result = replaceText(source, range, value);

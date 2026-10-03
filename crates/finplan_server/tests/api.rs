@@ -95,6 +95,8 @@ impl TestApp {
             guest_access: true,
             guest_max_iterations: 100,
             guest_retention_days: 30,
+            local_mode: true,
+            offload: Default::default(),
             local_mail_sink: None,
             cors_origins: vec!["http://localhost:3000".into()],
         };
@@ -3236,6 +3238,9 @@ mod real_estate_cases;
 
 #[path = "cases/results_projection.rs"]
 mod results_projection_cases;
+
+#[path = "cases/plan_reads.rs"]
+mod plan_reads_cases;
 
 #[path = "cases/what_if.rs"]
 mod what_if_cases;

@@ -33,7 +33,7 @@ use ts_rs::TS;
 
 use super::draft_agent::{self, DraftAnswers, DraftMessage, StartDrafting};
 use super::runs::{self, Run};
-use super::scenarios::{SCENARIO_COLUMNS, Scenario};
+use super::scenarios::SCENARIO_COLUMNS;
 use super::suggestions::{self, ApplySuggestion, ApplyTo, SuggestionPath};
 use crate::auth::session::CurrentUser;
 use crate::db::Db;
@@ -44,6 +44,7 @@ use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 use crate::suggest::ai::draft::DraftQuestion;
 use finplan_plan::compile;
+use finplan_plan::specs::scenarios::Scenario;
 
 pub fn router() -> Router<AppState> {
     Router::new()

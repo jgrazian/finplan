@@ -16,6 +16,23 @@ pub struct Bracket {
     pub rate: f64,
 }
 
+/// A tax config of the caller's library, as the tax config routes return it.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct TaxConfig {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub state_rate: f64,
+    pub capital_gains_rate: f64,
+    pub early_withdrawal_penalty_rate: f64,
+    /// Federal standard deduction, in the brackets' dollars.
+    pub standard_deduction: f64,
+    /// Added to the deduction from the tax year the person turns 65.
+    pub age_65_extra_deduction: f64,
+    pub federal_brackets: Vec<Bracket>,
+}
+
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct CreateTaxConfig {

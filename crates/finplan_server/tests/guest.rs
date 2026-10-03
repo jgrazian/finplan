@@ -33,6 +33,8 @@ fn config(hosted: bool) -> ServerConfig {
         guest_access: true,
         guest_max_iterations: 100,
         guest_retention_days: 30,
+        local_mode: true,
+        offload: Default::default(),
         local_mail_sink: None,
         bind: "127.0.0.1:0".into(),
         database_url: "sqlite::memory:".into(),

@@ -180,16 +180,16 @@ pub async fn load_connection(
     .bind(user_id)
     .fetch_all(&mut *db)
     .await?;
-    let mut tax_notes: HashMap<i64, Option<String>> = sqlx::query_as::<_, (i64, Option<String>)>(
-        "SELECT id, description FROM tax_configs WHERE user_id = ?1",
-    )
-    .bind(user_id)
-    .fetch_all(&mut *db)
-    .await?
-    .into_iter()
-    .collect();
+    let tax_descriptions: HashMap<i64, Option<String>> =
+        sqlx::query_as::<_, (i64, Option<String>)>(
+            "SELECT id, description FROM tax_configs WHERE user_id = ?1",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *db)
+        .await?
+        .into_iter()
+        .collect();
     for config in config_rows {
-        let description = tax_notes.remove(&config.id).flatten();
         let brackets: Vec<TaxBracketRow> = sqlx::query_as(
             "SELECT threshold, rate FROM tax_brackets
               WHERE tax_config_id = ?1 ORDER BY threshold ASC",
@@ -200,8 +200,8 @@ pub async fn load_connection(
         tax_configs.insert(
             config.id,
             TaxConfigEntry {
+                description: tax_descriptions.get(&config.id).cloned().flatten(),
                 config,
-                description,
                 brackets,
             },
         );
@@ -209,7 +209,7 @@ pub async fn load_connection(
     let inflation_profiles: HashMap<i64, InflationEntry> =
         sqlx::query_as::<_, (i64, String, i64, Option<String>, i64)>(
             "SELECT id, name, distribution_id, description, sort_order
-               FROM inflation_profiles WHERE user_id = ?1",
+           FROM inflation_profiles WHERE user_id = ?1",
         )
         .bind(user_id)
         .fetch_all(&mut *db)

@@ -82,6 +82,7 @@ struct Metrics {
     mutations: Family<Labels, Counter>,
     auth: Family<Labels, Counter>,
     guests_purged: Family<Labels, Counter>,
+    offload_cost: Family<Labels, Counter>,
     errors: Family<Labels, Counter>,
     submissions: Family<Labels, Counter>,
     rejections: Family<Labels, Counter>,
@@ -185,6 +186,11 @@ impl Telemetry {
             "Guest users deleted by retention, by whether they had built a plan",
             Family::<Labels, Counter>::default()
         );
+        let offload_cost = metric!(
+            "offload_cost_units",
+            "Cost units charged to offload budgets at admission, by tier",
+            Family::<Labels, Counter>::default()
+        );
         let errors = metric!(
             "server_errors",
             "Unexpected failures at their handling boundary",
@@ -251,6 +257,7 @@ impl Telemetry {
             JobKind::ReviewAi,
             JobKind::ReviewChat,
             JobKind::PlanChat,
+            JobKind::Offload,
         ] {
             queued.get_or_create(&job_labels(kind)).set(0);
             oldest.get_or_create(&job_labels(kind)).set(0.0);
@@ -483,6 +490,7 @@ impl Telemetry {
             JobKind::ReviewAi,
             JobKind::ReviewChat,
             JobKind::PlanChat,
+            JobKind::Offload,
         ] {
             drop(canceled_before_start.get_or_create(&job_labels(kind)));
             for outcome in [
@@ -537,6 +545,7 @@ impl Telemetry {
             mutations,
             auth,
             guests_purged,
+            offload_cost,
             errors,
             submissions,
             rejections,
@@ -654,6 +663,13 @@ impl Telemetry {
                 .get_or_create(&labels([("kind", kind)]))
                 .inc_by(n);
         }
+    }
+    /// Cost units a server offload (`api::compute`) was charged, by tier.
+    pub fn offload_cost(&self, tier: Tier, units: u64) {
+        self.0
+            .offload_cost
+            .get_or_create(&labels([("tier", tier.as_str())]))
+            .inc_by(units);
     }
     pub fn count_error(&self, component: Component, class: ErrorClass) {
         self.0

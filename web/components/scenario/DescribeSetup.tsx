@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { ChatBubble, ChatText } from "@/components/chat/ChatBubble";
 import { Blueprint, Button, CurrencyInput, DateInput, Input, SegmentedControl, Tag } from "@/components/ui";
 import { api } from "@/lib/api/client";
+import { planApiFor } from "@/lib/nav";
 import type { AiDrafts } from "@/lib/api/generated/AiDrafts";
 import type { DocumentManifest } from "@/lib/api/generated/DocumentManifest";
 import type { DraftQuestion } from "@/lib/api/generated/DraftQuestion";
@@ -191,7 +192,11 @@ export function DescribeSetup({
     const id = draftId.current;
     if (holds == null || id == null) return;
     let live = true;
-    Promise.all([api.accounts.list(id), api.assets.list(id), api.events.list(id)]).then(
+    Promise.all([
+      planApiFor("cloud").accounts.list(id),
+      planApiFor("cloud").assets.list(id),
+      planApiFor("cloud").events.list(id),
+    ]).then(
       ([accounts, assets, events]) => live && setContents(draftContents(accounts, assets, events)),
       // The counts still say what is there; the lists catch up on the next change.
       () => undefined,

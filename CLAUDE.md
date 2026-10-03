@@ -103,6 +103,8 @@ anything doing I/O; CI builds it for `wasm32-unknown-unknown` with
 - `library.rs` - the user's return/inflation profiles and tax configs as a `Library` value: `attach` to a graph, `LibraryOp`/`apply_library`, the starter `seed()`
 - `create.rs` - `new_plan` and `duplicate` (the twins of `POST /scenarios` and `/duplicate`)
 - `compile/` - `ScenarioGraph` -> `SimulationConfig`
+- `read.rs` - every plan-shaped GET body (accounts, assets, events, parameters, profiles, tax configs, compile report, preflight) built from a graph; the server's routes and the local store answer with it
+- `preflight.rs`, `archive.rs` - the pre-run review; `PlanArchive` pack/unpack/preview and the import checks
 - `snapshot.rs` - canonical input snapshot, its hash, `MODEL_VERSION`
 - `results/` - `project()` a `MonteCarloSummary` into the results bodies; ledger, funding views
 - `suggest/`, `templates/`, `rules/` - review-note changes, templates and rule-based notes

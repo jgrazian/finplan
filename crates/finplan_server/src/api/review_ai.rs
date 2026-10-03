@@ -769,7 +769,8 @@ impl ToolHost for Tools<'_> {
     }
 
     fn preflight(&self) -> Result<Value, String> {
-        serde_json::to_value(super::onboarding::review(&self.graph)).map_err(|e| e.to_string())
+        serde_json::to_value(finplan_plan::preflight::preflight(&self.graph))
+            .map_err(|e| e.to_string())
     }
 
     fn goal_seek<'b>(

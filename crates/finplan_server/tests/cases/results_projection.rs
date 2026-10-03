@@ -181,7 +181,7 @@ async fn run_and_repersist(
 }
 
 /// A test app that also hands out the server state, for its database.
-async fn app_with_state() -> (TestApp, finplan_server::state::AppState) {
+pub(super) async fn app_with_state() -> (TestApp, finplan_server::state::AppState) {
     let dir = tempfile::tempdir().expect("temp dir");
     let config = ServerConfig {
         mail: Default::default(),
@@ -205,6 +205,8 @@ async fn app_with_state() -> (TestApp, finplan_server::state::AppState) {
         guest_access: true,
         guest_max_iterations: 100,
         guest_retention_days: 30,
+        local_mode: true,
+        offload: Default::default(),
         local_mail_sink: None,
         cors_origins: vec!["http://localhost:3000".into()],
     };

@@ -4,14 +4,14 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
-use finplan_plan::compile;
+use finplan_plan::specs::scenarios::{CompileReport, Scenario, ScenarioStatus};
 use ts_rs::TS;
 
 use finplan_plan::specs::scenarios::{CreateScenario, UpdateScenario, validate_date};
@@ -22,40 +22,6 @@ pub fn router() -> Router<AppState> {
         .route("/scenarios/{id}", get(fetch).patch(update).delete(destroy))
         .route("/scenarios/{id}/duplicate", post(duplicate))
         .route("/scenarios/{id}/compile", post(compile_check))
-}
-
-/// Whether a scenario is a plan or an AI-guided draft still being written
-/// (see `drafts`). Drafts never appear in the scenario list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type, TS)]
-#[serde(rename_all = "lowercase")]
-#[sqlx(type_name = "TEXT", rename_all = "lowercase")]
-#[ts(export)]
-pub enum ScenarioStatus {
-    Draft,
-    Active,
-}
-
-#[derive(Debug, Serialize, sqlx::FromRow, TS)]
-#[ts(export)]
-pub struct Scenario {
-    pub id: i64,
-    pub slug: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub start_date: String,
-    pub birth_date: Option<String>,
-    pub duration_years: i64,
-    pub inflation_profile_id: Option<i64>,
-    pub tax_config_id: Option<i64>,
-    pub collect_ledger: bool,
-    pub status: ScenarioStatus,
-    pub created_at: String,
-    pub updated_at: String,
-    /// When this scenario last produced results, and what they said. Carried
-    /// on the row so a list of scenarios can be shown with its own history
-    /// without a request per scenario.
-    pub last_run_at: Option<String>,
-    pub last_success_rate: Option<f64>,
 }
 
 /// The trailing two columns describe the scenario's latest successful run.
@@ -346,17 +312,6 @@ async fn duplicate(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-#[derive(Debug, Serialize, TS)]
-#[ts(export)]
-pub struct CompileReport {
-    pub ok: bool,
-    pub accounts: usize,
-    pub assets: usize,
-    pub events: usize,
-    pub return_profiles: usize,
-    pub duration_years: usize,
-}
-
 /// Lower the scenario without running it. Lets the UI surface configuration
 /// errors before a user commits to a long Monte Carlo run.
 async fn compile_check(
@@ -365,16 +320,7 @@ async fn compile_check(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<CompileReport>> {
     let graph = crate::db::graph::load(&state.db, id, &user.id).await?;
-    let compiled = compile::compile(&graph)?;
-
-    Ok(Json(CompileReport {
-        ok: true,
-        accounts: compiled.config.accounts.len(),
-        assets: compiled.config.asset_prices.len(),
-        events: compiled.config.events.len(),
-        return_profiles: compiled.config.return_profiles.len(),
-        duration_years: compiled.config.duration_years,
-    }))
+    Ok(Json(finplan_plan::read::compile_report(&graph)?))
 }
 
 async fn owned_assumptions(

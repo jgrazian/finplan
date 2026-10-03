@@ -21,16 +21,27 @@ import { ReviewScreen } from "@/components/review";
 import { NewScenarioScreen } from "@/components/scenario/NewScenarioScreen";
 import { SessionExpiredDialog, StatusBar } from "@/components/status";
 import { Button, Tag } from "@/components/ui";
-import { api } from "@/lib/api/client";
 import { historyApi } from "@/lib/api/history";
 import type { Scenario as ApiScenario, PreflightIssue, UserResponse } from "@/lib/api/types";
 import { useAsync } from "@/lib/hooks/useAsync";
+import { usePlanList } from "@/lib/hooks/usePlanList";
 import { useReview } from "@/lib/hooks/useReview";
 import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
-import { DEFAULT_TAB, NavProvider, type TabId, useNav } from "@/lib/nav";
-import { resolveScenario } from "@/lib/nav/url";
+import { useLocalMode } from "@/lib/local/useLocalMode";
+import {
+  DEFAULT_TAB,
+  NavProvider,
+  OpenPlanProvider,
+  type PlanHome,
+  type TabId,
+  homeOf,
+  planApiFor,
+  planCapabilities,
+  resolveScenario,
+  useNav,
+} from "@/lib/nav";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import { useApplyThemeMode } from "@/lib/theme";
 import type { InflationProfile, Scenario } from "@/lib/types";
@@ -143,15 +154,15 @@ function Workbench({
     nearestStop(user.default_iterations),
   );
 
-  const scenarios = useAsync(() => api.scenarios.list(), []);
+  // Plans live in one of two homes (spec 19). The list is both, each asked
+  // only when it can answer, and one failing leaves the other's plans listed.
+  const localMode = useLocalMode();
+  const scenarios = usePlanList({ local: localMode, cloud: true });
+  // Where a plan made from here is kept. Local first when it is on: the plan
+  // stays on the device unless the person moves it.
+  const [chosenHome, setNewHome] = useState<PlanHome>("local");
+  const newHome: PlanHome = localMode ? chosenHome : "cloud";
   const access = useAsync(() => historyApi.entitlements(), []);
-  // The server refuses a run above the account's cap, so what is asked for is
-  // brought down to the highest stop the cap allows before anything is sent.
-  const maxIterations = access.data?.max_iterations;
-  const effort = useMemo(
-    () => clampEffort(requestedEffort, maxIterations),
-    [requestedEffort, maxIterations],
-  );
   const guestState = useMemo(
     () => ({
       guest: user.guest,
@@ -162,16 +173,21 @@ function Workbench({
     }),
     [user.guest, access.data?.hosted, access.data?.guest_retention_days, onSignUp, onSignIn],
   );
+  // The libraries a new plan starts from are its home's, so they follow
+  // `newHome` rather than the plan on screen.
   const libraries = useAsync(
-    async () =>
-      Promise.all([api.inflationProfiles.list(), api.taxConfigs.list()]),
-    [],
+    async () => {
+      const homeApi = planApiFor(newHome);
+      return Promise.all([homeApi.inflationProfiles.list(), homeApi.taxConfigs.list()]);
+    },
+    [newHome],
   );
   const [inflationProfiles = [], taxConfigs = []] = libraries.data ?? [];
   const [creating, setCreating] = useState(false);
   const [recentlyCreated, setRecentlyCreated] = useState<ApiScenario>();
   // Bridge the list refresh without resurrecting this row after later deletion.
-  if (recentlyCreated && scenarios.data?.some((row) => row.id === recentlyCreated.id)) {
+  // By slug: a local and a cloud plan can share a numeric id.
+  if (recentlyCreated && scenarios.data?.some((row) => row.slug === recentlyCreated.slug)) {
     setRecentlyCreated(undefined);
   }
   // A draft (design 2c) is opened on Review but is never a plan in the list:
@@ -180,7 +196,7 @@ function Workbench({
   const [draft, setDraft] = useState<ApiScenario>();
   const list = useMemo(() => {
     const rows = scenarios.data ?? [];
-    return recentlyCreated && !rows.some((row) => row.id === recentlyCreated.id)
+    return recentlyCreated && !rows.some((row) => row.slug === recentlyCreated.slug)
       ? [recentlyCreated, ...rows] : rows;
   }, [scenarios.data, recentlyCreated]);
 
@@ -188,28 +204,53 @@ function Workbench({
   // until the query names something else. Derived, so a scenario deleted
   // elsewhere — or a stale id in a bookmarked URL — falls back rather than
   // leaving the screen pointed at nothing.
-  const selectedScenario =
-    (draft != null && nav.scenario === draft.slug ? draft : undefined) ??
-    resolveScenario(list, nav.scenario);
+  //
+  // Except when the query names a plan in a home that failed to answer: the
+  // plan is probably there, so falling back to the other home's first plan
+  // would rewrite the link to something else. That is an error instead.
+  const homeDown =
+    nav.scenario != null &&
+    scenarios.failed.includes(homeOf(nav.scenario)) &&
+    !list.some((row) => row.slug === nav.scenario);
+  const selectedScenario = homeDown
+    ? undefined
+    : ((draft != null && nav.scenario === draft.slug ? draft : undefined) ??
+      resolveScenario(list, nav.scenario));
   const isDraft = selectedScenario?.status === "draft";
   const scenarioId = selectedScenario?.id;
   const scenarioSlug = selectedScenario?.slug;
+  // What the open plan's home can do: AI features need a stored cloud plan,
+  // and the iteration cap is the server's, not the device's.
+  const capabilities = planCapabilities(scenarioSlug, { account: !user.guest });
+
+  // The server refuses a run above the account's cap, so what is asked for is
+  // brought down to the highest stop the cap allows before anything is sent.
+  // A local run is on the visitor's own CPU, where a cap is decoration.
+  const maxIterations = capabilities.home === "local" ? undefined : access.data?.max_iterations;
+  const effort = useMemo(
+    () => clampEffort(requestedEffort, maxIterations),
+    [requestedEffort, maxIterations],
+  );
 
   // Canonicalize fallbacks and legacy numeric bookmarks without adding history.
   useEffect(() => {
     if (scenarioSlug != null) nav.adoptScenario(scenarioSlug);
   }, [nav, scenarioSlug]);
 
-  const workspace = useWorkspace(scenarioId);
-  const run = useRun(workspace.scenario);
-  const review = useReview(scenarioId);
+  const workspace = useWorkspace(scenarioId, scenarioSlug);
+  const run = useRun(workspace.scenario, scenarioSlug);
+  const review = useReview(scenarioId, capabilities.ai);
   const status = useServerStatus();
+  // The server being unreachable stops edits to a cloud plan; one on this
+  // device is edited and run without it.
+  const planOffline = status.offline && capabilities.home === "cloud";
 
   // What would stop the next run. Re-read on every accepted edit, so fixing
   // an issue clears it from the strip without a reload.
   const preflight = useAsync(
-    async () => (scenarioId == null ? undefined : api.scenarios.preflight(scenarioId)),
-    [scenarioId, workspace.scenario?.updated_at],
+    async () =>
+      scenarioId == null ? undefined : planApiFor(scenarioSlug).scenarios.preflight(scenarioId),
+    [scenarioId, scenarioSlug, workspace.scenario?.updated_at],
   );
   const loadedRun = run.history.find((r) => r.id === run.selectedRunId);
   // Names for the rows warnings refer to, and each account's kind for the
@@ -305,7 +346,8 @@ function Workbench({
   // the copy's own Run button does that.
   const openCopy = useCallback(
     async (copyId: number) => {
-      const created = await api.scenarios.get(copyId);
+      // Notes are the server's, so the copy a note was applied to is a cloud plan.
+      const created = await planApiFor("cloud").scenarios.get(copyId);
       setRecentlyCreated(created);
       nav.openScenario(created.slug, "plan");
       scenarios.reload();
@@ -339,24 +381,25 @@ function Workbench({
   // and the run is left in the background rather than pulling the screen to
   // Results out from under whatever is being edited. Not on Review: applying
   // notes there batches edits for one deliberate re-run, which its banner offers.
-  const autoRun = user.auto_run && !status.offline && tab !== "review" && !isDraft;
+  const autoRun = user.auto_run && !planOffline && tab !== "review" && !isDraft;
   const updatedAt = workspace.scenario?.updated_at;
-  const seen = useRef<{ id?: number; at?: string }>({});
+  // Keyed by slug: two homes can both have a plan numbered 3.
+  const seen = useRef<{ slug?: string; at?: string }>({});
   const startQuietly = useRef(() => run.start(effort));
   useEffect(() => {
     startQuietly.current = () => run.start(effort);
   }, [run, effort]);
 
   useEffect(() => {
-    if (scenarioId == null || updatedAt == null) return;
+    if (scenarioSlug == null || updatedAt == null) return;
     const previous = seen.current;
-    seen.current = { id: scenarioId, at: updatedAt };
-    if (previous.id !== scenarioId || previous.at == null || previous.at === updatedAt) return;
+    seen.current = { slug: scenarioSlug, at: updatedAt };
+    if (previous.slug !== scenarioSlug || previous.at == null || previous.at === updatedAt) return;
     if (!autoRun) return;
 
     const timer = setTimeout(() => void startQuietly.current(), AUTO_RUN_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [scenarioId, updatedAt, autoRun, effort]);
+  }, [scenarioSlug, updatedAt, autoRun, effort]);
 
   // Keyboard parity with the TUI: `r` runs, as the header's keycap advertises.
   useEffect(() => {
@@ -393,37 +436,53 @@ function Workbench({
 
   // A scenario was deleted: drop it from the list, and if it was the one on
   // screen, move to the next plan (or the empty state when none is left).
+  // The id alone is ambiguous across homes, so the caller says which one it
+  // was deleted from.
   const scenarioDeleted = useCallback(
-    (id: number) => {
-      if (recentlyCreated?.id === id) setRecentlyCreated(undefined);
-      if (id === scenarioId) {
-        const next = list.find((row) => row.id !== id);
+    (id: number, home: PlanHome) => {
+      const gone = (row: { id: number; slug: string }) => row.id === id && homeOf(row.slug) === home;
+      if (recentlyCreated && gone(recentlyCreated)) setRecentlyCreated(undefined);
+      if (scenarioSlug != null && home === homeOf(scenarioSlug) && id === scenarioId) {
+        const next = list.find((row) => !gone(row));
         if (next) nav.setScenario(next.slug);
       }
       scenarios.reload();
     },
-    [recentlyCreated, scenarioId, list, nav, scenarios],
+    [recentlyCreated, scenarioId, scenarioSlug, list, nav, scenarios],
   );
+  // The plan on screen is deleted from its own home; the account's list holds only the cloud's.
+  const openPlanDeleted = useCallback(
+    (id: number) => scenarioDeleted(id, homeOf(scenarioSlug)),
+    [scenarioDeleted, scenarioSlug],
+  );
+  const cloudPlanDeleted = useCallback(
+    (id: number) => scenarioDeleted(id, "cloud"),
+    [scenarioDeleted],
+  );
+  const cloudPlans = useMemo(() => list.filter((row) => homeOf(row.slug) === "cloud"), [list]);
 
   const headerScenarios = useMemo(
     () => list.map((s) => ({
       ...toHeaderScenario(s),
-      ...(s.id === scenarioId ? { dirty: run.stale } : {}),
+      ...(s.slug === scenarioSlug ? { dirty: run.stale } : {}),
     })),
-    [list, scenarioId, run.stale],
+    [list, scenarioSlug, run.stale],
   );
 
   const activateInflation = useCallback(
     async (profile: InflationProfile) => {
       if (scenarioId == null) return;
-      await api.scenarios.update(scenarioId, { inflation_profile_id: profile.serverId });
+      await planApiFor(scenarioSlug).scenarios.update(scenarioId, {
+        inflation_profile_id: profile.serverId,
+      });
       saved();
     },
-    [scenarioId, saved],
+    [scenarioId, scenarioSlug, saved],
   );
 
   return (
     <GuestProvider value={guestState}>
+    <OpenPlanProvider planRef={scenarioSlug}>
     <main className="app-main">
       <AppShell>
         <AppHeader
@@ -459,7 +518,7 @@ function Workbench({
           run={run.run}
           running={run.active}
           onCancel={run.cancel}
-          offline={status.offline}
+          offline={planOffline}
         />
 
         {/* Server state lives here, directly under the nav and above every
@@ -479,12 +538,23 @@ function Workbench({
           </p>
         )}
 
+        {scenarios.failed.length > 0 && !scenarios.error && (
+          <p role="status" style={{ margin: 0, padding: "10px 16px", fontSize: 12, borderBottom: "1px solid var(--color-divider)" }}>
+            Your {scenarios.failed.join(" and ")} plans could not be loaded, so they are missing from the list.{" "}
+            <button type="button" className="linkbtn" onClick={scenarios.reload}>
+              Try again
+            </button>
+          </p>
+        )}
+
         {creating ? (
           <NewScenarioScreen
             defaults={user}
             inflationProfiles={inflationProfiles}
             taxConfigs={taxConfigs}
             access={access.data}
+            home={newHome}
+            onHomeChange={localMode ? setNewHome : undefined}
             onClose={() => {
               setCreating(false);
               // A draft started here spent one of the month's drafts.
@@ -508,15 +578,20 @@ function Workbench({
         ) : tab === "account" ? (
           <AccountScreen
             user={user}
-            scenarios={list}
+            scenarios={cloudPlans}
             offline={status.offline}
             onUserChange={session.update}
             onSignOut={() => void session.signOut()}
             onDeleted={session.forget}
-            onScenarioDeleted={scenarioDeleted}
+            onScenarioDeleted={cloudPlanDeleted}
           />
         ) : scenarios.error ? (
           <EmptyState title="Cannot reach the API" detail={scenarios.error.message} />
+        ) : homeDown ? (
+          <EmptyState
+            title={`Cannot load your ${homeOf(nav.scenario) === "local" ? "local" : "cloud"} plans`}
+            detail="The plan this link opens is kept there. Reload to try again."
+          />
         ) : workspace.error ? (
           <EmptyState title="Cannot load this scenario" detail={workspace.error.message} />
         ) : scenarios.data && list.length === 0 ? (
@@ -537,7 +612,7 @@ function Workbench({
                 effort={effort}
                 onEffortChange={setEffort}
                 maxIterations={maxIterations}
-                offline={status.offline}
+                offline={planOffline}
                 onRun={start}
                 issues={issues}
                 onReviewIssue={reviewIssue}
@@ -546,7 +621,7 @@ function Workbench({
             )}
             {tab === "portfolio" && (
               <PortfolioScreen
-                offline={status.offline}
+                offline={planOffline}
                 scenarioId={workspace.scenario.id}
                 accounts={workspace.accounts}
                 raw={workspace.raw}
@@ -561,7 +636,7 @@ function Workbench({
             )}
             {tab === "plan" && (
               <PlanScreen
-                offline={status.offline}
+                offline={planOffline}
                 scenarioId={workspace.scenario.id}
                 params={workspace.params}
                 assumptions={workspace.assumptions}
@@ -571,13 +646,13 @@ function Workbench({
                 onChanged={saved}
                 reviewNotes={reviewCounts.events}
                 onOpenReview={openReview}
-                onScenarioDeleted={scenarioDeleted}
+                onScenarioDeleted={openPlanDeleted}
               />
             )}
             {tab === "review" && (
               <ReviewScreen
                 scenarioId={workspace.scenario.id}
-                planChat={access.data?.ai_plan_chat}
+                planChat={capabilities.ai ? access.data?.ai_plan_chat : undefined}
                 onChatSpent={access.reload}
                 draft={
                   isDraft && selectedScenario
@@ -621,6 +696,7 @@ function Workbench({
       )}
 
     </main>
+    </OpenPlanProvider>
     </GuestProvider>
   );
 }

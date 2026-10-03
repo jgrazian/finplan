@@ -18,6 +18,11 @@ export type UserResponse = {
    * Re-run the active scenario by itself once an edit has settled.
    */
   auto_run: boolean;
+  /**
+   * Where a new plan is created by default (spec 19): on this device or on
+   * FinPlan's server. Every account starts on `"local"`.
+   */
+  default_plan_home: "local" | "cloud";
   created_at: string;
   /**
    * A guest (spec 17): `email` is a placeholder never to be shown, and the

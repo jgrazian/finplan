@@ -603,7 +603,7 @@ pub(crate) async fn load_profiles(
             continue;
         }
         let row: Option<ReturnProfileRow> = sqlx::query_as(
-            "SELECT id, name, description, distribution_id, asset_class, sort_order
+            "SELECT id, name, description, distribution_id, asset_class
                FROM return_profiles WHERE id = ?1 AND user_id = ?2",
         )
         .bind(id)
@@ -673,12 +673,6 @@ pub(crate) async fn load_assumptions(
         .bind(user_id)
         .fetch_optional(db)
         .await?;
-        let description: Option<String> =
-            sqlx::query_scalar("SELECT description FROM tax_configs WHERE id = ?1")
-                .bind(id)
-                .fetch_optional(db)
-                .await?
-                .flatten();
         if let Some(config) = config {
             let brackets: Vec<TaxBracketRow> = sqlx::query_as(
                 "SELECT threshold, rate FROM tax_brackets
@@ -687,6 +681,11 @@ pub(crate) async fn load_assumptions(
             .bind(id)
             .fetch_all(db)
             .await?;
+            let description: Option<String> =
+                sqlx::query_scalar("SELECT description FROM tax_configs WHERE id = ?1")
+                    .bind(id)
+                    .fetch_one(db)
+                    .await?;
             graph.tax_configs.insert(
                 id,
                 TaxConfigEntry {
@@ -703,7 +702,8 @@ pub(crate) async fn load_assumptions(
             continue;
         }
         let row: Option<(String, i64, Option<String>, i64)> = sqlx::query_as(
-            "SELECT name, distribution_id, description, sort_order FROM inflation_profiles WHERE id = ?1 AND user_id = ?2",
+            "SELECT name, distribution_id, description, sort_order
+               FROM inflation_profiles WHERE id = ?1 AND user_id = ?2",
         )
         .bind(id)
         .bind(user_id)

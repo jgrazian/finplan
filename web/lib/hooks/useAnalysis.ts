@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api/client";
 import type { Analysis, AnalysisOutcome, CreateAnalysis } from "@/lib/api/types";
 import { isTerminal } from "@/lib/api/types";
+import { usePlanApi } from "@/lib/nav/plan";
 import type { GraphSpec } from "@/lib/view/sweep";
 import { useAsync } from "./useAsync";
 
@@ -49,20 +49,22 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
 ): AnalysisState<Extract<AnalysisOutcome, { kind: K }>> {
   type Results = Extract<AnalysisOutcome, { kind: K }>;
 
+  // A job id is the home's own, so every call below goes to the one that issued it.
+  const api = usePlanApi();
   const [job, setJob] = useState<Analysis>();
   const [results, setResults] = useState<{ outcome: Results; job: number }>();
   const [error, setError] = useState<string>();
 
   // A job belongs to the scenario it was started for. Switching scenarios has
   // to drop it rather than leave another plan's grid on screen under a new name.
-  const openedFor = useRef(scenarioId);
+  const openedFor = useRef({ scenarioId, api });
   useEffect(() => {
-    if (openedFor.current === scenarioId) return;
-    openedFor.current = scenarioId;
+    if (openedFor.current.scenarioId === scenarioId && openedFor.current.api === api) return;
+    openedFor.current = { scenarioId, api };
     setJob(undefined);
     setResults(undefined);
     setError(undefined);
-  }, [scenarioId]);
+  }, [scenarioId, api]);
 
   const jobId = job?.id;
   const status = job?.status;
@@ -90,7 +92,7 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
       live = false;
       clearInterval(timer);
     };
-  }, [jobId, status]);
+  }, [api, jobId, status]);
 
   // Read the answer once, when it is there.
   useEffect(() => {
@@ -113,7 +115,7 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
     return () => {
       live = false;
     };
-  }, [jobId, status, kind]);
+  }, [api, jobId, status, kind]);
 
   const start = useCallback(
     async (body: CreateAnalysis) => {
@@ -132,7 +134,7 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
         return undefined;
       }
     },
-    [scenarioId],
+    [api, scenarioId],
   );
 
   const cancel = useCallback(async () => {
@@ -142,7 +144,7 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [jobId]);
+  }, [api, jobId]);
 
   const clear = useCallback(() => {
     setJob(undefined);
@@ -182,9 +184,10 @@ export function useAnalysis<K extends AnalysisOutcome["kind"]>(
  * screen chooses between the two, preferring whatever this session has run.
  */
 export function useCachedSweep(scenarioId: number | undefined) {
+  const api = usePlanApi();
   const { data, loading } = useAsync(
     async () => (scenarioId == null ? null : api.analysis.cachedSweep(scenarioId)),
-    [scenarioId],
+    [api, scenarioId],
   );
   const cached = data ?? undefined;
 
@@ -224,6 +227,7 @@ export function useSweepLayout(
   scenarioId: number | undefined,
   stored: GraphSpec[] | undefined,
 ) {
+  const api = usePlanApi();
   const [edited, setEdited] = useState<GraphSpec[]>();
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const queued = useRef<GraphSpec[]>(undefined);
@@ -233,7 +237,7 @@ export function useSweepLayout(
     queued.current = undefined;
     if (scenarioId == null || graphs == null) return;
     void api.analysis.saveSweepLayout(scenarioId, graphs).catch(() => {});
-  }, [scenarioId]);
+  }, [api, scenarioId]);
 
   const setLayout = useCallback(
     (graphs: GraphSpec[]) => {
@@ -262,9 +266,10 @@ export function useSweepLayout(
  * applied what-if rewrites their values.
  */
 export function useParameters(scenarioId: number | undefined, version?: string) {
+  const api = usePlanApi();
   const { data, loading, error, reload } = useAsync(
     async () => (scenarioId == null ? undefined : api.analysis.parameters(scenarioId)),
-    [scenarioId, version],
+    [api, scenarioId, version],
   );
   return { parameters: data, loading, error: error?.message, reload };
 }
