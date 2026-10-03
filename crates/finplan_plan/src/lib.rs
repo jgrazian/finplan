@@ -15,6 +15,7 @@ pub mod error;
 pub mod expression_refs;
 pub mod expressions;
 pub mod graph;
+pub mod results;
 pub mod snapshot;
 pub mod specs;
 

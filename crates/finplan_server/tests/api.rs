@@ -3234,6 +3234,9 @@ mod parameter_cases;
 #[path = "cases/real_estate.rs"]
 mod real_estate_cases;
 
+#[path = "cases/results_projection.rs"]
+mod results_projection_cases;
+
 #[path = "cases/what_if.rs"]
 mod what_if_cases;
 
