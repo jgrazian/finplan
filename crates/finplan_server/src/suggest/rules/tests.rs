@@ -23,7 +23,10 @@ const LAST: i64 = 2095;
 
 fn graph() -> ScenarioGraph {
     // Born 1996: Home Purchase (age 35) in 2031, Retirement (age 40) in 2036.
-    serde_json::from_str(include_str!("../testdata/default_snapshot.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../../../finplan_plan/testdata/default_snapshot.json"
+    ))
+    .unwrap()
 }
 
 fn f(year: i64) -> f64 {

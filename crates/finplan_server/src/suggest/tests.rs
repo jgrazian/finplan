@@ -11,7 +11,10 @@ use crate::api::events::EventBody;
 use crate::api::specs::{AmountSpec, EffectSpec};
 
 fn graph() -> ScenarioGraph {
-    serde_json::from_str(include_str!("testdata/default_snapshot.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../../finplan_plan/testdata/default_snapshot.json"
+    ))
+    .unwrap()
 }
 
 fn changes(value: Value) -> Vec<Change> {

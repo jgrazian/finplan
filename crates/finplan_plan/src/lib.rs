@@ -8,8 +8,10 @@
 //! `sqlx` feature adds `FromRow` to the row structs for the server; everything
 //! else is plain data and logic.
 
+pub mod compile;
 pub mod error;
 pub mod graph;
+pub mod snapshot;
 pub mod specs;
 
 pub use error::{PlanError, PlanResult};

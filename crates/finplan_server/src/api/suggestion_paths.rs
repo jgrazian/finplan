@@ -219,7 +219,7 @@ pub(crate) async fn walk(
             .map_or(ChangeTarget::NewEvent(String::new()), |c| c.target.clone());
         return Ok(Err(StepFailure {
             step: last.key.to_string(),
-            problems: vec![suggest::plan_problem(err, change, target)?],
+            problems: vec![suggest::plan_problem(err.into(), change, target)?],
         }));
     }
     Ok(Ok(Walked {

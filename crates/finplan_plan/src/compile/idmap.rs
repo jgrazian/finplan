@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use finplan_core::model::{AccountId, AssetId, EventId, ParameterId, ReturnProfileId};
 
-use crate::error::{ApiError, ApiResult};
+use crate::error::{PlanError, PlanResult};
 
 #[derive(Debug, Default, Clone)]
 pub struct IdMap {
@@ -31,9 +31,9 @@ pub struct IdMap {
 /// entity. Far above any plausible plan, but checked rather than truncated.
 const MAX_ENTITIES: usize = u16::MAX as usize;
 
-fn next_index(len: usize, what: &'static str) -> ApiResult<u16> {
+fn next_index(len: usize, what: &'static str) -> PlanResult<u16> {
     if len >= MAX_ENTITIES {
-        return Err(ApiError::unprocessable(format!(
+        return Err(PlanError::unprocessable(format!(
             "scenario has too many {what} (limit {MAX_ENTITIES})"
         )));
     }
@@ -45,7 +45,7 @@ impl IdMap {
         Self::default()
     }
 
-    pub fn intern_account(&mut self, db_id: i64) -> ApiResult<AccountId> {
+    pub fn intern_account(&mut self, db_id: i64) -> PlanResult<AccountId> {
         if let Some(id) = self.account_to_dense.get(&db_id) {
             return Ok(*id);
         }
@@ -55,7 +55,7 @@ impl IdMap {
         Ok(AccountId(idx))
     }
 
-    pub fn intern_asset(&mut self, db_id: i64) -> ApiResult<AssetId> {
+    pub fn intern_asset(&mut self, db_id: i64) -> PlanResult<AssetId> {
         if let Some(id) = self.asset_to_dense.get(&db_id) {
             return Ok(*id);
         }
@@ -65,7 +65,7 @@ impl IdMap {
         Ok(AssetId(idx))
     }
 
-    pub fn intern_event(&mut self, db_id: i64) -> ApiResult<EventId> {
+    pub fn intern_event(&mut self, db_id: i64) -> PlanResult<EventId> {
         if let Some(id) = self.event_to_dense.get(&db_id) {
             return Ok(*id);
         }
@@ -75,7 +75,7 @@ impl IdMap {
         Ok(EventId(idx))
     }
 
-    pub fn intern_profile(&mut self, db_id: i64) -> ApiResult<ReturnProfileId> {
+    pub fn intern_profile(&mut self, db_id: i64) -> PlanResult<ReturnProfileId> {
         if let Some(id) = self.profile_to_dense.get(&db_id) {
             return Ok(*id);
         }
@@ -85,7 +85,7 @@ impl IdMap {
         Ok(ReturnProfileId(idx))
     }
 
-    pub fn intern_parameter(&mut self, db_id: i64) -> ApiResult<ParameterId> {
+    pub fn intern_parameter(&mut self, db_id: i64) -> PlanResult<ParameterId> {
         if let Some(id) = self.parameter_to_dense.get(&db_id) {
             return Ok(*id);
         }
@@ -96,9 +96,9 @@ impl IdMap {
         Ok(id)
     }
 
-    pub fn parameter(&self, db_id: i64) -> ApiResult<ParameterId> {
+    pub fn parameter(&self, db_id: i64) -> PlanResult<ParameterId> {
         self.parameter_to_dense.get(&db_id).copied().ok_or_else(|| {
-            ApiError::unprocessable(format!("parameter {db_id} is not part of this scenario"))
+            PlanError::unprocessable(format!("parameter {db_id} is not part of this scenario"))
         })
     }
 
@@ -110,27 +110,27 @@ impl IdMap {
     /// Resolve an id that must already have been interned. Effects and triggers
     /// reference accounts/assets/events that the first pass registered, so a
     /// miss here means the row points outside the scenario.
-    pub fn account(&self, db_id: i64) -> ApiResult<AccountId> {
+    pub fn account(&self, db_id: i64) -> PlanResult<AccountId> {
         self.account_to_dense.get(&db_id).copied().ok_or_else(|| {
-            ApiError::unprocessable(format!("account {db_id} is not part of this scenario"))
+            PlanError::unprocessable(format!("account {db_id} is not part of this scenario"))
         })
     }
 
-    pub fn asset(&self, db_id: i64) -> ApiResult<AssetId> {
+    pub fn asset(&self, db_id: i64) -> PlanResult<AssetId> {
         self.asset_to_dense.get(&db_id).copied().ok_or_else(|| {
-            ApiError::unprocessable(format!("asset {db_id} is not part of this scenario"))
+            PlanError::unprocessable(format!("asset {db_id} is not part of this scenario"))
         })
     }
 
-    pub fn event(&self, db_id: i64) -> ApiResult<EventId> {
+    pub fn event(&self, db_id: i64) -> PlanResult<EventId> {
         self.event_to_dense.get(&db_id).copied().ok_or_else(|| {
-            ApiError::unprocessable(format!("event {db_id} is not part of this scenario"))
+            PlanError::unprocessable(format!("event {db_id} is not part of this scenario"))
         })
     }
 
-    pub fn profile(&self, db_id: i64) -> ApiResult<ReturnProfileId> {
+    pub fn profile(&self, db_id: i64) -> PlanResult<ReturnProfileId> {
         self.profile_to_dense.get(&db_id).copied().ok_or_else(|| {
-            ApiError::unprocessable(format!("return profile {db_id} is not available"))
+            PlanError::unprocessable(format!("return profile {db_id} is not available"))
         })
     }
 

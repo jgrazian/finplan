@@ -24,7 +24,10 @@ use crate::suggest::{read, resolve};
 const KEY: &str = "sk-or-v1-test-SECRET-123";
 
 fn graph() -> ScenarioGraph {
-    serde_json::from_str(include_str!("../testdata/default_snapshot.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../../../finplan_plan/testdata/default_snapshot.json"
+    ))
+    .unwrap()
 }
 
 fn results() -> Results {

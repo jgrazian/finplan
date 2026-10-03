@@ -812,7 +812,10 @@ fn refunds_net_against_spending_and_nothing_flags_without_a_sample() {
 }
 
 fn graph() -> ScenarioGraph {
-    serde_json::from_str(include_str!("../suggest/testdata/default_snapshot.json")).unwrap()
+    serde_json::from_str(include_str!(
+        "../../../finplan_plan/testdata/default_snapshot.json"
+    ))
+    .unwrap()
 }
 
 fn statement(kind: DocumentKind, institution: &str, account: AccountData, text: &str) -> Document {

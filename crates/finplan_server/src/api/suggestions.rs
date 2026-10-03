@@ -1913,7 +1913,7 @@ pub(super) async fn apply(
             if let Err(err) = crate::compile::compile(&stepped.graph) {
                 let last = batches.last().expect("at least one step");
                 let problem = suggest::plan_problem(
-                    err,
+                    err.into(),
                     last.len().saturating_sub(1),
                     last.last()
                         .map_or(suggest::ChangeTarget::NewEvent(String::new()), |c| {

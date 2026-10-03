@@ -721,7 +721,7 @@ pub(crate) async fn ai_sensitivity(
         }
         other => SensitivityError::Refused(other.to_string()),
     };
-    let compiled = compile::compile(graph).map_err(refused)?;
+    let compiled = compile::compile(graph).map_err(|error| refused(error.into()))?;
     let available = parameters(&compiled);
     if available.is_empty() {
         return Err(SensitivityError::Refused(

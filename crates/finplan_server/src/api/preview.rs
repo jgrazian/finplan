@@ -460,7 +460,7 @@ pub async fn simulate_draft(
             return Ok(blocked(DraftBlocked::Steps { step, problems }));
         }
     };
-    let compiled = match compile::compile(&stepped.graph) {
+    let compiled = match compile::compile(&stepped.graph).map_err(ApiError::from) {
         Ok(compiled) => compiled,
         // A database or internal failure is the server's; anything else is
         // the plan's.
@@ -731,7 +731,7 @@ pub(crate) fn edited(
             let target = changes
                 .last()
                 .map_or(ChangeTarget::NewEvent(String::new()), |c| c.target.clone());
-            suggest::plan_problem(err, change, target).map(Err)
+            suggest::plan_problem(err.into(), change, target).map(Err)
         }
     }
 }

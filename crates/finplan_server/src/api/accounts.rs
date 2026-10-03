@@ -13,7 +13,7 @@ use super::ReorderRequest;
 use crate::auth::activity::{ActivityFields, Submitted};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult, on_unique_violation};
-pub use finplan_plan::specs::CatchUpSpec;
+pub use finplan_plan::specs::{CatchUpSpec, RepaymentSpec, repayment_of};
 
 use crate::observability::{EventFields, Operation, Resource};
 use crate::state::AppState;
@@ -160,17 +160,6 @@ pub enum FlavorSpec {
         #[serde(default)]
         repayment: Option<RepaymentSpec>,
     },
-}
-
-/// How a loan pays itself off: a level monthly payment from a cash account.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct RepaymentSpec {
-    /// Bank or investment account the payment is drawn from.
-    pub from_account_id: i64,
-    /// Months remaining at plan start — 360 for a new 30-year mortgage. A
-    /// loan drawn by a BuyProperty takes the term that effect names instead.
-    pub term_months: u32,
 }
 
 impl FlavorSpec {
@@ -506,15 +495,6 @@ async fn insert_detail(
         }
     }
     Ok(())
-}
-
-/// Both columns or neither: the payer set to NULL by its deletion leaves a
-/// term with nothing to draw from, which reads as no repayment.
-pub(crate) fn repayment_of(from: Option<i64>, term: Option<i64>) -> Option<RepaymentSpec> {
-    Some(RepaymentSpec {
-        from_account_id: from?,
-        term_months: u32::try_from(term?).ok().filter(|t| *t > 0)?,
-    })
 }
 
 async fn list(
