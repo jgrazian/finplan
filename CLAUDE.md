@@ -22,8 +22,9 @@ IMPORTIANT:
 finplan/
 ├── crates/
 │   ├── finplan_core/   # Simulation engine library (~2500 LOC)
+│   ├── finplan_plan/   # Plan model: graph, specs, edits, compile, results (no I/O, builds for wasm32)
 │   ├── finplan/        # Terminal UI application (~2600 LOC)
-│   └── finplan_server/ # HTTP API server, SQLite-backed (~5000 LOC)
+│   └── finplan_server/ # HTTP API server, SQLite-backed; depends on finplan_plan
 ├── spec/               # Detailed specifications
 ├── scripts/            # gen-bindings.sh
 └── web/                # Next.js frontend
@@ -36,7 +37,8 @@ finplan/
 
 ## TypeScript bindings
 
-Every request/response type in `finplan_server` derives `ts_rs::TS`, and
+Every request/response type in `finplan_server` and `finplan_plan` derives
+`ts_rs::TS`, and
 `./scripts/gen-bindings.sh` writes one `.ts` file per type into
 `web/lib/api/generated/`. The output is committed; after changing an API struct,
 regenerate and commit, or the frontend types silently drift from the server.
@@ -60,7 +62,9 @@ number on screen.
 | TUI entry | `crates/finplan/src/main.rs` |
 | App event loop | `crates/finplan/src/app.rs:116` - `App::run()` |
 | Server entry | `crates/finplan_server/src/main.rs` |
-| DB -> engine config | `crates/finplan_server/src/compile/mod.rs` - `compile()` |
+| Plan graph -> engine config | `crates/finplan_plan/src/compile/mod.rs` - `compile()` |
+| Load a plan from SQLite | `crates/finplan_server/src/db/graph.rs` - `load()` |
+| Summary -> results bodies | `crates/finplan_plan/src/results/mod.rs` - `project()` |
 | Schema | `crates/finplan_server/migrations/0001_init.sql` |
 
 ## finplan_core Navigation
@@ -85,6 +89,25 @@ number on screen.
 - `account_builder.rs` - Preset accounts (Checking, 401k, Roth, etc.)
 - `asset_builder.rs` - Asset definitions
 - `event_builder.rs` - Event construction helpers
+
+## finplan_plan Navigation
+
+What a plan *is*, with no database. Must not depend on sqlx, tokio, axum or
+anything doing I/O; CI builds it for `wasm32-unknown-unknown` with
+`--no-default-features` (the `sqlx` feature only adds `FromRow` for the server).
+
+- `graph.rs` - row structs and `ScenarioGraph` (the plan as loaded), `next_id`
+- `specs/` - API request/response specs (ts-rs exported) and their validation
+- `batch.rs` - `RowBatch`: specs lowered to rows; `merge_into` a graph (the server's SQL sink is `db::batch::insert`)
+- `edit/` - every write route as an in-memory edit of a `ScenarioGraph` (preview)
+- `compile/` - `ScenarioGraph` -> `SimulationConfig`
+- `snapshot.rs` - canonical input snapshot, its hash, `MODEL_VERSION`
+- `results/` - `project()` a `MonteCarloSummary` into the results bodies; ledger, funding views
+- `suggest/`, `templates/`, `rules/` - review-note changes, templates and rule-based notes
+- `error.rs` - `PlanError` (the server converts it to `ApiError`)
+
+Write routes in the server are "load the graph, call the plan crate, write
+rows"; `domain/edit_route_tests.rs` holds each route equal to its edit.
 
 ## finplan (TUI) Navigation
 

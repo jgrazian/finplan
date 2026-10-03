@@ -1,6 +1,6 @@
 # finplan_plan: a database-free plan crate
 
-Status: proposed (2026-10-03). Second of three:
+Status: implemented (2026-10-03, branch `plan-crate`). Second of three:
 [17](17_guest_access.md) guest access, this refactor, then
 [19](19_local_first_wasm.md) local-first in the browser. This is a pure
 refactor: the server's behaviour, API and generated bindings do not change.
@@ -212,3 +212,40 @@ bindings check green, and no behaviour change.
 - **Size of the move.** Roughly 7k lines move (`domain` 3.8k with tests,
   `compile` 2.1k, row batch, specs, funding). Do it in the phases above, not
   one commit, so review stays possible.
+
+## Implementation notes
+
+Where the result differs from the plan above, or found something worth keeping:
+
+- **`PlanError::Internal`.** A fifth variant (-> `ApiError::Internal`, 500) for
+  invariants the moved code already reported as internal errors ("row batch
+  links to unplaced row", missing values in `read_event`).
+- **`db::batch::insert(conn, scenario_id, &batch)`** takes the scenario id: a
+  batch does not carry one.
+- **Snapshot hash and `preserve_order`.** A workspace build turns on
+  serde_json's `preserve_order` (via the TUI's YAML dependency), under which
+  removing `created_at`/`updated_at` reordered keys and changed the hash. The
+  fingerprint is now re-sorted after the removal. The release server
+  (`--bin finplan-server`) never had the feature, so stored hashes are
+  unchanged; goldens in `crates/finplan_plan/testdata/` pin them.
+- **Seeds reproduce runs exactly.** `AccountSnapshot` summed per-asset values
+  from a randomly seeded `HashMap`, so seeded runs differed in the last bits
+  when an account held several assets. It is a `BTreeMap` now
+  (`a_seed_reproduces_the_projection_exactly`). Preview's base/edit pairing
+  and 19's browser/server agreement both rely on this.
+- **Core on wasm32.** `MonteCarloConfig::seed: None` and
+  `SimulationConfig::start_date: None` are `SimulationError::Config` on
+  wasm32 (no OS entropy, no clock); native behaviour is unchanged.
+- **Routes vs edits.** Validation, row building and messages are shared. What
+  stays per side is what the medium does differently: foreign keys and
+  `on_unique_violation` versus graph lookups, SQL `COALESCE` sort orders
+  versus `max + 1`, the SQL `UNION` referrer search on event delete, and two
+  places where the route and the edit check in a different order (scenario
+  update, parameter update), kept as they were.
+- **Results.** `store.rs` persists from `RunResults`;
+  `tests/cases/results_projection.rs` asserts the SQL read path serves exactly
+  `project()`. Runs whose path details were pruned can only be served by SQL.
+- **Bindings.** A plain `cargo test` exports to `target/ts-bindings/`; only
+  `scripts/gen-bindings.sh` writes `web/lib/api/generated/`, for both crates.
+- **Moved beyond the table:** `suggest`'s pure core (changes, resolve, diffs,
+  pointer, read, in-memory apply) and `suggest/rules`, as phase 5 allowed.
