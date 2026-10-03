@@ -700,7 +700,9 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
         if let Some(id) = body.tax_config_id
             && g.scenario.tax_config_id != Some(id)
         {
-            let TaxConfigEntry { config, brackets } = g
+            let TaxConfigEntry {
+                config, brackets, ..
+            } = g
                 .tax_configs
                 .get(&id)
                 .cloned()
@@ -715,6 +717,7 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
             let InflationEntry {
                 name,
                 distribution_id,
+                ..
             } = g
                 .inflation_profiles
                 .get(&id)
@@ -762,6 +765,13 @@ pub fn create_return_profile(graph: &mut ScenarioGraph, body: &CreateProfile) ->
         }
         let distribution_id = add_distribution(g, &body.distribution, 0)?;
         let id = g.next_id(Table::ReturnProfiles);
+        // After the library's last, as the route's `MAX(sort_order) + 1` does.
+        let sort_order = g
+            .return_profiles
+            .values()
+            .map(|p| p.sort_order)
+            .max()
+            .map_or(0, |last| last + 1);
         g.return_profiles.insert(
             id,
             ReturnProfileRow {
@@ -770,6 +780,7 @@ pub fn create_return_profile(graph: &mut ScenarioGraph, body: &CreateProfile) ->
                 name: name.to_string(),
                 description: body.description.clone(),
                 distribution_id,
+                sort_order,
             },
         );
         Ok(id)
@@ -816,6 +827,7 @@ pub fn create_tax_config(graph: &mut ScenarioGraph, body: &CreateTaxConfig) -> P
         g.tax_configs.insert(
             id,
             TaxConfigEntry {
+                description: body.description.clone(),
                 config: TaxConfigRow {
                     id,
                     name: name.to_string(),

@@ -59,6 +59,17 @@ pub struct ReturnProfileRow {
     pub name: String,
     pub description: Option<String>,
     pub distribution_id: i64,
+    /// Where the profile sits in the caller's library (`ORDER BY sort_order,
+    /// name`). Not part of what a run depends on, so a zero is left out of the
+    /// JSON and [`crate::snapshot::snapshot`] zeroes it: the input hash of a
+    /// plan does not move when someone reorders their library.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub sort_order: i64,
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,6 +295,9 @@ pub struct TaxBracketRow {
 #[derive(Debug, Clone)]
 pub struct TaxConfigEntry {
     pub config: TaxConfigRow,
+    /// The library's description of it, which a run does not read (so it is
+    /// not on [`TaxConfigRow`], whose JSON is part of the input snapshot).
+    pub description: Option<String>,
     pub brackets: Vec<TaxBracketRow>,
 }
 
@@ -293,6 +307,9 @@ pub struct TaxConfigEntry {
 pub struct InflationEntry {
     pub name: String,
     pub distribution_id: i64,
+    pub description: Option<String>,
+    /// Its place in the caller's library (`ORDER BY sort_order, name`).
+    pub sort_order: i64,
 }
 
 /// Every row backing one scenario, indexed for in-memory tree assembly.

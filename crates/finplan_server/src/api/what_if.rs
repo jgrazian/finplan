@@ -31,8 +31,8 @@ use finplan_core::analysis::SweepProgress;
 use finplan_plan::compile::{self, CompiledScenario};
 use finplan_plan::graph::ScenarioGraph;
 
-use super::scenarios::Scenario;
 use finplan_plan::specs::events::EventBody;
+use finplan_plan::specs::scenarios::Scenario;
 use finplan_plan::specs::{AmountSpec, EffectSpec, TriggerSpec};
 
 pub fn router() -> Router<AppState> {

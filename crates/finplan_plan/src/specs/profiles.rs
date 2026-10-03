@@ -73,6 +73,44 @@ impl AssetClass {
     }
 }
 
+/// A return or inflation profile of the caller's library, as the profile
+/// routes return it.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct Profile {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    /// What the profile is for, where anyone has said. Null is the normal
+    /// state for a hand-made profile and simply means nothing auto-selects it.
+    pub asset_class: Option<AssetClass>,
+    pub distribution: DistributionSpec,
+    /// Names of assets and accounts pointing at this profile. Always present,
+    /// empty when nothing references it: an omitted key would make the
+    /// generated TypeScript claim a field the wire format does not carry.
+    pub used_by: Vec<String>,
+}
+
+/// One bootstrap history the engine ships with, and the observations behind it.
+///
+/// The years are sent, not a mean and a spread. A resampled history has no
+/// closed-form summary — that is the whole reason to pick one over a Normal —
+/// so a client that only had two figures could not draw it, and one that drew
+/// a bell from them would be drawing the distribution the user declined.
+/// Eleven series of at most a century of `f64` is a few kilobytes.
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct HistoryPreset {
+    /// The value a `Bootstrap` distribution stores.
+    pub id: String,
+    /// Display name, e.g. `S&P 500`.
+    pub name: String,
+    /// Calendar year of `returns[0]`.
+    pub start_year: i32,
+    /// Annual total returns as fractions, one per year.
+    pub returns: Vec<f64>,
+}
+
 /// One node of a [`DistributionSpec`] as the columns of a `distributions` row.
 ///
 /// `regimes` holds the nested bull and bear distributions of a regime-switching

@@ -181,7 +181,7 @@ async fn run_and_repersist(
 }
 
 /// A test app that also hands out the server state, for its database.
-async fn app_with_state() -> (TestApp, finplan_server::state::AppState) {
+pub(super) async fn app_with_state() -> (TestApp, finplan_server::state::AppState) {
     let dir = tempfile::tempdir().expect("temp dir");
     let config = ServerConfig {
         mail: Default::default(),
