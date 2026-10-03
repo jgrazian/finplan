@@ -1,10 +1,16 @@
 //! Exact annual vectors: bounded by dates × iterations, not ledger size.
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::SimulationError;
 use crate::model::{RealNetWorthSummary, RealQuantilePoint, RealTerminalStats, SimulationResult};
 
-pub(super) struct RealAccumulator {
+/// Per-batch real net worth columns, merged across batches before quantiles.
+///
+/// Serializable so a batch run elsewhere can hand it back to be merged.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealAccumulator {
     dates: Vec<jiff::civil::Date>,
     columns: Vec<Vec<f64>>,
 }

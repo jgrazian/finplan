@@ -1,7 +1,7 @@
 use rustc_hash::FxHashMap;
 
 mod quantiles;
-use quantiles::RealAccumulator;
+pub use quantiles::RealAccumulator;
 
 use crate::apply::{SimulationScratch, process_events_with_scratch};
 use crate::config::SimulationConfig;
@@ -17,6 +17,7 @@ use crate::simulation_state::SimulationState;
 use rand::{RngCore, SeedableRng};
 #[cfg(feature = "parallel")]
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
+use serde::{Deserialize, Serialize};
 
 // Re-export for backwards compatibility
 pub use crate::model::n_day_rate;
@@ -707,7 +708,10 @@ fn advance_time(state: &mut SimulationState) {
 
 // ── Online statistics & convergence ──────────────────────────────────
 
-struct OnlineStats {
+/// Running count, sum and sum of squares of terminal net worth, mergeable
+/// across batches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnlineStats {
     count: usize,
     funded_count: usize,
     sum: f64,
@@ -882,6 +886,508 @@ fn percentile_value(sorted: &[(u64, f64)], p: f64) -> f64 {
     sorted.get(idx.min(n - 1)).map_or(0.0, |(_, v)| *v)
 }
 
+// ── Monte Carlo: batch plan ──────────────────────────────────────────
+//
+// A run is a plan of batches: how many, how big, and which seed each starts
+// from. `MonteCarloConfig` fixes the plan, so the result is a function of the
+// plan alone. Who executes a batch (a rayon thread, a WebAssembly worker in
+// another tab process) and in what order they finish is not an input, which is
+// why the pieces below are public and their outputs serializable:
+//
+//   coordinator.next_round()  ->  [BatchSpec]      what to run next
+//   run_batch(prepared, spec) ->  BatchOutput      one worker, any worker
+//   coordinator.absorb(outs)                       merged in index order
+//   coordinator.finish(..)    ->  MonteCarloSummary
+//
+// `monte_carlo_core` is that loop with rayon as the workers.
+
+/// One batch of a round: a contiguous run of iterations on its own RNG stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchSpec {
+    /// Position within the round. Outputs merge in this order.
+    pub index: usize,
+    /// The batch's RNG seed: the round's base seed plus `index`.
+    pub seed: u64,
+    /// How many iterations this batch runs.
+    pub iterations: usize,
+}
+
+/// What one batch produces, ready to merge.
+///
+/// Carries only mergeable state (sums, counts, per-iteration terminal values),
+/// never a ledger, so it stays small enough to post between workers. Every
+/// float serializes exactly, so a batch merged after a trip through a worker
+/// equals the same batch merged in place — provided the reader parses floats
+/// exactly: `serde_json` needs its `float_roundtrip` feature, whose absence
+/// leaves its parser an ulp off now and then. (Structured clone and
+/// `serde-wasm-bindgen` pass the `f64` itself and need nothing.)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchOutput {
+    /// The `BatchSpec::index` this was run for.
+    pub index: usize,
+    /// `(iteration seed, terminal net worth)` in iteration order.
+    pub results: Vec<(u64, f64)>,
+    pub stats: OnlineStats,
+    pub mean_accumulators: Option<MeanAccumulators>,
+    pub real_accumulator: Option<RealAccumulator>,
+    pub funding: crate::model::FundingAccumulator,
+}
+
+/// Everything a worker needs to run batches, built once by `prepare_run`.
+///
+/// Holds no randomness: any two workers that prepare the same plan produce
+/// identical batches for identical `BatchSpec`s.
+#[derive(Debug, Clone)]
+pub struct PreparedRun {
+    /// The plan with the ledger off. Funding checks and warnings still run.
+    batch_params: SimulationConfig,
+    /// An empty real-wealth accumulator on the plan's date grid; each batch
+    /// starts from a copy. `None` when real quantiles are not wanted.
+    real_template: Option<RealAccumulator>,
+    compute_means: bool,
+}
+
+fn validate_counts(config: &MonteCarloConfig) -> Result<(), SimulationError> {
+    if config.iterations == 0 || config.parallel_batches == 0 {
+        return Err(SimulationError::Config(
+            "iterations and parallel_batches must be positive".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn max_iterations(config: &MonteCarloConfig) -> usize {
+    config
+        .convergence
+        .as_ref()
+        .map_or(config.iterations, |c| c.max_iterations)
+}
+
+fn validate_max_iterations(config: &MonteCarloConfig) -> Result<(), SimulationError> {
+    if max_iterations(config) < config.iterations {
+        return Err(SimulationError::Config(
+            "max_iterations must be at least iterations".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the plan and build what a worker needs to run its batches.
+///
+/// Runs one simulation (seed 0) as validation, so a plan that cannot simulate
+/// fails here, once, rather than in every batch. Collects real net worth
+/// quantiles, as `monte_carlo_simulate_with_config` does.
+pub fn prepare_run(
+    params: &SimulationConfig,
+    config: &MonteCarloConfig,
+) -> Result<PreparedRun, SimulationError> {
+    prepare_run_with(params, config, true)
+}
+
+/// `prepare_run`, with the real-wealth accumulator optional. Without it a run
+/// has no phase 2, which is what sweeps want (`monte_carlo_stats_only`).
+pub fn prepare_run_with(
+    params: &SimulationConfig,
+    config: &MonteCarloConfig,
+    collect_real: bool,
+) -> Result<PreparedRun, SimulationError> {
+    validate_counts(config)?;
+    let template = simulate(params, 0)?;
+    validate_max_iterations(config)?;
+
+    let mut batch_params = params.clone();
+    batch_params.collect_ledger = false;
+    Ok(PreparedRun {
+        batch_params,
+        real_template: collect_real.then(|| RealAccumulator::new(&template)),
+        compute_means: config.compute_mean,
+    })
+}
+
+/// The base seed for a plan: `config.seed`, or a fresh unseeded draw.
+///
+/// Draw it once per run and hand the same value to the coordinator. On
+/// `wasm32` an unseeded plan is a config error (no OS entropy).
+pub fn base_seed(config: &MonteCarloConfig) -> Result<u64, SimulationError> {
+    match config.seed {
+        Some(seed) => Ok(seed),
+        None => unseeded_batch_seed(),
+    }
+}
+
+/// Run one batch of a prepared plan.
+///
+/// `progress`, when given, counts each finished iteration and is polled for
+/// cancellation before each one; a cancelled batch is an error, never a
+/// short output, so a partial batch cannot be merged by accident.
+pub fn run_batch(
+    prepared: &PreparedRun,
+    spec: &BatchSpec,
+    progress: Option<&MonteCarloProgress>,
+) -> Result<BatchOutput, SimulationError> {
+    let cancelled = || progress.is_some_and(MonteCarloProgress::is_cancelled);
+    if cancelled() {
+        return Err(SimulationError::Cancelled);
+    }
+
+    let mut rng = rand::rngs::SmallRng::seed_from_u64(spec.seed);
+    let mut scratch = SimulationScratch::new();
+    let mut local_stats = OnlineStats::new();
+    let mut local_acc: Option<MeanAccumulators> = None;
+    let mut local_real = prepared.real_template.clone();
+    let mut local_funding = crate::model::FundingAccumulator::default();
+    let mut local_results = Vec::with_capacity(spec.iterations);
+
+    for _ in 0..spec.iterations {
+        if cancelled() {
+            return Err(SimulationError::Cancelled);
+        }
+
+        let seed = rng.next_u64();
+        // Never silently discard/retry failed iterations: doing so biases
+        // both distributions and success rates toward survivors.
+        let result = simulate_with_scratch(&prepared.batch_params, seed, &mut scratch)?;
+        let fnw = final_net_worth(&result);
+        if !fnw.is_finite() {
+            return Err(SimulationError::Config(
+                "nonfinite terminal net worth".into(),
+            ));
+        }
+        if let Some(acc) = &mut local_real {
+            acc.accumulate(&result)?;
+        }
+        // A skipped/failed effect is not evidence that the plan was funded.
+        local_stats.add(fnw, result.warnings.is_empty());
+        local_funding.add(seed, &result, fnw);
+        local_results.push((seed, fnw));
+
+        if prepared.compute_means {
+            if let Some(ref mut acc) = local_acc {
+                acc.accumulate(&result);
+            } else {
+                let mut new_acc = MeanAccumulators::new(&result);
+                new_acc.accumulate(&result);
+                local_acc = Some(new_acc);
+            }
+        }
+
+        if let Some(progress) = progress {
+            progress.increment();
+        }
+    }
+
+    Ok(BatchOutput {
+        index: spec.index,
+        results: local_results,
+        stats: local_stats,
+        mean_accumulators: local_acc,
+        real_accumulator: local_real,
+        funding: local_funding,
+    })
+}
+
+/// Plans rounds of batches, merges their outputs and decides when to stop.
+///
+/// Holds the run's running state and nothing about *how* batches execute, so
+/// the same coordinator drives rayon threads in-process or WebAssembly workers
+/// that answer in any order.
+pub struct MonteCarloCoordinator {
+    parallel_batches: usize,
+    batch_size: usize,
+    min_iterations: usize,
+    max_iterations: usize,
+    percentiles: Vec<f64>,
+    convergence_metric: Option<ConvergenceMetric>,
+    convergence_tracker: Option<ConvergenceTracker>,
+
+    seed_results: Vec<(u64, f64)>,
+    online_stats: OnlineStats,
+    mean_accumulators: Option<MeanAccumulators>,
+    real_accumulator: Option<RealAccumulator>,
+    funding: crate::model::FundingAccumulator,
+
+    batch_seed: u64,
+    converged: bool,
+    final_convergence_value: Option<f64>,
+    done: bool,
+    /// The round handed out and not yet absorbed.
+    pending: Option<Vec<BatchSpec>>,
+}
+
+impl MonteCarloCoordinator {
+    /// Start a run from `base_seed` (see `base_seed`).
+    pub fn new(config: &MonteCarloConfig, base_seed: u64) -> Result<Self, SimulationError> {
+        validate_counts(config)?;
+        validate_max_iterations(config)?;
+        Ok(Self {
+            parallel_batches: config.parallel_batches,
+            batch_size: config.batch_size,
+            min_iterations: config.iterations,
+            max_iterations: max_iterations(config),
+            percentiles: config.percentiles.clone(),
+            convergence_metric: config.convergence.as_ref().map(|c| c.metric),
+            convergence_tracker: config
+                .convergence
+                .as_ref()
+                .map(|c| ConvergenceTracker::new(c.metric, c.relative_threshold)),
+            seed_results: Vec::new(),
+            online_stats: OnlineStats::new(),
+            mean_accumulators: None,
+            real_accumulator: None,
+            funding: crate::model::FundingAccumulator::default(),
+            batch_seed: base_seed,
+            converged: false,
+            final_convergence_value: None,
+            done: false,
+            pending: None,
+        })
+    }
+
+    /// Iterations merged so far.
+    #[must_use]
+    pub fn completed(&self) -> usize {
+        self.seed_results.len()
+    }
+
+    /// The next round of batches to run, or `None` when the run is over: the
+    /// fixed count is reached, the metric converged, or the ceiling is hit.
+    ///
+    /// Asking again before `absorb` returns the same round.
+    pub fn next_round(&mut self) -> Option<Vec<BatchSpec>> {
+        if self.done {
+            return None;
+        }
+        if let Some(pending) = &self.pending {
+            return Some(pending.clone());
+        }
+        let current_count = self.seed_results.len();
+        if current_count >= self.max_iterations {
+            self.done = true;
+            return None;
+        }
+
+        // Dispatch a round of work, one batch per core, each core taking an
+        // equal share of it. A fixed-count run has one round: everything.
+        //
+        // A converging run cannot, because the point of it is to stop early —
+        // dispatching the whole ceiling would run every iteration before the
+        // metric was ever looked at, which is the fixed run it was chosen
+        // instead of. So it takes the minimum sample first, then `batch_size`
+        // per core, and tests the metric between rounds.
+        let round = match self.convergence_tracker {
+            Some(_) if current_count < self.min_iterations => self.min_iterations - current_count,
+            Some(_) => self.batch_size.max(1) * self.parallel_batches,
+            None => usize::MAX,
+        };
+        let remaining = (self.max_iterations - current_count).min(round);
+        let num_batches = self.parallel_batches.min(remaining);
+        let per_batch = remaining / num_batches;
+        let extra = remaining % num_batches;
+
+        // Distribute remainder across first `extra` batches
+        let specs: Vec<BatchSpec> = (0..num_batches)
+            .map(|index| BatchSpec {
+                index,
+                seed: self.batch_seed.wrapping_add(index as u64),
+                iterations: per_batch + usize::from(index < extra),
+            })
+            .collect();
+        self.pending = Some(specs.clone());
+        Some(specs)
+    }
+
+    /// Merge a finished round, one output per `BatchSpec`, in any order.
+    ///
+    /// Outputs are merged in batch index order whatever order they arrive in:
+    /// floating-point sums are not associative, and the result must not depend
+    /// on which worker finished first. A round that does not match what
+    /// `next_round` handed out (missing, duplicated or short batches) is
+    /// rejected without merging anything.
+    pub fn absorb(&mut self, mut outputs: Vec<BatchOutput>) -> Result<(), SimulationError> {
+        let Some(specs) = &self.pending else {
+            return Err(SimulationError::Config(
+                "absorb called with no round pending".into(),
+            ));
+        };
+        outputs.sort_by_key(|o| o.index);
+        let matches_round = outputs.len() == specs.len()
+            && outputs
+                .iter()
+                .zip(specs)
+                .all(|(o, s)| o.index == s.index && o.results.len() == s.iterations);
+        if !matches_round {
+            return Err(SimulationError::Config(
+                "batch outputs do not match the round".into(),
+            ));
+        }
+        let num_batches = specs.len();
+        self.pending = None;
+
+        for out in outputs {
+            self.funding.merge(out.funding);
+            if let Some(local) = out.real_accumulator {
+                match &mut self.real_accumulator {
+                    Some(acc) => acc.merge(local),
+                    None => self.real_accumulator = Some(local),
+                }
+            }
+            self.seed_results.extend(out.results);
+            self.online_stats.merge(&out.stats);
+            if let Some(acc) = out.mean_accumulators {
+                if let Some(ref mut existing) = self.mean_accumulators {
+                    existing.merge(&acc);
+                } else {
+                    self.mean_accumulators = Some(acc);
+                }
+            }
+        }
+
+        self.batch_seed = self.batch_seed.wrapping_add(num_batches as u64);
+        self.seed_results.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        // Check convergence
+        if let Some(ref mut tracker) = self.convergence_tracker {
+            if self.seed_results.len() >= self.min_iterations {
+                let (is_converged, metric_value) =
+                    tracker.check_convergence(&self.seed_results, &self.online_stats);
+                self.final_convergence_value = metric_value;
+                if is_converged {
+                    self.converged = true;
+                    self.done = true;
+                }
+            }
+        } else if self.seed_results.len() >= self.min_iterations {
+            self.done = true;
+        }
+        Ok(())
+    }
+
+    /// Final statistics, percentile seeds and (with `run_phase2`) the full
+    /// re-run of each percentile path and the real-wealth quantiles.
+    ///
+    /// `params` is the plan with its ledger on: phase 2 re-simulates the
+    /// percentile seeds from it. Finishing before `next_round` returns `None`
+    /// summarizes what has been absorbed.
+    pub fn finish(
+        self,
+        params: &SimulationConfig,
+        run_phase2: bool,
+    ) -> Result<MonteCarloSummary, SimulationError> {
+        let result = self.finish_inner(run_phase2.then_some(params))?;
+        Ok(MonteCarloSummary {
+            stats: result.stats,
+            percentile_runs: result.percentile_runs,
+            mean_accumulators: result.mean_accumulators,
+            real_net_worth: result.real_net_worth,
+            funding: Some(result.funding),
+        })
+    }
+
+    /// Stats and percentile seeds only: no phase 2, so no plan is needed.
+    pub fn finish_stats(self) -> Result<(MonteCarloStats, Vec<(f64, u64)>), SimulationError> {
+        let result = self.finish_inner(None)?;
+        Ok((result.stats, result.percentile_seeds))
+    }
+
+    fn finish_inner(
+        mut self,
+        phase2_params: Option<&SimulationConfig>,
+    ) -> Result<MonteCarloInternalResult, SimulationError> {
+        // Final sort
+        self.seed_results.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let seed_results = &self.seed_results;
+
+        // Calculate final statistics
+        let actual_iterations = seed_results.len();
+        let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
+        let mean_final_net_worth = self.online_stats.mean();
+        let std_dev_final_net_worth = self.online_stats.std_dev();
+
+        let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
+        let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
+
+        let success_count = final_values.iter().filter(|v| **v > 0.0).count();
+        let success_rate = if actual_iterations > 0 {
+            success_count as f64 / actual_iterations as f64
+        } else {
+            0.0
+        };
+
+        let mut percentile_values = Vec::new();
+        let mut percentile_seeds = Vec::new();
+
+        if actual_iterations > 0 {
+            for &p in &self.percentiles {
+                let idx =
+                    ((actual_iterations as f64 * p).floor() as usize).min(actual_iterations - 1);
+                let (seed, value) = seed_results[idx];
+                percentile_values.push((p, value));
+                percentile_seeds.push((p, seed));
+            }
+        }
+
+        // Phase 2: Re-run percentile seeds for full results (if requested)
+        let percentile_runs = match phase2_params {
+            Some(params) => percentile_seeds
+                .iter()
+                .map(|&(p, seed)| simulate(params, seed).map(|result| (p, result)))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => Vec::new(),
+        };
+
+        let stats = MonteCarloStats {
+            num_iterations: actual_iterations,
+            success_rate,
+            funding_success_rate: Some(if actual_iterations > 0 {
+                self.online_stats.funded_count as f64 / actual_iterations as f64
+            } else {
+                0.0
+            }),
+            mean_final_net_worth,
+            std_dev_final_net_worth,
+            min_final_net_worth,
+            max_final_net_worth,
+            percentile_values,
+            converged: self.convergence_metric.map(|_| self.converged),
+            convergence_metric: self.convergence_metric,
+            convergence_value: self.final_convergence_value,
+        };
+
+        // Real quantiles belong to phase 2: a stats-only run drops them.
+        let real_accumulator = self.real_accumulator.filter(|_| phase2_params.is_some());
+        Ok(MonteCarloInternalResult {
+            stats,
+            percentile_runs,
+            mean_accumulators: self.mean_accumulators,
+            real_net_worth: real_accumulator.map(RealAccumulator::finish).transpose()?,
+            percentile_seeds,
+            funding: self.funding.finish(),
+        })
+    }
+}
+
+/// Merge the batches of a one-round plan into a summary.
+///
+/// `outputs` may arrive in any order. Errors if they do not make up the whole
+/// plan: a converging plan whose first round has not converged needs the
+/// coordinator, because only it can ask for the next round.
+pub fn merge_batches(
+    params: &SimulationConfig,
+    config: &MonteCarloConfig,
+    outputs: Vec<BatchOutput>,
+) -> Result<MonteCarloSummary, SimulationError> {
+    // The seed only names batches, and these are already run.
+    let mut coordinator = MonteCarloCoordinator::new(config, config.seed.unwrap_or(0))?;
+    coordinator.next_round();
+    coordinator.absorb(outputs)?;
+    if coordinator.next_round().is_some() {
+        return Err(SimulationError::Config(
+            "batches do not complete the plan".into(),
+        ));
+    }
+    coordinator.finish(params, true)
+}
+
 // ── Monte Carlo: unified core ────────────────────────────────────────
 
 /// Internal options controlling Monte Carlo execution behavior.
@@ -918,18 +1424,30 @@ fn unseeded_batch_seed() -> Result<u64, SimulationError> {
     ))
 }
 
+/// Run a round's batches on the rayon pool (or in order without `parallel`).
+/// Outputs come back in batch index order either way.
+fn run_round(
+    prepared: &PreparedRun,
+    round: Vec<BatchSpec>,
+    progress: Option<&MonteCarloProgress>,
+) -> Result<Vec<BatchOutput>, SimulationError> {
+    #[cfg(feature = "parallel")]
+    let specs = round.into_par_iter();
+    #[cfg(not(feature = "parallel"))]
+    let specs = round.into_iter();
+    // Each batch accumulates independently; there is no shared state to lock.
+    specs
+        .map(|spec| run_batch(prepared, &spec, progress))
+        .collect()
+}
+
 /// Core Monte Carlo engine. All three public MC functions delegate here.
 fn monte_carlo_core(
     params: &SimulationConfig,
     config: &MonteCarloConfig,
     options: &MonteCarloOptions<'_>,
 ) -> Result<MonteCarloInternalResult, SimulationError> {
-    if config.iterations == 0 || config.parallel_batches == 0 {
-        return Err(SimulationError::Config(
-            "iterations and parallel_batches must be positive".into(),
-        ));
-    }
-    let parallel_batches = config.parallel_batches;
+    validate_counts(config)?;
 
     // Reset and check progress if tracking
     if let Some(progress) = options.progress {
@@ -939,9 +1457,7 @@ fn monte_carlo_core(
         }
     }
 
-    // Validate by running one simulation
-    let template = simulate(params, 0)?;
-    let mut real_accumulator = options.run_phase2.then(|| RealAccumulator::new(&template));
+    let prepared = prepare_run_with(params, config, options.run_phase2)?;
 
     if let Some(progress) = options.progress
         && progress.is_cancelled()
@@ -949,268 +1465,21 @@ fn monte_carlo_core(
         return Err(SimulationError::Cancelled);
     }
 
-    // Funding checks and warnings still run without the ledger.
-    let mut batch_params = params.clone();
-    batch_params.collect_ledger = false;
+    let mut coordinator = MonteCarloCoordinator::new(config, base_seed(config)?)?;
+    while let Some(round) = coordinator.next_round() {
+        let outputs = run_round(&prepared, round, options.progress)?;
 
-    let min_iterations = config.iterations;
-    let max_iterations = config
-        .convergence
-        .as_ref()
-        .map_or(config.iterations, |c| c.max_iterations);
-
-    if max_iterations < min_iterations {
-        return Err(SimulationError::Config(
-            "max_iterations must be at least iterations".into(),
-        ));
-    }
-
-    let mut convergence_tracker = config
-        .convergence
-        .as_ref()
-        .map(|c| ConvergenceTracker::new(c.metric, c.relative_threshold));
-
-    let mut seed_results: Vec<(u64, f64)> = Vec::new();
-    let mut online_stats = OnlineStats::new();
-    let mut mean_accumulators: Option<MeanAccumulators> = None;
-    let mut funding = crate::model::FundingAccumulator::default();
-    let mut batch_seed: u64 = match config.seed {
-        Some(seed) => seed,
-        None => unseeded_batch_seed()?,
-    };
-    let mut converged = false;
-    let mut final_convergence_value: Option<f64> = None;
-
-    let cancelled = std::sync::atomic::AtomicBool::new(false);
-
-    let compute_means = config.compute_mean;
-
-    loop {
-        let current_count = seed_results.len();
-        if current_count >= max_iterations {
-            break;
-        }
-
-        // Check cancellation
+        // Check cancellation after the round
         if let Some(progress) = options.progress
-            && (cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled())
+            && progress.is_cancelled()
         {
             return Err(SimulationError::Cancelled);
         }
 
-        // Dispatch a round of work, one batch per core, each core taking an
-        // equal share of it. A fixed-count run has one round: everything.
-        //
-        // A converging run cannot, because the point of it is to stop early —
-        // dispatching the whole ceiling would run every iteration before the
-        // metric was ever looked at, which is the fixed run it was chosen
-        // instead of. So it takes the minimum sample first, then `batch_size`
-        // per core, and tests the metric between rounds.
-        let round = match convergence_tracker {
-            Some(_) if current_count < min_iterations => min_iterations - current_count,
-            Some(_) => config.batch_size.max(1) * parallel_batches,
-            None => usize::MAX,
-        };
-        let remaining = (max_iterations - current_count).min(round);
-        let num_batches = parallel_batches.min(remaining);
-        let per_batch = remaining / num_batches;
-        let extra = remaining % num_batches;
-
-        // Each batch returns its results, stats, and optional local mean accumulator.
-        // No shared Mutex — each thread accumulates independently, merge after.
-        type BatchOutput = (
-            Vec<(u64, f64)>,
-            OnlineStats,
-            Option<MeanAccumulators>,
-            Option<RealAccumulator>,
-            crate::model::FundingAccumulator,
-        );
-        #[cfg(feature = "parallel")]
-        let batch_indices = (0..num_batches).into_par_iter();
-        #[cfg(not(feature = "parallel"))]
-        let batch_indices = 0..num_batches;
-        let batch_outputs: Result<Vec<BatchOutput>, SimulationError> = batch_indices
-            .map(|local_batch_idx| {
-                if cancelled.load(std::sync::atomic::Ordering::Relaxed) {
-                    return Err(SimulationError::Cancelled);
-                }
-
-                let mut rng =
-                    rand::rngs::SmallRng::seed_from_u64(batch_seed + local_batch_idx as u64);
-                let mut scratch = SimulationScratch::new();
-                let mut local_stats = OnlineStats::new();
-                let mut local_acc: Option<MeanAccumulators> = None;
-                let mut local_real = options.run_phase2.then(|| RealAccumulator::new(&template));
-                let mut local_funding = crate::model::FundingAccumulator::default();
-
-                // Distribute remainder across first `extra` batches
-                let this_batch_size = per_batch + if local_batch_idx < extra { 1 } else { 0 };
-                let mut local_results = Vec::with_capacity(this_batch_size);
-
-                for _ in 0..this_batch_size {
-                    if let Some(progress) = options.progress
-                        && progress.is_cancelled()
-                    {
-                        cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
-                        break;
-                    }
-
-                    let seed = rng.next_u64();
-                    {
-                        // Never silently discard/retry failed iterations: doing so biases
-                        // both distributions and success rates toward survivors.
-                        let result = simulate_with_scratch(&batch_params, seed, &mut scratch)?;
-                        let fnw = final_net_worth(&result);
-                        if !fnw.is_finite() {
-                            return Err(SimulationError::Config(
-                                "nonfinite terminal net worth".into(),
-                            ));
-                        }
-                        if let Some(acc) = &mut local_real {
-                            acc.accumulate(&result)?;
-                        }
-                        // A skipped/failed effect is not evidence that the plan was funded.
-                        local_stats.add(fnw, result.warnings.is_empty());
-                        local_funding.add(seed, &result, fnw);
-                        local_results.push((seed, fnw));
-
-                        if compute_means {
-                            if let Some(ref mut acc) = local_acc {
-                                acc.accumulate(&result);
-                            } else {
-                                let mut new_acc = MeanAccumulators::new(&result);
-                                new_acc.accumulate(&result);
-                                local_acc = Some(new_acc);
-                            }
-                        }
-
-                        if let Some(progress) = options.progress {
-                            progress.increment();
-                        }
-                    }
-                }
-
-                Ok((
-                    local_results,
-                    local_stats,
-                    local_acc,
-                    local_real,
-                    local_funding,
-                ))
-            })
-            .collect();
-
-        // Merge results from all batches (single-threaded, fast)
-        for (results, stats, local_acc, local_real, local_funding) in batch_outputs? {
-            funding.merge(local_funding);
-            if let (Some(acc), Some(local)) = (&mut real_accumulator, local_real) {
-                acc.merge(local);
-            }
-            seed_results.extend(results);
-            online_stats.merge(&stats);
-            if let Some(acc) = local_acc {
-                if let Some(ref mut existing) = mean_accumulators {
-                    existing.merge(&acc);
-                } else {
-                    mean_accumulators = Some(acc);
-                }
-            }
-        }
-
-        batch_seed += num_batches as u64;
-
-        // Check cancellation after batch
-        if let Some(progress) = options.progress
-            && (cancelled.load(std::sync::atomic::Ordering::Relaxed) || progress.is_cancelled())
-        {
-            return Err(SimulationError::Cancelled);
-        }
-
-        seed_results.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-        // Check convergence
-        if let Some(ref mut tracker) = convergence_tracker {
-            if seed_results.len() >= min_iterations {
-                let (is_converged, metric_value) =
-                    tracker.check_convergence(&seed_results, &online_stats);
-                final_convergence_value = metric_value;
-                if is_converged {
-                    converged = true;
-                    break;
-                }
-            }
-        } else if seed_results.len() >= config.iterations {
-            break;
-        }
+        coordinator.absorb(outputs)?;
     }
 
-    // Final sort
-    seed_results.sort_by(|a, b| a.1.total_cmp(&b.1));
-
-    // Calculate final statistics
-    let actual_iterations = seed_results.len();
-    let final_values: Vec<f64> = seed_results.iter().map(|(_, v)| *v).collect();
-    let mean_final_net_worth = online_stats.mean();
-    let std_dev_final_net_worth = online_stats.std_dev();
-
-    let min_final_net_worth = final_values.first().copied().unwrap_or(0.0);
-    let max_final_net_worth = final_values.last().copied().unwrap_or(0.0);
-
-    let success_count = final_values.iter().filter(|v| **v > 0.0).count();
-    let success_rate = if actual_iterations > 0 {
-        success_count as f64 / actual_iterations as f64
-    } else {
-        0.0
-    };
-
-    let mut percentile_values = Vec::new();
-    let mut percentile_seeds = Vec::new();
-
-    if actual_iterations > 0 {
-        for &p in &config.percentiles {
-            let idx = ((actual_iterations as f64 * p).floor() as usize).min(actual_iterations - 1);
-            let (seed, value) = seed_results[idx];
-            percentile_values.push((p, value));
-            percentile_seeds.push((p, seed));
-        }
-    }
-
-    // Phase 2: Re-run percentile seeds for full results (if requested)
-    let percentile_runs = if options.run_phase2 {
-        percentile_seeds
-            .iter()
-            .map(|&(p, seed)| simulate(params, seed).map(|result| (p, result)))
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        Vec::new()
-    };
-
-    let stats = MonteCarloStats {
-        num_iterations: actual_iterations,
-        success_rate,
-        funding_success_rate: Some(if actual_iterations > 0 {
-            online_stats.funded_count as f64 / actual_iterations as f64
-        } else {
-            0.0
-        }),
-        mean_final_net_worth,
-        std_dev_final_net_worth,
-        min_final_net_worth,
-        max_final_net_worth,
-        percentile_values,
-        converged: config.convergence.as_ref().map(|_| converged),
-        convergence_metric: config.convergence.as_ref().map(|c| c.metric),
-        convergence_value: final_convergence_value,
-    };
-
-    Ok(MonteCarloInternalResult {
-        stats,
-        percentile_runs,
-        mean_accumulators,
-        real_net_worth: real_accumulator.map(RealAccumulator::finish).transpose()?,
-        percentile_seeds,
-        funding: funding.finish(),
-    })
+    coordinator.finish_inner(options.run_phase2.then_some(params))
 }
 
 // ── Monte Carlo: public API ──────────────────────────────────────────

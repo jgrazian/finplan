@@ -28,7 +28,10 @@ parallel = ["dep:rayon"]
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tdigest = "0.2"
-serde_json = "1.0"
+# `float_roundtrip`: serde_json's default parser can land an ulp off the f64 it
+# printed, which breaks the batch round-trip test. Anything that parses a
+# `BatchOutput` from JSON needs it too.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
 
 [[bench]]
 name = "simulation_benchmarks"

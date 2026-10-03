@@ -16,6 +16,7 @@
 
 mod accounts;
 mod basic;
+mod batches;
 mod builder_dsl;
 mod contribution_limits;
 mod funding;
