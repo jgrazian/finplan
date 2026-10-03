@@ -145,15 +145,26 @@ async fn restart_replays_snapshot_even_when_live_inputs_are_deleted() {
         .await
         .unwrap();
     let queue = finplan_server::runner::spawn(db.clone(), 1);
-    finplan_server::runner::requeue_orphans(&db, &queue)
+    let config = recovery_config();
+    finplan_server::runner::requeue_orphans(&db, &queue, &config)
         .await
         .unwrap();
     assert_eq!(app.await_run(id).await, "succeeded");
     assert_eq!(before, app.get(&format!("/api/runs/{id}/results")).await.1);
     // Legacy queued work cannot claim newly loaded inputs as its own provenance.
     sqlx::query("UPDATE runs SET status = 'queued', snapshot_json = NULL, model_version = NULL, input_hash = NULL WHERE id = ?1").bind(id).execute(&db).await.unwrap();
-    queue.enqueue(id).await.unwrap();
+    queue.enqueue(id, &config).await.unwrap();
     assert_eq!(app.await_run(id).await, "failed");
     let (_, inputs) = app.get(&format!("/api/runs/{id}/inputs")).await;
     assert!(inputs["snapshot"].is_null());
+}
+
+fn recovery_config() -> finplan_server::config::ServerConfig {
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        config: finplan_server::config::ServerConfig,
+    }
+    Cli::parse_from(["test"]).config
 }

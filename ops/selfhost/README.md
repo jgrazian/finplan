@@ -127,6 +127,17 @@ Registration is open in the example config. To close it, set
 `FINPLAN_REGISTRATION_OPEN=false` and restart the server. Existing users can
 still sign in.
 
+## Guest access
+
+With `FINPLAN_GUEST_ACCESS=true` (the server default) a signed-out visitor
+lands in the workbench as a guest instead of on the sign-in form: runs capped
+at `FINPLAN_GUEST_MAX_ITERATIONS` (100), one plan, no AI, and the guest is
+deleted after `FINPLAN_GUEST_RETENTION_DAYS` (30) without a visit, or after a
+day if it never saved a plan. The example config turns it off; set it to
+`true` and restart to open it, then watch the guest admissions and purge
+counts on the dashboard. A guest can claim an account in place, keeping its
+plan.
+
 ## Monitoring
 
 Prometheus scrapes finplan-server and node-exporter every 15 seconds and

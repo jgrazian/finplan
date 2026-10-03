@@ -47,10 +47,11 @@ async fn issue(state: &AppState, raw_email: &str, purpose: &str) -> ApiResult<()
     let Ok(email) = normalize_email(raw_email) else {
         return Ok(());
     };
-    let user: Option<String> = sqlx::query_scalar("SELECT id FROM users WHERE email = ?")
-        .bind(&email)
-        .fetch_optional(&state.db)
-        .await?;
+    let user: Option<String> =
+        sqlx::query_scalar("SELECT id FROM users WHERE email = ? AND kind = 'account'")
+            .bind(&email)
+            .fetch_optional(&state.db)
+            .await?;
     let Some(user) = user else {
         return Ok(());
     };

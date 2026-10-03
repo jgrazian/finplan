@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { LockedFeature, useGuest } from "@/components/auth/GuestContext";
 import { SubTabBar } from "@/components/layout";
 import { EmptyState } from "@/components/screens/EmptyState";
 import type { SegmentOption } from "@/components/ui";
@@ -63,8 +64,19 @@ export function AnalysisScreen({
     onPlanChanged();
   }, [reload, onPlanChanged]);
 
+  // Analysis runs many simulations a request, which the guest limits switch
+  // off: the server refuses what-if, sweep and goal seek alike for a guest.
+  const { restricted } = useGuest();
+
   let body;
-  if (mode === "what-if") {
+  if (restricted) {
+    body = (
+      <LockedFeature title="Analysis needs an account">
+        What-if, Sweep and Solve each run many simulations of your plan. Create a free account
+        to use them; your guest plan comes with you.
+      </LockedFeature>
+    );
+  } else if (mode === "what-if") {
     // What-if stands without named parameters — market shocks and one-off
     // events need none — so only the parameter rows of its menu go missing.
     body = !parameters && !error ? (

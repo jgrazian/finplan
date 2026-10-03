@@ -78,6 +78,7 @@ impl Draft {
                 id: id.into(),
                 email: "draft-user@example.test".into(),
                 session_id: "s".into(),
+                guest: false,
             },
             state,
             scenario,
@@ -452,4 +453,21 @@ async fn an_ai_goal_seek_over_an_age_searches_a_grid_and_reports_years() {
             .unwrap()
             .starts_with("age ")
     );
+}
+
+#[test]
+fn a_previews_iterations_are_clamped_to_the_callers_cap() {
+    let limit = |cap| Limit {
+        cap,
+        tier: Tier::Free,
+    };
+    assert_eq!(draft_iterations(None, limit(50_000)), 400);
+    assert_eq!(draft_iterations(None, limit(100)), 100);
+    assert_eq!(draft_iterations(Some(5_000), limit(1_000)), 1_000);
+    assert_eq!(draft_iterations(Some(50_000), limit(50_000)), 5_000);
+    assert_eq!(draft_iterations(Some(1), limit(100)), 1);
+    // A zero cap never produces a zero-iteration simulation.
+    assert_eq!(draft_iterations(Some(5), limit(0)), 1);
+    assert_eq!(limit(1_000).iterations(), 1_000);
+    assert_eq!(limit(50_000).iterations(), MAX_PREVIEW_ITERATIONS);
 }

@@ -1,6 +1,7 @@
 //! Authentication: Argon2id password hashing and opaque session tokens.
 
 pub(crate) mod activity;
+pub mod guest;
 pub mod protection;
 pub mod recovery;
 pub mod routes;

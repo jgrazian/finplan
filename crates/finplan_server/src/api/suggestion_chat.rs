@@ -215,7 +215,7 @@ async fn post_message(
     let note = suggestions::owned(&state.db, id, &user.id)
         .await?
         .into_suggestion()?;
-    let Some(reviews) = state.review_ai.clone() else {
+    let Some(reviews) = state.review_ai_for(&user).cloned() else {
         return Err(ApiError::Conflict(
             "AI review is not enabled on this server, so there is no model to chat with".into(),
         ));

@@ -1,7 +1,7 @@
 //! Versioned, transactionally exported plan inputs and independent restoration.
 use std::collections::{HashMap, HashSet};
 
-use crate::observability::{EventFields, Operation, Resource};
+use crate::observability::{AuthAction, AuthOutcome, EventFields, Operation, Resource};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -47,6 +47,10 @@ pub struct ImportArchive {
     pub name_prefix: String,
     /// Reusing this key returns the original result instead of creating duplicates.
     pub request_id: String,
+    /// The web sets this when it brings a guest plan into an account after
+    /// sign-in (spec 17), so adoption can be counted. It changes nothing else.
+    #[serde(default)]
+    pub from_guest: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -534,6 +538,17 @@ async fn import(
             ..Default::default()
         },
     );
+    if body.from_guest {
+        state.telemetry.auth(
+            AuthAction::GuestAdopted,
+            AuthOutcome::Succeeded,
+            &EventFields {
+                user_id: Some(&user.id),
+                count: Some(result.scenario_ids.len() as u64),
+                ..Default::default()
+            },
+        );
+    }
 
     Ok(Json(result))
 }

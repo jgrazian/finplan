@@ -9,10 +9,23 @@ import type { Session } from "@/lib/hooks/useSession";
 /**
  * Sign in, or register. The server seeds a new account with a starter library
  * of return profiles and a tax table, so registering is enough to start.
+ *
+ * For a guest (spec 17) registering claims the guest in place, so the plan
+ * built so far is the new account's, and signing in offers to bring it along.
+ * `embedded` drops the page chrome for use inside a dialog over the workbench.
  */
-export function LoginForm({ session }: { session: Session }) {
+export function LoginForm({
+  session,
+  initialMode = "signIn",
+  embedded,
+}: {
+  session: Session;
+  initialMode?: "signIn" | "signUp";
+  embedded?: boolean;
+}) {
+  const guest = session.user?.guest === true;
   const [recovering, setRecovering] = useState(false);
-  const [mode, setMode] = useState<"signIn" | "signUp">("signIn");
+  const [mode, setMode] = useState<"signIn" | "signUp">(initialMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [passwordConfirmation, setPasswordConfirmation] = useState("");
@@ -29,25 +42,35 @@ export function LoginForm({ session }: { session: Session }) {
         e.preventDefault();
         if (registering) {
           if (!passwordsMatch) return;
-          session.signUp(email, password, passwordConfirmation, displayName || undefined);
+          const register = guest ? session.claim : session.signUp;
+          register(email, password, passwordConfirmation, displayName || undefined);
         }
         else session.signIn(email, password);
       }}
       style={{
         maxWidth: 360,
-        margin: "72px auto",
+        margin: embedded ? 0 : "72px auto",
         display: "flex",
         flexDirection: "column",
         gap: 12,
       }}
     >
-      <span className="nav-brand" style={{ margin: 0, fontSize: 24 }}>
-        <BrandMark size={26} />
-        <Wordmark />
-      </span>
+      {!embedded && (
+        <span className="nav-brand" style={{ margin: 0, fontSize: 24 }}>
+          <BrandMark size={26} />
+          <Wordmark />
+        </span>
+      )}
       <h4 style={{ margin: "4px 0 6px" }}>
-        {registering ? "Create an account" : "Sign in"}
+        {registering ? (guest ? "Create a free account" : "Create an account") : "Sign in"}
       </h4>
+      {guest && (
+        <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5 }}>
+          {registering
+            ? "Your guest plan becomes your account's plan."
+            : "Already have an account? Sign in, and you can bring your guest plan with you."}
+        </p>
+      )}
 
       <Field label="Email">
         <CompactInput
@@ -105,7 +128,7 @@ export function LoginForm({ session }: { session: Session }) {
         block
         disabled={session.busy || (registering && (!passwordConfirmation || !passwordsMatch))}
       >
-        {session.busy ? "…" : registering ? "Register" : "Sign in"}
+        {session.busy ? "…" : registering ? (guest ? "Create account" : "Register") : "Sign in"}
       </Button>
       <Button
         type="button"
@@ -116,7 +139,7 @@ export function LoginForm({ session }: { session: Session }) {
           setPasswordConfirmation("");
         }}
       >
-        {registering ? "I already have an account" : "Create an account"}
+        {registering ? "I already have an account" : guest ? "Create a free account" : "Create an account"}
       </Button>
       {!registering && <Button type="button" variant="ghost" onClick={() => setRecovering(true)}>Forgot password?</Button>}
     </form>

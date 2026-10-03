@@ -97,10 +97,14 @@ async fn run_quick(
     body: QuickWhatIf,
     decision: &mut Submission,
 ) -> ApiResult<Json<WhatIfOutcome>> {
+    let cap = crate::billing::iteration_cap(
+        &crate::billing::entitlements(&state.db, &user.id, &state.config).await?,
+        &state.config,
+    );
     let iterations = body
         .iterations
         .unwrap_or(DEFAULT_QUICK_ITERATIONS)
-        .min(MAX_QUICK_ITERATIONS);
+        .min(MAX_QUICK_ITERATIONS.min(cap));
     let prepared = super::analysis::prepare(
         state,
         user,
@@ -111,8 +115,12 @@ async fn run_quick(
         },
     )
     .await?;
-    let permit =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    let permit = crate::billing::admit_compute_observed(
+        &user.id,
+        prepared.tier,
+        &state.telemetry,
+        Origin::Request,
+    )?;
     decision.accepted();
 
     let progress = SweepProgress::new(prepared.spec.budget());

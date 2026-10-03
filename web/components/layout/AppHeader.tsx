@@ -34,6 +34,7 @@ export function AppHeader<T extends string>({
   userInitials,
   onAccount,
   accountOpen,
+  guest,
   onRun,
   run,
   running,
@@ -51,6 +52,11 @@ export function AppHeader<T extends string>({
   /** Picked from the switcher's last row; omit to leave that row out. */
   onNewScenario?: () => void;
   userInitials: string;
+  /**
+   * A guest has no account to open: Sign up and Sign in take the avatar's
+   * place, and the two handlers open those forms.
+   */
+  guest?: { onSignUp: () => void; onSignIn: () => void };
   /** Opens account settings in place of the tab screens. */
   onAccount?: () => void;
   /** Account settings is what is on screen, so the avatar reads as current. */
@@ -144,21 +150,37 @@ export function AppHeader<T extends string>({
         </Button>
       )}
 
-      <button
-        type="button"
-        className="btn btn-secondary btn-icon app-avatar"
-        aria-label="Account settings"
-        aria-current={accountOpen ? "page" : undefined}
-        title="Account settings"
-        onClick={onAccount}
-        style={
-          accountOpen
-            ? { background: "var(--color-accent)", color: "var(--color-bg)", borderColor: "var(--color-accent)" }
-            : undefined
-        }
-      >
-        {userInitials}
-      </button>
+      {guest ? (
+        <>
+          <Button variant="primary" onClick={guest.onSignUp}>
+            Sign up
+          </Button>
+          <button
+            type="button"
+            className="linkbtn"
+            style={{ whiteSpace: "nowrap" }}
+            onClick={guest.onSignIn}
+          >
+            Sign in
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="btn btn-secondary btn-icon app-avatar"
+          aria-label="Account settings"
+          aria-current={accountOpen ? "page" : undefined}
+          title="Account settings"
+          onClick={onAccount}
+          style={
+            accountOpen
+              ? { background: "var(--color-accent)", color: "var(--color-bg)", borderColor: "var(--color-accent)" }
+              : undefined
+          }
+        >
+          {userInitials}
+        </button>
+      )}
     </header>
 
     {/* Phones: the same tabs, as a fixed bar along the bottom edge. */}

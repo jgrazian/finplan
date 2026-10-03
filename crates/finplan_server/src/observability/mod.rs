@@ -46,7 +46,9 @@ bounded_enum!(AuthAction {
     Register => "register", Login => "login", Logout => "logout",
     PasswordChanged => "password_changed", ResetRequested => "reset_requested",
     ResetCompleted => "reset_completed", VerificationRequested => "verification_requested",
-    EmailVerified => "email_verified", SessionRevoked => "session_revoked", Throttled => "throttled"
+    EmailVerified => "email_verified", SessionRevoked => "session_revoked", Throttled => "throttled",
+    GuestCreated => "guest_created", GuestClaimed => "guest_claimed",
+    GuestAdopted => "guest_adopted", GuestPurged => "guest_purged"
 });
 bounded_enum!(AuthOutcome {
     Succeeded => "succeeded", Failed => "failed", Rejected => "rejected", Replay => "replay"
@@ -64,9 +66,11 @@ bounded_enum!(ErrorClass {
 });
 bounded_enum!(JobKind { Run => "run", Sweep => "sweep", Sensitivity => "sensitivity", Solve => "solve", WhatIf => "what_if", Preview => "preview", ReviewAi => "review_ai", ReviewChat => "review_chat", PlanChat => "plan_chat" });
 bounded_enum!(Outcome { Succeeded => "succeeded", Failed => "failed", Canceled => "canceled", Interrupted => "interrupted" });
+// Who is asking, for admission counters: spec 17 guest load on the board.
+bounded_enum!(Tier { Guest => "guest", Free => "free", Pro => "pro" });
 bounded_enum!(Origin { Request => "request", Recovery => "recovery" });
 bounded_enum!(SubmissionResult { Accepted => "accepted", Invalid => "invalid", CapacityRejected => "capacity_rejected", InternalError => "internal_error" });
-bounded_enum!(RejectionReason { GlobalLimit => "global_limit", UserLimit => "user_limit", QueueFull => "queue_full", QueueClosed => "queue_closed" });
+bounded_enum!(RejectionReason { GlobalLimit => "global_limit", GuestLimit => "guest_limit", UserLimit => "user_limit", QueueFull => "queue_full", QueueClosed => "queue_closed" });
 bounded_enum!(Phase { Prepare => "prepare", BlockingWait => "blocking_wait", Engine => "engine", Persist => "persist" });
 bounded_enum!(QueueExit { Started => "started", Canceled => "canceled", Deleted => "deleted" });
 

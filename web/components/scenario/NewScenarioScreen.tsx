@@ -13,6 +13,7 @@ import {
   SegmentedControl,
   type SegmentOption,
 } from "@/components/ui";
+import { CreateAccountLink, useGuest } from "@/components/auth/GuestContext";
 import { api } from "@/lib/api/client";
 import { http } from "@/lib/api/http";
 import type { Entitlements } from "@/lib/api/generated/Entitlements";
@@ -184,7 +185,20 @@ export function NewScenarioScreen(props: NewScenarioProps) {
   const access = props.access;
   const drafts = access?.ai_drafts ?? null;
   const describable = access != null && drafts != null && props.onReviewDraft != null && props.onDraftCreated != null;
-  const modeSwitch = <ModeSwitch mode={mode} describable={describable} onChange={setMode} />;
+  // A hosted guest has no AI drafts: Describe & upload stays in the list,
+  // locked, with the way to unlock it beside it.
+  const { restricted } = useGuest();
+  const locked = restricted && drafts == null;
+  const modeSwitch = (
+    <>
+      <ModeSwitch mode={mode} describable={describable} locked={locked} onChange={setMode} />
+      {locked && (
+        <span className="ns-mut">
+          AI drafts and document upload need an account. <CreateAccountLink />.
+        </span>
+      )}
+    </>
+  );
   if (access && drafts && props.onReviewDraft && props.onDraftCreated && mode === "describe") {
     return (
       <DescribeSetup
@@ -213,15 +227,28 @@ export function NewScenarioScreen(props: NewScenarioProps) {
 function ModeSwitch({
   mode,
   describable,
+  locked,
   onChange,
 }: {
   mode: Mode;
   describable: boolean;
+  /** Shown but disabled: the account would have it, a guest does not. */
+  locked: boolean;
   onChange: (mode: Mode) => void;
 }) {
   const options: SegmentOption<Mode>[] = [
     { value: "guided", label: "Guided" },
     ...(describable ? [{ value: "describe" as const, label: "Describe & upload" }] : []),
+    ...(locked
+      ? [
+          {
+            value: "describe" as const,
+            label: "Describe & upload",
+            disabled: true,
+            title: "Create a free account to describe your plan and upload statements.",
+          },
+        ]
+      : []),
     { value: "blank", label: "Blank" },
   ];
   return (

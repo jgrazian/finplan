@@ -201,7 +201,7 @@ async fn start(
     body: Option<Json<StartDraft>>,
 ) -> ApiResult<(StatusCode, Json<DraftStatus>)> {
     let retain_documents = body.is_some_and(|Json(b)| b.retain_documents);
-    if state.review_ai.is_none() {
+    if state.review_ai_for(&user).is_none() {
         return Err(ApiError::Conflict(
             "AI drafts are not available on this server".into(),
         ));

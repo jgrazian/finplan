@@ -181,7 +181,8 @@ recoverable work; it does not imply a persisted terminal run status.
 | `finplan_auth_events_total` | Counter; action, outcome | Bounded authentication action/result pairs, with no identity labels. |
 | `finplan_server_errors_total` | Counter; component, class | Unexpected failures, recorded once at their handling boundary; includes non-HTTP background failures. |
 | `finplan_job_submissions_total` | Counter; kind, result | Submission decisions reaching the compute submission service: accepted, invalid, capacity_rejected, or internal_error. Pre-handler auth/JSON failures remain HTTP metrics. |
-| `finplan_compute_rejections_total` | Counter; reason, origin=request/recovery | Actual admission failures: global_limit, user_limit, queue_full, queue_closed. Recovery retries are counted separately from user submission decisions. |
+| `finplan_compute_rejections_total` | Counter; reason, tier=guest/free/pro, origin=request/recovery | Actual admission failures: global_limit, guest_limit, user_limit, queue_full, queue_closed. Recovery retries are counted separately from user submission decisions. |
+| `finplan_compute_admissions_total` | Counter; tier=guest/free/pro, origin=request/recovery | Jobs admitted to compute, so guest load shows next to its rejections. |
 | `finplan_compute_admitted` | Gauge | Existing process-wide compute permits held, including queued/canceled work awaiting cleanup. |
 | `finplan_compute_limit` | Gauge | Process-wide configured admission limit, currently 16. |
 | `finplan_jobs_queued` | Gauge; kind | Current waiting work, including recovery backlog and dispatcher-held runs. See sampling rules below. |

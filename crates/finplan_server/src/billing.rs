@@ -5,6 +5,7 @@ use crate::{
     config::{HostedAccessMode, ServerConfig},
     db::Db,
     error::{ApiError, ApiResult},
+    observability::Tier,
     state::AppState,
 };
 use axum::{
@@ -40,6 +41,14 @@ impl AccessMode {
 pub struct Entitlements {
     /// Full planning capabilities, including beta and self-hosted access.
     pub pro: bool,
+    /// A guest (spec 17): signed in without an account. On a hosted server a
+    /// guest is never `pro`, whatever the access mode, and gets the guest
+    /// iteration cap, no goal seeks and no AI. Self-hosted guests are
+    /// unrestricted; this still says they have no account.
+    pub guest: bool,
+    /// Days without a visit before a guest and its plans are deleted; set
+    /// for every guest, so the banner can say so.
+    pub guest_retention_days: Option<i64>,
     pub access_mode: AccessMode,
     pub hosted: bool,
     pub goal_seeks_used_this_month: i64,
@@ -101,7 +110,7 @@ async fn get_entitlements(
 /// whether the server has a review model.
 pub async fn entitlements_for(state: &AppState, user: &str) -> ApiResult<Entitlements> {
     let mut out = entitlements(&state.db, user, &state.config).await?;
-    if state.review_ai.is_some() {
+    if state.review_ai.is_some() && !limited_guest(&out, &state.config) {
         let limits = state.config.draft.limits(out.pro);
         let used = ai_drafts_used(&state.db, user).await?;
         let remaining = limits.drafts_per_month.saturating_sub(used);
@@ -147,9 +156,39 @@ async fn ai_drafts_used(db: &Db, user: &str) -> ApiResult<u32> {
     let used: i64 = sqlx::query_scalar("SELECT COALESCE((SELECT used FROM monthly_ai_drafts WHERE user_id=? AND month=strftime('%Y-%m','now')),0)").bind(user).fetch_one(db).await?;
     Ok(used.clamp(0, i64::from(u32::MAX)) as u32)
 }
+/// Whether `user` is a guest. Read on its own so every caller of
+/// [`entitlements`] gets the guest rules without passing the session along.
+async fn is_guest(db: &Db, user: &str) -> ApiResult<bool> {
+    Ok(
+        sqlx::query_scalar::<_, bool>("SELECT kind = 'guest' FROM users WHERE id = ?")
+            .bind(user)
+            .fetch_optional(db)
+            .await?
+            .unwrap_or(false),
+    )
+}
+
+/// A guest on a hosted server, where the guest limits apply. Self-hosted
+/// guests are the single local user and are not limited.
+fn limited_guest(e: &Entitlements, config: &ServerConfig) -> bool {
+    e.guest && config.hosted
+}
+
+/// The most iterations any simulation path may spend for this caller: runs,
+/// previews, what-ifs and analyses each clamp to `min(their own constant,
+/// iteration_cap)`, so no path can outrun the tier's run cap.
+#[must_use]
+pub fn iteration_cap(e: &Entitlements, config: &ServerConfig) -> usize {
+    e.max_iterations.min(config.max_iterations)
+}
+
 pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<Entitlements> {
     let access_mode = AccessMode::from_config(config);
-    let pro = access_mode != AccessMode::Subscription || sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id = ? AND state IN ('active','canceling','past_due') AND access_until > unixepoch())").bind(user).fetch_one(db).await?;
+    let guest = is_guest(db, user).await?;
+    // Guests are checked before the access mode: in beta every account is
+    // `pro`, and a hosted guest must not inherit that.
+    let limited = guest && config.hosted;
+    let pro = !limited && (access_mode != AccessMode::Subscription || sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id = ? AND state IN ('active','canceling','past_due') AND access_until > unixepoch())").bind(user).fetch_one(db).await?);
     let editable = if pro {
         None
     } else {
@@ -158,16 +197,26 @@ pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResu
     let used:i64=sqlx::query_scalar("SELECT COALESCE((SELECT used FROM monthly_goal_seeks WHERE user_id=? AND month=strftime('%Y-%m','now')),0)").bind(user).fetch_one(db).await?;
     Ok(Entitlements {
         pro,
+        guest,
+        guest_retention_days: guest.then_some(config.guest_retention_days),
         hosted: config.hosted,
         access_mode,
         goal_seeks_used_this_month: used,
         max_iterations: if !config.hosted {
             config.max_iterations
+        } else if limited {
+            config.max_iterations.min(config.guest_max_iterations)
         } else {
             config.max_iterations.min(if pro { 50_000 } else { 1_000 })
         },
         saved_plan_limit: if pro { None } else { Some(1) },
-        goal_seeks_per_month: if pro { None } else { Some(1) },
+        goal_seeks_per_month: if pro {
+            None
+        } else if limited {
+            Some(0)
+        } else {
+            Some(1)
+        },
         editable_scenario_id: editable,
         annual_price_usd: 80,
         monthly_price_usd: 10,
@@ -176,8 +225,13 @@ pub async fn entitlements(db: &Db, user: &str, config: &ServerConfig) -> ApiResu
     })
 }
 pub async fn require_pro(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<()> {
-    if entitlements(db, user, config).await?.pro {
+    let e = entitlements(db, user, config).await?;
+    if e.pro {
         Ok(())
+    } else if limited_guest(&e, config) {
+        Err(ApiError::Forbidden(
+            "Create a free account to use this. Your guest plan comes with you.".into(),
+        ))
     } else {
         Err(ApiError::Forbidden(
             "This action requires Pro. Your existing plans and exports remain available.".into(),
@@ -212,8 +266,14 @@ pub async fn require_editable(
 /// Call once after request validation, before accepting a goal seek. Invalid
 /// requests must never consume usage. A failed accepted job still counts.
 pub async fn reserve_goal_seek(db: &Db, user: &str, config: &ServerConfig) -> ApiResult<()> {
-    if entitlements(db, user, config).await?.pro {
+    let e = entitlements(db, user, config).await?;
+    if e.pro {
         return Ok(());
+    }
+    if limited_guest(&e, config) {
+        return Err(ApiError::Forbidden(
+            "Create a free account to use goal seek.".into(),
+        ));
     }
     let accepted = sqlx::query("INSERT INTO monthly_goal_seeks(user_id,month,used) VALUES (?,strftime('%Y-%m','now'),1) ON CONFLICT(user_id,month) DO UPDATE SET used=used+1 WHERE used < 1")
         .bind(user).execute(db).await?.rows_affected();
@@ -362,6 +422,109 @@ mod tests {
         let db = crate::db::connect("sqlite::memory:", 1).await.unwrap();
         sqlx::query("INSERT INTO users(id,email,password_hash) VALUES ('u','u@example.com','unused'),('v','v@example.com','unused')").execute(&db).await.unwrap();
         db
+    }
+    #[test]
+    fn a_guest_holds_one_compute_permit_and_an_account_two() {
+        use crate::observability::RejectionReason::*;
+        let mut counts = ComputeCounts::default();
+        assert_eq!(counts.admit("g", Tier::Guest), Ok(()));
+        assert_eq!(counts.admit("g", Tier::Guest), Err(UserLimit));
+        assert_eq!(counts.admit("a", Tier::Free), Ok(()));
+        assert_eq!(counts.admit("a", Tier::Free), Ok(()));
+        assert_eq!(counts.admit("a", Tier::Free), Err(UserLimit));
+        assert_eq!(counts.admit("p", Tier::Pro), Ok(()));
+        assert_eq!(counts.admit("p", Tier::Pro), Ok(()));
+        assert_eq!(counts.admit("p", Tier::Pro), Err(UserLimit));
+    }
+    #[test]
+    fn guests_together_stop_at_half_the_limit_and_accounts_still_get_in() {
+        use crate::observability::RejectionReason::*;
+        let mut counts = ComputeCounts::default();
+        for n in 0..GUEST_COMPUTE_LIMIT {
+            assert_eq!(counts.admit(&format!("g{n}"), Tier::Guest), Ok(()));
+        }
+        assert_eq!(GUEST_COMPUTE_LIMIT, COMPUTE_LIMIT / 2);
+        assert_eq!(counts.admit("late", Tier::Guest), Err(GuestLimit));
+        // The other half of the limit is the accounts'.
+        for n in 0..COMPUTE_LIMIT - GUEST_COMPUTE_LIMIT {
+            assert_eq!(counts.admit(&format!("a{n}"), Tier::Free), Ok(()));
+        }
+        assert_eq!(counts.admit("late", Tier::Pro), Err(GlobalLimit));
+    }
+    #[test]
+    fn releasing_guest_permits_frees_the_guest_share() {
+        use crate::observability::RejectionReason::*;
+        let mut counts = ComputeCounts::default();
+        for n in 0..GUEST_COMPUTE_LIMIT {
+            counts.admit(&format!("g{n}"), Tier::Guest).unwrap();
+        }
+        assert_eq!(counts.admit("late", Tier::Guest), Err(GuestLimit));
+        counts.release("g0", Tier::Guest);
+        assert_eq!(counts.guests, GUEST_COMPUTE_LIMIT - 1);
+        assert_eq!(counts.total, GUEST_COMPUTE_LIMIT - 1);
+        assert_eq!(counts.admit("late", Tier::Guest), Ok(()));
+        // The released guest may start again.
+        assert_eq!(counts.admit("g0", Tier::Guest), Err(GuestLimit));
+        counts.release("late", Tier::Guest);
+        assert_eq!(counts.admit("g0", Tier::Guest), Ok(()));
+        for n in 0..GUEST_COMPUTE_LIMIT {
+            counts.release(&format!("g{n}"), Tier::Guest);
+        }
+        assert_eq!((counts.total, counts.guests), (0, 0));
+        assert!(counts.users.is_empty());
+    }
+    #[test]
+    fn a_guest_permit_remembers_it_is_a_guest_when_dropped() {
+        // The gate is process-wide and other tests hold permits, so wait for a
+        // free guest slot rather than assert on totals.
+        let user = "tier-test-guest";
+        let first = (0..200)
+            .find_map(|_| {
+                admit_compute_inner(user, Tier::Guest).ok().or_else(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    None
+                })
+            })
+            .expect("a guest slot frees up");
+        assert_eq!(first.tier(), Tier::Guest);
+        // One job per guest, however much room is left.
+        assert!(admit_compute_inner(user, Tier::Guest).is_err());
+        drop(first);
+        let second = admit_compute_inner(user, Tier::Guest);
+        // Another test's guests may have taken the freed slot; the guest's own
+        // limit no longer blocks it.
+        assert!(matches!(
+            second.as_ref().err(),
+            None | Some(
+                crate::observability::RejectionReason::GuestLimit
+                    | crate::observability::RejectionReason::GlobalLimit
+            )
+        ));
+    }
+    #[tokio::test]
+    async fn tier_is_guest_only_where_guest_limits_apply() {
+        let db = fixture().await;
+        sqlx::query("INSERT INTO users(id,email,password_hash,kind) VALUES ('gst','g@guest.invalid','!','guest')").execute(&db).await.unwrap();
+        for hosted in [true, false] {
+            let config = config(hosted);
+            assert_eq!(
+                entitlements(&db, "gst", &config)
+                    .await
+                    .unwrap()
+                    .tier(&config),
+                if hosted { Tier::Guest } else { Tier::Pro }
+            );
+        }
+        let config = config(true);
+        assert_eq!(
+            entitlements(&db, "u", &config).await.unwrap().tier(&config),
+            Tier::Free
+        );
+        sqlx::query("INSERT INTO subscriptions(user_id,provider,subscription_id,state,access_until,revision) VALUES ('v','fake','s','active',4000000000,1)").execute(&db).await.unwrap();
+        assert_eq!(
+            entitlements(&db, "v", &config).await.unwrap().tier(&config),
+            Tier::Pro
+        );
     }
     #[tokio::test]
     async fn sandbox_lifecycle_is_idempotent_ordered_and_preserves_ownership() {
@@ -552,6 +715,8 @@ pub async fn mutation_entitlements(
 #[derive(Default)]
 struct ComputeCounts {
     total: usize,
+    /// Permits held by guests, all of them together (spec 17).
+    guests: usize,
     users: std::collections::HashMap<String, usize>,
 }
 static COMPUTE: std::sync::OnceLock<std::sync::Mutex<ComputeCounts>> = std::sync::OnceLock::new();
@@ -559,8 +724,37 @@ static COMPUTE: std::sync::OnceLock<std::sync::Mutex<ComputeCounts>> = std::sync
 /// insufficient to bound retained jobs. Hold this through the job's terminal state.
 pub struct ComputePermit {
     user: String,
+    /// Remembered so [`Drop`] gives back the guest share too.
+    tier: Tier,
+}
+impl ComputePermit {
+    pub fn tier(&self) -> Tier {
+        self.tier
+    }
 }
 pub const COMPUTE_LIMIT: usize = 16;
+/// Guests together hold at most half the limit, so a burst of guests queues
+/// behind itself rather than in front of paying users.
+pub const GUEST_COMPUTE_LIMIT: usize = COMPUTE_LIMIT / 2;
+/// Concurrent jobs per account.
+const USER_COMPUTE_LIMIT: usize = 2;
+/// Concurrent jobs per guest.
+const GUEST_USER_COMPUTE_LIMIT: usize = 1;
+
+impl Entitlements {
+    /// The label admission is counted under: a limited guest, a Pro account,
+    /// or a Free account.
+    #[must_use]
+    pub fn tier(&self, config: &ServerConfig) -> Tier {
+        if limited_guest(self, config) {
+            Tier::Guest
+        } else if self.pro {
+            Tier::Pro
+        } else {
+            Tier::Free
+        }
+    }
+}
 
 /// Snapshot the existing process-wide admission gate; no shadow permit count.
 pub fn compute_admitted() -> usize {
@@ -571,56 +765,92 @@ pub fn compute_admitted() -> usize {
         .total
 }
 
+/// Admit as an account, unobserved.
 pub fn admit_compute(user: &str) -> ApiResult<ComputePermit> {
-    admit_compute_inner(user).map_err(|_| capacity_error())
+    admit_compute_inner(user, Tier::Free).map_err(|_| capacity_error())
 }
 
 pub fn admit_compute_observed(
     user: &str,
+    tier: Tier,
     telemetry: &crate::observability::Telemetry,
     origin: crate::observability::Origin,
 ) -> ApiResult<ComputePermit> {
-    admit_compute_inner(user).map_err(|reason| {
-        telemetry.rejection(reason, origin);
-        capacity_error()
-    })
+    match admit_compute_inner(user, tier) {
+        Ok(permit) => {
+            telemetry.admission(tier, origin);
+            Ok(permit)
+        }
+        Err(reason) => {
+            telemetry.rejection(reason, tier, origin);
+            Err(capacity_error())
+        }
+    }
 }
 
 fn capacity_error() -> ApiError {
     ApiError::Conflict("Compute capacity is busy. Wait for an existing run or analysis to finish, or cancel it, then retry.".into())
 }
 
-fn admit_compute_inner(user: &str) -> Result<ComputePermit, crate::observability::RejectionReason> {
-    use crate::observability::RejectionReason;
-    let mut counts = COMPUTE
+fn admit_compute_inner(
+    user: &str,
+    tier: Tier,
+) -> Result<ComputePermit, crate::observability::RejectionReason> {
+    COMPUTE
         .get_or_init(Default::default)
         .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if counts.total >= COMPUTE_LIMIT {
-        return Err(RejectionReason::GlobalLimit);
-    }
-    if counts.users.get(user).copied().unwrap_or(0) >= 2 {
-        return Err(RejectionReason::UserLimit);
-    }
-    counts.total += 1;
-    *counts.users.entry(user.to_string()).or_default() += 1;
+        .unwrap_or_else(|e| e.into_inner())
+        .admit(user, tier)?;
     Ok(ComputePermit {
         user: user.to_string(),
+        tier,
     })
+}
+impl ComputeCounts {
+    fn admit(
+        &mut self,
+        user: &str,
+        tier: Tier,
+    ) -> Result<(), crate::observability::RejectionReason> {
+        use crate::observability::RejectionReason;
+        let guest = tier == Tier::Guest;
+        if self.total >= COMPUTE_LIMIT {
+            return Err(RejectionReason::GlobalLimit);
+        }
+        if guest && self.guests >= GUEST_COMPUTE_LIMIT {
+            return Err(RejectionReason::GuestLimit);
+        }
+        let per_user = if guest {
+            GUEST_USER_COMPUTE_LIMIT
+        } else {
+            USER_COMPUTE_LIMIT
+        };
+        if self.users.get(user).copied().unwrap_or(0) >= per_user {
+            return Err(RejectionReason::UserLimit);
+        }
+        self.total += 1;
+        self.guests += usize::from(guest);
+        *self.users.entry(user.to_string()).or_default() += 1;
+        Ok(())
+    }
+    fn release(&mut self, user: &str, tier: Tier) {
+        self.total -= 1;
+        self.guests -= usize::from(tier == Tier::Guest);
+        if let Some(n) = self.users.get_mut(user) {
+            *n -= 1;
+            if *n == 0 {
+                self.users.remove(user);
+            }
+        }
+    }
 }
 impl Drop for ComputePermit {
     fn drop(&mut self) {
-        let mut counts = COMPUTE
+        COMPUTE
             .get_or_init(Default::default)
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        counts.total -= 1;
-        if let Some(n) = counts.users.get_mut(&self.user) {
-            *n -= 1;
-            if *n == 0 {
-                counts.users.remove(&self.user);
-            }
-        }
+            .unwrap_or_else(|e| e.into_inner())
+            .release(&self.user, self.tier);
     }
 }
 
@@ -632,10 +862,21 @@ pub async fn check_plan_slot(
     config: &ServerConfig,
     additional: i64,
 ) -> ApiResult<()> {
-    if AccessMode::from_config(config) != AccessMode::Subscription {
+    // A hosted guest gets one plan in every access mode, beta included.
+    let guest: bool = config.hosted
+        && sqlx::query_scalar("SELECT kind = 'guest' FROM users WHERE id = ?")
+            .bind(user)
+            .fetch_optional(&mut *connection)
+            .await?
+            .unwrap_or(false);
+    if !guest && AccessMode::from_config(config) != AccessMode::Subscription {
         return Ok(());
     }
-    let pro:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id=? AND state IN ('active','canceling','past_due') AND access_until>unixepoch())").bind(user).fetch_one(&mut *connection).await?;
+    let pro: bool = !guest
+        && sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE user_id=? AND state IN ('active','canceling','past_due') AND access_until>unixepoch())")
+            .bind(user)
+            .fetch_one(&mut *connection)
+            .await?;
     if pro {
         return Ok(());
     }
@@ -645,9 +886,11 @@ pub async fn check_plan_slot(
             .fetch_one(&mut *connection)
             .await?;
     if count.saturating_add(additional) > 1 {
-        return Err(ApiError::Forbidden(
-            "Free includes one saved plan. Existing plans remain readable and exportable.".into(),
-        ));
+        return Err(ApiError::Forbidden(if guest {
+            "A guest keeps one plan. Create a free account to keep it, or sign in.".into()
+        } else {
+            "Free includes one saved plan. Existing plans remain readable and exportable.".into()
+        }));
     }
     Ok(())
 }

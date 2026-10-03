@@ -1059,8 +1059,8 @@
             "uid": "prometheus"
           },
           "refId": "A",
-          "expr": "sum by (reason) (increase(finplan_compute_rejections_total[$__rate_interval])) or vector(0)",
-          "legendFormat": "{{reason}}"
+          "expr": "sum by (reason, tier) (increase(finplan_compute_rejections_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "{{reason}} / {{tier}}"
         }
       ],
       "fieldConfig": {
@@ -1088,7 +1088,59 @@
           "sort": "desc"
         }
       },
-      "description": "Submissions turned away by global, per-user or queue limits."
+      "description": "Submissions turned away by global, guest, per-user or queue limits, by caller tier."
+    },
+    {
+      "type": "timeseries",
+      "title": "Compute admissions by tier",
+      "id": 52,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 55
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (tier) (increase(finplan_compute_admissions_total[$__rate_interval])) or vector(0)",
+          "legendFormat": "{{tier}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "fillOpacity": 0,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "description": "Jobs admitted to compute, by caller tier (guest, free, pro). Guest load shows here before it shows as rejections."
     },
     {
       "type": "row",
@@ -1099,7 +1151,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 55
+        "y": 63
       },
       "panels": []
     },
@@ -1115,7 +1167,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 56
+        "y": 64
       },
       "targets": [
         {
@@ -1166,7 +1218,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 56
+        "y": 64
       },
       "targets": [
         {
@@ -1217,7 +1269,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 56
+        "y": 64
       },
       "targets": [
         {
@@ -1268,7 +1320,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 64
+        "y": 72
       },
       "targets": [
         {
@@ -1328,7 +1380,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 64
+        "y": 72
       },
       "targets": [
         {
@@ -1377,7 +1429,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 72
+        "y": 80
       },
       "panels": []
     },
@@ -1393,7 +1445,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1448,7 +1500,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1503,7 +1555,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1557,7 +1609,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1611,7 +1663,7 @@
         "h": 4,
         "w": 4,
         "x": 16,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1665,7 +1717,7 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 73
+        "y": 81
       },
       "targets": [
         {
@@ -1719,7 +1771,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 77
+        "y": 85
       },
       "targets": [
         {
@@ -1771,7 +1823,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 77
+        "y": 85
       },
       "targets": [
         {
@@ -1823,7 +1875,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 85
+        "y": 93
       },
       "targets": [
         {
@@ -1874,7 +1926,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 85
+        "y": 93
       },
       "targets": [
         {
@@ -1926,7 +1978,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 85
+        "y": 93
       },
       "targets": [
         {
@@ -1978,7 +2030,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 93
+        "y": 101
       },
       "targets": [
         {
@@ -2039,7 +2091,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 93
+        "y": 101
       },
       "targets": [
         {
@@ -2100,7 +2152,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 93
+        "y": 101
       },
       "targets": [
         {
@@ -2152,7 +2204,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 101
+        "y": 109
       },
       "targets": [
         {
@@ -2203,7 +2255,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 101
+        "y": 109
       },
       "targets": [
         {
@@ -2255,7 +2307,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 101
+        "y": 109
       },
       "targets": [
         {
@@ -2307,7 +2359,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 101
+        "y": 109
       },
       "targets": [
         {
@@ -2356,7 +2408,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 109
+        "y": 117
       },
       "panels": []
     },
@@ -2372,7 +2424,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 110
+        "y": 118
       },
       "targets": [
         {
@@ -2423,7 +2475,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 110
+        "y": 118
       },
       "targets": [
         {
@@ -2483,7 +2535,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 110
+        "y": 118
       },
       "targets": [
         {

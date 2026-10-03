@@ -93,6 +93,11 @@ async fn upload(
     mut multipart: Multipart,
 ) -> ApiResult<(StatusCode, Json<Vec<DocumentManifest>>)> {
     let retain = owned_draft(&state, id, &user.id).await?;
+    if state.limited_guest(&user) {
+        return Err(ApiError::Forbidden(
+            "Create a free account to upload documents.".into(),
+        ));
+    }
     let pro = crate::billing::entitlements(&state.db, &user.id, &state.config)
         .await?
         .pro;

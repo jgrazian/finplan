@@ -10,7 +10,7 @@ export type PreviewRequest = {
   changes: Array<Change>;
   /**
    * Simulations for each side. Defaults to the base run's count; capped at
-   * `MAX_PREVIEW_ITERATIONS`.
+   * `MAX_PREVIEW_ITERATIONS` and at the caller's own iteration cap.
    */
   iterations?: number | null;
 };

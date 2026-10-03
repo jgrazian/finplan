@@ -27,7 +27,7 @@ use crate::analysis::results::{AnalysisOutcome, AnalysisParameter, CachedSweep};
 use crate::auth::session::CurrentUser;
 use crate::compile::{self, rows::ScenarioGraph};
 use crate::error::{ApiError, ApiResult};
-use crate::observability::{JobKind as MetricKind, Origin};
+use crate::observability::{JobKind as MetricKind, Origin, Tier};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 use finplan_core::config::SimulationConfig;
@@ -281,9 +281,10 @@ async fn create_analysis(
         base,
         spec,
         is_solve,
+        tier,
     } = prepare(state, user, scenario_id, body).await?;
     let admission =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+        crate::billing::admit_compute_observed(&user.id, tier, &state.telemetry, Origin::Request)?;
     if is_solve {
         crate::billing::reserve_goal_seek(&state.db, &user.id, &state.config).await?;
     }
@@ -300,6 +301,8 @@ pub(crate) struct Prepared {
     pub base: SimulationConfig,
     pub spec: JobSpec,
     is_solve: bool,
+    /// The caller's tier, which admission is counted under.
+    pub tier: Tier,
 }
 
 /// Everything short of admission: access, iteration bounds, compiling the
@@ -312,6 +315,7 @@ pub(crate) async fn prepare(
     body: CreateAnalysis,
 ) -> ApiResult<Prepared> {
     let entitlements = crate::billing::entitlements(&state.db, &user.id, &state.config).await?;
+    let cap = crate::billing::iteration_cap(&entitlements, &state.config);
     let is_solve = matches!(&body, CreateAnalysis::Solve { .. });
     if !is_solve {
         crate::billing::require_pro(&state.db, &user.id, &state.config).await?;
@@ -325,18 +329,19 @@ pub(crate) async fn prepare(
         | CreateAnalysis::Solve { iterations, .. } => *iterations,
         CreateAnalysis::WhatIf { .. } => None,
     };
-    // A deployment resource ceiling is request validation, independent of paid access.
-    if requested_iterations.is_some_and(|n| n > state.config.max_iterations) {
-        return Err(ApiError::bad_request(format!(
-            "iterations must not exceed {}",
-            state.config.max_iterations
-        )));
-    }
-    if requested_iterations.is_some_and(|n| n > entitlements.max_iterations) {
-        return Err(ApiError::Forbidden(format!(
-            "Your plan allows at most {} iterations.",
-            entitlements.max_iterations
-        )));
+    // The deployment's resource ceiling is request validation, independent of
+    // paid access; below it, the account's own cap is a plan limit.
+    if requested_iterations.is_some_and(|n| n > cap) {
+        return Err(
+            if requested_iterations.is_some_and(|n| n > state.config.max_iterations) {
+                ApiError::bad_request(format!(
+                    "iterations must not exceed {}",
+                    state.config.max_iterations
+                ))
+            } else {
+                ApiError::Forbidden(format!("Your plan allows at most {cap} iterations."))
+            },
+        );
     }
     let graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
     let compiled = compile::compile(&graph)?;
@@ -379,11 +384,7 @@ pub(crate) async fn prepare(
                 config: SweepConfig {
                     parameters: sweeps,
                     metrics: Vec::new(),
-                    mc_iterations: iterations_or_default(
-                        iterations,
-                        250,
-                        entitlements.max_iterations,
-                    )?,
+                    mc_iterations: iterations_or_default(iterations, 250, cap)?,
                     parallel_batches,
                     seed: Some(ANALYSIS_SEED),
                 },
@@ -414,7 +415,7 @@ pub(crate) async fn prepare(
                 fraction,
                 // A ranking is two runs a parameter and is meant to be cheap,
                 // so it defaults lighter than a sweep cell does.
-                iterations: iterations_or_default(iterations, 200, entitlements.max_iterations)?,
+                iterations: iterations_or_default(iterations, 200, cap)?,
                 parallel_batches,
                 seed: Some(ANALYSIS_SEED),
             }
@@ -451,11 +452,7 @@ pub(crate) async fn prepare(
                             .into(),
                         min_value,
                     },
-                    mc_iterations: iterations_or_default(
-                        iterations,
-                        250,
-                        entitlements.max_iterations,
-                    )?,
+                    mc_iterations: iterations_or_default(iterations, 250, cap)?,
                     parallel_batches,
                     seed: Some(ANALYSIS_SEED),
                     ..SolveConfig::default()
@@ -465,9 +462,7 @@ pub(crate) async fn prepare(
 
         CreateAnalysis::WhatIf { layers, iterations } => {
             let lowered = crate::api::what_if::lower(&graph, &compiled, &layers)?;
-            let ceiling = entitlements
-                .max_iterations
-                .clamp(MIN_ITERATIONS, MAX_ANALYSIS_ITERATIONS);
+            let ceiling = cap.clamp(MIN_ITERATIONS, MAX_ANALYSIS_ITERATIONS);
             let total = iterations
                 .unwrap_or(DEFAULT_WHAT_IF_ITERATIONS)
                 .clamp(MIN_ITERATIONS, ceiling);
@@ -495,7 +490,17 @@ pub(crate) async fn prepare(
         base: compiled.config,
         spec,
         is_solve,
+        tier: entitlements.tier(&state.config),
     })
+}
+
+/// The label the caller's admission is counted under.
+async fn caller_tier(state: &AppState, user: &CurrentUser) -> ApiResult<Tier> {
+    Ok(
+        crate::billing::entitlements(&state.db, &user.id, &state.config)
+            .await?
+            .tier(&state.config),
+    )
 }
 
 // ── the AI tool ─────────────────────────────────────────────────────────────
@@ -588,8 +593,9 @@ pub(crate) async fn ai_goal_seek(
         ));
     }
 
+    let tier = caller_tier(state, user).await?;
     let permit =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+        crate::billing::admit_compute_observed(&user.id, tier, &state.telemetry, Origin::Request)?;
     let progress = finplan_core::analysis::SweepProgress::new(0);
     let guard = CancelOnDrop(progress.clone());
     let base = compiled.config.clone();
@@ -760,8 +766,9 @@ pub(crate) async fn ai_sensitivity(
         ));
     }
 
+    let tier = caller_tier(state, user).await.map_err(refused)?;
     let permit =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)
+        crate::billing::admit_compute_observed(&user.id, tier, &state.telemetry, Origin::Request)
             .map_err(refused)?;
     let progress = finplan_core::analysis::SweepProgress::new(spec.budget());
     let guard = CancelOnDrop(progress.clone());

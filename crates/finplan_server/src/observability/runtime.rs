@@ -98,6 +98,7 @@ impl ObservabilityRuntime {
         );
         let db = state.db.clone();
         let telemetry = state.telemetry.clone();
+        let guest_retention_days = state.config.guest_retention_days;
         let mut shutdown = receive;
         tasks.spawn(
             async move {
@@ -110,7 +111,10 @@ impl ObservabilityRuntime {
                         _ = interval.tick() => {
                             tokio::select! {
                                 _ = shutdown.changed() => return Ok(()),
-                                _ = purge_sessions(&db, &telemetry) => {}
+                                _ = async {
+                                    purge_sessions(&db, &telemetry).await;
+                                    purge_guests(&db, &telemetry, guest_retention_days).await;
+                                } => {}
                             }
                         }
                     }
@@ -209,6 +213,16 @@ pub(crate) async fn purge_sessions(db: &Db, telemetry: &Telemetry) {
     }
 }
 
+pub(crate) async fn purge_guests(db: &Db, telemetry: &Telemetry, retention_days: i64) {
+    match auth::guest::purge(db, retention_days).await {
+        Ok((empty, with_plans)) => {
+            telemetry.recovered_error(Component::Session, ErrorClass::Database);
+            telemetry.guests_purged(empty, with_plans);
+        }
+        Err(_) => telemetry.recoverable_error(Component::Session, ErrorClass::Database),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +239,9 @@ mod tests {
             hosted: false,
             access_mode: Default::default(),
             registration_open: true,
+            guest_access: true,
+            guest_max_iterations: 100,
+            guest_retention_days: 30,
             local_mail_sink: None,
             bind: "127.0.0.1:0".into(),
             database_url: "sqlite::memory:".into(),

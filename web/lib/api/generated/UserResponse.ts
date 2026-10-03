@@ -19,4 +19,9 @@ export type UserResponse = {
    */
   auto_run: boolean;
   created_at: string;
+  /**
+   * A guest (spec 17): `email` is a placeholder never to be shown, and the
+   * account screens do not apply.
+   */
+  guest: boolean;
 };

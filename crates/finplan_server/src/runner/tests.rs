@@ -10,6 +10,16 @@ pub(super) struct Hook {
     pub finish_allowed: tokio::sync::Notify,
 }
 
+fn config() -> crate::config::ServerConfig {
+    use clap::Parser;
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        config: crate::config::ServerConfig,
+    }
+    Cli::parse_from(["test"]).config
+}
+
 async fn fixture() -> (Db, RunQueue, String, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let db = crate::db::connect(
@@ -126,7 +136,7 @@ async fn duplicate_delivery_records_one_success_and_actual_iterations() {
     let worker = queue.worker_permits.clone().acquire_owned().await.unwrap();
     let id = insert(&db, &user, true).await;
     send(&queue, &user, id);
-    queue.enqueue(id).await.unwrap();
+    queue.enqueue(id, &config()).await.unwrap();
     drop(worker);
     idle(&queue).await;
     assert_eq!(status(&db, id).await, "succeeded");
@@ -315,7 +325,7 @@ async fn recovery_admits_large_persisted_backlog_once_and_preserves_original_age
         .await
         .unwrap();
     }
-    requeue_orphans(&db, &queue).await.unwrap();
+    requeue_orphans(&db, &queue, &config()).await.unwrap();
     let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM runs WHERE status='queued'")
         .fetch_one(&db)
         .await

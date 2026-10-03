@@ -42,6 +42,21 @@ impl Telemetry {
         );
     }
 
+    /// One retention pass over guests (`auth::guest::purge`). Silent when it
+    /// found nothing, as `maintenance.sessions_purged` is.
+    pub fn guests_purged(&self, empty: u64, with_plans: u64) {
+        if empty + with_plans == 0 {
+            return;
+        }
+        self.guests_purged_count(empty, with_plans);
+        tracing::info!(
+            event = "maintenance.guests_purged",
+            count = empty + with_plans,
+            empty,
+            with_plans
+        );
+    }
+
     pub fn auth_throttled(&self) {
         self.auth_count(AuthAction::Throttled, AuthOutcome::Rejected);
         if let Some(suppressed) = self.permit_log(("auth", "throttled")) {

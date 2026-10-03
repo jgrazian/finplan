@@ -137,7 +137,7 @@ async fn post_message(
             "a draft is described on New scenario; create it to chat about it here".into(),
         ));
     }
-    let Some(reviews) = state.review_ai.clone() else {
+    let Some(reviews) = state.review_ai_for(&user).cloned() else {
         return Err(ApiError::Conflict(
             "AI review is not enabled on this server, so there is no model to chat with".into(),
         ));

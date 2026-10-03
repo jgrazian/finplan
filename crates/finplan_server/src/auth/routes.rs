@@ -31,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/sessions", get(list_sessions))
         .route("/sessions/{id}", delete(revoke_session))
         .merge(super::recovery::router())
+        .merge(super::guest::router())
 }
 
 #[derive(Deserialize, TS)]
@@ -69,13 +70,16 @@ pub struct UserResponse {
     /// Re-run the active scenario by itself once an edit has settled.
     pub auto_run: bool,
     pub created_at: String,
+    /// A guest (spec 17): `email` is a placeholder never to be shown, and the
+    /// account screens do not apply.
+    pub guest: bool,
 }
 
 const USER_COLUMNS: &str =
     "id, email, email_verified_at, display_name, birth_date, default_iterations,
-     default_duration_years, auto_run, created_at";
+     default_duration_years, auto_run, created_at, kind = 'guest' AS guest";
 
-async fn load_user(state: &AppState, id: &str) -> ApiResult<Json<UserResponse>> {
+pub(super) async fn load_user(state: &AppState, id: &str) -> ApiResult<Json<UserResponse>> {
     let row: Option<UserResponse> =
         sqlx::query_as(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = ?1"))
             .bind(id)
@@ -98,6 +102,7 @@ async fn register(
         return Err(ApiError::bad_request("passwords do not match"));
     }
     let email = normalize_email(&body.email)?;
+    super::guest::refuse_placeholder_email(&email)?;
     if state.config.hosted {
         super::protection::account_attempt(&state, &email)?;
     }
@@ -151,15 +156,20 @@ async fn login(
         super::protection::account_attempt(&state, &email)?;
     }
 
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT id, password_hash FROM users WHERE email = ?1")
+    let row: Option<(String, String, String)> =
+        sqlx::query_as("SELECT id, password_hash, kind FROM users WHERE email = ?1")
             .bind(&email)
             .fetch_optional(&state.db)
             .await?;
 
+    // A guest's email and hash are placeholders (spec 17). Refuse the row by
+    // kind, not because '!' happens not to parse as a hash, and answer exactly
+    // as for a missing user.
+    let row = row.filter(|(_, _, kind)| kind != "guest");
+
     // Verify against a dummy hash when the user is missing so that a wrong email
     // and a wrong password take comparable time.
-    let Some((id, password_hash)) = row else {
+    let Some((id, password_hash, _)) = row else {
         let _ = verify_password_async(
             body.password.clone(),
             DUMMY_HASH.to_owned(),
@@ -185,6 +195,7 @@ async fn login(
     }
 
     RequestContext::authenticate(&id);
+    super::guest::replace_guest(&state, &headers, &id).await?;
     let token = session::issue(&state.db, &id, session::user_agent_of(&headers).as_deref()).await?;
 
     state.telemetry.auth(
@@ -253,8 +264,20 @@ async fn logout(
     Ok((out, axum::http::StatusCode::NO_CONTENT))
 }
 
-async fn me(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<UserResponse>> {
-    load_user(&state, &user.id).await
+async fn me(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    user: CurrentUser,
+) -> ApiResult<impl IntoResponse> {
+    // A guest's session slides (see `CurrentUser`), so the cookie's Max-Age has
+    // to slide with it or the browser drops it at day 30 regardless.
+    let refreshed = match session::token_of(&headers) {
+        Some(token) if user.guest => {
+            session::set_cookie_header(&token, state.config.secure_cookies)
+        }
+        _ => HeaderMap::new(),
+    };
+    Ok((refreshed, load_user(&state, &user.id).await?))
 }
 
 // ===========================================================================

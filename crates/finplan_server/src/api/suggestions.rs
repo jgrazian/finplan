@@ -923,7 +923,8 @@ async fn review(
     // The model reads the rule notes and the open ones too, so it adds to
     // them rather than repeating them, and the ones the user dismissed, so
     // it does not raise them again.
-    let context = state.review_ai.is_some().then(|| {
+    // A hosted guest gets the rule notes only: no model pass (spec 17).
+    let context = state.review_ai_for(&user).is_some().then(|| {
         ReviewContext::build(&graph, &results, &drafts)
             .with_open_notes(
                 carried

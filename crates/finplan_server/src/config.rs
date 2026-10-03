@@ -58,6 +58,19 @@ pub struct ServerConfig {
     #[arg(long, env = "FINPLAN_REGISTRATION_OPEN", default_value_t = true, action = clap::ArgAction::Set)]
     pub registration_open: bool,
 
+    /// Let a signed-out visitor start as a guest (spec 17). Hosted only:
+    /// self-hosted deployments always allow guests, uncapped.
+    #[arg(long, env = "FINPLAN_GUEST_ACCESS", default_value_t = true, action = clap::ArgAction::Set)]
+    pub guest_access: bool,
+
+    /// Iterations a hosted guest may run on any simulation path.
+    #[arg(long, env = "FINPLAN_GUEST_MAX_ITERATIONS", default_value_t = 100)]
+    pub guest_max_iterations: usize,
+
+    /// Days without a visit after which a guest and its plans are deleted.
+    #[arg(long, env = "FINPLAN_GUEST_RETENTION_DAYS", default_value_t = 30)]
+    pub guest_retention_days: i64,
+
     /// Explicit local development mail sink directory; never available in hosted mode.
     #[arg(long, env = "FINPLAN_LOCAL_MAIL_SINK")]
     pub local_mail_sink: Option<String>,
@@ -128,6 +141,9 @@ impl ServerConfig {
         }
         if self.sim_workers == 0 {
             return Err("simulation workers must be positive".into());
+        }
+        if self.guest_max_iterations == 0 || self.guest_retention_days < 1 {
+            return Err("guest iterations and retention must be positive".into());
         }
         if self.max_iterations == 0 {
             return Err("maximum iterations must be positive".into());

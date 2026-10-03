@@ -8,6 +8,18 @@ export type Entitlements = {
    * Full planning capabilities, including beta and self-hosted access.
    */
   pro: boolean;
+  /**
+   * A guest (spec 17): signed in without an account. On a hosted server a
+   * guest is never `pro`, whatever the access mode, and gets the guest
+   * iteration cap, no goal seeks and no AI. Self-hosted guests are
+   * unrestricted; this still says they have no account.
+   */
+  guest: boolean;
+  /**
+   * Days without a visit before a guest and its plans are deleted; set
+   * for every guest, so the banner can say so.
+   */
+  guest_retention_days: number | null;
   access_mode: AccessMode;
   hosted: boolean;
   goal_seeks_used_this_month: number;

@@ -3,9 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AccountScreen } from "@/components/account";
 import { AnalysisScreen } from "@/components/analysis";
+import { AdoptionDialog } from "@/components/auth/AdoptionDialog";
+import { AuthDialog, type AuthMode } from "@/components/auth/AuthDialog";
+import { GuestBanner } from "@/components/auth/GuestBanner";
+import { GuestProvider } from "@/components/auth/GuestContext";
 import { LoginForm } from "@/components/auth/LoginForm";
 import { AppFooter, AppHeader, AppShell, type TabDef } from "@/components/layout";
 import { nearestStop, type RunEffort } from "@/components/results";
+import { clampEffort } from "@/lib/view/effort";
 import {
   EmptyState,
   PlanScreen,
@@ -24,7 +29,7 @@ import { useReview } from "@/lib/hooks/useReview";
 import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
-import { NavProvider, type TabId, useNav } from "@/lib/nav";
+import { DEFAULT_TAB, NavProvider, type TabId, useNav } from "@/lib/nav";
 import { resolveScenario } from "@/lib/nav/url";
 import { useServerStatus } from "@/lib/status/useServerStatus";
 import { useApplyThemeMode } from "@/lib/theme";
@@ -60,6 +65,9 @@ const AUTO_RUN_SETTLE_MS = 1_500;
  */
 export function App() {
   const session = useSession();
+  // A guest's Sign up and Sign in open over the workbench rather than replace it.
+  const [auth, setAuth] = useState<AuthMode>();
+  const closeAuth = useCallback(() => setAuth(undefined), []);
   // The mode is the device's, so it holds signed in or out.
   useApplyThemeMode();
 
@@ -74,9 +82,27 @@ export function App() {
     );
   }
 
+  const { user } = session;
   return (
     <NavProvider>
-      <Workbench session={session} user={session.user} />
+      {/* Keyed on who the data belongs to: signing in switches to another
+          user's plans, and claiming or adopting changes what the entitlements
+          and the list say, so each starts the workbench afresh. */}
+      <Workbench
+        key={`${user.id}:${user.guest}:${session.revision}`}
+        session={session}
+        user={user}
+        onSignUp={() => setAuth("signUp")}
+        onSignIn={() => setAuth("signIn")}
+      />
+      {user.guest && auth && <AuthDialog session={session} mode={auth} onClose={closeAuth} />}
+      {session.adoption && (
+        <AdoptionDialog
+          adoption={session.adoption}
+          onAdopt={() => void session.adopt()}
+          onDecline={session.declineAdoption}
+        />
+      )}
     </NavProvider>
   );
 }
@@ -86,22 +112,56 @@ function initials(name: string): string {
   return (parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2)).toUpperCase();
 }
 
-function Workbench({ session, user }: { session: Session; user: UserResponse }) {
+function Workbench({
+  session,
+  user,
+  onSignUp,
+  onSignIn,
+}: {
+  session: Session;
+  user: UserResponse;
+  /** A guest asked to create an account, or to sign in to one. */
+  onSignUp: () => void;
+  onSignIn: () => void;
+}) {
   // Which scenario, which tab and which row all come out of the query string,
   // so a refresh returns to the screen it left. Account settings is a
   // destination rather than a fifth tab: it is about the account, not the
   // scenario the tabs all describe, so it is a tab id the header does not list.
   const nav = useNav();
+  // A guest has no account screen: a link or bookmark to it lands on a tab.
+  const tab: TabId = user.guest && nav.tab === "account" ? DEFAULT_TAB : nav.tab;
+  const { setTab } = nav;
+  useEffect(() => {
+    if (user.guest && nav.tab === "account") setTab(DEFAULT_TAB);
+  }, [user.guest, nav.tab, setTab]);
 
   // How hard a run should work is a property of the question being asked, not
   // of the plan, so it lives here for the session rather than on the scenario.
   // The account preference seeds it; the Results slider moves it from there.
-  const [effort, setEffort] = useState<RunEffort>(() =>
+  const [requestedEffort, setEffort] = useState<RunEffort>(() =>
     nearestStop(user.default_iterations),
   );
 
   const scenarios = useAsync(() => api.scenarios.list(), []);
   const access = useAsync(() => historyApi.entitlements(), []);
+  // The server refuses a run above the account's cap, so what is asked for is
+  // brought down to the highest stop the cap allows before anything is sent.
+  const maxIterations = access.data?.max_iterations;
+  const effort = useMemo(
+    () => clampEffort(requestedEffort, maxIterations),
+    [requestedEffort, maxIterations],
+  );
+  const guestState = useMemo(
+    () => ({
+      guest: user.guest,
+      restricted: user.guest && (access.data?.hosted ?? true),
+      retentionDays: access.data?.guest_retention_days ?? null,
+      openSignUp: onSignUp,
+      openSignIn: onSignIn,
+    }),
+    [user.guest, access.data?.hosted, access.data?.guest_retention_days, onSignUp, onSignIn],
+  );
   const libraries = useAsync(
     async () =>
       Promise.all([api.inflationProfiles.list(), api.taxConfigs.list()]),
@@ -279,7 +339,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   // and the run is left in the background rather than pulling the screen to
   // Results out from under whatever is being edited. Not on Review: applying
   // notes there batches edits for one deliberate re-run, which its banner offers.
-  const autoRun = user.auto_run && !status.offline && nav.tab !== "review" && !isDraft;
+  const autoRun = user.auto_run && !status.offline && tab !== "review" && !isDraft;
   const updatedAt = workspace.scenario?.updated_at;
   const seen = useRef<{ id?: number; at?: string }>({});
   const startQuietly = useRef(() => run.start(effort));
@@ -363,11 +423,12 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
   );
 
   return (
+    <GuestProvider value={guestState}>
     <main className="app-main">
       <AppShell>
         <AppHeader
           tabs={TABS}
-          activeTab={creating ? undefined : nav.tab}
+          activeTab={creating ? undefined : tab}
           onTabChange={(tab) => {
             // New scenario is a page, not a tab: any tab leaves it.
             setCreating(false);
@@ -389,7 +450,8 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
             setCreating(false);
             nav.setTab("account");
           }}
-          accountOpen={!creating && nav.tab === "account"}
+          accountOpen={!creating && tab === "account"}
+          guest={user.guest ? { onSignUp, onSignIn } : undefined}
           onRun={() => {
             setCreating(false);
             start();
@@ -406,8 +468,10 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           onRetry={refresh}
           onRunAgain={start}
           onSignIn={() => void session.signOut()}
-          exclude={nav.tab === "results" ? "run" : undefined}
+          exclude={tab === "results" ? "run" : undefined}
         />
+
+        {user.guest && <GuestBanner />}
 
         {access.data?.access_mode === "beta" && (
           <p style={{ margin: 0, padding: "10px 16px", fontSize: 12, borderBottom: "1px solid var(--color-divider)" }}>
@@ -441,7 +505,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
               nav.openScenario(created.slug, "review");
             }}
           />
-        ) : nav.tab === "account" ? (
+        ) : tab === "account" ? (
           <AccountScreen
             user={user}
             scenarios={list}
@@ -461,7 +525,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
           <EmptyState title="Loading…" detail="Fetching the scenario." />
         ) : (
           <>
-            {nav.tab === "results" && (
+            {tab === "results" && (
               <ResultsScreen
                 results={run.results}
                 run={run.run}
@@ -472,6 +536,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onPercentileChange={run.setPercentile}
                 effort={effort}
                 onEffortChange={setEffort}
+                maxIterations={maxIterations}
                 offline={status.offline}
                 onRun={start}
                 issues={issues}
@@ -479,7 +544,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onReviewEvent={reviewEvent}
               />
             )}
-            {nav.tab === "portfolio" && (
+            {tab === "portfolio" && (
               <PortfolioScreen
                 offline={status.offline}
                 scenarioId={workspace.scenario.id}
@@ -494,7 +559,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onActivateInflation={activateInflation}
               />
             )}
-            {nav.tab === "plan" && (
+            {tab === "plan" && (
               <PlanScreen
                 offline={status.offline}
                 scenarioId={workspace.scenario.id}
@@ -509,7 +574,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onScenarioDeleted={scenarioDeleted}
               />
             )}
-            {nav.tab === "review" && (
+            {tab === "review" && (
               <ReviewScreen
                 scenarioId={workspace.scenario.id}
                 planChat={access.data?.ai_plan_chat}
@@ -531,7 +596,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
                 onNavigate={followEvidence}
               />
             )}
-            {nav.tab === "analysis" && (
+            {tab === "analysis" && (
               <AnalysisScreen
                 scenario={workspace.scenario}
                 onPlanChanged={saved}
@@ -556,6 +621,7 @@ function Workbench({ session, user }: { session: Session; user: UserResponse }) 
       )}
 
     </main>
+    </GuestProvider>
   );
 }
 

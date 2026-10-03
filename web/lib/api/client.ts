@@ -5,6 +5,9 @@
  * `crates/finplan_server/src/api/mod.rs`.
  */
 import { http } from "./http";
+import type { ArchiveImported } from "./generated/ArchiveImported";
+import type { ImportArchive } from "./generated/ImportArchive";
+import type { PlanArchive } from "./generated/PlanArchive";
 import type {
   Account,
   ApplyWhatIf,
@@ -90,6 +93,19 @@ export const api = {
     login: (body: Credentials) => http.post<UserResponse>("/auth/login", body),
     register: (body: RegisterCredentials) => http.post<UserResponse>("/auth/register", body),
     logout: () => http.post<void>("/auth/logout"),
+    /** A guest session (spec 17): 403 when guest access is off, 429 when rate limited. */
+    guest: () => http.post<UserResponse>("/auth/guest"),
+    /** Turn the caller's guest into an account in place; plans stay with it. */
+    claimGuest: (body: RegisterCredentials) =>
+      http.post<UserResponse>("/auth/guest/claim", body),
+  },
+
+  /** Whole-account plan archives; the web uses them to carry a guest's plan across a sign-in. */
+  archives: {
+    exportAll: () => http.get<PlanArchive>("/archives"),
+    /** `from_guest` marks an adoption, so the server can count it. */
+    import: (body: ImportArchive) =>
+      http.post<ArchiveImported>("/archives/import", body),
   },
 
   /**

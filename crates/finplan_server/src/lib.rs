@@ -95,7 +95,7 @@ pub async fn build_with(
     observability::purge_sessions(&db, &telemetry).await;
 
     let runs = runner::spawn_with_telemetry(db.clone(), config.sim_workers, telemetry.clone());
-    runner::requeue_orphans(&db, &runs).await?;
+    runner::requeue_orphans(&db, &runs, &config).await?;
     api::review_ai::recover(&db).await?;
     api::suggestion_chat::recover(&db).await?;
     api::draft_agent::recover(&db).await?;

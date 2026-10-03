@@ -30,14 +30,16 @@ use ts_rs::TS;
 
 use crate::api::funding::{FundingDiagnostics, funding_view};
 use crate::auth::session::CurrentUser;
+use crate::billing::Entitlements;
 use crate::compile::rows::{
     DistributionRow, InflationEntry, ReturnProfileRow, ScenarioGraph, TaxBracketRow,
     TaxConfigEntry, TaxConfigRow,
 };
 use crate::compile::{self, CompiledScenario};
+use crate::config::ServerConfig;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
-use crate::observability::{JobKind as MetricKind, Origin};
+use crate::observability::{JobKind as MetricKind, Origin, Tier};
 use crate::runner::inputs::MODEL_VERSION;
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
@@ -67,7 +69,7 @@ pub struct PreviewRequest {
     pub base_run_id: Option<i64>,
     pub changes: Vec<Change>,
     /// Simulations for each side. Defaults to the base run's count; capped at
-    /// `MAX_PREVIEW_ITERATIONS`.
+    /// `MAX_PREVIEW_ITERATIONS` and at the caller's own iteration cap.
     #[serde(default)]
     pub iterations: Option<usize>,
 }
@@ -169,9 +171,11 @@ pub(crate) async fn run_preview(
     if iterations == Some(0) {
         return Err(ApiError::bad_request("iterations must be at least 1"));
     }
+    let entitlements = crate::billing::entitlements(&state.db, &user.id, &state.config).await?;
+    let limit = Limit::of(&entitlements, &state.config);
 
     if base_run_id.is_none() && super::is_draft(&state.db, scenario_id).await? {
-        return draft_preview(state, user, scenario_id, changes, iterations).await;
+        return draft_preview(state, user, scenario_id, changes, iterations, limit).await;
     }
 
     let run = base_run(&state.db, scenario_id, base_run_id).await?;
@@ -192,7 +196,7 @@ pub(crate) async fn run_preview(
 
     let iterations = iterations
         .unwrap_or(run.iterations.max(1) as usize)
-        .min(MAX_PREVIEW_ITERATIONS);
+        .min(limit.iterations());
     let mut outcome = Preview {
         base_run_id: Some(run.id),
         iterations,
@@ -253,8 +257,12 @@ pub(crate) async fn run_preview(
         None
     };
 
-    let permit =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    let permit = crate::billing::admit_compute_observed(
+        &user.id,
+        limit.tier,
+        &state.telemetry,
+        Origin::Request,
+    )?;
     if let Some(decision) = decision {
         decision.accepted();
     }
@@ -304,6 +312,7 @@ async fn draft_preview(
     scenario_id: i64,
     changes: &[Change],
     iterations: Option<usize>,
+    limit: Limit,
 ) -> ApiResult<Preview> {
     let mut graph = ScenarioGraph::load(&state.db, scenario_id, &user.id).await?;
     let mut outcome = Preview {
@@ -334,9 +343,10 @@ async fn draft_preview(
     outcome.diff = resolved.diff(&Names::from_graph(&graph));
     match edited(&graph, &resolved, changes)? {
         Ok((_, compiled)) => {
-            let iterations = draft_iterations(iterations);
+            let iterations = draft_iterations(iterations, limit);
             outcome.iterations = iterations;
-            outcome.edited = Some(simulate_unpaired(state, user, &compiled, iterations).await?);
+            outcome.edited =
+                Some(simulate_unpaired(state, user, &compiled, iterations, limit).await?);
         }
         Err(problem) => outcome.problems.push(problem),
     }
@@ -354,10 +364,31 @@ pub const DRAFT_SIMULATION_ITERATIONS: usize = 400;
 /// to it) see the same simulated markets wherever their market inputs agree.
 const DRAFT_SEED: u64 = 0xD2AF_7C0D_E5EE_D001;
 
-fn draft_iterations(requested: Option<usize>) -> usize {
+fn draft_iterations(requested: Option<usize>, limit: Limit) -> usize {
     requested
         .unwrap_or(DRAFT_SIMULATION_ITERATIONS)
-        .clamp(1, MAX_PREVIEW_ITERATIONS)
+        .min(limit.iterations())
+        .max(1)
+}
+
+/// What the caller's tier allows a preview: its iteration cap (spec 17: one
+/// cap for every simulation path) and the label its admission is counted under.
+#[derive(Clone, Copy)]
+struct Limit {
+    cap: usize,
+    tier: Tier,
+}
+impl Limit {
+    fn of(entitlements: &Entitlements, config: &ServerConfig) -> Self {
+        Self {
+            cap: crate::billing::iteration_cap(entitlements, config),
+            tier: entitlements.tier(config),
+        }
+    }
+    /// `min(MAX_PREVIEW_ITERATIONS, cap)`.
+    fn iterations(self) -> usize {
+        MAX_PREVIEW_ITERATIONS.min(self.cap)
+    }
 }
 
 /// Why a draft cannot be simulated as it stands.
@@ -396,7 +427,7 @@ pub struct DraftSimulation {
 /// A plan that cannot run is a result, not an error: `blocked` says which
 /// step failed to apply, or why the plan does not compile. `iterations`
 /// defaults to [`DRAFT_SIMULATION_ITERATIONS`] and is capped at
-/// [`MAX_PREVIEW_ITERATIONS`]. Any scenario of the user's will do, but a draft
+/// [`MAX_PREVIEW_ITERATIONS`] and at the caller's own iteration cap. Any scenario of the user's will do, but a draft
 /// is what it is for.
 pub async fn simulate_draft(
     state: &AppState,
@@ -440,10 +471,14 @@ pub async fn simulate_draft(
             }));
         }
     };
-    let iterations = draft_iterations(iterations);
+    let limit = Limit::of(
+        &crate::billing::entitlements(&state.db, &user.id, &state.config).await?,
+        &state.config,
+    );
+    let iterations = draft_iterations(iterations, limit);
     Ok(DraftSimulation {
         iterations,
-        stats: Some(simulate_unpaired(state, user, &compiled, iterations).await?),
+        stats: Some(simulate_unpaired(state, user, &compiled, iterations, limit).await?),
         blocked: None,
     })
 }
@@ -455,6 +490,7 @@ async fn simulate_unpaired(
     user: &CurrentUser,
     compiled: &CompiledScenario,
     iterations: usize,
+    limit: Limit,
 ) -> ApiResult<PreviewStats> {
     let mc_config = MonteCarloConfig {
         iterations,
@@ -465,8 +501,12 @@ async fn simulate_unpaired(
         parallel_batches: 4,
         seed: Some(DRAFT_SEED),
     };
-    let permit =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    let permit = crate::billing::admit_compute_observed(
+        &user.id,
+        limit.tier,
+        &state.telemetry,
+        Origin::Request,
+    )?;
     let cancel = Arc::new(AtomicBool::new(false));
     let guard = CancelOnDrop(cancel.clone());
     let config = compiled.config.clone();

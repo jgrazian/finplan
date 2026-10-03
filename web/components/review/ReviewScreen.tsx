@@ -2,6 +2,7 @@
 
 import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CreateAccountLink, useGuest } from "@/components/auth/GuestContext";
 import { Button, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/http";
@@ -138,6 +139,7 @@ function PlanReview({
   // The sub-tab is in the query, like Portfolio's. Chat is offered only while
   // the server has a model to answer.
   const nav = useNav();
+  const guest = useGuest();
   const chatAvailable = planChat != null && review?.ai != null;
   const section: ReviewSection = chatAvailable && nav.section === "chat" ? "chat" : "notes";
   const [busy, setBusy] = useState<number>();
@@ -418,6 +420,11 @@ function PlanReview({
         {latest == null && (
           <p style={{ margin: 0, fontSize: 12, color: MUTED }}>Run the plan first; a review is written about a finished run.</p>
         )}
+        {guest.restricted && (
+          <p style={{ margin: 0, fontSize: 12, color: MUTED }}>
+            Plan chat and AI notes need an account. <CreateAccountLink />.
+          </p>
+        )}
       </div>
     );
   }
@@ -449,6 +456,11 @@ function PlanReview({
             ? "Ask about the plan or for a change; changes come back as notes for you to apply."
             : view.headline}
         </span>
+        {guest.restricted && (
+          <span style={{ fontSize: 13, color: MUTED }}>
+            Plan chat and AI notes need an account. <CreateAccountLink />.
+          </span>
+        )}
         {ai && (
           <span
             role="status"

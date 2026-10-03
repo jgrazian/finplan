@@ -7,6 +7,7 @@ pub(crate) mod telemetry;
 mod tests;
 
 use crate::compile::{self, rows::ScenarioGraph};
+use crate::config::ServerConfig;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{
@@ -178,7 +179,7 @@ impl RunQueue {
                 mpsc::error::TrySendError::Full(_) => RejectionReason::QueueFull,
                 mpsc::error::TrySendError::Closed(_) => RejectionReason::QueueClosed,
             };
-            self.telemetry.rejection(reason, origin);
+            self.telemetry.rejection(reason, admission.tier(), origin);
             ApiError::Conflict("Run queue unavailable. Retry shortly.".into())
         })?;
         Ok(ReservedRun {
@@ -187,12 +188,16 @@ impl RunQueue {
             admission,
         })
     }
-    pub async fn enqueue(&self, run_id: i64) -> ApiResult<()> {
+    pub async fn enqueue(&self, run_id: i64, config: &ServerConfig) -> ApiResult<()> {
         let (user, scenario, age): (String, i64, f64) = sqlx::query_as(
             "SELECT user_id, scenario_id, CAST(unixepoch() - unixepoch(created_at) AS REAL) FROM runs WHERE id=? AND status='queued'")
             .bind(run_id).fetch_optional(&self.db).await?.ok_or(ApiError::NotFound("queued run"))?;
+        // Only the user id survives a restart, so the tier is looked up again.
+        let tier = crate::billing::entitlements(&self.db, &user, config)
+            .await?
+            .tier(config);
         let admission =
-            crate::billing::admit_compute_observed(&user, &self.telemetry, Origin::Recovery)?;
+            crate::billing::admit_compute_observed(&user, tier, &self.telemetry, Origin::Recovery)?;
         let reservation = self.reserve(admission, Origin::Recovery)?;
         let context = JobContext::new(JobKind::Run, Origin::Recovery, &user, scenario, run_id);
         context.event("run.recovered");
@@ -395,7 +400,11 @@ pub fn spawn_with_telemetry(db: Db, workers: usize, telemetry: Telemetry) -> Run
     queue
 }
 
-pub async fn requeue_orphans(db: &Db, queue: &RunQueue) -> Result<(), sqlx::Error> {
+pub async fn requeue_orphans(
+    db: &Db,
+    queue: &RunQueue,
+    config: &ServerConfig,
+) -> Result<(), sqlx::Error> {
     tracing::info!(event = "recovery.started");
     let initialization = async {
         sqlx::query("UPDATE runs SET status='queued', completed_iterations=0, started_at=NULL WHERE status='running'").execute(db).await?;
@@ -413,6 +422,7 @@ pub async fn requeue_orphans(db: &Db, queue: &RunQueue) -> Result<(), sqlx::Erro
     };
     let db = db.clone();
     let queue = queue.clone();
+    let config = config.clone();
     tokio::spawn(async move {
         let mut after = 0;
         let mut recovered = 0_u64;
@@ -426,7 +436,7 @@ pub async fn requeue_orphans(db: &Db, queue: &RunQueue) -> Result<(), sqlx::Erro
             };
             let mut failures = 0_u64;
             loop {
-                match queue.enqueue(id).await {
+                match queue.enqueue(id, &config).await {
                     Ok(()) => { recovered += 1; break; },
                     Err(ApiError::Conflict(_)) => tokio::time::sleep(Duration::from_millis(250)).await,
                     Err(ApiError::NotFound(_)) => break,

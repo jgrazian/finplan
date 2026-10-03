@@ -81,9 +81,11 @@ struct Metrics {
     in_flight: Gauge,
     mutations: Family<Labels, Counter>,
     auth: Family<Labels, Counter>,
+    guests_purged: Family<Labels, Counter>,
     errors: Family<Labels, Counter>,
     submissions: Family<Labels, Counter>,
     rejections: Family<Labels, Counter>,
+    admissions: Family<Labels, Counter>,
     admitted: Gauge,
     queued: Family<Labels, Gauge>,
     oldest: Family<Labels, FloatGauge>,
@@ -178,6 +180,11 @@ impl Telemetry {
             "Authentication outcomes",
             Family::<Labels, Counter>::default()
         );
+        let guests_purged = metric!(
+            "guests_purged",
+            "Guest users deleted by retention, by whether they had built a plan",
+            Family::<Labels, Counter>::default()
+        );
         let errors = metric!(
             "server_errors",
             "Unexpected failures at their handling boundary",
@@ -191,6 +198,11 @@ impl Telemetry {
         let rejections = metric!(
             "compute_rejections",
             "Compute admission rejections",
+            Family::<Labels, Counter>::default()
+        );
+        let admissions = metric!(
+            "compute_admissions",
+            "Compute admissions granted, by caller tier",
             Family::<Labels, Counter>::default()
         );
         let admitted = metric!(
@@ -524,9 +536,11 @@ impl Telemetry {
             in_flight,
             mutations,
             auth,
+            guests_purged,
             errors,
             submissions,
             rejections,
+            admissions,
             admitted,
             queued,
             oldest,
@@ -630,6 +644,17 @@ impl Telemetry {
             ]))
             .inc();
     }
+    /// Retention deletes guests in batches, so this adds `empty` and
+    /// `with_plans` rather than incrementing by one. The `kind` label is one of
+    /// those two literals.
+    pub(super) fn guests_purged_count(&self, empty: u64, with_plans: u64) {
+        for (kind, n) in [("empty", empty), ("with_plans", with_plans)] {
+            self.0
+                .guests_purged
+                .get_or_create(&labels([("kind", kind)]))
+                .inc_by(n);
+        }
+    }
     pub fn count_error(&self, component: Component, class: ErrorClass) {
         self.0
             .errors
@@ -648,11 +673,21 @@ impl Telemetry {
             ]))
             .inc();
     }
-    pub fn rejection(&self, reason: RejectionReason, origin: Origin) {
+    pub fn admission(&self, tier: Tier, origin: Origin) {
+        self.0
+            .admissions
+            .get_or_create(&labels([
+                ("tier", tier.as_str()),
+                ("origin", origin.as_str()),
+            ]))
+            .inc();
+    }
+    pub fn rejection(&self, reason: RejectionReason, tier: Tier, origin: Origin) {
         self.0
             .rejections
             .get_or_create(&labels([
                 ("reason", reason.as_str()),
+                ("tier", tier.as_str()),
                 ("origin", origin.as_str()),
             ]))
             .inc();
@@ -660,6 +695,7 @@ impl Telemetry {
             tracing::warn!(
                 event = "compute.rejected",
                 reason = reason.as_str(),
+                tier = tier.as_str(),
                 origin = origin.as_str(),
                 suppressed
             );

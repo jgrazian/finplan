@@ -192,7 +192,7 @@ pub(super) async fn start(
     scenario_id: i64,
     description: &str,
 ) -> ApiResult<()> {
-    let Some(reviews) = &state.review_ai else {
+    let Some(reviews) = state.review_ai_for(user) else {
         return Err(ApiError::Conflict(
             "AI drafts are not available on this server".into(),
         ));
@@ -269,7 +269,7 @@ pub(super) async fn answer(
     answers: BTreeMap<String, Value>,
     message: Option<&str>,
 ) -> ApiResult<()> {
-    let Some(reviews) = &state.review_ai else {
+    let Some(reviews) = state.review_ai_for(user) else {
         return Err(ApiError::Conflict(
             "AI drafts are not available on this server".into(),
         ));
@@ -406,7 +406,7 @@ pub(super) async fn follow_up(
     scenario_id: i64,
     message: &str,
 ) -> ApiResult<()> {
-    let Some(reviews) = &state.review_ai else {
+    let Some(reviews) = state.review_ai_for(user) else {
         return Err(ApiError::Conflict(
             "AI drafts are not available on this server".into(),
         ));

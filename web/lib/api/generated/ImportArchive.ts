@@ -11,4 +11,9 @@ export type ImportArchive = {
    * Reusing this key returns the original result instead of creating duplicates.
    */
   request_id: string;
+  /**
+   * The web sets this when it brings a guest plan into an account after
+   * sign-in (spec 17), so adoption can be counted. It changes nothing else.
+   */
+  from_guest: boolean;
 };

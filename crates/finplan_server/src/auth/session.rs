@@ -117,8 +117,9 @@ pub fn set_cookie_header(token: &str, secure: bool) -> HeaderMap {
 
 /// Pull the session token out of the cookie header, or an
 /// `Authorization: Bearer` header for non-browser clients.
-fn extract_token(parts: &Parts) -> Option<String> {
-    if let Some(cookies) = parts.headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
+#[must_use]
+pub fn token_of(headers: &HeaderMap) -> Option<String> {
+    if let Some(cookies) = headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
         for pair in cookies.split(';') {
             let pair = pair.trim();
             if let Some(value) = pair
@@ -131,8 +132,7 @@ fn extract_token(parts: &Parts) -> Option<String> {
         }
     }
 
-    parts
-        .headers
+    headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
@@ -149,6 +149,9 @@ pub struct CurrentUser {
     /// The opaque id of the session this request arrived on, so the account
     /// screen can mark one row in the device list "this device".
     pub session_id: String,
+    /// A guest (spec 17): a placeholder account with a normal session. Guests
+    /// get their own entitlements and compute share, and never see mail.
+    pub guest: bool,
 }
 
 impl FromRequestParts<AppState> for CurrentUser {
@@ -158,11 +161,11 @@ impl FromRequestParts<AppState> for CurrentUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        let token = extract_token(parts).ok_or(ApiError::Unauthorized)?;
+        let token = token_of(&parts.headers).ok_or(ApiError::Unauthorized)?;
         let token_hash = hash_token(&token);
 
-        let row: Option<(String, String, String)> = sqlx::query_as(
-            "SELECT u.id, u.email, s.public_id
+        let row: Option<(String, String, String, bool)> = sqlx::query_as(
+            "SELECT u.id, u.email, s.public_id, u.kind = 'guest'
                FROM sessions s
                JOIN users u ON u.id = s.user_id
               WHERE s.token_hash = ?1 AND s.expires_at > datetime('now')",
@@ -171,15 +174,25 @@ impl FromRequestParts<AppState> for CurrentUser {
         .fetch_optional(&state.db)
         .await?;
 
-        let (id, email, session_id) = row.ok_or(ApiError::Unauthorized)?;
+        let (id, email, session_id, guest) = row.ok_or(ApiError::Unauthorized)?;
 
         RequestContext::authenticate(&id);
 
-        // Touch the session so idle-time can be reasoned about later.
-        match sqlx::query("UPDATE sessions SET last_seen = datetime('now') WHERE token_hash = ?1")
-            .bind(&token_hash)
-            .execute(&state.db)
-            .await
+        // Touch the session so idle-time can be reasoned about later. A guest's
+        // session slides: retention (spec 17) is measured from the last visit, so
+        // a guest who comes back daily must not be signed out at day 30. Accounts
+        // keep the expiry fixed at issue.
+        match sqlx::query(
+            "UPDATE sessions
+                SET last_seen = datetime('now'),
+                    expires_at = CASE WHEN ?2 THEN datetime('now', ?3) ELSE expires_at END
+              WHERE token_hash = ?1",
+        )
+        .bind(&token_hash)
+        .bind(guest)
+        .bind(format!("+{SESSION_TTL_DAYS} days"))
+        .execute(&state.db)
+        .await
         {
             Ok(_) => state
                 .telemetry
@@ -193,6 +206,7 @@ impl FromRequestParts<AppState> for CurrentUser {
             id,
             email,
             session_id,
+            guest,
         })
     }
 }

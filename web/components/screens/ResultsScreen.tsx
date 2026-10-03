@@ -20,6 +20,7 @@ import {
 } from "@/components/results";
 import type { ScaleKind } from "@/components/charts";
 import { resolveScaleKind } from "@/components/charts/stack";
+import { IterationUpsell } from "@/components/auth/GuestContext";
 import { Button, Hr } from "@/components/ui";
 import type { Percentile, ResultsData } from "@/lib/types";
 import type { PreflightIssue, Run } from "@/lib/api/types";
@@ -112,6 +113,7 @@ function ResultsContent({
   onPercentileChange,
   effort,
   onEffortChange,
+  maxIterations,
   offline,
   onRun,
 }: {
@@ -130,6 +132,8 @@ function ResultsContent({
   /** How hard the next run should work; the rail's first section sets it. */
   effort: RunEffort;
   onEffortChange: (effort: RunEffort) => void;
+  /** The most iterations the account may run; the dial offers nothing above it. */
+  maxIterations?: number;
   /** No connection: nothing can be run, so the dial is read-only.  */
   offline?: boolean;
   onRun: () => void;
@@ -207,7 +211,13 @@ function ResultsContent({
             iterations={stats.numIterations}
             action={
               mobile ? (
-                <EffortMenu value={effort} onChange={onEffortChange} disabled={offline} />
+                <EffortMenu
+                  value={effort}
+                  onChange={onEffortChange}
+                  disabled={offline}
+                  maxIterations={maxIterations}
+                  note={<IterationUpsell />}
+                />
               ) : undefined
             }
           />
@@ -270,7 +280,13 @@ function ResultsContent({
         >
           {!mobile && (
             <>
-              <EffortPanel value={effort} onChange={onEffortChange} disabled={offline} />
+              <EffortPanel
+                value={effort}
+                onChange={onEffortChange}
+                disabled={offline}
+                maxIterations={maxIterations}
+                note={<IterationUpsell />}
+              />
               <Hr flush />
             </>
           )}

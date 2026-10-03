@@ -114,3 +114,76 @@ pub fn account_attempt(state: &AppState, email: &str) -> crate::error::ApiResult
     }
     Ok(())
 }
+
+/// Guests one address may create per hour, and all addresses together per
+/// minute (spec 17). Creating a guest is free and unauthenticated, so this is
+/// the only thing between a script and a table of throwaway users.
+const GUESTS_PER_IP_PER_HOUR: u32 = 5;
+const GUESTS_PER_MINUTE: u32 = 60;
+const GUEST_IP_WINDOW: Duration = Duration::from_secs(3600);
+const GUEST_GLOBAL_WINDOW: Duration = Duration::from_secs(60);
+/// Distinct addresses tracked at once; past this, unseen addresses are refused
+/// rather than letting the map grow.
+const GUEST_WINDOW_KEYS: usize = 4096;
+
+/// Kept apart from `WINDOWS`, which forgets everything after 60 seconds.
+static GUEST_WINDOWS: OnceLock<Mutex<HashMap<String, Window>>> = OnceLock::new();
+static GUEST_GLOBAL: OnceLock<Mutex<Window>> = OnceLock::new();
+
+/// The address the request arrived from, as `auth_throttle` reads it. Forwarded
+/// headers are never trusted.
+#[must_use]
+pub fn peer_of(connect: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>) -> String {
+    connect
+        .map(|p| p.0.ip().to_string())
+        .unwrap_or_else(|| "unknown-peer".into())
+}
+
+/// Count one guest creation against the per-address and process-wide limits.
+pub fn guest_attempt(state: &AppState, peer: &str) -> crate::error::ApiResult<()> {
+    let limited = |retry_after| {
+        state.telemetry.auth_throttled();
+        Err(crate::error::ApiError::rate_limited(
+            "Too many guest sessions. Try again later or sign in.",
+            retry_after,
+        ))
+    };
+    let now = Instant::now();
+    {
+        let mut windows = GUEST_WINDOWS.get_or_init(Default::default).lock().unwrap();
+        windows.retain(|_, w| now.duration_since(w.started) < GUEST_IP_WINDOW);
+        let key = format!("guest:{peer}");
+        if windows.len() >= GUEST_WINDOW_KEYS && !windows.contains_key(&key) {
+            return limited(3600);
+        }
+        let w = windows.entry(key).or_insert(Window {
+            started: now,
+            attempts: 0,
+        });
+        w.attempts += 1;
+        if w.attempts > GUESTS_PER_IP_PER_HOUR {
+            let wait = GUEST_IP_WINDOW.saturating_sub(now.duration_since(w.started));
+            return limited(wait.as_secs().max(1));
+        }
+    }
+    let mut global = GUEST_GLOBAL
+        .get_or_init(|| {
+            Mutex::new(Window {
+                started: now,
+                attempts: 0,
+            })
+        })
+        .lock()
+        .unwrap();
+    if now.duration_since(global.started) >= GUEST_GLOBAL_WINDOW {
+        *global = Window {
+            started: now,
+            attempts: 0,
+        };
+    }
+    global.attempts += 1;
+    if global.attempts > GUESTS_PER_MINUTE {
+        return limited(60);
+    }
+    Ok(())
+}

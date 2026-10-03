@@ -148,6 +148,11 @@ async fn list_for_scenario(
     Ok(Json(rows))
 }
 
+/// The seed a guest's run gets when the request names none. At the guest
+/// iteration cap (100) the success rate moves by several points between seeds,
+/// so re-running an unchanged plan must not change the number on screen.
+pub const GUEST_SEED: i64 = 17;
+
 /// Queue a run. The scenario is compiled synchronously first so a misconfigured
 /// plan fails immediately with a useful message instead of surfacing as a failed
 /// job seconds later.
@@ -174,14 +179,8 @@ pub(crate) async fn create_run(
 ) -> ApiResult<(StatusCode, Json<Run>)> {
     super::owned_scenario(&state.db, scenario_id, &user.id).await?;
     crate::billing::require_editable(&state.db, &user.id, scenario_id, &state.config).await?;
-    let entitled_max = if state.config.hosted {
-        crate::billing::entitlements(&state.db, &user.id, &state.config)
-            .await?
-            .max_iterations
-            .min(state.config.max_iterations)
-    } else {
-        state.config.max_iterations
-    };
+    let entitlements = crate::billing::entitlements(&state.db, &user.id, &state.config).await?;
+    let entitled_max = crate::billing::iteration_cap(&entitlements, &state.config);
     if body.iterations < 1 {
         return Err(ApiError::bad_request("iterations must be at least 1"));
     }
@@ -222,8 +221,12 @@ pub(crate) async fn create_run(
         ));
     }
 
-    let admission =
-        crate::billing::admit_compute_observed(&user.id, &state.telemetry, Origin::Request)?;
+    let admission = crate::billing::admit_compute_observed(
+        &user.id,
+        entitlements.tier(&state.config),
+        &state.telemetry,
+        Origin::Request,
+    )?;
     let reserved = state.runs.reserve(admission, Origin::Request)?;
     let dispatch_guard = state.runs.submission_guard().await;
     let mut tx = state.db.begin().await?;
@@ -243,9 +246,13 @@ pub(crate) async fn create_run(
 
     let (snapshot, input_hash) = crate::runner::inputs::snapshot(&graph)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let effective_seed = body
-        .seed
-        .unwrap_or_else(|| i64::from(rand::random::<u32>()));
+    let effective_seed = body.seed.unwrap_or_else(|| {
+        if state.limited_guest(user) {
+            GUEST_SEED
+        } else {
+            i64::from(rand::random::<u32>())
+        }
+    });
 
     let run_id: i64 = sqlx::query_scalar(
         "INSERT INTO runs

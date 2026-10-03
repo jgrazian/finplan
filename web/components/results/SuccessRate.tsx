@@ -1,7 +1,9 @@
 import type { CSSProperties, ReactNode } from "react";
+import { IterationUpsell, useGuest } from "@/components/auth/GuestContext";
 import { StatLabel, Tooltip } from "@/components/ui";
 import { fmtInt } from "@/lib/format";
 import { useCountUp } from "@/lib/hooks/useCountUp";
+import { intervalLabel, successIntervalPoints } from "@/lib/view/guest";
 import {
   SUCCESS_BANDS,
   SUCCESS_SCALE_FLOOR,
@@ -35,6 +37,10 @@ export function SuccessRate({
   const shownPct = useCountUp(pct);
   const shown = shownPct / 100;
   const band = successBand(shown);
+  // A guest's runs are small enough that the rate moves by several points
+  // from one run to the next, so the headline carries how far.
+  const { restricted } = useGuest();
+  const noise = restricted && measured ? successIntervalPoints(fraction, iterations) : undefined;
 
   return (
     <section aria-label="Simulation outcome definitions" style={{ marginBottom: 20 }}>
@@ -70,6 +76,14 @@ export function SuccessRate({
             >
               %
             </span>
+            {noise != null && noise > 0 && (
+              <span
+                title={`95% interval from ${fmtInt(iterations)} iterations: the true rate is likely within ${noise.toFixed(1)} percentage points of this figure.`}
+                style={{ fontFamily: "var(--font-display)", fontSize: 28 }}
+              >
+                ± {intervalLabel(noise)}
+              </span>
+            )}
           </div>
           <div style={{ fontSize: 12 }}>
             {fmtInt(iterations)} Monte Carlo iterations
@@ -77,6 +91,12 @@ export function SuccessRate({
               <>
                 {" · "}
                 <span className={`success-verdict is-${band.key}`}>{band.label}</span>
+              </>
+            )}
+            {restricted && (
+              <>
+                {" · "}
+                <IterationUpsell />
               </>
             )}
           </div>
