@@ -19,5 +19,6 @@ pub mod results;
 pub mod snapshot;
 pub mod specs;
 pub mod suggest;
+pub mod templates;
 
 pub use error::{PlanError, PlanResult};

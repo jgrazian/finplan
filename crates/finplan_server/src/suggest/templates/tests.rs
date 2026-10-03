@@ -1,11 +1,12 @@
-//! Each template expands, applies through the change model to a real plan,
-//! and compiles; expansions with different key prefixes share a plan.
+//! Every template, applied through the routes' SQL halves to a stored plan and
+//! compiled. The rest of the template tests (parameter checks, the individual
+//! expansions) run on an in-memory plan in `finplan_plan::templates`.
 
 use serde_json::{Value, json};
 
 use super::*;
 use crate::compile::rows::ScenarioGraph;
-use crate::suggest::{ChangeProblem, Created, apply_steps_sql};
+use crate::suggest::{Change, ChangeOp, ChangeTarget, Created, RefKind, apply_steps_sql};
 
 struct Fixture {
     db: crate::db::Db,
@@ -113,76 +114,6 @@ fn event(g: &ScenarioGraph, name: &str) -> crate::api::events::Event {
     crate::api::events::read_event(g, id).unwrap()
 }
 
-#[test]
-fn requests_deserialize_from_tool_json_with_refs() {
-    let r = request(json!({
-        "kind": "employer_match", "key_prefix": "m_",
-        "to_account_id": {"$new": "k401"}, "salary": 120000,
-        "match_rate": 0.5, "up_to_percent": 6,
-        "end": {"kind": "AgeParameter", "parameter_id": {"$new": "retire_age"}},
-    }));
-    assert_eq!(r.key_prefix, "m_");
-    let Template::EmployerMatch(p) = &r.template else {
-        panic!("kind")
-    };
-    assert_eq!(p.to_account_id, RowRef::new("k401"));
-    assert_eq!(r.template.kind(), TemplateKind::EmployerMatch);
-    let plain = request(json!({"kind": "salary", "to_account_id": 7, "annual_amount": 90000}));
-    assert_eq!(plain.key_prefix, "");
-    let Template::Salary(p) = plain.template else {
-        panic!("kind")
-    };
-    assert_eq!(p.to_account_id, RowRef::Id(7));
-}
-
-#[test]
-fn bad_parameters_are_refused_before_anything_is_written() {
-    let bad = |value: Value| request(value).expand().unwrap_err().to_string();
-    assert!(
-        bad(json!({"kind": "salary", "to_account_id": 1, "annual_amount": 0})).contains("positive")
-    );
-    assert!(
-        bad(
-            json!({"kind": "salary", "to_account_id": 1, "annual_amount": 1000,
-                   "employee_401k": {"account_id": 2, "annual_amount": 2000}})
-        )
-        .contains("exceeds")
-    );
-    assert!(
-        bad(json!({"kind": "market_crash", "drop": 1.5,
-                       "when": {"kind": "Age", "years": 60}}))
-        .contains("between 0 and 1")
-    );
-    assert!(
-        bad(
-            json!({"kind": "home_purchase", "price": 500000, "down_payment": 100000,
-                       "from_account_id": 1, "when": {"kind": "Age", "years": 40}})
-        )
-        .contains("mortgage_rate")
-    );
-    assert!(
-        bad(
-            json!({"kind": "large_expense", "from_account_id": 1, "amount": 5,
-                       "when": {"kind": "Date", "on_date": "soon"}})
-        )
-        .contains("YYYY-MM-DD")
-    );
-    assert!(
-        bad(
-            json!({"kind": "recurring_expense", "name": "Rent", "from_account_id": 1,
-                       "amount": 5, "interval": "Never"})
-        )
-        .contains("repeats")
-    );
-    assert!(
-        bad(
-            json!({"kind": "job_loss", "salary_event_id": 1, "months": 0,
-                       "when": {"kind": "Age", "years": 50}})
-        )
-        .contains("months")
-    );
-}
-
 #[tokio::test]
 async fn every_template_applies_and_compiles_and_prefixes_keep_expansions_apart() {
     let f = Fixture::new().await;
@@ -276,128 +207,4 @@ async fn every_template_applies_and_compiles_and_prefixes_keep_expansions_apart(
     }
     let salary = event(&g, "Salary");
     assert_eq!(salary.effects.len(), 3, "taxable pay, deferral, purchase");
-}
-
-#[tokio::test]
-async fn the_match_is_tax_free_income_scaled_from_salary() {
-    let f = Fixture::new().await;
-    let m = request(json!({
-        "kind": "employer_match", "to_account_id": {"$new": "k401"}, "salary": 100000,
-        "match_rate": 0.5, "up_to_percent": 6,
-    }))
-    .expand()
-    .unwrap();
-    f.apply(&[f.base(), m.changes]).await.unwrap();
-    let g = f.graph().await;
-    let e = event(&g, "Employer 401(k) match");
-    let effect = serde_json::to_value(&e.effects[0]).unwrap();
-    assert_eq!(effect["kind"], "Income");
-    assert_eq!(effect["income_type"], "TaxFree");
-    assert_eq!(effect["amount"]["kind"], "Scale");
-    assert_eq!(effect["amount"]["factor"], 0.03);
-    assert_eq!(effect["amount"]["inner"]["inner"]["value"], 100000.);
-}
-
-#[tokio::test]
-async fn a_match_can_follow_a_salary_parameter() {
-    let f = Fixture::new().await;
-    let m = request(json!({
-        "kind": "employer_match", "to_account_id": {"$new": "k401"}, "salary": 0,
-        "salary_parameter": "salary", "match_rate": 1.0, "up_to_percent": 4,
-    }))
-    .expand()
-    .unwrap();
-    let parameter = Change {
-        op: ChangeOp::Add,
-        target: ChangeTarget::NewParameter("salary".into()),
-        path: String::new(),
-        expect: None,
-        value: Some(json!({"name": "salary", "value": {"kind": "Money", "value": 120000.0}})),
-    };
-    f.apply(&[f.base(), vec![parameter], m.changes])
-        .await
-        .unwrap();
-    crate::compile::compile(&f.graph().await).expect("compiles");
-}
-
-#[tokio::test]
-async fn an_expense_can_follow_a_monthly_parameter() {
-    let f = Fixture::new().await;
-    let e = request(json!({
-        "kind": "recurring_expense", "name": "Living", "from_account_id": {"$new": "checking"},
-        "amount": 36000, "amount_parameter": "Monthly spending", "parameter_interval": "Monthly",
-        "fund_from_investments": true,
-    }))
-    .expand()
-    .unwrap();
-    let parameter = parameter(
-        "monthly",
-        "Monthly spending",
-        ParameterValueSpec::Money { value: 3000. },
-    );
-    f.apply(&[f.base(), vec![parameter], e.changes])
-        .await
-        .unwrap();
-    let g = f.graph().await;
-    let living = serde_json::to_value(event(&g, "Living")).unwrap();
-    assert_eq!(
-        living["effects"][0]["amount"]["source"],
-        "top_up(inflation($\"Monthly spending\" * 12))"
-    );
-    assert_eq!(
-        living["effects"][1]["amount"]["source"],
-        "inflation($\"Monthly spending\" * 12)"
-    );
-    crate::compile::compile(&g).expect("compiles");
-}
-
-#[tokio::test]
-async fn a_cash_home_purchase_makes_no_mortgage() {
-    let f = Fixture::new().await;
-    let h = request(json!({
-        "kind": "home_purchase", "price": 200000, "down_payment": 200000,
-        "from_account_id": {"$new": "checking"}, "when": {"kind": "Age", "years": 40},
-    }))
-    .expand()
-    .unwrap();
-    assert!(h.keys.iter().all(|k| k.key != "mortgage"));
-    f.apply(&[f.base(), h.changes]).await.unwrap();
-    let g = f.graph().await;
-    assert!(g.accounts.iter().all(|a| a.name != "Home mortgage"));
-    crate::compile::compile(&g).expect("compiles");
-}
-
-#[tokio::test]
-async fn two_expansions_without_a_prefix_collide_on_their_keys() {
-    let f = Fixture::new().await;
-    let rent = |name: &str| {
-        request(json!({"kind": "recurring_expense", "name": name,
-                       "from_account_id": {"$new": "checking"}, "amount": 100}))
-        .expand()
-        .unwrap()
-        .changes
-    };
-    let mut both = rent("Rent");
-    both.extend(rent("Food"));
-    let problems = f.apply(&[f.base(), both]).await.unwrap_err();
-    // The second `add` at "" lands on the first one's target.
-    assert!(matches!(
-        problems.problems[0],
-        ChangeProblem::UnsupportedOp { .. } | ChangeProblem::DuplicateKey { .. }
-    ));
-    let mut namespaced = request(json!({"kind": "recurring_expense", "key_prefix": "a_",
-        "name": "Rent", "from_account_id": {"$new": "checking"}, "amount": 100}))
-    .expand()
-    .unwrap()
-    .changes;
-    namespaced.extend(
-        request(
-            json!({"kind": "recurring_expense", "key_prefix": "b_", "name": "Food",
-            "from_account_id": {"$new": "checking"}, "amount": 100}),
-        )
-        .expand()
-        .unwrap()
-        .changes,
-    );
-    f.apply(&[f.base(), namespaced]).await.unwrap();
 }
