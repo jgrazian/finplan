@@ -55,7 +55,7 @@ pub struct RunQueue {
     /// The worker slots, shared with offloaded compute jobs (`compute`).
     worker_permits: Arc<Semaphore>,
     /// Cancel flags of offloaded compute jobs, queued or running, by job id.
-    compute_flags: Arc<StdMutex<HashMap<i64, Arc<AtomicBool>>>>,
+    compute_flags: Arc<StdMutex<HashMap<i64, Arc<compute::ComputeFlag>>>>,
     db: Db,
     telemetry: Telemetry,
     // Held across claim and flag registration, and across cancel's transition.

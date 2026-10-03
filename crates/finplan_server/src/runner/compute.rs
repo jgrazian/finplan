@@ -40,20 +40,28 @@ pub struct ComputeJob {
     pub admission: ComputePermit,
 }
 
+/// A job's cancellation: the flag the engine polls, and a wake-up for a job
+/// still waiting for a worker slot, so canceling it frees its admission at
+/// once instead of when a slot comes free.
+pub(super) struct ComputeFlag {
+    cancel: Arc<AtomicBool>,
+    wake: tokio::sync::Notify,
+}
+
 /// Removes the job's cancel flag however its task ends.
 struct FlagGuard {
     id: i64,
-    flags: Arc<StdMutex<HashMap<i64, Arc<AtomicBool>>>>,
-    cancel: Arc<AtomicBool>,
+    flags: Arc<StdMutex<HashMap<i64, Arc<ComputeFlag>>>>,
+    flag: Arc<ComputeFlag>,
 }
 impl Drop for FlagGuard {
     fn drop(&mut self) {
         // Also stops a progress reporter that outlived its job.
-        self.cancel.store(true, Ordering::Relaxed);
+        self.flag.cancel.store(true, Ordering::Relaxed);
         let mut flags = self.flags.lock().unwrap_or_else(|e| e.into_inner());
         if flags
             .get(&self.id)
-            .is_some_and(|flag| Arc::ptr_eq(flag, &self.cancel))
+            .is_some_and(|flag| Arc::ptr_eq(flag, &self.flag))
         {
             flags.remove(&self.id);
         }
@@ -79,11 +87,14 @@ impl RunQueue {
     /// Start an offloaded job. The `compute_jobs` row must exist already; the
     /// job waits for a worker slot, then runs.
     pub fn submit_compute(&self, job: ComputeJob) {
-        let cancel = Arc::new(AtomicBool::new(false));
+        let flag = Arc::new(ComputeFlag {
+            cancel: Arc::new(AtomicBool::new(false)),
+            wake: tokio::sync::Notify::new(),
+        });
         self.compute_flags
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(job.id, cancel.clone());
+            .insert(job.id, flag.clone());
         let context = JobContext::new(JobKind::Offload, Origin::Request, &job.user_id, 0, job.id);
         context.event("offload.submitted");
         tracing::info!(
@@ -95,14 +106,15 @@ impl RunQueue {
         let queue = self.clone();
         let span = context.span();
         tokio::spawn(
-            async move { queue.run_compute(job, cancel, context).await }
+            async move { queue.run_compute(job, flag, context).await }
                 .instrument(span)
                 .with_current_subscriber(),
         );
     }
 
     /// Ask a queued or running job to stop. A running job notices between
-    /// batches; a queued one never starts.
+    /// batches and holds its slot until then; a queued one gives up its place
+    /// and its admission immediately.
     pub fn cancel_compute(&self, id: i64) {
         if let Some(flag) = self
             .compute_flags
@@ -110,11 +122,13 @@ impl RunQueue {
             .unwrap_or_else(|e| e.into_inner())
             .get(&id)
         {
-            flag.store(true, Ordering::Relaxed);
+            flag.cancel.store(true, Ordering::Relaxed);
+            flag.wake.notify_one();
         }
     }
 
-    async fn run_compute(self, job: ComputeJob, cancel: Arc<AtomicBool>, context: JobContext) {
+    async fn run_compute(self, job: ComputeJob, flag: Arc<ComputeFlag>, context: JobContext) {
+        let cancel = flag.cancel.clone();
         let ComputeJob {
             id,
             user_id,
@@ -128,13 +142,23 @@ impl RunQueue {
         let _flag = FlagGuard {
             id,
             flags: self.compute_flags.clone(),
-            cancel: cancel.clone(),
+            flag: flag.clone(),
         };
         let telemetry = self.telemetry.clone();
         let submitted = Submitted::now();
 
-        let Ok(_permit) = self.worker_permits.clone().acquire_owned().await else {
-            return;
+        let _permit = tokio::select! {
+            permit = self.worker_permits.clone().acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => return,
+            },
+            // Canceled while waiting: give the admission back now.
+            () = flag.wake.notified() => {
+                telemetry.queue_wait(JobKind::Offload, QueueExit::Canceled, submitted.elapsed());
+                telemetry.canceled_before_start(JobKind::Offload);
+                context.event("offload.canceled");
+                return;
+            }
         };
         if cancel.load(Ordering::Relaxed) {
             telemetry.queue_wait(JobKind::Offload, QueueExit::Canceled, submitted.elapsed());
