@@ -16,6 +16,7 @@ use crate::observability::{
 };
 use finplan_core::model::{ConvergenceConfig, MonteCarloConfig, MonteCarloProgress};
 use finplan_core::simulation::monte_carlo_simulate_with_progress;
+use finplan_plan::results::{RunSettings, project};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -711,8 +712,9 @@ async fn execute(
         Err(_) => return Err(RunError::EnginePanic),
     };
     let _persist = PhaseTimer::new(telemetry, JobKind::Run, Phase::Persist);
+    let results = project(&compiled, &summary, &RunSettings::default());
     let _lease = lease.lock().await?;
-    match store::persist(db, run_id, &compiled, &summary).await {
+    match store::persist(db, run_id, &results).await {
         Ok(()) => {}
         Err(sqlx::Error::RowNotFound) => return Err(RunError::Deleted),
         Err(_) => return Err(RunError::Persistence),
