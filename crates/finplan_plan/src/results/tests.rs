@@ -134,3 +134,21 @@ fn a_run_can_skip_its_ledger() {
     assert!(served.ledger_years.is_empty());
     assert!(!served.cash_flows.is_empty());
 }
+
+/// Preview pairs a base and an edited run by seed, and the browser (spec 19)
+/// must agree with the server, so a seed has to reproduce a run to the bit.
+/// The default plan holds several assets per account, which is what used to
+/// make it drift in the last bits (account snapshots summed a `HashMap`).
+#[test]
+fn a_seed_reproduces_the_projection_exactly() {
+    let body = || {
+        let results = projected(&RunSettings::default())
+            .results(1, 1, None)
+            .unwrap();
+        serde_json::to_string(&results).unwrap()
+    };
+    let first = body();
+    for _ in 0..3 {
+        assert_eq!(first, body());
+    }
+}

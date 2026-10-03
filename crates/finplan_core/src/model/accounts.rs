@@ -3,7 +3,7 @@
 //! Accounts are containers for assets with specific tax treatments.
 //! Assets represent individual investments or property within accounts.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::model::Market;
 
@@ -337,7 +337,7 @@ impl Account {
             match &self.flavor {
                 AccountFlavor::Bank(cash) => AccountSnapshotFlavor::Bank(cash.value),
                 AccountFlavor::Investment(inv) => {
-                    let mut assets: HashMap<AssetId, f64> = HashMap::new();
+                    let mut assets: BTreeMap<AssetId, f64> = BTreeMap::new();
 
                     for asset in &inv.positions {
                         let value = asset.units
@@ -375,7 +375,10 @@ pub enum AccountSnapshotFlavor {
     Bank(f64),
     Investment {
         cash: f64,
-        assets: HashMap<AssetId, f64>,
+        /// Ordered so that summing it (`total_value`) adds in the same order on
+        /// every run: a randomly seeded `HashMap` made seeded runs differ in
+        /// the last bits whenever an account held several assets.
+        assets: BTreeMap<AssetId, f64>,
     },
     Property(f64),
     Liability(f64),
