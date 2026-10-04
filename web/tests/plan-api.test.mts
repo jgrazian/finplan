@@ -201,22 +201,24 @@ async function withFlag(
   }
 }
 
-test("local mode is off unless the build or the browser turns it on", async () => {
-  await withFlag({}, () => assert.equal(localModeEnabled(), false));
-  await withFlag({ env: "0" }, () => assert.equal(localModeEnabled(), false));
-  await withFlag({ storage: "0" }, () => assert.equal(localModeEnabled(), false));
+test("local mode is on unless the build or the browser turns it off, and the browser's word wins", async () => {
+  await withFlag({}, () => assert.equal(localModeEnabled(), true));
   await withFlag({ env: "1" }, () => assert.equal(localModeEnabled(), true));
-  await withFlag({ env: "true" }, () => assert.equal(localModeEnabled(), true));
+  await withFlag({ env: "0" }, () => assert.equal(localModeEnabled(), false));
+  await withFlag({ env: "false" }, () => assert.equal(localModeEnabled(), false));
+  await withFlag({ storage: "0" }, () => assert.equal(localModeEnabled(), false));
   await withFlag({ storage: "1" }, () => assert.equal(localModeEnabled(), true));
+  // A tester can turn a deployment's "off" back on for one browser, and the reverse.
+  await withFlag({ env: "0", storage: "1" }, () => assert.equal(localModeEnabled(), true));
+  await withFlag({ env: "1", storage: "0" }, () => assert.equal(localModeEnabled(), false));
 });
 
-test("blocked storage reads as off rather than throwing", async () => {
+test("blocked storage falls back to the build's setting rather than throwing", async () => {
   const blocked = () => {
     throw new Error("SecurityError");
   };
-  await withFlag({ storage: blocked }, () => assert.equal(localModeEnabled(), false));
-  // The build-time switch does not need storage at all.
-  await withFlag({ env: "1", storage: blocked }, () => assert.equal(localModeEnabled(), true));
+  await withFlag({ storage: blocked }, () => assert.equal(localModeEnabled(), true));
+  await withFlag({ env: "0", storage: blocked }, () => assert.equal(localModeEnabled(), false));
 });
 
 test("the server can turn local mode off, and silence on its part means on", async () => {
@@ -227,8 +229,8 @@ test("the server can turn local mode off, and silence on its part means on", asy
     setServerLocalMode(true);
     assert.equal(localModeEnabled(), true);
   });
-  // The server's word is not enough to turn it on.
-  await withFlag({}, () => {
+  // The server's word is not enough to turn it on where the client turned it off.
+  await withFlag({ env: "0" }, () => {
     setServerLocalMode(true);
     assert.equal(localModeEnabled(), false);
   });
@@ -258,9 +260,9 @@ test("/health is read for local_mode, and an older server's plain answer leaves 
   }
 });
 
-test("with the flag off the server is never asked, so the app makes no request it did not before", async () => {
+test("with local mode turned off the server is never asked, so the app makes no request it did not before", async () => {
   let asked = 0;
-  await withFlag({}, async () => {
+  await withFlag({ env: "0" }, async () => {
     const allowed = await loadLocalModePolicy(async () => {
       asked += 1;
       return new Response('{"local_mode":true}');

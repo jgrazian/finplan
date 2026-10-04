@@ -1,33 +1,39 @@
 /**
- * Whether plans may live in this browser (spec 19, phase 1: "behind a flag").
+ * Whether plans may live in this browser (spec 19).
  *
- * Two keys must agree. The visitor's side is a build-time variable or a
- * `localStorage` switch (so a tester can turn it on without a rebuild); the
- * server's side is `/health`, where an operator who wants every plan on their
- * server reports `local_mode: false`. Either off is off, and off means the app
- * is exactly what it was before local plans existed.
+ * On by default. Two keys can turn it off, and either off is off. The
+ * visitor's side: a `localStorage` switch for one browser, then a build-time
+ * variable for a deployment. The server's side is `/health`, where an operator
+ * who wants every plan on their server reports `local_mode: false`. Off means
+ * the app is exactly what it was before local plans existed.
  *
  * Plain imports only, so the Node test runner can load it.
  */
 
-/** The `localStorage` key that turns local mode on for one browser. */
+/** The `localStorage` key that turns local mode on (`"1"`) or off (`"0"`) for one browser. */
 export const LOCAL_MODE_STORAGE_KEY = "finplan.localMode";
 
+const ON = new Set(["1", "true"]);
+const OFF = new Set(["0", "false"]);
+
 function clientFlag(): boolean {
+  // One browser's own choice first, so a tester can flip it without a rebuild.
+  try {
+    const stored = globalThis.localStorage?.getItem(LOCAL_MODE_STORAGE_KEY);
+    if (stored != null && ON.has(stored)) return true;
+    if (stored != null && OFF.has(stored)) return false;
+  } catch {
+    // Storage can throw outright: blocked site data, a sandboxed frame.
+  }
   try {
     // Next inlines `NEXT_PUBLIC_*` only when it is spelled out like this, and
     // where nothing inlined it and there is no `process`, the lookup throws.
     const built = process.env.NEXT_PUBLIC_FINPLAN_LOCAL_MODE;
-    if (built === "1" || built === "true") return true;
+    if (built !== undefined && OFF.has(built)) return false;
   } catch {
-    // No build-time value to read; fall through to the browser's own switch.
+    // No build-time value to read: the default stands.
   }
-  try {
-    return globalThis.localStorage?.getItem(LOCAL_MODE_STORAGE_KEY) === "1";
-  } catch {
-    // Storage can throw outright: blocked site data, a sandboxed frame.
-    return false;
-  }
+  return true;
 }
 
 /** What `/health` said about local mode; undefined until asked, or when it did not say. */
@@ -39,7 +45,7 @@ export function setServerLocalMode(allowed: boolean | undefined): void {
 }
 
 /**
- * Local mode is on: the client flag is set and the server has not said no. A
+ * Local mode is on: the client has not turned it off and the server has not said no. A
  * server that has not answered yet, or whose `/health` has no `local_mode`
  * (an older one), counts as yes: the field exists to turn the feature off.
  */
@@ -50,8 +56,8 @@ export function localModeEnabled(): boolean {
 /**
  * Asks `/health` whether the server allows local mode, once, and remembers.
  *
- * Skipped entirely when the client flag is off, so a deployment that has not
- * opted in makes no request it did not make before. `/health` carries no plan
+ * Skipped entirely when the client has turned it off, so a deployment that
+ * opted out makes no request it did not make before. `/health` carries no plan
  * data, which is why it may be asked in local mode. Any failure is the same as
  * silence: the browser may still be offline, and local plans work offline.
  */

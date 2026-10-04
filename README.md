@@ -6,11 +6,11 @@ FinPlan models multiple account types, taxes, income and spending events, and ch
 
 ## Hosted feedback beta
 
-The [web beta](https://finplan.rayknot.com/) is free during the beta and includes saved plans, comparisons, reports, and advanced analysis. Compute limits apply, and future plans and pricing may change. An account is required; hosted plans are stored on the beta server. If you would rather keep your plan on your own machine, use the terminal UI below.
+The [web beta](https://finplan.rayknot.com/) is free during the beta and includes saved plans, comparisons, reports, and advanced analysis. You can try a guest plan without signing up. Guest plans are deleted after 30 days without a visit; create a free account to keep yours. Plans in the web beta, including guest plans, are stored on the beta server. Compute limits apply, and future plans and pricing may change. If you would rather keep your plan on your own machine, use the terminal UI below.
 
 To help improve the beta:
 
-1. Create an account and build a plan, using fictional figures if you do not want to enter personal financial information.
+1. Create a scenario in the guest plan, using fictional figures if you do not want to enter personal financial information.
 2. Run a simulation and try changing an assumption such as retirement age or spending.
 3. Use **Contact** in the app to send private feedback, or [open a GitHub issue](https://github.com/jgrazian/finplan/issues/new) for a public bug report or feature request. Please do not include account details or personal financial information in either message.
 

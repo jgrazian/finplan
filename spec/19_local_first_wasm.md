@@ -408,10 +408,11 @@ Also learned, which phases 1-3 build on:
 
 ## Implementation notes (2026-10-03)
 
-Phases 0–7 are built, with local mode behind `NEXT_PUBLIC_FINPLAN_LOCAL_MODE`
-or `localStorage['finplan.localMode'] = '1'` (and not refused by the server's
-`/health` `local_mode`). Nothing changes for anyone with the flag off; flipping
-the default (phase 7's rollout) is a deploy decision, not code.
+Phases 0–7 are built, and local mode is on by default (since 2026-10-04). It
+is off where `localStorage['finplan.localMode'] = '0'` (one browser), where the
+build sets `NEXT_PUBLIC_FINPLAN_LOCAL_MODE=0` (a deployment, unless a browser
+sets `'1'`), or where the server's `/health` reports `local_mode: false`
+(`FINPLAN_LOCAL_MODE=false`). Off, the app is what it was before local plans.
 
 Where things live:
 
