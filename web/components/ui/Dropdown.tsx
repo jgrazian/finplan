@@ -20,6 +20,8 @@ export interface DropdownOption<T extends string | number> {
   label: string;
   /** Right-aligned secondary value, so the menu can be read as a table. */
   detail?: ReactNode;
+  /** A small mark before the label, shown in the trigger too when picked. */
+  icon?: ReactNode;
   /** Section band above the row. Consecutive options sharing a name group. */
   group?: string;
   /**
@@ -294,6 +296,7 @@ export function Dropdown<T extends string | number>({
         onClick={() => (open ? close() : openMenu())}
         onKeyDown={onKeyDown}
       >
+        {current?.icon != null && <span className="dd-icon">{current.icon}</span>}
         <span className={cx("dd-value", !current && "dd-empty")}>
           {current ? current.label : placeholder}
         </span>
@@ -387,6 +390,7 @@ function Row<T extends string | number>({
       ) : (
         <span className="mk" aria-hidden="true" />
       )}
+      {option.icon != null && <span className="dd-icon">{option.icon}</span>}
       <span className="dd-label">{option.label}</span>
       {option.detail != null && <span className="sub">{option.detail}</span>}
     </div>

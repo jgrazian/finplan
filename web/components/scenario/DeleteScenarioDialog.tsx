@@ -1,7 +1,7 @@
 "use client";
 
 import { Dialog } from "@/components/ui";
-import { usePlanApi } from "@/lib/nav";
+import { type PlanHome, planApiFor, usePlanApi } from "@/lib/nav";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 
 /**
@@ -12,14 +12,22 @@ import { useSubmit } from "@/lib/hooks/useSubmit";
  */
 export function DeleteScenarioDialog({
   scenario,
+  home,
   onClose,
   onDeleted,
 }: {
   scenario: { id: number; name: string };
+  /**
+   * Where the scenario lives. Required from a list that mixes homes: ids are
+   * per home, so the open plan's home could name a different plan entirely.
+   * Omitted, it is the open plan's.
+   */
+  home?: PlanHome;
   onClose: () => void;
   onDeleted: (id: number) => void;
 }) {
-  const api = usePlanApi();
+  const open = usePlanApi();
+  const api = home ? planApiFor(home) : open;
   const submit = useSubmit();
   return (
     <Dialog

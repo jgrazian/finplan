@@ -73,6 +73,9 @@
 
   /* The statement blue: actions and the current place, never a chart. */
   --color-accent: #2f5f9e;
+  /* Destructive actions only (Delete). Not a data colour: losses in charts
+     keep the series palette. */
+  --color-danger: #a8322d;
   --color-accent-100: #eff6ff;
   --color-accent-200: #dbe9fc;
   --color-accent-300: #bad3f5;
@@ -175,6 +178,7 @@
   --color-neutral-900: #f1f3f5;
 
   --color-accent: #93b7e7;
+  --color-danger: #f0958c;
   --color-accent-100: #11243e;
   --color-accent-200: #19365b;
   --color-accent-300: #244a7c;
@@ -548,6 +552,40 @@ input {
 
 .btn-ghost:active:not(:disabled) {
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+/* A ghost button that destroys something: same weight, red so it is never
+   mistaken for the harmless actions beside it. */
+.btn-danger {
+  color: var(--color-danger);
+  padding-inline: 8px;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
+}
+
+.btn-danger:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 18%, transparent);
+}
+
+/* A row's delete: a quiet × that turns red only when pointed at, so a table
+   of them reads as data rather than as a column of alarms. */
+.row-delete {
+  border: 0;
+  background: none;
+  padding: 0 4px;
+  font-size: 16px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--color-text) 45%, transparent);
+}
+
+.row-delete:hover,
+.row-delete:focus-visible {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 10%, transparent);
 }
 
 .btn-icon {

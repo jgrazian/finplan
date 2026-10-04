@@ -61,7 +61,8 @@ export function backupDue(input: {
 export function isSafari(userAgent: string): boolean {
   const ios = /\b(iPhone|iPad|iPod)\b/.test(userAgent);
   if (ios) return true;
-  if (/\b(Chrome|Chromium|Edg|OPR|Opera|Android|Firefox)\b/.test(userAgent)) return false;
+  // Unanchored on the left so `HeadlessChrome` counts as Chrome too.
+  if (/(Chrome|Chromium|Edg|OPR|Opera|Android|Firefox)\b/.test(userAgent)) return false;
   return /\bSafari\b/.test(userAgent);
 }
 

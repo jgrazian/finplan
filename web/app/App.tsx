@@ -707,6 +707,24 @@ function Workbench({
           onCancel={offload.active ? offload.cancel : run.cancel}
           runWhere={offload.active ? "server" : undefined}
           offline={planOffline}
+          homeOf={localMode ? homeOf : undefined}
+          onFiles={localMode ? () => setHomeRequest({ kind: "files" }) : undefined}
+          homeNote={(home) =>
+            home === "local" ? PRIVACY_PROMISE : "Stored on FinPlan's servers with your account."
+          }
+          onMoveCurrent={
+            localMode && selectedScenario && !isDraft
+              ? () => {
+                  if (homeOf(selectedScenario.slug) === "cloud") {
+                    setHomeRequest({ kind: "download", plan: selectedScenario });
+                  } else if (account) {
+                    setHomeRequest({ kind: "move", plan: selectedScenario });
+                  } else {
+                    onSignIn();
+                  }
+                }
+              : undefined
+          }
         />
 
         {/* Server state lives here, directly under the nav and above every
@@ -722,20 +740,14 @@ function Workbench({
 
         {migration && <MigrationNotice result={migration} onDismiss={onDismissMigration} />}
 
-        {/* Local mode only: where the open plan lives, and what can be done about it. */}
-        {localMode && selectedScenario && !isDraft && !creating && tab !== "account" && (
+        {/* Local mode only: what is at risk for a plan kept on this device, when anything is. */}
+        {localMode && selectedScenario && !isDraft && !creating && tab !== "account" &&
+          capabilities.home === "local" && (
           <PlanHomeBar
-            home={capabilities.home}
-            account={account}
             backupDue={durability.backupDue}
             persistDenied={durability.persistDenied}
             safariNudge={durability.safariNudge}
-            readOnly={status.offline}
-            onMoveToCloud={() => setHomeRequest({ kind: "move", plan: selectedScenario })}
-            onDownload={() => setHomeRequest({ kind: "download", plan: selectedScenario })}
             onBackup={() => void backUp(selectedScenario)}
-            onFiles={() => setHomeRequest({ kind: "files" })}
-            onSignIn={onSignIn}
             onDismissSafari={durability.dismissSafariNudge}
           />
         )}
@@ -810,6 +822,7 @@ function Workbench({
                     plans: localPlans,
                     onMoveToCloud: (plan) => setHomeRequest({ kind: "move", plan }),
                     onDownload: (plan) => setHomeRequest({ kind: "download", plan }),
+                    onDeleted: (id) => scenarioDeleted(id, "local"),
                     onImported: (ids) => {
                       scenarios.reload();
                       const first = ids[0];

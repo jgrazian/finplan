@@ -71,6 +71,21 @@ body {
   color: var(--color-accent);
 }
 
+/* Where the open scenario is saved, said quietly beside the switcher that
+   carries its mark. Phones have no room for it; the mark still says it. */
+.app-header-home {
+  flex: none;
+  font-size: 12.5px;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--color-text) 66%, transparent);
+}
+
+@media (max-width: 900px) {
+  .app-header-home {
+    display: none;
+  }
+}
+
 /* Run and its in-flight progress share one fixed-width slot, so the header
    never reflows when a run starts or ends. */
 .app-header-run {
@@ -1154,6 +1169,14 @@ tr:hover > * > .grip,
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* A mark that names what kind of thing the value is — where a scenario lives —
+   sits before it and never shrinks. */
+.dd-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 .dd-value.dd-empty {

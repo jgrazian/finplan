@@ -2,7 +2,9 @@
 
 import { type ReactNode, useMemo } from "react";
 import { Button, Dropdown, type DropdownOption, Tag } from "@/components/ui";
+import { HOME_LABEL, HomeIcon } from "@/components/local/HomeIcon";
 import type { Run } from "@/lib/api/types";
+import type { PlanHome } from "@/lib/nav";
 import type { Scenario } from "@/lib/types";
 import { BrandMark, Wordmark } from "./Brand";
 
@@ -16,6 +18,21 @@ export interface TabDef<T extends string> {
  * ids are the server's, so a decorated key cannot collide with one.
  */
 const NEW_SCENARIO = "\u0000new-scenario";
+/** The switcher's other commands: move the open scenario to its other home, and the plan files. */
+const MOVE_SCENARIO = "\u0000move-scenario";
+const PLAN_FILES = "\u0000plan-files";
+
+/** Menu sections, in the order a scenario's home is listed. */
+const HOME_GROUP: Record<PlanHome, string> = {
+  local: "On this device",
+  cloud: "In the cloud",
+};
+
+/** What the header says beside the switcher about where the open plan is saved. */
+const HOME_STATUS: Record<PlanHome, string> = {
+  local: "Saved on this device",
+  cloud: "Saved to the cloud",
+};
 
 /**
  * Header grammar 6b — one row: brand, inline tabs, scenario switcher, Run,
@@ -42,6 +59,10 @@ export function AppHeader<T extends string>({
   runWhere,
   offline,
   trailing,
+  homeOf,
+  onMoveCurrent,
+  onFiles,
+  homeNote,
 }: {
   tabs: ReadonlyArray<TabDef<T>>;
   /** Absent while a page that is not a tab (New scenario) is on screen. */
@@ -74,14 +95,40 @@ export function AppHeader<T extends string>({
   offline?: boolean;
   /** Extra controls between the scenario switcher and Run. */
   trailing?: ReactNode;
+  /**
+   * Local mode: where each scenario lives. Every row and the picked value then
+   * carry the home's mark, the menu groups by home, and the header says where
+   * the open scenario is saved. Absent, the switcher is a plain list.
+   */
+  homeOf?: (id: string) => PlanHome;
+  /** Offered in the menu's foot: move the open scenario to its other home. */
+  onMoveCurrent?: () => void;
+  /** The menu's last row: export plans as a file, or import one to this device. */
+  onFiles?: () => void;
+  /** Said on hover over the saved-where line, e.g. the privacy promise. */
+  homeNote?: (home: PlanHome) => string;
 }) {
   const active = scenarios.find((s) => s.id === activeScenarioId);
+  const activeHome = active && homeOf ? homeOf(active.id) : undefined;
 
   const options = useMemo(() => {
-    const rows: Array<DropdownOption<string>> = scenarios.map((s) => ({
-      value: s.id,
-      label: s.name,
-    }));
+    const rows: Array<DropdownOption<string>> = [];
+    if (homeOf) {
+      // Grouped by home, this device first: an empty home still shows its
+      // heading, so where a new plan would go is never a mystery.
+      for (const home of ["local", "cloud"] as const) {
+        const group = HOME_GROUP[home];
+        const mine = scenarios.filter((s) => homeOf(s.id) === home);
+        for (const s of mine) {
+          rows.push({ value: s.id, label: s.name, group, icon: <HomeIcon home={home} /> });
+        }
+        if (mine.length === 0) {
+          rows.push({ value: `\u0000none-${home}`, label: "None", group, disabled: true });
+        }
+      }
+    } else {
+      for (const s of scenarios) rows.push({ value: s.id, label: s.name });
+    }
     if (onNewScenario) {
       rows.push({
         value: NEW_SCENARIO,
@@ -90,8 +137,18 @@ export function AppHeader<T extends string>({
         disabled: offline,
       });
     }
+    if (onMoveCurrent && activeHome) {
+      rows.push({
+        value: MOVE_SCENARIO,
+        label: activeHome === "local" ? "Move to cloud…" : "Move to device…",
+        action: true,
+        disabled: offline,
+      });
+    }
+    // Files need no server: a backup is how a plan on this device survives one.
+    if (onFiles) rows.push({ value: PLAN_FILES, label: "Export / import…", action: true });
     return rows;
-  }, [offline, onNewScenario, scenarios]);
+  }, [activeHome, homeOf, offline, onFiles, onMoveCurrent, onNewScenario, scenarios]);
 
   return (
     <>
@@ -124,15 +181,33 @@ export function AppHeader<T extends string>({
         ))}
       </nav>
 
+      {activeHome && (
+        <span
+          className="app-header-home"
+          title={homeNote?.(activeHome)}
+          aria-label={`${HOME_STATUS[activeHome]}. ${HOME_LABEL[activeHome]}.`}
+        >
+          {HOME_STATUS[activeHome]}
+        </span>
+      )}
+
       <Dropdown
         className="app-header-scenario"
-        style={{ width: 170 }}
+        style={{ width: homeOf ? 200 : 170 }}
         ariaLabel="Scenario"
         placeholder="No scenario"
         options={options}
         value={activeScenarioId}
-        maxMenuHeight={280}
-        onChange={(id) => (id === NEW_SCENARIO ? onNewScenario?.() : onScenarioChange(id))}
+        maxMenuHeight={320}
+        onChange={(id) =>
+          id === NEW_SCENARIO
+            ? onNewScenario?.()
+            : id === MOVE_SCENARIO
+              ? onMoveCurrent?.()
+              : id === PLAN_FILES
+                ? onFiles?.()
+                : onScenarioChange(id)
+        }
       />
 
       {active?.dirty && <Tag tone="outline">results stale</Tag>}

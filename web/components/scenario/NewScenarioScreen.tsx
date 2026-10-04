@@ -19,6 +19,7 @@ import type { SetupPlan } from "@/lib/api/generated/SetupPlan";
 import type { Profile, Scenario, TaxConfig, UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { PRIVACY_PROMISE } from "@/lib/local/durability";
+import { HOME_LABEL, HomeIcon } from "@/components/local/HomeIcon";
 import { type PlanHome, planApiFor, planCapabilities } from "@/lib/nav";
 import { addYears, money, yearsBetween } from "@/lib/view/format";
 import { DescribeSetup } from "./DescribeSetup";
@@ -204,19 +205,16 @@ export function NewScenarioScreen(props: NewScenarioProps) {
   const modeSwitch = (
     <>
       {props.onHomeChange && <HomeSwitch home={props.home} onChange={props.onHomeChange} />}
-      {/* Said once, where a plan's home is chosen; each way out of it says so where it happens. */}
-      {props.home === "local" && (
-        <span className="ns-mut" style={{ flexBasis: "100%" }}>
-          {PRIVACY_PROMISE}
-        </span>
-      )}
       <ModeSwitch
         mode={mode}
         describable={describable}
         locked={locked}
         lockedTitle={
           lockedForHome
-            ? capabilities.cloudOnlyReason
+            ? // The way to the account is the switch beside it, not a move.
+              props.onHomeChange
+              ? "Choose Cloud to describe your plan and upload statements."
+              : capabilities.cloudOnlyReason
             : "Create a free account to describe your plan and upload statements."
         }
         onChange={setMode}
@@ -226,7 +224,6 @@ export function NewScenarioScreen(props: NewScenarioProps) {
           AI drafts and document upload need an account. <CreateAccountLink />.
         </span>
       )}
-      {lockedForHome && <span className="ns-mut">{capabilities.cloudOnlyReason}.</span>}
     </>
   );
   if (access && drafts && props.onReviewDraft && props.onDraftCreated && mode === "describe") {
@@ -256,11 +253,26 @@ export function NewScenarioScreen(props: NewScenarioProps) {
   );
 }
 
-/** Where the new plan lives; shown only when local mode gives a choice. */
+/**
+ * Where the new plan lives; shown only when local mode gives a choice. The
+ * privacy promise is said here, on the option it belongs to, rather than as a
+ * line of its own: a sentence that comes and goes with the choice would move
+ * the whole bar each time it is toggled.
+ */
 function HomeSwitch({ home, onChange }: { home: PlanHome; onChange: (home: PlanHome) => void }) {
   const options: SegmentOption<PlanHome>[] = [
-    { value: "local", label: "This device", title: "The plan stays in this browser." },
-    { value: "cloud", label: "Cloud", title: "The plan is saved to your FinPlan account." },
+    {
+      value: "local",
+      label: HOME_LABEL.local,
+      icon: <HomeIcon home="local" />,
+      title: PRIVACY_PROMISE,
+    },
+    {
+      value: "cloud",
+      label: HOME_LABEL.cloud,
+      icon: <HomeIcon home="cloud" />,
+      title: "The plan is saved to your FinPlan account.",
+    },
   ];
   return (
     <SegmentedControl
@@ -709,7 +721,8 @@ function GuidedSetup(
   const age = draft.birth_date && draft.start_date >= draft.birth_date
     ? Math.floor(yearsBetween(draft.birth_date, draft.start_date))
     : null;
-  const title = draft.name.trim() ? `New scenario — ${draft.name.trim()}` : "New scenario";
+  // Not the plan's name: a label that grows as it is typed shifts the bar beside it.
+  const title = "New scenario";
   const error = stepError ?? submit.error;
 
   return (

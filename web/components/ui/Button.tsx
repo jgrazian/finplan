@@ -4,7 +4,7 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { cx } from "./cx";
 import { Kbd } from "./Kbd";
 
-type Variant = "primary" | "secondary" | "ghost" | "add";
+type Variant = "primary" | "secondary" | "ghost" | "danger" | "add";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;

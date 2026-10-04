@@ -1,5 +1,6 @@
 "use client";
 
+import { HOME_LABEL, HomeIcon } from "@/components/local/HomeIcon";
 import { useState } from "react";
 import { Field, Hr, NumberInput, SectionHeading, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
@@ -105,8 +106,18 @@ export function PreferencesPanel({
               value={draft.home}
               onChange={(home) => !readOnly && setDraft((held) => ({ ...held, home }))}
               options={[
-                { value: "local", label: "This device", title: "New plans stay in this browser." },
-                { value: "cloud", label: "Cloud", title: "New plans are saved to your FinPlan account." },
+                {
+                  value: "local",
+                  label: HOME_LABEL.local,
+                  icon: <HomeIcon home="local" />,
+                  title: "New plans stay in this browser.",
+                },
+                {
+                  value: "cloud",
+                  label: HOME_LABEL.cloud,
+                  icon: <HomeIcon home="cloud" />,
+                  title: "New plans are saved to your FinPlan account.",
+                },
               ]}
             />
           </Field>

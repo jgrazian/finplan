@@ -86,6 +86,12 @@ test("Safari is detected, and the browsers that say Safari too are not", () => {
   assert.equal(isSafari(EDGE), false);
   assert.equal(isSafari(FIREFOX), false);
   assert.equal(isSafari(ANDROID), false);
+  assert.equal(
+    isSafari(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+    ),
+    false,
+  );
 });
 
 test("on iOS every browser is WebKit, so Chrome there counts", () => {

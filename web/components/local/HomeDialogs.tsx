@@ -38,14 +38,14 @@ export function MoveToCloudDialog({
   if (partial) {
     return (
       <Dialog
-        title="Moved to cloud"
+        title="Moved to the cloud"
         onClose={() => onMoved(partial)}
         onSubmit={() => onMoved(partial)}
         submitLabel="Open the cloud plan"
         error={`The plan is in the cloud, but the copy on this device could not be deleted: ${partial.deleteError ?? "unknown error"}. You can delete it yourself.`}
       >
         <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
-          <strong style={{ fontWeight: 500 }}>{plan.name}</strong> is now stored on FinPlan&rsquo;s
+          <strong style={{ fontWeight: 500 }}>{plan.name}</strong>{" "}is now stored on FinPlan&rsquo;s
           servers.
         </p>
       </Dialog>
@@ -75,12 +75,12 @@ export function MoveToCloudDialog({
       }
     >
       <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.5 }}>
-        <strong style={{ fontWeight: 500 }}>{plan.name}</strong> will be stored on FinPlan&rsquo;s
+        <strong style={{ fontWeight: 500 }}>{plan.name}</strong>{" "}will be stored on FinPlan&rsquo;s
         servers, with your account. That is what lets you use it on another device and use AI
         review on it. Once it is there, the copy on this device is deleted.
       </p>
       <p style={{ margin: 0, fontSize: 12.5, lineHeight: 1.5 }} className="ns-mut">
-        Saved runs are not moved; results are recomputed in the cloud. Your plan limit applies.
+        Saved runs are not moved; results are recomputed there. Your plan limit applies.
       </p>
     </Dialog>
   );
@@ -140,8 +140,8 @@ export function DownloadToDeviceDialog({
 
   return (
     <Dialog
-      title="Download to this device"
-      submitLabel="Download to this device"
+      title="Move to device"
+      submitLabel="Move to device"
       busy={submit.busy}
       error={submit.error}
       onClose={onClose}

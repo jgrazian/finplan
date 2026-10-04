@@ -1,10 +1,12 @@
 "use client";
 
-import { useId } from "react";
+import { type ReactNode, useId } from "react";
 
 export interface SegmentOption<T extends string> {
   value: T;
   label: string;
+  /** A small mark before the label. */
+  icon?: ReactNode;
   /** A muted tally after the label, e.g. how many rows the option shows. */
   count?: number;
   disabled?: boolean;
@@ -43,6 +45,7 @@ export function SegmentedControl<T extends string>({
             checked={value === opt.value}
             onChange={() => onChange(opt.value)}
           />
+          {opt.icon}
           {opt.label}
           {opt.count != null && <span className="seg-count">{opt.count}</span>}
         </label>
