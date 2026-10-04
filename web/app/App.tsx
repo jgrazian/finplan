@@ -894,6 +894,7 @@ function Workbench({
               <PlanScreen
                 offline={planOffline}
                 scenarioId={workspace.scenario.id}
+                funding={workspace.scenario.funding}
                 params={workspace.params}
                 assumptions={workspace.assumptions}
                 axis={workspace.axis}

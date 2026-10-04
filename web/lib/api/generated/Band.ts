@@ -11,6 +11,11 @@ export type Band = {
    */
   path_id: string;
   percentile: number | null;
+  /**
+   * The seed that replays this path, as decimal text (a `u64`). Null for the
+   * mean and for a run stored before seeds were kept.
+   */
+  seed: string | null;
   dates: Array<string>;
   net_worth: Array<number>;
   /**

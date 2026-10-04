@@ -20,6 +20,7 @@ mod batches;
 mod builder_dsl;
 mod contribution_limits;
 mod funding;
+mod funding_policy;
 mod market_shock;
 mod parameters;
 mod profiling;

@@ -7,4 +7,5 @@ export { EventRail } from "./EventRail";
 export { TriggerSentence } from "./TriggerSentence";
 export { PlanTimeline } from "./PlanTimeline";
 export { ScenarioStrip } from "./ScenarioStrip";
+export { FundingSetting } from "./FundingSetting";
 export * from "./timeline";

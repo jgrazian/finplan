@@ -13,7 +13,7 @@ use crate::specs::accounts::{CreateAccount, CreatePosition, UpdateAccount, Updat
 use crate::specs::assets::{CreateAsset, UpdateAsset};
 use crate::specs::events::EventBody;
 use crate::specs::parameters::ParameterBody;
-use crate::specs::scenarios::UpdateScenario;
+use crate::specs::scenarios::{SetFunding, UpdateScenario};
 
 /// One write to a plan, as one of the plan-scoped routes the web calls. Each
 /// variant is the in-memory twin of the route in its doc comment (under
@@ -27,6 +27,8 @@ use crate::specs::scenarios::UpdateScenario;
 pub enum EditOp {
     /// `PATCH /scenarios/{id}`
     UpdateScenario { body: UpdateScenario },
+    /// `PUT /scenarios/{id}/funding`
+    SetFunding { body: SetFunding },
 
     /// `POST …/assets`
     CreateAsset { body: CreateAsset },
@@ -107,6 +109,11 @@ pub fn apply(graph: &mut ScenarioGraph, op: &EditOp) -> PlanResult<EditOutcome> 
     Ok(match op {
         EditOp::UpdateScenario { body } => {
             update_scenario(graph, body)?;
+            EditOutcome::done()
+        }
+
+        EditOp::SetFunding { body } => {
+            set_funding(graph, body)?;
             EditOutcome::done()
         }
 

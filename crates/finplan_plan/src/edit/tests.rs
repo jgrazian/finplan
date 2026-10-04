@@ -305,3 +305,137 @@ fn deleting_what_events_use_is_refused() {
         PlanError::NotFound("account")
     );
 }
+
+fn funding(strategy: &str, ceiling: Option<f64>, excludes: &[i64]) -> SetFunding {
+    serde_json::from_value(json!({"funding": {
+        "strategy": strategy, "bracket_ceiling": ceiling, "exclude_accounts": excludes}}))
+    .unwrap()
+}
+
+#[test]
+fn funding_policy_is_set_compiled_and_cleared() {
+    let mut graph = default_graph();
+    assert!(compile::compile(&graph).unwrap().config.funding.is_none());
+
+    set_funding(
+        &mut graph,
+        &funding("BracketFilling", Some(0.22), &[3, 1, 3]),
+    )
+    .unwrap();
+    assert_eq!(
+        graph.funding_excludes,
+        vec![1, 3],
+        "sorted and deduplicated"
+    );
+    let compiled = compile::compile(&graph).unwrap();
+    let policy = compiled.config.funding.expect("policy compiles");
+    assert!(matches!(
+        policy.order,
+        finplan_core::model::WithdrawalOrder::BracketFilling { ceiling_rate } if ceiling_rate == 0.22
+    ));
+    assert_eq!(policy.exclude_accounts.len(), 2);
+    assert!(policy.from.is_none());
+    assert_eq!(graph.funding().unwrap().exclude_accounts, vec![1, 3]);
+
+    // No ceiling means the engine's default.
+    set_funding(&mut graph, &funding("BracketFilling", None, &[])).unwrap();
+    let order = compile::compile(&graph)
+        .unwrap()
+        .config
+        .funding
+        .unwrap()
+        .order;
+    assert!(matches!(
+        order,
+        finplan_core::model::WithdrawalOrder::BracketFilling { ceiling_rate }
+            if ceiling_rate == finplan_core::model::WithdrawalOrder::DEFAULT_BRACKET_CEILING
+    ));
+
+    set_funding(
+        &mut graph,
+        &SetFunding {
+            funding: None,
+            align_sweeps: None,
+        },
+    )
+    .unwrap();
+    assert!(graph.scenario.funding_strategy.is_none() && graph.funding_excludes.is_empty());
+    assert!(graph.funding().is_none());
+}
+
+#[test]
+fn funding_policy_can_align_strategy_sweeps() {
+    let mut graph = default_graph();
+    let strategy_rows = graph
+        .withdrawal_sources
+        .values()
+        .filter(|r| r.mode == "Strategy")
+        .count();
+    assert!(strategy_rows > 0, "fixture has strategy sweeps");
+
+    // Without the flag the sweeps keep their own strategy.
+    set_funding(&mut graph, &funding("TaxFreeFirst", None, &[])).unwrap();
+    assert!(
+        graph
+            .withdrawal_sources
+            .values()
+            .all(|r| r.strategy.as_deref() == Some("PenaltyAware"))
+    );
+
+    let mut body = funding("BracketFilling", Some(0.22), &[]);
+    body.align_sweeps = Some(true);
+    set_funding(&mut graph, &body).unwrap();
+    for row in graph
+        .withdrawal_sources
+        .values()
+        .filter(|r| r.mode == "Strategy")
+    {
+        assert_eq!(row.strategy.as_deref(), Some("BracketFilling"));
+        assert_eq!(row.bracket_ceiling, Some(0.22));
+    }
+    compile::compile(&graph).unwrap();
+}
+
+#[test]
+fn funding_policy_refuses_what_it_cannot_sell_or_fill() {
+    let mut graph = default_graph();
+    for (body, wanted) in [
+        (funding("TaxFreeFirst", None, &[6]), "investment"),
+        (funding("TaxFreeFirst", None, &[9999]), "does not exist"),
+        (funding("ProRata", Some(0.12), &[]), "BracketFilling"),
+        (funding("BracketFilling", Some(1.0), &[]), "not including"),
+        (funding("BracketFilling", Some(-0.1), &[]), "not including"),
+    ] {
+        let err = refused(&mut graph, |g| set_funding(g, &body));
+        assert!(
+            matches!(&err, PlanError::Invalid(m) if m.contains(wanted)),
+            "{err}"
+        );
+    }
+    assert!(graph.scenario.funding_strategy.is_none(), "atomic");
+}
+
+#[test]
+fn deleting_an_account_drops_it_from_the_funding_excludes() {
+    let mut graph = default_graph();
+    let mut spare = graph.accounts[0].clone();
+    spare.id = 99;
+    graph.accounts.push(spare);
+    graph.investment.insert(99, graph.investment[&1].clone());
+    graph.investment.get_mut(&99).unwrap().account_id = 99;
+    graph.positions.remove(&99);
+    set_funding(&mut graph, &funding("ProRata", None, &[1, 99])).unwrap();
+    delete_account(&mut graph, 99).unwrap();
+    assert_eq!(graph.funding_excludes, vec![1]);
+    assert!(graph.scenario.funding_strategy.is_some());
+}
+
+#[test]
+fn set_funding_runs_through_the_edit_entry_point() {
+    let mut graph = default_graph();
+    let op: EditOp = serde_json::from_value(json!({"op": "set_funding", "body": {
+        "funding": {"strategy": "ProRata", "exclude_accounts": [2]}}}))
+    .unwrap();
+    apply(&mut graph, &op).unwrap();
+    assert_eq!(graph.funding_excludes, vec![2]);
+}

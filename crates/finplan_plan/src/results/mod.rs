@@ -107,6 +107,11 @@ pub struct AccountLabel {
 pub struct PathResults {
     /// `None` is the synthetic nominal mean.
     pub percentile: Option<f64>,
+    /// The seed that replays this path (`simulate(config, seed)`), as decimal
+    /// text because a `u64` does not fit a JS number. `None` for the mean, and
+    /// for runs stored before seeds were kept.
+    #[serde(default)]
+    pub seed: Option<String>,
     pub net_worth: Vec<NetWorthPoint>,
     /// In snapshot order, then the snapshot's account order.
     pub account_points: Vec<AccountPoint>,
@@ -237,7 +242,15 @@ pub fn project(
     let mut paths: Vec<PathResults> = summary
         .percentile_runs
         .iter()
-        .map(|(percentile, result)| project_path(Some(*percentile), compiled, result, settings))
+        .map(|(percentile, result)| {
+            let mut path = project_path(Some(*percentile), compiled, result, settings);
+            path.seed = summary
+                .percentile_seeds
+                .iter()
+                .find(|(p, _)| p == percentile)
+                .map(|(_, seed)| seed.to_string());
+            path
+        })
         .collect();
     if let Some(mean) = summary.get_mean_result() {
         paths.push(project_path(None, compiled, &mean, settings));
@@ -395,6 +408,7 @@ fn project_path(
 
     PathResults {
         percentile,
+        seed: None,
         net_worth,
         account_points,
         cash_flows,
@@ -499,6 +513,7 @@ impl RunResults {
                 Band {
                     path_id: path_id(path.percentile),
                     percentile: path.percentile,
+                    seed: path.seed.clone(),
                     dates: path.net_worth.iter().map(|p| p.date.clone()).collect(),
                     net_worth: path.net_worth.iter().map(|p| p.net_worth).collect(),
                     inflation: path

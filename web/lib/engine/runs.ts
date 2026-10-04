@@ -31,11 +31,11 @@ import type { RunInfo } from "../api/generated/RunInfo.ts";
 import type { RunCost } from "../api/generated/RunCost.ts";
 import type { PlanArchive } from "../api/generated/PlanArchive.ts";
 import type { RunsApi } from "../api/plan.ts";
-import type { CreateRun, Results, Run } from "../api/types.ts";
+import type { CreateRun, DrawdownBody, DrawdownComparison, Results, Run } from "../api/types.ts";
 import type { LocalPlanMeta, RunEstimate } from "../local/runtime.ts";
 import type { Core } from "./core.ts";
 import { joinOutputs, splitSpecs } from "./engine.ts";
-import { CANCELLED, badRequest, conflict, guard, localError, notFound, toLocalError } from "./errors.ts";
+import { CANCELLED, abortError, badRequest, conflict, guard, localError, notFound, toLocalError } from "./errors.ts";
 import { planLockName, tryLock, withLock } from "./locks.ts";
 import { KEEP_RUNS_PER_PLAN, type RunRecord, type StoreTx } from "./store.ts";
 
@@ -224,6 +224,29 @@ export class Runs {
       );
     },
 
+    drawdown: async (id, body) => {
+      const { snapshot, seed } = await this.drawdownInputs(id);
+      const handle = this.core.pool.drawdown({ compare: false, snapshot, seed, body: JSON.stringify(body ?? {}) });
+      return JSON.parse(await handle.promise) as DrawdownBody;
+    },
+
+    drawdownCompare: async (id, body, signal) => {
+      const { snapshot } = await this.drawdownInputs(id);
+      if (signal?.aborted) throw abortError();
+      const handle = this.core.pool.drawdown({ compare: true, snapshot, body: JSON.stringify(body ?? {}) });
+      const onAbort = () => handle.cancel();
+      signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        return JSON.parse(await handle.promise) as DrawdownComparison;
+      } catch (thrown) {
+        // The caller withdrew the question: an abort, as a fetch's would be.
+        if (signal?.aborted) throw abortError();
+        throw thrown;
+      } finally {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    },
+
     inputs: (id) => this.core.store.transact("r", async (tx) => this.inputsOf(await this.requireRun(tx, id))),
 
     report: async (id) => this.reportOf(id),
@@ -253,6 +276,30 @@ export class Runs {
 
   private requireSucceeded(run: RunRecord): void {
     if (run.status !== "succeeded") throw conflict("this run has no results yet");
+  }
+
+  /**
+   * What Drawdown re-simulates: the run's own snapshot, and the seed of its
+   * median path (the stored percentile closest to 0.5, the lower on a tie, as
+   * the server picks it). A run saved before seeds were kept has none.
+   */
+  private async drawdownInputs(id: number): Promise<{ snapshot: string; seed: string }> {
+    const run = await this.core.store.transact("r", (tx) => this.requireRun(tx, id));
+    const stale = () => conflict("Run the plan again to see drawdown.");
+    if (run.status !== "succeeded" || !run.snapshot) throw stale();
+    const { bands } = await this.api.results(id);
+    let seed: string | undefined;
+    let best = Infinity;
+    for (const band of bands) {
+      if (band.percentile == null || band.seed == null) continue;
+      const distance = Math.abs(band.percentile - 0.5);
+      if (distance < best || (distance === best && band.percentile < 0.5)) {
+        best = distance;
+        seed = band.seed;
+      }
+    }
+    if (seed === undefined) throw stale();
+    return { snapshot: run.snapshot, seed };
   }
 
   private inputsOf(run: RunRecord): RunInputs {

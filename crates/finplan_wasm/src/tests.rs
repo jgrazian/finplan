@@ -264,6 +264,43 @@ fn refusals_carry_the_servers_status_code_and_body() {
 }
 
 #[test]
+fn the_funding_policy_is_an_edit_and_a_read() {
+    let library = ok(plans::library_seed_json());
+    let graph = new_plan(&library);
+    let set = |graph: &str, funding: Value| {
+        plans::apply_edit_json(
+            graph,
+            &library,
+            &json!({"op": "set_funding", "body": {"funding": funding}}).to_string(),
+            None,
+        )
+    };
+    let on = value(&ok(set(
+        &graph,
+        json!({"strategy": "TaxFreeFirst", "exclude_accounts": []}),
+    )))["graph"]
+        .to_string();
+    let read = |graph: &str| {
+        value(&ok(reads::read_json(
+            graph,
+            &library,
+            &json!({"query": "scenario"}).to_string(),
+        )))
+    };
+    assert_eq!(read(&on)["funding"]["strategy"], "TaxFreeFirst");
+    let off = value(&ok(set(&on, Value::Null)))["graph"].to_string();
+    assert!(read(&off)["funding"].is_null());
+
+    // Refused with the status the server answers.
+    let bad = set(
+        &graph,
+        json!({"strategy": "ProRata", "bracket_ceiling": 0.1, "exclude_accounts": []}),
+    )
+    .unwrap_err();
+    assert_eq!(bad.status, 400);
+}
+
+#[test]
 fn the_library_is_edited_and_read_across_plans() {
     let library = ok(plans::library_seed_json());
     let seeded: Library = serde_json::from_str(&library).unwrap();
@@ -418,6 +455,24 @@ pub(crate) fn local(snapshot: &str, settings: &str) -> String {
 fn a_local_run_equals_the_engines_own() {
     let run = settings(200, 42);
     assert_eq!(local(DEFAULT_SNAPSHOT, &run), direct(&run));
+}
+
+#[test]
+fn a_local_run_keeps_the_seed_of_each_percentile_path() {
+    let results: RunResults =
+        serde_json::from_str(&local(DEFAULT_SNAPSHOT, &settings(100, 3))).unwrap();
+    for path in &results.paths {
+        assert_eq!(
+            path.percentile.is_some(),
+            path.seed.is_some(),
+            "{:?}",
+            path.percentile
+        );
+        if let Some(seed) = &path.seed {
+            seed.parse::<u64>().expect("a decimal u64");
+        }
+    }
+    assert!(results.paths.iter().any(|p| p.seed.is_some()));
 }
 
 #[test]

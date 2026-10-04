@@ -527,7 +527,7 @@ pub enum LotMethod {
     AverageCost,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum WithdrawalStrategy {
     TaxEfficientEarly,
@@ -538,6 +538,33 @@ pub enum WithdrawalStrategy {
     /// Tax-deferred first up to the top of `bracket_ceiling`'s bracket, from
     /// 59.5; otherwise as `PenaltyAware`.
     BracketFilling,
+}
+
+impl WithdrawalStrategy {
+    /// The name stored in `withdrawal_sources.strategy` and the funding policy.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WithdrawalStrategy::TaxEfficientEarly => "TaxEfficientEarly",
+            WithdrawalStrategy::TaxDeferredFirst => "TaxDeferredFirst",
+            WithdrawalStrategy::TaxFreeFirst => "TaxFreeFirst",
+            WithdrawalStrategy::ProRata => "ProRata",
+            WithdrawalStrategy::PenaltyAware => "PenaltyAware",
+            WithdrawalStrategy::BracketFilling => "BracketFilling",
+        }
+    }
+
+    /// The inverse of [`Self::as_str`].
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "TaxEfficientEarly" => WithdrawalStrategy::TaxEfficientEarly,
+            "TaxDeferredFirst" => WithdrawalStrategy::TaxDeferredFirst,
+            "TaxFreeFirst" => WithdrawalStrategy::TaxFreeFirst,
+            "ProRata" => WithdrawalStrategy::ProRata,
+            "PenaltyAware" => WithdrawalStrategy::PenaltyAware,
+            "BracketFilling" => WithdrawalStrategy::BracketFilling,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1090,19 +1117,9 @@ fn lower_withdrawal_sources(
         WithdrawalSourcesSpec::SingleAccount { account_id } => {
             ("SingleAccount", Some(*account_id), None, None)
         }
-        WithdrawalSourcesSpec::Strategy { strategy, .. } => (
-            "Strategy",
-            None,
-            None,
-            Some(match strategy {
-                WithdrawalStrategy::TaxEfficientEarly => "TaxEfficientEarly",
-                WithdrawalStrategy::TaxDeferredFirst => "TaxDeferredFirst",
-                WithdrawalStrategy::TaxFreeFirst => "TaxFreeFirst",
-                WithdrawalStrategy::ProRata => "ProRata",
-                WithdrawalStrategy::PenaltyAware => "PenaltyAware",
-                WithdrawalStrategy::BracketFilling => "BracketFilling",
-            }),
-        ),
+        WithdrawalSourcesSpec::Strategy { strategy, .. } => {
+            ("Strategy", None, None, Some(strategy.as_str()))
+        }
         WithdrawalSourcesSpec::Custom { .. } => ("Custom", None, None, None),
     };
     // Only bracket filling reads a ceiling; anything else would be dead weight.

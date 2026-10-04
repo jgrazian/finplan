@@ -44,7 +44,7 @@ pub fn router() -> Router<AppState> {
 /// A client that has moved on aborts its fetch, axum drops this handler's
 /// future, and the drop flags the worker to stop rather than finishing an
 /// answer nobody will read.
-struct CancelOnDrop(SweepProgress);
+pub(super) struct CancelOnDrop(pub(super) SweepProgress);
 
 impl Drop for CancelOnDrop {
     fn drop(&mut self) {

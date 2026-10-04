@@ -31,7 +31,8 @@ pub async fn load_connection(
 ) -> ApiResult<ScenarioGraph> {
     let scenario: ScenarioRow = sqlx::query_as(
         "SELECT id, user_id, name, description, start_date, birth_date, duration_years,
-                inflation_profile_id, tax_config_id, collect_ledger, created_at, updated_at
+                inflation_profile_id, tax_config_id, collect_ledger,
+                funding_strategy, funding_bracket_ceiling, created_at, updated_at
            FROM scenarios WHERE id = ?1 AND user_id = ?2",
     )
     .bind(scenario_id)
@@ -39,6 +40,14 @@ pub async fn load_connection(
     .fetch_optional(&mut *db)
     .await?
     .ok_or(ApiError::NotFound("scenario"))?;
+
+    let funding_excludes: Vec<i64> = sqlx::query_scalar(
+        "SELECT account_id FROM scenario_funding_excludes WHERE scenario_id = ?1
+          ORDER BY account_id",
+    )
+    .bind(scenario_id)
+    .fetch_all(&mut *db)
+    .await?;
 
     let assets: Vec<AssetRow> = sqlx::query_as(
         "SELECT id, name, description, initial_price, return_profile_id, tracking_error, sort_order
@@ -305,6 +314,7 @@ pub async fn load_connection(
 
     let mut graph = ScenarioGraph {
         scenario,
+        funding_excludes,
         assets,
         accounts,
         bank: bank.into_iter().map(|r| (r.account_id, r)).collect(),

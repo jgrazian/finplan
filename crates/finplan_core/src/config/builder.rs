@@ -112,6 +112,17 @@ impl SimulationBuilder {
         }
     }
 
+    /// Cover cash deficits by selling investments in `order` (whole plan).
+    #[must_use]
+    pub fn funding_policy(mut self, order: crate::model::WithdrawalOrder) -> Self {
+        self.config.funding = Some(crate::model::FundingPolicy {
+            order,
+            exclude_accounts: Vec::new(),
+            from: None,
+        });
+        self
+    }
+
     // =========================================================================
     // Basic Configuration
     // =========================================================================

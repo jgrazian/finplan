@@ -12,24 +12,27 @@ import { useNav } from "@/lib/nav";
 import { SolvePanel } from "./SolvePanel";
 import { SweepPanel } from "./SweepPanel";
 import { WhatIfPanel } from "./WhatIfPanel";
+import { DrawdownPanel } from "./DrawdownPanel";
 
-type Mode = "what-if" | "sweep" | "solve";
+type Mode = "what-if" | "sweep" | "solve" | "drawdown";
 
 /** Offer only implemented analysis workflows. */
 const MODES: ReadonlyArray<SegmentOption<Mode>> = [
   { value: "what-if", label: "What-if" },
   { value: "sweep", label: "Sweep" },
   { value: "solve", label: "Solve" },
+  { value: "drawdown", label: "Drawdown" },
 ];
 
 const CAPTIONS: Record<Mode, string> = {
   "what-if": "Stack overrides on a copy of the plan and see what each one costs or buys.",
   sweep: "Compare simulated outcomes across a range of plan inputs.",
   solve: "Search for a value that meets your chosen outcome threshold.",
+  drawdown: "Plan which accounts fund each year of retirement spending.",
 };
 
 function modeOf(section: string | undefined): Mode {
-  return section === "sweep" || section === "solve" ? section : "what-if";
+  return section === "sweep" || section === "solve" || section === "drawdown" ? section : "what-if";
 }
 
 /** Analysis tab: the what-if stack, the sweep grid, and the goal seek that reads exactly. */
@@ -80,6 +83,9 @@ export function AnalysisScreen({
         to use them; your guest plan comes with you.
       </LockedFeature>
     );
+  } else if (mode === "drawdown") {
+    // Drawdown reads a finished run, not named parameters, so it stands alone.
+    body = <DrawdownPanel key={scenarioId} scenario={scenario} onPlanChanged={onPlanChanged} />;
   } else if (mode === "what-if") {
     // What-if stands without named parameters — market shocks and one-off
     // events need none — so only the parameter rows of its menu go missing.

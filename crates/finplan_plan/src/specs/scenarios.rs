@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::{PlanError, PlanResult};
+use crate::specs::WithdrawalStrategy;
 
 /// Whether a scenario is a plan or an AI-guided draft still being written.
 /// Drafts never appear in the scenario list.
@@ -15,6 +16,55 @@ use crate::error::{PlanError, PlanResult};
 pub enum ScenarioStatus {
     Draft,
     Active,
+}
+
+/// When cash runs short, sell investments in this order (spec 20). A plan
+/// without one records a shortfall instead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
+pub struct FundingPolicySpec {
+    pub strategy: WithdrawalStrategy,
+    /// `BracketFilling` only: the highest marginal rate to fill to. Absent
+    /// means 12%.
+    #[serde(default)]
+    pub bracket_ceiling: Option<f64>,
+    /// Investment accounts never sold to cover a deficit.
+    #[serde(default)]
+    pub exclude_accounts: Vec<i64>,
+}
+
+/// `PUT /scenarios/{id}/funding`: set the policy, or turn it off with null.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct SetFunding {
+    pub funding: Option<FundingPolicySpec>,
+    /// Drawdown's "Apply to plan": also give every `Strategy`-sourced Sweep
+    /// the policy's strategy, so the plan has one strategy everywhere. Ignored
+    /// when `funding` is null.
+    #[serde(default)]
+    #[ts(optional)]
+    pub align_sweeps: Option<bool>,
+}
+
+impl FundingPolicySpec {
+    /// The ceiling, when given, is only for `BracketFilling` and is a rate the
+    /// table's CHECK accepts.
+    pub fn check(&self) -> PlanResult<()> {
+        let Some(rate) = self.bracket_ceiling else {
+            return Ok(());
+        };
+        if !matches!(self.strategy, WithdrawalStrategy::BracketFilling) {
+            return Err(PlanError::invalid(
+                "bracket_ceiling only applies to the BracketFilling strategy",
+            ));
+        }
+        if !(0.0..1.0).contains(&rate) {
+            return Err(PlanError::invalid(
+                "bracket_ceiling must be a rate from 0 up to (not including) 1",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// A scenario as `GET /scenarios/{id}` returns it.
@@ -40,6 +90,10 @@ pub struct Scenario {
     /// without a request per scenario.
     pub last_run_at: Option<String>,
     pub last_success_rate: Option<f64>,
+    /// The plan's funding policy; null = off. The server selects it as one
+    /// JSON column (`SCENARIO_COLUMNS`).
+    #[cfg_attr(feature = "sqlx", sqlx(json(nullable)))]
+    pub funding: Option<FundingPolicySpec>,
 }
 
 /// What lowering a scenario for the engine produced, without running it.

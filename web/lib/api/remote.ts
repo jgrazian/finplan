@@ -25,6 +25,7 @@ import type {
   AnalysisParameter,
   Asset,
   CachedSweep,
+  CompareRequest,
   CompileReport,
   CreateAccount,
   CreateAnalysis,
@@ -34,6 +35,9 @@ import type {
   CreateRun,
   CreateScenario,
   CreateTaxConfig,
+  DrawdownBody,
+  DrawdownComparison,
+  DrawdownRequest,
   Event,
   EventBody,
   NamedParameter,
@@ -51,6 +55,7 @@ import type {
   Results,
   Run,
   Scenario,
+  SetFunding,
   TaxConfig,
   UpdateAccountBody,
   UpdateAsset,
@@ -78,6 +83,8 @@ export const remoteApi: PlanApi = {
     get: (id: number) => http.get<Scenario>(scenario(id)),
     create: (body: CreateScenario) => http.post<Scenario>("/scenarios", body),
     update: (id: number, body: UpdateScenario) => http.patch<Scenario>(scenario(id), body),
+    setFunding: (id: number, body: SetFunding) =>
+      http.put<Scenario>(`${scenario(id)}/funding`, body),
     remove: (id: number) => http.delete(scenario(id)),
     duplicate: (id: number, name: string) =>
       http.post<Scenario>(`${scenario(id)}/duplicate`, { name }),
@@ -273,7 +280,12 @@ export const remoteApi: PlanApi = {
       const search = params.toString();
       return http.get<LedgerPage>(`/runs/${id}/ledger${search ? `?${search}` : ""}`);
     },
-      inputs: (id: number) => http.get<RunInputs>(`/runs/${id}/inputs`),
+    drawdown: (id: number, body: DrawdownRequest = {}) =>
+      http.post<DrawdownBody>(`/runs/${id}/drawdown`, body),
+    /** Aborting `signal` stops the server's simulation too. */
+    drawdownCompare: (id: number, body: CompareRequest = {}, signal?: AbortSignal) =>
+      http.post<DrawdownComparison>(`/runs/${id}/drawdown/compare`, body, signal),
+    inputs: (id: number) => http.get<RunInputs>(`/runs/${id}/inputs`),
     report: (id: number) => http.get<RunReport>(`/runs/${id}/report`),
     compare: (left: number, right: number) =>
       http.post<RunComparison>("/run-comparisons", { left_run_id: left, right_run_id: right }),

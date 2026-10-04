@@ -22,7 +22,7 @@ import type {
   WhatIfStack,
 } from "../api/types.ts";
 import type { Core } from "./core.ts";
-import { conflict, guard, notFound, toLocalError } from "./errors.ts";
+import { abortError, conflict, guard, notFound, toLocalError } from "./errors.ts";
 import { planLockName, withLock } from "./locks.ts";
 import type { AnalysisHandle } from "./pool.ts";
 import type { PlanRecord } from "./store.ts";
@@ -269,8 +269,3 @@ export class AnalysisJobs {
   };
 }
 
-function abortError(): Error {
-  const error = new Error("The operation was aborted.");
-  error.name = "AbortError";
-  return error;
-}

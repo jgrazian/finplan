@@ -375,6 +375,26 @@ async fn the_default_snapshot_projects_to_the_served_results() {
         4,
         "mean and three"
     );
+    // The percentile rows keep the seed that replays each path, and the median
+    // helper finds the 50th's.
+    let band_seed = |series: &str| {
+        served["bands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["path_id"] == series)
+            .unwrap()["seed"]
+            .clone()
+    };
+    assert!(band_seed("mean").is_null());
+    let median = band_seed("0.5");
+    let median = median.as_str().expect("the median band carries its seed");
+    assert_eq!(
+        finplan_server::db::median_seed(&state.db, golden.run_id)
+            .await
+            .unwrap(),
+        Some(median.parse().unwrap())
+    );
     assert!(!served["ledger_years"].as_array().unwrap().is_empty());
     assert!(!served["real_net_worth"].is_null());
     assert!(!served["funding_diagnostics"].is_null());
@@ -529,4 +549,42 @@ async fn a_run_projected_without_its_ledger_keeps_everything_else() {
     assert_eq!(without["ledger_years"], json!([]));
     without["ledger_years"] = full["ledger_years"].clone();
     assert_same("a ledgerless projection", &without, &full);
+}
+
+/// `PUT /scenarios/{id}/funding` writes the policy, and the scenario reads it back.
+#[tokio::test]
+async fn the_funding_policy_is_set_read_back_and_cleared() {
+    let mut app = TestApp::new().await;
+    app.login_as("funding-policy@example.com").await;
+    let (scenario_id, checking, brokerage) = app.seed_scenario().await;
+    let path = format!("/api/scenarios/{scenario_id}");
+    let (_, scenario) = app.get(&path).await;
+    assert!(scenario["funding"].is_null());
+
+    let policy = json!({"funding": {"strategy": "BracketFilling", "bracket_ceiling": 0.22,
+                                    "exclude_accounts": [brokerage, brokerage]}});
+    let (status, set) = app.put(&format!("{path}/funding"), policy).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    let expected = json!({"strategy": "BracketFilling", "bracket_ceiling": 0.22,
+                          "exclude_accounts": [brokerage]});
+    assert_eq!(set["funding"], expected);
+    assert_eq!(app.get(&path).await.1["funding"], expected);
+    let (status, report) = app.post(&format!("{path}/compile"), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+
+    // A bank account cannot be excluded, and a refusal leaves the policy alone.
+    let (status, _) = app
+        .put(
+            &format!("{path}/funding"),
+            json!({"funding": {"strategy": "ProRata", "exclude_accounts": [checking]}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(app.get(&path).await.1["funding"], expected);
+
+    let (status, off) = app
+        .put(&format!("{path}/funding"), json!({"funding": null}))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{off}");
+    assert!(off["funding"].is_null());
 }

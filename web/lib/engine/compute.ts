@@ -16,6 +16,8 @@
  * | `batch {job, spec}` | `progress [done, total]` any number of times, then `ok` + `value`: the `BatchOutput` text |
  * | `release {job}` | none |
  * | `analysis {graph, library, body, quick}` | `progress [done, total]` any number of times, then `ok` + `value` |
+ * | `drawdown {snapshot, seed, body}` | `ok` + `value`: the `DrawdownBody` text |
+ * | `drawdown-compare {snapshot, body}` | `progress [done, total]` any number of times, then `ok` + `value`: the `DrawdownComparison` text |
  * | `analysis-shard {graph, library, body, shard, shards}` | `progress` as above, then `ok` + `value`: this shard's answers (opaque) |
  * | `analysis-finish {graph, library, body, answers}` | `progress` for anything no shard answered, then `ok` + `value`: the outcome |
  * | `calibrate {snapshot, settings}` | `ok` + `value`: `{seconds, iterations}` |
@@ -30,6 +32,8 @@ export type ComputeRequest =
   | { id: number; kind: "batch"; job: string; spec: string }
   | { id: number; kind: "release"; job: string }
   | { id: number; kind: "analysis"; graph: string; library: string; body: string; quick: boolean }
+  | { id: number; kind: "drawdown"; snapshot: string; seed: string; body: string }
+  | { id: number; kind: "drawdown-compare"; snapshot: string; body: string }
   | {
       id: number;
       kind: "analysis-shard";
@@ -131,6 +135,25 @@ export function createComputeHost(
               id: request.id,
               ok: true,
               value: run(request.graph, request.library, request.body, progress),
+            });
+            return;
+          }
+          case "drawdown":
+            reply({
+              id: request.id,
+              ok: true,
+              value: engine.drawdown(request.snapshot, request.seed, request.body),
+            });
+            return;
+          case "drawdown-compare": {
+            const progress = (done: number, total: number) => {
+              reply({ id: request.id, progress: [done, total] });
+              return stopped?.() ?? false;
+            };
+            reply({
+              id: request.id,
+              ok: true,
+              value: engine.drawdown_compare(request.snapshot, request.body, progress),
             });
             return;
           }

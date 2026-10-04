@@ -53,6 +53,8 @@ export interface NavState {
   section?: string;
   /** Selected row within the section, undefined meaning "the first one". */
   selection?: string;
+  /** A year pinned on a chart (`yr`); Analysis > Drawdown keeps its selected year here. */
+  year?: number;
 }
 
 /** Reads a URL — `/plan?sel=Retire` — back into nav state. */
@@ -63,11 +65,14 @@ export function parseNav(pathname: string, search: string): NavState {
   const tab = TAB_IDS.find((id) => id === pathname.split("/")[1]) ?? DEFAULT_TAB;
   const scenario = query.get("scenario");
   const fallback = DEFAULT_SECTION[tab];
+  const yearText = query.get("yr");
+  const year = yearText != null && /^\d{4}$/.test(yearText) ? Number(yearText) : undefined;
   return {
     scenario: scenario != null && /^[a-zA-Z0-9]+$/.test(scenario) ? scenario : undefined,
     tab,
     section: fallback == null ? undefined : (query.get("sec") ?? fallback),
     selection: query.get("sel") ?? undefined,
+    ...(year != null ? { year } : {}),
   };
 }
 
@@ -86,6 +91,7 @@ export function toHref(state: NavState): string {
   if (state.selection != null && state.selection !== "") {
     query.set("sel", state.selection);
   }
+  if (state.year != null) query.set("yr", String(state.year));
   const text = query.toString();
   return text === "" ? `/${state.tab}` : `/${state.tab}?${text}`;
 }

@@ -29,6 +29,14 @@ pub struct ScenarioRow {
     pub inflation_profile_id: Option<i64>,
     pub tax_config_id: Option<i64>,
     pub collect_ledger: i64,
+    /// The plan-level funding policy's strategy (`WithdrawalStrategy` name);
+    /// null = off. Skipped when unset so plans without it keep their input hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub funding_strategy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "sqlx", sqlx(default))]
+    pub funding_bracket_ceiling: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -318,6 +326,9 @@ pub struct InflationEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScenarioGraph {
     pub scenario: ScenarioRow,
+    /// Investment accounts the funding policy never sells.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub funding_excludes: Vec<i64>,
 
     pub assets: Vec<AssetRow>,
     pub accounts: Vec<AccountRow>,
@@ -393,6 +404,19 @@ pub enum Table {
 const IN_MEMORY_LIBRARY_ID_FLOOR: i64 = 1_000_000_000;
 
 impl ScenarioGraph {
+    /// The funding policy as the API shows it; None when the policy is off.
+    pub fn funding(&self) -> Option<crate::specs::scenarios::FundingPolicySpec> {
+        let strategy =
+            crate::specs::WithdrawalStrategy::parse(self.scenario.funding_strategy.as_deref()?)?;
+        let mut exclude_accounts = self.funding_excludes.clone();
+        exclude_accounts.sort_unstable();
+        Some(crate::specs::scenarios::FundingPolicySpec {
+            strategy,
+            bracket_ceiling: self.scenario.funding_bracket_ceiling,
+            exclude_accounts,
+        })
+    }
+
     /// The id for a new row of `table`: one above the largest id it holds
     /// (above [`IN_MEMORY_LIBRARY_ID_FLOOR`] for the library tables, whose
     /// rows a snapshot may leave out). Ids are only ever the graph's own, so

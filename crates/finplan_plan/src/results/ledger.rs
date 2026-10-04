@@ -139,6 +139,7 @@ fn credit_label(kind: CashFlowKind) -> &'static str {
 fn debit_label(kind: CashFlowKind) -> &'static str {
     match kind {
         CashFlowKind::Expense => "Expense",
+        CashFlowKind::Tax => "Tax",
         CashFlowKind::Contribution => "Contribution",
         CashFlowKind::InvestmentPurchase => "Purchase",
         CashFlowKind::Transfer => "Transfer out",

@@ -28,6 +28,7 @@ import type {
   ApplyWhatIf,
   Asset,
   CachedSweep,
+  CompareRequest,
   CompileReport,
   CreateAccount,
   CreateAnalysis,
@@ -37,6 +38,9 @@ import type {
   CreateRun,
   CreateScenario,
   CreateTaxConfig,
+  DrawdownBody,
+  DrawdownComparison,
+  DrawdownRequest,
   Event,
   EventBody,
   ExpressionValidation,
@@ -54,6 +58,7 @@ import type {
   Results,
   Run,
   Scenario,
+  SetFunding,
   TaxConfig,
   UpdateAccountBody,
   UpdateAsset,
@@ -70,6 +75,8 @@ export interface ScenariosApi {
   get: (id: number) => Promise<Scenario>;
   create: (body: CreateScenario) => Promise<Scenario>;
   update: (id: number, body: UpdateScenario) => Promise<Scenario>;
+  /** When cash runs short: sell investments in this order, or `{ funding: null }` to record a shortfall instead. */
+  setFunding: (id: number, body: SetFunding) => Promise<Scenario>;
   remove: (id: number) => Promise<void>;
   duplicate: (id: number, name: string) => Promise<Scenario>;
   /** The guided "answer a few questions" creation: the plan, its accounts and its events in one write. */
@@ -210,6 +217,17 @@ export interface RunsApi {
    * screen reads one year of it at a time.
    */
   ledger: (id: number, query?: LedgerQuery) => Promise<LedgerPage>;
+  /**
+   * The run's median path re-simulated under each withdrawal strategy
+   * (spec 20), year by year from retirement. Refused with 409 for a run saved
+   * before seeds were kept: "Run the plan again to see drawdown."
+   */
+  drawdown: (id: number, body?: DrawdownRequest) => Promise<DrawdownBody>;
+  /**
+   * A small Monte Carlo per strategy on one common seed. Aborting `signal`
+   * stops the simulation.
+   */
+  drawdownCompare: (id: number, body?: CompareRequest, signal?: AbortSignal) => Promise<DrawdownComparison>;
   /** The inputs the run was made from: what freshness compares the plan's hash against. */
   inputs: (id: number) => Promise<RunInputs>;
   report: (id: number) => Promise<RunReport>;

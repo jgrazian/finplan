@@ -13,9 +13,9 @@ use finplan_core::expression::compile_amount;
 use finplan_core::model::{
     Account, AccountFlavor, AmountMode, AssetCoord, AssetLot, BalanceThreshold, CalendarAge, Cash,
     CatchUp, ContributionLimit, ContributionLimitPeriod, Event, EventEffect, EventTrigger,
-    Financing, FixedAsset, HistoricalInflation, HistoricalReturns, IncomeType, InflationProfile,
-    InvestmentContainer, LoanDetail, LotMethod, ParameterValue, Repayment, RepeatInterval,
-    ReturnProfile, TaxBracket, TaxConfig, TaxStatus, TransferAmount, TriggerOffset,
+    Financing, FixedAsset, FundingPolicy, HistoricalInflation, HistoricalReturns, IncomeType,
+    InflationProfile, InvestmentContainer, LoanDetail, LotMethod, ParameterValue, Repayment,
+    RepeatInterval, ReturnProfile, TaxBracket, TaxConfig, TaxStatus, TransferAmount, TriggerOffset,
     WithdrawalOrder, WithdrawalSources,
 };
 use jiff::civil::Date;
@@ -492,6 +492,7 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         duration_years: graph.scenario.duration_years.max(1) as usize,
         events,
         collect_ledger: graph.scenario.collect_ledger != 0,
+        funding: funding_policy(graph, &id_map)?,
     };
 
     Ok(CompiledScenario {
@@ -501,6 +502,47 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         account_names,
         event_names,
     })
+}
+
+/// A stored strategy name (and bracket ceiling) as the engine's order; shared
+/// by sweep sources and the plan's funding policy.
+pub(crate) fn withdrawal_order(
+    name: Option<&str>,
+    ceiling: Option<f64>,
+) -> PlanResult<WithdrawalOrder> {
+    Ok(match name {
+        Some("TaxEfficientEarly") => WithdrawalOrder::TaxEfficientEarly,
+        Some("TaxDeferredFirst") => WithdrawalOrder::TaxDeferredFirst,
+        Some("TaxFreeFirst") => WithdrawalOrder::TaxFreeFirst,
+        Some("ProRata") => WithdrawalOrder::ProRata,
+        Some("PenaltyAware") => WithdrawalOrder::PenaltyAware,
+        Some("BracketFilling") => WithdrawalOrder::BracketFilling {
+            ceiling_rate: ceiling.unwrap_or(WithdrawalOrder::DEFAULT_BRACKET_CEILING),
+        },
+        other => {
+            return Err(PlanError::unprocessable(format!(
+                "unknown withdrawal strategy '{}'",
+                other.unwrap_or("<null>")
+            )));
+        }
+    })
+}
+
+/// The plan's funding policy for the whole horizon (`from: None`); the
+/// Drawdown overlay is the only thing that sets a start date.
+fn funding_policy(graph: &ScenarioGraph, ids: &IdMap) -> PlanResult<Option<FundingPolicy>> {
+    let Some(name) = graph.scenario.funding_strategy.as_deref() else {
+        return Ok(None);
+    };
+    let mut exclude_accounts = Vec::with_capacity(graph.funding_excludes.len());
+    for id in &graph.funding_excludes {
+        exclude_accounts.push(ids.account(*id)?);
+    }
+    Ok(Some(FundingPolicy {
+        order: withdrawal_order(Some(name), graph.scenario.funding_bracket_ceiling)?,
+        exclude_accounts,
+        from: None,
+    }))
 }
 
 fn trigger_needs_birth_date(trigger: &EventTrigger) -> bool {
@@ -1224,24 +1266,7 @@ fn build_withdrawal_sources(
             })?)?)
         }
         "Strategy" => {
-            let order = match row.strategy.as_deref() {
-                Some("TaxEfficientEarly") => WithdrawalOrder::TaxEfficientEarly,
-                Some("TaxDeferredFirst") => WithdrawalOrder::TaxDeferredFirst,
-                Some("TaxFreeFirst") => WithdrawalOrder::TaxFreeFirst,
-                Some("ProRata") => WithdrawalOrder::ProRata,
-                Some("PenaltyAware") => WithdrawalOrder::PenaltyAware,
-                Some("BracketFilling") => WithdrawalOrder::BracketFilling {
-                    ceiling_rate: row
-                        .bracket_ceiling
-                        .unwrap_or(WithdrawalOrder::DEFAULT_BRACKET_CEILING),
-                },
-                other => {
-                    return Err(PlanError::unprocessable(format!(
-                        "unknown withdrawal strategy '{}'",
-                        other.unwrap_or("<null>")
-                    )));
-                }
-            };
+            let order = withdrawal_order(row.strategy.as_deref(), row.bracket_ceiling)?;
             let mut exclude_accounts = Vec::new();
             for item in items.into_iter().flatten() {
                 if item.role == "exclude" {

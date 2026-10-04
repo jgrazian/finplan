@@ -143,6 +143,7 @@
     "birth_date": "1981-01-01",
     "description": "Guided setup: spending funded by checking only; assumptions reviewed.",
     "duration_years": 50,
+    "funding": null,
     "inflation": null,
     "name": "Golden",
     "start_date": "2026-01-01",

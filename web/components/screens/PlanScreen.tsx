@@ -5,6 +5,7 @@ import {
   type EventDraft,
   EventEditor,
   EventRail,
+  FundingSetting,
   PlanTimeline,
   ScenarioStrip,
   eventProblem,
@@ -13,7 +14,7 @@ import {
 import { DeleteScenarioDialog } from "@/components/scenario/DeleteScenarioDialog";
 import { Button, Dialog, SegmentedControl } from "@/components/ui";
 import { usePlanApi } from "@/lib/nav";
-import type { Event as ApiEvent, EventBody, UpdateScenario } from "@/lib/api/types";
+import type { Event as ApiEvent, EventBody, FundingPolicySpec, UpdateScenario } from "@/lib/api/types";
 import { useReorderWrite } from "@/lib/hooks/useReorderWrite";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -61,6 +62,7 @@ function blankEvent(name: string): EventBody {
  */
 export function PlanScreen({
   scenarioId,
+  funding,
   params,
   assumptions,
   axis,
@@ -73,6 +75,8 @@ export function PlanScreen({
   onScenarioDeleted,
 }: {
   scenarioId: number;
+  /** The plan's funding policy; null = off. */
+  funding: FundingPolicySpec | null;
   params: ScenarioParams;
   assumptions: AssumptionChoices;
   axis: PlanAxis;
@@ -319,6 +323,13 @@ export function PlanScreen({
         assumptions={assumptions}
         onChange={saveParams}
         onDelete={onScenarioDeleted && (() => setDeletingScenario(true))}
+        offline={offline}
+      />
+      <FundingSetting
+        scenarioId={scenarioId}
+        funding={funding}
+        accounts={raw.accounts}
+        onChanged={onChanged}
         offline={offline}
       />
 

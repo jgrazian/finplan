@@ -44,7 +44,7 @@ use crate::specs::assets::{self, CreateAsset, UpdateAsset};
 use crate::specs::events::{self, EventBody, lower_tree};
 use crate::specs::parameters::{self, ParameterBody};
 use crate::specs::profiles::CreateProfile;
-use crate::specs::scenarios::{UpdateScenario, validate_date};
+use crate::specs::scenarios::{SetFunding, UpdateScenario, validate_date};
 use crate::specs::taxes::CreateTaxConfig;
 
 /// Run `edit` on a copy of `graph`, keeping the result only if it succeeds.
@@ -461,6 +461,7 @@ pub fn delete_account(graph: &mut ScenarioGraph, account_id: i64) -> PlanResult<
         g.property.remove(&account_id);
         g.liability.remove(&account_id);
         g.positions.remove(&account_id);
+        g.funding_excludes.retain(|id| *id != account_id);
         for loan in g.liability.values_mut() {
             if loan.repay_from_account_id == Some(account_id) {
                 loan.repay_from_account_id = None;
@@ -748,6 +749,49 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
         }
         if let Some(ledger) = body.collect_ledger {
             g.scenario.collect_ledger = i64::from(ledger);
+        }
+        Ok(())
+    })
+}
+
+/// Set the plan's funding policy, or turn it off, as `PUT /scenarios/{id}/funding`
+/// would. Excluded accounts must be investment accounts of this plan; they are
+/// deduplicated. Turning the policy off forgets its excludes and ceiling. With
+/// `align_sweeps`, every Strategy-mode withdrawal source takes the strategy too.
+pub fn set_funding(graph: &mut ScenarioGraph, body: &SetFunding) -> PlanResult<()> {
+    atomically(graph, |g| {
+        let Some(policy) = &body.funding else {
+            g.scenario.funding_strategy = None;
+            g.scenario.funding_bracket_ceiling = None;
+            g.funding_excludes.clear();
+            return Ok(());
+        };
+        policy.check()?;
+        let mut excludes = policy.exclude_accounts.clone();
+        excludes.sort_unstable();
+        excludes.dedup();
+        for id in &excludes {
+            if !g.accounts.iter().any(|a| a.id == *id) {
+                return Err(PlanError::invalid(format!(
+                    "excluded account {id} does not exist in this plan"
+                )));
+            }
+            if !g.investment.contains_key(id) {
+                return Err(PlanError::invalid(
+                    "only investment accounts can be excluded from funding",
+                ));
+            }
+        }
+        g.scenario.funding_strategy = Some(policy.strategy.as_str().to_string());
+        g.scenario.funding_bracket_ceiling = policy.bracket_ceiling;
+        g.funding_excludes = excludes;
+        if body.align_sweeps == Some(true) {
+            for row in g.withdrawal_sources.values_mut() {
+                if row.mode == "Strategy" {
+                    row.strategy = g.scenario.funding_strategy.clone();
+                    row.bracket_ceiling = policy.bracket_ceiling;
+                }
+            }
         }
         Ok(())
     })

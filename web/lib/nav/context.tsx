@@ -22,6 +22,8 @@ export interface Nav extends NavState {
   openTab: (tab: TabId, target?: { section?: string; selection?: string }) => void;
   setSection: (section: string) => void;
   setSelection: (selection: string | undefined) => void;
+  /** Pins (or clears) the year a chart holds; replaces rather than pushes, like a row pick. */
+  setYear: (year: number | undefined) => void;
 }
 
 const NavContext = createContext<Nav | undefined>(undefined);
@@ -65,7 +67,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
     () => ({
       ...state,
       openScenario: (scenario, tab, selection) => go({ ...scenarioDestination(scenario, tab), selection }, true),
-      setScenario: (scenario) => go({ ...state, scenario, selection: undefined }, true),
+      setScenario: (scenario) => go({ ...state, scenario, selection: undefined, year: undefined }, true),
       adoptScenario: (scenario) => {
         if (state.scenario === scenario) return;
         go({ ...state, scenario }, false);
@@ -80,8 +82,9 @@ export function NavProvider({ children }: { children: ReactNode }) {
           section: DEFAULT_SECTION[tab] == null ? undefined : (target.section ?? DEFAULT_SECTION[tab]),
           selection: target.selection,
         }, true),
-      setSection: (section) => go({ ...state, section, selection: undefined }, true),
+      setSection: (section) => go({ ...state, section, selection: undefined, year: undefined }, true),
       setSelection: (selection) => go({ ...state, selection }, false),
+      setYear: (year) => go({ ...state, year }, false),
     }),
     [go, state],
   );

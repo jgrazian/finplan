@@ -4,6 +4,7 @@ import type { CreateAsset } from "./CreateAsset";
 import type { CreatePosition } from "./CreatePosition";
 import type { EventBody } from "./EventBody";
 import type { ParameterBody } from "./ParameterBody";
+import type { SetFunding } from "./SetFunding";
 import type { UpdateAccount } from "./UpdateAccount";
 import type { UpdateAsset } from "./UpdateAsset";
 import type { UpdatePosition } from "./UpdatePosition";
@@ -19,6 +20,7 @@ import type { UpdateScenario } from "./UpdateScenario";
  */
 export type EditOp =
   | { "op": "update_scenario"; body: UpdateScenario }
+  | { "op": "set_funding"; body: SetFunding }
   | { "op": "create_asset"; body: CreateAsset }
   | { "op": "update_asset"; id: number; body: UpdateAsset }
   | { "op": "delete_asset"; id: number }

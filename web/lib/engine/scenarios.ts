@@ -111,6 +111,9 @@ export function scenariosGroup(core: Core, lifecycle: PlanLifecycle): ScenariosA
     update: async (id, body) =>
       (await core.editPlan<Scenario>(id, { op: "update_scenario", body }, () => ({ query: "scenario" }))).read,
 
+    setFunding: async (id, body) =>
+      (await core.editPlan<Scenario>(id, { op: "set_funding", body }, () => ({ query: "scenario" }))).read,
+
     remove: async (id) => {
       lifecycle.forgetPlan(id);
       await withLock(planLockName(id), () =>

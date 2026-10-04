@@ -80,6 +80,17 @@ fn a_projection_serves_every_path_it_stored() {
     // The mean first, then the percentiles ascending.
     let ids: Vec<&str> = served.bands.iter().map(|b| b.path_id.as_str()).collect();
     assert_eq!(ids, ["mean", "0.1", "0.5", "0.9"]);
+    // Percentile paths carry the seed that replays them; the mean has none.
+    let seeds: Vec<bool> = served.bands.iter().map(|b| b.seed.is_some()).collect();
+    assert_eq!(seeds, [false, true, true, true]);
+    assert!(
+        served.bands[2]
+            .seed
+            .as_deref()
+            .unwrap()
+            .parse::<u64>()
+            .is_ok()
+    );
     assert!(served.path_details);
     assert_eq!(served.series_id, "0.5");
     assert_eq!((served.run_id, served.scenario_id), (1, 2));

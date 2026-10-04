@@ -333,6 +333,14 @@ pub fn resolve<'a>(
         .collect()
 }
 
+/// The plan's retirement age: its Age parameter whose name mentions "retire".
+/// The engine has no notion of retirement, so a name is all there is to go on.
+pub fn retirement_age_parameter(available: &[PlanParameter]) -> Option<&PlanParameter> {
+    available
+        .iter()
+        .find(|p| p.kind == ParamKind::Age && p.name.to_lowercase().contains("retire"))
+}
+
 /// What a what-if analysis runs: the plan and each cumulative step.
 pub struct Lowered {
     pub steps: Vec<SimulationConfig>,
@@ -349,9 +357,7 @@ pub fn lower(
     let available = parameters(compiled);
     let resolved = resolve(graph, &available, layers)?;
 
-    let retirement = available
-        .iter()
-        .find(|p| p.kind == ParamKind::Age && p.name.to_lowercase().contains("retire"));
+    let retirement = retirement_age_parameter(&available);
     let plan_retirement_age = retirement.map(|p| p.current);
     let mut what_if_retirement_age = plan_retirement_age;
 

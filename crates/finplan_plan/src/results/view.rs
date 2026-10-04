@@ -45,6 +45,10 @@ pub struct Band {
     /// Run-local identity, also accepted by results/ledger `series` queries.
     pub path_id: String,
     pub percentile: Option<f64>,
+    /// The seed that replays this path, as decimal text (a `u64`). Null for the
+    /// mean and for a run stored before seeds were kept.
+    #[serde(default)]
+    pub seed: Option<String>,
     pub dates: Vec<String>,
     pub net_worth: Vec<f64>,
     /// Cumulative inflation at each of `dates`, on this path's own realised

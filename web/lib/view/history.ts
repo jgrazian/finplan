@@ -20,6 +20,8 @@ export function snapshotScenario(inputs: RunInputs, raw: Results): Scenario {
     status: source?.status ?? "active",
     created_at: source?.created_at ?? "", updated_at: source?.updated_at ?? "",
     last_run_at: null, last_success_rate: null,
+    // Display-only: a historical axis does not need the funding policy.
+    funding: null,
   };
 }
 

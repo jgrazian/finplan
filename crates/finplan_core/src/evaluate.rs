@@ -688,16 +688,18 @@ pub fn evaluate_effect_into(
         } => {
             // Step 1: Determine source account(s) to liquidate from, in order.
             // A `Some` ceiling caps the ordinary income that step may add.
-            let source_accounts: Vec<(AccountId, Option<f64>)> = match sources {
-                WithdrawalSources::SingleAsset(coord) => vec![(coord.account_id, None)],
-                WithdrawalSources::SingleAccount(id) => vec![(*id, None)],
+            // A `Some` share caps the step at that fraction of the amount
+            // first requested (ProRata's proportional pass).
+            let source_accounts: Vec<(AccountId, Option<f64>, Option<f64>)> = match sources {
+                WithdrawalSources::SingleAsset(coord) => vec![(coord.account_id, None, None)],
+                WithdrawalSources::SingleAccount(id) => vec![(*id, None, None)],
                 WithdrawalSources::Custom(list) => {
                     // Inline dedup: for small N, linear search is faster than sort+dedup
-                    let mut accounts: Vec<(AccountId, Option<f64>)> =
+                    let mut accounts: Vec<(AccountId, Option<f64>, Option<f64>)> =
                         Vec::with_capacity(list.len());
                     for coord in list {
-                        if !accounts.iter().any(|(id, _)| *id == coord.account_id) {
-                            accounts.push((coord.account_id, None));
+                        if !accounts.iter().any(|(id, _, _)| *id == coord.account_id) {
+                            accounts.push((coord.account_id, None, None));
                         }
                     }
                     accounts
@@ -705,7 +707,34 @@ pub fn evaluate_effect_into(
                 WithdrawalSources::Strategy {
                     order,
                     exclude_accounts,
-                } => strategy_sources(*order, exclude_accounts, state),
+                } => {
+                    let steps = strategy_sources(*order, exclude_accounts, state);
+                    let mut all: Vec<(AccountId, Option<f64>, Option<f64>)> = Vec::new();
+                    if matches!(order, WithdrawalOrder::ProRata) {
+                        let value_of = |id: AccountId| {
+                            state.portfolio.accounts.get(&id).map_or(0.0, |acc| {
+                                acc.total_value(
+                                    &state.portfolio.market,
+                                    state.timeline.start_date,
+                                    state.timeline.current_date,
+                                )
+                                .max(0.0)
+                            })
+                        };
+                        let total: f64 = steps.iter().map(|(id, _)| value_of(*id)).sum();
+                        if total > 0.0 {
+                            all.extend(
+                                steps
+                                    .iter()
+                                    .map(|(id, _)| (*id, None, Some(value_of(*id) / total))),
+                            );
+                        }
+                    }
+                    // In account order: the whole sweep for other strategies,
+                    // ProRata's second pass for what a share could not supply.
+                    all.extend(steps.into_iter().map(|(id, ceiling)| (id, ceiling, None)));
+                    all
+                }
             };
 
             // Track start index so we can analyze only the new effects for Sweep logic
@@ -734,9 +763,10 @@ pub fn evaluate_effect_into(
             // Ordinary income this sweep has added so far: each sale reads the
             // year-to-date total from `state`, which only moves once applied.
             let mut added_income = 0.0;
+            let requested = remaining;
 
             // Step 2: Liquidate from source accounts until target is met
-            for (from_account, income_ceiling) in source_accounts {
+            for (from_account, income_ceiling, share) in source_accounts {
                 if remaining < 0.01 {
                     break;
                 }
@@ -748,7 +778,10 @@ pub fn evaluate_effect_into(
                             WithdrawalSources::SingleAsset(coord) => Some(coord.asset_id),
                             _ => None,
                         },
-                        amount: TransferAmount::fixed(remaining),
+                        amount: TransferAmount::fixed(match share {
+                            Some(fraction) => remaining.min(requested * fraction),
+                            None => remaining,
+                        }),
                         amount_mode: *amount_mode,
                         lot_method: *lot_method,
                     },
@@ -889,11 +922,14 @@ pub fn evaluate_effect_into(
                 let sweep_start = out.len();
                 evaluate_effect_into(&sweep, state, out)?;
 
-                // Calculate actual amount from CashCredits in the sweep results
+                // What was distributed: the gross proceeds of the lots sold,
+                // the same measure as `required_value`. The cash credits are
+                // net of the tax withheld (and the sweep's transfer to
+                // `destination` repeats them), so they would read short.
                 let actual_amount = out[sweep_start..]
                     .iter()
                     .filter_map(|ev| match ev {
-                        EvalEvent::CashCredit { net_amount, .. } => Some(*net_amount),
+                        EvalEvent::SubtractAssetLot { proceeds, .. } => Some(*proceeds),
                         _ => None,
                     })
                     .sum();
@@ -1254,7 +1290,7 @@ pub fn evaluate_effect_into(
                 out.push(EvalEvent::CashDebit {
                     from: *to,
                     net_amount: sell_proceeds,
-                    kind: CashFlowKind::Expense,
+                    kind: CashFlowKind::Tax,
                 });
             }
 
@@ -1293,7 +1329,7 @@ pub fn strategy_sources(
         WithdrawalOrder::TaxEfficientEarly => [0, 1, 2],
         WithdrawalOrder::TaxDeferredFirst => [1, 0, 2],
         WithdrawalOrder::TaxFreeFirst => [1, 2, 0],
-        // Proportional draws are not implemented; this is account order.
+        // Account order: the sweep itself splits the amount by value.
         WithdrawalOrder::ProRata => [0, 0, 0],
         // Before 59.5 the tax-deferred accounts go last, to avoid the penalty.
         WithdrawalOrder::PenaltyAware | WithdrawalOrder::BracketFilling { .. } if early => {

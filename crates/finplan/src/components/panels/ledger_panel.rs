@@ -200,6 +200,7 @@ impl LedgerPanel {
                     .unwrap_or("Unknown");
                 let kind_str = match kind {
                     finplan_core::model::CashFlowKind::Expense => "Expense",
+                    finplan_core::model::CashFlowKind::Tax => "Tax",
                     finplan_core::model::CashFlowKind::Contribution => "Contribution",
                     finplan_core::model::CashFlowKind::InvestmentPurchase => "Purchase",
                     finplan_core::model::CashFlowKind::Transfer => "Transfer",

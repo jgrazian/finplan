@@ -33,6 +33,7 @@ export function ChartCanvas({
   hoverY,
   pinnedIndex,
   onSelect,
+  zeroLabel = "Zero balance",
   children,
 }: {
   scale: Scale;
@@ -45,6 +46,8 @@ export function ChartCanvas({
   pinnedIndex?: number | null;
   /** Click a year to pin it. Omit to leave the plot read-only. */
   onSelect?: (index: number) => void;
+  /** What the zero line means, when the domain crosses it. */
+  zeroLabel?: string;
   children: ReactNode;
 }) {
   const geo = scale.geo ?? DEFAULT_GEOMETRY;
@@ -118,7 +121,7 @@ export function ChartCanvas({
             stroke="var(--color-text)"
             strokeOpacity={0.6}
           >
-            <title>Zero balance</title>
+            <title>{zeroLabel}</title>
           </line>
         )}
         <line

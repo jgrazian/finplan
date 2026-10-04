@@ -614,6 +614,7 @@ fn canonical(config: &finplan_core::config::SimulationConfig) -> Vec<String> {
         sorted(&config.asset_tracking_errors),
         sorted(&config.parameters),
         format!("{:?}", config.collect_ledger),
+        format!("{:?}", config.funding),
     ]
 }
 
@@ -1644,6 +1645,119 @@ async fn scenario_settings_match_the_route() {
         update_scenario(&mut mem, &body).unwrap_err();
         assert_eq!(serde_json::to_value(&mem).unwrap(), before, "{edit}");
     }
+}
+
+#[tokio::test]
+async fn funding_policy_matches_the_route() {
+    let plan = Plan::new().await;
+    let ids = &plan.ids;
+    let mut mem = plan.load().await;
+    let set = |value: Value| -> finplan_plan::specs::scenarios::SetFunding {
+        serde_json::from_value(value).unwrap()
+    };
+    let write = |body: finplan_plan::specs::scenarios::SetFunding| {
+        let plan = &plan;
+        async move {
+            let mut tx = plan.db.begin().await.unwrap();
+            let out =
+                crate::api::scenarios::set_funding_in(&mut tx, &plan.user, plan.id, &body).await;
+            if out.is_ok() {
+                tx.commit().await.unwrap();
+            }
+            out
+        }
+    };
+
+    for edit in [
+        json!({"funding": {"strategy": "TaxEfficientEarly"}}),
+        json!({"funding": {"strategy": "BracketFilling", "bracket_ceiling": 0.22,
+                           "exclude_accounts": [ids.roth, ids.vanguard, ids.roth]}}),
+        json!({"funding": {"strategy": "ProRata", "exclude_accounts": [ids.roth]}}),
+        json!({"funding": {"strategy": "TaxFreeFirst", "align_sweeps": true}}),
+        json!({"funding": {"strategy": "BracketFilling", "bracket_ceiling": 0.22,
+                           "align_sweeps": true}}),
+        json!({"funding": null, "align_sweeps": true}),
+        json!({"funding": null}),
+    ] {
+        let body = set(edit.clone());
+        write(set(edit.clone())).await.unwrap();
+        set_funding(&mut mem, &body).unwrap();
+        mem.scenario.updated_at = plan.load().await.scenario.updated_at;
+        assert_same(&plan, &mem, &edit.to_string()).await;
+    }
+    assert!(mem.funding().is_none() && mem.funding_excludes.is_empty());
+
+    // Refused alike: a bank or missing account, a ceiling on the wrong strategy
+    // or out of range.
+    for edit in [
+        json!({"funding": {"strategy": "TaxFreeFirst", "exclude_accounts": [ids.usaa]}}),
+        json!({"funding": {"strategy": "TaxFreeFirst", "exclude_accounts": [9999]}}),
+        json!({"funding": {"strategy": "ProRata", "bracket_ceiling": 0.12}}),
+        json!({"funding": {"strategy": "BracketFilling", "bracket_ceiling": 1.0}}),
+    ] {
+        write(set(edit.clone())).await.unwrap_err();
+        let before = serde_json::to_value(&mem).unwrap();
+        set_funding(&mut mem, &set(edit.clone())).unwrap_err();
+        assert_eq!(serde_json::to_value(&mem).unwrap(), before, "{edit}");
+        assert_same(&plan, &mem, &edit.to_string()).await;
+    }
+
+    // Deleting an excluded account drops it from the excludes: the foreign key
+    // cascades, the in-memory delete does the same.
+    let spare: CreateAccount = serde_json::from_value(
+        json!({"name": "Spare", "flavor": "Investment", "tax_status": "Taxable",
+               "cash_value": 0.0, "cash_return_profile_id": ids.cash}),
+    )
+    .unwrap();
+    let spare_id = {
+        let mut tx = plan.db.begin().await.unwrap();
+        let id = accounts::create_in(&mut tx, plan.id, &spare).await.unwrap();
+        tx.commit().await.unwrap();
+        id
+    };
+    create_account(&mut mem, &spare).unwrap();
+    let body = set(json!({"funding": {"strategy": "TaxFreeFirst",
+                                      "exclude_accounts": [ids.roth, spare_id]}}));
+    write(set(json!({"funding": {"strategy": "TaxFreeFirst",
+                                 "exclude_accounts": [ids.roth, spare_id]}})))
+    .await
+    .unwrap();
+    set_funding(&mut mem, &body).unwrap();
+    let live = plan.load().await;
+    {
+        let mut conn = plan.db.acquire().await.unwrap();
+        accounts::destroy_in(&mut conn, &live, plan.id, spare_id)
+            .await
+            .unwrap();
+    }
+    delete_account(&mut mem, spare_id).unwrap();
+    mem.scenario.updated_at = plan.load().await.scenario.updated_at;
+    assert_same(&plan, &mem, "excluded account deleted").await;
+    assert_eq!(mem.funding_excludes, vec![ids.roth]);
+
+    // A duplicate carries the policy, with the excludes on the copy's accounts.
+    let id = super::clone_scenario(&plan.db, &plan.load().await, "Copy")
+        .await
+        .unwrap();
+    let copy = crate::db::graph::load(&plan.db, id, &plan.user)
+        .await
+        .unwrap();
+    assert_eq!(
+        copy.scenario.funding_strategy.as_deref(),
+        Some("TaxFreeFirst")
+    );
+    assert_eq!(copy.funding_excludes.len(), 1);
+    assert_ne!(copy.funding_excludes[0], ids.roth);
+    assert_eq!(
+        copy.accounts
+            .iter()
+            .find(|a| a.id == copy.funding_excludes[0])
+            .map(|a| a.name.as_str()),
+        mem.accounts
+            .iter()
+            .find(|a| a.id == ids.roth)
+            .map(|a| a.name.as_str()),
+    );
 }
 
 // ── the caller's return profiles and tax configs ────────────────────────────
@@ -2769,6 +2883,8 @@ async fn duplicates_match_the_route() {
             s.inflation_profile_id,
             s.tax_config_id,
             s.collect_ledger,
+            s.funding_strategy.clone(),
+            s.funding_bracket_ceiling,
         )
     };
     assert_eq!(scenario(&stored), scenario(&mem));

@@ -405,14 +405,11 @@ fn read_withdrawal_sources(
                 .collect(),
         },
         _ => WithdrawalSourcesSpec::Strategy {
-            strategy: match row.strategy.as_deref() {
-                Some("TaxDeferredFirst") => WithdrawalStrategy::TaxDeferredFirst,
-                Some("TaxFreeFirst") => WithdrawalStrategy::TaxFreeFirst,
-                Some("ProRata") => WithdrawalStrategy::ProRata,
-                Some("PenaltyAware") => WithdrawalStrategy::PenaltyAware,
-                Some("BracketFilling") => WithdrawalStrategy::BracketFilling,
-                _ => WithdrawalStrategy::TaxEfficientEarly,
-            },
+            strategy: row
+                .strategy
+                .as_deref()
+                .and_then(WithdrawalStrategy::parse)
+                .unwrap_or(WithdrawalStrategy::TaxEfficientEarly),
             bracket_ceiling: row.bracket_ceiling,
             exclude_accounts: items
                 .into_iter()

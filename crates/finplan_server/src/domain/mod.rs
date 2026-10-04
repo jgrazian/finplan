@@ -62,8 +62,9 @@ pub(crate) async fn clone_into_mapped(
     let new_id: i64 = sqlx::query_scalar(
         "INSERT INTO scenarios
             (user_id, name, description, start_date, birth_date, duration_years,
-             inflation_profile_id, tax_config_id, collect_ledger)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) RETURNING id",
+             inflation_profile_id, tax_config_id, collect_ledger,
+             funding_strategy, funding_bracket_ceiling)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) RETURNING id",
     )
     .bind(&src.user_id)
     .bind(name)
@@ -74,6 +75,8 @@ pub(crate) async fn clone_into_mapped(
     .bind(src.inflation_profile_id)
     .bind(src.tax_config_id)
     .bind(src.collect_ledger)
+    .bind(&src.funding_strategy)
+    .bind(src.funding_bracket_ceiling)
     .fetch_one(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;
@@ -268,6 +271,16 @@ pub(crate) async fn clone_into_mapped(
             )
             .await?;
         }
+    }
+
+    for account_id in &graph.funding_excludes {
+        sqlx::query(
+            "INSERT INTO scenario_funding_excludes (scenario_id, account_id) VALUES (?1, ?2)",
+        )
+        .bind(new_id)
+        .bind(remap(&accounts, *account_id, "account")?)
+        .execute(&mut **tx)
+        .await?;
     }
 
     Ok(Cloned {

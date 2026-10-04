@@ -14,9 +14,9 @@ use crate::create::new_plan;
 use crate::error::{PlanError, PlanResult};
 use crate::graph::ScenarioGraph;
 use crate::library::Library;
-use crate::specs::Interval;
 use crate::specs::parameters::ParameterValueSpec;
 use crate::specs::scenarios::CreateScenario;
+use crate::specs::{Interval, WithdrawalStrategy};
 use crate::suggest::{Change, Created, resolve_steps};
 use crate::templates::{
     Allocation, Employee401k, RecurringExpenseParams, RowRef, SalaryParams, Template, When,
@@ -293,7 +293,9 @@ pub fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> PlanResult<Vec<Cha
                     inflation_adjusted: None,
                     start,
                     end,
-                    fund_from_investments: p.fund_from_investments,
+                    // The plan-level funding policy covers every deficit, so the
+                    // expenses carry no Sweep of their own.
+                    fund_from_investments: false,
                     sort_order: Some(sort_order),
                 }),
             ));
@@ -303,6 +305,14 @@ pub fn lower(p: &SetupPlan, annual_401k_contribution: f64) -> PlanResult<Vec<Cha
         changes.extend(expand_template(prefix, &template)?.changes);
     }
     Ok(changes)
+}
+
+/// The funding policy the answers turn on: investments are sold, tax-efficient
+/// first, whenever cash runs short. None leaves the policy off.
+#[must_use]
+pub fn funding_strategy(p: &SetupPlan) -> Option<&'static str> {
+    p.fund_from_investments
+        .then_some(WithdrawalStrategy::TaxEfficientEarly.as_str())
 }
 
 /// What the scenario row says about how the plan was made.
@@ -338,7 +348,7 @@ pub fn create_plan(
     if !known {
         return Err(PlanError::invalid("Selected assumptions are unavailable"));
     }
-    let graph = new_plan(
+    let mut graph = new_plan(
         &CreateScenario {
             name: p.name.trim().to_string(),
             description: Some(description(p).to_string()),
@@ -352,6 +362,7 @@ pub fn create_plan(
         id,
         now,
     )?;
+    graph.scenario.funding_strategy = funding_strategy(p).map(str::to_string);
     let changes = lower(p, contribution)?;
     match resolve_steps(&graph, &[changes], &Created::new())? {
         Ok(stepped) => Ok(stepped.graph),
@@ -407,6 +418,60 @@ mod tests {
         assert_eq!(plan.parameters.len(), 2);
         assert!(plan.events.len() >= 3);
         compile(&plan).expect("a guided plan runs");
+    }
+
+    #[test]
+    fn funding_policy_replaces_the_per_expense_sweeps() {
+        let library = crate::library::seed();
+        let plan = create_plan(&answers(&library), &library, 3, "2026-10-03 12:00:00").unwrap();
+        assert_eq!(
+            plan.scenario.funding_strategy.as_deref(),
+            Some("TaxEfficientEarly")
+        );
+        assert!(plan.funding_excludes.is_empty());
+        assert!(plan.effects.values().all(|e| e.kind != "Sweep"));
+        let funding = compile(&plan).unwrap().config.funding.expect("policy");
+        assert!(funding.exclude_accounts.is_empty() && funding.from.is_none());
+
+        let mut off = answers(&library);
+        off.fund_from_investments = false;
+        let plan = create_plan(&off, &library, 4, "2026-10-03 12:00:00").unwrap();
+        assert!(plan.scenario.funding_strategy.is_none());
+        assert!(compile(&plan).unwrap().config.funding.is_none());
+    }
+
+    #[test]
+    fn guided_plan_spends_past_cash_without_a_shortfall_when_investments_suffice() {
+        let library = crate::library::seed();
+        let mut a = answers(&library);
+        // Checking holds a month of spending; the rest must come from investments.
+        (
+            a.cash,
+            a.annual_income,
+            a.retirement_401k_contribution_percent,
+        ) = (5_000.0, 0.0, 0.0);
+        a.investments = 3_000_000.0;
+        a.duration_years = 5;
+        let plan = create_plan(&a, &library, 3, "2026-10-03 12:00:00").unwrap();
+        let config = compile(&plan).unwrap().config;
+        let result = finplan_core::simulation::simulate(&config, 7).unwrap();
+        let shortfall = result
+            .warnings
+            .iter()
+            .any(|w| w.kind == finplan_core::model::WarningKind::CashShortfall);
+        assert!(!shortfall, "{:?}", result.warnings);
+
+        // The same answers without funding do run dry, so the check bites.
+        a.fund_from_investments = false;
+        let plan = create_plan(&a, &library, 4, "2026-10-03 12:00:00").unwrap();
+        let result =
+            finplan_core::simulation::simulate(&compile(&plan).unwrap().config, 7).unwrap();
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.kind == finplan_core::model::WarningKind::CashShortfall)
+        );
     }
 
     #[test]

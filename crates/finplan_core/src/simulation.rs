@@ -3,15 +3,17 @@ use rustc_hash::FxHashMap;
 mod quantiles;
 pub use quantiles::RealAccumulator;
 
-use crate::apply::{SimulationScratch, process_events_with_scratch};
+use crate::apply::{SimulationScratch, apply_eval_event, process_events_with_scratch};
 use crate::config::SimulationConfig;
 use crate::error::SimulationError;
+use crate::evaluate::evaluate_effect_into;
 use crate::metrics::{InstrumentationConfig, SimulationMetrics};
 use crate::model::{
-    AccountFlavor, AccountId, AssetId, AssetLot, CashFlowKind, ConvergenceMetric, EventTrigger,
-    LedgerEntry, LoanDetail, MeanAccumulators, MonteCarloConfig, MonteCarloProgress,
-    MonteCarloStats, MonteCarloSummary, MonthlyCashFlowSummary, SimulationResult,
-    SimulationWarning, StateEvent, TaxStatus, WarningKind, YearlyCashFlowSummary, final_net_worth,
+    AccountFlavor, AccountId, AmountMode, AssetId, AssetLot, CashFlowKind, ConvergenceMetric,
+    EventEffect, EventTrigger, IncomeType, LedgerEntry, LoanDetail, LotMethod, MeanAccumulators,
+    MonteCarloConfig, MonteCarloProgress, MonteCarloStats, MonteCarloSummary,
+    MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus,
+    TransferAmount, WarningKind, WithdrawalSources, YearlyCashFlowSummary, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 use rand::{RngCore, SeedableRng};
@@ -58,7 +60,7 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
                 _ => {}
             },
             StateEvent::CashDebit { amount, kind, .. } => match kind {
-                CashFlowKind::Expense => summary.expenses += amount,
+                CashFlowKind::Expense | CashFlowKind::Tax => summary.expenses += amount,
                 CashFlowKind::Contribution => summary.contributions += amount,
                 CashFlowKind::InvestmentPurchase => {}
                 _ => {}
@@ -124,7 +126,7 @@ pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSu
                 _ => {}
             },
             StateEvent::CashDebit { amount, kind, .. } => match kind {
-                CashFlowKind::Expense => summary.expenses += amount,
+                CashFlowKind::Expense | CashFlowKind::Tax => summary.expenses += amount,
                 CashFlowKind::Contribution => summary.contributions += amount,
                 CashFlowKind::InvestmentPurchase => {}
                 _ => {}
@@ -277,6 +279,7 @@ fn simulate_inner(
 
         // Expense and funding events may fire in separate same-date passes.
         // Test only once they have all settled, not between individual effects.
+        settle_funding_policy(&mut state, scratch);
         record_cash_shortfall(
             &mut state,
             &mut cash_shortfall_recorded,
@@ -286,6 +289,7 @@ fn simulate_inner(
     }
 
     // The final advance can change balances even when there are no more events.
+    settle_funding_policy(&mut state, scratch);
     record_cash_shortfall(
         &mut state,
         &mut cash_shortfall_recorded,
@@ -295,6 +299,68 @@ fn simulate_inner(
     state.finalize_year_taxes();
 
     Ok(build_simulation_result(&mut state))
+}
+
+/// Cover overdrawn bank accounts by selling investments, when the plan has a
+/// funding policy in force. Runs after the date's events settle, so event
+/// sweeps always go first and the policy only covers what they left short.
+///
+/// Each deficit is a `Net` sweep through the same evaluate/apply path events
+/// use, so lots, tax withholding and penalties are reused; its ledger entries
+/// carry no source event. A sweep that fails (nothing to sell) is dropped: the
+/// shortfall check that follows records the problem.
+fn settle_funding_policy(state: &mut SimulationState, scratch: &mut SimulationScratch) {
+    let Some(policy) = &state.funding else {
+        return;
+    };
+    if policy
+        .from
+        .is_some_and(|from| state.timeline.current_date < from)
+    {
+        return;
+    }
+    let sources = WithdrawalSources::Strategy {
+        order: policy.order,
+        exclude_accounts: policy.exclude_accounts.clone(),
+    };
+
+    let mut deficits: Vec<(AccountId, f64)> = state
+        .portfolio
+        .accounts
+        .iter()
+        .filter(|(_, account)| matches!(account.flavor, AccountFlavor::Bank(_)))
+        .filter_map(|(id, account)| account.cash_balance().map(|balance| (*id, balance)))
+        .filter(|(_, balance)| *balance < -0.005)
+        .map(|(id, balance)| (id, -balance))
+        .collect();
+    deficits.sort_by_key(|(id, _)| *id);
+
+    for (account_id, deficit) in deficits {
+        let sweep = EventEffect::Sweep {
+            sources: sources.clone(),
+            to: account_id,
+            amount: TransferAmount::fixed(deficit),
+            amount_mode: AmountMode::Net,
+            lot_method: LotMethod::Fifo,
+            income_type: IncomeType::TaxFree,
+        };
+        scratch.eval_events.clear();
+        if evaluate_effect_into(&sweep, state, &mut scratch.eval_events).is_err() {
+            scratch.eval_events.clear();
+            continue;
+        }
+        for ee in scratch.eval_events.drain(..) {
+            if let Err(e) = apply_eval_event(state, &ee) {
+                state.warnings.push(SimulationWarning {
+                    date: state.timeline.current_date,
+                    event_id: None,
+                    message: format!("failed to apply funding policy sale: {e}"),
+                    kind: WarningKind::EffectSkipped,
+                    account_id: e.account_id(),
+                });
+            }
+        }
+    }
 }
 
 /// Record settled cash deficits, independently of ledger collection.
@@ -327,6 +393,10 @@ fn record_cash_shortfall(
     if *recorded {
         return;
     }
+    let funding_active = state
+        .funding
+        .as_ref()
+        .is_some_and(|policy| policy.from.is_none_or(|from| date >= from));
     if let Some((account_id, balance)) = lowest
         && balance < -0.005
     {
@@ -334,12 +404,21 @@ fn record_cash_shortfall(
         state.warnings.push(SimulationWarning {
             date: state.timeline.current_date,
             event_id: None,
-            message: format!(
-                "A cash account is overdrawn by ${:.2} in nominal dollars after this date's events settle. \
-                 Other assets do not automatically fund spending; add a withdrawal or transfer \
-                 rule, or reduce spending. Later recovery does not erase this shortfall.",
-                -balance
-            ),
+            message: if funding_active {
+                format!(
+                    "A cash account is overdrawn by ${:.2} in nominal dollars after this date's events settle. \
+                     The investments the funding policy may sell could not cover the deficit. \
+                     Later recovery does not erase this shortfall.",
+                    -balance
+                )
+            } else {
+                format!(
+                    "A cash account is overdrawn by ${:.2} in nominal dollars after this date's events settle. \
+                     Other assets do not automatically fund spending; add a withdrawal or transfer \
+                     rule, or reduce spending. Later recovery does not erase this shortfall.",
+                    -balance
+                )
+            },
             kind: WarningKind::CashShortfall,
             account_id: Some(account_id),
         });
@@ -1299,6 +1378,7 @@ impl MonteCarloCoordinator {
             mean_accumulators: result.mean_accumulators,
             real_net_worth: result.real_net_worth,
             funding: Some(result.funding),
+            percentile_seeds: result.percentile_seeds,
         })
     }
 
@@ -1525,6 +1605,7 @@ pub fn monte_carlo_simulate_with_config(
         mean_accumulators: result.mean_accumulators,
         real_net_worth: result.real_net_worth,
         funding: Some(result.funding),
+        percentile_seeds: result.percentile_seeds,
     })
 }
 
@@ -1565,6 +1646,7 @@ pub fn monte_carlo_simulate_with_progress(
         mean_accumulators: result.mean_accumulators,
         real_net_worth: result.real_net_worth,
         funding: Some(result.funding),
+        percentile_seeds: result.percentile_seeds,
     })
 }
 

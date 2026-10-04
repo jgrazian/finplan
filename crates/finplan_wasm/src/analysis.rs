@@ -29,6 +29,7 @@ use finplan_plan::analysis::{
     prepare,
 };
 use finplan_plan::create;
+use finplan_plan::drawdown::{self, CompareRequest, DrawdownRequest};
 use finplan_plan::graph::ScenarioGraph;
 use finplan_plan::library::Library;
 use finplan_plan::results::RunResults;
@@ -680,4 +681,34 @@ pub fn apply_note_json(
     written.scenario.updated_at = now.to_string();
     library.attach(&mut written);
     to_json(&written)
+}
+
+// ── drawdown ───────────────────────────────────────────────────────────────
+
+/// `POST /runs/{id}/drawdown`: the yearly rows of a run's path under each
+/// strategy. `snapshot` is the run's input snapshot, `seed` the decimal seed of
+/// its median path (a `u64` does not fit a JS number), `request` a
+/// `DrawdownRequest`. A `DrawdownBody` JSON.
+pub fn drawdown_json(snapshot: &str, seed: &str, request: &str) -> EngineResult<String> {
+    let graph: ScenarioGraph = parse("snapshot", snapshot)?;
+    let seed: u64 = seed
+        .trim()
+        .parse()
+        .map_err(|_| EngineError::bad_request("seed is not a whole number"))?;
+    let request: DrawdownRequest = parse("drawdown request", request)?;
+    to_json(&drawdown::project(&graph, seed, &request)?)
+}
+
+/// `POST /runs/{id}/drawdown/compare`: a Monte Carlo per strategy on one common
+/// seed. `body` is a `CompareRequest`; `progress` is called with
+/// `(simulations done, expected)`. A `DrawdownComparison` JSON.
+pub fn drawdown_compare_json(
+    snapshot: &str,
+    body: &str,
+    progress: Progress<'_>,
+) -> EngineResult<String> {
+    let graph: ScenarioGraph = parse("snapshot", snapshot)?;
+    let body: CompareRequest = parse("comparison request", body)?;
+    let mut runner = Local::new(progress);
+    to_json(&drawdown::compare(&graph, &body, &mut runner)?)
 }

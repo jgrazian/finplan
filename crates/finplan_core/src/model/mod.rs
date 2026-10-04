@@ -18,8 +18,8 @@ pub use accounts::{
 pub use diagnostics::{FundingAccumulator, FundingDiagnostics, PathDiagnostics, ShortfallStart};
 pub use events::{
     AmountMode, BalanceThreshold, Event, EventEffect, EventTrigger, Financing, FlowLimits,
-    IncomeType, LimitPeriod, LotMethod, RepeatInterval, TransferAmount, TransferEndpoint,
-    TriggerOffset, WithdrawalOrder, WithdrawalSources,
+    FundingPolicy, IncomeType, LimitPeriod, LotMethod, RepeatInterval, TransferAmount,
+    TransferEndpoint, TriggerOffset, WithdrawalOrder, WithdrawalSources,
 };
 pub use ids::{AccountId, AssetCoord, AssetId, EventId, ParameterId, ReturnProfileId};
 pub use market::{

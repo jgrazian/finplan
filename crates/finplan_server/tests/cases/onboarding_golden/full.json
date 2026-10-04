@@ -160,23 +160,6 @@
         {
           "amount": {
             "kind": "Expression",
-            "source": "top_up(inflation($\"Monthly spending\" * 12))"
-          },
-          "amount_mode": "Net",
-          "income_type": "TaxFree",
-          "kind": "Sweep",
-          "lot_method": "Fifo",
-          "sources": {
-            "bracket_ceiling": null,
-            "exclude_accounts": [],
-            "mode": "Strategy",
-            "strategy": "TaxEfficientEarly"
-          },
-          "to_account_id": "Checking"
-        },
-        {
-          "amount": {
-            "kind": "Expression",
             "source": "inflation($\"Monthly spending\" * 12)"
           },
           "from_account_id": "Checking",
@@ -201,40 +184,6 @@
     {
       "description": null,
       "effects": [
-        {
-          "amount": {
-            "kind": "Max",
-            "left": {
-              "kind": "Fixed",
-              "value": 0.0
-            },
-            "right": {
-              "kind": "Sub",
-              "left": {
-                "inner": {
-                  "kind": "Fixed",
-                  "value": 30000.0
-                },
-                "kind": "InflationAdjusted"
-              },
-              "right": {
-                "account_id": "Checking",
-                "kind": "AccountCashBalance"
-              }
-            }
-          },
-          "amount_mode": "Net",
-          "income_type": "TaxFree",
-          "kind": "Sweep",
-          "lot_method": "Fifo",
-          "sources": {
-            "bracket_ceiling": null,
-            "exclude_accounts": [],
-            "mode": "Strategy",
-            "strategy": "TaxEfficientEarly"
-          },
-          "to_account_id": "Checking"
-        },
         {
           "amount": {
             "inner": {
@@ -304,6 +253,11 @@
     "birth_date": "1981-01-01",
     "description": "Guided setup: investment withdrawals explicitly authorized; assumptions reviewed.",
     "duration_years": 50,
+    "funding": {
+      "bracket_ceiling": null,
+      "exclude_accounts": [],
+      "strategy": "TaxEfficientEarly"
+    },
     "inflation": null,
     "name": "Golden",
     "start_date": "2026-01-01",

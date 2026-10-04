@@ -302,6 +302,22 @@ pub fn validate_graph(graph: &ScenarioGraph) -> PlanResult<()> {
             }
         }
     }
+    // The funding policy holds to what `PUT …/funding` accepts.
+    let policy = graph.funding();
+    let stray = policy.is_none()
+        && (graph.scenario.funding_strategy.is_some()
+            || graph.scenario.funding_bracket_ceiling.is_some()
+            || !graph.funding_excludes.is_empty());
+    let mut excludes = graph.funding_excludes.clone();
+    excludes.sort_unstable();
+    excludes.dedup();
+    if stray
+        || policy.is_some_and(|p| p.check().is_err())
+        || excludes.len() != graph.funding_excludes.len()
+        || excludes.iter().any(|id| !graph.investment.contains_key(id))
+    {
+        return Err(PlanError::invalid("Archive funding policy is invalid."));
+    }
     compile::compile(graph)
         .map_err(|e| PlanError::invalid(format!("Archive plan cannot be compiled: {e}")))?;
     Ok(())
@@ -345,4 +361,41 @@ fn check_dag(rows: impl Iterator<Item = (i64, Vec<i64>)>) -> PlanResult<()> {
         visit(*id, &edges, &mut HashSet::new(), 0, &mut heights)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph() -> ScenarioGraph {
+        serde_json::from_str(include_str!("../testdata/default_snapshot.json")).unwrap()
+    }
+
+    #[test]
+    fn the_funding_policy_travels_and_is_checked() {
+        let mut plan = graph();
+        plan.scenario.funding_strategy = Some("BracketFilling".into());
+        plan.scenario.funding_bracket_ceiling = Some(0.22);
+        plan.funding_excludes = vec![2];
+        let back = unpack(&pack(vec![plan.clone()]).unwrap()).unwrap();
+        assert_eq!(back[0].funding(), plan.funding());
+
+        // An archive from before the policy has none.
+        assert!(
+            unpack(&pack(vec![graph()]).unwrap()).unwrap()[0]
+                .funding()
+                .is_none()
+        );
+
+        for bad in [
+            |g: &mut ScenarioGraph| g.funding_excludes = vec![6],
+            |g: &mut ScenarioGraph| g.funding_excludes = vec![2, 2],
+            |g: &mut ScenarioGraph| g.scenario.funding_strategy = Some("Nope".into()),
+            |g: &mut ScenarioGraph| g.scenario.funding_bracket_ceiling = Some(1.5),
+        ] {
+            let mut g = plan.clone();
+            bad(&mut g);
+            assert!(validate_graph(&g).is_err());
+        }
+    }
 }

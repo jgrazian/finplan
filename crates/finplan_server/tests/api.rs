@@ -3209,6 +3209,9 @@ async fn shared_tax_edits_and_inflation_deletion_invalidate_dependents() {
     }
 }
 
+#[path = "cases/drawdown.rs"]
+mod drawdown_cases;
+
 #[path = "cases/history.rs"]
 mod history_cases;
 

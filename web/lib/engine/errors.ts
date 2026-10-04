@@ -99,3 +99,10 @@ export function guard<T>(fn: () => T): T {
 
 /** The error a cancelled run or analysis ends with. */
 export const CANCELLED = "canceled";
+
+/** What a fetch rejects with when its `AbortSignal` fires: the caller withdrew the question. */
+export function abortError(): Error {
+  const error = new Error("The operation was aborted.");
+  error.name = "AbortError";
+  return error;
+}

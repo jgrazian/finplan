@@ -91,11 +91,12 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
             None,
         );
     }
-    if !g
-        .effects
-        .values()
-        .filter(enabled_effect)
-        .any(|e| e.kind == "Sweep" || e.kind == "CashTransfer")
+    if g.scenario.funding_strategy.is_none()
+        && !g
+            .effects
+            .values()
+            .filter(enabled_effect)
+            .any(|e| e.kind == "Sweep" || e.kind == "CashTransfer")
     {
         add("funding_intent","warning","No withdrawal or transfer rule is modeled. Spending uses only its named account; review whether this is intentional.".into(),"plan",None);
     }

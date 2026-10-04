@@ -53,6 +53,7 @@ fn results() -> Results {
             percentile_values: Vec::new(),
         },
         bands: vec![Band {
+            seed: None,
             path_id: "0.5".into(),
             percentile: Some(0.5),
             dates: dates.clone(),

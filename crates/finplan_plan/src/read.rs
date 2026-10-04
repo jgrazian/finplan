@@ -75,6 +75,7 @@ pub fn scenario(graph: &ScenarioGraph, extras: ScenarioExtras) -> Scenario {
         updated_at: row.updated_at.clone(),
         last_run_at: extras.last_run_at,
         last_success_rate: extras.last_success_rate,
+        funding: graph.funding(),
     }
 }
 

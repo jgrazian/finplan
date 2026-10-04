@@ -150,6 +150,19 @@ pub async fn persist(db: &Db, run_id: i64, results: &RunResults) -> Result<(), s
 
     for path in &results.paths {
         write_path(&mut tx, run_id, path).await?;
+        // The percentile rows were made at enqueue; the seed that replays the
+        // path is only known now. Kept for every run (not a current-run-only
+        // table), so a later view can re-simulate the median.
+        if let (Some(percentile), Some(seed)) = (path.percentile, &path.seed) {
+            sqlx::query(
+                "UPDATE run_percentiles SET seed = ?3 WHERE run_id = ?1 AND percentile = ?2",
+            )
+            .bind(run_id)
+            .bind(percentile)
+            .bind(seed)
+            .execute(&mut *tx)
+            .await?;
+        }
     }
 
     sqlx::query(

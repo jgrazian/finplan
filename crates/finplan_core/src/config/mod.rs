@@ -40,8 +40,8 @@
 use std::collections::HashMap;
 
 use crate::model::{
-    Account, AssetId, Event, EventId, EventTrigger, InflationProfile, ParameterId, ParameterValue,
-    ReturnProfile, ReturnProfileId, TaxConfig,
+    Account, AssetId, Event, EventId, EventTrigger, FundingPolicy, InflationProfile, ParameterId,
+    ParameterValue, ReturnProfile, ReturnProfileId, TaxConfig,
 };
 use serde::{Deserialize, Serialize};
 
@@ -173,6 +173,11 @@ pub struct SimulationConfig {
     /// When disabled, `SimulationResult.ledger` and `yearly_cash_flows` will be empty.
     #[serde(default = "default_true")]
     pub collect_ledger: bool,
+
+    /// Sell investments to cover cash deficits left after a date's events.
+    /// `None` leaves a run as it was before the policy existed.
+    #[serde(default)]
+    pub funding: Option<FundingPolicy>,
 }
 
 impl Default for SimulationConfig {
@@ -191,6 +196,7 @@ impl Default for SimulationConfig {
             duration_years: default_duration_years(),
             events: Vec::new(),
             collect_ledger: true,
+            funding: None,
         }
     }
 }

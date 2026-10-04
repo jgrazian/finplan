@@ -835,6 +835,10 @@ pub struct MonteCarloSummary {
     /// summaries produced before it was measured.
     #[serde(default)]
     pub funding: Option<super::FundingDiagnostics>,
+    /// The seed behind each entry of `percentile_runs`, as `(percentile,
+    /// seed)`: `simulate(config, seed)` reproduces that path exactly.
+    #[serde(default)]
+    pub percentile_seeds: Vec<(f64, u64)>,
 }
 
 impl MonteCarloSummary {

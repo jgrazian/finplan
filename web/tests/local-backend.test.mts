@@ -90,6 +90,23 @@ if (requireEngine("local backend")) {
     assert.equal((await h.api.scenarios.create(newPlan("Third") as never)).id, 3);
   });
 
+  test("the funding policy is set, read back, refused when bad, and cleared", async () => {
+    const { api, plan } = await withPlan();
+    // The fixture's guided setup funds from investments, which turns the policy on.
+    assert.equal((await api.scenarios.get(plan.id)).funding?.strategy, "TaxEfficientEarly");
+    const set = await api.scenarios.setFunding(plan.id, {
+      funding: { strategy: "BracketFilling", bracket_ceiling: 0.22, exclude_accounts: [] },
+    });
+    assert.equal(set.funding?.strategy, "BracketFilling");
+    assert.equal((await api.scenarios.get(plan.id)).funding?.bracket_ceiling, 0.22);
+    await assert.rejects(
+      api.scenarios.setFunding(plan.id, { funding: { strategy: "ProRata", bracket_ceiling: 0.1, exclude_accounts: [] } }),
+      (e: { status: number }) => e.status === 400,
+    );
+    assert.equal((await api.scenarios.get(plan.id)).funding?.strategy, "BracketFilling");
+    assert.equal((await api.scenarios.setFunding(plan.id, { funding: null })).funding, null);
+  });
+
   test("guided setup makes a plan that compiles, and a retry makes no second one", async () => {
     const h = await harness();
     const [profile] = await h.api.returnProfiles.list();
@@ -317,6 +334,11 @@ if (requireEngine("local backend")) {
     assert.equal(results.run_id, done.id);
     assert.equal(results.scenario_id, h.plan.id);
     assert.equal(results.stats.num_iterations, 200);
+    // Each percentile path keeps the seed that replays it, as decimal text; the mean has none.
+    for (const band of results.bands) {
+      if (band.percentile === null) assert.equal(band.seed, null);
+      else assert.match(band.seed ?? "", /^\d+$/);
+    }
     const mean = await h.api.runs.results(done.id, "mean");
     assert.equal(mean.series_id, "mean");
     await assert.rejects(h.api.runs.results(done.id, "p50"), (e: { status: number }) => e.status === 400);
@@ -548,6 +570,98 @@ if (requireEngine("local backend")) {
     assert.equal(applied.id, h.plan.id);
     assert.equal((await h.api.events.list(h.plan.id)).length, before + 1);
     assert.deepEqual(await h.api.whatIf.get(h.plan.id), { entries: [] }, "applying clears the stack");
+  });
+
+  test("drawdown replays a run's median path under each strategy, compares them, and refuses a run with no seed", async () => {
+    const h = await withDefaultPlan();
+    const queued = await h.api.runs.create(h.plan.id, { iterations: 60, seed: 5, percentiles: [0.1, 0.5, 0.9] });
+    await finished(h, queued.id);
+
+    const body = await h.api.runs.drawdown(queued.id);
+    assert.equal(body.choices.length, 7);
+    assert.equal(body.choices[0].choice.kind, "AsPlanned");
+    assert.equal(body.choices[0].overlay, false);
+    assert.equal(body.choices[1].overlay, true);
+    assert.equal(body.retirement.source, "income");
+    const years = body.choices[1].years;
+    assert.ok(years.length > 0);
+    assert.equal(years[0].withdrawals.length, body.accounts.length);
+    // The seed is the median band's, and the rows balance.
+    const bands = (await h.api.runs.results(queued.id)).bands;
+    assert.equal(body.seed, bands.find((b) => b.percentile === 0.5)?.seed);
+    for (const y of years) {
+      const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+      const inflow = sum(y.income) + sum(y.withdrawals) + y.cash + y.shortfall;
+      assert.ok(Math.abs(inflow - (y.spending + y.withdrawal_taxes + y.surplus)) <= 1);
+    }
+
+    const one = await h.api.runs.drawdown(queued.id, {
+      strategies: [{ kind: "Strategy", strategy: "TaxFreeFirst" }],
+      retirement_year: 2050,
+    });
+    assert.equal(one.retirement.source, "request");
+    assert.equal(one.choices[0].years[0].year, 2050);
+    await assert.rejects(
+      h.api.runs.drawdown(queued.id, { strategies: [] }),
+      (e: { status: number }) => e.status === 400,
+    );
+
+    const compared = await h.api.runs.drawdownCompare(queued.id, {
+      request: { strategies: [{ kind: "AsPlanned" }, { kind: "Strategy", strategy: "ProRata" }] },
+      iterations: 25,
+    });
+    assert.equal(compared.rows.length, 2);
+    assert.equal(compared.iterations, 25);
+    await assert.rejects(
+      h.api.runs.drawdownCompare(queued.id, { iterations: 100_000 }),
+      (e: { status: number }) => e.status === 400,
+    );
+    const controller = new AbortController();
+    const asked = h.api.runs.drawdownCompare(queued.id, { iterations: 500 }, controller.signal);
+    controller.abort();
+    await assert.rejects(asked, (e: Error) => e.name === "AbortError");
+
+    // A run kept without seeds (stored before they were) asks to be run again.
+    const stored = JSON.parse((await h.store.transact("r", (tx) => tx.getResults(queued.id))) as string);
+    for (const path of stored.paths) delete path.seed;
+    const shot = await h.runtime.snapshot(h.plan.id);
+    const old = await h.runtime.saveServerRun(h.plan.id, {
+      settings: { iterations: 60, seed: 5 },
+      inputHash: shot.hash,
+      modelVersion: shot.modelVersion,
+      results: stored,
+    });
+    for (const call of [() => h.api.runs.drawdown(old.id), () => h.api.runs.drawdownCompare(old.id)]) {
+      await assert.rejects(call(), (e: { status: number; message: string }) => {
+        assert.equal(e.status, 409);
+        assert.equal(e.message, "Run the plan again to see drawdown.");
+        return true;
+      });
+    }
+    await assert.rejects(h.api.runs.drawdown(9999), (e: { status: number }) => e.status === 404);
+  });
+
+  test("applying a strategy to the plan sets the funding policy and every strategy sweep", async () => {
+    const h = await withDefaultPlan();
+    const strategies = async () => {
+      const found: string[] = [];
+      for (const event of await h.api.events.list(h.plan.id)) {
+        for (const effect of event.effects) {
+          const sources = effect.kind === "Sweep" ? effect.sources : null;
+          if (sources?.mode === "Strategy") found.push(sources.strategy);
+        }
+      }
+      return found;
+    };
+    assert.deepEqual(await strategies(), ["PenaltyAware", "PenaltyAware"]);
+    await h.api.scenarios.setFunding(h.plan.id, { funding: { strategy: "TaxFreeFirst", exclude_accounts: [] } });
+    assert.deepEqual(await strategies(), ["PenaltyAware", "PenaltyAware"], "off unless asked");
+    const set = await h.api.scenarios.setFunding(h.plan.id, {
+      funding: { strategy: "BracketFilling", bracket_ceiling: 0.22, exclude_accounts: [] },
+      align_sweeps: true,
+    });
+    assert.equal(set.funding?.strategy, "BracketFilling");
+    assert.deepEqual(await strategies(), ["BracketFilling", "BracketFilling"]);
   });
 
   test("the review writes rule notes about a run, keeps dismissals, and applies a path", async () => {

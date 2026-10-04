@@ -23,6 +23,9 @@ pub enum CashFlowKind {
     Income,
     /// True expense (bills, purchases, etc.)
     Expense,
+    /// Taxes paid out of cash (e.g. RSU sell-to-cover). Counted with
+    /// expenses in the cash-flow summaries.
+    Tax,
     /// Proceeds from liquidating investments (Sweep, `AssetSale`)
     LiquidationProceeds,
     /// Cash used to purchase investments

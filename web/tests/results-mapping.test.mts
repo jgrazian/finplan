@@ -8,10 +8,10 @@ const scenario = { start_date: "2040-01-01" } as Scenario; // Edited live dates 
 const axis = { unit: "year" as const, range: [2026, 2027] as [number, number], at: (date: string) => Number(date.slice(0, 4)), label: String };
 function fixture(series = "0.5"): Results {
   const bands = [
-    { path_id: "0.1", percentile: 0.1, dates, net_worth: [100, 100, 100], inflation: [1, 1, 1] },
-    { path_id: "0.5", percentile: 0.5, dates, net_worth: [100, 300, 200], inflation: [1, 1, 4] },
-    { path_id: "0.95", percentile: 0.95, dates, net_worth: [100, -50, 300], inflation: [1, 1, 2] },
-    { path_id: "mean", percentile: null, dates, net_worth: [100, 116.67, 200], inflation: [1, 1, 2.33] },
+    { path_id: "0.1", percentile: 0.1, seed: null, dates, net_worth: [100, 100, 100], inflation: [1, 1, 1] },
+    { path_id: "0.5", percentile: 0.5, seed: null, dates, net_worth: [100, 300, 200], inflation: [1, 1, 4] },
+    { path_id: "0.95", percentile: 0.95, seed: null, dates, net_worth: [100, -50, 300], inflation: [1, 1, 2] },
+    { path_id: "mean", percentile: null, seed: null, dates, net_worth: [100, 116.67, 200], inflation: [1, 1, 2.33] },
   ];
   const selected = bands.find(b => b.path_id === series)!;
   return {

@@ -34,6 +34,19 @@ pub const CURRENT_RUN_ONLY_TABLES: [&str; 8] = [
     "run_ledger",
 ];
 
+/// The seed of the run's median market path: the stored percentile closest to
+/// 0.5 (the lower one on a tie). None for a run saved before seeds were kept.
+pub async fn median_seed(db: &Db, run_id: i64) -> Result<Option<u64>, sqlx::Error> {
+    let seed: Option<String> = sqlx::query_scalar(
+        "SELECT seed FROM run_percentiles WHERE run_id = ?1 AND seed IS NOT NULL
+          ORDER BY abs(percentile - 0.5), percentile LIMIT 1",
+    )
+    .bind(run_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(seed.and_then(|s| s.parse().ok()))
+}
+
 #[derive(Debug)]
 pub struct RebuildReport {
     pub tables: usize,
@@ -390,7 +403,7 @@ mod tests {
         source.close().await;
 
         let report = rebuild(&source_path, &destination_path).await.unwrap();
-        assert_eq!(report.tables, 59);
+        assert_eq!(report.tables, 60);
 
         let rebuilt = connect(&format!("sqlite://{}", destination_path.display()), 1)
             .await

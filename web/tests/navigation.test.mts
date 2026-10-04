@@ -33,3 +33,11 @@ test("scenario resolution handles slugs, legacy bookmarks and stale links", () =
   assert.equal(resolveScenario(scenarios, undefined), first);
   assert.equal(resolveScenario([], second.slug), undefined);
 });
+
+test("a pinned year rides in the query and is dropped with the section", () => {
+  const state = { scenario: "s8a4f21b7c903", tab: "analysis" as const, section: "drawdown", selection: "bracket-22", year: 2056 };
+  const url = new URL(toHref(state), "https://example.com");
+  assert.equal(url.searchParams.get("yr"), "2056");
+  assert.deepEqual(parseNav(url.pathname, url.search), state);
+  assert.equal(parseNav("/analysis", "?yr=abc").year, undefined);
+});

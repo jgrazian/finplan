@@ -63,6 +63,8 @@
 //! | `analysis_shard(graph, library, body, shard, shards, progress)` | `CreateAnalysis`; one worker's share of its simulations | `CallAnswer[]` (opaque) |
 //! | `analysis_finish(graph, library, body, answers, progress)` | `CreateAnalysis`; the shards' answers as a `string[]` | `AnalysisOutcome` |
 //! | `quick_what_if(graph, library, body, progress)` | `QuickWhatIf` | `WhatIfOutcome` |
+//! | `drawdown(snapshot, seed, request)` | run snapshot, median seed (decimal), `DrawdownRequest` | `DrawdownBody` |
+//! | `drawdown_compare(snapshot, body, progress)` | run snapshot, `CompareRequest` | `DrawdownComparison` |
 //! | `apply_what_if(graph, library, body, new_id, now)` | `ApplyWhatIf` | `ScenarioGraph` |
 //! | `check_what_if_stack(body)` | `WhatIfStack` | `WhatIfStack` |
 //! | `apply_note(graph, library, path_key, steps, copy_id, copy_name, now)` | `[{key, changes}]` | `ScenarioGraph` |

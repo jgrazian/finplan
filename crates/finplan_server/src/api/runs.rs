@@ -406,10 +406,23 @@ pub(crate) async fn results(
             .map(|(date, _)| factor_for(&factors, year_of(date)))
             .collect();
 
+        let seed: Option<String> = match percentile {
+            Some(p) => sqlx::query_scalar(
+                "SELECT seed FROM run_percentiles WHERE run_id = ?1 AND percentile = ?2",
+            )
+            .bind(id)
+            .bind(p)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten(),
+            None => None,
+        };
+
         let (dates, net_worth) = points.into_iter().unzip();
         bands.push(Band {
             path_id: path_id(*percentile),
             percentile: *percentile,
+            seed,
             dates,
             net_worth,
             inflation,

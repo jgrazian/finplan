@@ -614,3 +614,80 @@ fn the_local_runner_answers_as_the_engines_own_runner() {
     let engine = analyze(&attached, request, &limits, &mut ProgressRunner::new(None)).unwrap();
     assert_eq!(serde_json::to_value(&engine).unwrap(), local);
 }
+
+// ── drawdown ───────────────────────────────────────────────────────────────
+
+/// The seed a finished local run kept for its median path.
+fn median_seed(results: &str) -> String {
+    value(results)["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["percentile"] == 0.5)
+        .and_then(|p| p["seed"].as_str())
+        .expect("the median path keeps its seed")
+        .to_string()
+}
+
+#[test]
+fn drawdown_replays_the_median_path_of_a_local_run() {
+    let finished = local(DEFAULT_SNAPSHOT, &settings(40, 4));
+    let seed = median_seed(&finished);
+    let body = value(&ok(analysis::drawdown_json(DEFAULT_SNAPSHOT, &seed, "{}")));
+    assert_eq!(body["seed"], seed.as_str());
+    assert_eq!(body["choices"].as_array().unwrap().len(), 7);
+    assert_eq!(body["choices"][0]["choice"]["kind"], "AsPlanned");
+    assert!(!body["choices"][1]["years"].as_array().unwrap().is_empty());
+
+    let one = json!({"strategies": [{"kind": "Strategy", "strategy": "ProRata"}],
+                     "retirement_year": 2050})
+    .to_string();
+    let one = value(&ok(analysis::drawdown_json(DEFAULT_SNAPSHOT, &seed, &one)));
+    assert_eq!(one["retirement"]["source"], "request");
+    assert_eq!(one["choices"][0]["overlay"], true);
+
+    // The refusals are the server's.
+    let refused = |seed: &str, request: &str| {
+        analysis::drawdown_json(DEFAULT_SNAPSHOT, seed, request)
+            .unwrap_err()
+            .status
+    };
+    assert_eq!(refused("not a seed", "{}"), 400);
+    assert_eq!(refused(&seed, r#"{"strategies": []}"#), 400);
+    assert_eq!(refused(&seed, "["), 400);
+}
+
+#[test]
+fn drawdown_compares_strategies_and_reports_progress() {
+    let mut reports = 0;
+    let body = json!({"request": {"strategies": [
+        {"kind": "AsPlanned"}, {"kind": "Strategy", "strategy": "TaxFreeFirst"}]},
+        "iterations": 25})
+    .to_string();
+    let comparison = value(&ok(analysis::drawdown_compare_json(
+        DEFAULT_SNAPSHOT,
+        &body,
+        &mut |_, _| {
+            reports += 1;
+            false
+        },
+    )));
+    assert!(reports > 0);
+    assert_eq!(comparison["iterations"], 25);
+    assert_eq!(comparison["rows"].as_array().unwrap().len(), 2);
+
+    let too_many = json!({"iterations": 100_000}).to_string();
+    assert_eq!(
+        analysis::drawdown_compare_json(DEFAULT_SNAPSHOT, &too_many, &mut |_, _| false)
+            .unwrap_err()
+            .status,
+        400
+    );
+    // A host that cancels gets the server's "canceled" refusal.
+    assert_eq!(
+        analysis::drawdown_compare_json(DEFAULT_SNAPSHOT, &body, &mut |_, _| true)
+            .unwrap_err()
+            .status,
+        409
+    );
+}

@@ -49,9 +49,15 @@ async fn guided_setup_retries_preserve_one_reconciled_plan_and_compile() {
             .iter()
             .find(|event| event["name"] == name)
             .unwrap();
-        assert_eq!(event["effects"][0]["kind"], "Sweep");
-        assert_eq!(event["effects"][1]["kind"], "Expense");
+        // The plan-level funding policy covers the deficit, not a Sweep per expense.
+        assert_eq!(event["effects"].as_array().unwrap().len(), 1);
+        assert_eq!(event["effects"][0]["kind"], "Expense");
     }
+    let (_, scenario) = app.get(&format!("/api/scenarios/{sid}")).await;
+    assert_eq!(
+        scenario["funding"],
+        json!({"strategy": "TaxEfficientEarly", "bracket_ceiling": null, "exclude_accounts": []})
+    );
     let salary = events
         .as_array()
         .unwrap()
@@ -100,7 +106,7 @@ async fn guided_setup_retries_preserve_one_reconciled_plan_and_compile() {
         .find(|event| event["name"] == "Spending before retirement")
         .unwrap();
     assert_eq!(
-        before["effects"][1]["amount"]["source"],
+        before["effects"][0]["amount"]["source"],
         "inflation($\"Monthly spending\" * 12)"
     );
     let mut changed = body.clone();
@@ -287,6 +293,7 @@ async fn dumped_plan(app: &mut TestApp, sid: i64) -> Value {
             "birth_date": scenario["birth_date"], "duration_years": scenario["duration_years"],
             "inflation": name_of(&inflation, &scenario["inflation_profile_id"]),
             "tax_config_id": scenario["tax_config_id"], "description": scenario["description"],
+            "funding": scenario["funding"],
         },
         "accounts": accounts.clone(),
         "assets": assets,

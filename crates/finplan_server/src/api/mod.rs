@@ -10,6 +10,7 @@ pub mod contact;
 pub mod documents;
 pub mod draft_agent;
 pub mod drafts;
+pub mod drawdown;
 pub mod events;
 pub(crate) mod expression_refs;
 pub mod expressions;
@@ -52,6 +53,7 @@ pub fn router(config: &crate::config::ServerConfig) -> Router<AppState> {
         .merge(profiles::router())
         .merge(taxes::router())
         .merge(runs::router())
+        .merge(drawdown::router())
         .merge(reports::router())
         .merge(analysis::router())
         .merge(what_if::router())

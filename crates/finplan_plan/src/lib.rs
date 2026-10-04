@@ -14,6 +14,7 @@ pub mod archive;
 pub mod batch;
 pub mod compile;
 pub mod create;
+pub mod drawdown;
 pub mod edit;
 pub mod error;
 pub mod expression_refs;

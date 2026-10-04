@@ -111,7 +111,9 @@ pub enum WithdrawalOrder {
     /// Rarely optimal, but available
     TaxFreeFirst,
 
-    /// Pro-rata from all accounts proportionally
+    /// Pro-rata: split the amount across the eligible investment accounts in
+    /// proportion to their market value, then cover whatever an account could
+    /// not supply from the others in account order.
     /// Maintains consistent tax treatment over time
     ProRata,
 
@@ -164,6 +166,22 @@ impl Default for WithdrawalSources {
             exclude_accounts: vec![],
         }
     }
+}
+
+/// Cover cash deficits by selling investments.
+///
+/// When a bank account is still overdrawn after a date's events settle, the
+/// run sells from the investment accounts in `order` to cover it. Event-level
+/// sweeps fire first, so the policy only covers what they leave short.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingPolicy {
+    pub order: WithdrawalOrder,
+    /// Investment accounts never sold to cover a deficit.
+    #[serde(default)]
+    pub exclude_accounts: Vec<AccountId>,
+    /// First date the policy acts; `None` = the whole plan.
+    #[serde(default)]
+    pub from: Option<jiff::civil::Date>,
 }
 
 /// How to interpret the withdrawal amount

@@ -2,7 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 
@@ -14,18 +14,20 @@ use crate::state::AppState;
 use finplan_plan::specs::scenarios::{CompileReport, Scenario, ScenarioStatus};
 use ts_rs::TS;
 
-use finplan_plan::specs::scenarios::{CreateScenario, UpdateScenario, validate_date};
+use finplan_plan::specs::scenarios::{CreateScenario, SetFunding, UpdateScenario, validate_date};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/scenarios", get(list).post(create))
         .route("/scenarios/{id}", get(fetch).patch(update).delete(destroy))
+        .route("/scenarios/{id}/funding", put(set_funding))
         .route("/scenarios/{id}/duplicate", post(duplicate))
         .route("/scenarios/{id}/compile", post(compile_check))
 }
 
-/// The trailing two columns describe the scenario's latest successful run.
-/// Failed or pending runs do not replace the last successful result.
+/// `last_run_at` and `last_success_rate` describe the scenario's latest
+/// successful run; failed or pending runs do not replace it. `funding` is the
+/// funding policy as one JSON object (decoded by `Scenario`), null when off.
 pub(crate) const SCENARIO_COLUMNS: &str =
     "id, slug, name, description, start_date, birth_date, duration_years,
      inflation_profile_id, tax_config_id, collect_ledger, status, created_at, updated_at,
@@ -34,7 +36,13 @@ pub(crate) const SCENARIO_COLUMNS: &str =
        ORDER BY r.finished_at DESC LIMIT 1) AS last_run_at,
      (SELECT st.success_rate FROM run_stats st JOIN runs r ON r.id = st.run_id
        WHERE r.scenario_id = scenarios.id AND r.status = 'succeeded'
-       ORDER BY r.finished_at DESC LIMIT 1) AS last_success_rate";
+       ORDER BY r.finished_at DESC LIMIT 1) AS last_success_rate,
+     CASE WHEN funding_strategy IS NULL THEN NULL ELSE json_object(
+       'strategy', funding_strategy,
+       'bracket_ceiling', funding_bracket_ceiling,
+       'exclude_accounts', (SELECT json_group_array(account_id) FROM
+         (SELECT account_id FROM scenario_funding_excludes
+           WHERE scenario_id = scenarios.id ORDER BY account_id))) END AS funding";
 
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<Scenario>>> {
     let rows: Vec<Scenario> = sqlx::query_as(&format!(
@@ -228,6 +236,103 @@ pub(crate) async fn update_in(
     Ok(())
 }
 
+/// `PUT /scenarios/{id}/funding`: load the graph, let the plan crate check and
+/// apply the edit, write what it changed.
+async fn set_funding(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<i64>,
+    Json(Submitted { body, fields }): Json<Submitted<SetFunding>>,
+) -> ApiResult<Json<Scenario>> {
+    super::owned_scenario(&state.db, id, &user.id).await?;
+    let mut tx = state.db.begin_with("BEGIN IMMEDIATE").await?;
+    set_funding_in(&mut tx, &user.id, id, &body).await?;
+    tx.commit().await?;
+    super::touch_scenario(&state.db, id).await?;
+
+    state.telemetry.mutation(
+        Resource::Scenario,
+        Operation::Updated,
+        &EventFields {
+            user_id: Some(&user.id),
+            scenario_id: Some(id),
+            resource_id: Some(id),
+            fields: &fields,
+            ..Default::default()
+        },
+    );
+    let row: Scenario = sqlx::query_as(&format!(
+        "SELECT {SCENARIO_COLUMNS} FROM scenarios WHERE id = ?1"
+    ))
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(row))
+}
+
+/// Apply `PUT /scenarios/{id}/funding`: the plan crate checks the policy
+/// against the stored plan and says what it becomes, and that is written.
+pub(crate) async fn set_funding_in(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: &str,
+    id: i64,
+    body: &SetFunding,
+) -> ApiResult<()> {
+    let mut graph = crate::db::graph::load_connection(conn, id, user_id).await?;
+    finplan_plan::edit::set_funding(&mut graph, body)?;
+    write_funding(conn, id, &graph).await?;
+    if body.align_sweeps == Some(true) && body.funding.is_some() {
+        // The edit already set the rows in the graph; mirror them.
+        for row in graph
+            .withdrawal_sources
+            .values()
+            .filter(|row| row.mode == "Strategy")
+        {
+            sqlx::query(
+                "UPDATE effect_withdrawal_sources SET strategy = ?2, bracket_ceiling = ?3
+                 WHERE effect_id = ?1",
+            )
+            .bind(row.effect_id)
+            .bind(&row.strategy)
+            .bind(row.bracket_ceiling)
+            .execute(&mut *conn)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+/// Store the graph's funding policy on scenario `id`: the two columns and the
+/// excludes, replacing what was there.
+pub(crate) async fn write_funding(
+    conn: &mut sqlx::SqliteConnection,
+    id: i64,
+    graph: &finplan_plan::graph::ScenarioGraph,
+) -> ApiResult<()> {
+    sqlx::query(
+        "UPDATE scenarios SET funding_strategy = ?2, funding_bracket_ceiling = ?3 WHERE id = ?1",
+    )
+    .bind(id)
+    .bind(&graph.scenario.funding_strategy)
+    .bind(graph.scenario.funding_bracket_ceiling)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("DELETE FROM scenario_funding_excludes WHERE scenario_id = ?1")
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    for account_id in &graph.funding_excludes {
+        sqlx::query(
+            "INSERT INTO scenario_funding_excludes (scenario_id, account_id) VALUES (?1, ?2)",
+        )
+        .bind(id)
+        .bind(account_id)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
+}
+
 async fn destroy(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -371,6 +476,10 @@ impl ActivityFields for UpdateScenario {
         "tax_config_id",
         "collect_ledger",
     ];
+}
+
+impl ActivityFields for SetFunding {
+    const FIELDS: &'static [&'static str] = &["funding", "align_sweeps"];
 }
 
 impl ActivityFields for DuplicateRequest {

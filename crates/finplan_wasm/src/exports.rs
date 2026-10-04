@@ -389,6 +389,23 @@ pub fn quick_what_if(
     ))
 }
 
+/// See [`analysis::drawdown_json`].
+#[wasm_bindgen]
+pub fn drawdown(snapshot: &str, seed: &str, request: &str) -> Result<String, String> {
+    js(analysis::drawdown_json(snapshot, seed, request))
+}
+
+/// See [`analysis::drawdown_compare_json`].
+#[wasm_bindgen]
+pub fn drawdown_compare(
+    snapshot: &str,
+    body: &str,
+    progress: &js_sys::Function,
+) -> Result<String, String> {
+    let mut report = progress_fn(progress);
+    js(analysis::drawdown_compare_json(snapshot, body, &mut report))
+}
+
 /// See [`analysis::apply_what_if_json`].
 #[wasm_bindgen]
 pub fn apply_what_if(

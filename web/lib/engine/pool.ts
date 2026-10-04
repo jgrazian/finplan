@@ -62,6 +62,11 @@ export interface AnalysisRequest {
   quick: boolean;
 }
 
+/** A Drawdown question about one run: its snapshot, and a `DrawdownRequest` or `CompareRequest` JSON. */
+export type DrawdownJob =
+  | { compare: false; snapshot: string; /** The median path's decimal seed. */ seed: string; body: string }
+  | { compare: true; snapshot: string; body: string };
+
 export interface AnalysisHandle {
   /** The `AnalysisOutcome` (or `WhatIfOutcome`) JSON. */
   promise: Promise<string>;
@@ -88,6 +93,8 @@ export interface ComputePool {
   /** Stop the run now: queued batches fail, workers executing them are terminated. */
   cancelJob(job: string): void;
   analysis(request: AnalysisRequest, onProgress?: (done: number, total: number) => void): AnalysisHandle;
+  /** The `DrawdownBody` (or, compared, the `DrawdownComparison`) JSON; on one worker, off the store's thread. */
+  drawdown(job: DrawdownJob, onProgress?: (done: number, total: number) => void): AnalysisHandle;
   calibrate(snapshot: string, settings: string): Promise<CalibrationSample>;
   /** Terminate every worker and refuse further work. */
   terminate(): void;
@@ -323,6 +330,23 @@ export class WorkerPool implements ComputePool {
             throw stopped ?? failure;
           });
     return { promise, cancel: () => stop(cancelled("analysis")) };
+  }
+
+  drawdown(job: DrawdownJob, onProgress?: (done: number, total: number) => void): AnalysisHandle {
+    const owner = `drawdown-${this.nextId++}`;
+    const request: DistributiveOmit<ComputeRequest, "id"> = job.compare
+      ? { kind: "drawdown-compare", snapshot: job.snapshot, body: job.body }
+      : { kind: "drawdown", snapshot: job.snapshot, seed: job.seed, body: job.body };
+    const promise = this.task(owner, request, onProgress);
+    const stop = (error: LocalError) => {
+      const waiting = this.queue.filter((task) => task.owner === owner);
+      this.queue = this.queue.filter((task) => task.owner !== owner);
+      for (const task of waiting) task.fail(error);
+      for (const slot of [...this.slots]) {
+        if (slot.current?.owner === owner) this.drop(slot, error);
+      }
+    };
+    return { promise, cancel: () => stop(cancelled("drawdown")) };
   }
 
   /** One request on the next idle worker, under `owner`. */

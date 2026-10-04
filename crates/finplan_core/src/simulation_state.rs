@@ -39,6 +39,9 @@ pub struct SimulationState {
     /// Whether to collect ledger entries during simulation
     /// When false, ledger recording is skipped to save CPU/memory in batch runs
     pub collect_ledger: bool,
+
+    /// Sells investments to cover cash deficits at each settle step
+    pub funding: Option<crate::model::FundingPolicy>,
 }
 
 #[derive(Debug, Clone)]
@@ -572,6 +575,7 @@ impl SimulationState {
             diagnostics: crate::model::PathDiagnostics::default(),
             rng: RefCell::new(effect_rng),
             collect_ledger: params.collect_ledger,
+            funding: params.funding.clone(),
         };
         // The first tax year never rolls over, so build its brackets here.
         state.index_federal_brackets(start_date.year());

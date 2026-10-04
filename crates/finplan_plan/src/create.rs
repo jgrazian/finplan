@@ -66,6 +66,8 @@ pub fn new_plan(
         inflation_profile_id: body.inflation_profile_id,
         tax_config_id: body.tax_config_id,
         collect_ledger: 1,
+        funding_strategy: None,
+        funding_bracket_ceiling: None,
         created_at: now.to_string(),
         updated_at: now.to_string(),
     });
@@ -102,6 +104,7 @@ pub fn duplicate(
 fn empty_graph(scenario: ScenarioRow) -> ScenarioGraph {
     ScenarioGraph {
         scenario,
+        funding_excludes: Vec::new(),
         assets: Vec::new(),
         accounts: Vec::new(),
         bank: Default::default(),
@@ -147,6 +150,8 @@ pub fn library_view(library: &Library) -> ScenarioGraph {
         inflation_profile_id: None,
         tax_config_id: None,
         collect_ledger: 0,
+        funding_strategy: None,
+        funding_bracket_ceiling: None,
         created_at: String::new(),
         updated_at: String::new(),
     });

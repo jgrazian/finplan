@@ -137,9 +137,9 @@ async fn create(
             }
         }
     }
-    let id: i64 = sqlx::query_scalar("INSERT INTO scenarios(user_id,name,start_date,birth_date,duration_years,inflation_profile_id,tax_config_id,description) VALUES(?,?,?,?,?,?,?,?) RETURNING id")
+    let id: i64 = sqlx::query_scalar("INSERT INTO scenarios(user_id,name,start_date,birth_date,duration_years,inflation_profile_id,tax_config_id,description,funding_strategy) VALUES(?,?,?,?,?,?,?,?,?) RETURNING id")
         .bind(&user.id).bind(p.name.trim()).bind(&p.start_date).bind(&p.birth_date).bind(p.duration_years).bind(p.inflation_profile_id).bind(p.tax_config_id)
-        .bind(setup::description(&p)).fetch_one(&mut *tx).await?;
+        .bind(setup::description(&p)).bind(setup::funding_strategy(&p)).fetch_one(&mut *tx).await?;
     let changes = setup::lower(&p, annual_401k_contribution)?;
     if let Err(problems) =
         apply_steps_sql(&mut tx, id, &user.id, &[changes], &Created::new()).await?
