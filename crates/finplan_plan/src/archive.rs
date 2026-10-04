@@ -318,6 +318,8 @@ pub fn validate_graph(graph: &ScenarioGraph) -> PlanResult<()> {
     {
         return Err(PlanError::invalid("Archive funding policy is invalid."));
     }
+    crate::specs::scenarios::check_deferred_tax_rate(graph.scenario.deferred_tax_rate)
+        .map_err(|_| PlanError::invalid("Archive deferred tax rate is invalid."))?;
     compile::compile(graph)
         .map_err(|e| PlanError::invalid(format!("Archive plan cannot be compiled: {e}")))?;
     Ok(())
@@ -397,5 +399,38 @@ mod tests {
             bad(&mut g);
             assert!(validate_graph(&g).is_err());
         }
+    }
+
+    #[test]
+    fn the_deferred_tax_rate_travels_and_defaults_to_24_percent() {
+        // An archive from before the setting has none, and reads as 24%.
+        let old = pack(vec![graph()]).unwrap();
+        assert!(old.plans[0]["scenario"].get("deferred_tax_rate").is_none());
+        assert_eq!(unpack(&old).unwrap()[0].scenario.deferred_tax_rate, 0.24);
+
+        let mut plan = graph();
+        plan.scenario.deferred_tax_rate = 0.32;
+        let archive = pack(vec![plan.clone()]).unwrap();
+        assert_eq!(archive.plans[0]["scenario"]["deferred_tax_rate"], 0.32);
+        assert_eq!(
+            unpack(&archive).unwrap()[0].scenario.deferred_tax_rate,
+            0.32
+        );
+
+        for rate in [1.0, -0.01, f64::NAN] {
+            plan.scenario.deferred_tax_rate = rate;
+            assert!(validate_graph(&plan).is_err(), "{rate}");
+        }
+    }
+
+    #[test]
+    fn the_default_rate_leaves_the_input_hash_alone() {
+        let plan = graph();
+        let (_, hash) = crate::snapshot::snapshot(&plan).unwrap();
+        let mut set = plan.clone();
+        set.scenario.deferred_tax_rate = 0.24;
+        assert_eq!(crate::snapshot::snapshot(&set).unwrap().1, hash);
+        set.scenario.deferred_tax_rate = 0.3;
+        assert_ne!(crate::snapshot::snapshot(&set).unwrap().1, hash);
     }
 }

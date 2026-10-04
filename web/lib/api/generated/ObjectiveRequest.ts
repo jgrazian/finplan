@@ -8,4 +8,5 @@ export type ObjectiveRequest =
   | "max-parameter"
   | "min-parameter"
   | "max-median-net-worth"
-  | "max-floor-net-worth";
+  | "max-floor-net-worth"
+  | "max-median-after-tax";

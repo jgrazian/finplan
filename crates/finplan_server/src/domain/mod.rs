@@ -63,8 +63,8 @@ pub(crate) async fn clone_into_mapped(
         "INSERT INTO scenarios
             (user_id, name, description, start_date, birth_date, duration_years,
              inflation_profile_id, tax_config_id, collect_ledger,
-             funding_strategy, funding_bracket_ceiling)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) RETURNING id",
+             funding_strategy, funding_bracket_ceiling, deferred_tax_rate)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12) RETURNING id",
     )
     .bind(&src.user_id)
     .bind(name)
@@ -77,6 +77,7 @@ pub(crate) async fn clone_into_mapped(
     .bind(src.collect_ledger)
     .bind(&src.funding_strategy)
     .bind(src.funding_bracket_ceiling)
+    .bind(src.deferred_tax_rate)
     .fetch_one(&mut **tx)
     .await
     .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?;

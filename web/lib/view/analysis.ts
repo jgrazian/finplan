@@ -183,6 +183,16 @@ export function solveRows(outcome: SolveOutcome): SolveRow[] {
     best: best ? fmtCompact(best.p5) : "—",
     delta: best ? deltaMoney(best.p5 - outcome.plan.p5) : "—",
   });
+  const afterTax = outcome.plan.after_tax_p50;
+  if (afterTax != null) {
+    const to = best?.after_tax_p50;
+    rows.push({
+      label: "After-tax P50",
+      plan: fmtCompact(afterTax),
+      best: to == null ? "—" : fmtCompact(to),
+      delta: to == null ? "—" : deltaMoney(to - afterTax),
+    });
+  }
   return rows;
 }
 

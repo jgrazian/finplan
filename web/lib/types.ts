@@ -370,6 +370,8 @@ export interface ScenarioParams {
   taxConfig: string;
   /** Which configuration that name belongs to; null when the scenario has none. */
   taxConfigId: number | null;
+  /** What a tax-deferred balance is assumed to owe, 0–1, when the plan is valued after tax. */
+  deferredTaxRate: number;
 }
 
 /**

@@ -379,6 +379,7 @@ impl LazySweepResults {
             p50_yearly_net_worth,
             p50_lifetime_taxes,
             final_inflation_factor,
+            after_tax_final_percentiles: stats.after_tax_percentile_values.clone(),
         }
     }
 
@@ -623,6 +624,7 @@ pub fn sweep_simulate_lazy_with(
         min_final_net_worth: 0.0,
         max_final_net_worth: 0.0,
         percentile_values: Vec::new(),
+        after_tax_percentile_values: Vec::new(),
         converged: None,
         convergence_metric: None,
         convergence_value: None,

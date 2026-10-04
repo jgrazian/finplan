@@ -22,6 +22,8 @@ export function snapshotScenario(inputs: RunInputs, raw: Results): Scenario {
     last_run_at: null, last_success_rate: null,
     // Display-only: a historical axis does not need the funding policy.
     funding: null,
+    // A snapshot leaves the rate out at its default.
+    deferred_tax_rate: source?.deferred_tax_rate ?? 0.24,
   };
 }
 

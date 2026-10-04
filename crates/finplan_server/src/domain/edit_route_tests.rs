@@ -615,6 +615,7 @@ fn canonical(config: &finplan_core::config::SimulationConfig) -> Vec<String> {
         sorted(&config.parameters),
         format!("{:?}", config.collect_ledger),
         format!("{:?}", config.funding),
+        format!("{:?}", config.deferred_tax_rate),
     ]
 }
 
@@ -1611,6 +1612,8 @@ async fn scenario_settings_match_the_route() {
         json!({"inflation_profile_id": inflation, "description": "Steady prices"}),
         json!({"collect_ledger": false}),
         json!({"name": " Renamed ", "start_date": "2026-03-01"}),
+        json!({"deferred_tax_rate": 0.32}),
+        json!({"deferred_tax_rate": 0.0, "tax_config_id": tax}),
     ] {
         let body = update(edit.clone());
         {
@@ -1626,6 +1629,11 @@ async fn scenario_settings_match_the_route() {
     }
     assert_eq!(mem.tax_brackets.len(), 2);
     assert_eq!(mem.inflation_profile_name.as_deref(), Some("Steady"));
+    assert_eq!(mem.scenario.deferred_tax_rate, 0.0);
+    assert_eq!(
+        compile::compile(&mem).unwrap().config.deferred_tax_rate,
+        0.0
+    );
 
     // Refused alike (the assumption case differs in kind, not in outcome).
     for edit in [
@@ -1635,6 +1643,8 @@ async fn scenario_settings_match_the_route() {
         json!({"name": "  "}),
         json!({"tax_config_id": 9999}),
         json!({"inflation_profile_id": 9999}),
+        json!({"deferred_tax_rate": 1.0}),
+        json!({"deferred_tax_rate": -0.1}),
     ] {
         let body = update(edit.clone());
         let mut conn = plan.db.acquire().await.unwrap();
@@ -2835,7 +2845,13 @@ async fn duplicates_match_the_route() {
     plan.create(&plan.branching()).await.unwrap();
     plan.create(&plan.drawdown()).await.unwrap();
     plan.create(&plan.move_house()).await.unwrap();
+    sqlx::query("UPDATE scenarios SET deferred_tax_rate = 0.3 WHERE id = ?1")
+        .bind(plan.id)
+        .execute(&plan.db)
+        .await
+        .unwrap();
     let graph = plan.load().await;
+    assert_eq!(graph.scenario.deferred_tax_rate, 0.3);
 
     let id = super::clone_scenario(&plan.db, &graph, "Copy")
         .await
@@ -2885,6 +2901,7 @@ async fn duplicates_match_the_route() {
             s.collect_ledger,
             s.funding_strategy.clone(),
             s.funding_bracket_ceiling,
+            s.deferred_tax_rate,
         )
     };
     assert_eq!(scenario(&stored), scenario(&mem));

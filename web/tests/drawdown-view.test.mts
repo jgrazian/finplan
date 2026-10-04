@@ -39,6 +39,8 @@ const choice = (years: DrawdownYear[]): DrawdownChoice => ({
     lifetime_tax: 0,
     ending_balance: 1000,
     ending_balance_real: 800,
+    after_tax_ending_balance: 900,
+    after_tax_ending_balance_real: 720,
     markers: [{ kind: "income", id: 7, year: 2041 }, { kind: "rmd", id: 2, year: 2042 }],
   },
   years,
@@ -156,6 +158,7 @@ test("the comparison picks the best of each column, unless all tie", () => {
     overlay: false,
     success_rate: s,
     median_final_net_worth: e,
+    median_after_tax_ending_balance: e,
     median_path_tax: t,
   });
   const lines = comparisonLines(
@@ -190,4 +193,36 @@ test("an RMD year marks the distribution after tax, from zero", () => {
   assert.deepEqual(panel.rmd, { amount: 80, afterTax: 70, accounts: ["Brokerage"] });
   assert.match(panel.note?.text ?? "", /required \$80 RMD exceeds the need by \$10/);
   assert.equal(drawdownView(b, b.choices[0], "share", "nominal").columns[1].rmd, undefined);
+});
+
+test("the comparison headlines the after-tax balance and keeps pre-tax for the hover", () => {
+  const row = (strategy: "TaxDeferredFirst" | "TaxFreeFirst", preTax: number, afterTax: number) => ({
+    choice: { kind: "Strategy" as const, strategy },
+    overlay: false,
+    success_rate: 0.9,
+    median_final_net_worth: preTax,
+    median_final_net_worth_real: preTax / 2,
+    median_after_tax_ending_balance: afterTax,
+    median_after_tax_ending_balance_real: afterTax / 2,
+    median_path_tax: 10,
+  });
+  // Drawing the 401(k) first ends smaller before tax but larger after it.
+  const comparison = {
+    iterations: 200,
+    retirement: { year: 2041, source: "start" as const },
+    rows: [row("TaxDeferredFirst", 900, 850), row("TaxFreeFirst", 1000, 790)],
+  };
+  const lines = comparisonLines(comparison, "nominal");
+  assert.deepEqual(lines.map((l) => l.afterTaxEndingBalance), [850, 790]);
+  assert.deepEqual(lines.map((l) => l.endingBalance), [900, 1000]);
+  assert.deepEqual(lines.map((l) => l.bestEnding), [true, false]);
+  const real = comparisonLines(comparison, "real");
+  assert.deepEqual(real.map((l) => l.afterTaxEndingBalance), [425, 395]);
+  assert.deepEqual(real.map((l) => l.endingBalance), [450, 500]);
+});
+
+test("the side panel's balance carries the after-tax figure in the chosen basis", () => {
+  const b = body([year(2041)]);
+  assert.equal(drawdownView(b, b.choices[0], "usd", "nominal").endBalanceAfterTax, 900);
+  assert.equal(drawdownView(b, b.choices[0], "usd", "real").endBalanceAfterTax, 720);
 });

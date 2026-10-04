@@ -76,6 +76,7 @@ pub fn scenario(graph: &ScenarioGraph, extras: ScenarioExtras) -> Scenario {
         last_run_at: extras.last_run_at,
         last_success_rate: extras.last_success_rate,
         funding: graph.funding(),
+        deferred_tax_rate: row.deferred_tax_rate,
     }
 }
 

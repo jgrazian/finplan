@@ -392,6 +392,7 @@ mod tests {
                 min_final_net_worth: 0.0,
                 max_final_net_worth: 0.0,
                 percentile_values: vec![],
+                after_tax_percentile_values: vec![],
                 converged: None,
                 convergence_metric: None,
                 convergence_value: None,

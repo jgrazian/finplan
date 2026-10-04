@@ -305,6 +305,8 @@ export interface DrawdownView {
   /** Lifetime tax on withdrawals over lifetime spending. */
   lifetimeTaxShare: number;
   endBalance: number;
+  /** The same with tax-deferred balances net of the plan's deferred tax rate. */
+  endBalanceAfterTax: number;
   endAge?: number;
   endYear: number;
   unit: DrawdownUnit;
@@ -505,6 +507,8 @@ export function drawdownView(
     lifetimeTax,
     lifetimeTaxShare: lifetimeSpending > 0 ? lifetimeTax / lifetimeSpending : 0,
     endBalance: basis === "real" ? choice.summary.ending_balance_real : choice.summary.ending_balance,
+    endBalanceAfterTax:
+      basis === "real" ? choice.summary.after_tax_ending_balance_real : choice.summary.after_tax_ending_balance,
     endAge: last ? ageIn(body, last.year) : undefined,
     endYear: last?.year ?? body.retirement.year,
     unit,
@@ -613,6 +617,9 @@ export interface ComparisonLine {
   label: string;
   choice: StrategyChoice;
   success: number;
+  /** Median ending balance with tax-deferred money net of the plan's rate: the headline. */
+  afterTaxEndingBalance: number;
+  /** The same before tax, for the hover. */
   endingBalance: number;
   tax?: number;
   bestSuccess: boolean;
@@ -621,8 +628,14 @@ export interface ComparisonLine {
 }
 
 export function comparisonLines(comparison: DrawdownComparison, basis: DrawdownBasis): ComparisonLine[] {
-  const ending = (r: ComparisonRow) =>
+  const preTax = (r: ComparisonRow) =>
     basis === "real" ? (r.median_final_net_worth_real ?? r.median_final_net_worth) : r.median_final_net_worth;
+  // Judged after tax: before tax, paying tax early (a conversion, a
+  // tax-deferred-first draw) always looks like losing money.
+  const ending = (r: ComparisonRow) =>
+    basis === "real"
+      ? (r.median_after_tax_ending_balance_real ?? r.median_after_tax_ending_balance)
+      : r.median_after_tax_ending_balance;
   const rows = comparison.rows;
   const bestSuccess = Math.max(...rows.map((r) => r.success_rate));
   const bestEnding = Math.max(...rows.map(ending));
@@ -638,7 +651,8 @@ export function comparisonLines(comparison: DrawdownComparison, basis: DrawdownB
     label: choiceLabel(r.choice),
     choice: r.choice,
     success: r.success_rate,
-    endingBalance: ending(r),
+    afterTaxEndingBalance: ending(r),
+    endingBalance: preTax(r),
     tax: r.median_path_tax ?? undefined,
     bestSuccess: successVaries && r.success_rate === bestSuccess,
     bestEnding: endingVaries && ending(r) === bestEnding,

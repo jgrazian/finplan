@@ -42,6 +42,8 @@ struct Folded {
     years: Vec<Sparse>,
     ending_balance: f64,
     ending_balance_real: f64,
+    after_tax_ending_balance: f64,
+    after_tax_ending_balance_real: f64,
 }
 
 /// Total of the overdrawn bank balances at a snapshot, as a positive number.
@@ -73,6 +75,8 @@ fn fold(compiled: &CompiledScenario, result: &SimulationResult, from_year: i64) 
             years: Vec::new(),
             ending_balance: 0.0,
             ending_balance_real: 0.0,
+            after_tax_ending_balance: 0.0,
+            after_tax_ending_balance_real: 0.0,
         };
     };
     let start_year = year_of(first);
@@ -178,11 +182,14 @@ fn fold(compiled: &CompiledScenario, result: &SimulationResult, from_year: i64) 
     }
 
     let ending_balance: f64 = last.accounts.iter().map(AccountSnapshot::total_value).sum();
+    let after_tax_ending_balance = compiled.config.after_tax_final_net_worth(result);
     let inflation = rows.values().last().map_or(1.0, |r| r.inflation);
     Folded {
         years: rows.into_values().collect(),
         ending_balance,
         ending_balance_real: ending_balance / inflation,
+        after_tax_ending_balance,
+        after_tax_ending_balance_real: after_tax_ending_balance / inflation,
     }
 }
 
@@ -312,8 +319,13 @@ pub fn project(
     let choices = folded
         .into_iter()
         .map(|(choice, overlay, folded)| {
-            let (ending_balance, ending_balance_real) =
-                (folded.ending_balance, folded.ending_balance_real);
+            let Folded {
+                ending_balance,
+                ending_balance_real,
+                after_tax_ending_balance,
+                after_tax_ending_balance_real,
+                ..
+            } = folded;
             let (years, markers) = densify(folded, &accounts, &income_sources);
             DrawdownChoice {
                 choice,
@@ -323,6 +335,8 @@ pub fn project(
                     lifetime_tax: years.iter().map(|y| y.total_tax).sum::<f64>() + 0.0,
                     ending_balance,
                     ending_balance_real,
+                    after_tax_ending_balance,
+                    after_tax_ending_balance_real,
                     first_shortfall_year: years.iter().find(|y| y.shortfall > EPS).map(|y| y.year),
                     markers,
                 },

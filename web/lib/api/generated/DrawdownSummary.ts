@@ -12,6 +12,12 @@ export type DrawdownSummary = {
    */
   ending_balance: number;
   ending_balance_real: number;
+  /**
+   * The same with tax-deferred balances counted net of the plan's
+   * `deferred_tax_rate`: what the money is worth to whoever spends it.
+   */
+  after_tax_ending_balance: number;
+  after_tax_ending_balance_real: number;
   first_shortfall_year?: number | null;
   markers: Array<DrawdownMarker>;
 };

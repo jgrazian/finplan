@@ -340,6 +340,7 @@ fn placeholder(mc: &MonteCarloConfig) -> StatsRun {
         min_final_net_worth: 0.0,
         max_final_net_worth: 0.0,
         percentile_values: mc.percentiles.iter().map(|&p| (p, 0.0)).collect(),
+        after_tax_percentile_values: mc.percentiles.iter().map(|&p| (p, 0.0)).collect(),
         converged: None,
         convergence_metric: None,
         convergence_value: None,

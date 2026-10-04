@@ -399,6 +399,11 @@ pub struct MonteCarloStats {
     pub max_final_net_worth: f64,
     /// Final net worth at each requested percentile
     pub percentile_values: Vec<(f64, f64)>, // (percentile, value)
+    /// After-tax final net worth (`after_tax_final_net_worth`) at the same
+    /// percentiles, ranked on its own. Empty on statistics produced before it
+    /// was measured.
+    #[serde(default)]
+    pub after_tax_percentile_values: Vec<(f64, f64)>,
     /// If convergence mode was used, indicates whether convergence was achieved.
     /// None if fixed iteration mode was used.
     #[serde(default)]
@@ -865,6 +870,41 @@ pub fn final_net_worth(result: &SimulationResult) -> f64 {
     result.wealth_snapshots.last().map_or(0.0, |snap| {
         snap.accounts.iter().map(AccountSnapshot::total_value).sum()
     })
+}
+
+/// Final net worth after the tax a pre-tax balance still owes: every account
+/// in `tax_deferred` counts at `1 - rate` of its value, everything else
+/// (taxable, tax-free, bank, property, debt) at its value.
+#[must_use]
+pub fn after_tax_final_net_worth(
+    result: &SimulationResult,
+    tax_deferred: &[AccountId],
+    rate: f64,
+) -> f64 {
+    result.wealth_snapshots.last().map_or(0.0, |snap| {
+        snap.accounts
+            .iter()
+            .map(|a| {
+                let value = a.total_value();
+                if tax_deferred.contains(&a.account_id) {
+                    value * (1.0 - rate)
+                } else {
+                    value
+                }
+            })
+            .sum()
+    })
+}
+
+impl MonteCarloStats {
+    /// After-tax final net worth at a percentile, if the run measured it.
+    #[must_use]
+    pub fn after_tax_percentile(&self, percentile: f64) -> Option<f64> {
+        self.after_tax_percentile_values
+            .iter()
+            .find(|(p, _)| (*p - percentile).abs() < 1e-6)
+            .map(|(_, v)| *v)
+    }
 }
 
 // ============================================================================

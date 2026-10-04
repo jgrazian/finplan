@@ -43,6 +43,9 @@ pub enum SolveObjective {
     /// The highest *floor*: the 5th-percentile terminal net worth. Picks the
     /// setting whose bad outcomes are least bad, rather than its typical one.
     MaxFloorNetWorth,
+    /// The highest median after-tax terminal net worth: tax-deferred balances
+    /// count net of the plan's `deferred_tax_rate`.
+    MaxMedianAfterTax,
 }
 
 impl SolveObjective {
@@ -60,6 +63,7 @@ impl SolveObjective {
             Self::MinParameter => "Minimum sufficient value",
             Self::MaxMedianNetWorth => "Max median terminal net worth",
             Self::MaxFloorNetWorth => "Max P5 terminal net worth",
+            Self::MaxMedianAfterTax => "Max median after-tax ending balance",
         }
     }
 }
@@ -109,6 +113,10 @@ pub struct SolveProbe {
     /// Terminal net worth by percentile, as `(percentile, value)` in nominal
     /// dollars — the same pairs a Monte Carlo run reports.
     pub final_percentiles: Vec<(f64, f64)>,
+    /// After-tax terminal net worth by percentile, the same way. Empty on
+    /// probes recorded before it was measured.
+    #[serde(default)]
+    pub after_tax_percentiles: Vec<(f64, f64)>,
     /// Whether this probe clears the constraint.
     pub feasible: bool,
     /// The quantity being optimised, at this probe.
@@ -123,6 +131,15 @@ impl SolveProbe {
     #[must_use]
     pub fn percentile(&self, percentile: f64) -> Option<f64> {
         self.final_percentiles
+            .iter()
+            .find(|(p, _)| (p - percentile).abs() < 1e-6)
+            .map(|(_, v)| *v)
+    }
+
+    /// After-tax terminal net worth at a percentile, if the run reported one.
+    #[must_use]
+    pub fn after_tax_percentile(&self, percentile: f64) -> Option<f64> {
+        self.after_tax_percentiles
             .iter()
             .find(|(p, _)| (p - percentile).abs() < 1e-6)
             .map(|(_, v)| *v)
@@ -373,6 +390,7 @@ fn probe_from(
         }
         SolveObjective::MaxMedianNetWorth => percentile(0.50),
         SolveObjective::MaxFloorNetWorth => percentile(0.05),
+        SolveObjective::MaxMedianAfterTax => stats.after_tax_percentile(0.50).unwrap_or(0.0),
     };
 
     SolveProbe {
@@ -380,6 +398,7 @@ fn probe_from(
         success_rate: stats.success_rate,
         funding_success_rate: stats.funding_success_rate,
         final_percentiles: stats.percentile_values.clone(),
+        after_tax_percentiles: stats.after_tax_percentile_values.clone(),
         feasible,
         objective_value,
         bracket,
@@ -535,6 +554,7 @@ fn finish(
             success_rate: 0.0,
             funding_success_rate: None,
             final_percentiles: Vec::new(),
+            after_tax_percentiles: Vec::new(),
             feasible: false,
             objective_value: 0.0,
             bracket: None,

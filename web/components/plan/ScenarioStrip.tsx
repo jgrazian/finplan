@@ -13,7 +13,8 @@ type Editable =
   | "durationYears"
   | "birthDate"
   | "inflationProfileId"
-  | "taxConfigId";
+  | "taxConfigId"
+  | "deferredTaxRate";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 58%, transparent)";
 
@@ -189,9 +190,10 @@ export function ScenarioStrip({
           style={{
             padding: "0 20px 14px",
             display: "grid",
-            // The three dates are short and the two assumption names are not,
-            // so the pickers get the room rather than an even fifth each.
-            gridTemplateColumns: "0.85fr 0.7fr 0.85fr 1.3fr 1.3fr",
+            // The three dates and the rate are short and the two assumption
+            // names are not, so the pickers get the room rather than an even
+            // sixth each.
+            gridTemplateColumns: "0.85fr 0.7fr 0.85fr 1.3fr 1.3fr 0.75fr",
             gap: 12,
             alignItems: "start",
           }}
@@ -299,6 +301,25 @@ export function ScenarioStrip({
             />
             {refused.taxConfigId && <UnsavedNote>{refused.taxConfigId}</UnsavedNote>}
             {tax && <Note>{tax.note}</Note>}
+          </Field>
+
+          <Field
+            label="Tax on pre-tax money"
+            className={refused.deferredTaxRate ? "field-unsaved" : undefined}
+          >
+            <NumberInput
+              style={{ minHeight: 30 }}
+              value={Math.round(shown.deferredTaxRate * 1000) / 10}
+              suffix="%"
+              decimals={1}
+              min={0}
+              max={99.9}
+              readOnly={readOnly}
+              aria-label="Tax rate on tax-deferred balances"
+              onCommit={(percent) => void save({ deferredTaxRate: percent / 100 })}
+            />
+            {refused.deferredTaxRate && <UnsavedNote>{refused.deferredTaxRate}</UnsavedNote>}
+            <Note>What a 401(k) or IRA dollar is assumed to owe on the way out, for after-tax ending balance.</Note>
           </Field>
 
           {!readOnly && onDelete && unsaved === 0 && (

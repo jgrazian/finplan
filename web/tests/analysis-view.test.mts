@@ -145,6 +145,27 @@ test("the solve comparison quotes the parameter, then what moved with it", () =>
   assert.equal(rows[3].delta.startsWith("−"), true);
 });
 
+test("a solve that measured the after-tax median adds it to the comparison", () => {
+  const best = {
+    values: [12_000],
+    feasible: true,
+    bracket_low: null,
+    bracket_high: null,
+    success_rate: 0.95,
+    funding_success_rate: null,
+    p5: 50,
+    p50: 900,
+    p95: 4_000,
+    after_tax_p50: 700,
+  };
+  const outcome = solve(best);
+  outcome.plan = { ...outcome.plan, after_tax_p50: 800 };
+  const row = solveRows(outcome).at(-1)!;
+  assert.equal(row.label, "After-tax P50");
+  assert.equal(row.best, "$700");
+  assert.equal(row.delta.startsWith("−"), true);
+});
+
 test("no feasible answer reads as one, rather than as a zero", () => {
   const outcome = solve(null);
   assert.equal(solveHeadline(outcome), "no answer");

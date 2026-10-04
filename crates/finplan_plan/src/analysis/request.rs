@@ -43,6 +43,9 @@ pub enum ObjectiveRequest {
     MaxMedianNetWorth,
     /// The highest 5th-percentile terminal net worth: the best floor.
     MaxFloorNetWorth,
+    /// The highest median after-tax terminal net worth: tax-deferred balances
+    /// count net of the plan's deferred tax rate.
+    MaxMedianAfterTax,
 }
 
 impl From<ObjectiveRequest> for SolveObjective {
@@ -52,6 +55,7 @@ impl From<ObjectiveRequest> for SolveObjective {
             ObjectiveRequest::MinParameter => Self::MinParameter,
             ObjectiveRequest::MaxMedianNetWorth => Self::MaxMedianNetWorth,
             ObjectiveRequest::MaxFloorNetWorth => Self::MaxFloorNetWorth,
+            ObjectiveRequest::MaxMedianAfterTax => Self::MaxMedianAfterTax,
         }
     }
 }

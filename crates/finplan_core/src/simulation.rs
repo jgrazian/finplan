@@ -13,7 +13,8 @@ use crate::model::{
     EventEffect, EventTrigger, IncomeType, LedgerEntry, LoanDetail, LotMethod, MeanAccumulators,
     MonteCarloConfig, MonteCarloProgress, MonteCarloStats, MonteCarloSummary,
     MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus,
-    TransferAmount, WarningKind, WithdrawalSources, YearlyCashFlowSummary, final_net_worth,
+    TransferAmount, WarningKind, WithdrawalSources, YearlyCashFlowSummary,
+    after_tax_final_net_worth, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
 use rand::{RngCore, SeedableRng};
@@ -1006,6 +1007,9 @@ pub struct BatchOutput {
     pub index: usize,
     /// `(iteration seed, terminal net worth)` in iteration order.
     pub results: Vec<(u64, f64)>,
+    /// Each iteration's after-tax terminal net worth, aligned to `results`.
+    #[serde(default)]
+    pub after_tax: Vec<f64>,
     pub stats: OnlineStats,
     pub mean_accumulators: Option<MeanAccumulators>,
     pub real_accumulator: Option<RealAccumulator>,
@@ -1020,6 +1024,8 @@ pub struct BatchOutput {
 pub struct PreparedRun {
     /// The plan with the ledger off. Funding checks and warnings still run.
     batch_params: SimulationConfig,
+    /// The plan's tax-deferred accounts, for each path's after-tax value.
+    tax_deferred: Vec<AccountId>,
     /// An empty real-wealth accumulator on the plan's date grid; each batch
     /// starts from a copy. `None` when real quantiles are not wanted.
     real_template: Option<RealAccumulator>,
@@ -1077,6 +1083,7 @@ pub fn prepare_run_with(
     let mut batch_params = params.clone();
     batch_params.collect_ledger = false;
     Ok(PreparedRun {
+        tax_deferred: batch_params.tax_deferred_accounts(),
         batch_params,
         real_template: collect_real.then(|| RealAccumulator::new(&template)),
         compute_means: config.compute_mean,
@@ -1132,6 +1139,7 @@ pub fn run_batch_observed(
     let mut local_real = prepared.real_template.clone();
     let mut local_funding = crate::model::FundingAccumulator::default();
     let mut local_results = Vec::with_capacity(spec.iterations);
+    let mut local_after_tax = Vec::with_capacity(spec.iterations);
 
     for _ in 0..spec.iterations {
         if cancelled() {
@@ -1155,6 +1163,11 @@ pub fn run_batch_observed(
         local_stats.add(fnw, result.warnings.is_empty());
         local_funding.add(seed, &result, fnw);
         local_results.push((seed, fnw));
+        local_after_tax.push(after_tax_final_net_worth(
+            &result,
+            &prepared.tax_deferred,
+            prepared.batch_params.deferred_tax_rate,
+        ));
 
         if prepared.compute_means {
             if let Some(ref mut acc) = local_acc {
@@ -1177,6 +1190,7 @@ pub fn run_batch_observed(
     Ok(BatchOutput {
         index: spec.index,
         results: local_results,
+        after_tax: local_after_tax,
         stats: local_stats,
         mean_accumulators: local_acc,
         real_accumulator: local_real,
@@ -1199,6 +1213,8 @@ pub struct MonteCarloCoordinator {
     convergence_tracker: Option<ConvergenceTracker>,
 
     seed_results: Vec<(u64, f64)>,
+    /// After-tax terminal net worth per iteration, in no particular order.
+    after_tax_results: Vec<f64>,
     online_stats: OnlineStats,
     mean_accumulators: Option<MeanAccumulators>,
     real_accumulator: Option<RealAccumulator>,
@@ -1229,6 +1245,7 @@ impl MonteCarloCoordinator {
                 .as_ref()
                 .map(|c| ConvergenceTracker::new(c.metric, c.relative_threshold)),
             seed_results: Vec::new(),
+            after_tax_results: Vec::new(),
             online_stats: OnlineStats::new(),
             mean_accumulators: None,
             real_accumulator: None,
@@ -1309,10 +1326,11 @@ impl MonteCarloCoordinator {
         };
         outputs.sort_by_key(|o| o.index);
         let matches_round = outputs.len() == specs.len()
-            && outputs
-                .iter()
-                .zip(specs)
-                .all(|(o, s)| o.index == s.index && o.results.len() == s.iterations);
+            && outputs.iter().zip(specs).all(|(o, s)| {
+                o.index == s.index
+                    && o.results.len() == s.iterations
+                    && o.after_tax.len() == s.iterations
+            });
         if !matches_round {
             return Err(SimulationError::Config(
                 "batch outputs do not match the round".into(),
@@ -1330,6 +1348,7 @@ impl MonteCarloCoordinator {
                 }
             }
             self.seed_results.extend(out.results);
+            self.after_tax_results.extend(out.after_tax);
             self.online_stats.merge(&out.stats);
             if let Some(acc) = out.mean_accumulators {
                 if let Some(ref mut existing) = self.mean_accumulators {
@@ -1414,6 +1433,8 @@ impl MonteCarloCoordinator {
 
         let mut percentile_values = Vec::new();
         let mut percentile_seeds = Vec::new();
+        let mut after_tax_percentile_values = Vec::new();
+        self.after_tax_results.sort_by(f64::total_cmp);
 
         if actual_iterations > 0 {
             for &p in &self.percentiles {
@@ -1422,6 +1443,7 @@ impl MonteCarloCoordinator {
                 let (seed, value) = seed_results[idx];
                 percentile_values.push((p, value));
                 percentile_seeds.push((p, seed));
+                after_tax_percentile_values.push((p, self.after_tax_results[idx]));
             }
         }
 
@@ -1447,6 +1469,7 @@ impl MonteCarloCoordinator {
             min_final_net_worth,
             max_final_net_worth,
             percentile_values,
+            after_tax_percentile_values,
             converged: self.convergence_metric.map(|_| self.converged),
             convergence_metric: self.convergence_metric,
             convergence_value: self.final_convergence_value,

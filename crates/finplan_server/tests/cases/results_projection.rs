@@ -551,6 +551,47 @@ async fn a_run_projected_without_its_ledger_keeps_everything_else() {
     assert_same("a ledgerless projection", &without, &full);
 }
 
+/// `PATCH /scenarios/{id}` sets the deferred tax rate; it reads back, travels
+/// in the archive and survives a duplicate.
+#[tokio::test]
+async fn the_deferred_tax_rate_is_set_read_back_and_carried() {
+    let mut app = TestApp::new().await;
+    app.login_as("deferred-tax@example.com").await;
+    let (scenario_id, _, _) = app.seed_scenario().await;
+    let path = format!("/api/scenarios/{scenario_id}");
+    assert_eq!(app.get(&path).await.1["deferred_tax_rate"], 0.24);
+
+    let (status, set) = app.patch(&path, json!({"deferred_tax_rate": 0.32})).await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert_eq!(set["deferred_tax_rate"], 0.32);
+    for bad in [json!(1.0), json!(-0.1)] {
+        let (status, _) = app.patch(&path, json!({"deferred_tax_rate": bad})).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    // Other settings leave it alone.
+    let (_, renamed) = app.patch(&path, json!({"description": "Taxed"})).await;
+    assert_eq!(renamed["deferred_tax_rate"], 0.32);
+
+    let (_, archive) = app.get(&format!("{path}/archive")).await;
+    assert_eq!(archive["plans"][0]["scenario"]["deferred_tax_rate"], 0.32);
+    let (status, imported) = app
+        .post(
+            "/api/archives/import",
+            json!({"archive": archive, "name_prefix": "Restored ", "request_id": "dtr"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{imported}");
+    let restored = imported["scenario_ids"][0].as_i64().unwrap();
+    let (_, restored) = app.get(&format!("/api/scenarios/{restored}")).await;
+    assert_eq!(restored["deferred_tax_rate"], 0.32);
+
+    let (status, copy) = app
+        .post(&format!("{path}/duplicate"), json!({"name": "Copy"}))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{copy}");
+    assert_eq!(copy["deferred_tax_rate"], 0.32);
+}
+
 /// `PUT /scenarios/{id}/funding` writes the policy, and the scenario reads it back.
 #[tokio::test]
 async fn the_funding_policy_is_set_read_back_and_cleared() {

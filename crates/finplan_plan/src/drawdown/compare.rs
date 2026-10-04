@@ -26,9 +26,9 @@ const PARALLEL_BATCHES: usize = 4;
 /// [`ANALYSIS_SEED`] (common random numbers: differences come from the
 /// strategy, not from sampling noise).
 ///
-/// Per strategy it reports success rates and the median final net worth, plus
-/// the tax and real value on the median path (one more simulation each: the
-/// Monte Carlo keeps no per-iteration tax).
+/// Per strategy it reports success rates and the median final net worth, pre-
+/// and after-tax, plus the tax and real value on the median path (one more
+/// simulation each: the Monte Carlo keeps no per-iteration tax).
 pub fn compare(
     graph: &ScenarioGraph,
     body: &CompareRequest,
@@ -70,20 +70,23 @@ pub fn compare(
             .iter()
             .find(|(p, _)| (*p - 0.5).abs() < 1e-9)
             .map_or(stats.mean_final_net_worth, |(_, v)| *v);
+        // Every iteration is valued after tax as it runs; without that value
+        // (none to rank) the pre-tax median stands in.
+        let after_tax = stats.after_tax_percentile(0.5).unwrap_or(median);
         let path = seeds
             .iter()
             .find(|(p, _)| (*p - 0.5).abs() < 1e-9)
             .and_then(|(_, seed)| simulate(&config, *seed).ok());
+        let inflation = path.as_ref().and_then(|p| p.cumulative_inflation.last());
         rows.push(ComparisonRow {
             choice,
             overlay,
             success_rate: stats.success_rate,
             funding_success_rate: stats.funding_success_rate,
             median_final_net_worth: median,
-            median_final_net_worth_real: path
-                .as_ref()
-                .and_then(|p| p.cumulative_inflation.last())
-                .map(|factor| median / factor),
+            median_final_net_worth_real: inflation.map(|factor| median / factor),
+            median_after_tax_ending_balance: after_tax,
+            median_after_tax_ending_balance_real: inflation.map(|factor| after_tax / factor),
             median_path_tax: path.as_ref().map(|p| {
                 p.yearly_taxes
                     .iter()
