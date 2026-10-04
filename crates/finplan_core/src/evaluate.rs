@@ -6,7 +6,10 @@ use crate::error::{
     AccountTypeError, LookupError, StateEventError, TransferEvaluationError, TriggerEventError,
 };
 use crate::expression::EvaluationContext;
-use crate::liquidation::{LiquidationParams, get_current_price, liquidate_investment_into};
+use crate::liquidation::{
+    CashWithdrawalParams, LiquidationParams, get_current_price, liquidate_investment_into,
+    withdraw_cash_into,
+};
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
     EventId, EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TransferAmount,
@@ -307,6 +310,12 @@ pub enum EvalEvent {
         proceeds: f64,
         short_term_gain: f64,
         long_term_gain: f64,
+    },
+
+    /// Take uninvested cash out of an investment account (gross).
+    CashWithdrawal {
+        from: AccountId,
+        amount: f64,
     },
 
     // === Balance Operations ===
@@ -765,26 +774,26 @@ pub fn evaluate_effect_into(
             let mut added_income = 0.0;
             let requested = remaining;
 
+            // Cash each account has given up to this sweep so far. A ProRata
+            // or bracket-filling sweep can visit an account twice, and
+            // `state` only moves once the effects apply.
+            let mut cash_drawn: Vec<(AccountId, f64)> = Vec::new();
+
             // Step 2: Liquidate from source accounts until target is met
             for (from_account, income_ceiling, share) in source_accounts {
                 if remaining < 0.01 {
                     break;
                 }
 
-                let sale = match income_ceiling {
-                    None => EventEffect::AssetSale {
-                        from: from_account,
-                        asset_id: match sources {
-                            WithdrawalSources::SingleAsset(coord) => Some(coord.asset_id),
-                            _ => None,
-                        },
-                        amount: TransferAmount::fixed(match share {
+                // What this step may take, and whether that is gross or net.
+                let (mut step, step_mode) = match income_ceiling {
+                    None => (
+                        match share {
                             Some(fraction) => remaining.min(requested * fraction),
                             None => remaining,
-                        }),
-                        amount_mode: *amount_mode,
-                        lot_method: *lot_method,
-                    },
+                        },
+                        *amount_mode,
+                    ),
                     Some(ceiling) => {
                         let ytd = state.taxes.ytd_tax.ordinary_income + added_income;
                         let room = ceiling - ytd;
@@ -800,17 +809,62 @@ pub fn evaluate_effect_into(
                                 state.taxes.config.state_rate,
                             ),
                         };
-                        EventEffect::AssetSale {
-                            from: from_account,
-                            asset_id: None,
-                            amount: TransferAmount::fixed(wanted.min(room)),
-                            amount_mode: AmountMode::Gross,
-                            lot_method: *lot_method,
-                        }
+                        (wanted.min(room), AmountMode::Gross)
                     }
                 };
 
                 let before_len = out.len();
+
+                // Cash first: the account's own cash before its holdings. A
+                // single-asset sweep names the holding to sell, and cash
+                // already in the destination has nowhere to go.
+                if !matches!(sources, WithdrawalSources::SingleAsset(_))
+                    && from_account != *to
+                    && let Some(Account {
+                        flavor: AccountFlavor::Investment(investment),
+                        ..
+                    }) = state.portfolio.accounts.get(&from_account)
+                {
+                    let drawn = cash_drawn.iter().position(|(id, _)| *id == from_account);
+                    let cash = withdraw_cash_into(
+                        &CashWithdrawalParams {
+                            account_id: from_account,
+                            investment,
+                            already_drawn: drawn.map_or(0.0, |i| cash_drawn[i].1),
+                            to_account: from_account, // Like a sale's proceeds
+                            amount_mode: step_mode,
+                            tax_config: &state.taxes.config,
+                            ytd_ordinary_income: state.taxes.ytd_tax.ordinary_income + added_income,
+                            early_withdrawal_penalty_applies: state
+                                .timeline
+                                .is_below_early_withdrawal_age(),
+                        },
+                        step,
+                        out,
+                    );
+                    match drawn {
+                        Some(i) => cash_drawn[i].1 += cash.gross_amount,
+                        None if cash.gross_amount > 0.0 => {
+                            cash_drawn.push((from_account, cash.gross_amount));
+                        }
+                        None => {}
+                    }
+                    step -= match step_mode {
+                        AmountMode::Gross => cash.gross_amount,
+                        AmountMode::Net => cash.net_proceeds,
+                    };
+                }
+
+                let sale = EventEffect::AssetSale {
+                    from: from_account,
+                    asset_id: match sources {
+                        WithdrawalSources::SingleAsset(coord) => Some(coord.asset_id),
+                        _ => None,
+                    },
+                    amount: TransferAmount::fixed(step),
+                    amount_mode: step_mode,
+                    lot_method: *lot_method,
+                };
                 evaluate_effect_into(&sale, state, out)?;
                 added_income += out[before_len..]
                     .iter()
@@ -922,14 +976,16 @@ pub fn evaluate_effect_into(
                 let sweep_start = out.len();
                 evaluate_effect_into(&sweep, state, out)?;
 
-                // What was distributed: the gross proceeds of the lots sold,
-                // the same measure as `required_value`. The cash credits are
-                // net of the tax withheld (and the sweep's transfer to
-                // `destination` repeats them), so they would read short.
+                // What was distributed: the account's cash withdrawn plus the
+                // gross proceeds of the lots sold, the same measure as
+                // `required_value`. The cash credits are net of the tax
+                // withheld (and the sweep's transfer to `destination`
+                // repeats them), so they would read short.
                 let actual_amount = out[sweep_start..]
                     .iter()
                     .filter_map(|ev| match ev {
                         EvalEvent::SubtractAssetLot { proceeds, .. } => Some(*proceeds),
+                        EvalEvent::CashWithdrawal { amount, .. } => Some(*amount),
                         _ => None,
                     })
                     .sum();

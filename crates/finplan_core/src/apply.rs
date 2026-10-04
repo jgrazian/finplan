@@ -367,6 +367,29 @@ pub fn apply_eval_event_with_source(
             }
         }
 
+        EvalEvent::CashWithdrawal { from, amount } => {
+            let account = state
+                .portfolio
+                .accounts
+                .get_mut(from)
+                .ok_or(ApplyError::Lookup(LookupError::AccountNotFound(*from)))?;
+
+            let AccountFlavor::Investment(inv) = &mut account.flavor else {
+                return Err(ApplyError::AccountType(
+                    AccountTypeError::NotAnInvestmentAccount(*from),
+                ));
+            };
+            inv.cash.value -= amount;
+
+            let ledger_event = StateEvent::CashWithdrawal {
+                account_id: *from,
+                amount: *amount,
+            };
+            record_ledger_entry(state, current_date, source_event, ledger_event);
+
+            Ok(())
+        }
+
         EvalEvent::PropertyBasis { account, delta } => {
             match state
                 .portfolio

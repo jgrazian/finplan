@@ -541,3 +541,49 @@ fn a_distribution_is_counted_gross_like_the_amount_required() {
     );
     assert!(distributions.iter().all(|(r, a)| *a <= r + 1.0));
 }
+
+#[test]
+fn cash_withdrawn_from_an_account_is_attributed_to_it() {
+    // The 401(k) holds cash, which its first RMD draws before selling.
+    let mut graph = rmd_graph();
+    graph.investment.get_mut(&3).unwrap().cash_value = 60_000.0;
+    let body = project(&graph, SEED, &DrawdownRequest::default()).unwrap();
+    assert_balanced(&body);
+
+    let compiled = crate::compile::compile(&graph).unwrap();
+    let k401 = compiled.id_map.account(3).unwrap();
+    let mut config = compiled.config.clone();
+    config.collect_ledger = true;
+    let result = finplan_core::simulation::simulate(&config, SEED).unwrap();
+    let in_year = |year: i64, cash_only: bool| -> f64 {
+        result
+            .ledger
+            .iter()
+            .filter(|e| i64::from(e.date.year()) == year)
+            .filter_map(|e| match e.event {
+                finplan_core::model::StateEvent::CashWithdrawal { account_id, amount }
+                    if account_id == k401 =>
+                {
+                    Some(amount)
+                }
+                finplan_core::model::StateEvent::AssetSale {
+                    account_id,
+                    proceeds,
+                    ..
+                } if account_id == k401 && !cash_only => Some(proceeds),
+                _ => None,
+            })
+            .sum()
+    };
+
+    let i = body.accounts.iter().position(|a| a.id == 3).unwrap();
+    let planned = &body.choices[0];
+    let first_rmd = planned.years.iter().find(|y| y.rmd[i] > 1.0).unwrap();
+    assert!(in_year(first_rmd.year, true) > 1.0, "the RMD drew cash");
+    assert!(
+        (first_rmd.withdrawals[i] - in_year(first_rmd.year, false)).abs() < 0.01,
+        "{} vs {}",
+        first_rmd.withdrawals[i],
+        in_year(first_rmd.year, false)
+    );
+}
