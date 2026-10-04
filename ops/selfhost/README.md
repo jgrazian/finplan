@@ -27,14 +27,26 @@ each previous run. The script picks the highest `vX.Y.Z` tag on GitHub (or the
 tag pinned by `FINPLAN_TAG` in `deploy.env`), exits if that commit is already
 live, and otherwise:
 
-1. builds `finplan-server` with `cargo build --release` and the web app with
-   `pnpm build` as the build user, using that user's toolchains. The web build
-   first compiles the browser engine (`scripts/build-wasm.sh`), so the script
-   installs the `wasm32-unknown-unknown` target and the `wasm-bindgen` CLI
-   (pinned to the version in `crates/finplan_wasm/Cargo.toml`) if missing;
-2. installs the result into a new release directory;
-3. backs up the database, then switches `current` and restarts both services;
-4. checks the API and web health, then prunes to the newest five releases.
+1. brings the toolchains up to date before building anything: `rustup update`
+   for the build user (a failed update builds with what is installed), then
+   `scripts/build-wasm.sh --tools`, which installs the `wasm32-unknown-unknown`
+   target and the `wasm-bindgen` CLI pinned in `crates/finplan_wasm/Cargo.toml`
+   when missing or another version, and `dnf install binaryen` for `wasm-opt`
+   (optional; the engine builds without it);
+2. builds `finplan-server` with `cargo build --release` and the web app with
+   `pnpm build` (which compiles the browser engine first) as the build user;
+3. installs the result into a new release directory;
+4. backs up the database, then switches `current` and restarts both services;
+5. checks the API and web health, then prunes to the newest five releases.
+
+The script and the systemd units are copies made at install time: a deploy
+does not update them. After a release changes anything in `ops/selfhost/`,
+reinstall what changed, e.g.
+
+```sh
+git -C /opt/finplan/src show vX.Y.Z:ops/selfhost/finplan-deploy.sh > /tmp/finplan-deploy
+sudo install -m 755 /tmp/finplan-deploy /usr/local/sbin/finplan-deploy
+```
 
 Pushes to `main` do not deploy. Without a pin, the script also refuses to move
 to a tag whose commit is older than the live one, and logs why instead.
@@ -64,13 +76,13 @@ sudo systemctl enable --now finplan-deploy.timer \
 
 The build user needs `cargo` and `rustup` in `~/.cargo/bin` and `node`/`npx` in
 `~/.local/bin`. pnpm is fetched with `npx`, so it does not need to be installed.
-The first deploy after the engine landed also runs `rustup target add
-wasm32-unknown-unknown` and `cargo install wasm-bindgen-cli --locked` (a few
-minutes); to do it ahead of time, as the build user:
+Each deploy runs `rustup update` and installs the WebAssembly tools it is
+missing (a `cargo install` of `wasm-bindgen-cli`, about a minute, the first
+time or when the pinned version changes). To do it ahead of time, as the build
+user, from a checkout:
 
 ```sh
-rustup target add wasm32-unknown-unknown
-cargo install wasm-bindgen-cli --version '=0.2.106' --locked
+scripts/build-wasm.sh --tools      # wasm32 target + the pinned wasm-bindgen CLI
 sudo dnf install binaryen          # optional: wasm-opt shrinks the engine ~10%
 ```
 

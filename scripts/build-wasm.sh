@@ -11,11 +11,17 @@
 # build.
 #
 # The wasm-bindgen CLI must be the same version as the crate's pinned
-# `wasm-bindgen` dependency, or it refuses the module. One-time setup:
+# `wasm-bindgen` dependency, or it refuses the module. The script installs the
+# wasm32 target and that CLI itself when they are missing or the CLI is
+# another version (a `cargo install`, about a minute, once):
 #
 #   rustup target add wasm32-unknown-unknown
 #   cargo install wasm-bindgen-cli --version '=0.2.106' --locked
-#   brew install binaryen          # optional: wasm-opt, ~10-15% smaller
+#
+# wasm-opt is optional and is not installed here (it needs the system's package
+# manager): `brew install binaryen` or `dnf install binaryen`, ~10-15% smaller.
+#
+#   scripts/build-wasm.sh --tools   only make sure the tools are there, and exit
 #
 # Env: FINPLAN_WASM_PROFILE (default wasm-release), FINPLAN_WASM_OUT.
 set -euo pipefail
@@ -31,25 +37,28 @@ if [ -z "$want" ]; then
     echo "build-wasm: cannot read the pinned wasm-bindgen version from crates/finplan_wasm/Cargo.toml" >&2
     exit 1
 fi
-install_hint="cargo install wasm-bindgen-cli --version '=$want' --locked"
-
-if ! command -v wasm-bindgen >/dev/null 2>&1; then
-    echo "build-wasm: wasm-bindgen CLI not found. Install it with:" >&2
-    echo "  $install_hint" >&2
-    exit 1
-fi
-have="$(wasm-bindgen --version | awk '{print $2}')"
-if [ "$have" != "$want" ]; then
-    echo "build-wasm: wasm-bindgen CLI is $have but finplan_wasm pins $want. Install the right one:" >&2
-    echo "  $install_hint" >&2
-    exit 1
-fi
 
 if command -v rustup >/dev/null 2>&1 \
     && ! rustup target list --installed | grep -qx "$target"; then
-    echo "build-wasm: the $target target is missing. Install it with:" >&2
-    echo "  rustup target add $target" >&2
-    exit 1
+    echo "build-wasm: installing the $target target" >&2
+    rustup target add "$target"
+fi
+
+have="$(wasm-bindgen --version 2>/dev/null | awk '{print $2}' || true)"
+if [ "$have" != "$want" ]; then
+    echo "build-wasm: installing wasm-bindgen-cli $want (found: ${have:-none})" >&2
+    cargo install wasm-bindgen-cli --version "=$want" --locked
+    hash -r
+    have="$(wasm-bindgen --version 2>/dev/null | awk '{print $2}' || true)"
+    if [ "$have" != "$want" ]; then
+        echo "build-wasm: wasm-bindgen $want was installed but \`wasm-bindgen\` on PATH is ${have:-missing};" >&2
+        echo "  put cargo's bin directory ($(dirname "$(command -v cargo)")) first on PATH" >&2
+        exit 1
+    fi
+fi
+
+if [ "${1:-}" = "--tools" ]; then
+    exit 0
 fi
 
 cargo build --manifest-path "$root/Cargo.toml" -p finplan_wasm \
@@ -71,7 +80,7 @@ if command -v wasm-opt >/dev/null 2>&1; then
         "$wasm" -o "$wasm.opt"
     mv "$wasm.opt" "$wasm"
 else
-    echo "build-wasm: wasm-opt (binaryen) not found; skipping the size pass (brew install binaryen)" >&2
+    echo "build-wasm: wasm-opt (binaryen) not found; skipping the size pass (brew/dnf install binaryen)" >&2
 fi
 
 raw="$(wc -c < "$wasm" | tr -d ' ')"
