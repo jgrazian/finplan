@@ -24,6 +24,7 @@ pub mod read;
 pub mod results;
 pub mod review;
 pub mod rules;
+pub mod run;
 pub mod snapshot;
 pub mod specs;
 pub mod suggest;

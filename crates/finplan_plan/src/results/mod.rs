@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use finplan_core::model::{
     AccountId, MonteCarloSummary, SimulationResult, WarningKind, final_net_worth,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::compile::CompiledScenario;
 use crate::error::PlanResult;
@@ -55,7 +55,7 @@ impl Default for RunSettings {
 }
 
 /// One point of a path's net worth.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NetWorthPoint {
     pub date: String,
     pub net_worth: f64,
@@ -63,7 +63,7 @@ pub struct NetWorthPoint {
 
 /// One account's value at one snapshot of a path. `step` is the snapshot's
 /// index in the path.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountPoint {
     pub account_id: i64,
     pub step: usize,
@@ -71,7 +71,7 @@ pub struct AccountPoint {
 }
 
 /// A year's cash flows on one path.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CashFlowRow {
     pub year: i64,
     pub income: f64,
@@ -83,7 +83,7 @@ pub struct CashFlowRow {
 }
 
 /// A year's tax summary on one path.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaxRow {
     pub year: i64,
     pub ordinary_income: f64,
@@ -96,14 +96,14 @@ pub struct TaxRow {
 }
 
 /// An account that can have a series, in display order.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountLabel {
     pub account_id: i64,
     pub label: String,
 }
 
 /// Everything stored for one representative path, or for the mean.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PathResults {
     /// `None` is the synthetic nominal mean.
     pub percentile: Option<f64>,
@@ -121,7 +121,7 @@ pub struct PathResults {
 }
 
 /// A finished run, flattened into what its results endpoints return.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunResults {
     pub stats: Stats,
     pub real_net_worth: Option<RealNetWorthSummary>,

@@ -216,3 +216,31 @@ pub fn on_unique_violation(err: sqlx::Error, msg: &str) -> ApiError {
     }
     ApiError::Database(err)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ApiError;
+    use finplan_plan::PlanError;
+
+    /// The browser raises `PlanError`s with `PlanError::status/code/message`;
+    /// the server must answer the same for the same error.
+    #[test]
+    fn plan_errors_map_to_the_status_and_code_the_plan_crate_reports() {
+        let errors = [
+            PlanError::invalid("bad"),
+            PlanError::unprocessable("odd"),
+            PlanError::NotFound("account"),
+            PlanError::Conflict("taken".into()),
+            PlanError::internal("boom"),
+        ];
+        for error in errors {
+            let (status, code, message) = (error.status(), error.code(), error.message());
+            let api = ApiError::from(error);
+            assert_eq!(api.status().as_u16(), status);
+            assert_eq!(api.code(), code);
+            if !matches!(api, ApiError::Internal(_)) {
+                assert_eq!(api.to_string(), message);
+            }
+        }
+    }
+}

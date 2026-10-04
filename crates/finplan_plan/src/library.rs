@@ -566,6 +566,37 @@ pub fn apply_library(
     Ok(EditOutcome { id: outcome })
 }
 
+/// [`apply_library`], and the plans brought along with it: every plan in
+/// `plans` has the new library attached (so its copies of a changed profile or
+/// tax config, and its references to a deleted one, follow), and a plan the
+/// change touched gets `updated_at = now`, as the routes bump the scenarios a
+/// changed profile or tax config reaches. Returns the outcome and the ids of
+/// the plans that changed.
+///
+/// Atomic: on an error neither the library nor any plan is touched.
+pub fn apply_library_to_plans(
+    library: &mut Library,
+    plans: &mut [ScenarioGraph],
+    op: &LibraryOp,
+    now: Option<&str>,
+) -> PlanResult<(EditOutcome, Vec<i64>)> {
+    let outcome = apply_library(library, plans, op)?;
+    let mut changed = Vec::new();
+    for plan in plans.iter_mut() {
+        let before =
+            serde_json::to_value(&*plan).map_err(|e| PlanError::internal(e.to_string()))?;
+        library.attach(plan);
+        let after = serde_json::to_value(&*plan).map_err(|e| PlanError::internal(e.to_string()))?;
+        if before != after {
+            if let Some(now) = now {
+                plan.scenario.updated_at = now.to_string();
+            }
+            changed.push(plan.scenario.id);
+        }
+    }
+    Ok((outcome, changed))
+}
+
 fn create_return_profile(library: &mut Library, body: &CreateProfile) -> PlanResult<Option<i64>> {
     let id = library
         .return_profiles

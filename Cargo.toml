@@ -4,7 +4,8 @@ members = [
     "crates/finplan",
     "crates/finplan_core",
     "crates/finplan_plan",
-    "crates/finplan_server"
+    "crates/finplan_server",
+    "crates/finplan_wasm"
 ]
 
 [workspace.dependencies]
@@ -23,3 +24,16 @@ strip = true
 inherits = "release"
 debug = true
 strip = false
+
+# The browser build (`scripts/build-wasm.sh`). Size matters more than the last
+# few percent of speed here: the module is downloaded, not installed. A wasm32
+# panic aborts the instance either way (there is no unwinding without the
+# exception-handling proposal), so `panic = "abort"` only drops the unwind
+# tables; nothing in the wasm build relies on `catch_unwind`.
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true

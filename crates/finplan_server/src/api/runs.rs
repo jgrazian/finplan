@@ -62,157 +62,9 @@ pub struct Run {
 const RUN_COLUMNS: &str = "id, scenario_id, status, iterations, completed_iterations, converge,
      max_iterations, seed, error_message, created_at, started_at, finished_at, input_hash, model_version";
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, optional_fields = nullable)]
-pub struct CreateRun {
-    #[serde(default = "default_iterations")]
-    pub iterations: i64,
-    #[serde(default = "default_percentiles")]
-    pub percentiles: Vec<f64>,
-    #[serde(default)]
-    pub seed: Option<i64>,
-    #[serde(default = "default_batch")]
-    pub batch_size: i64,
-    #[serde(default = "default_parallel")]
-    pub parallel_batches: i64,
-    #[serde(default = "yes")]
-    pub compute_mean: bool,
-    /// Keep sampling until the median settles instead of stopping at
-    /// `iterations`, which then reads as the minimum sample to take first.
-    #[serde(default)]
-    pub converge: bool,
-}
-
-impl Default for CreateRun {
-    /// A run as if the body were `{}`: every field its serde default.
-    fn default() -> Self {
-        Self {
-            iterations: default_iterations(),
-            percentiles: default_percentiles(),
-            seed: None,
-            batch_size: default_batch(),
-            parallel_batches: default_parallel(),
-            compute_mean: yes(),
-            converge: false,
-        }
-    }
-}
-
-/// Ceiling on a converging run, before `--max-iterations` is applied.
-///
-/// A converging run is asked for by someone who does not want to pick a count,
-/// so it needs an answer in the time a count would have taken. Ten thousand
-/// iterations is roughly twice the largest fixed size the UI offers.
-const CONVERGE_CEILING: i64 = 10_000;
-
-pub(crate) fn default_iterations() -> i64 {
-    1000
-}
-
-/// The example runs stored alongside the envelope: a bad case, the middle and
-/// a good case, at the fan's outer band rather than out at P5/P95, where a
-/// path is often a degenerate wipe-out or a runaway.
-pub(crate) fn default_percentiles() -> Vec<f64> {
-    vec![0.10, 0.50, 0.90]
-}
-
-pub(crate) fn default_batch() -> i64 {
-    100
-}
-
-pub(crate) fn default_parallel() -> i64 {
-    4
-}
-
-fn yes() -> bool {
-    true
-}
-
-/// A run's settings once checked against what the caller may ask for.
-pub(crate) struct ValidatedRun {
-    /// Fixed runs: the count. Converging runs: the minimum sample, clamped to
-    /// the ceiling.
-    pub iterations: i64,
-    /// Set only on a converging run: the most iterations it may take.
-    pub ceiling: Option<i64>,
-    /// Sorted, deduplicated, within 0..1.
-    pub percentiles: Vec<f64>,
-}
-
-/// The checks every run's settings pass, whether it is stored against a
-/// scenario (`create_run`) or offloaded from a local plan (`api::compute`):
-/// iterations in `1..=entitled_max`, a converging run's ceiling, batch shape
-/// and percentiles.
-pub(crate) fn validate_run(
-    iterations: i64,
-    converge: bool,
-    percentiles: &[f64],
-    batch_size: i64,
-    parallel_batches: i64,
-    entitled_max: usize,
-) -> ApiResult<ValidatedRun> {
-    if iterations < 1 {
-        return Err(ApiError::bad_request("iterations must be at least 1"));
-    }
-    if iterations as usize > entitled_max {
-        return Err(ApiError::bad_request(format!(
-            "iterations must not exceed {entitled_max}"
-        )));
-    }
-
-    // A converging run's `iterations` is its minimum sample, so it is clamped
-    // to the ceiling rather than refused: asking to look at the metric later
-    // than the run is allowed to go just means looking at it once, at the end.
-    let ceiling = converge.then(|| CONVERGE_CEILING.min(entitled_max as i64));
-    let iterations = match ceiling {
-        Some(cap) => iterations.min(cap),
-        None => iterations,
-    };
-
-    if percentiles.len() > 21
-        || !(1..=10_000).contains(&batch_size)
-        || !(1..=16).contains(&parallel_batches)
-    {
-        return Err(ApiError::bad_request(
-            "Use at most 21 percentiles, batch size 1–10000, and parallel batches 1–16.",
-        ));
-    }
-
-    let mut percentiles = percentiles.to_vec();
-    percentiles.retain(|p| (0.0..=1.0).contains(p));
-    percentiles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    percentiles.dedup();
-    if percentiles.is_empty() {
-        return Err(ApiError::bad_request(
-            "percentiles must contain at least one value in 0..1",
-        ));
-    }
-    Ok(ValidatedRun {
-        iterations,
-        ceiling,
-        percentiles,
-    })
-}
-
-/// The most cost units one run may be, however much budget is left.
-pub(crate) const MAX_RUN_COST: i64 = 100_000_000;
-
-/// What a run of `sample` iterations (a converging run's ceiling, since that is
-/// the most it can spend) costs on this plan: `sample x duration_years x
-/// max(accounts + assets + events, 1)`. Refuses a run over [`MAX_RUN_COST`].
-pub(crate) fn run_cost(sample: i64, graph: &finplan_plan::graph::ScenarioGraph) -> ApiResult<i64> {
-    let cost = sample
-        .saturating_mul(graph.scenario.duration_years)
-        .saturating_mul(
-            (graph.accounts.len() + graph.assets.len() + graph.events.len()).max(1) as i64,
-        );
-    if cost > MAX_RUN_COST {
-        return Err(ApiError::bad_request(
-            "Run is too large. Reduce iterations, duration, or plan complexity.",
-        ));
-    }
-    Ok(cost)
-}
+// The run settings and their checks are shared with the browser's local runs,
+// so they live in `finplan_plan::run`.
+pub(crate) use finplan_plan::run::{CreateRun, ValidatedRun, run_cost, validate_run};
 
 async fn owned_run(state: &AppState, id: i64, user_id: &str) -> ApiResult<Run> {
     let row: Option<Run> = sqlx::query_as(&format!(
@@ -298,7 +150,7 @@ pub(crate) async fn create_run(
     let mut tx = state.db.begin().await?;
     let graph = crate::db::graph::load_connection(&mut tx, scenario_id, &user.id).await?;
     compile::compile(&graph)?;
-    run_cost(ceiling.unwrap_or(iterations), &graph)?;
+    run_cost(&graph, ceiling.unwrap_or(iterations))?;
 
     let (snapshot, input_hash) = finplan_plan::snapshot::snapshot(&graph)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
@@ -796,25 +648,6 @@ async fn ledger_years(
         }
     }
     Ok(years)
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, optional_fields = nullable)]
-pub struct LedgerQuery {
-    /// Which path to read, matching `ResultsQuery::series`.
-    #[serde(default)]
-    pub series: Option<String>,
-    /// Restrict to one calendar year — how the cash-flow table reads the
-    /// entries behind a row it has expanded.
-    #[serde(default)]
-    pub year: Option<i64>,
-    /// One of `cash`, `asset`, `tax`, `event`; omit for all four.
-    #[serde(default)]
-    pub category: Option<String>,
-    #[serde(default)]
-    pub limit: Option<i64>,
-    #[serde(default)]
-    pub offset: Option<i64>,
 }
 
 /// The itemised effects behind a year's cash-flow totals.

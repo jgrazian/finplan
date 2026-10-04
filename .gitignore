@@ -46,3 +46,6 @@ perf.data*
 fixtures/*.json
 
 .pnpm-store/
+
+# Browser engine build output (scripts/build-wasm.sh); binary, not committed
+web/lib/engine/pkg/

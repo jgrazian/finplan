@@ -5,13 +5,20 @@ use finplan_core::{
     model::{AssetCoord, TransferEndpoint},
     simulation_state::SimulationState,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::compile::{self, idmap::IdMap};
 use crate::error::{PlanError, PlanResult};
 use crate::graph::ScenarioGraph;
 use crate::specs::{AmountSpec, EffectSpec, WithdrawalSourcesSpec};
+
+/// The body of `POST /scenarios/{id}/expressions/validate`.
+#[derive(Debug, Deserialize, TS)]
+#[ts(export)]
+pub struct ExpressionValidationRequest {
+    pub effect: EffectSpec,
+}
 
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]

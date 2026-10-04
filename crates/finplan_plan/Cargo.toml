@@ -7,7 +7,9 @@ edition = "2024"
 finplan_core = { path = "../finplan_core", default-features = false }
 jiff = { workspace = true }
 serde = { workspace = true }
-serde_json = "1"
+# `float_roundtrip`: a stored `RunResults` (or a `BatchOutput`) read back from
+# JSON must equal the one that was written, to the last bit of every `f64`.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.10"
 # `deserialize_with` fields (the PATCH double-options) spell their TS shape
 # with `#[ts(...)]`, so ts-rs ignoring that serde attribute is expected.

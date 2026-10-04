@@ -4,12 +4,12 @@
 //! They live here, rather than with the HTTP handlers, so the server's SQL read
 //! path and [`super::RunResults`] build the very same values.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::funding::FundingDiagnostics;
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Stats {
     pub num_iterations: i64,
@@ -29,7 +29,7 @@ pub struct Stats {
     pub percentile_values: Vec<PercentileValue>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PercentileValue {
     pub percentile: f64,
@@ -39,7 +39,7 @@ pub struct PercentileValue {
 /// A representative path ranked by terminal NOMINAL net worth, not a
 /// pointwise quantile. Null percentile is the synthetic nominal mean, which
 /// has no coherent ledger and must not be deflated using mean inflation.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Band {
     /// Run-local identity, also accepted by results/ledger `series` queries.
@@ -55,7 +55,7 @@ pub struct Band {
 
 /// Cumulative inflation for one plan year. Factor 1.0 is the plan's base
 /// year; the engine uses annual factors without within-year interpolation.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct InflationPoint {
     pub year: i64,
@@ -65,7 +65,7 @@ pub struct InflationPoint {
 /// What one year of the ledger holds, without the entries themselves — enough
 /// for the cash-flow table to say how much is behind each row before anyone
 /// expands it.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LedgerYear {
     pub year: i64,
@@ -82,7 +82,7 @@ pub struct LedgerYear {
 }
 
 /// One flattened ledger entry.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 #[ts(export)]
 pub struct LedgerEntry {
@@ -104,7 +104,7 @@ pub struct LedgerEntry {
     pub event_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct AccountSeries {
     pub account_id: i64,
@@ -112,7 +112,7 @@ pub struct AccountSeries {
     pub values: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CashFlow {
     pub year: i64,
@@ -125,7 +125,7 @@ pub struct CashFlow {
     pub taxes: f64,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 #[ts(export)]
 pub struct Warning {
@@ -138,7 +138,7 @@ pub struct Warning {
 }
 
 /// Real-dollar pointwise quantiles over ALL iterations, not selected paths.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 #[ts(export)]
 pub struct RealQuantilePoint {
@@ -154,7 +154,7 @@ pub struct RealQuantilePoint {
     pub p95: f64,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::FromRow))]
 #[ts(export)]
 pub struct RealTerminalStats {
@@ -167,7 +167,7 @@ pub struct RealTerminalStats {
     pub max: f64,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RealNetWorthSummary {
     /// Each iteration is deflated before aggregation. Annual factors relative
@@ -180,7 +180,7 @@ pub struct RealNetWorthSummary {
     pub points: Vec<RealQuantilePoint>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Results {
     pub run_id: i64,
@@ -213,7 +213,7 @@ pub struct Results {
     pub funding_diagnostics: Option<FundingDiagnostics>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LedgerPage {
     pub run_id: i64,
@@ -221,4 +221,24 @@ pub struct LedgerPage {
     pub entries: Vec<LedgerEntry>,
     /// Entries matching the filter, of which `entries` is one page.
     pub total: i64,
+}
+
+/// The query of `GET /runs/{id}/ledger`.
+#[derive(Debug, Clone, Default, Deserialize, TS)]
+#[ts(export, optional_fields = nullable)]
+pub struct LedgerQuery {
+    /// Which path to read, matching `ResultsQuery::series`.
+    #[serde(default)]
+    pub series: Option<String>,
+    /// Restrict to one calendar year — how the cash-flow table reads the
+    /// entries behind a row it has expanded.
+    #[serde(default)]
+    pub year: Option<i64>,
+    /// One of `cash`, `asset`, `tax`, `event`; omit for all four.
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+    #[serde(default)]
+    pub offset: Option<i64>,
 }

@@ -21,13 +21,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use ts_rs::TS;
 
-use super::runs::{default_batch, default_parallel, run_cost, validate_run};
 use crate::auth::session::CurrentUser;
 use crate::error::{ApiError, ApiResult};
 use crate::observability::{JobKind, Origin};
 use crate::runner::compute::ComputeJob;
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
+use finplan_plan::run::{default_batch, default_parallel, run_cost, validate_run};
 
 /// The largest request body: a plan is a few hundred kilobytes at most.
 pub const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
@@ -45,9 +45,9 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export, optional_fields = nullable)]
 pub struct ComputeRunSettings {
-    #[serde(default = "super::runs::default_iterations")]
+    #[serde(default = "finplan_plan::run::default_iterations")]
     pub iterations: i64,
-    #[serde(default = "super::runs::default_percentiles")]
+    #[serde(default = "finplan_plan::run::default_percentiles")]
     pub percentiles: Vec<f64>,
     /// Random when absent. The one used comes back on the job, so the run can
     /// be reproduced.
@@ -62,8 +62,8 @@ pub struct ComputeRunSettings {
 impl Default for ComputeRunSettings {
     fn default() -> Self {
         Self {
-            iterations: super::runs::default_iterations(),
-            percentiles: super::runs::default_percentiles(),
+            iterations: finplan_plan::run::default_iterations(),
+            percentiles: finplan_plan::run::default_percentiles(),
             seed: None,
             converge: false,
         }
@@ -226,13 +226,13 @@ async fn submit(
     }
     let compiled = compile::compile(&graph)?;
     let sample = run.ceiling.unwrap_or(run.iterations);
-    let cost = run_cost(sample, &graph)?;
+    let cost = run_cost(&graph, sample)?;
     drop(graph);
 
     let seed = settings
         .seed
         .unwrap_or_else(|| i64::from(rand::random::<u32>()));
-    let config = crate::runner::mc_config(
+    let config = finplan_plan::run::mc_config(
         run.iterations,
         Some(seed),
         default_batch(),

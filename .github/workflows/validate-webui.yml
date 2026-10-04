@@ -33,10 +33,40 @@ jobs:
           ! cargo tree -p finplan_plan --no-default-features -e normal | grep -E "sqlx|tokio|axum|hyper|reqwest"
       - run: ./scripts/gen-bindings.sh
       - run: git diff --exit-code -- web/lib/api/generated
+      # The browser engine (spec 19): the web build and its tests load the
+      # WebAssembly that scripts/build-wasm.sh produces, so build it first. The
+      # wasm-bindgen CLI is pinned to the version finplan_wasm depends on and
+      # cached (a cold install compiles it for a few minutes).
+      - name: Read the pinned wasm-bindgen version
+        id: wasm-bindgen
+        run: echo "version=$(sed -n 's/^wasm-bindgen = "=\([0-9.]*\)".*/\1/p' crates/finplan_wasm/Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - name: Cache wasm-bindgen-cli
+        id: wasm-bindgen-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/wasm-bindgen*
+          key: wasm-bindgen-cli-${{ runner.os }}-${{ steps.wasm-bindgen.outputs.version }}
+      - name: Install wasm-bindgen-cli
+        if: steps.wasm-bindgen-cache.outputs.cache-hit != 'true'
+        run: cargo install wasm-bindgen-cli --version '=${{ steps.wasm-bindgen.outputs.version }}' --locked
+      # wasm-opt shrinks the module; build-wasm.sh warns and goes on without it.
+      - name: Install binaryen
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends binaryen
+      - run: cargo clippy -p finplan_wasm --target wasm32-unknown-unknown -- -D warnings
       - run: pnpm install --frozen-lockfile
         working-directory: web
-      - run: pnpm typecheck && pnpm lint && pnpm test && pnpm build
+      - run: pnpm wasm
         working-directory: web
+      - run: pnpm typecheck && pnpm lint && pnpm test
+        working-directory: web
+        env:
+          # A missing engine build fails the smoke test instead of skipping it.
+          FINPLAN_REQUIRE_WASM: "1"
+      # The engine was just built; `pnpm build` need not rebuild it.
+      - run: pnpm build
+        working-directory: web
+        env:
+          FINPLAN_WASM_PREBUILT: "1"
       - run: python3 -m unittest discover -s scripts -p 'test_sqlite_backup.py'
   images:
     runs-on: ubuntu-latest

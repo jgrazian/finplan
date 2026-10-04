@@ -12,7 +12,7 @@ use crate::observability::{
     Component, ErrorClass, JobContext, JobKind, Origin, Outcome, Phase, QueueExit, RejectionReason,
     Telemetry,
 };
-use finplan_core::model::{ConvergenceConfig, MonteCarloConfig, MonteCarloProgress};
+use finplan_core::model::MonteCarloProgress;
 use finplan_core::simulation::monte_carlo_simulate_with_progress;
 use finplan_plan::compile;
 use finplan_plan::graph::ScenarioGraph;
@@ -458,39 +458,6 @@ pub async fn requeue_orphans(
     Ok(())
 }
 
-/// The engine settings of a run, shared by stored runs and offloaded compute
-/// jobs so the same settings and seed give the same results in both.
-///
-/// On a converging run (`converge_ceiling` set) `iterations` is the minimum
-/// sample before the metric is tested, and the ceiling is the most it may take.
-pub(crate) fn mc_config(
-    iterations: i64,
-    seed: Option<i64>,
-    batch_size: i64,
-    parallel_batches: i64,
-    compute_mean: bool,
-    converge_ceiling: Option<i64>,
-    percentiles: Vec<f64>,
-) -> MonteCarloConfig {
-    MonteCarloConfig {
-        iterations: iterations as usize,
-        percentiles: if percentiles.is_empty() {
-            vec![0.10, 0.50, 0.90]
-        } else {
-            percentiles
-        },
-        compute_mean,
-        convergence: converge_ceiling.map(|ceiling| ConvergenceConfig {
-            max_iterations: ceiling as usize,
-            relative_threshold: 0.01,
-            ..ConvergenceConfig::default()
-        }),
-        batch_size: batch_size as usize,
-        parallel_batches: parallel_batches as usize,
-        seed: seed.map(|s| s as u64),
-    }
-}
-
 #[derive(Debug)]
 enum RunError {
     Db,
@@ -592,7 +559,7 @@ async fn execute(
             .map_err(|_| RunError::Preparation)?;
     let compiled = compile::compile(&graph).map_err(|_| RunError::Preparation)?;
 
-    let mc_config = mc_config(
+    let mc_config = finplan_plan::run::mc_config(
         iterations,
         seed,
         batch_size,
