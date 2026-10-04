@@ -58,6 +58,11 @@ pub struct AnalysisPoint {
     pub p5: f64,
     pub p50: f64,
     pub p95: f64,
+    /// Median after-tax terminal net worth, nominal: tax-deferred balances
+    /// net of the plan's `deferred_tax_rate`. Absent where the run predates it.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub after_tax_p50: Option<f64>,
 }
 
 impl From<&MonteCarloStats> for AnalysisPoint {
@@ -75,6 +80,7 @@ impl From<&MonteCarloStats> for AnalysisPoint {
             p5: at(0.05),
             p50: at(0.50),
             p95: at(0.95),
+            after_tax_p50: stats.after_tax_percentile(0.50),
         }
     }
 }
@@ -88,6 +94,7 @@ fn point_from_probe(probe: &SolveProbe) -> AnalysisPoint {
         p5: at(0.05),
         p50: at(0.50),
         p95: at(0.95),
+        after_tax_p50: probe.after_tax_percentile(0.50),
     }
 }
 

@@ -37,8 +37,24 @@ pub struct ScenarioRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "sqlx", sqlx(default))]
     pub funding_bracket_ceiling: Option<f64>,
+    /// The tax a tax-deferred balance is assumed to owe, for valuing the plan
+    /// after tax (spec 21). Left out of the JSON at its default, so plans that
+    /// never set it keep their input hash and older snapshots read as 24%.
+    #[serde(
+        default = "default_deferred_tax_rate",
+        skip_serializing_if = "is_default_deferred_tax_rate"
+    )]
+    pub deferred_tax_rate: f64,
     pub created_at: String,
     pub updated_at: String,
+}
+
+fn default_deferred_tax_rate() -> f64 {
+    finplan_core::config::DEFAULT_DEFERRED_TAX_RATE
+}
+
+fn is_default_deferred_tax_rate(rate: &f64) -> bool {
+    *rate == finplan_core::config::DEFAULT_DEFERRED_TAX_RATE
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

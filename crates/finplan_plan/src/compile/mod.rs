@@ -493,6 +493,7 @@ pub fn compile(graph: &ScenarioGraph) -> PlanResult<CompiledScenario> {
         events,
         collect_ledger: graph.scenario.collect_ledger != 0,
         funding: funding_policy(graph, &id_map)?,
+        deferred_tax_rate: graph.scenario.deferred_tax_rate,
     };
 
     Ok(CompiledScenario {

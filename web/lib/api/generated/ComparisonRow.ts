@@ -16,6 +16,16 @@ export type ComparisonRow = {
    */
   median_final_net_worth_real?: number | null;
   /**
+   * Median of after-tax final net worth across the iterations (ranked on
+   * its own), nominal: tax-deferred balances count net of the plan's
+   * `deferred_tax_rate`. The fair column for comparing Roth conversions.
+   */
+  median_after_tax_ending_balance: number;
+  /**
+   * The same, deflated by the median path's inflation.
+   */
+  median_after_tax_ending_balance_real?: number | null;
+  /**
    * Lifetime tax on the median path (the iteration whose final net worth is
    * the median); the Monte Carlo itself keeps no per-iteration tax.
    */

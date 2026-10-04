@@ -136,6 +136,7 @@ impl OptimizationResult {
                 min_final_net_worth: 0.0,
                 max_final_net_worth: 0.0,
                 percentile_values: Vec::new(),
+                after_tax_percentile_values: Vec::new(),
                 converged: None,
                 convergence_metric: None,
                 convergence_value: None,

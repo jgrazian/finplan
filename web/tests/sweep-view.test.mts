@@ -417,20 +417,26 @@ test("the CSV carries one row per combination, in the order the server sent them
   assert.equal(lines.length, 13);
   assert.equal(
     lines[0],
-    "Retire · age,Spending · amount,Windfall · amount,positive_ending_net_worth_rate,cash_funding_check_rate,p5,p50,p95",
+    "Retire · age,Spending · amount,Windfall · amount,positive_ending_net_worth_rate,cash_funding_check_rate,p5,p50,p95,after_tax_p50",
   );
   // The last axis varies fastest, and the variables are written as values.
   assert.equal(lines[1].startsWith("60,5000,0,"), true, lines[1]);
   assert.equal(lines[2].startsWith("60,5000,100000,"), true, lines[2]);
   // Funding success was never measured, so its column is empty rather than 0.
   assert.equal(lines[1].split(",")[4], "");
+  // Nor was the after-tax median (the cells predate it).
+  assert.equal(lines[1].split(",").at(-1), "");
 });
 
 test("the metric menu offers every measure a cell carries", () => {
   assert.deepEqual(
     METRICS.map((m) => m.id),
-    ["funding", "success", "p50", "p5", "p95"],
+    ["funding", "success", "p50", "p5", "p95", "after_tax"],
   );
+  // A cell from before the after-tax median was measured has none to draw.
+  const point = { success_rate: 1, funding_success_rate: null, p5: 0, p50: 5, p95: 9 };
+  assert.equal(metric("after_tax").of(point), undefined);
+  assert.equal(metric("after_tax").of({ ...point, after_tax_p50: 4 }), 4);
   assert.equal(metric("success").format(0.912), "91.2%");
   assert.equal(metric("p50").format(1_250_000), "$1,250,000");
   assert.equal(metric("p50").tick(1_250_000), "$1.25M");

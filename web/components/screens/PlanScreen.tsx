@@ -180,6 +180,7 @@ export function PlanScreen({
       body.inflation_profile_id = patch.inflationProfileId;
     }
     if (patch.taxConfigId != null) body.tax_config_id = patch.taxConfigId;
+    if (patch.deferredTaxRate != null) body.deferred_tax_rate = patch.deferredTaxRate;
     await api.scenarios.update(scenarioId, body);
     onChanged();
   };

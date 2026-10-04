@@ -264,6 +264,33 @@ fn refusals_carry_the_servers_status_code_and_body() {
 }
 
 #[test]
+fn the_deferred_tax_rate_is_an_edit_and_a_read() {
+    let library = ok(plans::library_seed_json());
+    let graph = new_plan(&library);
+    let set = |graph: &str, rate: Value| {
+        plans::apply_edit_json(
+            graph,
+            &library,
+            &json!({"op": "update_scenario", "body": {"deferred_tax_rate": rate}}).to_string(),
+            None,
+        )
+    };
+    let read = |graph: &str| {
+        value(&ok(reads::read_json(
+            graph,
+            &library,
+            &json!({"query": "scenario"}).to_string(),
+        )))
+    };
+    assert_eq!(read(&graph)["deferred_tax_rate"], 0.24);
+    let set_to = value(&ok(set(&graph, json!(0.3))))["graph"].to_string();
+    assert_eq!(read(&set_to)["deferred_tax_rate"], 0.3);
+
+    // Refused with the status the server answers.
+    assert_eq!(set(&graph, json!(1.5)).unwrap_err().status, 400);
+}
+
+#[test]
 fn the_funding_policy_is_an_edit_and_a_read() {
     let library = ok(plans::library_seed_json());
     let graph = new_plan(&library);

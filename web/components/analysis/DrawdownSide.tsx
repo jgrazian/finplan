@@ -195,7 +195,12 @@ export function DrawdownSide({
           <span style={{ color: MUTED }}>
             Balance at {view.endAge ?? view.endYear}
           </span>
-          <b style={{ fontFamily: "var(--font-heading)" }}>{fmtCompact(view.endBalance)}</b>
+          <b
+            style={{ fontFamily: "var(--font-heading)" }}
+            title={`After tax on pre-tax money: ${fmtCompact(view.endBalanceAfterTax)}`}
+          >
+            {fmtCompact(view.endBalance)}
+          </b>
         </div>
       </div>
 

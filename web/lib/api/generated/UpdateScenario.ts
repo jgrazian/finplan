@@ -9,4 +9,9 @@ export type UpdateScenario = {
   inflation_profile_id?: number | null;
   tax_config_id?: number | null;
   collect_ledger?: boolean | null;
+  /**
+   * The rate tax-deferred balances are valued at after tax, from 0 up to
+   * (not including) 1.
+   */
+  deferred_tax_rate?: number | null;
 };

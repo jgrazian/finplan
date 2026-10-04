@@ -41,6 +41,7 @@ const OBJECTIVES: ReadonlyArray<{ value: ObjectiveRequest; label: string; detail
   },
   { value: "max-median-net-worth", label: "Most median terminal wealth", detail: "P50" },
   { value: "max-floor-net-worth", label: "Best floor", detail: "P5 terminal wealth" },
+  { value: "max-median-after-tax", label: "Most median after-tax wealth", detail: "P50, pre-tax money net of tax" },
 ];
 
 /**

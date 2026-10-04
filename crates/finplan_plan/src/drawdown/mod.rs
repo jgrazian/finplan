@@ -235,6 +235,10 @@ pub struct DrawdownSummary {
     /// Final net worth, nominal and in the start year's dollars.
     pub ending_balance: f64,
     pub ending_balance_real: f64,
+    /// The same with tax-deferred balances counted net of the plan's
+    /// `deferred_tax_rate`: what the money is worth to whoever spends it.
+    pub after_tax_ending_balance: f64,
+    pub after_tax_ending_balance_real: f64,
     pub first_shortfall_year: Option<i64>,
     pub markers: Vec<DrawdownMarker>,
 }
@@ -289,6 +293,12 @@ pub struct ComparisonRow {
     /// The same, in the start year's dollars (deflated by the median path's
     /// own inflation).
     pub median_final_net_worth_real: Option<f64>,
+    /// Median of after-tax final net worth across the iterations (ranked on
+    /// its own), nominal: tax-deferred balances count net of the plan's
+    /// `deferred_tax_rate`. The fair column for comparing Roth conversions.
+    pub median_after_tax_ending_balance: f64,
+    /// The same, deflated by the median path's inflation.
+    pub median_after_tax_ending_balance_real: Option<f64>,
     /// Lifetime tax on the median path (the iteration whose final net worth is
     /// the median); the Monte Carlo itself keeps no per-iteration tax.
     pub median_path_tax: Option<f64>,

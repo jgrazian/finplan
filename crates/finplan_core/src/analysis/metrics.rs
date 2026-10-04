@@ -20,6 +20,9 @@ pub enum AnalysisMetric {
     MaxDrawdown,
     /// Safe withdrawal rate achieving a target success rate
     SafeWithdrawalRate { target_success_rate: f64 },
+    /// Median final net worth with tax-deferred balances valued after the
+    /// plan's `deferred_tax_rate`
+    AfterTaxEndingBalance,
 }
 
 impl AnalysisMetric {
@@ -35,6 +38,7 @@ impl AnalysisMetric {
             Self::SafeWithdrawalRate {
                 target_success_rate,
             } => format!("SWR @ {:.0}%", target_success_rate * 100.0),
+            Self::AfterTaxEndingBalance => "After-Tax Ending Balance".to_string(),
         }
     }
 
@@ -48,6 +52,7 @@ impl AnalysisMetric {
             Self::LifetimeTaxes => "Taxes",
             Self::MaxDrawdown => "Drawdown",
             Self::SafeWithdrawalRate { .. } => "SWR",
+            Self::AfterTaxEndingBalance => "After-tax",
         }
     }
 }
@@ -62,6 +67,7 @@ pub struct ComputedMetrics {
     pub lifetime_taxes: Option<f64>,
     pub max_drawdown: Option<f64>,
     pub safe_withdrawal_rate: Option<f64>,
+    pub after_tax_ending_balance: Option<f64>,
 }
 
 /// Raw data from a single sweep point - stores enough data to compute any metric on demand.
@@ -86,6 +92,10 @@ pub struct SweepPointData {
     /// To convert nominal to real: `real_value` = `nominal_value` / `final_inflation_factor`
     #[serde(default = "default_inflation_factor")]
     pub final_inflation_factor: f64,
+    /// After-tax final net worth percentiles, like `final_percentiles`, in
+    /// NOMINAL dollars. Empty in data stored before it was measured.
+    #[serde(default)]
+    pub after_tax_final_percentiles: Vec<(f64, f64)>,
 }
 
 /// Default inflation factor for backwards compatibility with old serialized data
@@ -102,6 +112,7 @@ impl Default for SweepPointData {
             p50_yearly_net_worth: Vec::new(),
             p50_lifetime_taxes: 0.0,
             final_inflation_factor: 1.0,
+            after_tax_final_percentiles: Vec::new(),
         }
     }
 }
@@ -155,7 +166,16 @@ impl SweepPointData {
             p50_yearly_net_worth,
             p50_lifetime_taxes,
             final_inflation_factor,
+            after_tax_final_percentiles: summary.stats.after_tax_percentile_values.clone(),
         }
+    }
+
+    /// Median after-tax final net worth, NOMINAL; 0 where it was not measured.
+    fn after_tax_median(&self) -> f64 {
+        self.after_tax_final_percentiles
+            .iter()
+            .find(|(p, _)| (*p - 0.5).abs() < 0.01)
+            .map_or(0.0, |(_, v)| *v)
     }
 
     /// Compute a specific metric from this raw data.
@@ -227,6 +247,8 @@ impl SweepPointData {
                 // SWR requires iterative search - not computed from stored data
                 0.0
             }
+
+            AnalysisMetric::AfterTaxEndingBalance => to_real(self.after_tax_median()),
         }
     }
 
@@ -283,6 +305,9 @@ impl SweepPointData {
                 }
                 AnalysisMetric::SafeWithdrawalRate { .. } => {
                     // Not computed
+                }
+                AnalysisMetric::AfterTaxEndingBalance => {
+                    result.after_tax_ending_balance = Some(self.compute_metric(metric, birth_year));
                 }
             }
         }
@@ -359,6 +384,9 @@ pub fn compute_metrics(
             AnalysisMetric::SafeWithdrawalRate { .. } => {
                 // This requires iterative search - skip for now
                 // Could be computed separately if needed
+            }
+            AnalysisMetric::AfterTaxEndingBalance => {
+                result.after_tax_ending_balance = summary.stats.after_tax_percentile(0.5);
             }
         }
     }

@@ -30,7 +30,8 @@ pub fn router() -> Router<AppState> {
 /// funding policy as one JSON object (decoded by `Scenario`), null when off.
 pub(crate) const SCENARIO_COLUMNS: &str =
     "id, slug, name, description, start_date, birth_date, duration_years,
-     inflation_profile_id, tax_config_id, collect_ledger, status, created_at, updated_at,
+     inflation_profile_id, tax_config_id, collect_ledger, deferred_tax_rate, status,
+     created_at, updated_at,
      (SELECT r.finished_at FROM runs r
        WHERE r.scenario_id = scenarios.id AND r.status = 'succeeded'
        ORDER BY r.finished_at DESC LIMIT 1) AS last_run_at,
@@ -199,6 +200,7 @@ pub(crate) async fn update_in(
 ) -> ApiResult<()> {
     body.check_name()?;
     body.check_duration()?;
+    body.check_deferred_tax_rate()?;
     owned_assumptions(conn, user_id, body.inflation_profile_id, body.tax_config_id).await?;
     let (start_date, birth_date) = body.dates()?;
 
@@ -213,6 +215,7 @@ pub(crate) async fn update_in(
             inflation_profile_id = COALESCE(?7, inflation_profile_id),
             tax_config_id        = COALESCE(?8, tax_config_id),
             collect_ledger       = COALESCE(?9, collect_ledger),
+            deferred_tax_rate    = COALESCE(?10, deferred_tax_rate),
             updated_at           = datetime('now')
           WHERE id = ?1",
     )
@@ -225,6 +228,7 @@ pub(crate) async fn update_in(
     .bind(body.inflation_profile_id)
     .bind(body.tax_config_id)
     .bind(body.collect_ledger.map(i64::from))
+    .bind(body.deferred_tax_rate)
     .execute(&mut *conn)
     .await
     .map_err(|e| on_unique_violation(e, "a scenario with that name already exists"))?
@@ -475,6 +479,7 @@ impl ActivityFields for UpdateScenario {
         "inflation_profile_id",
         "tax_config_id",
         "collect_ledger",
+        "deferred_tax_rate",
     ];
 }
 

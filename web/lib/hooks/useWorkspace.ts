@@ -125,6 +125,7 @@ export function useWorkspace(scenarioId: number | undefined, planRef: string | u
         inflationProfileId: scenario.inflation_profile_id,
         taxConfig: taxConfig?.name ?? "—",
         taxConfigId: scenario.tax_config_id,
+        deferredTaxRate: scenario.deferred_tax_rate,
       },
       axis,
       accounts: toViewAccounts(accounts, { assets, profiles: returnProfiles, events }),

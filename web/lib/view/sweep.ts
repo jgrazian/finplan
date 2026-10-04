@@ -13,7 +13,7 @@ import { paramTick } from "./analysis.ts";
 
 // ───────────────────────────── metrics ─────────────────────────────
 
-export type MetricId = "success" | "funding" | "p50" | "p5" | "p95";
+export type MetricId = "success" | "funding" | "p50" | "p5" | "p95" | "after_tax";
 
 /** One dependent variable a graph can be drawn against. */
 export interface Metric {
@@ -70,11 +70,16 @@ const rate = (
   span: (values) => widen(bounds(values, 0, 1), MIN_RATE_SPAN, 0, 1),
 });
 
-const money = (id: MetricId, label: string, short: string, of: (p: AnalysisPoint) => number): Metric => ({
+const money = (
+  id: MetricId,
+  label: string,
+  short: string,
+  of: (p: AnalysisPoint) => number | null | undefined,
+): Metric => ({
   id,
   label,
   short,
-  of,
+  of: (point) => of(point) ?? undefined,
   format: fmtCurrency,
   tick: fmtCompact,
   unit: "",
@@ -91,6 +96,8 @@ export const METRICS: readonly Metric[] = [
   money("p50", "P50 terminal net worth", "P50 terminal", (p) => p.p50),
   money("p5", "P5 terminal net worth", "P5 terminal", (p) => p.p5),
   money("p95", "P95 terminal net worth", "P95 terminal", (p) => p.p95),
+  // Tax-deferred balances net of the plan's deferred tax rate.
+  money("after_tax", "Median after-tax ending balance", "after-tax P50", (p) => p.after_tax_p50),
 ];
 
 export function metric(id: MetricId): Metric {
@@ -853,6 +860,7 @@ export function sweepCsv(space: SweepSpace): string {
     "p5",
     "p50",
     "p95",
+    "after_tax_p50",
   ];
 
   const rows: string[] = [header.map(quote).join(",")];
@@ -868,6 +876,7 @@ export function sweepCsv(space: SweepSpace): string {
           point.p5,
           point.p50,
           point.p95,
+          point.after_tax_p50 ?? "",
         ].join(","),
       );
       return;

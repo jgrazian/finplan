@@ -32,7 +32,8 @@ pub async fn load_connection(
     let scenario: ScenarioRow = sqlx::query_as(
         "SELECT id, user_id, name, description, start_date, birth_date, duration_years,
                 inflation_profile_id, tax_config_id, collect_ledger,
-                funding_strategy, funding_bracket_ceiling, created_at, updated_at
+                funding_strategy, funding_bracket_ceiling, deferred_tax_rate,
+                created_at, updated_at
            FROM scenarios WHERE id = ?1 AND user_id = ?2",
     )
     .bind(scenario_id)

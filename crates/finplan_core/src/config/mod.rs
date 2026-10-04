@@ -40,8 +40,9 @@
 use std::collections::HashMap;
 
 use crate::model::{
-    Account, AssetId, Event, EventId, EventTrigger, FundingPolicy, InflationProfile, ParameterId,
-    ParameterValue, ReturnProfile, ReturnProfileId, TaxConfig,
+    Account, AccountFlavor, AccountId, AssetId, Event, EventId, EventTrigger, FundingPolicy,
+    InflationProfile, ParameterId, ParameterValue, ReturnProfile, ReturnProfileId,
+    SimulationResult, TaxConfig, TaxStatus, after_tax_final_net_worth,
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,13 @@ fn default_duration_years() -> usize {
 
 fn default_true() -> bool {
     true
+}
+
+/// The rate [`SimulationConfig::deferred_tax_rate`] defaults to.
+pub const DEFAULT_DEFERRED_TAX_RATE: f64 = 0.24;
+
+fn default_deferred_tax_rate() -> f64 {
+    DEFAULT_DEFERRED_TAX_RATE
 }
 
 /// Complete simulation configuration
@@ -178,6 +186,12 @@ pub struct SimulationConfig {
     /// `None` leaves a run as it was before the policy existed.
     #[serde(default)]
     pub funding: Option<FundingPolicy>,
+
+    /// The tax a tax-deferred balance is assumed to owe on the way out, for
+    /// valuing a path after tax (`after_tax_final_net_worth`). It values the
+    /// end of a run and never changes how one plays out.
+    #[serde(default = "default_deferred_tax_rate")]
+    pub deferred_tax_rate: f64,
 }
 
 impl Default for SimulationConfig {
@@ -197,6 +211,7 @@ impl Default for SimulationConfig {
             events: Vec::new(),
             collect_ledger: true,
             funding: None,
+            deferred_tax_rate: DEFAULT_DEFERRED_TAX_RATE,
         }
     }
 }
@@ -206,6 +221,33 @@ impl SimulationConfig {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The accounts whose balances are pre-tax (401(k), traditional IRA).
+    #[must_use]
+    pub fn tax_deferred_accounts(&self) -> Vec<AccountId> {
+        self.accounts
+            .iter()
+            .filter(|a| {
+                matches!(
+                    &a.flavor,
+                    AccountFlavor::Investment(inv) if inv.tax_status == TaxStatus::TaxDeferred
+                )
+            })
+            .map(|a| a.account_id)
+            .collect()
+    }
+
+    /// A path's final net worth with every tax-deferred balance reduced by
+    /// [`Self::deferred_tax_rate`]: taxable + tax-free + bank + property − debt
+    /// + tax-deferred × (1 − rate).
+    #[must_use]
+    pub fn after_tax_final_net_worth(&self, result: &SimulationResult) -> f64 {
+        after_tax_final_net_worth(
+            result,
+            &self.tax_deferred_accounts(),
+            self.deferred_tax_rate,
+        )
     }
 
     /// Return a copy with an existing parameter overridden.

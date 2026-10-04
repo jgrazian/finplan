@@ -701,6 +701,7 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
     body.check_name()?;
     let (start_date, birth_date) = body.dates()?;
     body.check_duration()?;
+    body.check_deferred_tax_rate()?;
     atomically(graph, |g| {
         if let Some(id) = body.tax_config_id
             && g.scenario.tax_config_id != Some(id)
@@ -749,6 +750,9 @@ pub fn update_scenario(graph: &mut ScenarioGraph, body: &UpdateScenario) -> Plan
         }
         if let Some(ledger) = body.collect_ledger {
             g.scenario.collect_ledger = i64::from(ledger);
+        }
+        if let Some(rate) = body.deferred_tax_rate {
+            g.scenario.deferred_tax_rate = rate;
         }
         Ok(())
     })

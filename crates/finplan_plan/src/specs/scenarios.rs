@@ -94,6 +94,9 @@ pub struct Scenario {
     /// JSON column (`SCENARIO_COLUMNS`).
     #[cfg_attr(feature = "sqlx", sqlx(json(nullable)))]
     pub funding: Option<FundingPolicySpec>,
+    /// The rate tax-deferred balances are valued at when the plan is valued
+    /// after tax (after-tax ending balance), as a fraction.
+    pub deferred_tax_rate: f64,
 }
 
 /// What lowering a scenario for the engine produced, without running it.
@@ -148,6 +151,20 @@ pub struct UpdateScenario {
     pub tax_config_id: Option<i64>,
     #[serde(default)]
     pub collect_ledger: Option<bool>,
+    /// The rate tax-deferred balances are valued at after tax, from 0 up to
+    /// (not including) 1.
+    #[serde(default)]
+    pub deferred_tax_rate: Option<f64>,
+}
+
+/// A deferred tax rate is a fraction from 0 up to (not including) 1.
+pub fn check_deferred_tax_rate(rate: f64) -> PlanResult<()> {
+    if !(0.0..1.0).contains(&rate) {
+        return Err(PlanError::invalid(
+            "deferred_tax_rate must be a rate from 0 up to (not including) 1",
+        ));
+    }
+    Ok(())
 }
 
 pub fn validate_date(text: &str, field: &str) -> PlanResult<String> {
@@ -175,6 +192,14 @@ impl UpdateScenario {
             return Err(PlanError::invalid(
                 "duration_years must be between 1 and 120",
             ));
+        }
+        Ok(())
+    }
+
+    /// The deferred tax rate, when given, is one the table's CHECK accepts.
+    pub fn check_deferred_tax_rate(&self) -> PlanResult<()> {
+        if let Some(rate) = self.deferred_tax_rate {
+            check_deferred_tax_rate(rate)?;
         }
         Ok(())
     }

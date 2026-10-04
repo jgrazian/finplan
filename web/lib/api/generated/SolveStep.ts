@@ -32,4 +32,9 @@ export type SolveStep = {
   p5: number;
   p50: number;
   p95: number;
+  /**
+   * Median after-tax terminal net worth, nominal: tax-deferred balances
+   * net of the plan's `deferred_tax_rate`. Absent where the run predates it.
+   */
+  after_tax_p50?: number | null;
 };
