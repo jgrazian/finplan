@@ -31,7 +31,7 @@ struct Sparse {
     withdrawals: BTreeMap<i64, f64>,
     rmd: BTreeMap<i64, f64>,
     balances: BTreeMap<i64, f64>,
-    /// Gross sale proceeds and the credits those sales produced.
+    /// Gross sale proceeds and cash withdrawn, and the credits they produced.
     gross: f64,
     credits: f64,
     shortfall: f64,
@@ -135,6 +135,14 @@ fn fold(compiled: &CompiledScenario, result: &SimulationResult, from_year: i64) 
                 row.gross += proceeds;
                 if let Some(id) = account(*account_id) {
                     *row.withdrawals.entry(id).or_default() += proceeds;
+                }
+            }
+            // An investment account's own cash, drawn before its holdings:
+            // a withdrawal from that account like a sale's proceeds.
+            StateEvent::CashWithdrawal { account_id, amount } => {
+                row.gross += amount;
+                if let Some(id) = account(*account_id) {
+                    *row.withdrawals.entry(id).or_default() += amount;
                 }
             }
             StateEvent::RmdWithdrawal {

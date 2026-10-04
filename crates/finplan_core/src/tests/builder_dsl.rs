@@ -225,8 +225,11 @@ fn test_expense_event_builder() {
     assert!(metadata.event_id("Utilities").is_some());
 }
 
+/// `full_balance` on a withdrawal asks for the invested value. The sweep takes
+/// the account's cash first and sells holdings for the rest, so the account
+/// ends holding its starting cash's worth of investments and no cash.
 #[test]
-fn test_single_account_full_balance_sells_all_holdings_and_preserves_cash() {
+fn test_single_account_full_balance_takes_cash_before_holdings() {
     for starting_cash in [0.0, 300.0] {
         let (config, metadata) = SimulationBuilder::new()
             .start(2025, 1, 1)
@@ -278,6 +281,19 @@ fn test_single_account_full_balance_sells_all_holdings_and_preserves_cash() {
             result.final_account_balance(brokerage_id),
             Some(starting_cash)
         );
+        let cash_withdrawn: f64 = result
+            .ledger
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                StateEvent::CashWithdrawal { account_id, amount }
+                    if *account_id == brokerage_id =>
+                {
+                    Some(*amount)
+                }
+                _ => None,
+            })
+            .sum();
+        assert_eq!(cash_withdrawn, starting_cash);
         let final_brokerage = result
             .wealth_snapshots
             .last()
@@ -289,7 +305,7 @@ fn test_single_account_full_balance_sells_all_holdings_and_preserves_cash() {
         assert!(matches!(
             &final_brokerage.flavor,
             AccountSnapshotFlavor::Investment { cash, assets }
-                if *cash == starting_cash && assets.values().all(|value| *value == 0.0)
+                if *cash == 0.0 && (assets.values().sum::<f64>() - starting_cash).abs() < 1e-6
         ));
     }
 }

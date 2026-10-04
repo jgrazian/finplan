@@ -156,6 +156,11 @@ pub enum StateEvent {
         long_term_gain: f64,
     },
 
+    /// Withdraw an investment account's uninvested cash (gross, before any
+    /// tax withheld on it). Withdrawals take an account's cash before they
+    /// sell its holdings; the tax events that follow it are its own.
+    CashWithdrawal { account_id: AccountId, amount: f64 },
+
     // === Tax Events ===
     /// Ordinary income tax incurred
     IncomeTax {
@@ -248,6 +253,7 @@ impl StateEvent {
             StateEvent::CashCredit { .. }
                 | StateEvent::CashDebit { .. }
                 | StateEvent::CashAppreciation { .. }
+                | StateEvent::CashWithdrawal { .. }
         )
     }
 
@@ -296,6 +302,7 @@ impl StateEvent {
             StateEvent::LiabilityInterestAccrual { account_id, .. } => Some(*account_id),
             StateEvent::AssetPurchase { account_id, .. } => Some(*account_id),
             StateEvent::AssetSale { account_id, .. } => Some(*account_id),
+            StateEvent::CashWithdrawal { account_id, .. } => Some(*account_id),
             StateEvent::RmdWithdrawal { account_id, .. } => Some(*account_id),
             StateEvent::BalanceAdjusted { account, .. } => Some(*account),
             _ => None,

@@ -1,7 +1,8 @@
 //! Asset liquidation with proper lot tracking and tax calculation
 //!
 //! This module provides functions to liquidate assets from investment accounts,
-//! handling cost basis tracking, capital gains calculation, and tax implications.
+//! handling cost basis tracking, capital gains calculation, and tax implications,
+//! and to withdraw an investment account's own cash under the same tax rules.
 
 use jiff::civil::Date;
 
@@ -9,10 +10,10 @@ use crate::{
     error::MarketError,
     evaluate::EvalEvent,
     model::{
-        AccountId, AssetCoord, AssetId, AssetLot, CashFlowKind, InvestmentContainer, LotMethod,
-        Market, TaxConfig, TaxStatus,
+        AccountId, AmountMode, AssetCoord, AssetId, AssetLot, CashFlowKind, InvestmentContainer,
+        LotMethod, Market, TaxConfig, TaxStatus,
     },
-    taxes::calculate_federal_marginal_tax,
+    taxes::{calculate_federal_marginal_tax, calculate_gross_from_net},
 };
 
 /// Calculate current price for an asset using the Market struct
@@ -199,35 +200,13 @@ fn liquidate_tax_deferred_into(
     push_lot_subtractions(params.asset_coord, &lot_result, out);
 
     let gross_amount = lot_result.proceeds;
-
-    // Entire withdrawal taxed as ordinary income
-    let federal_tax = calculate_federal_marginal_tax(
+    let (net_amount, early_withdrawal_penalty) = withhold_distribution_tax(
         gross_amount,
+        params.tax_config,
         params.ytd_ordinary_income,
-        &params.tax_config.federal_brackets,
+        params.early_withdrawal_penalty_applies,
+        out,
     );
-    let state_tax = gross_amount * params.tax_config.state_rate;
-    let mut net_amount = gross_amount - federal_tax - state_tax;
-
-    out.push(EvalEvent::IncomeTax {
-        gross_income_amount: gross_amount,
-        federal_tax,
-        state_tax,
-    });
-
-    // Apply early withdrawal penalty if applicable (before age 59.5)
-    let early_withdrawal_penalty = if params.early_withdrawal_penalty_applies {
-        let penalty = gross_amount * params.tax_config.early_withdrawal_penalty_rate;
-        net_amount -= penalty;
-        out.push(EvalEvent::EarlyWithdrawalPenalty {
-            gross_amount,
-            penalty_amount: penalty,
-            penalty_rate: params.tax_config.early_withdrawal_penalty_rate,
-        });
-        penalty
-    } else {
-        0.0
-    };
 
     out.push(EvalEvent::CashCredit {
         to: params.to_account,
@@ -240,6 +219,49 @@ fn liquidate_tax_deferred_into(
         net_proceeds: net_amount,
         early_withdrawal_penalty,
     }
+}
+
+/// Tax a distribution from a tax-deferred account: the whole gross is
+/// ordinary income, plus the early-withdrawal penalty before 59½. Pushes the
+/// tax events and returns `(net, penalty)`.
+#[inline]
+fn withhold_distribution_tax(
+    gross_amount: f64,
+    tax_config: &TaxConfig,
+    ytd_ordinary_income: f64,
+    early_withdrawal_penalty_applies: bool,
+    out: &mut Vec<EvalEvent>,
+) -> (f64, f64) {
+    // Entire withdrawal taxed as ordinary income
+    let federal_tax = calculate_federal_marginal_tax(
+        gross_amount,
+        ytd_ordinary_income,
+        &tax_config.federal_brackets,
+    );
+    let state_tax = gross_amount * tax_config.state_rate;
+    let mut net_amount = gross_amount - federal_tax - state_tax;
+
+    out.push(EvalEvent::IncomeTax {
+        gross_income_amount: gross_amount,
+        federal_tax,
+        state_tax,
+    });
+
+    // Apply early withdrawal penalty if applicable (before age 59.5)
+    let early_withdrawal_penalty = if early_withdrawal_penalty_applies {
+        let penalty = gross_amount * tax_config.early_withdrawal_penalty_rate;
+        net_amount -= penalty;
+        out.push(EvalEvent::EarlyWithdrawalPenalty {
+            gross_amount,
+            penalty_amount: penalty,
+            penalty_rate: tax_config.early_withdrawal_penalty_rate,
+        });
+        penalty
+    } else {
+        0.0
+    };
+
+    (net_amount, early_withdrawal_penalty)
 }
 
 /// Liquidate from a tax-free account, pushing effects directly to output buffer
@@ -272,6 +294,118 @@ fn liquidate_tax_free_into(
         gross_amount,
         net_proceeds: net_amount,
         early_withdrawal_penalty: 0.0, // No penalty for tax-free accounts (simplified MVP)
+    }
+}
+
+/// Parameters for withdrawing an investment account's uninvested cash
+#[derive(Debug, Clone)]
+pub struct CashWithdrawalParams<'a> {
+    /// The account the cash is drawn from
+    pub account_id: AccountId,
+    /// That account's investment container
+    pub investment: &'a InvestmentContainer,
+    /// Cash already drawn from this account by the same evaluation and not
+    /// yet applied (a sweep may visit an account twice)
+    pub already_drawn: f64,
+    /// Where to credit the cash, net of any tax withheld
+    pub to_account: AccountId,
+    /// Whether `amount` is what leaves the account or what arrives
+    pub amount_mode: AmountMode,
+    /// Tax configuration for calculating taxes
+    pub tax_config: &'a TaxConfig,
+    /// Year-to-date ordinary income for marginal tax calculation
+    pub ytd_ordinary_income: f64,
+    /// Whether early withdrawal penalty applies (person below age 59.5)
+    pub early_withdrawal_penalty_applies: bool,
+}
+
+/// Withdraw up to `amount` of an investment account's own cash, taxed by the
+/// account's status as a sale of the account would be, less the gain (cash
+/// has no basis to recover and no lot to consume).
+///
+/// Draws at most the cash on hand. Pushes a `CashWithdrawal` for the gross,
+/// then its tax events, then the `CashCredit` of the net, the same shape as a
+/// sale. Pushes nothing when there is no cash to draw.
+pub fn withdraw_cash_into(
+    params: &CashWithdrawalParams,
+    amount: f64,
+    out: &mut Vec<EvalEvent>,
+) -> LiquidationResult {
+    let available = params.investment.cash.value - params.already_drawn;
+    if amount <= 0.001 || available < 0.01 {
+        return LiquidationResult::default();
+    }
+
+    match params.investment.tax_status {
+        // Already-taxed money: no gain, no tax.
+        TaxStatus::Taxable => withdraw_untaxed_cash_into(amount.min(available), params, out),
+        TaxStatus::TaxDeferred => {
+            let gross_amount = match params.amount_mode {
+                AmountMode::Gross => amount,
+                // The penalty is a flat rate on the gross, like state tax.
+                AmountMode::Net => calculate_gross_from_net(
+                    amount,
+                    params.ytd_ordinary_income,
+                    &params.tax_config.federal_brackets,
+                    params.tax_config.state_rate
+                        + if params.early_withdrawal_penalty_applies {
+                            params.tax_config.early_withdrawal_penalty_rate
+                        } else {
+                            0.0
+                        },
+                ),
+            }
+            .min(available);
+
+            out.push(EvalEvent::CashWithdrawal {
+                from: params.account_id,
+                amount: gross_amount,
+            });
+            let (net_amount, early_withdrawal_penalty) = withhold_distribution_tax(
+                gross_amount,
+                params.tax_config,
+                params.ytd_ordinary_income,
+                params.early_withdrawal_penalty_applies,
+                out,
+            );
+            out.push(EvalEvent::CashCredit {
+                to: params.to_account,
+                net_amount,
+                kind: CashFlowKind::LiquidationProceeds,
+            });
+
+            LiquidationResult {
+                gross_amount,
+                net_proceeds: net_amount,
+                early_withdrawal_penalty,
+            }
+        }
+        // A qualified distribution: no tax, as for a tax-free sale.
+        TaxStatus::TaxFree => withdraw_untaxed_cash_into(amount.min(available), params, out),
+    }
+}
+
+/// Cash that leaves with no tax withheld: gross and net are the same.
+#[inline]
+fn withdraw_untaxed_cash_into(
+    amount: f64,
+    params: &CashWithdrawalParams,
+    out: &mut Vec<EvalEvent>,
+) -> LiquidationResult {
+    out.push(EvalEvent::CashWithdrawal {
+        from: params.account_id,
+        amount,
+    });
+    out.push(EvalEvent::CashCredit {
+        to: params.to_account,
+        net_amount: amount,
+        kind: CashFlowKind::LiquidationProceeds,
+    });
+
+    LiquidationResult {
+        gross_amount: amount,
+        net_proceeds: amount,
+        early_withdrawal_penalty: 0.0,
     }
 }
 

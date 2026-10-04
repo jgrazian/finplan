@@ -3,7 +3,7 @@ use crate::graph::ScenarioGraph;
 use sha2::{Digest, Sha256};
 
 /// Bump when compilation, model semantics, or snapshot interpretation changes.
-pub const MODEL_VERSION: &str = "finplan-0.9.0/snapshot-1";
+pub const MODEL_VERSION: &str = "finplan-0.10.0/snapshot-1";
 
 pub fn snapshot(graph: &ScenarioGraph) -> Result<(String, String), serde_json::Error> {
     let mut graph = graph.clone();

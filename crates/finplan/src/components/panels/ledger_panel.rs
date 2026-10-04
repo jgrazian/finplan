@@ -284,6 +284,13 @@ impl LedgerPanel {
                     format_currency(total_gain)
                 )
             }
+            StateEvent::CashWithdrawal { account_id, amount } => {
+                let name = account_names
+                    .get(account_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                format!("{}: Withdraw {} of cash", name, format_currency(*amount))
+            }
             StateEvent::IncomeTax {
                 gross_amount,
                 federal_tax,

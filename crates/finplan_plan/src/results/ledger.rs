@@ -263,6 +263,16 @@ pub fn flatten(entry: &LedgerEntry, names: &Names<'_>) -> Option<LedgerRow> {
             "gain",
         ),
 
+        // Gross, like a sale's proceeds: any tax withheld follows as its own
+        // entry, and the net credit after that.
+        StateEvent::CashWithdrawal { account_id, amount } => row(
+            CASH,
+            "Cash withdrawal",
+            format!("uninvested cash from {}", names.account(*account_id)),
+            Some(*amount),
+            names.account_db_id(*account_id),
+        ),
+
         StateEvent::IncomeTax {
             gross_amount,
             federal_tax,
