@@ -28,7 +28,10 @@ tag pinned by `FINPLAN_TAG` in `deploy.env`), exits if that commit is already
 live, and otherwise:
 
 1. builds `finplan-server` with `cargo build --release` and the web app with
-   `pnpm build` as the build user, using that user's toolchains;
+   `pnpm build` as the build user, using that user's toolchains. The web build
+   first compiles the browser engine (`scripts/build-wasm.sh`), so the script
+   installs the `wasm32-unknown-unknown` target and the `wasm-bindgen` CLI
+   (pinned to the version in `crates/finplan_wasm/Cargo.toml`) if missing;
 2. installs the result into a new release directory;
 3. backs up the database, then switches `current` and restarts both services;
 4. checks the API and web health, then prunes to the newest five releases.
@@ -59,8 +62,17 @@ sudo systemctl enable --now finplan-deploy.timer \
     finplan-backup-hourly.timer finplan-backup-daily.timer
 ```
 
-The build user needs `cargo` in `~/.cargo/bin` and `node`/`npx` in
+The build user needs `cargo` and `rustup` in `~/.cargo/bin` and `node`/`npx` in
 `~/.local/bin`. pnpm is fetched with `npx`, so it does not need to be installed.
+The first deploy after the engine landed also runs `rustup target add
+wasm32-unknown-unknown` and `cargo install wasm-bindgen-cli --locked` (a few
+minutes); to do it ahead of time, as the build user:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version '=0.2.106' --locked
+sudo dnf install binaryen          # optional: wasm-opt shrinks the engine ~10%
+```
 
 In Cloudflare Zero Trust, open the tunnel, go to **Public Hostnames**, and add
 `finplan.rayknot.com` with service `HTTP` → `127.0.0.1:3480`. The zone must

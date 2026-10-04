@@ -1489,6 +1489,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "finplan_wasm"
+version = "0.12.2"
+dependencies = [
+ "finplan_core",
+ "finplan_plan",
+ "serde",
+ "serde_json",
+ "ts-rs",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -297,6 +297,109 @@ local mode sends none of them without opt-in (open question 4).
 7. **Default flip.** No-account visitors get local mode; migrate and retire
    17's guests; new pricing page.
 
+## Spike results (2026-10-03)
+
+Machine: Apple Silicon laptop (macOS, Node 24 / V8 for WebAssembly, the same
+engine Chrome and Edge use; Chrome 154 headless for the loading checks).
+Plan: `crates/finplan_plan/testdata/default_snapshot.json`, the anonymized
+default plan (4 investment accounts, 30 years, monthly events). The criterion
+benches build their fixtures in Rust, so they cannot be fed to WASM as they
+are; the default plan is the typical-plan measure. Native and WASM run the
+identical code path: `coordinator_new` + `prepare` + `run_batch` per batch +
+`coordinator_finish` (phase 2 and the projection), JSON in and out at every
+step, one thread, batches of 100 in rounds of 4. Reproduce with
+`cargo run --release -p finplan_wasm --example spike_native -- <snapshot>
+<iterations> <seed> [out]` and `node scripts/wasm-spike.mjs <snapshot>
+<iterations> <seed> [out]`.
+
+| | Native (release, `opt-level = "s"`) | Native (`opt-level = 3`, fat LTO) | WASM (`wasm-release`) |
+|---|---|---|---|
+| 1,000 iterations, batches only | 0.87 s (1,150 it/s) | 0.85 s (1,200 it/s) | **1.35 s (745 it/s)** |
+| 1,000 iterations, whole run incl. phase 2 and projection | 0.89 s | n/a | **1.38 s** |
+| 10,000 iterations, batches only | 7.8 s (1,290 it/s) | n/a | 13.4 s (745 it/s) |
+
+- **Throughput gap: 1.5x** single-threaded (native `opt-level = "s"` as the
+  server ships it), inside the expected 1.5-3x. Phase 2 plus projection adds
+  about 40 ms (20 ms native). Preparing the plan costs 10 ms.
+- **Time for 1,000 iterations: 1.4 s against the 3 s criterion.** With the
+  worker pool of phase 3 (batches run in parallel, one WASM instance each) the
+  4-batch default plan runs in about a quarter of that on 4+ cores.
+- **Bundle:** `finplan_wasm_bg.wasm` is 2.11 MB raw after `wasm-opt -Os`
+  (2.29 MB before), **679 KB gzip, 474 KB brotli** against the 2 MB compressed
+  budget. The generated JS glue is 34 KB. The size is serde_json plus the
+  plan model and engine; `opt-level = "s"`, fat LTO and `panic = "abort"` are
+  set in `[profile.wasm-release]`.
+- **Cold start**, fetch-free, in Node: import the glue 0.5 ms, instantiate
+  1.8-2.1 ms, first call (`library_seed`) 0.6 ms, about 3 ms in all, with 1.25
+  MB of linear memory. In Chrome (headless, production build, worker, fetching
+  the `.wasm` from the Next server and compiling it) fetch, compile and the
+  first call took about 40 ms cold and about 11 ms warm.
+- **Memory at 10,000 iterations** through the coordinator: WASM linear memory
+  grew to **32.9 MB** (30.8 MB at 1,000). That is with the whole run as four
+  batches of 2,500, whose JSON outputs (3.4 MB each, 13.7 MB together at 10k)
+  are the bulk of it. The coordinator itself keeps 16 bytes per iteration.
+  Well under the 256 MB-per-worker budget, so batch sizing is not yet a
+  constraint; a 100-iteration batch is about 150 KB of JSON.
+- **Native-versus-WASM result gap, same seed: not bit-identical, statistically
+  equal.** At 1,000 iterations seed 42: success rate 0.895 native, 0.903 WASM;
+  median final net worth 742.3 M native, 780.1 M WASM. At 10,000: success rate
+  0.9056 and 0.9110 (difference 0.5 points, 1.3 combined standard errors),
+  median 785.4 M and 789.9 M (0.6%), mean 1,765 M and 1,750 M. The gap is
+  larger than libm last-bit differences alone would give, and the reason is
+  not libm: `rand`'s `SmallRng` is a different generator on 32-bit targets
+  (Xoshiro128++ on wasm32, Xoshiro256++ on 64-bit), and `seed_from_u64` and
+  `usize` sampling differ with it. So a seed names a different stream per
+  pointer width, which the "Same seed, different machine" section above did not
+  account for. The consequences are the ones it lists (agreement within the
+  Monte Carlo interval, not bit for bit; preview pairing within one engine).
+  Making them identical means naming the generator explicitly in core
+  (`rand_chacha::ChaCha8Rng`, already in the dependency tree, or
+  `rand_xoshiro`) and sampling in `u64`, plus the `libm` routing the section
+  mentions. That would also change every seeded result the server has ever
+  produced, so it is not done here.
+
+**Verdict: go.** 1,000 iterations take 1.4 s single-threaded (criterion 3 s),
+the module is 474 KB brotli / 679 KB gzip (criterion 2 MB), cold start is tens
+of milliseconds, and memory is small. The risks to carry forward: the
+1.5x slowdown vs native (parallel workers more than cover it), and the RNG
+difference above (an equivalence test must compare statistics, not bits).
+
+Also learned, which phases 1-3 build on:
+
+- **Loading under Next.js 16 / Turbopack works with no special config**, in
+  `next dev` and in `next build && next start`, from a Web Worker created with
+  `new Worker(new URL("./x.worker.ts", import.meta.url))`. All three of these
+  load the `.wasm`, which Turbopack emits as a hashed asset under
+  `.next/static/media/`: `await init()` (the generated default,
+  `new URL("finplan_wasm_bg.wasm", import.meta.url)` inside the glue),
+  `await init({ module_or_path: new URL("./pkg/finplan_wasm_bg.wasm",
+  import.meta.url) })`, and `initSync({ module: await (await fetch(new
+  URL("./pkg/finplan_wasm_bg.wasm", import.meta.url))).arrayBuffer() })`. The
+  first or second is the one to use (they stream-compile); nothing needs to go
+  in `public/`. `web/lib/engine/pkg` must exist for `tsc` and the bundler to
+  resolve an import of it, which is why `predev`, `prebuild` and CI build it
+  first. Under Node (the smoke test) `initSync({ module: readFileSync(...) })`.
+- **`BatchOutput` and `BatchSpec` are opaque strings.** Iteration seeds are
+  full 64-bit integers, which `JSON.parse` rounds; workers must pass them as
+  strings (and join `BatchOutput`s into an array with `"[" + outputs.join(",")
+  + "]"`), never parse and re-stringify. The run seed itself is limited to
+  0..2^53-1 for the same reason (the browser draws 32 bits).
+- A panic in the engine is a trap and the instance is unusable afterwards; the
+  export layer throws it as an `EngineError` with code `panic`, and the worker
+  should be restarted.
+- A `RunResults` for the default plan is 7.8 MB of JSON (the percentile paths'
+  ledgers dominate), so the store should keep it as one blob per run and the
+  ledger reads (`ledger_page`) re-parse it; if that is too slow, the next
+  step is a handle-based `results_open`.
+- `finplan_wasm` differs from the sketch in "`finplan_wasm` crate" above in
+  these ways: the run seed is a field of the settings (`CreateRun.seed`,
+  required locally) rather than a separate argument; `apply_edit` and
+  `apply_library` take an optional `now` to stamp `updated_at`, and
+  `apply_library` returns the plans the change reached (`changed_plans`) so the
+  store can write them; the coordinator exposes `coordinator_info` for progress
+  denominators; reads are one `read(graph, library, query)` and
+  `read_library(library, plans, query)` with tagged queries.
+
 ## Open questions
 
 1. **Pricing.** With local runs unlimited, what does a Free *account* get?

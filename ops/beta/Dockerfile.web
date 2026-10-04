@@ -1,12 +1,29 @@
+# The browser engine (spec 19): the plan model and simulator compiled to
+# WebAssembly, which the web build bundles.
+FROM rust:1-bookworm AS wasm
+WORKDIR /src
+RUN rustup target add wasm32-unknown-unknown && apt-get update \
+    && apt-get install -y --no-install-recommends binaryen \
+    && rm -rf /var/lib/apt/lists/*
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo .cargo
+COPY crates crates
+COPY scripts/build-wasm.sh scripts/build-wasm.sh
+# Same version the crate pins: build-wasm.sh refuses any other.
+RUN cargo install wasm-bindgen-cli --locked \
+    --version "$(sed -n 's/^wasm-bindgen = "=\([0-9.]*\)".*/\1/p' crates/finplan_wasm/Cargo.toml)"
+RUN ./scripts/build-wasm.sh
+
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
 RUN npm install --global pnpm@12.3.4
 COPY web/package.json web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/ ./
+COPY --from=wasm /src/web/lib/engine/pkg ./lib/engine/pkg
 # Next embeds rewrites at build time; this must match the runtime API service.
 ARG FINPLAN_API_ORIGIN=http://server:8080
-ENV FINPLAN_API_ORIGIN=$FINPLAN_API_ORIGIN NEXT_TELEMETRY_DISABLED=1
+ENV FINPLAN_API_ORIGIN=$FINPLAN_API_ORIGIN NEXT_TELEMETRY_DISABLED=1 FINPLAN_WASM_PREBUILT=1
 RUN pnpm build
 
 FROM node:24-bookworm-slim

@@ -1,0 +1,29 @@
+[package]
+name = "finplan_wasm"
+version = "0.12.2"
+edition = "2024"
+description = "WebAssembly build of the FinPlan plan model and engine (spec 19)"
+
+[lib]
+# `cdylib` is what wasm-bindgen turns into the browser module; `rlib` lets the
+# workspace's native tests exercise the very same functions.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# No rayon: the browser runs one engine per worker instead (spec 19, "Parallelism
+# without cross-origin isolation"), so the batches are run by the host.
+finplan_core = { path = "../finplan_core", default-features = false }
+finplan_plan = { path = "../finplan_plan", default-features = false }
+serde = { workspace = true }
+# `float_roundtrip`: a `BatchOutput` read back from JSON must equal the one that
+# was written, bit for bit, or a merged run depends on which worker ran what.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
+# Pinned: the `wasm-bindgen` CLI that `scripts/build-wasm.sh` runs must be the
+# same version, and refuses to run on a module built by any other.
+wasm-bindgen = "=0.2.106"
+
+[features]
+# Pretty-prints the generated TypeScript; only wanted while regenerating the
+# bindings (`scripts/gen-bindings.sh`).
+ts-format = ["ts-rs/format"]

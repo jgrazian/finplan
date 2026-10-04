@@ -152,3 +152,36 @@ fn a_seed_reproduces_the_projection_exactly() {
         assert_eq!(first, body());
     }
 }
+
+/// A stored run is read back from JSON (the browser keeps `RunResults` in
+/// IndexedDB), and must answer the read endpoints exactly as the live value.
+#[test]
+fn run_results_round_trip_through_json() {
+    let live = projected(&RunSettings::default());
+    let json = serde_json::to_string(&live).unwrap();
+    let stored: RunResults = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        serde_json::to_string(&stored).unwrap(),
+        json,
+        "re-serializing the stored value changes it"
+    );
+
+    for series in [None, Some("mean"), Some("0.1"), Some("0.9")] {
+        let a = serde_json::to_value(live.results(1, 2, series).unwrap()).unwrap();
+        let b = serde_json::to_value(stored.results(1, 2, series).unwrap()).unwrap();
+        assert_eq!(a, b, "results({series:?})");
+        let a = serde_json::to_value(live.ledger_page(1, series, None, None, None, None).unwrap())
+            .unwrap();
+        let b = serde_json::to_value(
+            stored
+                .ledger_page(1, series, None, None, None, None)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(a, b, "ledger_page({series:?})");
+    }
+    let page = stored
+        .ledger_page(1, None, None, Some("cash"), Some(5), Some(2))
+        .unwrap();
+    assert!(page.total >= page.entries.len() as i64);
+}

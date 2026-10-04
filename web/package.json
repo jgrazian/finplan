@@ -5,12 +5,15 @@
   "packageManager": "pnpm@12.3.4",
   "type": "module",
   "scripts": {
+    "wasm": "../scripts/build-wasm.sh",
+    "predev": "../scripts/build-wasm.sh",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/*.test.mts"
+    "test": "node --experimental-strip-types --test tests/*.test.mts",
+    "prebuild": "[ -n \"$FINPLAN_WASM_PREBUILT\" ] || ../scripts/build-wasm.sh"
   },
   "dependencies": {
     "next": "16.2.3",

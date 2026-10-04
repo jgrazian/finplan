@@ -4,25 +4,18 @@ use axum::{
     extract::{Path, State},
     routing::post,
 };
-use serde::Deserialize;
-use ts_rs::TS;
 
-use finplan_plan::expressions::{ExpressionValidation, validate_effect};
+use finplan_plan::expressions::{
+    ExpressionValidation, ExpressionValidationRequest, validate_effect,
+};
 
 use crate::{auth::session::CurrentUser, error::ApiResult, state::AppState};
-use finplan_plan::specs::EffectSpec;
 
 pub fn router() -> Router<AppState> {
     Router::new().route(
         "/scenarios/{scenario_id}/expressions/validate",
         post(validate),
     )
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export)]
-pub struct ExpressionValidationRequest {
-    pub effect: EffectSpec,
 }
 
 async fn validate(

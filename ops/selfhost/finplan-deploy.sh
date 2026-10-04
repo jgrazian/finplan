@@ -69,6 +69,13 @@ as_builder git checkout --quiet --force --detach "$sha"
 # Keep the cargo target and node_modules caches; everything else is rebuilt.
 as_builder git clean -ffdxq -e /target -e /web/node_modules
 as_builder cargo build --locked --release --bin finplan-server
+# The web build compiles the engine to WebAssembly first (spec 19,
+# scripts/build-wasm.sh): it needs the wasm32 target and a wasm-bindgen CLI of
+# exactly the version the crate pins. Both installs are no-ops once present.
+wasm_bindgen=$(sed -n 's/^wasm-bindgen = "=\([0-9.]*\)".*/\1/p' crates/finplan_wasm/Cargo.toml)
+as_builder rustup target add wasm32-unknown-unknown
+as_builder bash -c "[[ \$(wasm-bindgen --version 2>/dev/null) == 'wasm-bindgen $wasm_bindgen' ]] \
+    || cargo install wasm-bindgen-cli --version '=$wasm_bindgen' --locked"
 as_builder bash -c "cd web && npx --yes $PNPM install --frozen-lockfile \
     && FINPLAN_API_ORIGIN=$API_ORIGIN npx --yes $PNPM build"
 

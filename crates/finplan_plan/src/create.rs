@@ -55,48 +55,20 @@ pub fn new_plan(
         ));
     }
 
-    let mut graph = ScenarioGraph {
-        scenario: ScenarioRow {
-            id,
-            user_id: LOCAL_USER_ID.to_string(),
-            name: name.to_string(),
-            description: body.description.clone(),
-            start_date,
-            birth_date,
-            duration_years: body.duration_years,
-            inflation_profile_id: body.inflation_profile_id,
-            tax_config_id: body.tax_config_id,
-            collect_ledger: 1,
-            created_at: now.to_string(),
-            updated_at: now.to_string(),
-        },
-        assets: Vec::new(),
-        accounts: Vec::new(),
-        bank: Default::default(),
-        investment: Default::default(),
-        property: Default::default(),
-        liability: Default::default(),
-        positions: Default::default(),
-        return_profiles: Default::default(),
-        distributions: Default::default(),
-        inflation_profile_name: None,
-        inflation_distribution_id: None,
-        tax_config: None,
-        tax_brackets: Vec::new(),
-        tax_configs: Default::default(),
-        inflation_profiles: Default::default(),
-        events: Vec::new(),
-        parameters: Vec::new(),
-        triggers: Default::default(),
-        trigger_children: Default::default(),
-        event_trigger: Default::default(),
-        amounts: Default::default(),
-        effects: Default::default(),
-        event_effects: Default::default(),
-        effect_children: Default::default(),
-        withdrawal_sources: Default::default(),
-        withdrawal_items: Default::default(),
-    };
+    let mut graph = empty_graph(ScenarioRow {
+        id,
+        user_id: LOCAL_USER_ID.to_string(),
+        name: name.to_string(),
+        description: body.description.clone(),
+        start_date,
+        birth_date,
+        duration_years: body.duration_years,
+        inflation_profile_id: body.inflation_profile_id,
+        tax_config_id: body.tax_config_id,
+        collect_ledger: 1,
+        created_at: now.to_string(),
+        updated_at: now.to_string(),
+    });
     library.attach(&mut graph);
     Ok(graph)
 }
@@ -124,4 +96,60 @@ pub fn duplicate(
     copy.scenario.created_at = now.to_string();
     copy.scenario.updated_at = now.to_string();
     Ok(copy)
+}
+
+/// A plan with no accounts, assets, events or library: just `scenario`.
+fn empty_graph(scenario: ScenarioRow) -> ScenarioGraph {
+    ScenarioGraph {
+        scenario,
+        assets: Vec::new(),
+        accounts: Vec::new(),
+        bank: Default::default(),
+        investment: Default::default(),
+        property: Default::default(),
+        liability: Default::default(),
+        positions: Default::default(),
+        return_profiles: Default::default(),
+        distributions: Default::default(),
+        inflation_profile_name: None,
+        inflation_distribution_id: None,
+        tax_config: None,
+        tax_brackets: Vec::new(),
+        tax_configs: Default::default(),
+        inflation_profiles: Default::default(),
+        events: Vec::new(),
+        parameters: Vec::new(),
+        triggers: Default::default(),
+        trigger_children: Default::default(),
+        event_trigger: Default::default(),
+        amounts: Default::default(),
+        effects: Default::default(),
+        event_effects: Default::default(),
+        effect_children: Default::default(),
+        withdrawal_sources: Default::default(),
+        withdrawal_items: Default::default(),
+    }
+}
+
+/// The library as a graph: a plan with nothing in it but the library's tables
+/// attached, which is what the library readers in [`crate::read`]
+/// (`return_profiles`, `tax_configs`, ...) read. It is never a plan of the
+/// user's.
+pub fn library_view(library: &Library) -> ScenarioGraph {
+    let mut graph = empty_graph(ScenarioRow {
+        id: 0,
+        user_id: LOCAL_USER_ID.to_string(),
+        name: "library".to_string(),
+        description: None,
+        start_date: "2000-01-01".to_string(),
+        birth_date: None,
+        duration_years: 1,
+        inflation_profile_id: None,
+        tax_config_id: None,
+        collect_ledger: 0,
+        created_at: String::new(),
+        updated_at: String::new(),
+    });
+    library.attach(&mut graph);
+    graph
 }

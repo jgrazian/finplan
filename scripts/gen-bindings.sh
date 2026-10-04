@@ -3,8 +3,9 @@
 # Regenerate the TypeScript bindings for the finplan_server API types.
 #
 # The types themselves are the source of truth: every request/response struct in
-# `crates/finplan_server/src/{api,auth,error}` and the plan specs in
-# `crates/finplan_plan/src/specs` derives `ts_rs::TS`, and ts-rs writes one
+# `crates/finplan_server/src/{api,auth,error}`, the plan specs in
+# `crates/finplan_plan/src/specs` and the engine's own shapes in
+# `crates/finplan_wasm/src` derives `ts_rs::TS`, and ts-rs writes one
 # `.ts` file per type. Run this after changing any of them; the
 # result is committed, so `git diff --exit-code web/lib/api/generated` in CI
 # catches bindings that have drifted from the server.
@@ -27,6 +28,9 @@ export TS_RS_EXPORT_DIR="$out"
 cargo test --manifest-path "$root/Cargo.toml" -p finplan_server \
     --features ts-format --lib export_bindings -- --quiet
 cargo test --manifest-path "$root/Cargo.toml" -p finplan_plan \
+    --features ts-format --lib export_bindings -- --quiet
+# ...and so are the few shapes the browser engine adds (errors, read queries).
+cargo test --manifest-path "$root/Cargo.toml" -p finplan_wasm \
     --features ts-format --lib export_bindings -- --quiet
 
 # ts-rs emits a file per type but no barrel, and 50-odd deep imports in the

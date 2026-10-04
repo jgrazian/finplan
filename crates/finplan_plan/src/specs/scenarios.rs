@@ -7,7 +7,7 @@ use crate::error::{PlanError, PlanResult};
 
 /// Whether a scenario is a plan or an AI-guided draft still being written.
 /// Drafts never appear in the scenario list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
 #[cfg_attr(feature = "sqlx", sqlx(type_name = "TEXT", rename_all = "lowercase"))]
 #[serde(rename_all = "lowercase")]
