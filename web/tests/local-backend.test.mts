@@ -676,6 +676,13 @@ if (requireEngine("local backend")) {
     assert.equal(review.ai, null);
     assert.ok(review.suggestions.length > 0);
     assert.ok(review.suggestions.every((s) => s.source === "rules" && s.status === "open"));
+    // What Review checks: every rule ran, its notes counted.
+    const rules = review.checks.filter((c) => c.layer === "rule");
+    assert.ok(rules.length > 0 && rules.every((c) => c.notes != null));
+    assert.equal(
+      rules.reduce((n, c) => n + (c.notes ?? 0), 0),
+      review.suggestions.length,
+    );
     assert.deepEqual(await h.runtime.review.get(h.plan.id), review);
 
     // Set one aside; it stays set aside across the next review.

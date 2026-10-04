@@ -20,7 +20,7 @@ use crate::graph::ScenarioGraph;
 use crate::results::RunResults;
 use crate::results::funding::FundingDiagnostics;
 use crate::results::view::Results;
-use crate::rules::{self, Evidence, Kind, Section};
+use crate::rules::{self, Evidence, Kind, ReviewCheck, Section};
 use crate::suggest::{self, Change, Created, DiffLine};
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -325,6 +325,8 @@ pub struct LocalReview {
     pub run_id: i64,
     pub reviewed_at: String,
     pub suggestions: Vec<Suggestion>,
+    /// The standard checks, each rule's counted over `suggestions`.
+    pub checks: Vec<ReviewCheck>,
 }
 
 /// What a note is about, independent of the figures it quotes: the key a local
@@ -445,6 +447,7 @@ pub fn review_results(
     Ok(LocalReview {
         run_id,
         reviewed_at: reviewed_at.to_string(),
+        checks: rules::review_checks(suggestions.iter().filter_map(|s| s.rule.as_deref())),
         suggestions,
     })
 }

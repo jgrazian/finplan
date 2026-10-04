@@ -14,12 +14,15 @@
 //! built on them say "on the median path". Run-level facts come from `stats`
 //! and `funding_diagnostics`.
 
+mod catalogue;
 mod plan;
 mod portfolio;
 mod results;
 
 #[cfg(test)]
 mod tests;
+
+pub use catalogue::{CheckLayer, PlanCheck, ReviewCheck, catalogue, review_checks};
 
 use std::collections::HashMap;
 
@@ -29,7 +32,7 @@ use ts_rs::TS;
 use crate::graph::ScenarioGraph;
 use crate::results::view::Results;
 use crate::specs::events::Event;
-use crate::specs::{AmountSpec, OffsetUnit, TriggerSpec};
+use crate::specs::{AmountSpec, EffectSpec, OffsetUnit, TriggerSpec};
 use crate::suggest::Change;
 
 /// What a note asks of the reader. Declared in severity order: the review
@@ -173,23 +176,65 @@ impl DraftPath {
 
 type Rule = fn(&Ctx) -> Vec<Draft>;
 
-const RULES: &[Rule] = &[
-    portfolio::cost_basis_equals_value,
-    portfolio::idle_bank_cash,
-    portfolio::unused_contribution_limits,
-    portfolio::unmapped_or_mismatched_assets,
-    plan::sweep_sells_while_cash,
-    plan::liability_payment_inflation_adjusted,
-    results::shortfall_account_concentration,
-    results::success_vs_funding_gap,
+/// Every rule a review runs, by the id its notes carry as `Draft::rule`. A
+/// rule added here needs its entry in [`catalogue`]; a test holds the two
+/// lists to each other.
+const RULES: &[(&str, Rule)] = &[
+    (
+        "cost_basis_equals_value",
+        portfolio::cost_basis_equals_value,
+    ),
+    ("idle_bank_cash", portfolio::idle_bank_cash),
+    (
+        "unused_contribution_limits",
+        portfolio::unused_contribution_limits,
+    ),
+    (
+        "unmapped_or_mismatched_assets",
+        portfolio::unmapped_or_mismatched_assets,
+    ),
+    ("sweep_sells_while_cash", plan::sweep_sells_while_cash),
+    (
+        "liability_payment_inflation_adjusted",
+        plan::liability_payment_inflation_adjusted,
+    ),
+    ("rmd_missing", plan::rmd_missing),
+    ("rmd_into_investment_cash", plan::rmd_into_investment_cash),
+    (
+        "shortfall_account_concentration",
+        results::shortfall_account_concentration,
+    ),
+    ("success_vs_funding_gap", results::success_vs_funding_gap),
 ];
+
+/// The id of every rule [`review`] runs, in the order it runs them.
+pub fn rule_ids() -> impl Iterator<Item = &'static str> {
+    RULES.iter().map(|(id, _)| *id)
+}
 
 /// Every note the rules find, fixes first, then by rule and title.
 pub fn review(graph: &ScenarioGraph, results: &Results) -> Vec<Draft> {
     let ctx = Ctx::new(graph, results);
-    let mut drafts: Vec<Draft> = RULES.iter().flat_map(|rule| rule(&ctx)).collect();
+    let mut drafts: Vec<Draft> = RULES
+        .iter()
+        .flat_map(|(id, rule)| {
+            let drafts = rule(&ctx);
+            debug_assert!(
+                drafts.iter().all(|d| d.rule == *id),
+                "rule {id} wrote a note under another id"
+            );
+            drafts
+        })
+        .collect();
     drafts.sort_by(|a, b| (a.kind, a.rule, &a.title).cmp(&(b.kind, b.rule, &b.title)));
     drafts
+}
+
+/// The age required minimum distributions start, by birth year: 73 for
+/// 1951-1959, 75 from 1960. Anyone born earlier is past it by any plan that
+/// starts today, and the engine's table starts at 73, so 73 stands for them.
+pub fn rmd_age(birth_year: i64) -> u8 {
+    if birth_year >= 1960 { 75 } else { 73 }
 }
 
 // ── shared reading of the plan and the run ──────────────────────────────────
@@ -335,8 +380,68 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn age_in(&self, year: i64) -> Option<i64> {
-        let birth = Month::from_date(self.graph.scenario.birth_date.as_deref()?)?;
-        Some(year - birth.year)
+        Some(year - self.birth_year()?)
+    }
+
+    pub fn birth_year(&self) -> Option<i64> {
+        Month::from_date(self.graph.scenario.birth_date.as_deref()?).map(|m| m.year)
+    }
+
+    /// The calendar year the plan ends in.
+    pub fn end_year(&self) -> Option<i64> {
+        Some(self.start()?.year + self.graph.scenario.duration_years)
+    }
+
+    /// The bank account the plan spends from: the one most enabled expenses
+    /// pay from, else the first bank. None when the plan has no bank.
+    pub fn main_bank(&self) -> Option<i64> {
+        let mut banks: Vec<_> = self
+            .graph
+            .accounts
+            .iter()
+            .filter(|a| a.flavor == "Bank")
+            .collect();
+        banks.sort_by_key(|a| (a.sort_order, a.id));
+        let paid_from = |id: i64| {
+            self.events
+                .iter()
+                .flat_map(|e| &e.effects)
+                .filter(|e| {
+                    matches!(e, EffectSpec::Expense { from_account_id, .. } if *from_account_id == id)
+                })
+                .count()
+        };
+        // The first of the banks tied for the most expenses.
+        banks
+            .iter()
+            .rev()
+            .max_by_key(|a| paid_from(a.id))
+            .map(|a| a.id)
+    }
+
+    /// What an investment account holds at the plan's start: its cash and its
+    /// lots at their assets' starting prices.
+    pub fn opening_value(&self, account_id: i64) -> f64 {
+        let cash = self
+            .graph
+            .investment
+            .get(&account_id)
+            .map_or(0.0, |i| i.cash_value);
+        let price = |asset_id: i64| {
+            self.graph
+                .assets
+                .iter()
+                .find(|a| a.id == asset_id)
+                .map_or(0.0, |a| a.initial_price)
+        };
+        cash + self
+            .graph
+            .positions
+            .get(&account_id)
+            .into_iter()
+            .flatten()
+            .map(|lot| lot.units * price(lot.asset_id))
+            .sum::<f64>()
     }
 
     /// When a trigger first fires, where that follows from dates and ages

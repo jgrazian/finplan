@@ -3,8 +3,10 @@ import type { ChangeTarget } from "../api/generated/ChangeTarget.ts";
 import type { Preview } from "../api/generated/Preview.ts";
 import type { PreviewStats } from "../api/generated/PreviewStats.ts";
 import type {
+  CheckLayer,
   Evidence,
   Review,
+  ReviewCheck,
   Suggestion,
   SuggestionKind,
   SuggestionPath,
@@ -59,6 +61,8 @@ const RULE_TOPIC: Record<string, string> = {
   unused_contribution_limits: "contributions",
   sweep_sells_while_cash: "sales you don't need",
   liability_payment_inflation_adjusted: "loan payment",
+  rmd_missing: "RMDs",
+  rmd_into_investment_cash: "where RMDs land",
   unmapped_or_mismatched_assets: "return assumption",
   shortfall_account_concentration: "where it fails",
   success_vs_funding_gap: "success vs funding",
@@ -709,7 +713,7 @@ function byKind(suggestions: Suggestion[]): Suggestion[] {
 }
 
 export function board(
-  review: Review,
+  review: Pick<Review, "run_id" | "reviewed_at" | "suggestions" | "ai">,
   {
     runCreatedAt,
     names = NO_NAMES,
@@ -798,6 +802,91 @@ export function aiLine(review: Pick<Review, "ai">): AiLine | undefined {
         ? { text: `The AI review stopped early: ${ai.error}. Its notes so far are shown.`, running: false }
         : undefined;
   }
+}
+
+// ── What Review checks (spec 21) ────────────────────────────────────────────
+
+/** One standard check, and where it stands for this review. */
+export interface CheckRow {
+  id: string;
+  /** What it looks for, in one sentence. */
+  text: string;
+  /** "Fix · Scenario & events". */
+  meta: string;
+  /** The path it proposes; absent when it proposes none. */
+  offers?: string;
+  /** "2 notes", "Found nothing", "AI reviewer", "Needs AI review", "Before each run". */
+  state: string;
+  /** A rule that wrote notes in this review. */
+  found: boolean;
+}
+
+export interface CheckGroup {
+  layer: CheckLayer;
+  heading: string;
+  rows: CheckRow[];
+}
+
+export interface ChecksView {
+  /** "10 rules ran, 3 wrote notes · 3 for the AI reviewer · 9 before each run". */
+  summary: string;
+  groups: CheckGroup[];
+}
+
+const SECTION_HEADING = Object.fromEntries(SECTIONS.map((s) => [s.id, s.heading])) as Record<SuggestionSection, string>;
+
+/**
+ * The review's standard checks, by layer: the rules (each having looked at
+ * this run, with what it found), the AI reviewer's own checklist, and what
+ * preflight checks before every run. Undefined for a review stored before it
+ * listed them.
+ */
+export function reviewChecks(review: Pick<Review, "checks" | "ai">): ChecksView | undefined {
+  const { checks } = review;
+  if (checks.length === 0) return undefined;
+  const reviewer = review.ai != null;
+  const state = (c: ReviewCheck): string => {
+    switch (c.layer) {
+      case "rule":
+        return c.notes ? plural(c.notes, "note") : "Found nothing";
+      case "reviewer":
+        return reviewer ? "AI reviewer" : "Needs AI review";
+      case "preflight":
+        return "Before each run";
+    }
+  };
+  const groups: CheckGroup[] = (
+    [
+      ["rule", "Rules, run on every review"],
+      ["reviewer", reviewer ? "The AI reviewer's checklist" : "The AI reviewer's checklist (not run on this plan)"],
+      ["preflight", "Preflight, before each run"],
+    ] as const
+  )
+    .map(([layer, heading]) => ({
+      layer,
+      heading,
+      rows: checks
+        .filter((c) => c.layer === layer)
+        .map((c) => ({
+          id: c.id,
+          text: c.looks_for,
+          meta: `${KIND_LABEL[c.kind]} · ${SECTION_HEADING[c.section]}`,
+          offers: c.offers === "none" ? undefined : c.offers,
+          state: state(c),
+          found: c.layer === "rule" && (c.notes ?? 0) > 0,
+        })),
+    }))
+    .filter((g) => g.rows.length > 0);
+  const count = (layer: CheckLayer) => checks.filter((c) => c.layer === layer).length;
+  const found = checks.filter((c) => c.layer === "rule" && (c.notes ?? 0) > 0).length;
+  return {
+    summary: [
+      `${plural(count("rule"), "rule")} ran, ${fmtInt(found)} wrote notes`,
+      `${fmtInt(count("reviewer"))} for the AI reviewer`,
+      `${fmtInt(count("preflight"))} before each run`,
+    ].join(" · "),
+    groups,
+  };
 }
 
 /** What the banner under the header says, and the one action it offers. */

@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use finplan_plan::graph::{DistributionRow, ScenarioGraph};
 use finplan_plan::results::funding::FundingDiagnostics;
 use finplan_plan::results::view::Results;
-use finplan_plan::rules::{Draft, Kind, Section};
+use finplan_plan::rules::{CheckLayer, Draft, Kind, Section};
 use finplan_plan::suggest::read;
 use finplan_plan::suggest::{Change, ChangeTarget};
 
@@ -113,6 +113,7 @@ impl ReviewContext {
         render_plan(&mut text, graph);
         render_run(&mut text, graph, results);
         render_existing(&mut text, rules);
+        render_checks(&mut text, rules);
 
         let dates = results
             .bands
@@ -1261,6 +1262,38 @@ impl ReviewContext {
         );
         self
     }
+}
+
+/// The standard checks (`rules::catalogue`): each rule marked with what it
+/// found in this run, the reviewer's own checklist, and what preflight
+/// checks before every run.
+fn render_checks(out: &mut String, rules: &[Draft]) {
+    let tag = |v: serde_json::Result<Value>| {
+        v.ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    };
+    let _ = writeln!(out, "\n<plan_checks>");
+    for check in finplan_plan::rules::review_checks(rules.iter().map(|d| d.rule)) {
+        let state = match (check.layer, check.notes) {
+            (CheckLayer::Rule, Some(0)) => "ran, found nothing".to_owned(),
+            (CheckLayer::Rule, Some(1)) => "ran, wrote 1 note".to_owned(),
+            (CheckLayer::Rule, n) => format!("ran, wrote {} notes", n.unwrap_or(0)),
+            (CheckLayer::Reviewer, _) => "yours".to_owned(),
+            (CheckLayer::Preflight, _) => "before every run".to_owned(),
+        };
+        let _ = writeln!(
+            out,
+            "- {} ({}, {} / {}): {state}. Looks for: {} Offers: {}",
+            check.id,
+            tag(serde_json::to_value(check.layer)),
+            tag(serde_json::to_value(check.kind)),
+            tag(serde_json::to_value(check.section)),
+            check.looks_for,
+            check.offers,
+        );
+    }
+    let _ = writeln!(out, "</plan_checks>");
 }
 
 fn render_existing(out: &mut String, rules: &[Draft]) {
