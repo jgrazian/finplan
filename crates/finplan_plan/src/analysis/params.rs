@@ -7,8 +7,8 @@ use finplan_core::model::{CalendarAge, ParameterId, ParameterValue};
 use finplan_core::optimization::OptimizableParameter;
 use jiff::civil::Date;
 
-use crate::error::{ApiError, ApiResult};
-use finplan_plan::compile::CompiledScenario;
+use crate::compile::CompiledScenario;
+use crate::error::{PlanError, PlanResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParamKind {
@@ -50,9 +50,9 @@ impl ParamKind {
 }
 
 impl PlanParameter {
-    pub(crate) fn typed_value(&self, value: f64) -> ApiResult<ParameterValue> {
+    pub fn typed_value(&self, value: f64) -> PlanResult<ParameterValue> {
         let invalid = || {
-            ApiError::bad_request(format!(
+            PlanError::invalid(format!(
                 "{} has an invalid {} bound",
                 self.name,
                 self.kind.as_str()
@@ -87,7 +87,7 @@ impl PlanParameter {
         })
     }
 
-    pub fn sweep(&self, min: f64, max: f64, steps: usize) -> ApiResult<SweepParameter> {
+    pub fn sweep(&self, min: f64, max: f64, steps: usize) -> PlanResult<SweepParameter> {
         let parameter = OptimizableParameter {
             parameter_id: self.dense_id,
             min_value: self.typed_value(min)?,
@@ -95,7 +95,7 @@ impl PlanParameter {
         };
         let (lo, hi) = parameter.bounds();
         if hi < lo || (steps > 1 && hi == lo) {
-            return Err(ApiError::bad_request(format!(
+            return Err(PlanError::invalid(format!(
                 "{} needs distinct ordered bounds",
                 self.name
             )));

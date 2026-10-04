@@ -20,12 +20,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::{
+    McRunner, ProgressRunner, SweepConfig, SweepParameter, SweepProgress, apply_parameter,
+    sweep_simulate_lazy_with,
+};
 use crate::config::SimulationConfig;
 use crate::error::SimulationError;
 use crate::model::{MonteCarloConfig, MonteCarloStats};
-use crate::simulation::monte_carlo_stats_only;
-
-use super::{SweepConfig, SweepParameter, SweepProgress, apply_parameter, sweep_simulate_lazy};
 
 /// What the solver is trying to make as large — or as small — as possible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,6 +261,15 @@ pub fn solve(
     config: &SolveConfig,
     progress: Option<&SweepProgress>,
 ) -> Result<SolveResults, SimulationError> {
+    solve_with(base_config, config, &mut ProgressRunner::new(progress))
+}
+
+/// [`solve`] with the Monte Carlo runs supplied by `runner`.
+pub fn solve_with(
+    base_config: &SimulationConfig,
+    config: &SolveConfig,
+    runner: &mut dyn McRunner,
+) -> Result<SolveResults, SimulationError> {
     if config.parameters.is_empty() {
         return Err(SimulationError::Config(
             "At least one parameter to vary is required".to_string(),
@@ -279,20 +289,18 @@ pub fn solve(
         }
     }
 
-    if let Some(p) = progress {
-        p.reset(config.probe_budget() * config.mc_iterations);
-    }
+    runner.begin(config.probe_budget() * config.mc_iterations);
 
     let labels: Vec<String> = config
         .parameters
         .iter()
         .map(SweepParameter::label)
         .collect();
-    let baseline = evaluate(base_config, config, &[], progress)?;
+    let baseline = evaluate(base_config, config, &[], runner)?;
 
     let mut results = match config.method() {
-        SolveMethod::Bisection => bisect(base_config, config, progress)?,
-        SolveMethod::GridSearch => grid_search(base_config, config, progress)?,
+        SolveMethod::Bisection => bisect(base_config, config, runner)?,
+        SolveMethod::GridSearch => grid_search(base_config, config, runner)?,
     };
     results.param_labels = labels;
     results.baseline = baseline;
@@ -308,11 +316,9 @@ fn evaluate(
     base_config: &SimulationConfig,
     config: &SolveConfig,
     values: &[f64],
-    progress: Option<&SweepProgress>,
+    runner: &mut dyn McRunner,
 ) -> Result<SolveProbe, SimulationError> {
-    if let Some(p) = progress
-        && p.is_cancelled()
-    {
+    if runner.cancelled() {
         return Err(SimulationError::Cancelled);
     }
 
@@ -336,10 +342,7 @@ fn evaluate(
     // re-runs simulations to rebuild percentile paths nothing here reads, and
     // builds a real-dollar envelope that refuses any plan whose event schedule
     // depends on the market path.
-    let mc_progress = progress
-        .map(SweepProgress::as_mc_progress)
-        .unwrap_or_default();
-    let (stats, _seeds) = monte_carlo_stats_only(&modified, &mc_config, &mc_progress)?;
+    let (stats, _seeds) = runner.stats(&modified, &mc_config)?;
     Ok(probe_from(&stats, config, values.to_vec(), None))
 }
 
@@ -399,7 +402,7 @@ fn better(objective: SolveObjective, a: f64, b: f64) -> bool {
 fn bisect(
     base_config: &SimulationConfig,
     config: &SolveConfig,
-    progress: Option<&SweepProgress>,
+    runner: &mut dyn McRunner,
 ) -> Result<SolveResults, SimulationError> {
     let param = &config.parameters[0];
     let (lo, hi) = (param.min_value, param.max_value);
@@ -419,12 +422,12 @@ fn bisect(
     let mut probes = Vec::new();
     let mut best: Option<SolveProbe> = None;
 
-    let take = |probes: &mut Vec<SolveProbe>,
-                best: &mut Option<SolveProbe>,
-                value: f64,
-                bracket: Option<(f64, f64)>|
+    let mut take = |probes: &mut Vec<SolveProbe>,
+                    best: &mut Option<SolveProbe>,
+                    value: f64,
+                    bracket: Option<(f64, f64)>|
      -> Result<bool, SimulationError> {
-        let mut probe = evaluate(base_config, config, &[value], progress)?;
+        let mut probe = evaluate(base_config, config, &[value], runner)?;
         probe.bracket = bracket;
         let feasible = probe.feasible;
         if feasible
@@ -478,7 +481,7 @@ fn span(wanted: f64, other: f64) -> (f64, f64) {
 fn grid_search(
     base_config: &SimulationConfig,
     config: &SolveConfig,
-    progress: Option<&SweepProgress>,
+    runner: &mut dyn McRunner,
 ) -> Result<SolveResults, SimulationError> {
     let sweep_config = SweepConfig {
         parameters: config.parameters.clone(),
@@ -487,7 +490,7 @@ fn grid_search(
         parallel_batches: config.parallel_batches,
         seed: config.seed,
     };
-    let grid = sweep_simulate_lazy(base_config, &sweep_config, progress)?;
+    let grid = sweep_simulate_lazy_with(base_config, &sweep_config, runner)?;
     let values = sweep_config.all_sweep_values();
 
     let mut probes = Vec::new();
