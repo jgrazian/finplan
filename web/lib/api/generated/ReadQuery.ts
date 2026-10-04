@@ -18,4 +18,5 @@ export type ReadQuery =
   | { "query": "compile_report" }
   | { "query": "preflight" }
   | { "query": "validate_expression"; request: ExpressionValidationRequest }
-  | { "query": "history_presets" };
+  | { "query": "history_presets" }
+  | { "query": "analysis_parameters" };

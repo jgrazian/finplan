@@ -32,6 +32,7 @@ export class LocalUnavailableError extends Error {
 }
 
 let backend: PlanApi | undefined;
+let starter: (() => Promise<unknown>) | undefined;
 
 /**
  * Registers the implementation local calls go to; `undefined` removes it. The
@@ -42,6 +43,17 @@ export function setLocalBackend(next: PlanApi | undefined): void {
   backend = next;
 }
 
+/**
+ * Registers what starts the backend, for a call made before it is up. A screen
+ * asks for its plans on its first render, which is before the engine's worker
+ * has loaded; the call waits for the start (the first call starts it, later
+ * ones share it) and is refused only if the start ends with nothing registered.
+ * `undefined` removes it.
+ */
+export function setLocalBackendStarter(next: (() => Promise<unknown>) | undefined): void {
+  starter = next;
+}
+
 /** Whether a backend is registered, for screens that offer local plans only when they can work. */
 export function hasLocalBackend(): boolean {
   return backend !== undefined;
@@ -50,6 +62,12 @@ export function hasLocalBackend(): boolean {
 function current(): PlanApi {
   if (!backend) throw new LocalUnavailableError();
   return backend;
+}
+
+/** The backend, waiting for it to start when something knows how to start it. */
+async function ready(): Promise<PlanApi> {
+  if (!backend && starter) await starter().catch(() => undefined);
+  return current();
 }
 
 /**
@@ -66,7 +84,7 @@ function forward<G extends object>(pick: (api: PlanApi) => G): G {
       if (typeof name === "symbol" || name === "then") return undefined;
       return async (...args: unknown[]) => {
         // A backend may be built ahead of the interface, so a whole group can be missing too.
-        const group = pick(current()) as Record<string, unknown> | undefined;
+        const group = pick(await ready()) as Record<string, unknown> | undefined;
         const method = group?.[name];
         if (typeof method !== "function") {
           throw new LocalUnavailableError(`The local store does not support "${name}" yet.`);
@@ -86,7 +104,7 @@ export const localApi: PlanApi = {
   expressions: forward((api) => api.expressions),
   returnProfiles: forward((api) => api.returnProfiles),
   inflationProfiles: forward((api) => api.inflationProfiles),
-  historyPresets: async () => current().historyPresets(),
+  historyPresets: async () => (await ready()).historyPresets(),
   taxConfigs: forward((api) => api.taxConfigs),
   analysis: forward((api) => api.analysis),
   whatIf: forward((api) => api.whatIf),

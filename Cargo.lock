@@ -1494,6 +1494,7 @@ version = "0.12.2"
 dependencies = [
  "finplan_core",
  "finplan_plan",
+ "js-sys",
  "serde",
  "serde_json",
  "ts-rs",

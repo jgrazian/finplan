@@ -39,6 +39,7 @@
  * `YYYY-MM-DD HH:MM:SS` UTC form the plan rows use; the UI reads either.
  */
 import type { CreateRun, Run } from "../api/types.ts";
+import type { LocalReviewApi } from "../engine/review.ts";
 
 export interface RunEstimate {
   /** Wall-clock seconds this run is expected to take on this device. */
@@ -86,6 +87,12 @@ export interface LocalRuntime {
   storeWasCleared(): Promise<boolean>;
   /** Subscribe to changes made in other tabs (BroadcastChannel); returns unsubscribe. */
   onExternalChange(listener: (scenarioId: number | null) => void): () => void;
+  /**
+   * The Review tab of a plan on this device: rule-based notes with no model and
+   * no server (spec 19, phase 4). Absent on a runtime that has no engine to
+   * write them; the AI parts (chat, model notes, previews) are never here.
+   */
+  review?: LocalReviewApi;
 }
 
 let runtime: LocalRuntime | undefined;

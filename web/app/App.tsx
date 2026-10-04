@@ -30,6 +30,7 @@ import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
 import { useLocalMode } from "@/lib/local/useLocalMode";
+import { startLocalEngineWhenIdle } from "@/lib/engine/boot";
 import { useGuestMigration } from "@/lib/hooks/useGuestMigration";
 import { useDurability } from "@/lib/hooks/useDurability";
 import { useLocalRuntime } from "@/lib/hooks/useLocalRuntime";
@@ -103,6 +104,9 @@ export function App() {
   // Local mode (spec 19): plans live in this browser, so no account is needed
   // to use the app, and a spec 17 guest is moved onto this device.
   const localMode = useLocalMode();
+  // The engine (store worker, IndexedDB, WASM) starts once the page has
+  // painted, and only when local mode is on.
+  useEffect(() => (localMode ? startLocalEngineWhenIdle() : undefined), [localMode]);
   const migration = useGuestMigration(session, localMode);
 
   if (session.user === undefined || migration.running) {
@@ -328,7 +332,10 @@ function Workbench({
       unsubscribe();
     };
   }, [runtime, reloadPlans, reloadWorkspace]);
-  const review = useReview(scenarioId, capabilities.ai);
+  // A plan on this device is reviewed by the rules the device runs itself; the
+  // model-written pass and chat stay with the cloud.
+  const localReview = capabilities.home === "local" ? runtime?.review : undefined;
+  const review = useReview(scenarioId, capabilities.ai || localReview != null, localReview);
   const status = useServerStatus();
   // The server being unreachable stops edits to a cloud plan; one on this
   // device is edited and run without it.
@@ -435,13 +442,13 @@ function Workbench({
   // the copy's own Run button does that.
   const openCopy = useCallback(
     async (copyId: number) => {
-      // Notes are the server's, so the copy a note was applied to is a cloud plan.
-      const created = await planApiFor("cloud").scenarios.get(copyId);
+      // The copy is a plan of the same home as the one the note was applied to.
+      const created = await planApiFor(scenarioSlug).scenarios.get(copyId);
       setRecentlyCreated(created);
       nav.openScenario(created.slug, "plan");
       scenarios.reload();
     },
-    [nav, scenarios],
+    [nav, scenarios, scenarioSlug],
   );
 
   // What a run is asked for; the same on this device and on the server.

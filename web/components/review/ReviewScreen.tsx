@@ -4,6 +4,9 @@ import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CreateAccountLink, LockedFeature, useGuest } from "@/components/auth/GuestContext";
 import { usePlanCapabilities } from "@/lib/hooks/usePlanCapabilities";
+import { useLocalRuntime } from "@/lib/hooks/useLocalRuntime";
+import { type ReviewActions, localReviewActions } from "@/lib/local/review";
+import { MOVE_TO_CLOUD_FOR_AI } from "@/lib/nav/capabilities";
 import { Button, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/http";
@@ -45,10 +48,27 @@ const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
  */
 export function ReviewScreen({ draft, ...props }: ReviewScreenProps) {
   const capabilities = usePlanCapabilities();
-  // Review notes, plan chat and drafts are written by the server about a plan
-  // it stores. A local plan gets the locked state rather than a request the
-  // server could only answer with a stranger's plan of the same number.
-  if (!capabilities.ai) {
+  const runtime = useLocalRuntime();
+  // A plan on this device has the rule-based notes the device writes itself.
+  const localReview = capabilities.home === "local" ? runtime?.review : undefined;
+  const scenarioId = props.scenarioId;
+  const actions = useMemo<ReviewActions>(
+    () =>
+      localReview
+        ? localReviewActions(localReview, scenarioId)
+        : {
+            apply: (id, body) => api.suggestions.apply(id, body),
+            preview: (id, body) => api.suggestions.preview(id, body),
+            dismiss: (id, body) => api.suggestions.dismiss(id, body),
+            reopen: (id) => api.suggestions.reopen(id),
+          },
+    [localReview, scenarioId],
+  );
+  // The model-written pass, plan chat and drafts are written by the server
+  // about a plan it stores. A local plan has none of those, and with no local
+  // review to show gets the locked state rather than a request the server could
+  // only answer with a stranger's plan of the same number.
+  if (!capabilities.ai && !localReview) {
     return (
       <LockedFeature title="AI review needs a cloud plan" action={null}>
         {capabilities.cloudOnlyReason}. Review notes, plan chat and AI drafts run on FinPlan&apos;s
@@ -67,7 +87,7 @@ export function ReviewScreen({ draft, ...props }: ReviewScreenProps) {
       onNavigate={props.onNavigate}
     />
   ) : (
-    <PlanReview {...props} />
+    <PlanReview {...props} actions={actions} local={localReview != null} />
   );
 }
 
@@ -134,6 +154,8 @@ interface ReviewScreenProps extends ReviewProps {
 }
 
 function PlanReview({
+  actions,
+  local,
   scenarioId,
   state,
   runs,
@@ -147,7 +169,12 @@ function PlanReview({
   onNavigate,
   planChat,
   onChatSpent,
-}: ReviewProps) {
+}: ReviewProps & {
+  /** What acting on a note does: the server's routes, or the device's own review. */
+  actions: ReviewActions;
+  /** The plan is on this device: rule-based notes only, nothing simulated. */
+  local: boolean;
+}) {
   const { review, error, reload, reviewRun, reviewing } = state;
   // The sub-tab is in the query, like Portfolio's. Chat is offered only while
   // the server has a model to answer.
@@ -182,9 +209,10 @@ function PlanReview({
             names,
             latest: latest && { id: latest.id, created_at: latest.created_at },
             selections,
+            preview: actions.preview != null,
           })
         : undefined,
-    [review, reviewedRun?.created_at, names, latest, selections],
+    [review, reviewedRun?.created_at, names, latest, selections, actions.preview],
   );
   const banner =
     review && view
@@ -242,7 +270,7 @@ function PlanReview({
           // No run: more steps and notes can be applied first, then one
           // re-run shows them together. The banner offers that run.
           const through = action === "apply-step" ? (step ?? null) : null;
-          await api.suggestions.apply(id, { path, through_step: through, to: "plan", name: null });
+          await actions.apply(id, { path, through_step: through, to: "plan", name: null });
           appliedHere.current.add(id);
           setNotice(undefined);
           onPlanChanged();
@@ -250,13 +278,14 @@ function PlanReview({
           break;
         }
         case "apply-copy": {
-          const applied = await api.suggestions.apply(id, { path, through_step: null, to: "copy", name: null });
+          const applied = await actions.apply(id, { path, through_step: null, to: "copy", name: null });
           record(id, path, { copyId: applied.scenario_id });
           reload();
           break;
         }
         case "preview": {
-          const preview = await api.suggestions.preview(id, { path, through_step: null });
+          if (!actions.preview) throw new Error("Previewing needs the plan on FinPlan's servers.");
+          const preview = await actions.preview(id, { path, through_step: null });
           record(id, path,
             preview.problems.length > 0
               ? { problems: preview.problems.map(problemText), stale: preview.problems.some((p) => p.kind === "stale") }
@@ -296,8 +325,8 @@ function PlanReview({
     record(id, path, {});
     setKept(id);
     try {
-      if (op === "reopen") await api.suggestions.reopen(id);
-      else await api.suggestions.dismiss(id, { as: "dismissed" });
+      if (op === "reopen") await actions.reopen(id);
+      else await actions.dismiss(id, { as: "dismissed" });
       reload();
     } catch (err) {
       record(id, path, { error: err instanceof Error ? err.message : String(err) });
@@ -583,8 +612,9 @@ function PlanReview({
       )}
 
       <p style={{ margin: 0, padding: "10px 20px", fontSize: 11.5, color: MUTED, borderTop: "1px solid var(--color-divider)" }}>
-        Notes are generated from the plan and the reviewed run. Figures marked “est.” are not simulated until
-        you preview them or re-run after applying. Not financial advice.
+        {local
+          ? `Notes are rule-based and written on this device: nothing about the plan is sent anywhere. ${MOVE_TO_CLOUD_FOR_AI} notes and plan chat. Figures marked “est.” are not simulated; re-run after applying to see their effect. Not financial advice.`
+          : "Notes are generated from the plan and the reviewed run. Figures marked “est.” are not simulated until you preview them or re-run after applying. Not financial advice."}
       </p>
     </section>
   );

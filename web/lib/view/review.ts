@@ -409,7 +409,7 @@ export function kicker(suggestion: Pick<Suggestion, "kind" | "rule" | "section">
 export function actionsFor(
   suggestion: Pick<Suggestion, "kind" | "status" | "applied_path">,
   path?: Pick<SuggestionPath, "steps" | "check">,
-  { confirm = false }: { confirm?: boolean } = {},
+  { confirm = false, preview = true }: { confirm?: boolean; preview?: boolean } = {},
 ): CardAction[] {
   if (suggestion.status !== "open") return [];
   const started = suggestion.applied_path != null;
@@ -432,7 +432,7 @@ export function actionsFor(
     case "read":
       break;
   }
-  if (editable && !started && path?.check == null) actions.push("preview");
+  if (preview && editable && !started && path?.check == null) actions.push("preview");
   if (!started) actions.push("dismiss");
   return actions;
 }
@@ -596,6 +596,7 @@ export function toCard(
     selected,
     chat = false,
     confirm = false,
+    preview = true,
   }: {
     latest?: RunStamp;
     basis?: string;
@@ -603,6 +604,8 @@ export function toCard(
     chat?: boolean;
     /** Offer "It's correct" on check notes: a draft's, whose facts the person confirms. */
     confirm?: boolean;
+    /** Offer "Preview": simulating a path against the run. A review written on the device cannot. */
+    preview?: boolean;
   } = {},
 ): Card {
   const path = selectedPath(suggestion, selected);
@@ -643,7 +646,7 @@ export function toCard(
     diff: path && !stepped ? (path.steps[0]?.diff ?? []).map(diffRow) : [],
     check: check && basis && suggestion.status === "open" ? { ...check, basis } : check,
     evidence: suggestion.evidence.map((e) => evidenceLink(e, names)),
-    actions: actionsFor(suggestion, path, { confirm }),
+    actions: actionsFor(suggestion, path, { confirm, preview }),
     source: suggestion.source === "ai" ? "AI" : undefined,
     applied: appliedLabel(suggestion, latest),
     resolvedAt: suggestion.status === "open" ? undefined : (suggestion.resolved_at ?? undefined),
@@ -712,12 +715,15 @@ export function board(
     names = NO_NAMES,
     latest,
     selections = {},
+    preview = true,
   }: {
     runCreatedAt?: string;
     names?: Names;
     latest?: RunStamp;
     /** The path picked on each card, by suggestion id; unpicked cards default. */
     selections?: Readonly<Record<number, string>>;
+    /** Whether cards offer "Preview"; a review written on the device has no simulator for it. */
+    preview?: boolean;
   } = {},
 ): Board {
   const open = byKind(review.suggestions.filter((s) => s.status === "open"));
@@ -744,7 +750,7 @@ export function board(
   const card = (s: Suggestion, seen: ReadonlySet<number> = new Set()): Card => {
     const within = new Set(seen).add(s.id);
     return {
-      ...toCard(s, names, { latest, basis, selected: selections[s.id], chat }),
+      ...toCard(s, names, { latest, basis, selected: selections[s.id], chat, preview }),
       children: (nested.children.get(s.id) ?? []).filter((c) => !within.has(c.id)).map((c) => card(c, within)),
     };
   };
@@ -760,7 +766,7 @@ export function board(
     pending,
     resolved: review.suggestions.length - shown.length,
     setAside: byKind(review.suggestions.filter((s) => s.status === "dismissed" || s.status === "confirmed")).map(
-      (s) => toCard(s, names, { latest, selected: selections[s.id], chat }),
+      (s) => toCard(s, names, { latest, selected: selections[s.id], chat, preview }),
     ),
   };
 }

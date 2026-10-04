@@ -14,4 +14,8 @@ export type RunCost = {
    * run's ceiling (the most it can spend).
    */
   sample: number;
+  /**
+   * The batches a round is split into: how many workers a run can use at once.
+   */
+  parallel_batches: number;
 };

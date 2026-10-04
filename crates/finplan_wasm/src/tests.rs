@@ -14,15 +14,16 @@ use serde_json::{Value, json};
 use crate::error::{EngineError, EngineResult};
 use crate::{plans, reads, results, runs};
 
-const DEFAULT_SNAPSHOT: &str = include_str!("../../finplan_plan/testdata/default_snapshot.json");
+pub(crate) const DEFAULT_SNAPSHOT: &str =
+    include_str!("../../finplan_plan/testdata/default_snapshot.json");
 const GOLDEN_JSON: &str = include_str!("../../finplan_plan/testdata/default.snapshot.json");
 const GOLDEN_HASH: &str = include_str!("../../finplan_plan/testdata/default.snapshot.sha256");
 
-fn ok<T>(result: EngineResult<T>) -> T {
+pub(crate) fn ok<T>(result: EngineResult<T>) -> T {
     result.unwrap_or_else(|error| panic!("{}", error.to_json()))
 }
 
-fn value(text: &str) -> Value {
+pub(crate) fn value(text: &str) -> Value {
     serde_json::from_str(text).unwrap()
 }
 
@@ -67,7 +68,7 @@ fn library_of(graph: &ScenarioGraph) -> Library {
     library
 }
 
-fn library_json_of(graph_json: &str) -> String {
+pub(crate) fn library_json_of(graph_json: &str) -> String {
     let graph: ScenarioGraph = serde_json::from_str(graph_json).unwrap();
     serde_json::to_string(&library_of(&graph)).unwrap()
 }
@@ -370,7 +371,7 @@ fn archives_round_trip() {
 
 // ── runs ───────────────────────────────────────────────────────────────────
 
-fn settings(iterations: i64, seed: i64) -> String {
+pub(crate) fn settings(iterations: i64, seed: i64) -> String {
     json!({"iterations": iterations, "seed": seed}).to_string()
 }
 
@@ -386,7 +387,7 @@ fn direct(settings: &str) -> String {
 
 /// The browser's way: a coordinator, a prepared run, JSON at every step, and
 /// each round's batches run in reverse order.
-fn local(snapshot: &str, settings: &str) -> String {
+pub(crate) fn local(snapshot: &str, settings: &str) -> String {
     let coordinator = ok(runs::coordinator_new(snapshot, settings));
     let prepared = ok(runs::prepare(snapshot, settings));
     let info = value(&ok(runs::coordinator_info_json(coordinator)));

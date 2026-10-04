@@ -22,6 +22,9 @@ ts-rs = { version = "12.0.1", features = ["no-serde-warnings"] }
 # Pinned: the `wasm-bindgen` CLI that `scripts/build-wasm.sh` runs must be the
 # same version, and refuses to run on a module built by any other.
 wasm-bindgen = "=0.2.106"
+# The release that pairs with that `wasm-bindgen`; only for `js_sys::Function`,
+# the progress callback of an analysis.
+js-sys = "=0.3.83"
 
 [features]
 # Pretty-prints the generated TypeScript; only wanted while regenerating the

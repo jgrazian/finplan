@@ -30,6 +30,7 @@
 //! | `model_version()` | | the engine's `MODEL_VERSION` |
 //! | `library_seed()` | | `Library` |
 //! | `new_plan(body, library, id, now)` | `CreateScenario`, `Library` | `ScenarioGraph` |
+//! | `setup_plan(body, library, id, now)` | `SetupPlan`, `Library` | `ScenarioGraph` |
 //! | `duplicate_plan(graph, new_id, name, now)` | | `ScenarioGraph` |
 //! | `apply_edit(graph, library, op, now?)` | `EditOp` | `EditResult` |
 //! | `apply_library(library, plans, op, now?)` | `LibraryOp`, `ScenarioGraph[]` | `LibraryEditResult` |
@@ -39,6 +40,7 @@
 //! | `export_archive(graphs)` | `ScenarioGraph[]` | `PlanArchive` |
 //! | `import_archive(archive)` | `PlanArchive` | `ScenarioGraph[]` |
 //! | `preview_archive(archive)` | `PlanArchive` | `ArchivePreview` |
+//! | `restore_plan(library, graph, new_id, name, now, suffix)` | one `import_archive` plan | `RestoreResult` |
 //! | `run_cost(graph, settings)` | `CreateRun` | `RunCost` |
 //! | `coordinator_new(snapshot, settings)` | snapshot JSON, `CreateRun` | handle |
 //! | `coordinator_info(h)` | | `RunInfo` |
@@ -52,6 +54,17 @@
 //! | `release(h)` | | |
 //! | `results_view(run_results, run_id, scenario_id, series?)` | `RunResults` | `Results` |
 //! | `ledger_page(run_results, run_id, query)` | `LedgerQuery` | `LedgerPage` |
+//! | `results_open(run_results)` | `RunResults` | handle |
+//! | `results_view_open(h, run_id, scenario_id, series?)` | | `Results` |
+//! | `ledger_page_open(h, run_id, query)` | `LedgerQuery` | `LedgerPage` |
+//! | `results_close(h)` | | |
+//! | `analysis_plan(graph, library, body)` | `CreateAnalysis` | `AnalysisPlan` |
+//! | `analysis_run(graph, library, body, progress)` | `CreateAnalysis` | `AnalysisOutcome` |
+//! | `quick_what_if(graph, library, body, progress)` | `QuickWhatIf` | `WhatIfOutcome` |
+//! | `apply_what_if(graph, library, body, new_id, now)` | `ApplyWhatIf` | `ScenarioGraph` |
+//! | `check_what_if_stack(body)` | `WhatIfStack` | `WhatIfStack` |
+//! | `apply_note(graph, library, path_key, steps, copy_id, copy_name, now)` | `[{key, changes}]` | `ScenarioGraph` |
+//! | `local_review(graph, library, run_results, run_id, reviewed_at, silenced)` | | `LocalReviewResult` |
 //!
 //! `BatchSpec`, `BatchOutput` and `RunResults` have no generated TypeScript:
 //! treat the first two as opaque strings (see [`runs`] for why) and the last as
@@ -61,6 +74,7 @@
 // refusal, off every hot path, so its size is not worth boxing it for.
 #![allow(clippy::result_large_err)]
 
+pub mod analysis;
 pub mod error;
 pub mod plans;
 pub mod reads;
@@ -71,3 +85,6 @@ mod exports;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_analysis;

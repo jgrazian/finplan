@@ -20,6 +20,7 @@
 //! | `preflight` | `PreflightReport` |
 //! | `validate_expression` | `ExpressionValidation` |
 //! | `history_presets` | `HistoryPreset[]` |
+//! | `analysis_parameters` | `AnalysisParameter[]` |
 //! | `return_profiles` / `return_profile` | `Profile[]` / `Profile` |
 //! | `inflation_profiles` | `Profile[]` |
 //! | `tax_configs` / `tax_config` | `TaxConfig[]` / `TaxConfig` |
@@ -89,6 +90,8 @@ pub enum ReadQuery {
     },
     /// `GET /history-presets`
     HistoryPresets,
+    /// `GET …/analysis/parameters`
+    AnalysisParameters,
 }
 
 /// Answer `query` about the plan. The library is attached to the plan first.
@@ -124,6 +127,7 @@ pub fn read_json(graph: &str, library: &str, query: &str) -> EngineResult<String
             to_json(&read::validate_expression(&graph, &request.effect)?)
         }
         ReadQuery::HistoryPresets => to_json(&read::history_presets()),
+        ReadQuery::AnalysisParameters => to_json(&finplan_plan::analysis::discover(&graph)?),
     }
 }
 

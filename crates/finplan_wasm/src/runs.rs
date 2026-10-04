@@ -61,6 +61,8 @@ pub struct RunCost {
     /// The iterations the cost was taken over: the count, or a converging
     /// run's ceiling (the most it can spend).
     pub sample: i64,
+    /// The batches a round is split into: how many workers a run can use at once.
+    pub parallel_batches: i64,
 }
 
 /// What a coordinator says about its run: [`coordinator_info_json`].
@@ -75,6 +77,10 @@ pub struct RunInfo {
     pub parallel_batches: i64,
     pub seed: i64,
     pub cost: i64,
+    /// The settings as run, defaults filled in, for the run's inputs.
+    pub converge: bool,
+    pub compute_mean: bool,
+    pub percentiles: Vec<f64>,
 }
 
 /// What a run costs, and whether the settings are acceptable: the same checks
@@ -88,6 +94,7 @@ pub fn run_cost_json(graph: &str, settings: &str) -> EngineResult<String> {
     to_json(&RunCost {
         cost: run_cost(&graph, sample)?,
         sample,
+        parallel_batches: settings.parallel_batches,
     })
 }
 
@@ -191,6 +198,9 @@ pub fn coordinator_new(snapshot: &str, settings: &str) -> EngineResult<u32> {
         parallel_batches: setup.settings.parallel_batches,
         seed,
         cost: setup.cost,
+        converge: setup.settings.converge,
+        compute_mean: setup.settings.compute_mean,
+        percentiles: setup.validated.percentiles.clone(),
     };
     Ok(COORDINATORS.with_borrow_mut(|registry| {
         registry.insert(LocalRun {

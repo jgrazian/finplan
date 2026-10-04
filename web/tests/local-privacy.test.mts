@@ -137,6 +137,27 @@ const LOCAL_FLOW_FILES = [
   "../lib/local/homes.ts",
   "../lib/local/offload.ts",
   "../lib/local/visitor.ts",
+  // The engine itself: the store worker, the compute workers and everything they
+  // run. Only `boot.ts` (the page's side, which hands `ApiError` to the RPC) may
+  // import `http`, and it never calls `fetch` either.
+  "../lib/engine/analysis.ts",
+  "../lib/engine/backend.ts",
+  "../lib/engine/compute.ts",
+  "../lib/engine/compute.worker.ts",
+  "../lib/engine/core.ts",
+  "../lib/engine/edits.ts",
+  "../lib/engine/engine.ts",
+  "../lib/engine/errors.ts",
+  "../lib/engine/idb.ts",
+  "../lib/engine/locks.ts",
+  "../lib/engine/pool.ts",
+  "../lib/engine/review.ts",
+  "../lib/engine/rpc.ts",
+  "../lib/engine/runs.ts",
+  "../lib/engine/runtime-client.ts",
+  "../lib/engine/scenarios.ts",
+  "../lib/engine/store.ts",
+  "../lib/engine/store.worker.ts",
 ];
 
 for (const file of LOCAL_FLOW_FILES) {

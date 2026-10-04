@@ -16,4 +16,10 @@ export type RunInfo = {
   parallel_batches: number;
   seed: number;
   cost: number;
+  /**
+   * The settings as run, defaults filled in, for the run's inputs.
+   */
+  converge: boolean;
+  compute_mean: boolean;
+  percentiles: Array<number>;
 };

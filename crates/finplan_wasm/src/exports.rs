@@ -4,7 +4,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::error::{EngineError, EngineResult};
-use crate::{plans, reads, results, runs};
+use crate::{analysis, plans, reads, results, runs};
 
 /// A failed call throws the JSON of its `EngineError`.
 fn js<T>(result: EngineResult<T>) -> Result<T, String> {
@@ -46,6 +46,12 @@ pub fn library_seed() -> Result<String, String> {
 #[wasm_bindgen]
 pub fn new_plan(body: &str, library: &str, id: f64, now: &str) -> Result<String, String> {
     js(plans::new_plan_json(body, library, whole(id, "id")?, now))
+}
+
+/// See [`plans::setup_plan_json`].
+#[wasm_bindgen]
+pub fn setup_plan(body: &str, library: &str, id: f64, now: &str) -> Result<String, String> {
+    js(plans::setup_plan_json(body, library, whole(id, "id")?, now))
 }
 
 /// See [`plans::duplicate_plan_json`].
@@ -120,6 +126,26 @@ pub fn import_archive(archive: &str) -> Result<String, String> {
 #[wasm_bindgen]
 pub fn preview_archive(archive: &str) -> Result<String, String> {
     js(plans::preview_archive_json(archive))
+}
+
+/// See [`plans::restore_plan_json`].
+#[wasm_bindgen]
+pub fn restore_plan(
+    library: &str,
+    graph: &str,
+    new_id: f64,
+    name: &str,
+    now: &str,
+    suffix: &str,
+) -> Result<String, String> {
+    js(plans::restore_plan_json(
+        library,
+        graph,
+        whole(new_id, "id")?,
+        name,
+        now,
+        suffix,
+    ))
 }
 
 /// See [`runs::run_cost_json`].
@@ -211,5 +237,166 @@ pub fn ledger_page(run_results: &str, run_id: f64, query: &str) -> Result<String
         run_results,
         whole(run_id, "run_id")?,
         query,
+    ))
+}
+
+/// See [`results::results_open`].
+#[wasm_bindgen]
+pub fn results_open(run_results: &str) -> Result<u32, String> {
+    js(results::results_open(run_results))
+}
+
+/// See [`results::results_view_open`].
+#[wasm_bindgen]
+pub fn results_view_open(
+    handle: u32,
+    run_id: f64,
+    scenario_id: f64,
+    series: Option<String>,
+) -> Result<String, String> {
+    js(results::results_view_open(
+        handle,
+        whole(run_id, "run_id")?,
+        whole(scenario_id, "scenario_id")?,
+        series.as_deref(),
+    ))
+}
+
+/// See [`results::ledger_page_open`].
+#[wasm_bindgen]
+pub fn ledger_page_open(handle: u32, run_id: f64, query: &str) -> Result<String, String> {
+    js(results::ledger_page_open(
+        handle,
+        whole(run_id, "run_id")?,
+        query,
+    ))
+}
+
+/// See [`results::results_close`].
+#[wasm_bindgen]
+pub fn results_close(handle: u32) {
+    results::results_close(handle);
+}
+
+/// See [`analysis::analysis_plan_json`].
+#[wasm_bindgen]
+pub fn analysis_plan(graph: &str, library: &str, body: &str) -> Result<String, String> {
+    js(analysis::analysis_plan_json(graph, library, body))
+}
+
+/// Wrap a JS `progress(done, total)` callback. A truthy answer asks the
+/// analysis to stop; a callback that throws is read as "stop" too, and the
+/// exception is dropped (it cannot unwind through the engine).
+fn progress_fn(callback: &js_sys::Function) -> impl FnMut(usize, usize) -> bool + '_ {
+    move |done, total| {
+        callback
+            .call2(
+                &JsValue::NULL,
+                &JsValue::from_f64(done as f64),
+                &JsValue::from_f64(total as f64),
+            )
+            .map(|answer| answer.is_truthy())
+            .unwrap_or(true)
+    }
+}
+
+/// See [`analysis::analysis_run_json`]. `progress(done, total)` is called as
+/// simulations finish; return true from it to stop.
+#[wasm_bindgen]
+pub fn analysis_run(
+    graph: &str,
+    library: &str,
+    body: &str,
+    progress: &js_sys::Function,
+) -> Result<String, String> {
+    let mut report = progress_fn(progress);
+    js(analysis::analysis_run_json(
+        graph,
+        library,
+        body,
+        &mut report,
+    ))
+}
+
+/// See [`analysis::quick_what_if_json`].
+#[wasm_bindgen]
+pub fn quick_what_if(
+    graph: &str,
+    library: &str,
+    body: &str,
+    progress: &js_sys::Function,
+) -> Result<String, String> {
+    let mut report = progress_fn(progress);
+    js(analysis::quick_what_if_json(
+        graph,
+        library,
+        body,
+        &mut report,
+    ))
+}
+
+/// See [`analysis::apply_what_if_json`].
+#[wasm_bindgen]
+pub fn apply_what_if(
+    graph: &str,
+    library: &str,
+    body: &str,
+    new_id: f64,
+    now: &str,
+) -> Result<String, String> {
+    js(analysis::apply_what_if_json(
+        graph,
+        library,
+        body,
+        whole(new_id, "id")?,
+        now,
+    ))
+}
+
+/// See [`analysis::check_what_if_stack_json`].
+#[wasm_bindgen]
+pub fn check_what_if_stack(body: &str) -> Result<String, String> {
+    js(analysis::check_what_if_stack_json(body))
+}
+
+/// See [`analysis::apply_note_json`]. `copy_id` is NaN, or the new plan's id
+/// when the steps go to a copy named `copy_name`.
+#[wasm_bindgen]
+pub fn apply_note(
+    graph: &str,
+    library: &str,
+    path_key: &str,
+    steps: &str,
+    copy_id: f64,
+    copy_name: &str,
+    now: &str,
+) -> Result<String, String> {
+    let copy = if copy_id.is_nan() {
+        None
+    } else {
+        Some((whole(copy_id, "id")?, copy_name))
+    };
+    js(analysis::apply_note_json(
+        graph, library, path_key, steps, copy, now,
+    ))
+}
+
+/// See [`analysis::local_review_json`].
+#[wasm_bindgen]
+pub fn local_review(
+    graph: &str,
+    library: &str,
+    run_results: &str,
+    run_id: f64,
+    reviewed_at: &str,
+    silenced: &str,
+) -> Result<String, String> {
+    js(analysis::local_review_json(
+        graph,
+        library,
+        run_results,
+        whole(run_id, "run_id")?,
+        reviewed_at,
+        silenced,
     ))
 }
