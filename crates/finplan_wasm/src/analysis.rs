@@ -3,8 +3,8 @@
 //! The loops that decide which configurations to simulate (the sweep grid, the
 //! goal seek's bisection, the stack of what-if layers) are
 //! `finplan_plan::analysis`; this module only gives them somewhere to simulate:
-//! [`Sequential`], an `McRunner` that runs each Monte Carlo call to completion
-//! on the calling thread. A browser runs it in a compute worker, so a long
+//! [`Local`], an `McRunner` that runs each Monte Carlo call to completion
+//! on the calling thread, and the shards that split one analysis across workers. A browser runs it in a compute worker, so a long
 //! analysis never blocks the page; the answer is the same as the server's for
 //! the same plan and request (the batch plan, [`LOCAL_PARALLEL_BATCHES`], is
 //! fixed rather than the machine's core count).
@@ -15,13 +15,15 @@
 //! tests use) returns `true` from the progress callback to stop: the next
 //! simulation is not started and the call fails with `409 conflict`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use finplan_core::analysis::{McRunner, StatsRun};
 use finplan_core::config::SimulationConfig;
 use finplan_core::error::SimulationError;
-use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, MonteCarloSummary};
-use finplan_core::simulation::{monte_carlo_simulate_with_progress, monte_carlo_stats_only};
+use finplan_core::model::{MonteCarloConfig, MonteCarloStats, MonteCarloSummary};
+use finplan_core::simulation::{
+    MonteCarloCoordinator, base_seed, prepare_run_with, run_batch_observed,
+};
 use finplan_plan::analysis::{
     AnalysisError, AnalysisOutcome, CreateAnalysis, Limits, MAX_ANALYSIS_ITERATIONS, analyze,
     prepare,
@@ -70,18 +72,24 @@ impl From<AnalysisError> for EngineError {
 /// Reports `(completed, total)` simulations, and answers whether to stop.
 pub type Progress<'a> = &'a mut dyn FnMut(usize, usize) -> bool;
 
-/// Runs every Monte Carlo call on the calling thread, one after another,
-/// reporting after each.
-struct Sequential<'a> {
+/// How many progress reports one Monte Carlo call makes at most.
+const REPORTS_PER_CALL: usize = 50;
+
+/// Runs every Monte Carlo call on the calling thread, batch by batch, as the
+/// engine's own `monte_carlo_core` does (the same preparation, coordinator,
+/// batches and merge order, so the same answer), reporting as simulations
+/// finish rather than as calls do: a sweep point of 250 iterations is not
+/// one tick of the counter.
+struct Local<'a> {
     progress: Progress<'a>,
     done: usize,
     total: usize,
     stop: bool,
 }
 
-impl<'a> Sequential<'a> {
+impl<'a> Local<'a> {
     fn new(progress: Progress<'a>) -> Self {
-        Sequential {
+        Local {
             progress,
             done: 0,
             total: 0,
@@ -89,40 +97,65 @@ impl<'a> Sequential<'a> {
         }
     }
 
-    fn advance(&mut self, iterations: usize) {
-        self.done += iterations;
+    /// Report `extra` simulations beyond those of finished calls.
+    fn report(&mut self, extra: usize) -> bool {
+        let done = self.done + extra;
         // A phase may run past the count it announced (a sweep's baseline run
         // follows its grid), so the total grows to meet it.
-        self.total = self.total.max(self.done);
-        self.stop = (self.progress)(self.done, self.total) || self.stop;
+        self.total = self.total.max(done);
+        self.stop = (self.progress)(done, self.total) || self.stop;
+        self.stop
+    }
+
+    /// One Monte Carlo call to the end of its rounds, ready to finish.
+    fn run(
+        &mut self,
+        config: &SimulationConfig,
+        mc: &MonteCarloConfig,
+        collect_real: bool,
+    ) -> Result<MonteCarloCoordinator, SimulationError> {
+        if self.stop {
+            return Err(SimulationError::Cancelled);
+        }
+        let prepared = prepare_run_with(config, mc, collect_real)?;
+        let mut coordinator = MonteCarloCoordinator::new(mc, base_seed(mc)?)?;
+        let step = (mc.iterations / REPORTS_PER_CALL).max(1);
+        let mut within = 0;
+        while let Some(round) = coordinator.next_round() {
+            let mut outputs = Vec::with_capacity(round.len());
+            for spec in &round {
+                let before = within;
+                outputs.push(run_batch_observed(&prepared, spec, None, |done| {
+                    (done % step == 0 || done == spec.iterations) && self.report(before + done)
+                })?);
+                within += spec.iterations;
+            }
+            coordinator.absorb(outputs)?;
+        }
+        self.done += within;
+        Ok(coordinator)
     }
 }
 
-impl McRunner for Sequential<'_> {
+impl McRunner for Local<'_> {
+    /// `monte_carlo_stats_only`, observed.
     fn stats(
         &mut self,
         config: &SimulationConfig,
         mc: &MonteCarloConfig,
     ) -> Result<StatsRun, SimulationError> {
-        if self.stop {
-            return Err(SimulationError::Cancelled);
-        }
-        let out = monte_carlo_stats_only(config, mc, &MonteCarloProgress::default())?;
-        self.advance(mc.iterations);
-        Ok(out)
+        let mut mc = mc.clone();
+        mc.compute_mean = false;
+        self.run(config, &mc, false)?.finish_stats()
     }
 
+    /// `monte_carlo_simulate_with_progress`, observed.
     fn summary(
         &mut self,
         config: &SimulationConfig,
         mc: &MonteCarloConfig,
     ) -> Result<MonteCarloSummary, SimulationError> {
-        if self.stop {
-            return Err(SimulationError::Cancelled);
-        }
-        let out = monte_carlo_simulate_with_progress(config, mc, &MonteCarloProgress::default())?;
-        self.advance(mc.iterations);
-        Ok(out)
+        self.run(config, mc, true)?.finish(config, true)
     }
 
     fn cancelled(&self) -> bool {
@@ -133,6 +166,239 @@ impl McRunner for Sequential<'_> {
         self.done = 0;
         self.total = total_iterations;
         self.stop = (self.progress)(0, total_iterations) || self.stop;
+    }
+}
+
+// ── sharding: one analysis on several workers ──────────────────────────────
+//
+// A sweep's points and a sensitivity's rows are independent Monte Carlo
+// calls: which calls an analysis makes does not depend on what any answers.
+// So each of `shards` workers runs the analysis's own loop and simulates
+// every `shards`-th call (`analysis_shard_json`), answering the rest with a
+// placeholder it throws away; then one pass (`analysis_finish_json`) runs the
+// loop again, answered from what the shards found. A call it finds no answer
+// for, or one whose plan or settings differ from the answer's, it simulates
+// itself, so the outcome is always the one-worker outcome. A solve chooses
+// each probe from the last answer, and a what-if makes a handful of full
+// runs, so neither is split: shard 0 runs it whole.
+
+/// One call's answer, as a shard found it.
+#[derive(Debug, Serialize, Deserialize)]
+struct CallAnswer {
+    /// The call's place in the analysis's sequence of calls.
+    index: usize,
+    /// [`call_key`] of the call it answers.
+    key: String,
+    answer: Answer,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Answer {
+    Stats {
+        stats: MonteCarloStats,
+        seeds: Vec<(f64, u64)>,
+    },
+    Summary(Box<MonteCarloSummary>),
+}
+
+/// What identifies a call: its kind, its plan and its Monte Carlo settings.
+/// The plan is hashed as canonical JSON (every object's keys sorted), so the
+/// same plan gives the same key in every worker: its maps are `HashMap`s,
+/// whose order differs from one instance to the next, and serde_json keeps
+/// that order when a build turns on `preserve_order`.
+fn call_key(kind: &str, config: &SimulationConfig, mc: &MonteCarloConfig) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut plan = String::new();
+    if let Ok(value) = serde_json::to_value(config) {
+        canonical(&value, &mut plan);
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (kind, plan, format!("{mc:?}")).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// `value` as JSON text with every object's keys in sorted order.
+fn canonical(value: &serde_json::Value, out: &mut String) {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            out.push('{');
+            for (i, (key, value)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String(key.clone()).to_string());
+                out.push(':');
+                canonical(value, out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                canonical(item, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// Whether the analysis's calls can be split across workers.
+fn shardable(body: &CreateAnalysis) -> bool {
+    matches!(
+        body,
+        CreateAnalysis::Sweep { .. } | CreateAnalysis::Sensitivity { .. }
+    )
+}
+
+/// The calls of one shard: its own simulated, the others answered with a
+/// placeholder so the loop goes on.
+struct Shard<'a> {
+    local: Local<'a>,
+    shard: usize,
+    shards: usize,
+    index: usize,
+    answers: Vec<CallAnswer>,
+}
+
+impl Shard<'_> {
+    /// The next call's index, and whether this shard simulates it.
+    fn next(&mut self) -> (usize, bool) {
+        let index = self.index;
+        self.index += 1;
+        (index, index % self.shards == self.shard)
+    }
+}
+
+impl McRunner for Shard<'_> {
+    fn stats(
+        &mut self,
+        config: &SimulationConfig,
+        mc: &MonteCarloConfig,
+    ) -> Result<StatsRun, SimulationError> {
+        if self.local.stop {
+            return Err(SimulationError::Cancelled);
+        }
+        let (index, mine) = self.next();
+        if !mine {
+            return Ok(placeholder(mc));
+        }
+        let (stats, seeds) = self.local.stats(config, mc)?;
+        self.answers.push(CallAnswer {
+            index,
+            key: call_key("stats", config, mc),
+            answer: Answer::Stats {
+                stats: stats.clone(),
+                seeds: seeds.clone(),
+            },
+        });
+        Ok((stats, seeds))
+    }
+
+    /// Not made by a shardable analysis; simulated, and kept, if one does.
+    fn summary(
+        &mut self,
+        config: &SimulationConfig,
+        mc: &MonteCarloConfig,
+    ) -> Result<MonteCarloSummary, SimulationError> {
+        let (index, _) = self.next();
+        let summary = self.local.summary(config, mc)?;
+        self.answers.push(CallAnswer {
+            index,
+            key: call_key("summary", config, mc),
+            answer: Answer::Summary(Box::new(summary.clone())),
+        });
+        Ok(summary)
+    }
+
+    fn cancelled(&self) -> bool {
+        self.local.stop
+    }
+
+    fn begin(&mut self, total_iterations: usize) {
+        self.local.begin(total_iterations);
+    }
+}
+
+/// A well-formed answer that is not one: what a shard tells the loop about a
+/// call another shard simulates. Nothing it feeds is kept.
+fn placeholder(mc: &MonteCarloConfig) -> StatsRun {
+    let stats = MonteCarloStats {
+        num_iterations: mc.iterations,
+        success_rate: 0.0,
+        funding_success_rate: None,
+        mean_final_net_worth: 0.0,
+        std_dev_final_net_worth: 0.0,
+        min_final_net_worth: 0.0,
+        max_final_net_worth: 0.0,
+        percentile_values: mc.percentiles.iter().map(|&p| (p, 0.0)).collect(),
+        converged: None,
+        convergence_metric: None,
+        convergence_value: None,
+    };
+    (stats, mc.percentiles.iter().map(|&p| (p, 0)).collect())
+}
+
+/// The loop again, answered from the shards; anything unanswered simulated.
+struct Replay<'a> {
+    local: Local<'a>,
+    index: usize,
+    answers: HashMap<usize, CallAnswer>,
+}
+
+impl Replay<'_> {
+    fn take(
+        &mut self,
+        kind: &str,
+        config: &SimulationConfig,
+        mc: &MonteCarloConfig,
+    ) -> Option<Answer> {
+        let index = self.index;
+        self.index += 1;
+        let found = self.answers.remove(&index)?;
+        (found.key == call_key(kind, config, mc)).then_some(found.answer)
+    }
+}
+
+impl McRunner for Replay<'_> {
+    fn stats(
+        &mut self,
+        config: &SimulationConfig,
+        mc: &MonteCarloConfig,
+    ) -> Result<StatsRun, SimulationError> {
+        match self.take("stats", config, mc) {
+            Some(Answer::Stats { stats, seeds }) => Ok((stats, seeds)),
+            _ => self.local.stats(config, mc),
+        }
+    }
+
+    fn summary(
+        &mut self,
+        config: &SimulationConfig,
+        mc: &MonteCarloConfig,
+    ) -> Result<MonteCarloSummary, SimulationError> {
+        match self.take("summary", config, mc) {
+            Some(Answer::Summary(summary)) => Ok(*summary),
+            _ => self.local.summary(config, mc),
+        }
+    }
+
+    fn cancelled(&self) -> bool {
+        self.local.stop
+    }
+
+    // The shards reported the work; a replay that has to simulate reports
+    // only that, on top of what is already shown.
+    fn begin(&mut self, total_iterations: usize) {
+        self.local.done = 0;
+        self.local.total = total_iterations;
     }
 }
 
@@ -176,8 +442,8 @@ pub fn analysis_plan_json(graph: &str, library: &str, body: &str) -> EngineResul
     })
 }
 
-/// Run an analysis to completion: an `AnalysisOutcome` JSON. `progress` is
-/// called with `(simulations done, simulations expected)`.
+/// Run an analysis to completion on this thread: an `AnalysisOutcome` JSON.
+/// `progress` is called with `(simulations done, simulations expected)`.
 pub fn analysis_run_json(
     graph: &str,
     library: &str,
@@ -186,7 +452,66 @@ pub fn analysis_run_json(
 ) -> EngineResult<String> {
     let graph = attached(graph, library)?;
     let body: CreateAnalysis = parse("analysis", body)?;
-    let mut runner = Sequential::new(progress);
+    let mut runner = Local::new(progress);
+    let outcome = analyze(&graph, body, &limits(), &mut runner)?;
+    to_json(&outcome)
+}
+
+/// Shard `shard` of `shards` of an analysis: its share of the Monte Carlo
+/// calls, simulated, as a JSON array for [`analysis_finish_json`]. `progress`
+/// reports this shard's simulations against the whole analysis's total. An
+/// analysis that cannot be split is run whole by shard 0, and the other shards
+/// answer `[]` at once.
+pub fn analysis_shard_json(
+    graph: &str,
+    library: &str,
+    body: &str,
+    shard: usize,
+    shards: usize,
+    progress: Progress<'_>,
+) -> EngineResult<String> {
+    let graph = attached(graph, library)?;
+    let body: CreateAnalysis = parse("analysis", body)?;
+    let shards = if shardable(&body) { shards.max(1) } else { 1 };
+    if shard >= shards {
+        return Ok("[]".to_string());
+    }
+    let mut runner = Shard {
+        local: Local::new(progress),
+        shard,
+        shards,
+        index: 0,
+        answers: Vec::new(),
+    };
+    analyze(&graph, body, &limits(), &mut runner)?;
+    to_json(&runner.answers)
+}
+
+/// The outcome of a sharded analysis: `answers` is a `string[]` JSON of what
+/// [`analysis_shard_json`] returned, in any order. The analysis's loop is run
+/// once more, answered from them; a call they do not answer is simulated
+/// here (reported through `progress`), so the outcome is
+/// [`analysis_run_json`]'s whatever the shards did.
+pub fn analysis_finish_json(
+    graph: &str,
+    library: &str,
+    body: &str,
+    answers: &str,
+    progress: Progress<'_>,
+) -> EngineResult<String> {
+    let graph = attached(graph, library)?;
+    let body: CreateAnalysis = parse("analysis", body)?;
+    let parts: Vec<String> = parse("shard answers", answers)?;
+    let mut found = HashMap::new();
+    for part in parts {
+        let part: Vec<CallAnswer> = parse("shard answers", &part)?;
+        found.extend(part.into_iter().map(|answer| (answer.index, answer)));
+    }
+    let mut runner = Replay {
+        local: Local::new(progress),
+        index: 0,
+        answers: found,
+    };
     let outcome = analyze(&graph, body, &limits(), &mut runner)?;
     to_json(&outcome)
 }
@@ -202,7 +527,7 @@ pub fn quick_what_if_json(
     let graph = attached(graph, library)?;
     let body: QuickWhatIf = parse("what-if", body)?;
     let iterations = quick_iterations(body.iterations, LOCAL_ITERATION_CAP);
-    let mut runner = Sequential::new(progress);
+    let mut runner = Local::new(progress);
     let outcome = analyze(
         &graph,
         CreateAnalysis::WhatIf {

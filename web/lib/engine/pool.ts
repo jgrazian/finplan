@@ -72,8 +72,17 @@ export interface AnalysisHandle {
 export interface ComputePool {
   /** The most workers the pool will run at once. */
   readonly size: number;
-  /** Run `specs` (one `BatchSpec` text each); `BatchOutput` texts come back in the same order. */
-  runBatches(job: RunJob, specs: readonly string[]): Promise<string[]>;
+  /**
+   * Run `specs` (one `BatchSpec` text each); `BatchOutput` texts come back in
+   * the same order. `onProgress` hears a batch's finished simulations as it
+   * runs, by the batch's index in `specs`, so a round reports progress before
+   * any of its batches is whole.
+   */
+  runBatches(
+    job: RunJob,
+    specs: readonly string[],
+    onProgress?: (index: number, done: number) => void,
+  ): Promise<string[]>;
   /** The run is over: workers forget its prepared plan. */
   endJob(job: string): void;
   /** Stop the run now: queued batches fail, workers executing them are terminated. */
@@ -220,10 +229,14 @@ export class WorkerPool implements ComputePool {
 
   // ── runs ─────────────────────────────────────────────────────────────────
 
-  runBatches(job: RunJob, specs: readonly string[]): Promise<string[]> {
+  runBatches(
+    job: RunJob,
+    specs: readonly string[],
+    onProgress?: (index: number, done: number) => void,
+  ): Promise<string[]> {
     if (this.terminated) return Promise.reject(cancelled("the compute pool is closed; the run"));
     const outputs = specs.map(
-          (spec) =>
+          (spec, index) =>
           new Promise<string>((resolve, reject) => {
             this.queue.push({
               owner: job.job,
@@ -239,7 +252,11 @@ export class WorkerPool implements ComputePool {
                     });
                     slot.prepared.add(job.job);
                   }
-                  const reply = await this.send(slot, { kind: "batch", job: job.job, spec });
+                  const reply = await this.send(
+                    slot,
+                    { kind: "batch", job: job.job, spec },
+                    onProgress && ((done) => onProgress(index, done)),
+                  );
                   resolve(reply.value as string);
                 };
                 run().then(
@@ -282,9 +299,39 @@ export class WorkerPool implements ComputePool {
 
   analysis(request: AnalysisRequest, onProgress?: (done: number, total: number) => void): AnalysisHandle {
     const owner = `analysis-${this.nextId++}`;
-    let fail: (error: LocalError) => void = () => undefined;
-    const promise = new Promise<string>((resolve, reject) => {
-      fail = reject;
+    let stopped: LocalError | undefined;
+    const stop = (error: LocalError) => {
+      stopped ??= error;
+      const waiting = this.queue.filter((task) => task.owner === owner);
+      this.queue = this.queue.filter((task) => task.owner !== owner);
+      for (const task of waiting) task.fail(error);
+      for (const slot of [...this.slots]) {
+        if (slot.current?.owner === owner) this.drop(slot, error);
+      }
+    };
+    // A quick what-if is one short call; anything else is split across every
+    // worker the pool may run (the engine runs an analysis it cannot split
+    // whole on the first, and the others answer at once).
+    const shards = request.quick ? 1 : this.size;
+    const promise: Promise<string> =
+      shards === 1
+        ? this.task(owner, { kind: "analysis", ...request }, onProgress)
+        : this.sharded(owner, request, shards, onProgress, () => stopped).catch((error: unknown) => {
+            const failure = toLocalError(error);
+            // One shard failing stops the rest: the analysis has no answer.
+            stop(failure);
+            throw stopped ?? failure;
+          });
+    return { promise, cancel: () => stop(cancelled("analysis")) };
+  }
+
+  /** One request on the next idle worker, under `owner`. */
+  private task(
+    owner: string,
+    request: DistributiveOmit<ComputeRequest, "id">,
+    onProgress?: (done: number, total: number) => void,
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
       if (this.terminated) {
         reject(cancelled("the compute pool is closed; the analysis"));
         return;
@@ -293,7 +340,7 @@ export class WorkerPool implements ComputePool {
         owner,
         fail: reject,
         start: (slot) => {
-          this.send(slot, { kind: "analysis", ...request }, onProgress).then(
+          this.send(slot, request, onProgress).then(
             (reply) => {
               resolve(reply.value as string);
               this.finish(slot);
@@ -307,19 +354,44 @@ export class WorkerPool implements ComputePool {
       });
       this.pump();
     });
-    return {
-      promise,
-      cancel: () => {
-        const error = cancelled("analysis");
-        const waiting = this.queue.filter((task) => task.owner === owner);
-        this.queue = this.queue.filter((task) => task.owner !== owner);
-        for (const task of waiting) task.fail(error);
-        for (const slot of [...this.slots]) {
-          if (slot.current?.owner === owner) this.drop(slot, error);
-        }
-        fail(error);
-      },
+  }
+
+  /**
+   * An analysis on `shards` workers at once: each simulates its share of the
+   * Monte Carlo calls, then one pass assembles the outcome from their answers
+   * (and simulates anything they did not answer, so it is the one-worker
+   * outcome). Progress is the shards' simulations added up.
+   */
+  private async sharded(
+    owner: string,
+    request: AnalysisRequest,
+    shards: number,
+    onProgress: ((done: number, total: number) => void) | undefined,
+    stopped: () => LocalError | undefined,
+  ): Promise<string> {
+    const { graph, library, body } = request;
+    const done = new Array<number>(shards).fill(0);
+    let total = 0;
+    const report = (shard: number) => (count: number, of: number) => {
+      done[shard] = count;
+      total = Math.max(total, of);
+      const sum = done.reduce((a, b) => a + b, 0);
+      onProgress?.(sum, Math.max(total, sum));
     };
+    const answers = await Promise.all(
+      done.map((_, shard) =>
+        this.task(owner, { kind: "analysis-shard", graph, library, body, shard, shards }, report(shard)),
+      ),
+    );
+    const halt = stopped();
+    if (halt) throw halt;
+    const before = done.reduce((a, b) => a + b, 0);
+    // The assembly simulates only what no shard answered: shown on top of theirs.
+    return this.task(
+      owner,
+      { kind: "analysis-finish", graph, library, body, answers: JSON.stringify(answers) },
+      (count, of) => onProgress?.(before + count, Math.max(total, before + of)),
+    );
   }
 
   calibrate(snapshot: string, settings: string): Promise<CalibrationSample> {

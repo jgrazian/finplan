@@ -203,13 +203,13 @@ pub struct RestoreResult {
 }
 
 /// One plan of an imported archive, made a plan of this device: the twin of
-/// the server's `restore_graph`. The archive's assumptions (return profiles
-/// with their distributions, the inflation profile, the tax config) are added
-/// to `library` as rows of their own, never matched by name onto what is
-/// there, and the plan is pointed at them. Each is named `"<name> [<suffix>]"`
-/// (a profile also carries its source id) so a second import of the same file
-/// cannot be mistaken for the first. `graph` is one of `import_archive`'s
-/// plans; `new_id` is the plan's local id and `now` its creation time.
+/// the server's `restore_graph`. Each of the archive's assumptions (return
+/// profiles with their distributions, the inflation profile, the tax config)
+/// that `library` already holds, by name and by value, is used as it is
+/// (`finplan_plan::adopt`); the rest are added as rows of their own, named
+/// `"<name> [<suffix>]"` only where the name is taken, and the plan is pointed
+/// at them. `graph` is one of `import_archive`'s plans; `new_id` is the plan's
+/// local id and `now` its creation time.
 pub fn restore_plan_json(
     library: &str,
     graph: &str,
@@ -218,6 +218,7 @@ pub fn restore_plan_json(
     now: &str,
     suffix: &str,
 ) -> EngineResult<String> {
+    use finplan_plan::adopt::{IMPORTED_INFLATION, adopt, import_name};
     use finplan_plan::library::{LibraryInflationProfile, LibraryReturnProfile, LibraryTaxConfig};
     use finplan_plan::specs::taxes::Bracket;
     use std::collections::HashMap;
@@ -229,6 +230,8 @@ pub fn restore_plan_json(
         return Err(EngineError::bad_request("scenario name cannot be empty"));
     }
     let bad = |what: &str| EngineError::bad_request(what.to_string());
+    let adoption = adopt(&graph, &library);
+    let needed = adoption.new_distributions(&graph);
 
     // Distributions first (a regime-switching one names its children), parents
     // after the rows they point at.
@@ -239,7 +242,12 @@ pub fn restore_plan_json(
         .max()
         .unwrap_or(0);
     let mut distribution_ids: HashMap<i64, i64> = HashMap::new();
-    let mut remaining: Vec<_> = graph.distributions.values().cloned().collect();
+    let mut remaining: Vec<_> = graph
+        .distributions
+        .values()
+        .filter(|row| needed.contains(&row.id))
+        .cloned()
+        .collect();
     remaining.sort_by_key(|row| row.id);
     while !remaining.is_empty() {
         let before = remaining.len();
@@ -267,7 +275,7 @@ pub fn restore_plan_json(
         remaining = deferred;
     }
 
-    let mut profile_ids: HashMap<i64, i64> = HashMap::new();
+    let mut profile_ids: HashMap<i64, i64> = adoption.return_profiles.clone();
     let mut next = library
         .return_profiles
         .iter()
@@ -277,14 +285,22 @@ pub fn restore_plan_json(
     let mut profiles: Vec<_> = graph.return_profiles.values().collect();
     profiles.sort_by_key(|p| p.id);
     for profile in profiles {
+        if profile_ids.contains_key(&profile.id) {
+            continue;
+        }
         let distribution_id = *distribution_ids
             .get(&profile.distribution_id)
             .ok_or_else(|| bad("Missing profile distribution."))?;
+        let name = import_name(
+            &profile.name,
+            &format!("{suffix}:{}", profile.id),
+            library.return_profiles.iter().map(|p| p.name.as_str()),
+        );
         next += 1;
         profile_ids.insert(profile.id, next);
         library.return_profiles.push(LibraryReturnProfile {
             id: next,
-            name: format!("{} [{suffix}:{}]", profile.name, profile.id),
+            name,
             description: profile.description.clone(),
             asset_class: profile.asset_class.clone(),
             distribution_id,
@@ -293,6 +309,7 @@ pub fn restore_plan_json(
     }
 
     graph.scenario.inflation_profile_id = match graph.inflation_distribution_id {
+        Some(_) if adoption.inflation_profile.is_some() => adoption.inflation_profile,
         Some(distribution) => {
             let distribution_id = *distribution_ids
                 .get(&distribution)
@@ -304,15 +321,17 @@ pub fn restore_plan_json(
                 .max()
                 .unwrap_or(0)
                 + 1;
+            let name = import_name(
+                graph
+                    .inflation_profile_name
+                    .as_deref()
+                    .unwrap_or(IMPORTED_INFLATION),
+                suffix,
+                library.inflation_profiles.iter().map(|p| p.name.as_str()),
+            );
             library.inflation_profiles.push(LibraryInflationProfile {
                 id,
-                name: format!(
-                    "{} [{suffix}]",
-                    graph
-                        .inflation_profile_name
-                        .as_deref()
-                        .unwrap_or("Imported inflation")
-                ),
+                name,
                 description: Some("Restored input assumptions".to_string()),
                 distribution_id,
                 sort_order: 0,
@@ -323,11 +342,17 @@ pub fn restore_plan_json(
     };
 
     graph.scenario.tax_config_id = match &graph.tax_config {
+        Some(_) if adoption.tax_config.is_some() => adoption.tax_config,
         Some(tax) => {
             let id = library.tax_configs.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+            let name = import_name(
+                &tax.name,
+                suffix,
+                library.tax_configs.iter().map(|t| t.name.as_str()),
+            );
             library.tax_configs.push(LibraryTaxConfig {
                 id,
-                name: format!("{} [{suffix}]", tax.name),
+                name,
                 description: None,
                 state_rate: tax.state_rate,
                 capital_gains_rate: tax.capital_gains_rate,

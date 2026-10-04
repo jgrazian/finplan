@@ -50,7 +50,7 @@
 //! | `coordinator_finish(h)` | | `RunResults` |
 //! | `coordinator_drop(h)` | | |
 //! | `prepare(snapshot, settings)` | | handle |
-//! | `run_batch(h, spec)` | `BatchSpec` | `BatchOutput` |
+//! | `run_batch(h, spec, progress?)` | `BatchSpec`; `progress(done, total)` as it runs | `BatchOutput` |
 //! | `release(h)` | | |
 //! | `results_view(run_results, run_id, scenario_id, series?)` | `RunResults` | `Results` |
 //! | `ledger_page(run_results, run_id, query)` | `LedgerQuery` | `LedgerPage` |
@@ -60,6 +60,8 @@
 //! | `results_close(h)` | | |
 //! | `analysis_plan(graph, library, body)` | `CreateAnalysis` | `AnalysisPlan` |
 //! | `analysis_run(graph, library, body, progress)` | `CreateAnalysis` | `AnalysisOutcome` |
+//! | `analysis_shard(graph, library, body, shard, shards, progress)` | `CreateAnalysis`; one worker's share of its simulations | `CallAnswer[]` (opaque) |
+//! | `analysis_finish(graph, library, body, answers, progress)` | `CreateAnalysis`; the shards' answers as a `string[]` | `AnalysisOutcome` |
 //! | `quick_what_if(graph, library, body, progress)` | `QuickWhatIf` | `WhatIfOutcome` |
 //! | `apply_what_if(graph, library, body, new_id, now)` | `ApplyWhatIf` | `ScenarioGraph` |
 //! | `check_what_if_stack(body)` | `WhatIfStack` | `WhatIfStack` |

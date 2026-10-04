@@ -371,7 +371,17 @@ export class Runs {
         if (state.cancelled) throw stopped();
         const round = guard(() => engine.coordinator_next_round(coordinator));
         if (round === undefined) break;
-        const outputs = await pool.runBatches({ job, snapshot, settings }, splitSpecs(round));
+        // Counted as the batches run, so a run that is one round (any run
+        // that does not converge) shows progress before it ends. The
+        // coordinator's own count replaces it once the round is merged.
+        const before = state.completed;
+        const done = new Map<number, number>();
+        const outputs = await pool.runBatches({ job, snapshot, settings }, splitSpecs(round), (index, count) => {
+          done.set(index, count);
+          let sum = 0;
+          for (const n of done.values()) sum += n;
+          state.completed = before + sum;
+        });
         if (state.cancelled) throw stopped();
         guard(() => engine.coordinator_absorb(coordinator, joinOutputs(outputs)));
         state.completed = guard(() => engine.coordinator_completed(coordinator));

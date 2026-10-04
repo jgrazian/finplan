@@ -116,6 +116,37 @@ if (requireEngine("the compute pool")) {
     }
   }
 
+  test("a round reports its batches' simulations as they run, before any batch is whole", async () => {
+    const engine = await loadEngine();
+    const snapshot = await snapshotOf();
+    // One round, one batch per worker: what a run that does not converge is.
+    const settings = JSON.stringify({ iterations: 400, seed: 3, batch_size: 100, parallel_batches: 2 });
+    const coordinator = engine.coordinator_new(snapshot, settings);
+    const pool = new WorkerPool(() => new InProcessWorker(engine), 2);
+    try {
+      const round = engine.coordinator_next_round(coordinator);
+      assert.ok(round);
+      const specs = splitSpecs(round);
+      assert.equal(specs.length, 2);
+      const latest = new Map<number, number>();
+      const reports: number[] = [];
+      const outputs = await pool.runBatches({ job: "progress", snapshot, settings }, specs, (index, done) => {
+        latest.set(index, done);
+        reports.push(done);
+      });
+      // Many reports, not one per batch, ending with each batch complete.
+      assert.ok(reports.length > 10, `${reports.length} reports`);
+      assert.ok(reports.some((done) => done < 200));
+      assert.deepEqual([...latest.entries()].sort(), [[0, 200], [1, 200]]);
+      engine.coordinator_absorb(coordinator, joinOutputs(outputs));
+      assert.equal(engine.coordinator_completed(coordinator), 400);
+    } finally {
+      engine.coordinator_drop(coordinator);
+      pool.endJob("progress");
+      pool.terminate();
+    }
+  });
+
   async function snapshotOf() {
     const h = await harness();
     const [profile] = await h.api.returnProfiles.list();

@@ -105,10 +105,18 @@ fn an_imported_plan_brings_its_assumptions_into_the_library() {
     let after = &restored["library"];
     let grew =
         |key: &str| after[key].as_array().unwrap().len() - before[key].as_array().unwrap().len();
+    // The starter inflation profile is already there, by name and by value:
+    // used, not copied.
+    assert_eq!(grew("inflation_profiles"), 0);
+    // The snapshot's tax config predates standard deductions, so it is not the
+    // starter one despite the name: added beside it, tagged, never substituted.
+    assert_eq!(grew("tax_configs"), 1);
+    assert_eq!(
+        after["tax_configs"].as_array().unwrap().last().unwrap()["name"],
+        "US Federal 2024 (single) [ab12cd34]"
+    );
     assert!(grew("return_profiles") >= 1);
     assert!(grew("distributions") >= 1);
-    assert_eq!(grew("tax_configs"), 1);
-    assert_eq!(grew("inflation_profiles"), 1);
     // Nothing already in the library was touched.
     for key in [
         "return_profiles",
@@ -145,7 +153,8 @@ fn an_imported_plan_brings_its_assumptions_into_the_library() {
             .is_empty()
     );
 
-    // A second import is a second set of rows, not a match on the first.
+    // A second import (a plan moved away and back) finds the first's rows and
+    // adds none: the library does not grow a copy per trip.
     let again = value(&ok(plans::restore_plan_json(
         &restored["library"].to_string(),
         &source,
@@ -154,10 +163,9 @@ fn an_imported_plan_brings_its_assumptions_into_the_library() {
         "2026-10-04 09:00:00",
         "ef56ab78",
     )));
-    assert_eq!(
-        again["library"]["tax_configs"].as_array().unwrap().len(),
-        after["tax_configs"].as_array().unwrap().len() + 1
-    );
+    assert_eq!(again["library"], *after);
+    assert!(!again["library"].to_string().contains("ef56ab78"));
+
     assert_eq!(
         plans::restore_plan_json(&library, &source, 1, "  ", "now", "x")
             .unwrap_err()
@@ -487,4 +495,122 @@ fn a_local_review_notes_a_run_and_silences_what_was_set_aside() {
             .unwrap()
             .contains(&prints[0])
     );
+}
+
+/// `body` split across `shards` workers, then finished: what the pool does.
+fn sharded(graph: &str, library: &str, body: &Value, shards: usize) -> (Value, usize) {
+    let mut simulated = 0;
+    let parts: Vec<String> = (0..shards)
+        .map(|shard| {
+            let mut last = 0;
+            let part = ok(analysis::analysis_shard_json(
+                graph,
+                library,
+                &body.to_string(),
+                shard,
+                shards,
+                &mut |done, _| {
+                    last = done;
+                    false
+                },
+            ));
+            simulated += last;
+            part
+        })
+        .collect();
+    let mut extra = 0;
+    let out = ok(analysis::analysis_finish_json(
+        graph,
+        library,
+        &body.to_string(),
+        &serde_json::to_string(&parts).unwrap(),
+        &mut |done, _| {
+            extra = done;
+            false
+        },
+    ));
+    assert_eq!(extra, 0, "the finish pass simulated nothing");
+    (value(&out), simulated)
+}
+
+#[test]
+fn a_sweep_split_across_workers_is_the_same_sweep() {
+    let (graph, library, spending) = analysable();
+    let body = json!({"kind": "sweep", "iterations": 25, "axes": [
+        {"parameter_id": spending, "min": 1000.0, "max": 3000.0, "steps": 5}]});
+    let (whole, reports) = analysis(&graph, &library, &body);
+    // Reported as simulations finish, not once per 25-iteration point.
+    assert!(reports.len() > 6 * 2, "{} reports", reports.len());
+    for shards in 1..=4 {
+        let (split, simulated) = sharded(&graph, &library, &body, shards);
+        assert_eq!(split, whole, "{shards} shards");
+        // Five cells and the plan: each simulated once, by one shard.
+        assert_eq!(simulated, 6 * 25, "{shards} shards");
+    }
+}
+
+#[test]
+fn a_sensitivity_split_across_workers_is_the_same_ranking() {
+    let (graph, library, _) = analysable();
+    let body = json!({"kind": "sensitivity", "iterations": 25});
+    let (whole, _) = analysis(&graph, &library, &body);
+    assert_eq!(whole["kind"], "sensitivity");
+    for shards in [2, 3] {
+        assert_eq!(sharded(&graph, &library, &body, shards).0, whole);
+    }
+}
+
+#[test]
+fn answers_that_do_not_match_their_call_are_simulated_again() {
+    let (graph, library, spending) = analysable();
+    let body = sweep_body(&spending);
+    let (whole, _) = analysis(&graph, &library, &body);
+    // Shards of a different sweep: every key differs, so the finish pass
+    // simulates the whole grid itself and still answers this one.
+    let other = json!({"kind": "sweep", "iterations": 25, "axes": [
+        {"parameter_id": spending, "min": 1500.0, "max": 2500.0, "steps": 3}]});
+    let parts: Vec<String> = (0..2)
+        .map(|shard| {
+            ok(analysis::analysis_shard_json(
+                &graph,
+                &library,
+                &other.to_string(),
+                shard,
+                2,
+                &mut |_, _| false,
+            ))
+        })
+        .collect();
+    let mut simulated = 0;
+    let out = ok(analysis::analysis_finish_json(
+        &graph,
+        &library,
+        &body.to_string(),
+        &serde_json::to_string(&parts).unwrap(),
+        &mut |done, _| {
+            simulated = done;
+            false
+        },
+    ));
+    assert_eq!(value(&out), whole);
+    assert!(simulated > 0);
+}
+
+#[test]
+fn the_local_runner_answers_as_the_engines_own_runner() {
+    use finplan_core::analysis::ProgressRunner;
+    use finplan_plan::analysis::{CreateAnalysis, analyze};
+    let (graph, library, spending) = analysable();
+    let body = sweep_body(&spending);
+    let (local, _) = analysis(&graph, &library, &body);
+    let mut attached: finplan_plan::graph::ScenarioGraph = serde_json::from_str(&graph).unwrap();
+    let lib: finplan_plan::library::Library = serde_json::from_str(&library).unwrap();
+    lib.attach(&mut attached);
+    let request: CreateAnalysis = serde_json::from_value(body).unwrap();
+    let limits = finplan_plan::analysis::Limits {
+        iteration_cap: analysis::LOCAL_ITERATION_CAP,
+        parallel_batches: analysis::LOCAL_PARALLEL_BATCHES,
+    };
+    let engine = analyze(&attached, request, &limits, &mut ProgressRunner::new(None)).unwrap();
+    assert_eq!(serde_json::to_value(&engine).unwrap(), local);
 }

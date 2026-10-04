@@ -17,8 +17,13 @@ use crate::{
     error::{ApiError, ApiResult},
     state::AppState,
 };
+use finplan_plan::adopt::{IMPORTED_INFLATION, adopt, import_name};
 use finplan_plan::archive::{self, ArchivePreview, PlanArchive, pack, unpack};
-use finplan_plan::graph::ScenarioGraph;
+use finplan_plan::graph::{DistributionRow, ScenarioGraph};
+use finplan_plan::library::{
+    Library, LibraryInflationProfile, LibraryReturnProfile, LibraryTaxConfig,
+};
+use finplan_plan::specs::taxes::Bracket;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -199,10 +204,13 @@ async fn import(
             return Err(ApiError::Forbidden("Free includes one saved plan. Export or read existing plans at any time; importing additional plans requires Pro.".into()));
         }
     }
+    // Read inside the transaction, and kept current as plans are restored, so
+    // two plans of one archive that share a profile add it once.
+    let mut library = crate::db::library::load_connection(&mut tx, &user.id).await?;
     let mut scenario_ids = Vec::new();
     for graph in &mut graphs {
         let name = format!("{}{}", body.name_prefix, graph.scenario.name);
-        scenario_ids.push(restore_graph(&mut tx, graph, &user.id, &name).await?);
+        scenario_ids.push(restore_graph(&mut tx, &mut library, graph, &user.id, &name).await?);
     }
     let result = ArchiveImported { scenario_ids };
     sqlx::query(
@@ -240,16 +248,29 @@ async fn import(
     Ok(Json(result))
 }
 
-/// New assumptions always get independent rows, never name-based substitution.
+/// Point `graph` at `user`'s library and save it as a new scenario. Each
+/// assumption the library already holds, by name and by value, is used as it
+/// is (`finplan_plan::adopt`), so moving a plan back and forth does not grow
+/// the library; the rest are added as rows of their own (and to `library`),
+/// named `"<name> [<tag>]"` only where the name is taken. A same-named row
+/// with different numbers is never substituted.
 pub(crate) async fn restore_graph(
     tx: &mut Transaction<'_, Sqlite>,
+    library: &mut Library,
     graph: &mut ScenarioGraph,
     user: &str,
     name: &str,
 ) -> ApiResult<i64> {
     let suffix = uuid::Uuid::new_v4().to_string()[..8].to_owned();
+    let adoption = adopt(graph, library);
+    let needed = adoption.new_distributions(graph);
     let mut distribution_ids = HashMap::new();
-    let mut remaining: Vec<_> = graph.distributions.values().cloned().collect();
+    let mut remaining: Vec<_> = graph
+        .distributions
+        .values()
+        .filter(|row| needed.contains(&row.id))
+        .cloned()
+        .collect();
     remaining.sort_by_key(|row| row.id);
     while !remaining.is_empty() {
         let before = remaining.len();
@@ -263,55 +284,122 @@ pub(crate) async fn restore_graph(
                 deferred.push(row);
                 continue;
             }
+            let bull_id = row.bull_id.map(|id| distribution_ids[&id]);
+            let bear_id = row.bear_id.map(|id| distribution_ids[&id]);
             let id: i64 = sqlx::query_scalar("INSERT INTO distributions(user_id,kind,rate,mean,std_dev,scale,df,bull_id,bear_id,bull_to_bear_prob,bear_to_bull_prob,history_preset,block_size) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id")
                 .bind(user).bind(&row.kind).bind(row.rate).bind(row.mean).bind(row.std_dev).bind(row.scale).bind(row.df)
-                .bind(row.bull_id.map(|id|distribution_ids[&id])).bind(row.bear_id.map(|id|distribution_ids[&id]))
+                .bind(bull_id).bind(bear_id)
                 .bind(row.bull_to_bear_prob).bind(row.bear_to_bull_prob).bind(&row.history_preset).bind(row.block_size)
                 .fetch_one(&mut **tx).await?;
             distribution_ids.insert(row.id, id);
+            library.distributions.push(DistributionRow {
+                id,
+                bull_id,
+                bear_id,
+                ..row
+            });
         }
         if deferred.len() == before {
             return Err(ApiError::bad_request("Invalid distribution references."));
         }
         remaining = deferred;
     }
-    let mut profile_ids = HashMap::new();
-    let mut profiles: Vec<_> = graph.return_profiles.values().collect();
+    let mut profile_ids = adoption.return_profiles.clone();
+    let mut profiles: Vec<_> = graph
+        .return_profiles
+        .values()
+        .filter(|p| !profile_ids.contains_key(&p.id))
+        .collect();
     profiles.sort_by_key(|p| p.id);
     for profile in profiles {
-        let distribution = distribution_ids
+        let distribution = *distribution_ids
             .get(&profile.distribution_id)
             .ok_or_else(|| ApiError::bad_request("Missing profile distribution."))?;
+        let name = import_name(
+            &profile.name,
+            &format!("{suffix}:{}", profile.id),
+            library.return_profiles.iter().map(|p| p.name.as_str()),
+        );
         let id:i64 = sqlx::query_scalar("INSERT INTO return_profiles(user_id,name,description,distribution_id,asset_class) VALUES(?,?,?,?,?) RETURNING id")
-            .bind(user).bind(format!("{} [{suffix}:{}]",profile.name,profile.id)).bind(&profile.description).bind(distribution).bind(&profile.asset_class)
+            .bind(user).bind(&name).bind(&profile.description).bind(distribution).bind(&profile.asset_class)
             .fetch_one(&mut **tx).await?;
         profile_ids.insert(profile.id, id);
+        library.return_profiles.push(LibraryReturnProfile {
+            id,
+            name,
+            description: profile.description.clone(),
+            asset_class: profile.asset_class.clone(),
+            distribution_id: distribution,
+            sort_order: 0,
+        });
     }
-    graph.scenario.inflation_profile_id = if let Some(distribution) =
-        graph.inflation_distribution_id
-    {
-        let mapped = distribution_ids
-            .get(&distribution)
-            .ok_or_else(|| ApiError::bad_request("Missing inflation distribution."))?;
-        Some(sqlx::query_scalar("INSERT INTO inflation_profiles(user_id,name,description,distribution_id) VALUES(?,?,?,?) RETURNING id")
-            .bind(user).bind(format!("{} [{suffix}]", graph.inflation_profile_name.as_deref().unwrap_or("Imported inflation"))).bind("Restored input assumptions").bind(mapped).fetch_one(&mut **tx).await?)
-    } else {
-        None
-    };
-    graph.scenario.tax_config_id = if let Some(tax) = &graph.tax_config {
-        let id:i64 = sqlx::query_scalar("INSERT INTO tax_configs(user_id,name,state_rate,capital_gains_rate,early_withdrawal_penalty_rate,standard_deduction,age_65_extra_deduction) VALUES(?,?,?,?,?,?,?) RETURNING id")
-            .bind(user).bind(format!("{} [{suffix}]",tax.name)).bind(tax.state_rate).bind(tax.capital_gains_rate).bind(tax.early_withdrawal_penalty_rate).bind(tax.standard_deduction).bind(tax.age_65_extra_deduction).fetch_one(&mut **tx).await?;
-        for bracket in &graph.tax_brackets {
-            sqlx::query("INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(?,?,?)")
-                .bind(id)
-                .bind(bracket.threshold)
-                .bind(bracket.rate)
-                .execute(&mut **tx)
-                .await?;
+    graph.scenario.inflation_profile_id = match graph.inflation_distribution_id {
+        Some(_) if adoption.inflation_profile.is_some() => adoption.inflation_profile,
+        Some(distribution) => {
+            let distribution = *distribution_ids
+                .get(&distribution)
+                .ok_or_else(|| ApiError::bad_request("Missing inflation distribution."))?;
+            let name = import_name(
+                graph
+                    .inflation_profile_name
+                    .as_deref()
+                    .unwrap_or(IMPORTED_INFLATION),
+                &suffix,
+                library.inflation_profiles.iter().map(|p| p.name.as_str()),
+            );
+            let description = "Restored input assumptions";
+            let id: i64 = sqlx::query_scalar("INSERT INTO inflation_profiles(user_id,name,description,distribution_id) VALUES(?,?,?,?) RETURNING id")
+                .bind(user).bind(&name).bind(description).bind(distribution).fetch_one(&mut **tx).await?;
+            library.inflation_profiles.push(LibraryInflationProfile {
+                id,
+                name,
+                description: Some(description.to_string()),
+                distribution_id: distribution,
+                sort_order: 0,
+            });
+            Some(id)
         }
-        Some(id)
-    } else {
-        None
+        None => None,
+    };
+    graph.scenario.tax_config_id = match &graph.tax_config {
+        Some(_) if adoption.tax_config.is_some() => adoption.tax_config,
+        Some(tax) => {
+            let name = import_name(
+                &tax.name,
+                &suffix,
+                library.tax_configs.iter().map(|t| t.name.as_str()),
+            );
+            let id:i64 = sqlx::query_scalar("INSERT INTO tax_configs(user_id,name,state_rate,capital_gains_rate,early_withdrawal_penalty_rate,standard_deduction,age_65_extra_deduction) VALUES(?,?,?,?,?,?,?) RETURNING id")
+                .bind(user).bind(&name).bind(tax.state_rate).bind(tax.capital_gains_rate).bind(tax.early_withdrawal_penalty_rate).bind(tax.standard_deduction).bind(tax.age_65_extra_deduction).fetch_one(&mut **tx).await?;
+            for bracket in &graph.tax_brackets {
+                sqlx::query("INSERT INTO tax_brackets(tax_config_id,threshold,rate) VALUES(?,?,?)")
+                    .bind(id)
+                    .bind(bracket.threshold)
+                    .bind(bracket.rate)
+                    .execute(&mut **tx)
+                    .await?;
+            }
+            library.tax_configs.push(LibraryTaxConfig {
+                id,
+                name,
+                description: None,
+                state_rate: tax.state_rate,
+                capital_gains_rate: tax.capital_gains_rate,
+                early_withdrawal_penalty_rate: tax.early_withdrawal_penalty_rate,
+                standard_deduction: tax.standard_deduction,
+                age_65_extra_deduction: tax.age_65_extra_deduction,
+                federal_brackets: graph
+                    .tax_brackets
+                    .iter()
+                    .map(|b| Bracket {
+                        threshold: b.threshold,
+                        rate: b.rate,
+                    })
+                    .collect(),
+            });
+            Some(id)
+        }
+        None => None,
     };
     let mapped = |id: i64| {
         profile_ids

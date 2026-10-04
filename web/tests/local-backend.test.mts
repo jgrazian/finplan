@@ -491,6 +491,31 @@ if (requireEngine("local backend")) {
     await assert.rejects(h.api.analysis.results(big.id), (e: { status: number }) => e.status === 409);
   });
 
+  test("a sweep split across the pool's workers is the sweep one worker makes", async () => {
+    const outcomes: unknown[] = [];
+    for (const poolSize of [1, 2, 3]) {
+      const h = await harness({ poolSize });
+      const profiles = await h.api.returnProfiles.list();
+      const { scenario_id } = await h.api.scenarios.setup(setupAnswers(profiles[0].id) as never);
+      const spending = (await h.api.analysis.parameters(scenario_id)).find((p) => p.name === "Monthly spending");
+      assert.ok(spending);
+      const started = await h.api.analysis.start(scenario_id, {
+        kind: "sweep",
+        iterations: 25,
+        axes: [{ parameter_id: spending.id, min: 3_000, max: 6_000, steps: 5 }],
+      } as never);
+      const job = await waitFor("the sweep", async () => {
+        const current = await h.api.analysis.get(started.id);
+        return current.status === "running" || current.status === "queued" ? undefined : current;
+      });
+      assert.equal(job.status, "succeeded", `${poolSize} workers`);
+      assert.equal(job.completed, job.total, `${poolSize} workers`);
+      outcomes.push(await h.api.analysis.results(started.id));
+    }
+    assert.deepEqual(outcomes[1], outcomes[0]);
+    assert.deepEqual(outcomes[2], outcomes[0]);
+  });
+
   test("a quick what-if answers in the call, honours an abort, and applies to the plan or a copy", async () => {
     const h = await withPlan();
     const layers = [{ kind: "market-shock", age: 50, drop: 0.3 }];

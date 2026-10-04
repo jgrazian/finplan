@@ -202,10 +202,22 @@ pub fn prepare(snapshot: &str, settings: &str) -> Result<u32, String> {
     js(runs::prepare(snapshot, settings))
 }
 
-/// See [`runs::run_batch_json`].
+/// See [`runs::run_batch_json`]. With `progress`, it is called as
+/// `progress(done, total)` while the batch runs ([`runs::run_batch_reporting_json`]);
+/// return true from it to stop.
 #[wasm_bindgen]
-pub fn run_batch(handle: u32, spec: &str) -> Result<String, String> {
-    js(runs::run_batch_json(handle, spec))
+pub fn run_batch(
+    handle: u32,
+    spec: &str,
+    progress: Option<js_sys::Function>,
+) -> Result<String, String> {
+    match progress {
+        Some(progress) => {
+            let mut report = progress_fn(&progress);
+            js(runs::run_batch_reporting_json(handle, spec, &mut report))
+        }
+        None => js(runs::run_batch_json(handle, spec)),
+    }
 }
 
 /// See [`runs::release`].
@@ -314,6 +326,48 @@ pub fn analysis_run(
         graph,
         library,
         body,
+        &mut report,
+    ))
+}
+
+/// See [`analysis::analysis_shard_json`]. `progress(done, total)` reports this
+/// shard's simulations; return true from it to stop.
+#[wasm_bindgen]
+pub fn analysis_shard(
+    graph: &str,
+    library: &str,
+    body: &str,
+    shard: u32,
+    shards: u32,
+    progress: &js_sys::Function,
+) -> Result<String, String> {
+    let mut report = progress_fn(progress);
+    js(analysis::analysis_shard_json(
+        graph,
+        library,
+        body,
+        shard as usize,
+        shards as usize,
+        &mut report,
+    ))
+}
+
+/// See [`analysis::analysis_finish_json`]. `answers` is a `string[]` JSON of
+/// the shards' results.
+#[wasm_bindgen]
+pub fn analysis_finish(
+    graph: &str,
+    library: &str,
+    body: &str,
+    answers: &str,
+    progress: &js_sys::Function,
+) -> Result<String, String> {
+    let mut report = progress_fn(progress);
+    js(analysis::analysis_finish_json(
+        graph,
+        library,
+        body,
+        answers,
         &mut report,
     ))
 }

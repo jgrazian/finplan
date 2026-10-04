@@ -40,19 +40,63 @@ async fn archives_restore_independent_inputs_retry_and_reject_cycles() {
         .post(&format!("/api/scenarios/{new_id}/compile"), json!({}))
         .await;
     assert_eq!(status, StatusCode::OK, "{result}");
+    // Restored into the library it came from, the plan uses that library's
+    // rows as they are: importing (or moving a plan back) adds no copies.
     let (_, restored) = app.get(&format!("/api/scenarios/{new_id}/archive")).await;
-    let old_profile = archive["plans"][0]["return_profiles"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .next()
-        .unwrap();
-    assert!(
-        !restored["plans"][0]["return_profiles"]
+    assert_eq!(
+        restored["plans"][0]["scenario"]["tax_config_id"],
+        archive["plans"][0]["scenario"]["tax_config_id"]
+    );
+    let names = |archive: &Value| -> Vec<String> {
+        let mut names: Vec<String> = archive["plans"][0]["return_profiles"]
             .as_object()
             .unwrap()
-            .contains_key(old_profile)
-    );
+            .values()
+            .map(|p| p["name"].as_str().unwrap().to_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    let listed = |profiles: &Value| {
+        profiles
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter_map(|p| p["name"].as_str())
+                    .filter(|n| n.contains(" ["))
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+    assert_eq!(listed(&profiles), 0, "no tagged copies: {profiles}");
+    assert_eq!(names(&restored), names(&archive));
+    // A same-named profile with other numbers is never substituted.
+    let mut changed = archive.clone();
+    let plan = &mut changed["plans"][0];
+    let used = plan["bank"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .map(|b| b["return_profile_id"].to_string())
+        .unwrap();
+    let distribution = plan["return_profiles"][&used]["distribution_id"].to_string();
+    let row = &mut plan["distributions"][&distribution];
+    for key in ["rate", "mean"] {
+        if let Some(x) = row[key].as_f64() {
+            row[key] = json!(x + 0.0123);
+        }
+    }
+    let (status, changed_import) = app
+        .post(
+            "/api/archives/import",
+            json!({"archive":changed,"name_prefix":"Changed ","request_id":"archive-changed"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{changed_import}");
+    let (_, profiles) = app.get("/api/return-profiles").await;
+    assert_eq!(listed(&profiles), 1, "one tagged copy: {profiles}");
     let mut bad = archive.clone();
     let distributions = bad["plans"][0]["distributions"].as_object_mut().unwrap();
     let key = distributions.keys().next().unwrap().clone();

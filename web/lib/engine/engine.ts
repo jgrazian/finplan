@@ -43,7 +43,12 @@ export interface Engine {
   coordinator_drop(handle: number): void;
 
   prepare(snapshot: string, settings: string): number;
-  run_batch(handle: number, spec: string): string;
+  /** `progress(done, total)` is called as the batch's simulations finish; return true to stop it. */
+  run_batch(
+    handle: number,
+    spec: string,
+    progress?: (done: number, total: number) => boolean | void,
+  ): string;
   release(handle: number): void;
 
   results_view(runResults: string, runId: number, scenarioId: number, series?: string | null): string;
@@ -58,6 +63,22 @@ export interface Engine {
     graph: string,
     library: string,
     body: string,
+    progress: (done: number, total: number) => boolean | void,
+  ): string;
+  analysis_shard(
+    graph: string,
+    library: string,
+    body: string,
+    shard: number,
+    shards: number,
+    progress: (done: number, total: number) => boolean | void,
+  ): string;
+  /** `answers` is a `string[]` JSON of what the shards returned. */
+  analysis_finish(
+    graph: string,
+    library: string,
+    body: string,
+    answers: string,
     progress: (done: number, total: number) => boolean | void,
   ): string;
   quick_what_if(

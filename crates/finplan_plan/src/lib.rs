@@ -8,6 +8,7 @@
 //! `sqlx` feature adds `FromRow` to the row structs for the server; everything
 //! else is plain data and logic.
 
+pub mod adopt;
 pub mod analysis;
 pub mod archive;
 pub mod batch;

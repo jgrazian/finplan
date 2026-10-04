@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use finplan_core::model::MonteCarloConfig;
 use finplan_core::simulation::{
     BatchOutput, BatchSpec, MonteCarloCoordinator, PreparedRun, base_seed, prepare_run, run_batch,
+    run_batch_observed,
 };
 use finplan_plan::PlanError;
 use finplan_plan::compile::{CompiledScenario, compile};
@@ -298,6 +299,31 @@ pub fn run_batch_json(handle: u32, spec: &str) -> EngineResult<String> {
     PREPARED.with_borrow_mut(|registry| {
         let prepared = registry.get_mut(handle)?;
         to_json(&run_batch(prepared, &spec, None)?)
+    })
+}
+
+/// How many progress reports a batch makes at most, besides its last.
+const REPORTS_PER_BATCH: usize = 50;
+
+/// [`run_batch_json`], calling `report(done, total)` as the batch's
+/// simulations finish (about [`REPORTS_PER_BATCH`] times, and always at the
+/// end), so a worker can post progress while the batch holds its thread.
+/// Returning true from `report` cancels the batch. The output is
+/// [`run_batch_json`]'s: reporting does not touch the simulation.
+pub fn run_batch_reporting_json(
+    handle: u32,
+    spec: &str,
+    report: &mut dyn FnMut(usize, usize) -> bool,
+) -> EngineResult<String> {
+    let spec: BatchSpec = parse("batch spec", spec)?;
+    let total = spec.iterations;
+    let step = (total / REPORTS_PER_BATCH).max(1);
+    PREPARED.with_borrow_mut(|registry| {
+        let prepared = registry.get_mut(handle)?;
+        let output = run_batch_observed(prepared, &spec, None, |done| {
+            (done % step == 0 || done == total) && report(done, total)
+        })?;
+        to_json(&output)
     })
 }
 

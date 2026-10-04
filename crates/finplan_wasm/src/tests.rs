@@ -540,3 +540,30 @@ fn runs_are_checked_like_the_servers() {
     assert_eq!(runs::coordinator_finish(handle).unwrap_err().status, 404);
     runs::release(prepared);
 }
+
+#[test]
+fn a_reporting_batch_reports_as_it_runs_and_returns_the_same_output() {
+    let prepared = ok(runs::prepare(DEFAULT_SNAPSHOT, &settings(120, 1)));
+    let spec = r#"{"index": 0, "seed": 7, "iterations": 120}"#;
+    let quiet = ok(runs::run_batch_json(prepared, spec));
+
+    let mut reports = Vec::new();
+    let loud = ok(runs::run_batch_reporting_json(
+        prepared,
+        spec,
+        &mut |done, total| {
+            reports.push((done, total));
+            false
+        },
+    ));
+    assert_eq!(loud, quiet, "reporting does not touch the simulation");
+    // Every 120 / 50 = 2 simulations, so 60 reports, rising, ending at the total.
+    assert_eq!(reports.len(), 60);
+    assert!(reports.windows(2).all(|w| w[0].0 < w[1].0));
+    assert_eq!(reports.last(), Some(&(120, 120)));
+
+    // Answering true stops the batch: an error, never a short output.
+    let stopped = runs::run_batch_reporting_json(prepared, spec, &mut |done, _| done >= 10);
+    assert!(stopped.is_err());
+    runs::release(prepared);
+}

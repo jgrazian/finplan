@@ -1025,6 +1025,22 @@ pub fn run_batch(
     spec: &BatchSpec,
     progress: Option<&MonteCarloProgress>,
 ) -> Result<BatchOutput, SimulationError> {
+    run_batch_observed(prepared, spec, progress, |_| false)
+}
+
+/// [`run_batch`], telling `each` how many of the batch's iterations have
+/// finished after every one. Returning true from it cancels the batch. It
+/// observes and never steers: the output is [`run_batch`]'s, bit for bit.
+///
+/// For a single-threaded host (a WebAssembly worker) that cannot read
+/// [`MonteCarloProgress`]'s atomics while the batch holds the thread, but can
+/// post a message from inside the loop.
+pub fn run_batch_observed(
+    prepared: &PreparedRun,
+    spec: &BatchSpec,
+    progress: Option<&MonteCarloProgress>,
+    mut each: impl FnMut(usize) -> bool,
+) -> Result<BatchOutput, SimulationError> {
     let cancelled = || progress.is_some_and(MonteCarloProgress::is_cancelled);
     if cancelled() {
         return Err(SimulationError::Cancelled);
@@ -1073,6 +1089,9 @@ pub fn run_batch(
 
         if let Some(progress) = progress {
             progress.increment();
+        }
+        if each(local_results.len()) {
+            return Err(SimulationError::Cancelled);
         }
     }
 

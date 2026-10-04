@@ -13,9 +13,11 @@
  * | request | reply |
  * |---|---|
  * | `prepare {job, snapshot, settings}` | `ok` |
- * | `batch {job, spec}` | `ok` + `value`: the `BatchOutput` text |
+ * | `batch {job, spec}` | `progress [done, total]` any number of times, then `ok` + `value`: the `BatchOutput` text |
  * | `release {job}` | none |
  * | `analysis {graph, library, body, quick}` | `progress [done, total]` any number of times, then `ok` + `value` |
+ * | `analysis-shard {graph, library, body, shard, shards}` | `progress` as above, then `ok` + `value`: this shard's answers (opaque) |
+ * | `analysis-finish {graph, library, body, answers}` | `progress` for anything no shard answered, then `ok` + `value`: the outcome |
  * | `calibrate {snapshot, settings}` | `ok` + `value`: `{seconds, iterations}` |
  *
  * `BatchSpec` and `BatchOutput` are opaque strings throughout: their seeds are
@@ -28,6 +30,16 @@ export type ComputeRequest =
   | { id: number; kind: "batch"; job: string; spec: string }
   | { id: number; kind: "release"; job: string }
   | { id: number; kind: "analysis"; graph: string; library: string; body: string; quick: boolean }
+  | {
+      id: number;
+      kind: "analysis-shard";
+      graph: string;
+      library: string;
+      body: string;
+      shard: number;
+      shards: number;
+    }
+  | { id: number; kind: "analysis-finish"; graph: string; library: string; body: string; answers: string }
   | { id: number; kind: "calibrate"; snapshot: string; settings: string };
 
 export type ComputeReply =
@@ -96,7 +108,14 @@ export function createComputeHost(
                 message: "this worker was not prepared for the run",
               });
             }
-            reply({ id: request.id, ok: true, value: engine.run_batch(handle, request.spec) });
+            // Progress as the batch runs, as an analysis reports it: a run is
+            // one round of a batch per worker, so counting whole batches
+            // would sit at zero until they all land together.
+            const progress = (done: number, total: number) => {
+              reply({ id: request.id, progress: [done, total] });
+              return stopped?.() ?? false;
+            };
+            reply({ id: request.id, ok: true, value: engine.run_batch(handle, request.spec, progress) });
             return;
           }
           case "release":
@@ -112,6 +131,32 @@ export function createComputeHost(
               id: request.id,
               ok: true,
               value: run(request.graph, request.library, request.body, progress),
+            });
+            return;
+          }
+          case "analysis-shard": {
+            const progress = (done: number, total: number) => {
+              reply({ id: request.id, progress: [done, total] });
+              return stopped?.() ?? false;
+            };
+            const { graph, library, body, shard, shards } = request;
+            reply({
+              id: request.id,
+              ok: true,
+              value: engine.analysis_shard(graph, library, body, shard, shards, progress),
+            });
+            return;
+          }
+          case "analysis-finish": {
+            const progress = (done: number, total: number) => {
+              reply({ id: request.id, progress: [done, total] });
+              return stopped?.() ?? false;
+            };
+            const { graph, library, body, answers } = request;
+            reply({
+              id: request.id,
+              ok: true,
+              value: engine.analysis_finish(graph, library, body, answers, progress),
             });
             return;
           }
