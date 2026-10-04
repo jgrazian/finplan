@@ -16,11 +16,11 @@ use crate::model::{
     AccountSnapshot, EventTrigger, MonteCarloConfig, MonteCarloProgress, MonteCarloStats,
     MonteCarloSummary, SimulationResult, TransferAmount,
 };
-use crate::simulation::{monte_carlo_simulate_with_progress, monte_carlo_stats_only};
+use crate::simulation::monte_carlo_simulate_with_progress;
 
 use super::{
-    EffectParam, EffectTarget, SweepConfig, SweepGrid, SweepParameter, SweepPointData,
-    SweepResults, SweepTarget, TriggerParam,
+    EffectParam, EffectTarget, McRunner, ProgressRunner, SweepConfig, SweepGrid, SweepParameter,
+    SweepPointData, SweepResults, SweepTarget, TriggerParam,
 };
 
 /// Progress tracking for sweep analysis
@@ -570,6 +570,19 @@ pub fn sweep_simulate_lazy(
     sweep_config: &SweepConfig,
     progress: Option<&SweepProgress>,
 ) -> Result<LazySweepResults, SimulationError> {
+    sweep_simulate_lazy_with(
+        base_config,
+        sweep_config,
+        &mut ProgressRunner::new(progress),
+    )
+}
+
+/// [`sweep_simulate_lazy`] with the Monte Carlo runs supplied by `runner`.
+pub fn sweep_simulate_lazy_with(
+    base_config: &SimulationConfig,
+    sweep_config: &SweepConfig,
+    runner: &mut dyn McRunner,
+) -> Result<LazySweepResults, SimulationError> {
     // Validate configuration
     if sweep_config.parameters.is_empty() {
         return Err(SimulationError::Config(
@@ -595,9 +608,7 @@ pub fn sweep_simulate_lazy(
     // Reset progress to track total iterations (points × iterations per point)
     let total_points = sweep_config.total_points();
     let total_iterations = total_points * mc_config.iterations;
-    if let Some(p) = progress {
-        p.reset(total_iterations);
-    }
+    runner.begin(total_iterations);
 
     // Extract birth year
     let birth_year = base_config.birth_date.map_or(1980, jiff::civil::Date::year);
@@ -622,9 +633,7 @@ pub fn sweep_simulate_lazy(
 
     // Iterate through all grid points
     for indices in stats_grid.indices() {
-        if let Some(p) = progress
-            && p.is_cancelled()
-        {
+        if runner.cancelled() {
             return Err(SimulationError::Cancelled);
         }
 
@@ -640,11 +649,7 @@ pub fn sweep_simulate_lazy(
 
         // Run Monte Carlo simulation with stats-only mode
         // This skips Phase 2 (re-running percentile seeds) and returns seeds instead
-        let mc_progress = progress
-            .map(SweepProgress::as_mc_progress)
-            .unwrap_or_default();
-        let (stats, percentile_seeds) =
-            monte_carlo_stats_only(&modified_config, &mc_config, &mc_progress)?;
+        let (stats, percentile_seeds) = runner.stats(&modified_config, &mc_config)?;
 
         stats_grid.set(&indices, stats);
         seeds_grid.set(&indices, percentile_seeds);

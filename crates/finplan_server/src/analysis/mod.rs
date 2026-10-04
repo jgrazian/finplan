@@ -13,15 +13,15 @@
 //! as a document and restored on load — see that module for why only the
 //! newest, and why a sweep and not the other two.
 //!
-//! [`parameters`] is the other half. A sweep axis, a sensitivity row and a
+//! [`parameters`] (in `finplan_plan::analysis`) is the other half. A sweep axis, a sensitivity row and a
 //! solve's varied parameter are all the same thing — a number in the plan that
 //! could have been different — so they are discovered once, from the compiled
 //! scenario, and every mode picks from that one list.
 
 pub mod cache;
 pub mod jobs;
-pub mod params;
 pub mod results;
 
+pub use finplan_plan::analysis::params;
 pub use jobs::{AnalysisJobs, JobHandle, JobKind, JobStatus, JobView, Outcome};
 pub use params::{ParamKind, PlanParameter, parameters};

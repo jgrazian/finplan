@@ -134,6 +134,7 @@ export type { LibraryInflationProfile } from "./LibraryInflationProfile";
 export type { LibraryOp } from "./LibraryOp";
 export type { LibraryReturnProfile } from "./LibraryReturnProfile";
 export type { LibraryTaxConfig } from "./LibraryTaxConfig";
+export type { LocalReview } from "./LocalReview";
 export type { LotMethod } from "./LotMethod";
 export type { MarketCrashParams } from "./MarketCrashParams";
 export type { MonthSummary } from "./MonthSummary";

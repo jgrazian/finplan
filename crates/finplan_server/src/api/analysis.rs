@@ -14,10 +14,8 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use finplan_core::analysis::{
-    SolveConfig, SolveConstraint, SolveConstraintMetric, SolveObjective, SweepConfig,
-};
-use serde::{Deserialize, Serialize};
+use finplan_core::analysis::{SolveConfig, SolveConstraint, SolveConstraintMetric, SolveObjective};
+use serde::Serialize;
 use ts_rs::TS;
 
 use crate::analysis::cache;
@@ -30,6 +28,7 @@ use crate::observability::{JobKind as MetricKind, Origin, Tier};
 use crate::runner::telemetry::Submission;
 use crate::state::AppState;
 use finplan_core::config::SimulationConfig;
+use finplan_plan::analysis::Limits;
 use finplan_plan::compile;
 use finplan_plan::graph::ScenarioGraph;
 
@@ -50,153 +49,11 @@ pub fn router() -> Router<AppState> {
         .route("/analyses/{id}/results", get(results))
 }
 
-/// Bounds on what a single request may ask for, so one browser tab cannot
-/// queue an hour of CPU.
-const MAX_STEPS: usize = 12;
-const MAX_AXES: usize = 4;
-const MAX_VARIED: usize = 3;
-
-/// The real ceiling on a sweep: how many combinations it may evaluate.
-///
-/// Counting axes is the wrong limit once a sweep can carry more than two of
-/// them — four axes of three steps is 81 cells and finishes, two axes of twelve
-/// is 144 and is the grid the old two-axis ceiling allowed. What costs time is
-/// the product, so that is what is capped, and at the analysis default of 250
-/// iterations it holds a request to 128,000 simulations.
-const MAX_SWEEP_POINTS: usize = 512;
-const MAX_ANALYSIS_ITERATIONS: usize = 2_000;
-const MIN_ITERATIONS: usize = 25;
-/// Monte Carlo iterations behind a whole what-if when the request names none.
-///
-/// A budget for the stack, not per step: it is split evenly across the plan and
-/// each layer, so adding an override does not make every nudge slower. Every
-/// step runs on the same seed, which keeps the step-to-step differences stable
-/// even at a few dozen iterations each.
-const DEFAULT_WHAT_IF_ITERATIONS: usize = 500;
-
-/// The default grid resolution: six steps an axis, which is what a heatmap can
-/// label without crowding.
-const DEFAULT_STEPS: usize = 6;
-
-/// Every analysis is seeded, and with the same seed.
-///
-/// Two cells of a grid differ by the parameter or they differ by nothing;
-/// letting them draw different market paths would put noise into exactly the
-/// comparison the screen exists to make. It also means a re-run of an unchanged
-/// question returns the same answer, which is the behaviour anyone comparing
-/// two screenshots expects.
-const ANALYSIS_SEED: u64 = 0x5EED;
-
-/// One axis of a requested sweep, or one parameter a solve may vary.
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, optional_fields = nullable)]
-pub struct AxisRequest {
-    /// An id from `GET /scenarios/{id}/analysis/parameters`.
-    pub parameter_id: String,
-    /// Range to cover. Omitted, the parameter's own suggested range is used.
-    #[serde(default)]
-    pub min: Option<f64>,
-    #[serde(default)]
-    pub max: Option<f64>,
-    /// Points along the axis. Ignored by a bisecting solve, which chooses its
-    /// own probes.
-    #[serde(default)]
-    pub steps: Option<usize>,
-}
-
-/// What to optimise for. Named rather than free-form: a client cannot ask for
-/// an objective the solver has no way to evaluate.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(export)]
-pub enum ObjectiveRequest {
-    /// The largest value of the varied parameter that still clears the
-    /// constraint — a maximum sustainable withdrawal.
-    MaxParameter,
-    /// The smallest such value — an earliest retirement age.
-    MinParameter,
-    /// The highest median terminal net worth.
-    MaxMedianNetWorth,
-    /// The highest 5th-percentile terminal net worth: the best floor.
-    MaxFloorNetWorth,
-}
-
-impl From<ObjectiveRequest> for SolveObjective {
-    fn from(value: ObjectiveRequest) -> Self {
-        match value {
-            ObjectiveRequest::MaxParameter => Self::MaxParameter,
-            ObjectiveRequest::MinParameter => Self::MinParameter,
-            ObjectiveRequest::MaxMedianNetWorth => Self::MaxMedianNetWorth,
-            ObjectiveRequest::MaxFloorNetWorth => Self::MaxFloorNetWorth,
-        }
-    }
-}
-
-/// The outcome measure a solve's constraint is written against.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(export)]
-pub enum ConstraintRequest {
-    SuccessRate,
-    FundingSuccessRate,
-}
-
-impl From<ConstraintRequest> for SolveConstraintMetric {
-    fn from(value: ConstraintRequest) -> Self {
-        match value {
-            ConstraintRequest::SuccessRate => Self::SuccessRate,
-            ConstraintRequest::FundingSuccessRate => Self::FundingSuccessRate,
-        }
-    }
-}
-
-/// The analysis to run. `kind` selects which of the three, and the fields that
-/// do not apply to it are ignored.
-#[derive(Debug, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-#[ts(export, optional_fields = nullable)]
-pub enum CreateAnalysis {
-    /// A grid over one to four parameters, capped by the product of the steps
-    /// rather than by the count: the client lays graphs out over the result and
-    /// each picks its own one or two axes from it.
-    Sweep {
-        axes: Vec<AxisRequest>,
-        #[serde(default)]
-        iterations: Option<usize>,
-    },
-    /// Every parameter moved on its own, ranked by what it did.
-    Sensitivity {
-        /// Which parameters to rank. Empty means all of them.
-        #[serde(default)]
-        parameter_ids: Vec<String>,
-        /// Band width as a fraction of each parameter's value: `0.2` for ±20%.
-        #[serde(default)]
-        fraction: Option<f64>,
-        #[serde(default)]
-        iterations: Option<usize>,
-    },
-    /// The best values of one to three parameters, subject to a constraint.
-    Solve {
-        vary: Vec<AxisRequest>,
-        objective: ObjectiveRequest,
-        #[serde(default)]
-        constraint: Option<ConstraintRequest>,
-        /// The floor, as a fraction: `0.95` for "success ≥ 95%".
-        min_value: f64,
-        #[serde(default)]
-        iterations: Option<usize>,
-    },
-    /// The plan with an ordered stack of overrides applied cumulatively: one
-    /// step for the plan and one more per layer.
-    WhatIf {
-        /// The enabled layers only, in order. At most eight.
-        layers: Vec<crate::api::what_if::WhatIfLayer>,
-        /// Simulations for the whole stack, split evenly across its steps
-        /// (each gets at least the analysis minimum).
-        #[serde(default)]
-        iterations: Option<usize>,
-    },
-}
+#[cfg(test)]
+use finplan_plan::analysis::iterations_or_default;
+pub use finplan_plan::analysis::{
+    ANALYSIS_SEED, AxisRequest, ConstraintRequest, CreateAnalysis, ObjectiveRequest,
+};
 
 /// A queued or finished analysis.
 #[derive(Debug, Serialize, TS)]
@@ -237,20 +94,8 @@ async fn list_parameters(
     user: CurrentUser,
     Path(scenario_id): Path<i64>,
 ) -> ApiResult<Json<Vec<AnalysisParameter>>> {
-    let (_, params) = plan(&state, scenario_id, &user.id).await?;
-    Ok(Json(params.iter().map(Into::into).collect()))
-}
-
-/// Compile the scenario and read its parameters, so both are one call.
-async fn plan(
-    state: &AppState,
-    scenario_id: i64,
-    user_id: &str,
-) -> ApiResult<(compile::CompiledScenario, Vec<PlanParameter>)> {
-    let graph = crate::db::graph::load(&state.db, scenario_id, user_id).await?;
-    let compiled = compile::compile(&graph)?;
-    let params = parameters(&compiled);
-    Ok((compiled, params))
+    let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
+    Ok(Json(finplan_plan::analysis::discover(&graph)?))
 }
 
 async fn create(
@@ -345,151 +190,17 @@ pub(crate) async fn prepare(
         );
     }
     let graph = crate::db::graph::load(&state.db, scenario_id, &user.id).await?;
-    let compiled = compile::compile(&graph)?;
-    let available = parameters(&compiled);
-    // A what-if can be all shocks and one-offs, so it is the one analysis that
-    // does not need a named parameter to vary.
-    if available.is_empty() && !matches!(&body, CreateAnalysis::WhatIf { .. }) {
-        return Err(ApiError::unprocessable(
-            "this plan has no named parameters to analyse — add parameters on the Plan tab and reference them in amounts or schedules",
-        ));
-    }
-
-    let parallel_batches = state.config.sim_workers.max(1);
-    let spec = match body {
-        CreateAnalysis::Sweep { axes, iterations } => {
-            if axes.is_empty() || axes.len() > MAX_AXES {
-                return Err(ApiError::bad_request(format!(
-                    "a sweep takes between one and {MAX_AXES} variables"
-                )));
-            }
-            // More axes means fewer steps each: a fourth variable at the
-            // two-axis default would be 1,296 cells, which is an hour nobody
-            // asked for. The client sends its own step counts; this is only
-            // what an omitted one falls back to.
-            let default_steps = match axes.len() {
-                1 | 2 => DEFAULT_STEPS,
-                3 => 4,
-                _ => 3,
-            };
-            let (params, sweeps) = resolve(&available, &axes, default_steps)?;
-            let points = sweeps.iter().map(|s| s.step_count).product::<usize>();
-            if points > MAX_SWEEP_POINTS {
-                return Err(ApiError::bad_request(format!(
-                    "that is {points} combinations; a sweep evaluates at most \
-                     {MAX_SWEEP_POINTS}. Drop a variable or cut its steps."
-                )));
-            }
-            JobSpec::Sweep {
-                params,
-                config: SweepConfig {
-                    parameters: sweeps,
-                    metrics: Vec::new(),
-                    mc_iterations: iterations_or_default(iterations, 250, cap)?,
-                    parallel_batches,
-                    seed: Some(ANALYSIS_SEED),
-                },
-            }
-        }
-
-        CreateAnalysis::Sensitivity {
-            parameter_ids,
-            fraction,
-            iterations,
-        } => {
-            let params = if parameter_ids.is_empty() {
-                available
-            } else {
-                parameter_ids
-                    .iter()
-                    .map(|id| find(&available, id).cloned())
-                    .collect::<ApiResult<Vec<_>>>()?
-            };
-            let fraction = fraction.unwrap_or(0.2);
-            if !(0.01..=1.0).contains(&fraction) {
-                return Err(ApiError::bad_request(
-                    "fraction must be between 0.01 and 1.0",
-                ));
-            }
-            JobSpec::Sensitivity {
-                params,
-                fraction,
-                // A ranking is two runs a parameter and is meant to be cheap,
-                // so it defaults lighter than a sweep cell does.
-                iterations: iterations_or_default(iterations, 200, cap)?,
-                parallel_batches,
-                seed: Some(ANALYSIS_SEED),
-            }
-        }
-
-        CreateAnalysis::Solve {
-            vary,
-            objective,
-            constraint,
-            min_value,
-            iterations,
-        } => {
-            if vary.is_empty() || vary.len() > MAX_VARIED {
-                return Err(ApiError::bad_request(format!(
-                    "a solve varies between one and {MAX_VARIED} parameters"
-                )));
-            }
-            if !(0.0..=1.0).contains(&min_value) {
-                return Err(ApiError::bad_request(
-                    "the constraint threshold is a fraction between 0 and 1",
-                ));
-            }
-            // Grid search is what more than one parameter falls back to, so the
-            // resolution has to stay coarse enough to finish.
-            let (params, sweeps) = resolve(&available, &vary, if vary.len() > 1 { 5 } else { 2 })?;
-            JobSpec::Solve {
-                params,
-                config: SolveConfig {
-                    parameters: sweeps,
-                    objective: objective.into(),
-                    constraint: SolveConstraint {
-                        metric: constraint
-                            .unwrap_or(ConstraintRequest::FundingSuccessRate)
-                            .into(),
-                        min_value,
-                    },
-                    mc_iterations: iterations_or_default(iterations, 250, cap)?,
-                    parallel_batches,
-                    seed: Some(ANALYSIS_SEED),
-                    ..SolveConfig::default()
-                },
-            }
-        }
-
-        CreateAnalysis::WhatIf { layers, iterations } => {
-            let lowered = crate::api::what_if::lower(&graph, &compiled, &layers)?;
-            let ceiling = cap.clamp(MIN_ITERATIONS, MAX_ANALYSIS_ITERATIONS);
-            let total = iterations
-                .unwrap_or(DEFAULT_WHAT_IF_ITERATIONS)
-                .clamp(MIN_ITERATIONS, ceiling);
-            let per_step = total
-                .div_ceil(lowered.steps.len().max(1))
-                .max(MIN_ITERATIONS);
-            JobSpec::WhatIf {
-                steps: lowered.steps,
-                iterations: per_step,
-                parallel_batches,
-                seed: Some(ANALYSIS_SEED),
-                plan_retirement_age: lowered.plan_retirement_age,
-                what_if_retirement_age: lowered.what_if_retirement_age,
-            }
-        }
-    };
-
-    // Cost includes all probes/cells and the full horizon; reject before quota use.
-    if spec.budget().saturating_mul(compiled.config.duration_years) > 20_000_000 {
-        return Err(ApiError::bad_request(
-            "Analysis is too large. Reduce iterations, years, or varied parameters.",
-        ));
-    }
+    let lowered = finplan_plan::analysis::prepare(
+        &graph,
+        body,
+        &Limits {
+            iteration_cap: cap,
+            parallel_batches: state.config.sim_workers.max(1),
+        },
+    )?;
     Ok(Prepared {
-        base: compiled.config,
-        spec,
+        base: lowered.base,
+        spec: lowered.spec,
         is_solve,
         tier: entitlements.tier(&state.config),
     })
@@ -995,75 +706,6 @@ async fn results(
     Path(id): Path<i64>,
 ) -> ApiResult<Json<AnalysisOutcome>> {
     Ok(Json(state.analyses.outcome(id, &user.id)?))
-}
-
-/// Turn requested axes into engine sweep parameters, defaulting the range and
-/// the resolution from the plan where the request left them out.
-fn resolve(
-    available: &[PlanParameter],
-    axes: &[AxisRequest],
-    default_steps: usize,
-) -> ApiResult<(
-    Vec<PlanParameter>,
-    Vec<finplan_core::analysis::SweepParameter>,
-)> {
-    let mut params = Vec::with_capacity(axes.len());
-    let mut sweeps = Vec::with_capacity(axes.len());
-
-    for axis in axes {
-        let param = find(available, &axis.parameter_id)?;
-        if params
-            .iter()
-            .any(|p: &PlanParameter| p.id == axis.parameter_id)
-        {
-            return Err(ApiError::bad_request(format!(
-                "{} is named twice; each axis needs its own parameter",
-                axis.parameter_id
-            )));
-        }
-
-        let min = axis.min.unwrap_or(param.min);
-        let max = axis.max.unwrap_or(param.max);
-        if !min.is_finite() || !max.is_finite() || max <= min {
-            return Err(ApiError::bad_request(format!(
-                "{} needs a range with max above min",
-                axis.parameter_id
-            )));
-        }
-        let steps = axis.steps.unwrap_or(default_steps);
-        if !(2..=MAX_STEPS).contains(&steps) {
-            return Err(ApiError::bad_request(format!(
-                "steps must be between 2 and {MAX_STEPS}"
-            )));
-        }
-
-        sweeps.push(param.sweep(min, max, steps)?);
-        params.push(param.clone());
-    }
-
-    Ok((params, sweeps))
-}
-
-fn find<'a>(available: &'a [PlanParameter], id: &str) -> ApiResult<&'a PlanParameter> {
-    available
-        .iter()
-        .find(|p| p.id == id)
-        .ok_or(ApiError::NotFound("parameter"))
-}
-
-fn iterations_or_default(
-    requested: Option<usize>,
-    fallback: usize,
-    deployment_max: usize,
-) -> ApiResult<usize> {
-    let ceiling = deployment_max.min(MAX_ANALYSIS_ITERATIONS);
-    let iterations = requested.unwrap_or(fallback.min(ceiling));
-    if !(MIN_ITERATIONS..=ceiling).contains(&iterations) {
-        return Err(ApiError::bad_request(format!(
-            "iterations must be between {MIN_ITERATIONS} and {ceiling}"
-        )));
-    }
-    Ok(iterations)
 }
 
 #[cfg(test)]

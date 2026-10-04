@@ -14,27 +14,17 @@ use crate::observability::{
     Phase, QueueExit, QueueSnapshot, Telemetry,
 };
 use crate::runner::telemetry::{Attempt, PhaseTimer, Submitted};
-use finplan_core::analysis::{
-    SolveConfig, SweepConfig, SweepParameter, SweepProgress, solve, sweep_simulate_lazy,
-};
+use finplan_core::analysis::{ProgressRunner, SweepProgress};
 use finplan_core::config::SimulationConfig;
-use finplan_core::model::{MonteCarloConfig, MonteCarloProgress, MonteCarloStats};
-use finplan_core::simulation::{monte_carlo_simulate_with_progress, monte_carlo_stats_only};
 use tokio::sync::Semaphore;
 use tracing::{Instrument, instrument::WithSubscriber};
 
 use super::cache;
-use super::params::PlanParameter;
-use super::results::{
-    AnalysisOutcome, AnalysisParameter, AnalysisPoint, SensitivityResults, SensitivityRow,
-    SolveOutcome, SweepAxis, SweepCell, SweepResults, WhatIfFan, WhatIfOutcome, WhatIfStep,
-};
+use super::results::AnalysisOutcome;
 use crate::db::Db;
 use crate::error::{ApiError, ApiResult};
-
-/// Terminal net worth percentiles every analysis asks for, so a cell, a probe
-/// and the plan baseline are all measured the same way.
-const PERCENTILES: [f64; 5] = [0.05, 0.25, 0.50, 0.75, 0.95];
+pub use finplan_plan::analysis::AnalysisSpec as JobSpec;
+use finplan_plan::analysis::run;
 
 /// How many finished jobs are kept. Enough that switching between Sweep and
 /// Solve and back still finds both, small enough that a long session does not
@@ -100,60 +90,13 @@ impl JobStatus {
     }
 }
 
-/// The work a job will do, already lowered to engine types.
-pub enum JobSpec {
-    Sweep {
-        params: Vec<PlanParameter>,
-        config: SweepConfig,
-    },
-    Sensitivity {
-        params: Vec<PlanParameter>,
-        fraction: f64,
-        iterations: usize,
-        parallel_batches: usize,
-        seed: Option<u64>,
-    },
-    Solve {
-        params: Vec<PlanParameter>,
-        config: SolveConfig,
-    },
-    /// The plan and each cumulative override step, already lowered: `steps[0]`
-    /// is the plan itself, `steps[i]` the plan with the first `i` layers on.
-    WhatIf {
-        steps: Vec<SimulationConfig>,
-        iterations: usize,
-        parallel_batches: usize,
-        seed: Option<u64>,
-        /// Retirement age before and after the layers, where the plan names one.
-        plan_retirement_age: Option<f64>,
-        what_if_retirement_age: Option<f64>,
-    },
-}
-
-impl JobSpec {
-    fn kind(&self) -> JobKind {
-        match self {
-            Self::Sweep { .. } => JobKind::Sweep,
-            Self::Sensitivity { .. } => JobKind::Sensitivity,
-            Self::Solve { .. } => JobKind::Solve,
-            Self::WhatIf { .. } => JobKind::WhatIf,
-        }
-    }
-
-    /// Simulations the job will run, for the progress denominator. An upper
-    /// bound where the search may stop early, which is what a progress bar
-    /// wants anyway.
-    pub(crate) fn budget(&self) -> usize {
-        match self {
-            Self::Sweep { config, .. } => (config.total_points() + 1) * config.mc_iterations,
-            Self::Sensitivity {
-                params, iterations, ..
-            } => (params.len() * 2 + 1) * iterations,
-            Self::Solve { config, .. } => config.probe_budget() * config.mc_iterations,
-            Self::WhatIf {
-                steps, iterations, ..
-            } => steps.len() * iterations,
-        }
+/// Which question a spec asks.
+fn kind_of(spec: &JobSpec) -> JobKind {
+    match spec {
+        JobSpec::Sweep { .. } => JobKind::Sweep,
+        JobSpec::Sensitivity { .. } => JobKind::Sensitivity,
+        JobSpec::Solve { .. } => JobKind::Solve,
+        JobSpec::WhatIf { .. } => JobKind::WhatIf,
     }
 }
 
@@ -292,7 +235,7 @@ impl AnalysisJobs {
                 Job {
                     scenario_id,
                     user_id: user_id.to_string(),
-                    kind: spec.kind(),
+                    kind: kind_of(&spec),
                     status: JobStatus::Queued,
                     completed,
                     total,
@@ -300,7 +243,7 @@ impl AnalysisJobs {
                     started: Instant::now(),
                     submitted: Submitted::now(),
                     context: JobContext::new(
-                        spec.kind().into(),
+                        kind_of(&spec).into(),
                         Origin::Request,
                         user_id,
                         scenario_id,
@@ -402,7 +345,11 @@ impl AnalysisJobs {
                                 blocking_queued.elapsed().as_secs_f64(),
                             );
                             let _engine = PhaseTimer::new(&worker_telemetry, kind, Phase::Engine);
-                            run(&base, &spec, &handle_progress)
+                            run(
+                                &base,
+                                &spec,
+                                &mut ProgressRunner::new(Some(&handle_progress)),
+                            )
                         })
                     })
                 })
@@ -438,7 +385,7 @@ impl AnalysisJobs {
                         }
                         (JobStatus::Succeeded, Some(result), None)
                     }
-                    Ok(Err(err)) if err.is_cancel() => (JobStatus::Canceled, None, None),
+                    Ok(Err(err)) if err.is_cancelled() => (JobStatus::Canceled, None, None),
                     Ok(Err(_)) => {
                         jobs.telemetry
                             .count_error(Component::Analysis, ErrorClass::Engine);
@@ -663,27 +610,6 @@ impl Registry {
     }
 }
 
-/// A failure from inside the worker, with cancellation kept apart: a canceled
-/// analysis is not an error to report, it is the state the caller asked for.
-struct WorkerError {
-    cancel: bool,
-}
-
-impl WorkerError {
-    fn is_cancel(&self) -> bool {
-        self.cancel
-    }
-}
-
-impl From<finplan_core::error::SimulationError> for WorkerError {
-    fn from(err: finplan_core::error::SimulationError) -> Self {
-        let cancel = matches!(err, finplan_core::error::SimulationError::Cancelled);
-        Self { cancel }
-    }
-}
-
-type WorkerResult<T> = Result<T, WorkerError>;
-
 /// Why an analysis run on the caller's own thread produced nothing.
 #[derive(Debug)]
 pub(crate) enum InlineFailure {
@@ -699,8 +625,8 @@ pub(crate) fn run_inline(
     spec: &JobSpec,
     progress: &SweepProgress,
 ) -> Result<AnalysisOutcome, InlineFailure> {
-    run(base, spec, progress).map_err(|err| {
-        if err.is_cancel() {
+    run(base, spec, &mut ProgressRunner::new(Some(progress))).map_err(|err| {
+        if err.is_cancelled() {
             InlineFailure::Cancelled
         } else {
             InlineFailure::Failed
@@ -708,356 +634,10 @@ pub(crate) fn run_inline(
     })
 }
 
-fn run(
-    base: &SimulationConfig,
-    spec: &JobSpec,
-    progress: &SweepProgress,
-) -> WorkerResult<AnalysisOutcome> {
-    match spec {
-        JobSpec::Sweep { params, config } => Ok(AnalysisOutcome::Sweep(run_sweep(
-            base, params, config, progress,
-        )?)),
-        JobSpec::Sensitivity {
-            params,
-            fraction,
-            iterations,
-            parallel_batches,
-            seed,
-        } => Ok(AnalysisOutcome::Sensitivity(run_sensitivity(
-            base,
-            params,
-            *fraction,
-            *iterations,
-            *parallel_batches,
-            *seed,
-            progress,
-        )?)),
-        JobSpec::Solve { params, config } => {
-            let mut results = solve(base, config, Some(progress))?;
-            for probe in results.probes.iter_mut().chain(results.best.iter_mut()) {
-                for (i, value) in probe.values.iter_mut().enumerate() {
-                    *value = params[i].display_coordinate(&config.parameters[i], *value);
-                }
-                if let Some((lo, hi)) = probe.bracket.as_mut() {
-                    *lo = params[0].display_coordinate(&config.parameters[0], *lo);
-                    *hi = params[0].display_coordinate(&config.parameters[0], *hi);
-                }
-            }
-            let described: Vec<AnalysisParameter> = params.iter().map(Into::into).collect();
-            Ok(AnalysisOutcome::Solve(SolveOutcome::new(
-                &results, &described,
-            )))
-        }
-        JobSpec::WhatIf {
-            steps,
-            iterations,
-            parallel_batches,
-            seed,
-            plan_retirement_age,
-            what_if_retirement_age,
-        } => Ok(AnalysisOutcome::WhatIf(run_what_if(
-            steps,
-            *iterations,
-            *parallel_batches,
-            *seed,
-            (*plan_retirement_age, *what_if_retirement_age),
-            progress,
-        )?)),
-    }
-}
-
-/// Run each cumulative what-if step on the same seed, and read the plan and
-/// the last step's fans off the engine's real-dollar envelope — the same
-/// deflated, pointwise quantiles a run stores for its Results chart.
-fn run_what_if(
-    steps: &[SimulationConfig],
-    iterations: usize,
-    parallel_batches: usize,
-    seed: Option<u64>,
-    (plan_retirement_age, what_if_retirement_age): (Option<f64>, Option<f64>),
-    progress: &SweepProgress,
-) -> WorkerResult<WhatIfOutcome> {
-    let Some(plan) = steps.first() else {
-        return Err(WorkerError { cancel: false });
-    };
-    let birth_date = plan.birth_date;
-
-    let mut outcome_steps = Vec::with_capacity(steps.len());
-    let mut envelopes = Vec::with_capacity(steps.len());
-    for config in steps {
-        if progress.is_cancelled() {
-            return Err(finplan_core::error::SimulationError::Cancelled.into());
-        }
-        let mut config = config.clone();
-        config.collect_ledger = false;
-        let mc = MonteCarloConfig {
-            iterations,
-            percentiles: PERCENTILES.to_vec(),
-            compute_mean: false,
-            parallel_batches,
-            seed,
-            ..Default::default()
-        };
-        let summary = monte_carlo_simulate_with_progress(&config, &mc, &progress.as_mc_progress())?;
-        let real = summary
-            .real_net_worth
-            .ok_or(WorkerError { cancel: false })?;
-        let at = |date: jiff::civil::Date| match birth_date {
-            Some(birth) => fractional_years(date) - fractional_years(birth),
-            None => fractional_years(date),
-        };
-        outcome_steps.push(WhatIfStep {
-            point: AnalysisPoint::from(&summary.stats),
-            median_end_real: real.points.last().map_or(0.0, |p| p.p50),
-            p10_dry_at: real
-                .points
-                .iter()
-                .find(|p| p.p10 <= 0.0)
-                .map(|p| at(p.date)),
-        });
-        envelopes.push(real.points);
-    }
-
-    let fan = |points: &[finplan_core::model::RealQuantilePoint]| WhatIfFan {
-        p25: points.iter().map(|p| p.p25).collect(),
-        p50: points.iter().map(|p| p.p50).collect(),
-        p75: points.iter().map(|p| p.p75).collect(),
-    };
-    let plan_points = envelopes.first().cloned().unwrap_or_default();
-    let last_points = envelopes.last().cloned().unwrap_or_default();
-    let years: Vec<f64> = plan_points
-        .iter()
-        .map(|p| fractional_years(p.date))
-        .collect();
-    let ages = birth_date.map(|birth| {
-        let born = fractional_years(birth);
-        years.iter().map(|year| year - born).collect()
-    });
-
-    Ok(WhatIfOutcome {
-        steps: outcome_steps,
-        ages,
-        years,
-        plan_fan: fan(&plan_points),
-        what_if_fan: fan(&last_points),
-        plan_retirement_age,
-        what_if_retirement_age,
-    })
-}
-
-/// A date as a fractional calendar year: 2030-07-02 is about 2030.5.
-fn fractional_years(date: jiff::civil::Date) -> f64 {
-    f64::from(date.year()) + (f64::from(date.day_of_year()) - 1.0) / f64::from(date.days_in_year())
-}
-
-/// The plan as configured, measured the same way every cell is.
-fn plan_point(
-    base: &SimulationConfig,
-    iterations: usize,
-    parallel_batches: usize,
-    seed: Option<u64>,
-    progress: &SweepProgress,
-) -> WorkerResult<AnalysisPoint> {
-    Ok(AnalysisPoint::from(&simulate(
-        base,
-        iterations,
-        parallel_batches,
-        seed,
-        progress,
-    )?))
-}
-
-fn simulate(
-    config: &SimulationConfig,
-    iterations: usize,
-    parallel_batches: usize,
-    seed: Option<u64>,
-    progress: &SweepProgress,
-) -> WorkerResult<MonteCarloStats> {
-    if progress.is_cancelled() {
-        return Err(finplan_core::error::SimulationError::Cancelled.into());
-    }
-    let mut config = config.clone();
-    // Nothing here reads the ledger, and it is the most expensive thing a
-    // simulation collects.
-    config.collect_ledger = false;
-
-    let mc = MonteCarloConfig {
-        iterations,
-        percentiles: PERCENTILES.to_vec(),
-        compute_mean: false,
-        parallel_batches,
-        seed,
-        ..Default::default()
-    };
-    // Stats only, which is all any of the three analyses read. The second pass
-    // re-runs simulations to rebuild percentile paths none of them look at, and
-    // on the way it accumulates a real-dollar envelope that requires every
-    // iteration to share one snapshot date grid — something a plan with a
-    // balance- or net-worth-triggered event cannot promise.
-    let inner: MonteCarloProgress = progress.as_mc_progress();
-    let (stats, _seeds) = monte_carlo_stats_only(&config, &mc, &inner)?;
-    Ok(stats)
-}
-
-fn run_sweep(
-    base: &SimulationConfig,
-    params: &[PlanParameter],
-    config: &SweepConfig,
-    progress: &SweepProgress,
-) -> WorkerResult<SweepResults> {
-    // The grid first: it resets the shared counter as it starts, so anything
-    // measured before it would be counted and then forgotten.
-    let grid = sweep_simulate_lazy(base, config, Some(progress))?;
-    let values: Vec<Vec<f64>> = config
-        .all_sweep_values()
-        .into_iter()
-        .enumerate()
-        .map(|(i, values)| {
-            values
-                .into_iter()
-                .map(|value| {
-                    params.get(i).map_or(value, |p| {
-                        p.display_coordinate(&config.parameters[i], value)
-                    })
-                })
-                .collect()
-        })
-        .collect();
-    let plan = plan_point(
-        base,
-        config.mc_iterations,
-        config.parallel_batches,
-        config.seed,
-        progress,
-    )?;
-
-    let axes: Vec<SweepAxis> = params
-        .iter()
-        .zip(&values)
-        .map(|(param, steps)| SweepAxis {
-            parameter_id: param.id.clone(),
-            label: param.name.clone(),
-            role: param.name.clone(),
-            kind: AnalysisParameter::from(param).kind,
-            values: steps.clone(),
-        })
-        .collect();
-
-    let mut cells = Vec::with_capacity(grid.total_points());
-    for indices in grid.stats.indices() {
-        let Some(stats) = grid.get_stats(&indices) else {
-            continue;
-        };
-        cells.push(SweepCell {
-            indices: indices.iter().map(|&i| i as u32).collect(),
-            point: AnalysisPoint::from(stats),
-        });
-    }
-
-    Ok(SweepResults {
-        default_metric: Some("funding".to_string()),
-        axes,
-        cells,
-        plan,
-        plan_indices: plan_indices(params, &values),
-        iterations: config.mc_iterations as u32,
-    })
-}
-
-/// Where the plan's own values land on the swept axes.
-///
-/// `None` as soon as one parameter's current value falls outside the range that
-/// was swept: half a marker is worse than none, because it would be drawn on a
-/// cell the plan is not in.
-fn plan_indices(params: &[PlanParameter], values: &[Vec<f64>]) -> Option<Vec<u32>> {
-    params
-        .iter()
-        .zip(values)
-        .map(|(param, steps)| {
-            let (lo, hi) = (*steps.first()?, *steps.last()?);
-            if param.current < lo.min(hi) || param.current > lo.max(hi) {
-                return None;
-            }
-            let nearest = steps
-                .iter()
-                .enumerate()
-                .min_by(|(_, a), (_, b)| {
-                    (*a - param.current)
-                        .abs()
-                        .total_cmp(&(*b - param.current).abs())
-                })
-                .map(|(i, _)| i as u32)?;
-            Some(nearest)
-        })
-        .collect()
-}
-
-/// Move each parameter through its band on its own, and rank by how much
-/// success moved.
-///
-/// Two simulations per parameter rather than a grid, which is what makes this
-/// cheap enough to be the thing you run before deciding what to sweep.
-fn run_sensitivity(
-    base: &SimulationConfig,
-    params: &[PlanParameter],
-    fraction: f64,
-    iterations: usize,
-    parallel_batches: usize,
-    seed: Option<u64>,
-    progress: &SweepProgress,
-) -> WorkerResult<SensitivityResults> {
-    let plan = plan_point(base, iterations, parallel_batches, seed, progress)?;
-
-    let mut rows = Vec::with_capacity(params.len());
-    for param in params {
-        let (low_value, high_value) = param.perturbed(fraction);
-        if (high_value - low_value).abs() < f64::EPSILON {
-            continue;
-        }
-        let at = |value: f64| -> WorkerResult<AnalysisPoint> {
-            let axis: SweepParameter = param
-                .sweep(value, value, 1)
-                .map_err(|_| WorkerError { cancel: false })?;
-            let modified = finplan_core::analysis::apply_parameter(base, &axis, axis.min_value)
-                .map_err(WorkerError::from)?;
-            Ok(AnalysisPoint::from(&simulate(
-                &modified,
-                iterations,
-                parallel_batches,
-                seed,
-                progress,
-            )?))
-        };
-
-        let low = at(low_value)?;
-        let high = at(high_value)?;
-        rows.push(SensitivityRow {
-            parameter_id: param.id.clone(),
-            label: param.name.clone(),
-            kind: AnalysisParameter::from(param).kind,
-            low_value,
-            high_value,
-            span: (high.success_rate - low.success_rate).abs() * 100.0,
-            low,
-            high,
-        });
-    }
-
-    // Biggest mover first: the ranking is the point of the screen.
-    rows.sort_by(|a, b| b.span.total_cmp(&a.span));
-
-    Ok(SensitivityResults {
-        rows,
-        plan,
-        fraction,
-        iterations: iterations as u32,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use finplan_core::analysis::{SweepConfig, SweepParameter};
     use std::time::Duration;
 
     async fn fixture() -> (AnalysisJobs, String, SimulationConfig) {
@@ -1280,5 +860,114 @@ mod tests {
             "finplan_server_errors_total{component=\"analysis\",class=\"persistence\"} 1"
         ));
         assert!(!jobs.telemetry.encode().unwrap().contains("private"));
+    }
+
+    /// A sequential runner with no pool and no progress: what a browser would
+    /// plug in.
+    struct Sequential;
+    impl finplan_core::analysis::McRunner for Sequential {
+        fn stats(
+            &mut self,
+            config: &SimulationConfig,
+            mc: &finplan_core::model::MonteCarloConfig,
+        ) -> Result<finplan_core::analysis::StatsRun, finplan_core::error::SimulationError>
+        {
+            finplan_core::simulation::monte_carlo_stats_only(
+                config,
+                mc,
+                &finplan_core::model::MonteCarloProgress::default(),
+            )
+        }
+        fn summary(
+            &mut self,
+            config: &SimulationConfig,
+            mc: &finplan_core::model::MonteCarloConfig,
+        ) -> Result<finplan_core::model::MonteCarloSummary, finplan_core::error::SimulationError>
+        {
+            finplan_core::simulation::monte_carlo_simulate_with_progress(
+                config,
+                mc,
+                &finplan_core::model::MonteCarloProgress::default(),
+            )
+        }
+        fn cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    /// The server's job (rayon-backed, several batches) and the plan crate's
+    /// own entry point on a sequential runner give the same answer for the
+    /// same seed, for every kind of analysis.
+    #[tokio::test]
+    async fn server_analyses_equal_the_plan_crate_on_a_sequential_runner() {
+        use finplan_plan::analysis::{CreateAnalysis, Limits, discover, prepare};
+        use finplan_plan::edit::{self, EditOp};
+
+        let (jobs, user, _) = fixture().await;
+        let mut graph: finplan_plan::graph::ScenarioGraph = serde_json::from_str(include_str!(
+            "../../../finplan_plan/testdata/default_snapshot.json"
+        ))
+        .unwrap();
+        graph.scenario.duration_years = 10;
+        let mut make = |op: serde_json::Value| {
+            let op: EditOp = serde_json::from_value(op).unwrap();
+            edit::apply(&mut graph, &op).unwrap().id.unwrap_or_default()
+        };
+        let retire = make(serde_json::json!({"op": "create_parameter", "body": {
+            "name": "Retirement age", "value": {"kind": "Age", "years": 45, "months": 0}}}));
+        make(serde_json::json!({"op": "create_parameter", "body": {
+            "name": "Spending", "value": {"kind": "Money", "value": 2000.0}}}));
+        make(serde_json::json!({"op": "create_event", "body": {
+            "name": "Retire", "fires_once": true, "enabled": true,
+            "trigger": {"kind": "AgeParameter", "parameter_id": retire},
+            "effects": [{"kind": "Expense", "from_account_id": 6,
+                "amount": {"kind": "Expression", "source": "$Spending"}}]}}));
+        let spend = discover(&graph)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.name == "Spending")
+            .unwrap()
+            .id;
+
+        // Four batches: the pool splits each run, the sequential runner does not.
+        let limits = Limits {
+            iteration_cap: 1_000,
+            parallel_batches: 4,
+        };
+        let bodies = [
+            serde_json::json!({"kind": "sweep", "iterations": 40, "axes": [
+                {"parameter_id": spend, "min": 1000.0, "max": 3000.0, "steps": 3}]}),
+            serde_json::json!({"kind": "sensitivity", "iterations": 40}),
+            serde_json::json!({"kind": "solve", "iterations": 40, "objective": "max-parameter",
+                "min_value": 0.9, "vary": [{"parameter_id": spend, "min": 0.0, "max": 5.0e7}]}),
+            serde_json::json!({"kind": "what-if", "iterations": 120, "layers": [
+                {"kind": "market-shock", "age": 40, "drop": 0.4}]}),
+        ];
+        for body in bodies {
+            let ask = || -> CreateAnalysis { serde_json::from_value(body.clone()).unwrap() };
+            let direct = finplan_plan::analysis::analyze(&graph, ask(), &limits, &mut Sequential)
+                .unwrap_or_else(|e| panic!("{body}: {e}"));
+
+            let prepared = prepare(&graph, ask(), &limits).unwrap();
+            let handle = jobs.start(
+                1,
+                &user,
+                prepared.base,
+                prepared.spec,
+                crate::billing::admit_compute(&user).unwrap(),
+            );
+            idle(&jobs, handle.id, &user).await;
+            assert_eq!(
+                jobs.view(handle.id, &user).unwrap().status,
+                JobStatus::Succeeded,
+                "{body}"
+            );
+            let served = jobs.outcome(handle.id, &user).unwrap();
+            assert_eq!(
+                serde_json::to_value(&served).unwrap(),
+                serde_json::to_value(&direct).unwrap(),
+                "{body}"
+            );
+        }
     }
 }

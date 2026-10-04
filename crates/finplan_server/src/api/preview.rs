@@ -98,27 +98,7 @@ pub struct Preview {
     pub edited: Option<PreviewStats>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct PreviewStats {
-    pub success_rate: f64,
-    pub funding_success_rate: Option<f64>,
-    /// Final net worth in today's dollars, over all iterations.
-    pub real_final: Option<RealFinal>,
-    pub funding: Option<FundingDiagnostics>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, TS)]
-#[ts(export)]
-pub struct RealFinal {
-    pub p5: f64,
-    pub p10: f64,
-    pub p25: f64,
-    pub p50: f64,
-    pub p75: f64,
-    pub p90: f64,
-    pub p95: f64,
-}
+pub use finplan_plan::review::{PreviewStats, RealFinal};
 
 async fn preview(
     State(state): State<AppState>,

@@ -714,3 +714,89 @@ fn money_reads_like_the_review_tab() {
     assert_eq!(money(0.0), "$0");
     assert_eq!(percent(0.955), "95.5%");
 }
+
+// ── the local review ────────────────────────────────────────────────────────
+
+#[test]
+fn a_local_review_writes_every_rule_note_in_the_shape_the_review_tab_reads() {
+    use crate::review::{SuggestionSource, SuggestionStatus, review_results};
+    let (graph, results) = (graph(), results());
+    let drafts = review(&graph, &results);
+    let local = review_results(
+        &graph,
+        &results,
+        7,
+        "2026-10-03 00:00:00",
+        &std::collections::HashSet::new(),
+    )
+    .unwrap();
+
+    assert_eq!(local.run_id, 7);
+    assert_eq!(local.reviewed_at, "2026-10-03 00:00:00");
+    assert_eq!(local.suggestions.len(), drafts.len());
+    for (i, (note, draft)) in local.suggestions.iter().zip(&drafts).enumerate() {
+        assert_eq!(note.id, i as i64 + 1);
+        assert_eq!(note.rule.as_deref(), Some(draft.rule));
+        assert_eq!((note.kind, note.section), (draft.kind, draft.section));
+        assert_eq!(note.source, SuggestionSource::Rules);
+        assert_eq!(note.status, SuggestionStatus::Open);
+        assert_eq!(note.run_id, Some(7));
+        assert_eq!(note.summary.as_deref(), Some(draft.summary.as_str()));
+        assert_eq!(note.paths.len(), draft.paths.len());
+        for path in &note.paths {
+            // Walked in memory, so every step carries its rendered diff.
+            assert!(
+                path.steps.iter().all(|s| !s.diff.is_empty()),
+                "{}",
+                note.title
+            );
+            assert!(path.steps.iter().all(|s| !s.applied));
+        }
+    }
+    // The wire shape is the server's Suggestion: no extra or missing keys.
+    let note = serde_json::to_value(&local.suggestions[0]).unwrap();
+    for key in [
+        "id",
+        "scenario_id",
+        "run_id",
+        "source",
+        "rule",
+        "kind",
+        "section",
+        "title",
+        "summary",
+        "reasoning",
+        "evidence",
+        "paths",
+        "applied_path",
+        "status",
+        "created_at",
+        "resolved_at",
+        "parent_id",
+        "note_key",
+        "blocked_by",
+        "column",
+        "auto_added",
+    ] {
+        assert!(note.get(key).is_some(), "missing {key}");
+    }
+    assert_eq!(note.as_object().unwrap().len(), 21);
+}
+
+#[test]
+fn a_silenced_note_is_not_raised_again() {
+    use crate::review::{review_results, suggestion_fingerprint};
+    let (graph, results) = (graph(), results());
+    let first = review_results(&graph, &results, 1, "t", &Default::default()).unwrap();
+    let silenced = [suggestion_fingerprint(&first.suggestions[0])]
+        .into_iter()
+        .collect();
+    let again = review_results(&graph, &results, 1, "t", &silenced).unwrap();
+    assert_eq!(again.suggestions.len(), first.suggestions.len() - 1);
+    assert!(
+        again
+            .suggestions
+            .iter()
+            .all(|n| n.title != first.suggestions[0].title)
+    );
+}
