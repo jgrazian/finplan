@@ -31,6 +31,7 @@ import {
   problemsIn,
   refusalHeading,
   reviewBanner,
+  reviewChecks,
   reviewedLine,
   selectedPath,
   shortDate,
@@ -998,4 +999,50 @@ test("a stale pick falls back to the first open note; next skips closed ones and
   const closed = [card(1, "dismissed"), card(2, "applied")];
   assert.equal(steppedNote(closed, 1)?.id, 2);
   assert.equal(steppedNote(closed, 2)?.id, 1);
+});
+
+test("What Review checks groups the checks by layer, each with what it came to", () => {
+  const check = (id: string, layer: "rule" | "reviewer" | "preflight", notes: number | null, offers = "none") => ({
+    id,
+    layer,
+    section: "plan" as const,
+    kind: "fix" as const,
+    looks_for: `${id} looks.`,
+    offers,
+    notes,
+  });
+  const checks = [
+    check("invalid_plan", "preflight", null),
+    check("rmd_missing", "rule", 0, "A yearly Apply RMD event."),
+    check("idle_bank_cash", "rule", 2),
+    check("missing_social_security", "reviewer", null),
+  ];
+  const view = reviewChecks({ checks, ai: null });
+  assert.ok(view);
+  assert.equal(view.summary, "2 rules ran, 1 wrote notes · 1 for the AI reviewer · 1 before each run");
+  assert.deepEqual(
+    view.groups.map((g) => g.layer),
+    ["rule", "reviewer", "preflight"],
+  );
+  const [rules, reviewer, preflight] = view.groups;
+  assert.deepEqual(
+    rules.rows.map((r) => [r.id, r.state, r.found, r.offers]),
+    [
+      ["rmd_missing", "Found nothing", false, "A yearly Apply RMD event."],
+      ["idle_bank_cash", "2 notes", true, undefined],
+    ],
+  );
+  assert.equal(rules.rows[0].meta, "Fix · Scenario & events");
+  // No model on this plan: the reviewer's checks say so.
+  assert.equal(reviewer.rows[0].state, "Needs AI review");
+  assert.match(reviewer.heading, /not run/);
+  assert.equal(preflight.rows[0].state, "Before each run");
+
+  const withAi = reviewChecks({
+    checks,
+    ai: { status: "done", stop: null, error: null, started_at: "", finished_at: null, activity: [] },
+  });
+  assert.equal(withAi?.groups[1].rows[0].state, "AI reviewer");
+  // A review stored before checks were listed shows none.
+  assert.equal(reviewChecks({ checks: [], ai: null }), undefined);
 });

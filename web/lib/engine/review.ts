@@ -20,7 +20,7 @@
  *    against the run and would need a second local run of the edited plan.
  *    Those stay behind "Move to cloud to use AI".
  */
-import type { AppliedSuggestion, ApplySuggestion, Review, Suggestion } from "../api/suggestions.ts";
+import type { AppliedSuggestion, ApplySuggestion, Review, ReviewCheck, Suggestion } from "../api/suggestions.ts";
 import type { LocalReviewResult } from "../api/generated/LocalReviewResult.ts";
 import type { Core } from "./core.ts";
 import { badRequest, conflict, guard, notFound } from "./errors.ts";
@@ -44,6 +44,8 @@ interface StoredReview {
   suggestions: Suggestion[];
   /** One per suggestion, same order: what a dismissal is kept under. */
   fingerprints: string[];
+  /** The standard checks; absent on a review stored before they were listed. */
+  checks?: ReviewCheck[];
 }
 
 const reviewKey = (planId: number) => `review:${planId}`;
@@ -54,6 +56,7 @@ const asReview = (stored: StoredReview): Review => ({
   reviewed_at: stored.reviewed_at,
   suggestions: stored.suggestions,
   ai: null,
+  checks: stored.checks ?? [],
 });
 
 export function reviewGroup(core: Core): LocalReviewApi {
@@ -143,6 +146,7 @@ export function reviewGroup(core: Core): LocalReviewApi {
         reviewed_at: out.review.reviewed_at,
         suggestions: out.review.suggestions,
         fingerprints: out.fingerprints,
+        checks: out.review.checks,
       };
       await core.store.transact("rw", async (tx) => {
         await core.requirePlan(tx, scenarioId);

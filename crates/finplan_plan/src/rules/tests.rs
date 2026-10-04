@@ -268,6 +268,7 @@ fn the_fixture_run_gets_the_expected_notes() {
         ])
     );
     assert_changes_resolve(&graph(), &drafts);
+    assert_catalogued(&drafts);
 }
 
 #[test]
@@ -701,6 +702,278 @@ fn a_small_gap_is_not() {
     assert!(!rules_of(&review(&graph(), &results())).contains_key("success_vs_funding_gap"));
 }
 
+// ── rmd_missing ─────────────────────────────────────────────────────────────
+
+/// The fixture run with Fidelity 401(k) holding `value` throughout; the plain
+/// fixture leaves it empty on the shown path.
+fn with_401k(mut r: Results, value: f64) -> Results {
+    let series = r
+        .account_series
+        .iter_mut()
+        .find(|s| s.account_id == 3)
+        .unwrap();
+    series.values.iter_mut().for_each(|v| *v = value);
+    r
+}
+
+fn born(graph: &mut ScenarioGraph, date: &str, years: i64) {
+    graph.scenario.birth_date = Some(date.into());
+    graph.scenario.duration_years = years;
+}
+
+fn add_event(graph: &mut ScenarioGraph, body: serde_json::Value) -> i64 {
+    crate::edit::create_event(graph, &serde_json::from_value(body).unwrap()).unwrap()
+}
+
+#[test]
+fn tax_deferred_money_with_no_rmd_event_is_fixed() {
+    let g = graph();
+    let drafts = review(&g, &with_401k(results(), 1.2e6));
+    let d = only(&drafts, "rmd_missing");
+    assert_catalogued(&drafts);
+    // Born 1996: RMDs from 75, in 2071, inside a plan that runs to 2096.
+    assert_eq!(
+        d.title,
+        "Fidelity 401(k) owes RMDs from 2071, at 75, but no event takes them"
+    );
+    assert!(
+        d.reasoning
+            .contains("Fidelity 401(k) holds $1.2M on the median path at the end of 2070"),
+        "{}",
+        d.reasoning
+    );
+    assert!(d.reasoning.contains("into USAA"), "{}", d.reasoning);
+    assert!(d.evidence.contains(&Evidence::AccountSeries {
+        account_id: 3,
+        date: "2070-12-31".into(),
+        value: 1.2e6,
+    }));
+
+    let [path] = d.paths.as_slice() else {
+        panic!("one path");
+    };
+    assert_eq!(path.label, "Take yearly RMDs from age 75 into USAA");
+    let [change] = changes(d).try_into().expect("one change");
+    assert_eq!(change.target, ChangeTarget::NewEvent("rmd".into()));
+    let body = change.value.unwrap();
+    assert_eq!(
+        body["trigger"]["start_condition"],
+        json!({"kind": "Age", "years": 75})
+    );
+    assert_eq!(
+        body["effects"],
+        json!([{"kind": "ApplyRmd", "to_account_id": 6, "lot_method": "Fifo"}])
+    );
+    assert_changes_resolve(&g, &drafts);
+}
+
+#[test]
+fn rmds_already_due_start_with_the_plan() {
+    let mut g = graph();
+    born(&mut g, "1950-01-01", 12);
+    let drafts = review(&g, &with_401k(results(), 500e3));
+    let d = only(&drafts, "rmd_missing");
+    assert!(
+        d.reasoning
+            .contains("RMDs are due from the start: they began at 73, in 2023"),
+        "{}",
+        d.reasoning
+    );
+    let [change] = changes(d).try_into().expect("one change");
+    assert_eq!(
+        change.value.unwrap()["trigger"]["start_condition"],
+        json!(null)
+    );
+}
+
+#[test]
+fn rmd_missing_stays_quiet_where_it_should() {
+    // The fixture's shown path holds nothing in the 401(k).
+    assert!(!rules_of(&review(&graph(), &results())).contains_key("rmd_missing"));
+
+    // The plan ends (2065) before RMDs start (2071).
+    let mut g = graph();
+    born(&mut g, "1996-01-01", 39);
+    let r = with_401k(results(), 1e6);
+    assert!(!rules_of(&review(&g, &r)).contains_key("rmd_missing"));
+
+    // An event already applies them.
+    let mut g = graph();
+    add_event(
+        &mut g,
+        json!({"name": "RMD", "trigger": {"kind": "Repeating", "interval": "Yearly"},
+               "effects": [{"kind": "ApplyRmd", "to_account_id": 6}]}),
+    );
+    assert!(!rules_of(&review(&g, &r)).contains_key("rmd_missing"));
+
+    // No birth date: the age is unknown (preflight says so).
+    let mut g = graph();
+    g.scenario.birth_date = None;
+    assert!(!rules_of(&review(&g, &r)).contains_key("rmd_missing"));
+}
+
+#[test]
+fn applying_rmd_missing_makes_the_run_take_rmds() {
+    // 71 at the start: RMDs from 73, in 2028, by the path's Age trigger.
+    let mut g = graph();
+    born(&mut g, "1955-01-01", 10);
+    let rmds = |g: &ScenarioGraph| {
+        let compiled = crate::compile::compile(g).unwrap();
+        let result = finplan_core::simulation::simulate(&compiled.config, 7).unwrap();
+        result.rmd_entries().count()
+    };
+    assert_eq!(rmds(&g), 0, "no RMDs before the fix");
+
+    let drafts = review(&g, &with_401k(results(), 500e3));
+    let d = only(&drafts, "rmd_missing");
+    let steps: Vec<Vec<Change>> = d.paths[0].steps.iter().map(|s| s.changes.clone()).collect();
+    let fixed = crate::suggest::resolve_steps(&g, &steps, &Default::default())
+        .unwrap()
+        .unwrap()
+        .graph;
+    assert!(rmds(&fixed) > 0, "the fixed plan takes RMDs");
+    assert!(!rules_of(&review(&fixed, &with_401k(results(), 500e3))).contains_key("rmd_missing"));
+}
+
+// ── rmd_into_investment_cash ────────────────────────────────────────────────
+
+#[test]
+fn an_rmd_paid_into_an_investment_account_is_retargeted_to_the_bank() {
+    let mut g = graph();
+    let id = add_event(
+        &mut g,
+        json!({"name": "RMD", "trigger": {"kind": "Repeating", "interval": "Yearly"},
+               "effects": [{"kind": "ApplyRmd", "to_account_id": 1}]}),
+    );
+    let drafts = review(&g, &results());
+    let d = only(&drafts, "rmd_into_investment_cash");
+    assert_catalogued(&drafts);
+    assert_eq!(
+        d.title,
+        "RMD pays RMDs into Vanguard, where they sit as cash"
+    );
+    assert!(
+        d.reasoning.contains("from 2071 at age 75"),
+        "{}",
+        d.reasoning
+    );
+    let [change] = changes(d).try_into().expect("one change");
+    assert_eq!(change.op, ChangeOp::Replace);
+    assert_eq!(change.target, ChangeTarget::Event(id));
+    assert_eq!(change.path, "/effects/0/to_account_id");
+    assert_eq!(
+        (change.expect, change.value),
+        (Some(json!(1)), Some(json!(6)))
+    );
+    assert_changes_resolve(&g, &drafts);
+}
+
+#[test]
+fn rmd_into_investment_cash_stays_quiet_where_it_should() {
+    // No RMD event at all.
+    assert!(!rules_of(&review(&graph(), &results())).contains_key("rmd_into_investment_cash"));
+    // One that pays into the bank.
+    let mut g = graph();
+    add_event(
+        &mut g,
+        json!({"name": "RMD", "trigger": {"kind": "Repeating", "interval": "Yearly"},
+               "effects": [{"kind": "ApplyRmd", "to_account_id": 6}]}),
+    );
+    assert!(!rules_of(&review(&g, &results())).contains_key("rmd_into_investment_cash"));
+}
+
+// ── the catalogue ───────────────────────────────────────────────────────────
+
+/// Every note is filed under its rule's catalogue entry, with its kind and
+/// section.
+fn assert_catalogued(drafts: &[Draft]) {
+    for d in drafts {
+        let entry = catalogue()
+            .iter()
+            .find(|c| c.id == d.rule)
+            .unwrap_or_else(|| panic!("{} is not catalogued", d.rule));
+        assert_eq!(entry.layer, CheckLayer::Rule, "{}", d.rule);
+        assert_eq!(
+            (entry.kind, entry.section),
+            (d.kind, d.section),
+            "{}",
+            d.rule
+        );
+    }
+}
+
+#[test]
+fn every_rule_and_preflight_code_is_catalogued_and_every_entry_exists() {
+    use crate::preflight::Code;
+    use std::collections::BTreeSet;
+
+    let of = |layer: CheckLayer| -> BTreeSet<&str> {
+        catalogue()
+            .iter()
+            .filter(|c| c.layer == layer)
+            .map(|c| c.id)
+            .collect()
+    };
+    let rules: BTreeSet<&str> = rule_ids().collect();
+    assert_eq!(rules.len(), rule_ids().count(), "a rule id is repeated");
+    assert_eq!(
+        of(CheckLayer::Rule),
+        rules,
+        "rules vs their catalogue entries"
+    );
+
+    let codes: BTreeSet<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+    assert_eq!(codes.len(), Code::ALL.len(), "a preflight code is repeated");
+    assert_eq!(
+        of(CheckLayer::Preflight),
+        codes,
+        "codes vs their catalogue entries"
+    );
+
+    let ids: BTreeSet<&str> = catalogue().iter().map(|c| c.id).collect();
+    assert_eq!(ids.len(), catalogue().len(), "an id is catalogued twice");
+    assert!(!of(CheckLayer::Reviewer).is_empty());
+    for c in catalogue() {
+        assert!(
+            c.looks_for.ends_with('.') && !c.looks_for.contains('\n'),
+            "{}: {:?}",
+            c.id,
+            c.looks_for
+        );
+        assert!(!c.offers.is_empty(), "{}", c.id);
+    }
+}
+
+#[test]
+fn the_fixture_run_raises_only_catalogued_codes() {
+    let report = crate::preflight::preflight(&graph());
+    for issue in &report.issues {
+        assert!(
+            catalogue()
+                .iter()
+                .any(|c| c.layer == CheckLayer::Preflight && c.id == issue.code),
+            "{}",
+            issue.code
+        );
+    }
+}
+
+#[test]
+fn review_checks_count_each_rules_notes() {
+    let drafts = review(&graph(), &results());
+    let checks = review_checks(drafts.iter().map(|d| d.rule));
+    assert_eq!(checks.len(), catalogue().len());
+    let notes = |id: &str| checks.iter().find(|c| c.id == id).unwrap().notes;
+    assert_eq!(notes("unmapped_or_mismatched_assets"), Some(3));
+    assert_eq!(notes("idle_bank_cash"), Some(1));
+    // Ran, found nothing.
+    assert_eq!(notes("cost_basis_equals_value"), Some(0));
+    assert_eq!(notes("rmd_missing"), Some(0));
+    // Not counted by a review.
+    assert_eq!(notes("missing_birth"), None);
+    assert_eq!(notes("missing_social_security"), None);
+}
+
 // ── formatting ──────────────────────────────────────────────────────────────
 
 #[test]
@@ -735,6 +1008,7 @@ fn a_local_review_writes_every_rule_note_in_the_shape_the_review_tab_reads() {
     assert_eq!(local.run_id, 7);
     assert_eq!(local.reviewed_at, "2026-10-03 00:00:00");
     assert_eq!(local.suggestions.len(), drafts.len());
+    assert_eq!(local.checks, review_checks(drafts.iter().map(|d| d.rule)));
     for (i, (note, draft)) in local.suggestions.iter().zip(&drafts).enumerate() {
         assert_eq!(note.id, i as i64 + 1);
         assert_eq!(note.rule.as_deref(), Some(draft.rule));

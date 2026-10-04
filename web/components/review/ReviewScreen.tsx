@@ -27,6 +27,7 @@ import {
   previewLine,
   problemText,
   reviewBanner,
+  reviewChecks,
   type StepRow,
   stepProblemText,
   stepProblemsIn,
@@ -37,6 +38,7 @@ import { DraftReview } from "./DraftReview";
 import { NoteDetail } from "./NoteDetail";
 import { NoteList } from "./NoteList";
 import { PlanChat } from "./PlanChat";
+import { ReviewChecks } from "./ReviewChecks";
 import { type CardOutcome, SuggestionCard } from "./SuggestionCard";
 
 const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
@@ -227,6 +229,7 @@ function PlanReview({
         })
       : undefined;
   const ai = review ? aiLine(review) : undefined;
+  const checks = review ? reviewChecks(review) : undefined;
 
   const reviewAgain = () => {
     setOutcomes({});
@@ -610,6 +613,8 @@ function PlanReview({
           </div>
         )
       )}
+
+      {section === "notes" && checks && <ReviewChecks view={checks} />}
 
       <p style={{ margin: 0, padding: "10px 20px", fontSize: 11.5, color: MUTED, borderTop: "1px solid var(--color-divider)" }}>
         {local

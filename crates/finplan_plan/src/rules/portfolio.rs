@@ -340,7 +340,7 @@ pub(super) fn unused_contribution_limits(ctx: &Ctx) -> Vec<Draft> {
 }
 
 /// Walk an effect and the branches of any `Random` inside it.
-fn visit<'e>(effect: &'e EffectSpec, f: &mut impl FnMut(&'e EffectSpec)) {
+pub(super) fn visit<'e>(effect: &'e EffectSpec, f: &mut impl FnMut(&'e EffectSpec)) {
     f(effect);
     if let EffectSpec::Random {
         on_true, on_false, ..

@@ -26,14 +26,50 @@ pub struct PreflightReport {
     pub can_run: bool,
 }
 
+/// Declares [`Code`] and [`Code::ALL`] from one list, so a code cannot be
+/// raised without being listed: the standard checks' catalogue
+/// (`crate::rules::catalogue`) is held to that list.
+macro_rules! codes {
+    ($($variant:ident => $code:literal,)*) => {
+        /// What a [`PreflightIssue`] is about; `as_str` is its wire `code`.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum Code {
+            $($variant,)*
+        }
+
+        impl Code {
+            /// Every code [`preflight`] can raise.
+            pub const ALL: &[Code] = &[$(Code::$variant,)*];
+
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Code::$variant => $code,)*
+                }
+            }
+        }
+    };
+}
+
+codes! {
+    InvalidPlan => "invalid_plan",
+    UnmappedAsset => "unmapped_asset",
+    EmptyEvent => "empty_event",
+    MissingSpending => "missing_spending",
+    FundingIntent => "funding_intent",
+    MissingBirth => "missing_birth",
+    Horizon => "horizon",
+    NoInflation => "no_inflation",
+    Assumptions => "assumptions",
+}
+
 /// Review `g`: compile it, then look for the omissions a run cannot report
 /// for itself (no spending, no inflation, an asset with no return, ...).
 /// `can_run` is false only when an issue is an error; warnings do not block.
 pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
     let mut issues = vec![];
-    let mut add = |code: &str, severity: &str, message: String, section: &str, record_id| {
+    let mut add = |code: Code, severity: &str, message: String, section: &str, record_id| {
         issues.push(PreflightIssue {
-            code: code.into(),
+            code: code.as_str().into(),
             severity: severity.into(),
             message,
             section: section.into(),
@@ -41,12 +77,12 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
         })
     };
     if let Err(e) = crate::compile::compile(g) {
-        add("invalid_plan", "error", e.to_string(), "plan", None);
+        add(Code::InvalidPlan, "error", e.to_string(), "plan", None);
     }
     for a in &g.assets {
         if a.return_profile_id.is_none() {
             add(
-                "unmapped_asset",
+                Code::UnmappedAsset,
                 "warning",
                 format!(
                     "{} has no return assumption. Its price stays fixed in nominal dollars; confirm that this is intentional.",
@@ -60,7 +96,7 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
     for e in &g.events {
         if e.enabled != 0 && g.event_effects.get(&e.id).is_none_or(|v| v.is_empty()) {
             add(
-                "empty_event",
+                Code::EmptyEvent,
                 "warning",
                 format!("{} is enabled but has no effects.", e.name),
                 "plan",
@@ -83,7 +119,7 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
         .any(|e| e.kind == "Expense")
     {
         add(
-            "missing_spending",
+            Code::MissingSpending,
             "warning",
             "No spending is modeled. This run cannot assess your ability to fund living costs."
                 .into(),
@@ -98,11 +134,11 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
             .filter(enabled_effect)
             .any(|e| e.kind == "Sweep" || e.kind == "CashTransfer")
     {
-        add("funding_intent","warning","No withdrawal or transfer rule is modeled. Spending uses only its named account; review whether this is intentional.".into(),"plan",None);
+        add(Code::FundingIntent,"warning","No withdrawal or transfer rule is modeled. Spending uses only its named account; review whether this is intentional.".into(),"plan",None);
     }
     if g.scenario.birth_date.is_none() {
         add(
-            "missing_birth",
+            Code::MissingBirth,
             "warning",
             "No birth date is set. Review age-based retirement and withdrawal assumptions.".into(),
             "plan",
@@ -120,7 +156,7 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
             - i64::from(birth.year())
             - i64::from((start.month(), start.day()) < (birth.month(), birth.day()));
         add(
-            "horizon",
+            Code::Horizon,
             "warning",
             format!(
                 "The modeled horizon ends around age {end_age}. Confirm that it covers your household's intended planning lifetime."
@@ -131,7 +167,7 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
     }
     if g.scenario.inflation_profile_id.is_none() {
         add(
-            "no_inflation",
+            Code::NoInflation,
             "warning",
             "No inflation is modeled. Inflation-adjusted spending will not grow.".into(),
             "plan",
@@ -139,7 +175,7 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
         );
     }
     add(
-        "assumptions",
+        Code::Assumptions,
         "warning",
         format!(
             "Review tax assumptions: {}. Returns and inflation are annual nominal assumptions. Tax modeling is simplified; profile labels retain their original year and filing status. Review omitted household income, benefits and costs before relying on results.",

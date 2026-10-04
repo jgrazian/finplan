@@ -49,7 +49,7 @@ use crate::state::AppState;
 use crate::suggest::ai::NoteOutline;
 use crate::suggest::ai::ReviewContext;
 use finplan_plan::graph::ScenarioGraph;
-use finplan_plan::rules::{self, Evidence, Kind, Section};
+use finplan_plan::rules::{self, Evidence, Kind, ReviewCheck, Section};
 use finplan_plan::suggest::{self, Change, ChangeProblem, Created};
 
 pub fn router() -> Router<AppState> {
@@ -126,6 +126,9 @@ pub struct Review {
     /// The model-written pass over the same run, which lands after the rule
     /// notes; null when the server has no review model configured.
     pub ai: Option<ReviewAi>,
+    /// The standard checks ("What Review checks"), each rule's notes counted
+    /// over this review's run.
+    pub checks: Vec<ReviewCheck>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1102,10 +1105,18 @@ async fn load_review(state: &AppState, scenario_id: i64) -> ApiResult<Option<Rev
     .bind(scenario_id)
     .fetch_all(db)
     .await?;
-    let suggestions = rows
+    let suggestions: Vec<Suggestion> = rows
         .into_iter()
         .map(SuggestionRow::into_suggestion)
         .collect::<ApiResult<_>>()?;
+    // What the rules wrote against this run: raised (or refreshed) by the
+    // review, whatever the user has done with it since.
+    let checks = rules::review_checks(
+        suggestions
+            .iter()
+            .filter(|s| s.source == SuggestionSource::Rules && s.run_id == Some(run_id))
+            .filter_map(|s| s.rule.as_deref()),
+    );
     let mut ai = latest.ai();
     if let (Some(ai), Some(reviews)) = (&mut ai, &state.review_ai)
         && ai.status == ReviewAiStatus::Running
@@ -1117,6 +1128,7 @@ async fn load_review(state: &AppState, scenario_id: i64) -> ApiResult<Option<Rev
         ai,
         reviewed_at: latest.reviewed_at,
         suggestions,
+        checks,
     }))
 }
 

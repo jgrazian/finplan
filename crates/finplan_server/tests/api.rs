@@ -3877,6 +3877,27 @@ async fn a_review_stores_checked_notes_and_remembers_dismissals() {
         .await;
     assert_eq!(latest["suggestions"], review["suggestions"]);
 
+    // What Review checks: each rule with its notes from this run, the
+    // reviewer's and preflight's checks uncounted.
+    assert_eq!(latest["checks"], review["checks"]);
+    let check = |id: &str| {
+        review["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap_or_else(|| panic!("no {id} in {review}"))
+            .clone()
+    };
+    assert_eq!(check("liability_payment_inflation_adjusted")["notes"], 1);
+    assert_eq!(
+        check("liability_payment_inflation_adjusted")["layer"],
+        "rule"
+    );
+    assert_eq!(check("sweep_sells_while_cash")["notes"], 0);
+    assert_eq!(check("missing_birth")["layer"], "preflight");
+    assert_eq!(check("missing_birth")["notes"], Value::Null);
+
     // Reviewing again refreshes the open notes rather than adding to them,
     // and a rule note raised again keeps its row.
     let again = app.review(scenario_id).await;

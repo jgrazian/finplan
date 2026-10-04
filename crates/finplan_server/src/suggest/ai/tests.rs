@@ -1354,6 +1354,52 @@ fn existing_notes_are_listed_with_what_they_change() {
 }
 
 #[test]
+fn the_standard_checks_are_listed_with_what_each_rule_found() {
+    use finplan_plan::rules::{CheckLayer, catalogue};
+    let note = |title: &str| Draft {
+        rule: "idle_bank_cash",
+        kind: Kind::Check,
+        section: Section::Portfolio,
+        title: title.into(),
+        summary: String::new(),
+        reasoning: String::new(),
+        evidence: Vec::new(),
+        paths: Vec::new(),
+    };
+    let text = context(&[note("USAA holds too much"), note("Ally holds too much")]).text;
+    let checks = &text[text.find("<plan_checks>").expect("listed")..];
+    for check in catalogue() {
+        let state = match (check.layer, check.id) {
+            (CheckLayer::Rule, "idle_bank_cash") => "ran, wrote 2 notes",
+            (CheckLayer::Rule, _) => "ran, found nothing",
+            (CheckLayer::Reviewer, _) => "yours",
+            (CheckLayer::Preflight, _) => "before every run",
+        };
+        let layer = match check.layer {
+            CheckLayer::Rule => "rule",
+            CheckLayer::Reviewer => "reviewer",
+            CheckLayer::Preflight => "preflight",
+        };
+        let line = format!("- {} ({layer}, ", check.id);
+        let at = checks
+            .find(&line)
+            .unwrap_or_else(|| panic!("missing {line:?} in:\n{checks}"));
+        let rest = &checks[at..];
+        let row = &rest[..rest.find('\n').unwrap()];
+        assert!(
+            row.contains(&format!("): {state}. Looks for: {}", check.looks_for)),
+            "{row}"
+        );
+    }
+    assert!(checks.contains(
+        "- rmd_missing (rule, fix / plan): ran, found nothing. Looks for: Tax-deferred money"
+    ));
+    // The model is told not to redo what ran.
+    assert!(prompt::SYSTEM_PROMPT.contains("Do not redo a check marked ran"));
+    assert!(!prompt::SYSTEM_PROMPT.contains("Do not repeat a note the rules already wrote"));
+}
+
+#[test]
 fn the_static_prefix_is_stable_and_names_the_body_types() {
     let reference = prompt::reference();
     assert_eq!(reference, prompt::reference());

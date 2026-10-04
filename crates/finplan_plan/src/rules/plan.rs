@@ -1,6 +1,12 @@
 //! Notes on events: effects that do something other than what they appear to.
 
-use super::{Ctx, Draft, DraftPath, Evidence, Kind, Section, clip, fixed_amount, money, year_of};
+use serde_json::json;
+
+use super::portfolio::visit;
+use super::{
+    Ctx, Draft, DraftPath, Evidence, Kind, Section, clip, fixed_amount, list, money, rmd_age,
+    year_of,
+};
 use crate::specs::{AmountSpec, EffectSpec, Interval, TriggerSpec};
 use crate::suggest::{Change, ChangeOp, ChangeTarget};
 
@@ -359,4 +365,254 @@ fn payoff(ctx: &Ctx, account_id: i64) -> Option<(String, f64)> {
         .iter()
         .find(|(_, v)| *v >= -0.5)
         .map(|(d, v)| (d.to_string(), *v))
+}
+
+/// The plan's tax-deferred accounts that hold money when RMDs start in
+/// `first`: the last balance before that year on the shown path (the first
+/// one when RMDs are already due), or the opening value of an account the
+/// run has no series for.
+fn deferred_at(ctx: &Ctx, first: i64) -> Vec<(i64, String, f64)> {
+    let jan1 = format!("{first:04}-01-01");
+    let mut accounts: Vec<_> = ctx
+        .graph
+        .accounts
+        .iter()
+        .filter(|a| {
+            ctx.graph
+                .investment
+                .get(&a.id)
+                .is_some_and(|i| i.tax_status == "TaxDeferred")
+        })
+        .collect();
+    accounts.sort_by_key(|a| (a.sort_order, a.id));
+    accounts
+        .into_iter()
+        .filter_map(|a| {
+            let balances = ctx.balances(a.id);
+            let (date, value) = if balances.is_empty() {
+                (
+                    ctx.graph.scenario.start_date.clone(),
+                    ctx.opening_value(a.id),
+                )
+            } else {
+                let (date, value) = balances
+                    .iter()
+                    .take_while(|(d, _)| *d < jan1.as_str())
+                    .last()
+                    .or(balances.first())
+                    .copied()?;
+                (date.to_string(), value)
+            };
+            (value > 0.5).then_some((a.id, date, value))
+        })
+        .collect()
+}
+
+/// Tax-deferred money still held at the RMD age, inside the plan, with no
+/// event that applies RMDs: the engine takes them only when an `ApplyRmd`
+/// effect runs, so the run never withdraws or taxes them. A correctness note.
+pub(super) fn rmd_missing(ctx: &Ctx) -> Vec<Draft> {
+    let (Some(birth), Some(start), Some(end)) = (ctx.birth_year(), ctx.start(), ctx.end_year())
+    else {
+        return Vec::new();
+    };
+    let age = rmd_age(birth);
+    let first = birth + i64::from(age);
+    if first > end {
+        return Vec::new();
+    }
+    let applies_rmd = ctx.events.iter().flat_map(|e| &e.effects).any(|effect| {
+        let mut found = false;
+        visit(effect, &mut |e| {
+            found |= matches!(e, EffectSpec::ApplyRmd { .. })
+        });
+        found
+    });
+    if applies_rmd {
+        return Vec::new();
+    }
+    let held = deferred_at(ctx, first);
+    if held.is_empty() {
+        return Vec::new();
+    }
+    let names = list(
+        &held
+            .iter()
+            .map(|(id, ..)| ctx.account_name(*id))
+            .collect::<Vec<_>>(),
+    );
+    let total: f64 = held.iter().map(|(.., v)| v).sum();
+    // Already past the age at the plan's start: due from the start.
+    let past = first <= start.year;
+    let (when, due) = if past {
+        (
+            "at the plan's start".to_string(),
+            format!("RMDs are due from the start: they began at {age}, in {first}"),
+        )
+    } else {
+        (
+            format!("at the end of {}", first - 1),
+            format!("RMDs fall due from age {age}, in {first}"),
+        )
+    };
+    let bank = ctx.main_bank();
+    let fix = bank.map_or_else(
+        || " The plan has no bank account to pay them into; add one first.".to_string(),
+        |id| {
+            format!(
+                " A yearly Apply RMD event from age {age} pays each year's required amount \
+                 into {}, taxed as ordinary income.",
+                ctx.account_name(id)
+            )
+        },
+    );
+    let mut evidence: Vec<Evidence> = held
+        .iter()
+        .map(|(id, date, value)| Evidence::AccountSeries {
+            account_id: *id,
+            date: date.clone(),
+            value: *value,
+        })
+        .collect();
+    evidence.push(Evidence::Stat {
+        name: "first RMD year".into(),
+        value: first as f64,
+    });
+    let paths = bank
+        .map(|bank| {
+            let start_condition = (!past).then(|| json!({"kind": "Age", "years": age}));
+            DraftPath::only(
+                clip(&format!(
+                    "Take yearly RMDs from age {age} into {}",
+                    ctx.account_name(bank)
+                )),
+                vec![Change {
+                    op: ChangeOp::Add,
+                    target: ChangeTarget::NewEvent("rmd".into()),
+                    path: String::new(),
+                    expect: None,
+                    value: Some(json!({
+                        "name": "Required minimum distributions",
+                        "fires_once": false,
+                        "enabled": true,
+                        "trigger": {
+                            "kind": "Repeating",
+                            "interval": "Yearly",
+                            "start_condition": start_condition,
+                            "end_condition": null,
+                            "max_occurrences": null,
+                        },
+                        "effects": [{
+                            "kind": "ApplyRmd",
+                            "to_account_id": bank,
+                            "lot_method": "Fifo",
+                        }],
+                    })),
+                }],
+            )
+        })
+        .into_iter()
+        .collect();
+    let s = if held.len() == 1 { "s" } else { "" };
+    vec![Draft {
+        rule: "rmd_missing",
+        kind: Kind::Fix,
+        section: Section::Plan,
+        title: format!("{names} owe{s} RMDs from {first}, at {age}, but no event takes them"),
+        summary: "FinPlan takes required minimum distributions only when an Apply RMD event \
+                  runs, so this plan never withdraws or taxes them."
+            .into(),
+        reasoning: format!(
+            "{names} hold{s} {total} on the median path {when}. {due} (born {birth}). No \
+             enabled event applies them, so the money compounds untouched and the run \
+             understates taxable income from then on.{fix}",
+            total = money(total),
+        ),
+        evidence,
+        paths,
+    }]
+}
+
+/// An `ApplyRmd` that pays into an investment account: the distribution lands
+/// there as cash, which no withdrawal spends and nothing invests unless an
+/// event buys with it.
+pub(super) fn rmd_into_investment_cash(ctx: &Ctx) -> Vec<Draft> {
+    let first = ctx.birth_year().map(|birth| {
+        let age = rmd_age(birth);
+        (birth + i64::from(age), age)
+    });
+    let bank = ctx.main_bank();
+    let mut drafts = Vec::new();
+    for event in &ctx.events {
+        for (i, effect) in event.effects.iter().enumerate() {
+            let EffectSpec::ApplyRmd { to_account_id, .. } = effect else {
+                continue;
+            };
+            if ctx.flavor(*to_account_id) != Some("Investment") {
+                continue;
+            }
+            let account = ctx.account_name(*to_account_id);
+            let from = first.map_or_else(String::new, |(year, age)| {
+                format!(", from {year} at age {age}")
+            });
+            let mut evidence = Vec::new();
+            if let Some((year, _)) = first {
+                evidence.push(Evidence::Ledger {
+                    year: ctx.start().map_or(year, |s| year.max(s.year)),
+                    event_id: Some(event.id),
+                    account_id: Some(*to_account_id),
+                });
+            }
+            let fix = bank.map_or_else(
+                || " The plan has no bank account to pay it into.".to_string(),
+                |id| {
+                    format!(
+                        " Paying the RMD into {} puts it where expenses are paid from.",
+                        ctx.account_name(id)
+                    )
+                },
+            );
+            // Retargeting to the bank is the one path for now; reinvesting the
+            // cash in place joins it once the `ReinvestCash` template exists
+            // (spec 21, with `cash_accumulates`).
+            let paths = bank
+                .map(|bank| {
+                    DraftPath::only(
+                        clip(&format!("Pay the RMD into {}", ctx.account_name(bank))),
+                        vec![Change {
+                            op: ChangeOp::Replace,
+                            target: ChangeTarget::Event(event.id),
+                            path: format!("/effects/{i}/to_account_id"),
+                            expect: Some(json!(to_account_id)),
+                            value: Some(json!(bank)),
+                        }],
+                    )
+                })
+                .into_iter()
+                .collect();
+            drafts.push(Draft {
+                rule: "rmd_into_investment_cash",
+                kind: Kind::Check,
+                section: Section::Plan,
+                title: format!(
+                    "{} pays RMDs into {account}, where they sit as cash",
+                    event.name
+                ),
+                summary: format!(
+                    "Cash in {account} is not spent by withdrawals or invested unless an event \
+                     buys with it, so the distributions pile up idle."
+                ),
+                reasoning: format!(
+                    "{}'s Apply RMD pays each year's distribution into {account}, an investment \
+                     account{from}. The distribution is taxed as it leaves the pre-tax account, \
+                     then sits in {account} as cash: sweeps sell holdings, not cash, so \
+                     spending never draws on it, and nothing invests it.{fix}",
+                    event.name
+                ),
+                evidence,
+                paths,
+            });
+        }
+    }
+    drafts
 }
