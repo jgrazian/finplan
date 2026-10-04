@@ -25,6 +25,7 @@ export function InflationProfilesTable({
   activeId,
   onActivate,
   onReorder,
+  onDelete,
 }: {
   profiles: InflationProfile[];
   activeId: string;
@@ -32,6 +33,8 @@ export function InflationProfilesTable({
   onActivate?: (profile: InflationProfile) => void;
   /** Server ids in their new order. Omitted where writes are refused. */
   onReorder?: (ids: number[]) => void | Promise<unknown>;
+  /** Asks to delete a profile; the caller confirms. Omitted where writes are refused. */
+  onDelete?: (profile: InflationProfile) => void;
 }) {
   const byServerId = new Map(profiles.map((p) => [p.serverId, p]));
   // Destructured rather than kept as one object: a `ref` prop taken off a
@@ -126,7 +129,20 @@ export function InflationProfilesTable({
             >
               {bandLabel(profile.distribution)}
             </span>
-            <span style={{ display: "flex", justifyContent: "flex-end" }}>
+            <span
+              style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12 }}
+            >
+              {onDelete && (
+                <button
+                  type="button"
+                  className="row-delete"
+                  onClick={() => onDelete(profile)}
+                  aria-label={`Delete ${profile.id}`}
+                  title="Delete this inflation profile"
+                >
+                  ×
+                </button>
+              )}
               <label className="check" title={`Use ${profile.id} for this scenario`}>
                 <input
                   type="radio"

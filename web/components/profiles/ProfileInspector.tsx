@@ -52,6 +52,7 @@ export function ProfileInspector({
   presets,
   onApply,
   onDuplicate,
+  onDelete,
   busy,
   error,
   offline,
@@ -61,6 +62,8 @@ export function ProfileInspector({
   presets: HistoryPreset[];
   onApply: (body: UpdateProfile) => void;
   onDuplicate: () => void;
+  /** Asks to delete the profile; the caller confirms. */
+  onDelete?: () => void;
   busy?: boolean;
   error?: string;
   /** No connection: the fields close rather than take edits that cannot save. */
@@ -72,6 +75,7 @@ export function ProfileInspector({
     dist: draftOf(profile.distribution, presets),
   };
   const [draft, setDraft] = useState<ProfileDraft>(pristine);
+  const inUse = profile.usedBy.length > 0;
   const spec = specOf(draft.dist);
   // The draft's history, not the stored profile's: switching preset redraws
   // the shape before Apply, which is the only way to compare two of them.
@@ -231,6 +235,32 @@ export function ProfileInspector({
           Apply
         </Button>
       </div>
+
+      {/* Its own line, apart from the edits: deleting is not a step of one.
+          A profile something still points at cannot go, and says what. */}
+      {onDelete && (
+        <div>
+          <Button
+            variant="danger"
+            disabled={busy || offline || inUse}
+            title={
+              offline
+                ? "No connection to the server."
+                : inUse
+                  ? `Used by ${profile.usedBy.join(", ")}. Map those to another profile first.`
+                  : "Delete this profile from the library, for every scenario"
+            }
+            onClick={onDelete}
+          >
+            Delete profile
+          </Button>
+          {inUse && (
+            <p className="ns-mut" style={{ margin: "4px 0 0", fontSize: 11.5 }}>
+              In use, so it cannot be deleted.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

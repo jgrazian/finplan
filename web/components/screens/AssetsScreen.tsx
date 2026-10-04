@@ -13,6 +13,7 @@ import {
   profileOptions,
 } from "@/components/portfolio";
 import {
+  DeleteProfileDialog,
   InflationCards,
   InflationProfilesTable,
   NewProfileDialog,
@@ -86,6 +87,10 @@ export function AssetsScreen({
   const api = usePlanApi();
   const [addingAsset, setAddingAsset] = useState(false);
   const [addingProfile, setAddingProfile] = useState(false);
+  const [deleting, setDeleting] = useState<
+    | { kind: "return"; profile: ReturnProfile }
+    | { kind: "inflation"; profile: InflationProfile }
+  >();
   /** Server ids ticked for a bulk remap; cleared once one lands. */
   const [checked, setChecked] = useState<ReadonlySet<number>>(new Set());
   // One query token carries both subjects, since only one is ever selected:
@@ -487,6 +492,9 @@ export function AssetsScreen({
                   ? undefined
                   : (ids) => saveOrder(() => api.inflationProfiles.reorder(ids))
               }
+              onDelete={
+                offline ? undefined : (profile) => setDeleting({ kind: "inflation", profile })
+              }
             />
           </div>
         )}
@@ -515,6 +523,7 @@ export function AssetsScreen({
         presets={histories}
         onApply={(body) => applyProfile(selectedProfile, body)}
         onDuplicate={() => duplicateProfile(selectedProfile)}
+        onDelete={() => setDeleting({ kind: "return", profile: selectedProfile })}
         busy={editingProfile.busy}
         error={editingProfile.error}
         offline={offline}
@@ -546,6 +555,20 @@ export function AssetsScreen({
           profiles={raw.returnProfiles}
           onClose={() => setAddingAsset(false)}
           onCreated={onChanged}
+        />
+      )}
+      {deleting && (
+        <DeleteProfileDialog
+          kind={deleting.kind}
+          profile={deleting.profile}
+          active={deleting.kind === "inflation" && deleting.profile.id === activeInflationProfile}
+          onClose={() => setDeleting(undefined)}
+          onDeleted={() => {
+            // The drawer was showing the profile that is gone.
+            if (deleting.kind === "return") nav.setSelection(undefined);
+            setDeleting(undefined);
+            onChanged();
+          }}
         />
       )}
       {addingProfile && (

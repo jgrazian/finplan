@@ -1,3 +1,4 @@
+export { DeleteProfileDialog } from "./DeleteProfileDialog";
 export { DISTRIBUTIONS, DistributionTerms, KIND_LABEL } from "./DistributionTerms";
 export { InflationProfilesTable } from "./InflationProfilesTable";
 export { InflationCards, ProfileCards } from "./ProfileCards";
