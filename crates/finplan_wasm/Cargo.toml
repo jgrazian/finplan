@@ -1,6 +1,6 @@
 [package]
 name = "finplan_wasm"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2024"
 description = "WebAssembly build of the FinPlan plan model and engine (spec 19)"
 
