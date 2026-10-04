@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, IBM_Plex_Sans, Source_Serif_4 } from "next/font/google";
+import { PwaRegistrar } from "@/components/local/PwaRegistrar";
 import { APPEARANCE_KEY, DARK_STYLE_KEY } from "@/lib/theme";
 import "./globals.css";
 
@@ -63,7 +64,10 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: PRE_PAINT }} />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        <PwaRegistrar />
+      </body>
     </html>
   );
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import type { ComponentProps } from "react";
 import { Button, rowStyle } from "@/components/ui";
 import type { Scenario, UserResponse } from "@/lib/api/types";
 import { useNav } from "@/lib/nav";
@@ -37,6 +38,7 @@ export function AccountScreen({
   onDeleted,
   onScenarioDeleted,
   offline,
+  local,
 }: {
   user: UserResponse;
   scenarios: Scenario[];
@@ -48,6 +50,8 @@ export function AccountScreen({
   onScenarioDeleted: (id: number) => void;
   /** Writes are being refused, so the forms close rather than lie. */
   offline?: boolean;
+  /** Plans on this device, when local mode is on; see `DataPanel`. */
+  local?: ComponentProps<typeof DataPanel>["local"];
 }) {
   // The section is the query's sub-tab, the same slot the Portfolio tab's
   // segmented control uses, so a link to the password field is just a URL.
@@ -107,6 +111,7 @@ export function AccountScreen({
             onDeleted={onDeleted}
             onScenarioDeleted={onScenarioDeleted}
             readOnly={offline}
+            local={local}
           />
         )}
         {active.id === "preferences" && (

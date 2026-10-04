@@ -16,10 +16,13 @@ export function AuthDialog({
   session,
   mode,
   onClose,
+  keepLabel = "Keep browsing as a guest",
 }: {
   session: Session;
   mode: AuthMode;
   onClose: () => void;
+  /** The way back out; a visitor with plans on this device is not a guest. */
+  keepLabel?: string;
 }) {
   const { clearError } = session;
   useEffect(() => {
@@ -57,7 +60,7 @@ export function AuthDialog({
       >
         <LoginForm key={mode} session={session} initialMode={mode} embedded />
         <Button variant="ghost" block onClick={onClose}>
-          Keep browsing as a guest
+          {keepLabel}
         </Button>
       </div>
     </div>

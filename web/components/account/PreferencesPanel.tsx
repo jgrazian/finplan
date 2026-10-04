@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { Field, Hr, NumberInput, SectionHeading } from "@/components/ui";
+import { Field, Hr, NumberInput, SectionHeading, SegmentedControl } from "@/components/ui";
 import { api } from "@/lib/api/client";
 import type { UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { useLocalMode } from "@/lib/local/useLocalMode";
+import type { PlanHome } from "@/lib/nav";
 import { AppearanceFields } from "./AppearanceFields";
 import { PanelNote, SaveRow } from "./chrome";
 
@@ -12,12 +14,14 @@ interface Draft {
   iterations: number;
   years: number;
   autoRun: boolean;
+  home: PlanHome;
 }
 
 const toDraft = (user: UserResponse): Draft => ({
   iterations: user.default_iterations,
   years: user.default_duration_years,
   autoRun: user.auto_run,
+  home: user.default_plan_home ?? "local",
 });
 
 /**
@@ -40,6 +44,7 @@ export function PreferencesPanel({
   const [draft, setDraft] = useState(() => toDraft(user));
   const [synced, setSynced] = useState(user);
   const submit = useSubmit();
+  const localMode = useLocalMode();
 
   if (synced !== user) {
     setSynced(user);
@@ -50,7 +55,8 @@ export function PreferencesPanel({
   const dirty =
     draft.iterations !== saved.iterations ||
     draft.years !== saved.years ||
-    draft.autoRun !== saved.autoRun;
+    draft.autoRun !== saved.autoRun ||
+    draft.home !== saved.home;
 
   return (
     <div>
@@ -90,6 +96,23 @@ export function PreferencesPanel({
         Re-run the active scenario automatically after an edit
       </label>
 
+      {localMode && (
+        <div style={{ marginTop: 14 }}>
+          <Field label="Default home for new plans">
+            <SegmentedControl<PlanHome>
+              name="default-plan-home"
+              ariaLabel="Default home for new plans"
+              value={draft.home}
+              onChange={(home) => !readOnly && setDraft((held) => ({ ...held, home }))}
+              options={[
+                { value: "local", label: "This device", title: "New plans stay in this browser." },
+                { value: "cloud", label: "Cloud", title: "New plans are saved to your FinPlan account." },
+              ]}
+            />
+          </Field>
+        </div>
+      )}
+
       <PanelNote>
         These defaults set the simulation count and length of new plans.
         You can adjust the simulation count on Results, within the service limit.
@@ -111,6 +134,9 @@ export function PreferencesPanel({
                   default_iterations: draft.iterations,
                   default_duration_years: draft.years,
                   auto_run: draft.autoRun,
+                  // A full replace on the server's side for the fields above;
+                  // this one is sent as it stands, saved or not.
+                  default_plan_home: draft.home,
                 }),
               ),
             () => {},

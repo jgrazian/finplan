@@ -39,6 +39,7 @@ export function AppHeader<T extends string>({
   run,
   running,
   onCancel,
+  runWhere,
   offline,
   trailing,
 }: {
@@ -67,6 +68,8 @@ export function AppHeader<T extends string>({
   /** A run is queued or executing: Run gives its slot to the progress. */
   running?: boolean;
   onCancel?: () => void;
+  /** The run is on FinPlan's servers (an offloaded local run), not on this device. */
+  runWhere?: "server";
   /** Nothing can reach the server, so a run cannot be started. */
   offline?: boolean;
   /** Extra controls between the scenario switcher and Run. */
@@ -136,7 +139,7 @@ export function AppHeader<T extends string>({
       {trailing}
 
       {running ? (
-        <RunProgress run={run} onCancel={onCancel} />
+        <RunProgress run={run} onCancel={onCancel} server={runWhere === "server"} />
       ) : (
         <Button
           className="app-header-run"
@@ -205,7 +208,15 @@ export function AppHeader<T extends string>({
  * with Cancel at the end. It holds Run's width, so the header never reflows
  * when a run starts or ends, and it shows from every tab.
  */
-function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel?: () => void }) {
+function RunProgress({
+  run,
+  onCancel,
+  server,
+}: {
+  run: Run | undefined;
+  onCancel?: () => void;
+  server?: boolean;
+}) {
   const done = run?.completed_iterations ?? 0;
   // A converging run stops when its median settles, so the bar is filling
   // towards a ceiling it is not expected to reach. Reading it against the
@@ -227,7 +238,9 @@ function RunProgress({ run, onCancel }: { run: Run | undefined; onCancel?: () =>
       }
     >
       <div className="run-progress-body">
-        <span className="run-progress-word">{queued ? "Queued" : "Simulating"}</span>
+        <span className="run-progress-word">
+          {queued ? "Queued" : server ? "On servers" : "Simulating"}
+        </span>
         <span className="run-progress-count">
           {f(done)} / {converging ? "≤" : ""}
           {f(total)}

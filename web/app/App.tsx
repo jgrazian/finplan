@@ -30,6 +30,25 @@ import { useRun } from "@/lib/hooks/useRun";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
 import { useLocalMode } from "@/lib/local/useLocalMode";
+import { useGuestMigration } from "@/lib/hooks/useGuestMigration";
+import { useDurability } from "@/lib/hooks/useDurability";
+import { useLocalRuntime } from "@/lib/hooks/useLocalRuntime";
+import { useOffload } from "@/lib/hooks/useOffload";
+import { HomeDialogHost, type HomeRequest } from "@/components/local/HomeDialogHost";
+import { PlanHomeBar } from "@/components/local/PlanHomeBar";
+import { download } from "@/components/account/download";
+import { exportLocal } from "@/lib/local/homes";
+import { localApi } from "@/lib/api/local";
+import { localPlanId } from "@/lib/nav";
+import { RunChoiceDialog } from "@/components/local/RunChoiceDialog";
+import { MigrationNotice, OffloadOutcome, RunNotice, StoreClearedNotice } from "@/components/local/Notices";
+import { type RunChoice, decideRun } from "@/lib/local/estimate";
+import { PRIVACY_PROMISE } from "@/lib/local/durability";
+import { type GuestMigration } from "@/lib/local/homes";
+import { getLocalRuntime } from "@/lib/local/runtime";
+import { offloadProgressRun } from "@/lib/local/offload";
+import { LOCAL_VISITOR } from "@/lib/local/visitor";
+import { STORED_PERCENTILES } from "@/lib/api/types";
 import {
   DEFAULT_TAB,
   NavProvider,
@@ -81,11 +100,22 @@ export function App() {
   const closeAuth = useCallback(() => setAuth(undefined), []);
   // The mode is the device's, so it holds signed in or out.
   useApplyThemeMode();
+  // Local mode (spec 19): plans live in this browser, so no account is needed
+  // to use the app, and a spec 17 guest is moved onto this device.
+  const localMode = useLocalMode();
+  const migration = useGuestMigration(session, localMode);
 
-  if (session.user === undefined) {
-    return <main className="app-main app-main-plain">Loading…</main>;
+  if (session.user === undefined || migration.running) {
+    return (
+      <main className="app-main app-main-plain">
+        {migration.running ? "Moving your plan to this device…" : "Loading…"}
+      </main>
+    );
   }
-  if (session.user === null) {
+  // Signed out with local mode on is not a login wall: the visitor opens on
+  // their plans in this browser, with a way to sign in for what needs a server.
+  const visitor = session.user === null && localMode;
+  if (session.user === null && !visitor) {
     return (
       <main className="app-main app-main-plain">
         <LoginForm session={session} />
@@ -93,7 +123,7 @@ export function App() {
     );
   }
 
-  const { user } = session;
+  const user = session.user ?? LOCAL_VISITOR;
   return (
     <NavProvider>
       {/* Keyed on who the data belongs to: signing in switches to another
@@ -103,10 +133,20 @@ export function App() {
         key={`${user.id}:${user.guest}:${session.revision}`}
         session={session}
         user={user}
+        visitor={visitor}
+        migration={migration.result}
+        onDismissMigration={migration.dismiss}
         onSignUp={() => setAuth("signUp")}
         onSignIn={() => setAuth("signIn")}
       />
-      {user.guest && auth && <AuthDialog session={session} mode={auth} onClose={closeAuth} />}
+      {(user.guest || visitor) && auth && (
+        <AuthDialog
+          session={session}
+          mode={auth}
+          onClose={closeAuth}
+          keepLabel={visitor ? "Keep working on this device" : undefined}
+        />
+      )}
       {session.adoption && (
         <AdoptionDialog
           adoption={session.adoption}
@@ -126,11 +166,19 @@ function initials(name: string): string {
 function Workbench({
   session,
   user,
+  visitor,
+  migration,
+  onDismissMigration,
   onSignUp,
   onSignIn,
 }: {
   session: Session;
   user: UserResponse;
+  /** Signed out with local mode on: `user` is a stand-in and nothing may ask the server for the account. */
+  visitor: boolean;
+  /** How a spec 17 guest's move to this device went, until it is read. */
+  migration: GuestMigration | undefined;
+  onDismissMigration: () => void;
   /** A guest asked to create an account, or to sign in to one. */
   onSignUp: () => void;
   onSignIn: () => void;
@@ -157,21 +205,27 @@ function Workbench({
   // Plans live in one of two homes (spec 19). The list is both, each asked
   // only when it can answer, and one failing leaves the other's plans listed.
   const localMode = useLocalMode();
-  const scenarios = usePlanList({ local: localMode, cloud: true });
-  // Where a plan made from here is kept. Local first when it is on: the plan
-  // stays on the device unless the person moves it.
-  const [chosenHome, setNewHome] = useState<PlanHome>("local");
-  const newHome: PlanHome = localMode ? chosenHome : "cloud";
-  const access = useAsync(() => historyApi.entitlements(), []);
+  // A visitor has no cloud plans and no account to ask about.
+  const scenarios = usePlanList({ local: localMode, cloud: !visitor });
+  // Where a plan made from here is kept: the account's preference, and on this
+  // device for anyone without one. Local first by default: the plan stays on the
+  // device unless the person moves it.
+  const [chosenHome, setNewHome] = useState<PlanHome>(
+    !user.guest && user.default_plan_home === "cloud" ? "cloud" : "local",
+  );
+  const newHome: PlanHome = localMode ? (visitor ? "local" : chosenHome) : "cloud";
+  // Entitlements are the server's answer about an account; a visitor has none,
+  // and asking would read as an expired session.
+  const access = useAsync(async () => (visitor ? undefined : historyApi.entitlements()), [visitor]);
   const guestState = useMemo(
     () => ({
       guest: user.guest,
-      restricted: user.guest && (access.data?.hosted ?? true),
+      restricted: user.guest && !visitor && (access.data?.hosted ?? true),
       retentionDays: access.data?.guest_retention_days ?? null,
       openSignUp: onSignUp,
       openSignIn: onSignIn,
     }),
-    [user.guest, access.data?.hosted, access.data?.guest_retention_days, onSignUp, onSignIn],
+    [user.guest, visitor, access.data?.hosted, access.data?.guest_retention_days, onSignUp, onSignIn],
   );
   // The libraries a new plan starts from are its home's, so they follow
   // `newHome` rather than the plan on screen.
@@ -239,6 +293,41 @@ function Workbench({
 
   const workspace = useWorkspace(scenarioId, scenarioSlug);
   const run = useRun(workspace.scenario, scenarioSlug);
+
+  // Local runs and homes (spec 19). A run offloaded to the server is stored on
+  // this device like any other, so on success the run list is simply re-read.
+  const runtime = useLocalRuntime();
+  const offload = useOffload(run.refresh);
+  const localId = localPlanId(scenarioSlug);
+  const durability = useDurability(localId, {
+    createdAt: workspace.scenario?.created_at,
+    updatedAt: workspace.scenario?.updated_at,
+  });
+  const [homeRequest, setHomeRequest] = useState<HomeRequest>();
+  const [runChoice, setRunChoice] = useState<{
+    effort: RunEffort;
+    offer: Extract<RunChoice, { kind: "offer-offload" }>;
+  }>();
+  // The estimate worth showing while a run here is going (10–60 s).
+  const [runEstimate, setRunEstimate] = useState<number>();
+  const [storeCleared, setStoreCleared] = useState(false);
+  const account = !user.guest;
+  const reloadPlans = scenarios.reload;
+  const reloadWorkspace = workspace.reload;
+  useEffect(() => {
+    if (!runtime) return;
+    let live = true;
+    void runtime.storeWasCleared().then((cleared) => live && setStoreCleared(cleared), () => undefined);
+    // Another tab changed a plan: refresh instead of overwriting it.
+    const unsubscribe = runtime.onExternalChange(() => {
+      reloadPlans();
+      reloadWorkspace();
+    });
+    return () => {
+      live = false;
+      unsubscribe();
+    };
+  }, [runtime, reloadPlans, reloadWorkspace]);
   const review = useReview(scenarioId, capabilities.ai);
   const status = useServerStatus();
   // The server being unreachable stops edits to a cloud plan; one on this
@@ -355,23 +444,114 @@ function Workbench({
     [nav, scenarios],
   );
 
+  // What a run is asked for; the same on this device and on the server.
+  const runSettings = useCallback(
+    (asked: RunEffort) => ({
+      iterations: asked.iterations,
+      converge: asked.converge,
+      percentiles: STORED_PERCENTILES,
+    }),
+    [],
+  );
+
+  // A run on this device is estimated first (spec 19): quick ones just run,
+  // middling ones run with the estimate showing, and long ones, or any on a
+  // constrained device, are offered to the server. Without a runtime to ask,
+  // the run starts as it always did. `quiet` is an automatic re-run, which
+  // never asks and never starts a run the person has not been offered.
+  const requestRun = useCallback(
+    async (asked: RunEffort, quiet = false) => {
+      if (offload.active) return;
+      const engine = getLocalRuntime();
+      if (capabilities.home !== "local" || !engine || scenarioId == null) {
+        setRunEstimate(undefined);
+        await run.start(asked);
+        return;
+      }
+      let choice: RunChoice = { kind: "run" };
+      try {
+        choice = decideRun(await engine.estimateRun(scenarioId, runSettings(asked)));
+      } catch {
+        // No estimate is no reason to refuse a run.
+      }
+      if (choice.kind === "offer-offload") {
+        if (!quiet) setRunChoice({ effort: asked, offer: choice });
+        return;
+      }
+      setRunEstimate(choice.kind === "run-with-estimate" ? choice.seconds : undefined);
+      await run.start(asked);
+    },
+    [offload.active, capabilities.home, scenarioId, run, runSettings],
+  );
+
   const start = useCallback(() => {
     // A draft has nothing to run until Create & run makes it a plan.
     if (isDraft) return;
     nav.setTab("results");
-    void run.start(effort);
-  }, [nav, run, effort, isDraft]);
+    void requestRun(effort);
+  }, [nav, requestRun, effort, isDraft]);
+
+  // The offload shares the header's progress bar with local runs.
+  const offloadRun =
+    scenarioId != null && localId != null
+      ? offloadProgressRun(offload.state, scenarioId, { iterations: effort.iterations })
+      : undefined;
+
+  const offloadNow = useCallback(
+    (asked: RunEffort) => {
+      setRunChoice(undefined);
+      if (scenarioId != null) void offload.start(scenarioId, runSettings(asked));
+    },
+    [offload, scenarioId, runSettings],
+  );
+
+  // One-click backup: the plan's archive as a download, then the reminder stands down.
+  const [backupError, setBackupError] = useState<string>();
+  const durabilityRefresh = durability.refresh;
+  const backUp = useCallback(
+    async (plan: ApiScenario) => {
+      setBackupError(undefined);
+      try {
+        await exportLocal(
+          { local: localApi },
+          getLocalRuntime(),
+          { kind: "one", id: plan.id, name: plan.name },
+          download,
+        );
+        durabilityRefresh();
+      } catch (e) {
+        setBackupError(e instanceof Error ? e.message : "Could not back up this plan.");
+      }
+    },
+    [durabilityRefresh],
+  );
+
+  // A plan changed home or arrived from a file: show it, in whichever home it is.
+  const openPlan = useCallback(
+    (plan: ApiScenario) => {
+      setCreating(false);
+      setRecentlyCreated(plan);
+      nav.openScenario(plan.slug, nav.tab === "account" ? "results" : nav.tab);
+      scenarios.reload();
+    },
+    [nav, scenarios],
+  );
+  const closeHomeRequest = useCallback(() => setHomeRequest(undefined), []);
+  const localPlans = useMemo(() => list.filter((row) => homeOf(row.slug) === "local"), [list]);
 
   const refresh = useCallback(() => {
     scenarios.reload();
     workspace.reload();
   }, [scenarios, workspace]);
 
+  const noteSavedEdit = durability.noteSavedEdit;
   const saved = useCallback(() => {
     run.markInputsChanged();
     refresh();
     libraries.reload();
-  }, [run, refresh, libraries]);
+    // The first saved edit to a plan on this device asks the browser to keep it.
+    if (localId != null) noteSavedEdit();
+  }, [run, refresh, libraries, localId, noteSavedEdit]);
 
   // Auto re-run, when the preference asks for it.
   //
@@ -385,10 +565,10 @@ function Workbench({
   const updatedAt = workspace.scenario?.updated_at;
   // Keyed by slug: two homes can both have a plan numbered 3.
   const seen = useRef<{ slug?: string; at?: string }>({});
-  const startQuietly = useRef(() => run.start(effort));
+  const startQuietly = useRef(() => requestRun(effort, true));
   useEffect(() => {
-    startQuietly.current = () => run.start(effort);
-  }, [run, effort]);
+    startQuietly.current = () => requestRun(effort, true);
+  }, [requestRun, effort]);
 
   useEffect(() => {
     if (scenarioSlug == null || updatedAt == null) return;
@@ -515,9 +695,10 @@ function Workbench({
             setCreating(false);
             start();
           }}
-          run={run.run}
-          running={run.active}
-          onCancel={run.cancel}
+          run={offloadRun ?? run.run}
+          running={run.active || offload.active}
+          onCancel={offload.active ? offload.cancel : run.cancel}
+          runWhere={offload.active ? "server" : undefined}
           offline={planOffline}
         />
 
@@ -530,7 +711,39 @@ function Workbench({
           exclude={tab === "results" ? "run" : undefined}
         />
 
-        {user.guest && <GuestBanner />}
+        {user.guest && !visitor && <GuestBanner />}
+
+        {migration && <MigrationNotice result={migration} onDismiss={onDismissMigration} />}
+
+        {/* Local mode only: where the open plan lives, and what can be done about it. */}
+        {localMode && selectedScenario && !isDraft && !creating && tab !== "account" && (
+          <PlanHomeBar
+            home={capabilities.home}
+            account={account}
+            backupDue={durability.backupDue}
+            persistDenied={durability.persistDenied}
+            safariNudge={durability.safariNudge}
+            readOnly={status.offline}
+            onMoveToCloud={() => setHomeRequest({ kind: "move", plan: selectedScenario })}
+            onDownload={() => setHomeRequest({ kind: "download", plan: selectedScenario })}
+            onBackup={() => void backUp(selectedScenario)}
+            onFiles={() => setHomeRequest({ kind: "files" })}
+            onSignIn={onSignIn}
+            onDismissSafari={durability.dismissSafariNudge}
+          />
+        )}
+
+        {backupError && (
+          <p role="alert" style={{ margin: 0, padding: "8px 16px", fontSize: 12, color: "var(--color-accent-700)" }}>
+            {backupError}
+          </p>
+        )}
+
+        <RunNotice
+          seconds={run.active && capabilities.home === "local" ? runEstimate : undefined}
+          offload={offload.state}
+        />
+        <OffloadOutcome state={offload.state} onDismiss={offload.dismiss} />
 
         {access.data?.access_mode === "beta" && (
           <p style={{ margin: 0, padding: "10px 16px", fontSize: 12, borderBottom: "1px solid var(--color-divider)" }}>
@@ -554,7 +767,7 @@ function Workbench({
             taxConfigs={taxConfigs}
             access={access.data}
             home={newHome}
-            onHomeChange={localMode ? setNewHome : undefined}
+            onHomeChange={localMode && !visitor ? setNewHome : undefined}
             onClose={() => {
               setCreating(false);
               // A draft started here spent one of the month's drafts.
@@ -584,6 +797,20 @@ function Workbench({
             onSignOut={() => void session.signOut()}
             onDeleted={session.forget}
             onScenarioDeleted={cloudPlanDeleted}
+            local={
+              localMode
+                ? {
+                    plans: localPlans,
+                    onMoveToCloud: (plan) => setHomeRequest({ kind: "move", plan }),
+                    onDownload: (plan) => setHomeRequest({ kind: "download", plan }),
+                    onImported: (ids) => {
+                      scenarios.reload();
+                      const first = ids[0];
+                      if (first !== undefined) void localApi.scenarios.get(first).then(openPlan);
+                    },
+                  }
+                : undefined
+            }
           />
         ) : scenarios.error ? (
           <EmptyState title="Cannot reach the API" detail={scenarios.error.message} />
@@ -595,7 +822,16 @@ function Workbench({
         ) : workspace.error ? (
           <EmptyState title="Cannot load this scenario" detail={workspace.error.message} />
         ) : scenarios.data && list.length === 0 ? (
-          <NoScenarios onCreate={() => setCreating(true)} />
+          <>
+            {localMode && storeCleared && (
+              <StoreClearedNotice onImport={() => setHomeRequest({ kind: "files" })} />
+            )}
+            <NoScenarios
+              local={localMode}
+              onCreate={() => setCreating(true)}
+              onImport={() => setHomeRequest({ kind: "files" })}
+            />
+          </>
         ) : !workspace.scenario || !workspace.params || !workspace.axis ? (
           <EmptyState title="Loading…" detail="Fetching the scenario." />
         ) : (
@@ -691,6 +927,40 @@ function Workbench({
 
       <AppFooter />
 
+      {runChoice && (
+        <RunChoiceDialog
+          offer={runChoice.offer}
+          account={account}
+          onOffload={() => offloadNow(runChoice.effort)}
+          onRunHere={() => {
+            const asked = runChoice.effort;
+            setRunChoice(undefined);
+            setRunEstimate(runChoice.offer.seconds);
+            void run.start(asked);
+          }}
+          onSignIn={() => {
+            setRunChoice(undefined);
+            onSignIn();
+          }}
+          onClose={() => setRunChoice(undefined)}
+        />
+      )}
+
+      {localMode && (
+        <HomeDialogHost
+          request={homeRequest}
+          localPlans={localPlans}
+          account={account}
+          onRequest={setHomeRequest}
+          onClose={closeHomeRequest}
+          onOpen={openPlan}
+          onChanged={() => {
+            scenarios.reload();
+            durability.refresh();
+          }}
+        />
+      )}
+
       {status.issue?.kind === "session" && (
         <SessionExpiredDialog onSignIn={() => void session.signOut()} />
       )}
@@ -714,7 +984,16 @@ function toHeaderScenario(scenario: ApiScenario): Scenario {
   };
 }
 
-function NoScenarios({ onCreate }: { onCreate: () => void }) {
+function NoScenarios({
+  onCreate,
+  onImport,
+  local,
+}: {
+  onCreate: () => void;
+  /** Local mode only: a backup file can be imported instead. */
+  onImport: () => void;
+  local: boolean;
+}) {
   return (
     <div style={{ padding: "40px 24px", maxWidth: 520 }}>
       <h4 style={{ margin: "0 0 6px" }}>No scenarios yet</h4>
@@ -729,9 +1008,17 @@ function NoScenarios({ onCreate }: { onCreate: () => void }) {
         A scenario holds the accounts, assets and events that make up one plan.
         Your return-profile and tax library is already seeded.
       </p>
-      <Button variant="primary" onClick={onCreate}>
-        Create a scenario
-      </Button>
+      {local && (
+        <p className="ns-mut" style={{ margin: "0 0 14px", fontSize: 12.5, lineHeight: 1.5 }}>
+          {PRIVACY_PROMISE}
+        </p>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <Button variant="primary" onClick={onCreate}>
+          Create a scenario
+        </Button>
+        {local && <Button onClick={onImport}>Import a backup file</Button>}
+      </div>
     </div>
   );
 }

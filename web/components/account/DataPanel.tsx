@@ -3,7 +3,8 @@
 import { planApiFor } from "@/lib/nav/api";
 import { ImportPanel } from "./ImportPanel";
 import { useState } from "react";
-import { Blueprint, Button, Hr, Table, Td, Th } from "@/components/ui";
+import { Blueprint, Button, Hr, SectionHeading, Table, Td, Th } from "@/components/ui";
+import { LocalPlansPanel } from "@/components/local/LocalPlansPanel";
 import type { Scenario, UserResponse } from "@/lib/api/types";
 import { fmtPercent } from "@/lib/format";
 import { useSubmit } from "@/lib/hooks/useSubmit";
@@ -28,6 +29,7 @@ export function DataPanel({
   onDeleted,
   onScenarioDeleted,
   readOnly,
+  local,
 }: {
   user: UserResponse;
   scenarios: Scenario[];
@@ -36,6 +38,16 @@ export function DataPanel({
   onScenarioDeleted: (id: number) => void;
   /** No connection: exports still work, deletion cannot be offered. */
   readOnly?: boolean;
+  /**
+   * Plans kept on this device, when local mode is on: their own list, and the
+   * way a plan changes home from here.
+   */
+  local?: {
+    plans: Scenario[];
+    onMoveToCloud: (plan: Scenario) => void;
+    onDownload: (plan: Scenario) => void;
+    onImported: (scenarioIds: number[]) => void;
+  };
 }) {
   const [deleting, setDeleting] = useState(false);
   const [deletingScenario, setDeletingScenario] = useState<Scenario>();
@@ -92,6 +104,11 @@ export function DataPanel({
                     >
                       {exporting === scenario.id ? "…" : "Export JSON"}
                     </Button>
+                    {local && (
+                      <Button variant="ghost" onClick={() => local.onDownload(scenario)}>
+                        Download to this device…
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       disabled={readOnly}
@@ -123,6 +140,21 @@ export function DataPanel({
 
       <ImportPanel disabled={readOnly} />
       <Hr />
+
+      {local && (
+        <>
+          <div style={{ marginBottom: 10 }}>
+            <SectionHeading>On this device</SectionHeading>
+          </div>
+          <LocalPlansPanel
+            plans={local.plans}
+            onMoveToCloud={local.onMoveToCloud}
+            onImported={local.onImported}
+            readOnly={readOnly}
+          />
+          <Hr />
+        </>
+      )}
 
       <Blueprint style={{ padding: "12px 14px", maxWidth: 600 }}>
         <div style={{ fontFamily: "var(--font-heading)", fontWeight: 600, fontSize: 15 }}>

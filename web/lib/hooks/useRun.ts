@@ -20,6 +20,8 @@ export interface RunState {
   markInputsChanged: () => void; loading: boolean; error: string | undefined;
   percentile: Percentile; setPercentile: (percentile: Percentile) => void;
   start: (effort: RunEffort) => Promise<void>; cancel: () => Promise<void>;
+  /** Re-read the plan's runs: one was stored from outside (a run offloaded to the server). */
+  refresh: () => void;
 }
 interface Loaded {
   /** `home:id`: an id is only unique within its home, so the home is part of the key. */
@@ -34,6 +36,7 @@ export function useRun(scenario: Scenario | undefined, planRef: string | undefin
   useLayoutEffect(() => { activeKey.current = key; }, [key]);
   const [loaded, setLoaded] = useState<Loaded>();
   const [revision, setRevision] = useState(0);
+  const [listRevision, setListRevision] = useState(0);
   const [percentile, setPercentile] = useState<Percentile>("p50");
   const current = loaded?.key === key ? loaded : undefined;
   const history = current?.history ?? [];
@@ -53,7 +56,7 @@ export function useRun(scenario: Scenario | undefined, planRef: string | undefin
       if (live) update(key, value => ({...value, history, loading: history.some(r=>r.status === "succeeded")}));
     }).catch((e:Error)=>live && update(key,value=>({...value,error:e.message,loading:false})));
     return ()=>{live=false;};
-  },[id,home,key,update]);
+  },[id,home,key,listRevision,update]);
   // Re-read actual dependencies after every successful mutation, including edits
   // made in the same second and shared library changes. Never clear staleness on completion.
   useEffect(()=>{
@@ -102,6 +105,10 @@ export function useRun(scenario: Scenario | undefined, planRef: string | undefin
     catch(e){update(key,v=>({...v,error:e instanceof Error ? e.message:String(e)}));}
   },[id,home,key,run,update]);
   const selectRun=useCallback((selected:number)=>{if(key != null) update(key,v=>({...v,selected,error:undefined}));},[key,update]);
+  const refresh=useCallback(()=>{
+    if(key != null) update(key,v=>({...v,selected:undefined,error:undefined}));
+    setListRevision(v=>v+1);
+  },[key,update]);
   const markInputsChanged=useCallback(()=>{
     if(key != null) update(key,v=>({...v,hashPending:true}));
     setRevision(v=>v+1);
@@ -112,5 +119,5 @@ export function useRun(scenario: Scenario | undefined, planRef: string | undefin
   const results=raw && source ? toResultsData(raw,source,planAxis(source)) : undefined;
   const stale=raw != null && (current?.hashPending === true || !inputs?.input_hash || inputs.input_hash !== current?.hash);
   const loading=(current?.loading ?? id != null) || (!current?.error && selectedRunId != null && (raw?.run_id !== selectedRunId || current?.rawSeries !== percentile));
-  return {run,results,history,selectedRunId,selectRun,inputs,active,stale,markInputsChanged,loading,error:current?.error,percentile,setPercentile,start,cancel};
+  return {run,results,history,selectedRunId,selectRun,inputs,active,stale,markInputsChanged,loading,error:current?.error,percentile,setPercentile,start,cancel,refresh};
 }

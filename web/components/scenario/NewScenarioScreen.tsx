@@ -18,6 +18,7 @@ import type { Entitlements } from "@/lib/api/generated/Entitlements";
 import type { SetupPlan } from "@/lib/api/generated/SetupPlan";
 import type { Profile, Scenario, TaxConfig, UserResponse } from "@/lib/api/types";
 import { useSubmit } from "@/lib/hooks/useSubmit";
+import { PRIVACY_PROMISE } from "@/lib/local/durability";
 import { type PlanHome, planApiFor, planCapabilities } from "@/lib/nav";
 import { addYears, money, yearsBetween } from "@/lib/view/format";
 import { DescribeSetup } from "./DescribeSetup";
@@ -203,6 +204,12 @@ export function NewScenarioScreen(props: NewScenarioProps) {
   const modeSwitch = (
     <>
       {props.onHomeChange && <HomeSwitch home={props.home} onChange={props.onHomeChange} />}
+      {/* Said once, where a plan's home is chosen; each way out of it says so where it happens. */}
+      {props.home === "local" && (
+        <span className="ns-mut" style={{ flexBasis: "100%" }}>
+          {PRIVACY_PROMISE}
+        </span>
+      )}
       <ModeSwitch
         mode={mode}
         describable={describable}

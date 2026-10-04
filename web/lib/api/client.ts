@@ -11,7 +11,12 @@
  * `crates/finplan_server/src/api/mod.rs`.
  */
 import { http } from "./http";
+import type { ComputeClient } from "../local/offload";
 import type {
+  ComputeBudget,
+  ComputeRun,
+  ComputeRunCreated,
+  ComputeRunRequest,
   ContactMessageReceipt,
   CreateContactMessage,
   CreateDraft,
@@ -78,6 +83,19 @@ export const api = {
     /** Unrecoverable, and cascades to every scenario, run and session. */
     remove: (body: DeleteAccount) => http.delete("/auth/me", body),
   },
+
+  /**
+   * Server offload (spec 19): a local plan's run, sent to FinPlan's servers.
+   * Remote-only and never on a `PlanApi`: the plan leaves the device for it,
+   * so it is only reached from the explicit "Run on FinPlan servers" action.
+   */
+  compute: {
+    budget: () => http.get<ComputeBudget>("/compute/budget"),
+    create: (body: ComputeRunRequest) => http.post<ComputeRunCreated>("/compute/runs", body),
+    get: (id: number) => http.get<ComputeRun>(`/compute/runs/${id}`),
+    /** Cancels a running job; on a finished one it deletes the results. */
+    remove: (id: number) => http.delete(`/compute/runs/${id}`),
+  } satisfies ComputeClient & { budget: () => Promise<ComputeBudget> },
 
   contact: {
     submit: (body: CreateContactMessage) =>

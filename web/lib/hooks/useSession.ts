@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api/client";
 import { planApiFor } from "@/lib/nav/api";
 import { ApiError } from "@/lib/api/http";
+import { loadLocalModePolicy } from "@/lib/local/flag";
 import { serverMonitor } from "@/lib/status/monitor";
 import type { PlanArchive } from "@/lib/api/generated/PlanArchive";
 import type { UserResponse } from "@/lib/api/types";
@@ -61,7 +62,8 @@ export interface Session {
  * The signed-in user, resolved from the session cookie on mount.
  *
  * A 401 from `/auth/me` starts a guest session (spec 17) so a first visit
- * lands in the workbench. Only when that is refused — guest access off (403)
+ * lands in the workbench, unless local mode is on (spec 19): then there is no
+ * guest, and the visitor is signed out with local plans. Only when guest access is refused — guest access off (403)
  * or rate limited (429) — is it the signed-out state, which shows the sign-in
  * form as before. Every other error surfaces so a server that is down does
  * not look like a logout.
@@ -95,24 +97,37 @@ export function useSession(): Session {
           setError(err instanceof Error ? err.message : String(err));
           return;
         }
-        api.auth.guest().then(
-          (guest) => {
-            if (!current) return;
-            setUser(guest);
-            // So a later 401 still means the guest's session expired.
-            serverMonitor.sessionStarted();
-          },
-          (refused: unknown) => {
-            if (!current) return;
+        // Local mode (spec 19) retires guest sessions: plans live in this
+        // browser, so a visitor needs no server identity to start. The answer
+        // is the signed-out state, which the app opens on local plans.
+        void loadLocalModePolicy().then((local) => {
+          if (!current) return;
+          if (local) {
             setUser(null);
-            // Guest access off or rate limited: the sign-in form is the floor.
-            if (!(refused instanceof ApiError && (refused.status === 403 || refused.status === 429))) {
-              setError(refused instanceof Error ? refused.message : String(refused));
-            }
-          },
-        );
+            return;
+          }
+          startGuest();
+        });
       },
     );
+    function startGuest() {
+      api.auth.guest().then(
+        (guest) => {
+          if (!current) return;
+          setUser(guest);
+          // So a later 401 still means the guest's session expired.
+          serverMonitor.sessionStarted();
+        },
+        (refused: unknown) => {
+          if (!current) return;
+          setUser(null);
+          // Guest access off or rate limited: the sign-in form is the floor.
+          if (!(refused instanceof ApiError && (refused.status === 403 || refused.status === 429))) {
+            setError(refused instanceof Error ? refused.message : String(refused));
+          }
+        },
+      );
+    }
     return () => {
       current = false;
     };
