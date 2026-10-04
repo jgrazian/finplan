@@ -17,7 +17,7 @@ serde = { version = "1.0", features = ["derive"] }
 [profile.release]
 codegen-units = 1
 lto = "thin"
-opt-level = "s"
+opt-level = 3
 strip = true
 
 [profile.flamegraph]
