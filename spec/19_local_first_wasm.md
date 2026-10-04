@@ -1,6 +1,8 @@
 # Local-first FinPlan: plans and engine in the browser
 
-Status: proposed (2026-10-03). Third of three: [17](17_guest_access.md) guest
+Status: implemented behind the local-mode flag (2026-10-03, branch
+`local-first-wasm`); see "Implementation notes" at the end for what shipped,
+where it departs from this text, and what is left. Third of three: [17](17_guest_access.md) guest
 access, [18](18_plan_crate.md) the database-free plan crate, then this. It
 depends on 18 and retires 17's guest tier.
 
@@ -215,8 +217,11 @@ since a sweep is hundreds of runs.
 
 WASM's basic `f64` arithmetic is IEEE-exact, but transcendental functions
 (`exp`, `ln`, `powf`, used by `rand_distr`) come from different libm
-implementations natively and in WASM. So the same seed can produce slightly
-different paths on the server and in the browser. Consequences:
+implementations natively and in WASM. More decisively, the spike found that
+`rand`'s `SmallRng` is Xoshiro128++ on 32-bit targets and Xoshiro256++ on
+64-bit ones, so the same seed draws a different stream altogether in WASM. So
+the same seed produces different paths on the server and in the browser.
+Consequences:
 
 - Offloaded and local results agree statistically, not bit for bit. The
   equivalence test runs fixtures both ways and checks success rate and median
@@ -225,9 +230,10 @@ different paths on the server and in the browser. Consequences:
   engine. When a base run's `engine` differs from where the preview runs, the
   preview re-simulates the base alongside the edit, which `api/preview.rs`
   already does when the base can't be reused.
-- Making them bit-identical would mean routing every transcendental through
-  the `libm` crate, including inside `rand_distr`. Not worth it unless users
-  notice.
+- Making them bit-identical would mean naming the generator explicitly in
+  core (e.g. `ChaCha8Rng`), which changes every seeded result the server has
+  produced, and routing every transcendental through the `libm` crate,
+  including inside `rand_distr`. Not worth it unless users notice.
 
 ## Durability
 
@@ -399,6 +405,66 @@ Also learned, which phases 1-3 build on:
   store can write them; the coordinator exposes `coordinator_info` for progress
   denominators; reads are one `read(graph, library, query)` and
   `read_library(library, plans, query)` with tagged queries.
+
+## Implementation notes (2026-10-03)
+
+Phases 0–7 are built, with local mode behind `NEXT_PUBLIC_FINPLAN_LOCAL_MODE`
+or `localStorage['finplan.localMode'] = '1'` (and not refused by the server's
+`/health` `local_mode`). Nothing changes for anyone with the flag off; flipping
+the default (phase 7's rollout) is a deploy decision, not code.
+
+Where things live:
+
+- Core: the batch API in `finplan_core::simulation` (`BatchSpec`,
+  `BatchOutput`, `prepare_run`, `run_batch`, `MonteCarloCoordinator`,
+  `merge_batches`); `monte_carlo_core` runs on top of it, bit-identical to
+  before. `finplan_core::analysis::McRunner` lets sweeps and solves run on any
+  runner.
+- Plan crate: `read`, `preflight`, `archive`, `library` (`Library`,
+  `LibraryOp`, `seed()`), `edit::EditOp`, `create`, `setup`, `run` (settings
+  -> `MonteCarloConfig`, `run_cost`), `analysis`, `what_if`,
+  `review::local_review`; `RunResults` is `Deserialize`; `PlanError` carries
+  its HTTP status and code.
+- `crates/finplan_wasm`: the bindings; `scripts/build-wasm.sh` writes
+  `web/lib/engine/pkg/` (not committed; `pnpm dev`/`build` run it).
+- Server: `/compute/runs` and `/compute/budget` (`api/compute*`,
+  `runner/compute.rs`, migrations 0020–0021), `FINPLAN_LOCAL_MODE` on
+  `/health`, `default_plan_home`, offload budgets `FINPLAN_OFFLOAD_BUDGET_FREE`
+  (20M cost units/month) and `_PRO` (1B) — placeholders for open question 2.
+- Web: `lib/api/{plan,remote,local}.ts` (the `PlanApi` seam), `lib/nav`
+  (`l<id>` refs, `usePlanApi`, `usePlanCapabilities`), `lib/engine/` (store
+  worker, IndexedDB, nested compute workers, coordinator, calibration, local
+  backend), `lib/local/` (flag, runtime contract, durability, estimates,
+  offload), `components/local/` (home badge, move/download/export dialogs).
+
+Departures from the text above:
+
+- Offload refuses every guest, and is capped by `FINPLAN_MAX_ITERATIONS`
+  rather than the tier's iteration cap: the budget is the limit.
+- A constrained device (≤ 2 cores, low memory) is offered the server only when
+  the estimate is 10 s or more, not on every run. The "about N s" on the
+  server is the local estimate over an assumed 8× speedup.
+- `/health` is now JSON (`status`, `local_mode`, `model_version`).
+- Local review shows rule-based notes and can apply them; Preview on a local
+  note is hidden (no local re-simulation of a note's path yet).
+
+Left to do:
+
+- Local analyses run on one compute worker, and progress only moves between
+  simulations: a default sweep (36 points × 250 iterations) took about 122 s
+  with the bar at 0%. Farm analysis points across the pool.
+- Browser-checked once in headless Chrome (create, edit, run, results, ledger,
+  second tab, review, quick what-if). Export/import, cancel and converging
+  runs in a browser, Safari, and the IndexedDB store under test are not yet
+  covered (Node tests use the in-memory store).
+- PWA icons are SVG only; some browsers want 192/512 PNGs before offering
+  install. The service worker is untested beyond a production build.
+- A guest whose plans were imported locally but whose tab closed before the
+  logout is imported again on the next visit (no marker).
+- No run-history badge for server-computed runs: the generated `Run` has no
+  engine field.
+- The cloud offload's `/compute/analyses` (sweeps on the server for local
+  plans) is not built.
 
 ## Open questions
 

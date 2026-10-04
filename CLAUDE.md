@@ -8,6 +8,7 @@ cargo run --bin finplan # Run the TUI
 cargo run --bin finplan-server # Run the API server
 cargo test              # Run all tests
 cargo fmt               # Format code (REQUIRED before commits)
+./scripts/build-wasm.sh # Browser engine -> web/lib/engine/pkg (pnpm dev/build run it)
 ```
 
 IMPORTIANT:
@@ -24,14 +25,17 @@ finplan/
 │   ├── finplan_core/   # Simulation engine library (~2500 LOC)
 │   ├── finplan_plan/   # Plan model: graph, specs, edits, compile, results (no I/O, builds for wasm32)
 │   ├── finplan/        # Terminal UI application (~2600 LOC)
-│   └── finplan_server/ # HTTP API server, SQLite-backed; depends on finplan_plan
+│   ├── finplan_server/ # HTTP API server, SQLite-backed; depends on finplan_plan
+│   └── finplan_wasm/   # wasm-bindgen layer over finplan_plan + core for local plans (spec 19)
 ├── spec/               # Detailed specifications
-├── scripts/            # gen-bindings.sh
+├── scripts/            # gen-bindings.sh, build-wasm.sh
 └── web/                # Next.js frontend
     ├── lib/api/generated/  # ts-rs output — never edit, run gen-bindings.sh
-    ├── lib/api/            # typed client over those bindings
+    ├── lib/api/            # typed client over those bindings; `PlanApi` = remote or local home
     ├── lib/view/           # API shapes -> screen view models
-    ├── lib/nav/            # the query string as app state (scenario/tab/row)
+    ├── lib/nav/            # the query string as app state (scenario/tab/row); `l<id>` = local plan
+    ├── lib/engine/         # local plans: store worker, IndexedDB, compute workers (pkg/ is built, not committed)
+    ├── lib/local/          # local mode flag, runtime contract, durability, estimates, offload
     └── components/         # presentational components
 ```
 
