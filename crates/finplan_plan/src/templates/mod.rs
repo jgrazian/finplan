@@ -453,8 +453,9 @@ pub struct RothConversionsParams {
     pub pay_tax_from_account_id: Option<RowRef>,
 }
 
-/// The age RMDs begin at (SECURE 2.0, born 1951-1959): a template's default
-/// end for conversions.
+/// The age RMDs begin at for someone born 1951-1959: the default end for
+/// conversions expanded without a plan. Against a plan, the end follows the
+/// birth year ([`crate::rules::rmd_age`]: 75 from 1960).
 pub const RMD_AGE: u8 = 73;
 
 /// The month and day a conversion template fires. Not Dec 31: the engine
@@ -1273,7 +1274,9 @@ impl RothConversionsParams {
                 }
             };
         let date = match &self.start {
-            Some(When::Date { .. }) => return Ok(self),
+            Some(When::Date { on_date }) => on_date
+                .parse()
+                .map_err(|_| TemplateError::new("dates are written YYYY-MM-DD"))?,
             Some(When::Age { years, months }) => {
                 at_age(i64::from(*years), i64::from(months.unwrap_or(0)))?
             }
@@ -1306,6 +1309,16 @@ impl RothConversionsParams {
         self.start = Some(When::Date {
             on_date: date.to_string(),
         });
+        // RMDs begin at 73 or 75 by birth year; stop the year before.
+        if self.end.is_none()
+            && let Some(birth) = graph
+                .scenario
+                .birth_date
+                .as_deref()
+                .and_then(|d| d.parse::<jiff::civil::Date>().ok())
+        {
+            self.end = Some(When::age(crate::rules::rmd_age(i64::from(birth.year()))));
+        }
         Ok(self)
     }
 }

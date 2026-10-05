@@ -15,8 +15,13 @@ import type { Account, AmountSpec, EffectSpec, EventBody, NamedParameter, Trigge
  */
 export const CONVERSION_DAY = "12-30";
 
-/** RMDs begin at 73 (born 1951–1959): conversions stop the year before. */
-export const RMD_AGE = 73;
+/**
+ * The age RMDs begin at: 73 for those born 1951–1959, 75 from 1960. Mirrors
+ * `rules::rmd_age`; conversions stop the year before.
+ */
+export function rmdAge(birthYear: number): number {
+  return birthYear >= 1960 ? 75 : 73;
+}
 
 /** The brackets the dialog offers to fill to. */
 export const CEILINGS = [0.1, 0.12, 0.22, 0.24, 0.32] as const;
@@ -105,7 +110,7 @@ export function conversionDefaults({
     toAccountId: largest(to).id,
     ceilingRate: 0.22,
     startYear: Math.max(startYear, retires ?? startYear),
-    untilAge: RMD_AGE,
+    untilAge: rmdAge(birthYear),
     payTaxFromAccountId: payer?.id ?? null,
   };
 }

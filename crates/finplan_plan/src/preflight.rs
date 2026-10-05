@@ -214,7 +214,8 @@ fn roth_conversion_candidate(g: &ScenarioGraph) -> Option<(String, i64)> {
         .as_deref()?
         .parse::<jiff::civil::Date>()
         .ok()?;
-    let first_rmd_year = i64::from(birth.year()) + i64::from(crate::templates::RMD_AGE);
+    let first_rmd_year =
+        i64::from(birth.year()) + i64::from(crate::rules::rmd_age(i64::from(birth.year())));
     if first_rmd_year >= i64::from(start.year()) + g.scenario.duration_years {
         return None;
     }
@@ -269,10 +270,10 @@ mod tests {
 
     #[test]
     fn a_pre_tax_balance_with_rmds_inside_the_plan_suggests_conversions() {
-        // Born 1996, the plan runs to 2096: RMDs begin in 2069.
+        // Born 1996, the plan runs to 2096: RMDs begin at 75, in 2071.
         let g = default_plan();
         let message = candidate(&g).expect("a note");
-        assert!(message.contains("Fidelity 401(k)") && message.contains("2069"));
+        assert!(message.contains("Fidelity 401(k)") && message.contains("2071"));
         assert!(preflight(&g).can_run);
     }
 

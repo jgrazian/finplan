@@ -82,7 +82,8 @@ test("the dialog's defaults: largest pre-tax into largest Roth, 22%, from retire
   assert.equal(choice.payTaxFromAccountId, 4);
   // 55 years 6 months past September 1975 is March 2031.
   assert.equal(choice.startYear, 2031);
-  assert.equal(choice.untilAge, 73);
+  // Born 1975: RMDs begin at 75.
+  assert.equal(choice.untilAge, 75);
 
   // No retirement parameter: the plan's first year; no taxable account: a bank.
   const plain = conversionDefaults({
