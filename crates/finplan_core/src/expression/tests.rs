@@ -1084,3 +1084,74 @@ fn initialization_validates_expressions_in_nested_amounts_and_random_branches() 
             .contains("parameter")
     );
 }
+
+/// `source` against the fixture with a 15k standard deduction and `ytd` of
+/// ordinary income so far, in tax year `year` (the fixture inflates 10% a
+/// year, so later years' brackets are indexed).
+fn bracket_room(source: &str, ytd: f64, year: i16) -> Result<f64, ExpressionError> {
+    let (mut config, metadata) = fixture();
+    config.tax_config.standard_deduction = 15_000.0;
+    let mut state = SimulationState::from_parameters(&config, 42).unwrap();
+    state.index_federal_brackets(year);
+    state.taxes.ytd_tax.ordinary_income = ytd;
+    Expression::compile(source, &metadata, &config.parameters)?
+        .bind_parameters(&config.parameters, config.birth_date)?
+        .evaluate(&EvaluationContext::new(&state))
+}
+
+#[test]
+fn bracket_room_is_the_ceiling_less_income_so_far() {
+    // The 22% bracket ends at 100,525 taxable: 115,525 gross with the
+    // standard deduction as a 0% band.
+    let room = bracket_room("bracket_room(0.22)", 0.0, 2025).unwrap();
+    assert!((room - 115_525.0).abs() < 1e-6);
+    let room = bracket_room("bracket_room(22%)", 40_000.0, 2025).unwrap();
+    assert!((room - 75_525.0).abs() < 1e-6);
+    // Floors at zero above the ceiling.
+    assert_eq!(
+        bracket_room("bracket_room(0.22)", 200_000.0, 2025).unwrap(),
+        0.0
+    );
+    // The 0% band is the deduction alone.
+    let room = bracket_room("bracket_room(0)", 5_000.0, 2025).unwrap();
+    assert!((room - 10_000.0).abs() < 1e-6);
+}
+
+#[test]
+fn bracket_room_reads_the_indexed_brackets_and_follows_a_parameter() {
+    let (config, _) = fixture();
+    let state = SimulationState::from_parameters(&config, 42).unwrap();
+    let factor = state.portfolio.market.inflation_factor_at_year(1);
+    assert!(factor > 1.0);
+    let room = bracket_room("bracket_room(0.22)", 0.0, 2026).unwrap();
+    assert!((room - 115_525.0 * factor).abs() < 1e-6);
+    // $WithdrawalRate is a 20% Rate parameter: the highest bracket taxed at
+    // or below it is 12%, which ends at 47,150.
+    let room = bracket_room("bracket_room($WithdrawalRate)", 0.0, 2025).unwrap();
+    assert!((room - 62_150.0).abs() < 1e-6);
+}
+
+#[test]
+fn bracket_room_takes_a_rate_and_renders_back() {
+    let (config, metadata) = fixture();
+    let error = Expression::compile(
+        "bracket_room(balance(\"Vanguard\"))",
+        &metadata,
+        &config.parameters,
+    )
+    .unwrap_err();
+    assert!(error.message.contains("rate"), "{error}");
+    let amount = compile_amount(
+        "min(bracket_room(0.24), 50000)",
+        &metadata,
+        &config.parameters,
+    )
+    .unwrap()
+    .amount;
+    assert_eq!(
+        amount.to_source(&metadata).unwrap(),
+        "min(bracket_room(0.24), 50000)"
+    );
+    // Unbounded above the top rate is an error, not an infinite amount.
+    assert!(bracket_room("bracket_room(0.5)", 0.0, 2025).is_err());
+}

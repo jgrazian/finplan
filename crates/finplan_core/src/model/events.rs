@@ -442,6 +442,26 @@ pub enum EventEffect {
         lot_method: LotMethod,
     },
 
+    // === Roth Conversions ===
+    /// Move pre-tax money into a Roth: the source's cash first, then its
+    /// holdings in kind (oldest lots first, at the same units), capped at
+    /// what the account holds. The market value converted is ordinary
+    /// income, with no early-withdrawal penalty. Skipped, with a warning, in
+    /// a year `from` owes an RMD that has not been taken.
+    RothConversion {
+        /// Tax-deferred account converted from.
+        from: AccountId,
+        /// Tax-free account converted into.
+        to: AccountId,
+        /// Gross amount to convert, e.g. `bracket_room(0.22)` or a fixed sum.
+        amount: TransferAmount,
+        /// Account whose cash or holdings pay the tax (a bank, or a taxable
+        /// investment account); None = withhold it from the conversion,
+        /// which before 59½ is an early distribution and pays the penalty.
+        #[serde(default)]
+        pay_tax_from: Option<AccountId>,
+    },
+
     // === Stochastic Effects ===
     /// Randomly execute one of two effects based on a probability threshold
     /// Useful for modeling uncertain events like job loss, medical expenses, inheritance, etc.

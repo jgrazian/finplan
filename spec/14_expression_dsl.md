@@ -82,6 +82,7 @@ provide unambiguous names for the compiler.
 | `years_since_start()` | Elapsed simulated days / 365.2425 |
 | `days_until("2035-01-01")` / `days_until($DateParameter)` | Signed days from the current simulation date to the given date |
 | `years_until(date)` | Signed days until the date / 365.2425 |
+| `bracket_room(rate)` | Ordinary income left this year before the marginal federal rate rises above `rate`: the top of the highest bracket taxed at or below it (indexed, standard deduction folded in as a 0% band), less year-to-date ordinary income, floored at 0. `rate` is a scalar or a Rate parameter; an error when no bracket is taxed above it |
 
 Balance functions use the engine's existing valuation rules. In particular, a
 known asset with no lots in an investment account has value zero. Inflation is
@@ -112,6 +113,7 @@ disagree with the actual transfer.
 | Sweep from one account/asset | Selected account; asset endpoint only for single-asset selection | Destination cash account |
 | Sweep using a strategy/custom list | Unavailable (no single source) | Destination cash account |
 | Balance adjustment | Unavailable | Adjusted account |
+| Roth conversion | The converted-from account (account-wide, like a single-account sweep) | The Roth's cash |
 
 `balance(source)` always means the whole containing account. For an asset sale,
 `source_balance()` means the selected holding if one is specified. An account-wide

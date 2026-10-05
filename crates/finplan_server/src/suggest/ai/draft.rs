@@ -56,7 +56,6 @@ use crate::documents::store::DocumentPage;
 use crate::observability::{AiTool, AiToolOutcome};
 use finplan_plan::rules::{Evidence, Kind, Section};
 use finplan_plan::suggest::{Change, ChangeProblem, ChangeTarget};
-use finplan_plan::templates::TemplateRequest;
 
 /// Questions a whole draft may ask.
 pub const MAX_QUESTIONS: usize = 3;
@@ -1257,30 +1256,9 @@ impl Session<'_> {
 
     fn expand_template(&self, input: &Value) -> Served {
         let tool = AiTool::ExpandTemplate;
-        let invalid = |message: String| Served::error(message, tool, AiToolOutcome::Invalid);
-        let Some(kind) = input.get("kind").and_then(Value::as_str) else {
-            return invalid("kind is required".into());
-        };
-        let mut request = match input.get("params") {
-            Some(Value::Object(map)) => map.clone(),
-            Some(Value::Null) | None => serde_json::Map::new(),
-            Some(_) => return invalid("params is an object".into()),
-        };
-        request.insert("kind".into(), json!(kind));
-        request.insert(
-            "key_prefix".into(),
-            input.get("key_prefix").cloned().unwrap_or(json!("")),
-        );
-        let request: TemplateRequest = match serde_json::from_value(Value::Object(request)) {
-            Ok(r) => r,
-            Err(e) => return invalid(format!("the {kind} parameters do not read: {e}")),
-        };
-        match request.expand() {
-            Ok(expansion) => match serde_json::to_string(&expansion) {
-                Ok(text) => Served::ok(text, tool),
-                Err(e) => invalid(e.to_string()),
-            },
-            Err(e) => invalid(e.to_string()),
+        match crate::suggest::ai::tools::templates::run(input) {
+            Ok(expansion) => Served::ok(expansion.to_string(), tool),
+            Err(message) => Served::error(message, tool, AiToolOutcome::Invalid),
         }
     }
 

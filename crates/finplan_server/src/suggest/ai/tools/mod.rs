@@ -34,6 +34,7 @@ mod runs;
 pub mod sensitivity;
 pub mod social_security;
 pub mod taxes;
+pub mod templates;
 
 use finplan_core::model::TaxConfig;
 use serde_json::{Value, json};
@@ -251,6 +252,7 @@ pub const ESTIMATE_TAXES: &str = "estimate_taxes";
 pub const GOAL_SEEK: &str = "goal_seek";
 pub const CASH_FLOW_BREAKDOWN: &str = "cash_flow_breakdown";
 pub const SENSITIVITY: &str = "sensitivity";
+pub const EXPAND_TEMPLATE: &str = "expand_template";
 
 /// Every shared tool, in the order the model sees them.
 pub const SPECS: &[ToolSpec] = &[
@@ -345,6 +347,13 @@ pub const SPECS: &[ToolSpec] = &[
         group: Group::Plan,
         metric: AiTool::Sensitivity,
     },
+    ToolSpec {
+        name: EXPAND_TEMPLATE,
+        description: "Lower a plain fact to the plan changes that write it, with the `$new` keys they create: a salary, an employer match, recurring spending, retirement, a home purchase, Social Security, a stress event, or yearly Roth conversions (roth_conversions: every Dec 30 from a start date's year, up to the top of a chosen bracket, until the RMD age unless an end is given). Use the changes as a path's steps (adjusting them if needed), then validate and preview the path. Free.",
+        schema: templates::schema,
+        group: Group::Calculators,
+        metric: AiTool::ExpandTemplate,
+    },
 ];
 
 /// A set of the shared tools a loop serves.
@@ -430,6 +439,7 @@ impl Registry {
             GOAL_SEEK => goal_seek::run(input, env).await,
             REFERENCE_FACTS => ToolOutput::from_result(facts::run(input)),
             FINANCE_CALC => ToolOutput::from_result(calc::run(input)),
+            EXPAND_TEMPLATE => ToolOutput::from_result(templates::run(input)),
             ESTIMATE_SOCIAL_SECURITY => ToolOutput::from_result(social_security::run(input)),
             ESTIMATE_TAXES => {
                 ToolOutput::from_result(taxes::run(input, env.host.plan_tax_config().as_ref()))

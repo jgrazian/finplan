@@ -635,6 +635,7 @@ pub enum EffectTypeContext {
     ApplyRmd,
     AdjustBalance,
     CashTransfer,
+    RothConversion,
     Random,
     RsuVesting,
 }
@@ -656,6 +657,7 @@ impl FromStr for EffectTypeContext {
             "ApplyRmd" | "Apply RMD" => Ok(Self::ApplyRmd),
             "AdjustBalance" | "Adjust Balance" => Ok(Self::AdjustBalance),
             "CashTransfer" | "Cash Transfer" => Ok(Self::CashTransfer),
+            "RothConversion" | "Roth Conversion" => Ok(Self::RothConversion),
             "Random" => Ok(Self::Random),
             "RsuVesting" | "RSU Vesting" => Ok(Self::RsuVesting),
             _ => Err(()),
@@ -678,6 +680,7 @@ impl EffectTypeContext {
             Self::ApplyRmd => "Apply RMD",
             Self::AdjustBalance => "Adjust Balance",
             Self::CashTransfer => "Cash Transfer",
+            Self::RothConversion => "Roth Conversion",
             Self::Random => "Random",
             Self::RsuVesting => "RSU Vesting",
         }

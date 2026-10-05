@@ -717,6 +717,20 @@ impl EventsScreen {
                     Self::format_amount(amount)
                 )
             }
+            EffectData::RothConversion {
+                from,
+                to,
+                amount,
+                pay_tax_from,
+            } => format!(
+                "Convert \"{}\" to Roth \"{}\": {} (tax {})",
+                from.0,
+                to.0,
+                Self::format_amount(amount),
+                pay_tax_from
+                    .as_ref()
+                    .map_or("withheld".to_string(), |t| format!("from \"{}\"", t.0))
+            ),
             EffectData::Random {
                 probability,
                 on_true,

@@ -108,6 +108,19 @@ impl TransferAmount {
         Self::fixed(value).inflated()
     }
 
+    /// `bracket_room(rate)`: ordinary income left this year before the
+    /// marginal federal rate rises above `rate`.
+    #[must_use]
+    pub fn bracket_room(rate: f64) -> Self {
+        Self::leaf(Op::Literal(rate, SCALAR)).unary(Op::BracketRoom)
+    }
+
+    /// `bracket_room($Rate)` with a Rate parameter, so the ceiling sweeps.
+    #[must_use]
+    pub fn bracket_room_parameter(id: ParameterId) -> Self {
+        Self::leaf(Op::Parameter(id, SCALAR)).unary(Op::BracketRoom)
+    }
+
     /// Multiply a money amount by a scalar factor.
     #[must_use]
     pub fn scaled(factor: f64, amount: Self) -> Self {

@@ -23,6 +23,13 @@ import { useNav } from "@/lib/nav";
 import type { AssumptionChoices, PlanEvent, ScenarioParams } from "@/lib/types";
 import type { PlanAxis } from "@/lib/view/axis";
 import { ParameterEditor, ParameterRail, blankParameterValue } from "@/components/plan/Parameters";
+import { RothConversionDialog } from "@/components/plan/RothConversionDialog";
+import {
+  type ConversionChoice,
+  conversionDefaults,
+  conversionEvent,
+  conversionUnavailable,
+} from "@/lib/view/conversion";
 
 /**
  * What Add event makes: a yearly repeat that does nothing yet.
@@ -273,6 +280,34 @@ export function PlanScreen({
     }
   };
 
+  /**
+   * "Add Roth conversions": the template's yearly Dec 30 event, made from the
+   * dialog's choices and opened in the editor like any other event.
+   */
+  const [converting, setConverting] = useState<ConversionChoice>();
+  const conversionBlocked = conversionUnavailable(raw.accounts);
+  const openConversions = () => {
+    const initial = conversionDefaults({
+      accounts: raw.accounts,
+      parameters,
+      start: params.start,
+      birthDate: params.birthDate,
+    });
+    if (!initial) return;
+    setConverting({ ...initial, name: freeName(initial.name, raw.events) });
+  };
+  const addConversions = (choice: ConversionChoice) => {
+    const name = freeName(choice.name, raw.events);
+    editing.run(
+      () => api.events.create(scenarioId, conversionEvent({ ...choice, name })),
+      () => {
+        setConverting(undefined);
+        openEvent(name);
+        onChanged();
+      },
+    );
+  };
+
   const addParameter = (kind: ReturnType<typeof blankParameterValue>["kind"]) => {
     const names = new Set(parameters.map((p) => p.name));
     let name = `New ${kind}`;
@@ -355,6 +390,16 @@ export function PlanScreen({
             >
               {isMobile ? "+" : "Add"}
             </Button>
+            {railMode === "events" && (
+              <Button
+                variant="ghost"
+                onClick={openConversions}
+                disabled={offline || editing.busy || conversionBlocked != null}
+                title={offline ? "No connection to the server." : conversionBlocked ?? undefined}
+              >
+                {isMobile ? "Roth" : "Add Roth conversions"}
+              </Button>
+            )}
           </div>
           <div className="plan-rail-list">
             {railMode === "events" ? (
@@ -432,6 +477,16 @@ export function PlanScreen({
         onSelect={selectEvent}
       />}
 
+      {converting && (
+        <RothConversionDialog
+          accounts={raw.accounts}
+          initial={converting}
+          busy={editing.busy}
+          error={editing.error}
+          onClose={() => setConverting(undefined)}
+          onSubmit={addConversions}
+        />
+      )}
       {deletingScenario && onScenarioDeleted && (
         <DeleteScenarioDialog
           scenario={{ id: scenarioId, name: params.name }}

@@ -291,6 +291,54 @@ impl LedgerPanel {
                     .unwrap_or("Unknown");
                 format!("{}: Withdraw {} of cash", name, format_currency(*amount))
             }
+            StateEvent::AssetLotMoved {
+                from,
+                to,
+                units,
+                value,
+                ..
+            } => {
+                let name = |id| {
+                    account_names
+                        .get(id)
+                        .map(|s| s.as_str())
+                        .unwrap_or("Unknown")
+                };
+                format!(
+                    "Move {:.2} units ({}) from {} to {}",
+                    units,
+                    format_currency(*value),
+                    name(from),
+                    name(to)
+                )
+            }
+            StateEvent::RothConversion {
+                from,
+                to,
+                amount,
+                tax,
+                withheld,
+            } => {
+                let name = |id| {
+                    account_names
+                        .get(id)
+                        .map(|s| s.as_str())
+                        .unwrap_or("Unknown")
+                };
+                let withheld = if *withheld > 0.0 {
+                    format!(", {} withheld", format_currency(*withheld))
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Roth conversion: {} from {} to {} (tax {}{})",
+                    format_currency(*amount),
+                    name(from),
+                    name(to),
+                    format_currency(*tax),
+                    withheld
+                )
+            }
             StateEvent::IncomeTax {
                 gross_amount,
                 federal_tax,

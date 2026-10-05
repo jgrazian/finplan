@@ -375,3 +375,148 @@ fn two_expansions_without_a_prefix_collide_on_their_keys() {
     );
     f.apply(&[f.base(), namespaced]).unwrap();
 }
+
+/// The base plan plus a Roth, `roth`.
+fn with_roth(f: &Fixture) -> Vec<Change> {
+    let mut base = f.base();
+    base.push(investment_account(
+        "roth",
+        "Roth IRA",
+        "TaxFree",
+        RowRef::Id(f.profile),
+        None,
+        vec![],
+    ));
+    base
+}
+
+#[test]
+fn roth_conversions_fire_each_dec_30_until_rmds_and_go_last() {
+    let f = Fixture::new();
+    let expansion = request(json!({
+        "kind": "roth_conversions", "key_prefix": "conv_",
+        "from_account_id": {"$new": "k401"}, "to_account_id": {"$new": "roth"},
+        "ceiling_rate": 0.22, "pay_tax_from_account_id": {"$new": "checking"},
+        "start": {"kind": "Date", "on_date": "2030-06-15"},
+    }))
+    .expand()
+    .unwrap();
+    let rent = request(json!({"kind": "recurring_expense", "key_prefix": "rent_",
+        "name": "Rent", "from_account_id": {"$new": "checking"}, "amount": 2000}))
+    .expand()
+    .unwrap();
+    let g = f
+        .apply(&[with_roth(&f), rent.changes, expansion.changes])
+        .unwrap_or_else(|p| panic!("{p:?}"));
+
+    let conversions = event(&g, "Roth conversions");
+    assert_eq!(
+        g.events.iter().max_by_key(|e| e.sort_order).unwrap().name,
+        "Roth conversions"
+    );
+    let trigger = serde_json::to_value(&conversions.trigger).unwrap();
+    assert_eq!(trigger["interval"], "Yearly");
+    assert_eq!(trigger["start_condition"]["on_date"], "2030-12-30");
+    assert_eq!(trigger["end_condition"]["kind"], "Age");
+    assert_eq!(trigger["end_condition"]["years"], 73);
+    let effect = serde_json::to_value(&conversions.effects[0]).unwrap();
+    assert_eq!(effect["kind"], "RothConversion");
+    assert_eq!(effect["amount"]["source"], "bracket_room(22%)");
+    let checking = g.accounts.iter().find(|a| a.name == "Checking").unwrap().id;
+    assert_eq!(effect["pay_tax_from_account_id"], checking);
+
+    // It compiles and runs: the first conversion is on Dec 30, 2030.
+    let compiled = crate::compile::compile(&g).expect("the plan compiles");
+    let result = finplan_core::simulation::simulate(&compiled.config, 1).unwrap();
+    assert!(result.ledger.iter().any(|e| matches!(
+        e.event,
+        finplan_core::model::StateEvent::RothConversion { .. }
+    ) && e.date == jiff::civil::date(2030, 12, 30)));
+}
+
+#[test]
+fn roth_conversions_start_from_the_plan_when_expanded_against_it() {
+    let f = Fixture::new();
+    let mut g = f.apply(&[with_roth(&f)]).unwrap();
+    let params = |start: Option<When>| RothConversionsParams {
+        name: None,
+        from_account_id: RowRef::Id(1),
+        to_account_id: RowRef::Id(2),
+        ceiling_rate: 0.12,
+        start,
+        end: None,
+        pay_tax_from_account_id: None,
+    };
+    let start = |p: RothConversionsParams| match p.start {
+        Some(When::Date { on_date }) => on_date,
+        other => panic!("{other:?}"),
+    };
+
+    // No retirement parameter: the plan's first year.
+    assert_eq!(start(params(None).for_plan(&g).unwrap()), "2026-09-03");
+    // An age: the day it is reached (born 1996-01-01).
+    assert_eq!(
+        start(params(Some(When::age(55))).for_plan(&g).unwrap()),
+        "2051-01-01"
+    );
+    // The retirement-age parameter, by default and by id.
+    g.parameters.push(crate::graph::ParameterRow {
+        id: 900,
+        name: "Retirement age".into(),
+        kind: "Age".into(),
+        number_value: None,
+        date_value: None,
+        age_years: Some(50),
+        age_months: Some(6),
+    });
+    assert_eq!(start(params(None).for_plan(&g).unwrap()), "2046-07-01");
+    let by_id = params(Some(When::AgeParameter {
+        parameter_id: RowRef::Id(900),
+    }));
+    assert_eq!(start(by_id.for_plan(&g).unwrap()), "2046-07-01");
+    // A date is kept as given.
+    let dated = params(Some(When::Date {
+        on_date: "2040-01-01".into(),
+    }));
+    assert_eq!(start(dated.for_plan(&g).unwrap()), "2040-01-01");
+}
+
+#[test]
+fn roth_conversion_parameters_are_checked() {
+    let bad = |value: Value| request(value).expand().unwrap_err().to_string();
+    let date = json!({"kind": "Date", "on_date": "2030-01-01"});
+    assert!(
+        bad(
+            json!({"kind": "roth_conversions", "from_account_id": 1, "to_account_id": 2,
+                   "ceiling_rate": 22, "start": date})
+        )
+        .contains("between 0 and 1")
+    );
+    assert!(
+        bad(
+            json!({"kind": "roth_conversions", "from_account_id": 1, "to_account_id": 1,
+                   "ceiling_rate": 0.22, "start": date})
+        )
+        .contains("two accounts")
+    );
+    assert!(
+        bad(
+            json!({"kind": "roth_conversions", "from_account_id": 1, "to_account_id": 2,
+                   "ceiling_rate": 0.22, "start": {"kind": "Age", "years": 60}})
+        )
+        .contains("against the plan")
+    );
+}
+
+#[test]
+fn a_conversion_into_an_account_that_is_not_a_roth_does_not_apply() {
+    let f = Fixture::new();
+    let expansion = request(json!({
+        "kind": "roth_conversions",
+        "from_account_id": {"$new": "k401"}, "to_account_id": {"$new": "checking"},
+        "ceiling_rate": 0.22, "start": {"kind": "Date", "on_date": "2030-01-01"},
+    }))
+    .expand()
+    .unwrap();
+    assert!(f.apply(&[with_roth(&f), expansion.changes]).is_err());
+}

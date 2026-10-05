@@ -3388,7 +3388,7 @@ async fn a_loop_can_serve_a_subset_of_the_registry() {
         tools::Registry::group(tools::Group::Calculators)
             .names()
             .len(),
-        4
+        5
     );
     assert!(tools::Registry::all().contains("validate_changes"));
     assert!(

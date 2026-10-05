@@ -430,6 +430,107 @@ fn deleting_an_account_drops_it_from_the_funding_excludes() {
     assert!(graph.scenario.funding_strategy.is_some());
 }
 
+/// A yearly Dec 30 conversion in the default plan: Fidelity 401(k) (3) into
+/// Vanguard Roth IRA (2), the tax paid from `pay`.
+fn conversion(pay: serde_json::Value) -> EventBody {
+    body(json!({
+        "name": "Roth conversions",
+        "trigger": {"kind": "Repeating", "interval": "Yearly",
+                    "start_condition": {"kind": "Date", "on_date": "2030-12-30"},
+                    "end_condition": {"kind": "Age", "years": 73}},
+        "effects": [{"kind": "RothConversion", "from_account_id": 3, "to_account_id": 2,
+                     "amount": {"kind": "Expression", "source": "bracket_room(0.22)"},
+                     "pay_tax_from_account_id": pay}],
+    }))
+}
+
+#[test]
+fn a_roth_conversion_round_trips_through_edit_read_compile_and_archive() {
+    let mut graph = default_graph();
+    let id = create_event(&mut graph, &conversion(json!(6))).unwrap();
+
+    // Read back as written.
+    let read = events::read_event(&graph, id).unwrap();
+    let effect = serde_json::to_value(&read.effects[0]).unwrap();
+    assert_eq!(
+        effect,
+        json!({"kind": "RothConversion", "from_account_id": 3, "to_account_id": 2,
+               "amount": {"kind": "Expression", "source": "bracket_room(0.22)"},
+               "pay_tax_from_account_id": 6})
+    );
+
+    // Compiled to the engine's effect, with the engine's ids.
+    let compiled = compile::compile(&graph).unwrap();
+    let event = compiled
+        .config
+        .events
+        .iter()
+        .find(|e| compiled.id_map.event_db_id(e.event_id) == Some(id))
+        .unwrap();
+    let finplan_core::model::EventEffect::RothConversion {
+        from,
+        to,
+        pay_tax_from,
+        ..
+    } = &event.effects[0]
+    else {
+        panic!("{:?}", event.effects[0]);
+    };
+    assert_eq!(compiled.id_map.account_db_id(*from), Some(3));
+    assert_eq!(compiled.id_map.account_db_id(*to), Some(2));
+    assert_eq!(
+        pay_tax_from.and_then(|p| compiled.id_map.account_db_id(p)),
+        Some(6)
+    );
+
+    // Through an archive and back.
+    let unpacked = crate::archive::unpack(&crate::archive::pack(vec![graph.clone()]).unwrap())
+        .unwrap()
+        .remove(0);
+    crate::archive::validate_graph(&unpacked).unwrap();
+    let again = events::read_event(&unpacked, id).unwrap();
+    assert_eq!(serde_json::to_value(&again.effects[0]).unwrap(), effect);
+
+    // Withheld: no payer.
+    let mut withheld = conversion(json!(null));
+    withheld.name = "Withheld conversions".into();
+    let id = create_event(&mut graph, &withheld).unwrap();
+    let read = events::read_event(&graph, id).unwrap();
+    assert!(serde_json::to_value(&read.effects[0]).unwrap()["pay_tax_from_account_id"].is_null());
+
+    // The payer is in use: deleting it is refused.
+    let err = refused(&mut graph, |g| delete_account(g, 6));
+    assert!(matches!(&err, PlanError::Conflict(_)), "{err}");
+}
+
+#[test]
+fn a_roth_conversion_converts_pre_tax_into_a_roth_and_pays_from_cash() {
+    let mut graph = default_graph();
+    let with = |from: i64, to: i64, pay: serde_json::Value| {
+        let mut b = conversion(pay.clone());
+        b.effects[0] = serde_json::from_value(json!({
+            "kind": "RothConversion", "from_account_id": from, "to_account_id": to,
+            "amount": {"kind": "Fixed", "value": 10000.0}, "pay_tax_from_account_id": pay,
+        }))
+        .unwrap();
+        b
+    };
+    for (from, to, pay, says) in [
+        (1, 2, json!(null), "tax-deferred"),
+        (3, 6, json!(null), "tax-free"),
+        (3, 1, json!(null), "tax-free"),
+        (3, 2, json!(4), "bank or taxable"),
+    ] {
+        let err = refused(&mut graph, |g| create_event(g, &with(from, to, pay)));
+        assert!(
+            matches!(&err, PlanError::Invalid(m) if m.contains(says)),
+            "{from}->{to}: {err}"
+        );
+    }
+    // A taxable payer is fine.
+    create_event(&mut graph, &with(3, 2, json!(1))).unwrap();
+}
+
 #[test]
 fn set_funding_runs_through_the_edit_entry_point() {
     let mut graph = default_graph();

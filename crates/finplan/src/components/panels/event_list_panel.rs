@@ -329,6 +329,16 @@ impl EventListPanel {
                     Self::format_amount_short(amount)
                 )
             }
+            EffectData::RothConversion {
+                from, to, amount, ..
+            } => {
+                format!(
+                    "Roth {} -> {}: {}",
+                    from.0,
+                    to.0,
+                    Self::format_amount_short(amount)
+                )
+            }
             EffectData::Random {
                 probability,
                 on_true,

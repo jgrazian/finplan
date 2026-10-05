@@ -995,6 +995,40 @@ fn build_amount(
 
 // ── effects ─────────────────────────────────────────────────────────────────
 
+/// A Roth conversion converts a tax-deferred account into a tax-free one,
+/// and its tax, when not withheld, is paid by a bank or taxable account.
+/// Checked when the plan compiles and when an edit writes the effect.
+pub fn check_roth_conversion(
+    graph: &ScenarioGraph,
+    from: i64,
+    to: i64,
+    pay_tax_from: Option<i64>,
+) -> PlanResult<()> {
+    let status = |id: i64| graph.investment.get(&id).map(|i| i.tax_status.as_str());
+    if status(from) != Some("TaxDeferred") {
+        return Err(PlanError::unprocessable(
+            "a Roth conversion converts from a tax-deferred account (a 401(k) or traditional IRA)",
+        ));
+    }
+    if status(to) != Some("TaxFree") {
+        return Err(PlanError::unprocessable(
+            "a Roth conversion converts into a tax-free (Roth) account",
+        ));
+    }
+    if let Some(payer) = pay_tax_from {
+        let bank = graph
+            .accounts
+            .iter()
+            .any(|a| a.id == payer && a.flavor == "Bank");
+        if !bank && status(payer) != Some("Taxable") {
+            return Err(PlanError::unprocessable(
+                "a Roth conversion's tax is paid from a bank or taxable account",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn build_effect(
     graph: &ScenarioGraph,
     ids: &IdMap,
@@ -1163,6 +1197,18 @@ fn build_effect(
                 from: ids.account(from()?)?,
                 financing,
             });
+        }
+        "RothConversion" => {
+            check_roth_conversion(graph, from()?, to()?, row.pay_tax_from_account_id)?;
+            EventEffect::RothConversion {
+                from: ids.account(from()?)?,
+                to: ids.account(to()?)?,
+                amount: amount(depth)?,
+                pay_tax_from: row
+                    .pay_tax_from_account_id
+                    .map(|id| ids.account(id))
+                    .transpose()?,
+            }
         }
         "MarketShock" => EventEffect::MarketShock {
             drop: row.shock_drop.ok_or_else(|| {

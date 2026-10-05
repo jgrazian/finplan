@@ -506,9 +506,13 @@ fn referrers(graph: &ScenarioGraph, held: Held) -> Vec<String> {
     }
     for f in graph.effects.values() {
         let named = match held {
-            Held::Account(id) => {
-                [f.from_account_id, f.to_account_id, f.loan_account_id].contains(&Some(id))
-            }
+            Held::Account(id) => [
+                f.from_account_id,
+                f.to_account_id,
+                f.loan_account_id,
+                f.pay_tax_from_account_id,
+            ]
+            .contains(&Some(id)),
             Held::Asset(id) => f.asset_id == Some(id),
         };
         if named && let Some(event) = effect_event(graph, f.id) {

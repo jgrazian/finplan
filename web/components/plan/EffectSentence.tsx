@@ -539,6 +539,51 @@ function EffectSlots({
           />
         </>
       );
+    case "RothConversion": {
+      // Only the accounts a conversion can name: pre-tax from, Roth into,
+      // and a bank or taxable account (or withholding) for the tax.
+      const investments = (status: string) =>
+        accounts.filter((a) => a.flavor === "Investment" && a.tax_status === status);
+      const payers = accounts.filter(
+        (a) => a.flavor === "Bank" || (a.flavor === "Investment" && a.tax_status === "Taxable"),
+      );
+      return (
+        <>
+          {kind}{amount}<span>from</span>
+          <Dropdown
+            inline
+            options={accountOptions(investments("TaxDeferred"))}
+            value={effect.fromAccountId}
+            placeholder="pick a 401(k) or IRA"
+            ariaLabel="Convert from"
+            disabled={disabled}
+            maxMenuHeight={300}
+            onChange={(fromAccountId) => onChange({ fromAccountId })}
+          />
+          <span>into</span>
+          <Dropdown
+            inline
+            options={accountOptions(investments("TaxFree"))}
+            value={effect.toAccountId}
+            placeholder="pick a Roth"
+            ariaLabel="Convert into"
+            disabled={disabled}
+            maxMenuHeight={300}
+            onChange={(toAccountId) => onChange({ toAccountId })}
+          />
+          <span>, tax</span>
+          <Dropdown
+            inline
+            options={[{ value: 0, label: "withheld" }, ...accountOptions(payers).map((o) => ({ ...o, label: `from ${o.label}` }))]}
+            value={effect.payTaxFromAccountId}
+            ariaLabel="Tax paid from"
+            disabled={disabled}
+            maxMenuHeight={300}
+            onChange={(payTaxFromAccountId) => onChange({ payTaxFromAccountId })}
+          />
+        </>
+      );
+    }
     case "Event control":
       return (
         <>
@@ -819,6 +864,7 @@ function EffectDetails({
           </Note>
         </div>
       )}
+      {effect.form === "RothConversion" && <ConversionHelp withheld={effect.payTaxFromAccountId === 0} />}
       {effect.form === "DeleteAccount" && (
         <Note>
           Removes the account from the plan when this fires, with whatever it still holds — put
@@ -828,6 +874,37 @@ function EffectDetails({
       {fields.verb && (
         <Note>Terminate is irreversible within a run; Pause can be resumed by a later effect.</Note>
       )}
+    </>
+  );
+}
+
+/**
+ * What a conversion does, and what it leaves out — said where it is set up,
+ * since the omissions are exactly what a real conversion plan watches.
+ */
+function ConversionHelp({ withheld }: { withheld: boolean }) {
+  return (
+    <>
+      <Note>
+        Moves the account&apos;s cash, then its holdings in kind (oldest first, same units) into
+        the Roth, capped at what it holds. The amount converted is ordinary income this year, with
+        no early-withdrawal penalty. Typically <code>bracket_room(0.22)</code> on a yearly Dec 30
+        event, last in the list, so the year&apos;s other income has landed. Skipped in a year the
+        account owes an RMD that has not been taken yet.
+      </Note>
+      <Note>
+        {withheld
+          ? "Withheld, the tax comes out of the conversion: less reaches the Roth, and before 59½ the withheld part is an early distribution and pays the 10% penalty. Paying it from a bank or taxable account keeps the conversion whole."
+          : "The tax is paid from that account's cash, selling its holdings if the cash is short; a bank that runs short is covered by the funding policy."}
+        {" "}Before 59½ each conversion must stay in the Roth five years before it can be
+        withdrawn without the penalty.
+      </Note>
+      <Note>
+        Not modeled: IRMAA Medicare surcharges, ACA premium credits, the taxable share of Social
+        Security (it is taxed as its income type says), and long-term gains stacking on top of
+        ordinary income (gains are taxed at a flat rate, so a conversion never pushes them out of
+        the 0% band here).
+      </Note>
     </>
   );
 }

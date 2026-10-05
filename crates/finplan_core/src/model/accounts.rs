@@ -231,6 +231,18 @@ pub struct AssetLot {
     pub cost_basis: f64,
 }
 
+/// One Roth conversion as the Roth remembers it, for the five-year rule:
+/// before 59½, a withdrawal consumes conversions oldest first, and the part
+/// drawn from one converted fewer than five tax years ago pays the
+/// early-withdrawal penalty.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct ConversionTranche {
+    /// Tax year of the conversion; its five years run from January 1.
+    pub year: i16,
+    /// What is left of it: converted, less what withdrawals have consumed.
+    pub amount: f64,
+}
+
 /// Tax treatment for an account
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaxStatus {

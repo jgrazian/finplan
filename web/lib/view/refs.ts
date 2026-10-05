@@ -141,6 +141,12 @@ function walkEffect(effect: EffectSpec, out: Set<number>): void {
       out.add(effect.to_account_id);
       if (effect.payoff_account_id != null) out.add(effect.payoff_account_id);
       return;
+    case "RothConversion":
+      out.add(effect.from_account_id);
+      out.add(effect.to_account_id);
+      if (effect.pay_tax_from_account_id != null) out.add(effect.pay_tax_from_account_id);
+      walkAmount(effect.amount, out);
+      return;
     case "Random":
       walkEffect(effect.on_true, out);
       if (effect.on_false) walkEffect(effect.on_false, out);

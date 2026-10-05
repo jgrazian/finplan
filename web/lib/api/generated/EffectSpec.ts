@@ -88,4 +88,11 @@ export type EffectSpec =
     gain_exclusion: number;
     payoff_account_id: number | null;
   }
-  | { "kind": "MarketShock"; drop: number };
+  | { "kind": "MarketShock"; drop: number }
+  | {
+    "kind": "RothConversion";
+    from_account_id: number;
+    to_account_id: number;
+    amount: AmountSpec;
+    pay_tax_from_account_id: number | null;
+  };

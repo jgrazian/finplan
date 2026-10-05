@@ -165,6 +165,22 @@ fn rename_account_in_effect(effect: &mut EffectData, old_name: &str, new_name: &
             }
             rename_account_in_amount(amount, old_name, new_name);
         }
+        EffectData::RothConversion {
+            from,
+            to,
+            amount,
+            pay_tax_from,
+        } => {
+            for tag in [Some(from), Some(to), pay_tax_from.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                if tag.0 == old_name {
+                    tag.0 = new_name.to_string();
+                }
+            }
+            rename_account_in_amount(amount, old_name, new_name);
+        }
         EffectData::RsuVesting { to, .. } if to.0 == old_name => {
             to.0 = new_name.to_string();
         }

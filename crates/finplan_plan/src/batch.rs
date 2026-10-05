@@ -273,6 +273,7 @@ impl RowBatch {
                     check(&accounts, r.from_account_id, "account")?;
                     check(&accounts, r.to_account_id, "account")?;
                     check(&accounts, r.loan_account_id, "account")?;
+                    check(&accounts, r.pay_tax_from_account_id, "account")?;
                     check(&assets, r.asset_id, "asset")?;
                 }
                 BatchRow::WithdrawalSource(r) => {

@@ -318,6 +318,40 @@ pub enum EvalEvent {
         amount: f64,
     },
 
+    /// Move (part of) a lot to another investment account in kind: the same
+    /// units and basis, no sale (a Roth conversion).
+    MoveAssetLot {
+        from: AssetCoord,
+        to: AccountId,
+        lot_date: Date,
+        units: f64,
+        cost_basis: f64,
+        value: f64,
+    },
+
+    /// A Roth conversion's record: the Roth remembers it for the five-year
+    /// rule, and the ledger gets `StateEvent::RothConversion`.
+    RothConversion {
+        from: AccountId,
+        to: AccountId,
+        amount: f64,
+        tax: f64,
+        withheld: f64,
+    },
+
+    /// A withdrawal before 59½ used up this much of a Roth's conversions,
+    /// oldest first.
+    ConsumeConversions {
+        account: AccountId,
+        amount: f64,
+    },
+
+    /// The effect did nothing, for a reason the run reports as a warning.
+    EffectSkipped {
+        account_id: Option<AccountId>,
+        message: &'static str,
+    },
+
     // === Balance Operations ===
     AdjustBalance {
         account: AccountId,
@@ -675,6 +709,7 @@ pub fn evaluate_effect_into(
                         early_withdrawal_penalty_applies: state
                             .timeline
                             .is_below_early_withdrawal_age(),
+                        conversion_tranches: state.conversion_tranches(*from),
                     },
                     out, // Push effects directly to scratch buffer
                 );
@@ -838,6 +873,8 @@ pub fn evaluate_effect_into(
                             early_withdrawal_penalty_applies: state
                                 .timeline
                                 .is_below_early_withdrawal_age(),
+                            conversion_tranches: state.conversion_tranches(from_account),
+                            current_year: state.timeline.current_date.year(),
                         },
                         step,
                         out,
@@ -1006,6 +1043,19 @@ pub fn evaluate_effect_into(
 
             Ok(())
         }
+        EventEffect::RothConversion {
+            from,
+            to,
+            amount,
+            pay_tax_from,
+        } => crate::conversion::evaluate_roth_conversion_into(
+            *from,
+            *to,
+            amount,
+            *pay_tax_from,
+            state,
+            out,
+        ),
         EventEffect::TriggerEvent(event_id) => {
             out.push(EvalEvent::TriggerEvent(*event_id));
             Ok(())
@@ -1418,8 +1468,9 @@ pub fn strategy_sources(
 
 /// The ordinary income at which the marginal rate first exceeds
 /// `ceiling_rate`: the top of the highest bracket taxed at or below it.
-/// Unbounded when no bracket is taxed above the ceiling.
-fn bracket_ceiling(brackets: &[crate::model::TaxBracket], ceiling_rate: f64) -> f64 {
+/// Unbounded when no bracket is taxed above the ceiling. The brackets are
+/// the year's indexed ones, standard deduction folded in as a 0% band.
+pub(crate) fn bracket_ceiling(brackets: &[crate::model::TaxBracket], ceiling_rate: f64) -> f64 {
     brackets
         .iter()
         .find(|bracket| bracket.rate > ceiling_rate + 1e-9)

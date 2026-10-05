@@ -177,7 +177,9 @@ RothConversion {
 
 **Timing.** `bracket_room` is only right once the year's other ordinary income
 has landed, so a conversion belongs at year-end: the template schedules it
-yearly on Dec 31, and last in event order. A conversion scheduled mid-year
+yearly on Dec 30, and last in event order. (Not Dec 31: the engine captures
+year-end balances, the next RMD's base, as Dec 31 begins and before that
+day's events, so a Dec 31 conversion would stay in next year's RMD base.) A conversion scheduled mid-year
 still works; it just fills against the income so far. The event editor shows
 a hint when a `bracket_room` amount fires before December.
 
@@ -207,7 +209,7 @@ part of the answer, and this engine does not yet see it.
 - `bracket_room` joins the expression functions in the parser, renderer and the
   expression reference the UI shows.
 - **Template** `RothConversions { from, to, ceiling_rate, start, end, pay_tax_from }`
-  creates a yearly Dec 31 event from `start` (default: the retirement
+  creates a yearly Dec 30 event from `start` (default: the retirement
   parameter, else now) until `end` (default: the year before the RMD age),
   amount `bracket_room(<rate>)`. The Plan tab offers it as "Add Roth
   conversions"; the drafting agent can use it.

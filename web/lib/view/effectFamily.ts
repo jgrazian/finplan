@@ -19,6 +19,7 @@ const FAMILY: Record<EffectKind, EffectFamily> = {
   AssetPurchase: "transfer",
   AdjustBalance: "transfer",
   ApplyRmd: "transfer",
+  RothConversion: "transfer",
   PauseEvent: "control",
   ResumeEvent: "control",
   TriggerEvent: "control",

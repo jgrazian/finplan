@@ -341,6 +341,12 @@ fn read_effect(graph: &ScenarioGraph, effect_id: i64, depth: usize) -> PlanResul
                 _ => None,
             },
         },
+        "RothConversion" => EffectSpec::RothConversion {
+            from_account_id: from,
+            to_account_id: to,
+            amount: amount()?,
+            pay_tax_from_account_id: row.pay_tax_from_account_id,
+        },
         "MarketShock" => EffectSpec::MarketShock {
             drop: row.shock_drop.unwrap_or_default(),
         },

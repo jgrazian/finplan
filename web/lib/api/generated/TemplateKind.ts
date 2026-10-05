@@ -9,4 +9,5 @@ export type TemplateKind =
   | "social_security"
   | "market_crash"
   | "large_expense"
-  | "job_loss";
+  | "job_loss"
+  | "roth_conversions";

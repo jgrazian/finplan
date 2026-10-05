@@ -38,6 +38,7 @@
 
 pub mod analysis;
 pub mod apply;
+mod conversion;
 pub mod date_math;
 pub mod error;
 pub mod evaluate;

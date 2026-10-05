@@ -379,6 +379,55 @@ pub struct JobLossParams {
     pub enabled: Option<bool>,
 }
 
+/// Yearly Roth conversions: every Dec 30 from `start` until `end`, convert
+/// pre-tax money up to the top of the `ceiling_rate` bracket
+/// (`bracket_room(ceiling_rate)`). Year-end, so the year's other income has
+/// landed; the event is added last, so it runs after the day's other events.
+/// Dec 30 rather than 31: see [`CONVERSION_DAY`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RothConversionsParams {
+    /// Defaults to "Roth conversions".
+    #[serde(default)]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// The tax-deferred account converted from (a 401(k) or traditional IRA).
+    pub from_account_id: RowRef,
+    /// The tax-free (Roth) account converted into.
+    pub to_account_id: RowRef,
+    /// The highest marginal rate to fill to, a fraction: 0.12, 0.22, 0.24.
+    pub ceiling_rate: f64,
+    /// When conversions begin: the first is on Dec 30 of that year. A date
+    /// expands anywhere; an age or a parameter needs the plan
+    /// ([`RothConversionsParams::for_plan`]), which also supplies the default:
+    /// the plan's retirement-age parameter, else its first year.
+    #[serde(default)]
+    #[ts(optional)]
+    pub start: Option<When>,
+    /// When conversions stop; defaults to age 73, when RMDs begin, so the
+    /// last is on Dec 30 of the year before.
+    #[serde(default)]
+    #[ts(optional)]
+    pub end: Option<When>,
+    /// The bank or taxable account that pays the tax; omitted withholds it
+    /// from the conversion (less reaches the Roth, and before 59½ the
+    /// withheld part pays the early-withdrawal penalty).
+    #[serde(default)]
+    #[ts(optional)]
+    pub pay_tax_from_account_id: Option<RowRef>,
+}
+
+/// The age RMDs begin at (SECURE 2.0, born 1951-1959): a template's default
+/// end for conversions.
+pub const RMD_AGE: u8 = 73;
+
+/// The month and day a conversion template fires. Not Dec 31: the engine
+/// captures year-end balances (next year's RMD base and the year-end
+/// snapshot) the moment the clock reaches Dec 31, before that day's events,
+/// so a Dec 31 conversion would stay in next year's RMD base and show in the
+/// balances a year late. `bracket_room` reads the same income on Dec 30.
+pub const CONVERSION_DAY: (i8, i8) = (12, 30);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -392,6 +441,7 @@ pub enum TemplateKind {
     MarketCrash,
     LargeExpense,
     JobLoss,
+    RothConversions,
 }
 
 /// One template and its parameters, tagged by `kind`.
@@ -408,6 +458,7 @@ pub enum Template {
     MarketCrash(MarketCrashParams),
     LargeExpense(LargeExpenseParams),
     JobLoss(JobLossParams),
+    RothConversions(RothConversionsParams),
 }
 
 impl Template {
@@ -422,6 +473,7 @@ impl Template {
             Template::MarketCrash(_) => TemplateKind::MarketCrash,
             Template::LargeExpense(_) => TemplateKind::LargeExpense,
             Template::JobLoss(_) => TemplateKind::JobLoss,
+            Template::RothConversions(_) => TemplateKind::RothConversions,
         }
     }
 }
@@ -509,6 +561,7 @@ pub fn expand_template(key_prefix: &str, template: &Template) -> Result<Expansio
         Template::MarketCrash(p) => market_crash(&mut out, p)?,
         Template::LargeExpense(p) => large_expense(&mut out, p)?,
         Template::JobLoss(p) => job_loss(&mut out, p)?,
+        Template::RothConversions(p) => roth_conversions(&mut out, p)?,
     }
     Ok(Expansion {
         changes: out.changes,
@@ -1034,6 +1087,150 @@ fn once(name: String, enabled: Option<bool>, when: Value, effects: Vec<Value>) -
     let mut body = event_body(name, true, when, effects);
     body.insert("enabled".into(), json!(enabled.unwrap_or(true)));
     Value::Object(body)
+}
+
+fn roth_conversions(out: &mut Builder, p: &RothConversionsParams) -> Result<(), TemplateError> {
+    if !p.ceiling_rate.is_finite() || !(0. ..1.).contains(&p.ceiling_rate) {
+        return Err(TemplateError::new(
+            "ceiling_rate is a marginal rate between 0 and 1, like 0.22",
+        ));
+    }
+    if p.from_account_id == p.to_account_id {
+        return Err(TemplateError::new(
+            "a conversion moves money between two accounts",
+        ));
+    }
+    let year = match &p.start {
+        Some(When::Date { on_date }) => on_date
+            .parse::<jiff::civil::Date>()
+            .map_err(|_| TemplateError::new("dates are written YYYY-MM-DD"))?
+            .year(),
+        _ => {
+            return Err(TemplateError::new(
+                "start must be a date (the first conversion is that year's Dec 30); \
+                 an age or a parameter is resolved against the plan",
+            ));
+        }
+    };
+    let end = match &p.end {
+        Some(end) => end.trigger()?,
+        None => When::age(RMD_AGE).trigger()?,
+    };
+    let rate = percent_figure(p.ceiling_rate);
+    let mut effect = json!({
+        "kind": "RothConversion",
+        "from_account_id": p.from_account_id.json(),
+        "to_account_id": p.to_account_id.json(),
+        "amount": expression(format!("bracket_room({rate}%)")),
+    });
+    if let Some(payer) = &p.pay_tax_from_account_id {
+        effect["pay_tax_from_account_id"] = payer.json();
+    }
+    let mut body = event_body(
+        named(&p.name, "Roth conversions")?,
+        false,
+        repeating(
+            Interval::Yearly,
+            Some(json!({"kind": "Date", "on_date": format!(
+                "{year:04}-{:02}-{:02}",
+                CONVERSION_DAY.0, CONVERSION_DAY.1
+            )})),
+            Some(end),
+        ),
+        vec![effect],
+    );
+    body.insert(
+        "description".into(),
+        json!(format!(
+            "Each Dec 30, convert pre-tax money to the Roth up to the top of the \
+             {rate}% bracket. Not modeled: IRMAA, ACA credits, the taxable share \
+             of Social Security, gains stacking on ordinary income."
+        )),
+    );
+    // No sort order: a new event goes last, after the year's other events.
+    out.create("roth_conversions", RefKind::Event, Value::Object(body));
+    Ok(())
+}
+
+/// A rate as the percent figure an expression writes: 0.22 -> "22", 0.125 ->
+/// "12.5".
+fn percent_figure(rate: f64) -> String {
+    let percent = (rate * 100. * 1e6).round() / 1e6;
+    if percent.fract() == 0. {
+        format!("{}", percent as i64)
+    } else {
+        format!("{percent}")
+    }
+}
+
+impl RothConversionsParams {
+    /// Resolve `start` against `graph` to the date the template expands with:
+    /// an age (or age parameter) becomes the day it is reached, a date
+    /// parameter its date, and none the plan's retirement-age parameter or,
+    /// without one, its start date. Conversions then begin where the plan
+    /// stands now; moving the retirement age later does not move them.
+    pub fn for_plan(mut self, graph: &crate::graph::ScenarioGraph) -> Result<Self, TemplateError> {
+        let at_age = |years: i64, months: i64| -> Result<jiff::civil::Date, TemplateError> {
+            graph
+                .scenario
+                .birth_date
+                .as_deref()
+                .and_then(|d| d.parse::<jiff::civil::Date>().ok())
+                .ok_or_else(|| TemplateError::new("an age needs the plan's birth date"))?
+                .checked_add(jiff::Span::new().years(years).months(months))
+                .map_err(|_| TemplateError::new("the age is out of range"))
+        };
+        let from_parameter =
+            |row: &crate::graph::ParameterRow| -> Result<jiff::civil::Date, TemplateError> {
+                match row.kind.as_str() {
+                    "Age" => at_age(
+                        row.age_years.unwrap_or_default(),
+                        row.age_months.unwrap_or_default(),
+                    ),
+                    "Date" => row
+                        .date_value
+                        .as_deref()
+                        .and_then(|d| d.parse().ok())
+                        .ok_or_else(|| TemplateError::new("the parameter has no date")),
+                    _ => Err(TemplateError::new("start is an age or date parameter")),
+                }
+            };
+        let date = match &self.start {
+            Some(When::Date { .. }) => return Ok(self),
+            Some(When::Age { years, months }) => {
+                at_age(i64::from(*years), i64::from(months.unwrap_or(0)))?
+            }
+            Some(When::AgeParameter { parameter_id } | When::DateParameter { parameter_id }) => {
+                let RowRef::Id(id) = parameter_id else {
+                    return Err(TemplateError::new(
+                        "a parameter the same batch creates has no value yet",
+                    ));
+                };
+                let row = graph
+                    .parameters
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .ok_or_else(|| TemplateError::new("no such parameter"))?;
+                from_parameter(row)?
+            }
+            None => match graph
+                .parameters
+                .iter()
+                .find(|p| p.kind == "Age" && p.name.to_lowercase().contains("retire"))
+            {
+                Some(retirement) => from_parameter(retirement)?,
+                None => graph
+                    .scenario
+                    .start_date
+                    .parse()
+                    .map_err(|_| TemplateError::new("the plan's start date is invalid"))?,
+            },
+        };
+        self.start = Some(When::Date {
+            on_date: date.to_string(),
+        });
+        Ok(self)
+    }
 }
 
 fn market_crash(out: &mut Builder, p: &MarketCrashParams) -> Result<(), TemplateError> {

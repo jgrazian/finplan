@@ -121,6 +121,8 @@ enum Op {
     Percent,
     Abs,
     Inflate,
+    /// Room left in the federal brackets up to a marginal rate this year.
+    BracketRoom,
     Add,
     Sub,
     Mul,
@@ -148,6 +150,7 @@ impl Op {
             | Self::Percent
             | Self::Abs
             | Self::Inflate
+            | Self::BracketRoom
             | Self::Not => 1,
             Self::Add
             | Self::Sub
@@ -237,6 +240,7 @@ impl Expression {
                     | Op::DaysUntil(_)
                     | Op::YearsUntil(_)
                     | Op::Inflate
+                    | Op::BracketRoom
             );
             dependent[index] = intrinsic
                 || analysis.operands[index][..instruction.op.arity()]
@@ -490,6 +494,13 @@ impl Expression {
                 Op::Positive | Op::Negate | Op::Abs => left & NUMERIC,
                 Op::Percent => left & SCALAR,
                 Op::Inflate => left & MONEY,
+                // A marginal rate in, dollars of income out.
+                Op::BracketRoom => {
+                    if left & SCALAR == 0 {
+                        return Err(error("bracket_room takes a rate, e.g. 0.22 or 22%"));
+                    }
+                    MONEY
+                }
                 Op::Add | Op::Sub | Op::Min | Op::Max => left & right & NUMERIC,
                 Op::Clamp => left & right & third & NUMERIC,
                 Op::Mul | Op::Div => binary_types(instruction.op, left, right),
@@ -598,6 +609,7 @@ impl CompiledAmount {
             | EventEffect::AssetPurchase { amount, .. }
             | EventEffect::AdjustBalance { amount, .. }
             | EventEffect::CashTransfer { amount, .. }
+            | EventEffect::RothConversion { amount, .. }
                 if self.amount_mode.is_none() =>
             {
                 *amount = self.amount
