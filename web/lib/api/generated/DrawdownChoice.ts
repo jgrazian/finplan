@@ -10,6 +10,11 @@ export type DrawdownChoice = {
    * was installed from the retirement date.
    */
   overlay: boolean;
+  /**
+   * Conversions ran as an overlay: the plan has none, so the event in the
+   * body's `conversions.overlay` was added for the run.
+   */
+  conversion_overlay: boolean;
   summary: DrawdownSummary;
   years: Array<DrawdownYear>;
 };

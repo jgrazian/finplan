@@ -70,7 +70,7 @@ fn assert_balanced(body: &DrawdownBody) {
                 + y.withdrawals.iter().sum::<f64>()
                 + y.cash
                 + y.shortfall;
-            let outflow = y.spending + y.withdrawal_taxes + y.surplus;
+            let outflow = y.spending + y.withdrawal_taxes + y.conversion_tax + y.surplus;
             assert!(
                 (inflow - outflow).abs() <= 1.0,
                 "{:?} {}: {inflow} vs {outflow}",
@@ -93,7 +93,7 @@ fn assert_balanced(body: &DrawdownBody) {
 fn the_default_list_runs_and_every_year_balances() {
     let body = project(&default_graph(), SEED, &DrawdownRequest::default()).unwrap();
     assert_eq!(body.choices.len(), 7);
-    assert_eq!(body.choices[0].choice, StrategyChoice::AsPlanned);
+    assert_eq!(body.choices[0].choice, StrategyChoice::AS_PLANNED);
     assert_eq!(body.seed, "7");
     assert_eq!(body.retirement.source, RetirementSource::Income);
     assert_eq!(
@@ -230,7 +230,7 @@ fn retirement_comes_from_the_request_then_the_parameter_then_the_income() {
     let graph = default_graph();
     let asked = DrawdownRequest {
         retirement_year: Some(2050),
-        strategies: Some(vec![StrategyChoice::AsPlanned]),
+        strategies: Some(vec![StrategyChoice::AS_PLANNED]),
     };
     let body = project(&graph, SEED, &asked).unwrap();
     assert_eq!(body.retirement.source, RetirementSource::Request);
@@ -270,13 +270,14 @@ fn a_bad_request_is_refused() {
         ..Default::default()
     });
     refused(DrawdownRequest {
-        strategies: Some(vec![StrategyChoice::AsPlanned; MAX_CHOICES + 1]),
+        strategies: Some(vec![StrategyChoice::AS_PLANNED; MAX_CHOICES + 1]),
         ..Default::default()
     });
     refused(DrawdownRequest {
         strategies: Some(vec![StrategyChoice::Strategy {
             strategy: crate::specs::WithdrawalStrategy::ProRata,
             bracket_ceiling: Some(0.12),
+            conversion: None,
         }]),
         ..Default::default()
     });
@@ -284,6 +285,14 @@ fn a_bad_request_is_refused() {
         retirement_year: Some(12),
         ..Default::default()
     });
+    for ceiling_rate in [0.0, 1.0, f64::NAN] {
+        refused(DrawdownRequest {
+            strategies: Some(vec![StrategyChoice::AsPlanned {
+                conversion: Some(ConversionChoice::UpTo { ceiling_rate }),
+            }]),
+            ..Default::default()
+        });
+    }
 }
 
 fn sweep(sources: WithdrawalSources) -> EventEffect {
@@ -377,9 +386,10 @@ fn normalizing_a_config_installs_or_retargets_the_policy() {
     let choice = StrategyChoice::Strategy {
         strategy: crate::specs::WithdrawalStrategy::TaxFreeFirst,
         bracket_ceiling: None,
+        conversion: None,
     };
 
-    let (same, overlay) = normalize(&config, &StrategyChoice::AsPlanned, when).unwrap();
+    let (same, overlay) = normalize(&config, &StrategyChoice::AS_PLANNED, when).unwrap();
     assert!(!overlay && same.funding.is_none());
     assert!(matches!(
         strategy_order(&same.events[0].effects[0]),
@@ -645,10 +655,11 @@ fn comparison_rows_carry_the_after_tax_median() {
     let body = CompareRequest {
         request: Some(DrawdownRequest {
             strategies: Some(vec![
-                StrategyChoice::AsPlanned,
+                StrategyChoice::AS_PLANNED,
                 StrategyChoice::Strategy {
                     strategy: crate::specs::WithdrawalStrategy::TaxDeferredFirst,
                     bracket_ceiling: None,
+                    conversion: None,
                 },
             ]),
             retirement_year: None,
@@ -705,4 +716,376 @@ fn a_conversion_is_not_a_withdrawal() {
     let after = years.last().unwrap();
     assert!(after.balances[k401] < before.balances[k401]);
     assert!(after.balances[roth] > before.balances[roth]);
+}
+
+// ── the conversion toggle (spec 21, part 3) ─────────────────────────────────
+
+const UP_TO_22: ConversionChoice = ConversionChoice::UpTo { ceiling_rate: 0.22 };
+
+/// As planned and two strategies, all with the toggle at `conversion`.
+fn toggled(conversion: Option<ConversionChoice>) -> DrawdownRequest {
+    use crate::specs::WithdrawalStrategy::*;
+    DrawdownRequest {
+        strategies: Some(vec![
+            StrategyChoice::AsPlanned { conversion },
+            StrategyChoice::Strategy {
+                strategy: TaxEfficientEarly,
+                bracket_ceiling: None,
+                conversion,
+            },
+            StrategyChoice::Strategy {
+                strategy: BracketFilling,
+                bracket_ceiling: Some(0.12),
+                conversion,
+            },
+        ]),
+        retirement_year: None,
+    }
+}
+
+/// The dry plan with its own conversions: $20k a year from the 401(k) into
+/// the Vanguard Roth from 2027, the tax paid from `payer` or withheld. Returns
+/// the plan and the event's id.
+fn converting_graph(payer: Option<i64>) -> (ScenarioGraph, i64) {
+    let mut graph = dry_graph();
+    let id = make(
+        &mut graph,
+        json!({"op": "create_event", "body": {
+            "name": "Roth conversions", "enabled": true, "fires_once": false,
+            "trigger": {"kind": "Repeating", "interval": "Yearly",
+                        "start_condition": {"kind": "Date", "on_date": "2027-12-30"}},
+            "effects": [{"kind": "RothConversion", "from_account_id": 3, "to_account_id": 2,
+                         "amount": {"kind": "Fixed", "value": 20000.0},
+                         "pay_tax_from_account_id": payer}]}}),
+    );
+    (graph, id)
+}
+
+/// The path `project` folds for `choice`, with its ledger.
+fn path_of(
+    graph: &ScenarioGraph,
+    choice: &StrategyChoice,
+) -> finplan_core::model::SimulationResult {
+    let compiled = crate::compile::compile(graph).unwrap();
+    let mut base = None;
+    let retirement = super::retirement::resolve(&compiled, None, SEED, &mut base).unwrap();
+    let conversions = super::conversion::Conversions::prepare(
+        graph,
+        &compiled,
+        &retirement,
+        std::slice::from_ref(choice),
+    )
+    .unwrap();
+    let (from, _) = conversions.base(&compiled, choice);
+    let (mut config, _) = normalize(&from.config, choice, retirement.date).unwrap();
+    config.collect_ledger = true;
+    finplan_core::simulation::simulate(&config, SEED).unwrap()
+}
+
+/// Per year: the gross converted, and its tax with the penalties the
+/// converting event paid, read off the ledger.
+fn ledger_conversions(
+    result: &finplan_core::model::SimulationResult,
+) -> std::collections::BTreeMap<i64, (f64, f64)> {
+    use finplan_core::model::StateEvent;
+    let converting: std::collections::BTreeSet<_> = result
+        .ledger
+        .iter()
+        .filter(|e| matches!(e.event, StateEvent::RothConversion { .. }))
+        .filter_map(|e| e.source_event)
+        .collect();
+    let mut by_year = std::collections::BTreeMap::<i64, (f64, f64)>::new();
+    for entry in &result.ledger {
+        let year = by_year.entry(i64::from(entry.date.year())).or_default();
+        match entry.event {
+            StateEvent::RothConversion { amount, tax, .. } => {
+                year.0 += amount;
+                year.1 += tax;
+            }
+            StateEvent::EarlyWithdrawalPenalty { penalty_amount, .. }
+                if entry.source_event.is_some_and(|e| converting.contains(&e)) =>
+            {
+                year.1 += penalty_amount;
+            }
+            _ => {}
+        }
+    }
+    by_year
+}
+
+#[test]
+fn every_year_balances_with_conversions_on() {
+    // Tax paid from the bank, withheld (before 59½, so penalized), and the
+    // overlay's, paid from the largest taxable account.
+    let cases = [
+        converting_graph(Some(6)).0,
+        converting_graph(None).0,
+        default_graph(),
+    ];
+    for graph in &cases {
+        for conversion in [None, Some(UP_TO_22), Some(ConversionChoice::Off)] {
+            let body = project(graph, SEED, &toggled(conversion)).unwrap();
+            assert_balanced(&body);
+            for choice in &body.choices {
+                assert!(choice.years.iter().all(|y| y.conversion >= 0.0
+                    && y.conversion_tax >= 0.0
+                    && y.withdrawal_taxes >= 0.0));
+                let converted: f64 = choice.years.iter().map(|y| y.conversion).sum();
+                match conversion {
+                    Some(ConversionChoice::Off) => assert_eq!(converted, 0.0),
+                    Some(_) => assert!(converted > 1.0, "{:?}", choice.choice),
+                    None => {}
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_conversion_and_its_tax_line_up_with_the_ledger() {
+    let as_planned = StrategyChoice::AS_PLANNED;
+    let overlaid = StrategyChoice::AsPlanned {
+        conversion: Some(UP_TO_22),
+    };
+    let cases = [
+        (converting_graph(Some(6)).0, as_planned.clone()),
+        (converting_graph(None).0, as_planned),
+        (default_graph(), overlaid),
+    ];
+    for (i, (graph, choice)) in cases.iter().enumerate() {
+        let request = DrawdownRequest {
+            strategies: Some(vec![choice.clone()]),
+            retirement_year: None,
+        };
+        let body = project(graph, SEED, &request).unwrap();
+        let ledger = ledger_conversions(&path_of(graph, choice));
+        let years = &body.choices[0].years;
+        assert!(
+            years.iter().any(|y| y.conversion > 1.0),
+            "case {i} converts"
+        );
+        for y in years {
+            let (gross, tax) = ledger.get(&y.year).copied().unwrap_or_default();
+            assert!((y.conversion - gross).abs() < 0.01, "case {i} {}", y.year);
+            assert!(
+                (y.conversion_tax - tax).abs() < 0.01,
+                "case {i} {}: {} vs {tax}",
+                y.year,
+                y.conversion_tax
+            );
+        }
+    }
+
+    // Withheld before 59½: the part kept back is a 401(k) distribution, and
+    // its tax and penalty are conversion tax, not tax on withdrawals.
+    let (graph, _) = converting_graph(None);
+    let body = project(&graph, SEED, &DrawdownRequest::default()).unwrap();
+    let k401 = body.accounts.iter().position(|a| a.id == 3).unwrap();
+    let year = body.choices[0]
+        .years
+        .iter()
+        .find(|y| y.conversion > 1.0)
+        .unwrap();
+    assert!(year.withdrawals[k401] > 1.0);
+    assert!(
+        (year.withdrawals[k401] - year.conversion_tax).abs() < 0.01,
+        "withheld = tax / (1 - penalty rate) = tax + penalty"
+    );
+    assert!(year.withdrawal_taxes < 0.01, "nothing else sold that year");
+}
+
+#[test]
+fn the_overlay_is_added_only_when_the_plan_has_no_conversion() {
+    // The default plan has none: a rate adds the template's event.
+    let body = project(&default_graph(), SEED, &toggled(Some(UP_TO_22))).unwrap();
+    assert!(body.conversions.events.is_empty());
+    assert_eq!(body.conversions.unavailable, None);
+    let overlay = body.conversions.overlay.clone().unwrap();
+    assert_eq!(
+        overlay,
+        ConversionOverlay {
+            from_account_id: 3,
+            to_account_id: 4,
+            pay_tax_from_account_id: Some(1),
+            start_year: 2036,
+            until_age: 75,
+        },
+        "the largest 401(k) into the largest Roth, tax from the largest taxable \
+         account, from retirement until RMDs (born 1996)"
+    );
+    for choice in &body.choices {
+        assert!(choice.conversion_overlay);
+        let years: Vec<i64> = choice
+            .years
+            .iter()
+            .filter(|y| y.conversion > 1.0)
+            .map(|y| y.year)
+            .collect();
+        assert_eq!(years.first(), Some(&2036));
+        assert!(*years.last().unwrap() < 1996 + 75);
+    }
+    // As planned and None add nothing.
+    for conversion in [None, Some(ConversionChoice::Off)] {
+        let body = project(&default_graph(), SEED, &toggled(conversion)).unwrap();
+        assert!(body.conversions.overlay.is_some());
+        for choice in &body.choices {
+            assert!(!choice.conversion_overlay);
+            assert!(choice.years.iter().all(|y| y.conversion == 0.0));
+        }
+    }
+
+    // A plan with its own: a rate retargets it, and nothing is added.
+    let (graph, event) = converting_graph(Some(6));
+    let body = project(&graph, SEED, &toggled(Some(UP_TO_22))).unwrap();
+    assert_eq!(body.conversions.events, vec![event]);
+    assert_eq!(body.conversions.overlay, None);
+    let planned = project(&graph, SEED, &toggled(None)).unwrap();
+    for (filled, fixed) in body.choices.iter().zip(&planned.choices) {
+        assert!(!filled.conversion_overlay);
+        let first = |c: &DrawdownChoice| c.years.iter().map(|y| y.conversion).find(|v| *v > 1.0);
+        assert!((first(fixed).unwrap() - 20_000.0).abs() < 0.01);
+        assert!(
+            first(filled).unwrap() > 20_000.0,
+            "the 22% bracket holds more than $20k"
+        );
+    }
+
+    // The comparison says the same.
+    let mut short = default_graph();
+    short.scenario.duration_years = 15;
+    let request = DrawdownRequest {
+        strategies: Some(vec![
+            StrategyChoice::AS_PLANNED,
+            StrategyChoice::AsPlanned {
+                conversion: Some(UP_TO_22),
+            },
+        ]),
+        retirement_year: Some(2030),
+    };
+    let rows = compare(
+        &short,
+        &CompareRequest {
+            request: Some(request),
+            iterations: Some(25),
+        },
+        &mut Sequential,
+    )
+    .unwrap()
+    .rows;
+    assert!(!rows[0].conversion_overlay && rows[1].conversion_overlay);
+}
+
+#[test]
+fn none_switches_the_plans_conversions_off() {
+    let (graph, _) = converting_graph(Some(6));
+    let off = project(&graph, SEED, &toggled(Some(ConversionChoice::Off))).unwrap();
+    let planned = project(&graph, SEED, &toggled(None)).unwrap();
+    let roth = off.accounts.iter().position(|a| a.id == 2).unwrap();
+    for (off, planned) in off.choices.iter().zip(&planned.choices) {
+        assert!(!off.conversion_overlay);
+        assert!(
+            off.years
+                .iter()
+                .all(|y| y.conversion == 0.0 && y.conversion_tax == 0.0)
+        );
+        assert!(planned.years.iter().any(|y| y.conversion > 1.0));
+        let end = |c: &DrawdownChoice| c.years.last().unwrap().balances[roth];
+        assert!(end(off) < end(planned), "{:?}", off.choice);
+    }
+}
+
+#[test]
+fn the_toggle_is_unavailable_without_a_roth_or_a_pre_tax_account() {
+    let mut graph = default_graph();
+    make(&mut graph, json!({"op": "delete_account", "id": 2}));
+    make(&mut graph, json!({"op": "delete_account", "id": 4}));
+    let body = project(&graph, SEED, &DrawdownRequest::default()).unwrap();
+    let reason = body.conversions.unavailable.unwrap();
+    assert!(reason.contains("Roth"), "{reason}");
+    assert_eq!(body.conversions.overlay, None);
+    assert!(project(&graph, SEED, &toggled(Some(UP_TO_22))).is_err());
+    // None asks for nothing the plan lacks.
+    assert_balanced(&project(&graph, SEED, &toggled(Some(ConversionChoice::Off))).unwrap());
+
+    let mut graph = default_graph();
+    make(&mut graph, json!({"op": "delete_account", "id": 3}));
+    let body = project(&graph, SEED, &DrawdownRequest::default()).unwrap();
+    assert!(
+        body.conversions
+            .unavailable
+            .unwrap()
+            .contains("tax-deferred")
+    );
+}
+
+/// Retired at 60 with a large 401(k): the plan lives on its taxable accounts
+/// with the low brackets empty, then its RMDs, from 75, come out at high
+/// rates.
+fn deferred_heavy_graph() -> ScenarioGraph {
+    let mut graph = default_graph();
+    graph.scenario.duration_years = 32;
+    make(
+        &mut graph,
+        json!({"op": "update_scenario", "body": {"birth_date": "1966-01-01"}}),
+    );
+    make(&mut graph, json!({"op": "delete_event", "id": 1}));
+    for lot in graph.positions.get_mut(&3).unwrap() {
+        lot.units *= 8.0;
+        lot.cost_basis *= 8.0;
+    }
+    make(
+        &mut graph,
+        json!({"op": "create_event", "body": {
+            "name": "RMD", "enabled": true, "fires_once": false,
+            "trigger": {"kind": "Repeating", "interval": "Yearly"},
+            "effects": [{"kind": "ApplyRmd", "to_account_id": 6}]}}),
+    );
+    graph
+}
+
+#[test]
+fn filling_low_brackets_ahead_of_rmds_beats_not_converting_after_tax() {
+    let graph = deferred_heavy_graph();
+    let request = DrawdownRequest {
+        strategies: Some(vec![
+            StrategyChoice::AsPlanned {
+                conversion: Some(ConversionChoice::Off),
+            },
+            StrategyChoice::AsPlanned {
+                conversion: Some(UP_TO_22),
+            },
+        ]),
+        retirement_year: None,
+    };
+    let body = project(&graph, SEED, &request).unwrap();
+    assert_balanced(&body);
+    let (none, filled) = (&body.choices[0].summary, &body.choices[1].summary);
+    assert!(body.choices[1].conversion_overlay);
+    assert!(
+        none.markers.iter().any(|m| m.kind == MarkerKind::Rmd),
+        "RMDs fall due inside the plan"
+    );
+    assert!(
+        filled.after_tax_ending_balance > none.after_tax_ending_balance,
+        "{} vs {}",
+        filled.after_tax_ending_balance,
+        none.after_tax_ending_balance
+    );
+
+    let rows = compare(
+        &graph,
+        &CompareRequest {
+            request: Some(request),
+            iterations: Some(25),
+        },
+        &mut Sequential,
+    )
+    .unwrap()
+    .rows;
+    assert!(
+        rows[1].median_after_tax_ending_balance > rows[0].median_after_tax_ending_balance,
+        "{} vs {}",
+        rows[1].median_after_tax_ending_balance,
+        rows[0].median_after_tax_ending_balance
+    );
 }

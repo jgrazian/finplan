@@ -646,6 +646,19 @@ fn drawdown_replays_the_median_path_of_a_local_run() {
     assert_eq!(one["retirement"]["source"], "request");
     assert_eq!(one["choices"][0]["overlay"], true);
 
+    // The conversion toggle: the default plan has no conversions, so a rate
+    // adds the template's event.
+    let converting = json!({"strategies": [
+        {"kind": "AsPlanned", "conversion": {"kind": "UpTo", "ceiling_rate": 0.22}}]})
+    .to_string();
+    let converting = value(&ok(analysis::drawdown_json(
+        DEFAULT_SNAPSHOT,
+        &seed,
+        &converting,
+    )));
+    assert_eq!(converting["choices"][0]["conversion_overlay"], true);
+    assert!(converting["conversions"]["overlay"].is_object());
+
     // The refusals are the server's.
     let refused = |seed: &str, request: &str| {
         analysis::drawdown_json(DEFAULT_SNAPSHOT, seed, request)

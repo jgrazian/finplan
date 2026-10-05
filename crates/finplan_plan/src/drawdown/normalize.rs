@@ -1,4 +1,4 @@
-//! Swapping a strategy into a compiled plan.
+//! Swapping a strategy and a conversion setting into a compiled plan.
 
 use finplan_core::config::SimulationConfig;
 use finplan_core::model::{EventEffect, FundingPolicy, WithdrawalOrder, WithdrawalSources};
@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::StrategyChoice;
+use super::conversion::set_conversions;
 use crate::compile::{CompiledScenario, withdrawal_order};
 use crate::error::PlanResult;
 
@@ -22,10 +23,11 @@ pub struct FixedSweep {
 /// The engine order a choice stands for; `None` for `AsPlanned`.
 pub(super) fn order_of(choice: &StrategyChoice) -> PlanResult<Option<WithdrawalOrder>> {
     match choice {
-        StrategyChoice::AsPlanned => Ok(None),
+        StrategyChoice::AsPlanned { .. } => Ok(None),
         StrategyChoice::Strategy {
             strategy,
             bracket_ceiling,
+            ..
         } => withdrawal_order(Some(strategy.as_str()), *bracket_ceiling).map(Some),
     }
 }
@@ -35,16 +37,22 @@ pub(super) fn order_of(choice: &StrategyChoice) -> PlanResult<Option<WithdrawalO
 /// Every sweep that takes a strategy gets the order (so do those nested in a
 /// `Random` effect); the funding policy's order becomes it too, or, when the
 /// plan has none, a policy is installed from `retirement` and reported as an
-/// overlay. `AsPlanned` is the config untouched.
+/// overlay. A conversion setting retargets or switches off every
+/// `RothConversion` (the overlay event, when the plan had none, is already in
+/// `config`: see `conversion::Conversions`). `AsPlanned` with no conversion
+/// setting is the config untouched.
 pub fn normalize(
     config: &SimulationConfig,
     choice: &StrategyChoice,
     retirement: Date,
 ) -> PlanResult<(SimulationConfig, bool)> {
-    let Some(order) = order_of(choice)? else {
-        return Ok((config.clone(), false));
-    };
     let mut config = config.clone();
+    if let Some(conversion) = choice.conversion() {
+        set_conversions(&mut config, conversion);
+    }
+    let Some(order) = order_of(choice)? else {
+        return Ok((config, false));
+    };
     for event in &mut config.events {
         for effect in &mut event.effects {
             set_order(effect, order);

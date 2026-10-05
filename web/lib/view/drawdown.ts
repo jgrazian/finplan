@@ -1,5 +1,6 @@
 import type {
   ComparisonRow,
+  ConversionChoice,
   DrawdownBody,
   DrawdownChoice,
   DrawdownComparison,
@@ -31,6 +32,12 @@ import { fmtCompact, fmtCurrency } from "../format.ts";
  * hangs below zero: it is what the strategy costs, not money that was spent,
  * and stacked above the line it read as overspending. Share mode leaves it
  * out, since it is not a share of spending.
+ *
+ * Roth conversions (spec 21) are not spending either: a converting year gets
+ * a hollow marker at the amount converted, and the conversion's tax hangs
+ * below the tax on withdrawals, drawn apart from it. Whatever paid that tax
+ * (a taxable sale, the part a conversion withheld, else bank cash) is carved
+ * off the sources, so they still meet the line.
  */
 
 export type DrawdownUnit = "usd" | "share";
@@ -59,6 +66,15 @@ export const SHORTFALL_COLOR = "var(--color-danger)";
  */
 export const TAX_STRIPES =
   "repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-danger) 60%, transparent) 0 2px, color-mix(in srgb, var(--color-danger) 12%, transparent) 2px 5px)";
+/**
+ * Tax on Roth conversions: the same red in level bands, so it reads as tax
+ * but apart from the tax on withdrawals beside it. The chart draws the same
+ * bands as an SVG pattern.
+ */
+export const CONVERSION_TAX_STRIPES =
+  "repeating-linear-gradient(0deg, color-mix(in srgb, var(--color-danger) 55%, transparent) 0 1.5px, color-mix(in srgb, var(--color-danger) 8%, transparent) 1.5px 4px)";
+/** The conversion marker: the Roth's colour, hollow. */
+export const CONVERSION_COLOR = "var(--color-series-4)";
 
 const ROLE_COLOR: Record<SeriesRole, string> = {
   income: "var(--color-series-5)",
@@ -204,6 +220,64 @@ export function withCeiling(choices: StrategyChoice[], ceiling: number): Strateg
   );
 }
 
+// ── the conversion toggle ───────────────────────────────────────────
+
+/** The toggle's setting; undefined runs the plan's own conversions ("As planned"). */
+export type ConversionSetting = ConversionChoice | undefined;
+
+export const CONVERSION_CEILINGS = [0.12, 0.22, 0.24] as const;
+
+/** `planned`, `none`, or the ceiling in whole percents (`22`). */
+export function conversionKey(setting: ConversionSetting): string {
+  if (setting == null) return "planned";
+  return setting.kind === "Off" ? "none" : String(Math.round(setting.ceiling_rate * 100));
+}
+
+export function conversionOfKey(key: string): ConversionSetting {
+  if (key === "none") return { kind: "Off" };
+  const percent = /^(\d{1,2})$/.exec(key);
+  return percent ? { kind: "UpTo", ceiling_rate: Number(percent[1]) / 100 } : undefined;
+}
+
+export function conversionLabel(setting: ConversionSetting): string {
+  if (setting == null) return "As planned";
+  return setting.kind === "Off" ? "None" : `Up to ${Math.round(setting.ceiling_rate * 100)}%`;
+}
+
+export interface ConversionOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+  title?: string;
+}
+
+/**
+ * The toggle's options: As planned · None · up to 12% / 22% / 24%. Without
+ * an account to convert from or into, only As planned is on, and every
+ * other option says why.
+ */
+export function conversionOptions(body: DrawdownBody): ConversionOption[] {
+  const why = body.conversions.unavailable ?? undefined;
+  const planned = body.conversions.events.length > 0
+    ? "The plan's own Roth conversions, as they are."
+    : "The plan has no Roth conversions.";
+  return [
+    { value: "planned", label: "As planned", title: planned },
+    { value: "none", label: "None", disabled: why != null, title: why ?? "Switch the plan's conversions off." },
+    ...CONVERSION_CEILINGS.map((rate) => ({
+      value: conversionKey({ kind: "UpTo", ceiling_rate: rate }),
+      label: `${Math.round(rate * 100)}%`,
+      disabled: why != null,
+      title: why ?? `Each year, convert pre-tax money to the Roth up to the top of the ${Math.round(rate * 100)}% bracket.`,
+    })),
+  ];
+}
+
+/** Every choice with the toggle's setting. */
+export function withConversion(choices: StrategyChoice[], setting: ConversionSetting): StrategyChoice[] {
+  return setting == null ? choices : choices.map((c) => ({ ...c, conversion: setting }));
+}
+
 export function retirementHint(source: RetirementSource): string | undefined {
   switch (source) {
     case "income":
@@ -235,6 +309,10 @@ export interface Column {
   cap?: Segment;
   /** Tax withheld on the year's sales, from zero down; dollars only. */
   taxes?: Segment;
+  /** Tax on the year's Roth conversions, below the tax on withdrawals; dollars only. */
+  conversionTax?: Segment;
+  /** Roth conversions, gross, where the hollow marker sits; dollars only. */
+  conversion?: number;
   surplus?: Segment;
   /** Target spend in the unit on screen; undefined in Share, where bars are 100%. */
   target?: number;
@@ -270,6 +348,8 @@ export interface YearPanel {
   taxes?: { amount: number; ofSpending: number; color: string };
   /** The year's required minimum distributions, gross and after tax, and the accounts they came from. */
   rmd?: { amount: number; afterTax: number; accounts: string[] };
+  /** The year's Roth conversions, gross; their tax; the Roth accounts' year-end balance. */
+  conversion?: { amount: number; tax: number; roth: number; accounts: string[] };
   note?: { tone: "bad" | "info"; text: string };
 }
 
@@ -298,6 +378,11 @@ export interface DrawdownView {
   hasSurplus: boolean;
   /** Any year carries a required minimum distribution. */
   hasRmd: boolean;
+  /** Any year converts to a Roth. */
+  hasConversion: boolean;
+  /** Converted over the years shown, and the tax on it. */
+  lifetimeConversion: number;
+  lifetimeConversionTax: number;
   markers: MarkerPosition[];
   /** Sources only; the tax is reported beside them, not as a share. */
   lifetime: LifetimeShare[];
@@ -331,17 +416,28 @@ interface YearParts {
   rmd: number;
   /** The same after the tax withheld on them, at the year's average rate. */
   rmdNet: number;
+  /** Roth conversions, gross, and their tax. */
+  conversion: number;
+  conversionTax: number;
 }
 
-/** A year's parts after the tax and surplus are carved off the sales; `f` converts the basis. */
+/**
+ * A year's parts after the tax and surplus are carved off the sales; `f`
+ * converts the basis. The conversion tax comes off the sales first (a taxable
+ * sale paid it, or the conversion withheld it from the pre-tax account), then
+ * off bank cash.
+ */
 function partsOf(year: DrawdownYear, f: number): YearParts {
   const sold = year.withdrawals.reduce((a, b) => a + b, 0);
-  const keep = sold > 0 ? Math.max(0, sold - year.withdrawal_taxes - year.surplus) / sold : 0;
+  const net = Math.max(0, sold - year.withdrawal_taxes - year.surplus);
+  const fromSales = Math.min(net, year.conversion_tax);
+  const fromCash = Math.min(year.cash, year.conversion_tax - fromSales);
+  const keep = sold > 0 ? (net - fromSales) / sold : 0;
   const afterTax = sold > 0 ? Math.max(0, sold - year.withdrawal_taxes) / sold : 0;
   const rmd = year.rmd.reduce((a, b) => a + b, 0) * f;
   const income = year.income.map((v) => v * f);
   const accounts = year.withdrawals.map((v) => v * keep * f);
-  const cash = year.cash * f;
+  const cash = (year.cash - fromCash) * f;
   const spending = year.spending * f;
   const paid = income.reduce((a, b) => a + b, 0) + accounts.reduce((a, b) => a + b, 0) + cash;
   return {
@@ -354,6 +450,8 @@ function partsOf(year: DrawdownYear, f: number): YearParts {
     spending,
     rmd,
     rmdNet: rmd * afterTax,
+    conversion: year.conversion * f,
+    conversionTax: year.conversion_tax * f,
   };
 }
 
@@ -464,12 +562,19 @@ export function drawdownView(
     if (unit === "usd") {
       column.target = parts.spending;
       if (parts.taxes > 0) column.taxes = { key: "taxes", from: 0, to: -parts.taxes };
-      min = Math.min(min, -parts.taxes);
+      const below = parts.taxes + parts.conversionTax;
+      if (parts.conversionTax > 0.5 * factor(y, basis)) {
+        column.conversionTax = { key: "conversion-tax", from: -parts.taxes, to: -below };
+      }
+      min = Math.min(min, -below);
       if (parts.rmd > 0.5 * factor(y, basis)) {
         column.rmd = parts.rmdNet;
       }
+      if (parts.conversion > 0.5 * factor(y, basis)) {
+        column.conversion = parts.conversion;
+      }
     }
-    max = Math.max(max, at, column.target ?? 0, column.rmd ?? 0);
+    max = Math.max(max, at, column.target ?? 0, column.rmd ?? 0, column.conversion ?? 0);
     return column;
   });
   if (unit === "share") max = 1;
@@ -485,6 +590,8 @@ export function drawdownView(
   const taxSeries = series.find((s) => s.kind === "taxes");
   const lifetimeTax = taxSeries ? lifetimeOf(taxSeries) : 0;
   const lifetimeSpending = choice.years.reduce((sum, y) => sum + y.spending * factor(y, basis), 0);
+  const lifetimeConversion = choice.years.reduce((sum, y) => sum + y.conversion * factor(y, basis), 0);
+  const lifetimeConversionTax = choice.years.reduce((sum, y) => sum + y.conversion_tax * factor(y, basis), 0);
 
   const last = choice.years[choice.years.length - 1];
   const markers: MarkerPosition[] = [];
@@ -502,6 +609,9 @@ export function drawdownView(
     hasShortfall: columns.some((c) => c.cap != null),
     hasSurplus: columns.some((c) => c.surplus != null),
     hasRmd: choice.years.some((y) => y.rmd.some((v) => v > 0.5)),
+    hasConversion: choice.years.some((y) => y.conversion > 0.5),
+    lifetimeConversion,
+    lifetimeConversionTax,
     markers,
     lifetime,
     lifetimeTax,
@@ -573,6 +683,9 @@ export function yearPanel(
   });
 
   const rmdAccounts = body.accounts.filter((_, i) => (y.rmd[i] ?? 0) > 0.5).map((a) => a.name);
+  const roths = body.accounts
+    .map((a, i) => ({ a, i }))
+    .filter(({ a }) => a.tax_status === "TaxFree");
   const taxSeries = view.series.find((s) => s.kind === "taxes");
   let note: YearPanel["note"];
   if (parts.gap > 0.5 * f) {
@@ -598,6 +711,14 @@ export function yearPanel(
     fundedAmount: paid,
     rmd: parts.rmd > 0.5 * f
       ? { amount: parts.rmd, afterTax: parts.rmdNet, accounts: rmdAccounts }
+      : undefined,
+    conversion: parts.conversion > 0.5 * f
+      ? {
+          amount: parts.conversion,
+          tax: parts.conversionTax,
+          roth: roths.reduce((sum, { i }) => sum + (y.balances[i] ?? 0) * f, 0),
+          accounts: roths.map(({ a }) => a.name),
+        }
       : undefined,
     taxes: taxSeries && parts.taxes > 0.5 * f
       ? {
@@ -683,6 +804,8 @@ export function drawdownCsv(
     "Shortfall",
     "Surplus",
     "Required RMD",
+    "Roth conversion",
+    "Tax on conversions",
     "Total tax",
   ];
   const lines = [head.map(cell).join(",")];
@@ -698,6 +821,8 @@ export function drawdownCsv(
         parts.gap,
         parts.surplus,
         parts.rmd,
+        parts.conversion,
+        parts.conversionTax,
         y.total_tax * f,
       ]
         .map(cell)
@@ -707,14 +832,20 @@ export function drawdownCsv(
   return lines.join("\n") + "\n";
 }
 
-/** The explicit request list for a bracket ceiling: As planned, then each strategy. */
-export function requestChoices(ceiling: number): StrategyChoice[] {
-  return [
-    { kind: "AsPlanned" },
-    ...STRATEGY_ORDER.map((strategy): StrategyChoice =>
-      strategy === "BracketFilling"
-        ? { kind: "Strategy", strategy, bracket_ceiling: ceiling }
-        : { kind: "Strategy", strategy },
-    ),
-  ];
+/**
+ * The explicit request list for a bracket ceiling: As planned, then each
+ * strategy, all with the conversion toggle's setting.
+ */
+export function requestChoices(ceiling: number, conversion?: ConversionSetting): StrategyChoice[] {
+  return withConversion(
+    [
+      { kind: "AsPlanned" },
+      ...STRATEGY_ORDER.map((strategy): StrategyChoice =>
+        strategy === "BracketFilling"
+          ? { kind: "Strategy", strategy, bracket_ceiling: ceiling }
+          : { kind: "Strategy", strategy },
+      ),
+    ],
+    conversion,
+  );
 }

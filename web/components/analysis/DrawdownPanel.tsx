@@ -14,12 +14,15 @@ import { useAsync } from "@/lib/hooks/useAsync";
 import { useIsMobile } from "@/lib/hooks/useIsMobile";
 import { useSubmit } from "@/lib/hooks/useSubmit";
 import { useNav, usePlanApi } from "@/lib/nav";
+import { conversionWrites } from "@/lib/view/conversion";
 import {
   DEFAULT_CEILING,
   ceilingOf,
   choiceKey,
   choiceLabel,
   choiceOfKey,
+  conversionKey,
+  conversionLabel,
   drawdownCsv,
   drawdownView,
   isCurrentChoice,
@@ -27,9 +30,11 @@ import {
   requestChoices,
   retirementHint,
   yearPanel,
+  type ConversionSetting,
   type DrawdownBasis,
   type DrawdownUnit,
 } from "@/lib/view/drawdown";
+import { ConversionToggle } from "./ConversionToggle";
 import { DrawdownChart, DrawdownLegend } from "./DrawdownChart";
 import { DrawdownSide } from "./DrawdownSide";
 import { StrategyChips } from "./StrategyChips";
@@ -82,18 +87,23 @@ export function DrawdownPanel({
   const picked = choiceOfKey(nav.selection);
   const [ceiling, setCeiling] = useState(() => (picked && ceilingOf(picked)) ?? DEFAULT_CEILING);
   const fundingKey = JSON.stringify(scenario.funding);
+  // The Roth conversion toggle applies to every strategy at once.
+  const [conversion, setConversion] = useState<ConversionSetting>();
+  const conversionAt = conversionKey(conversion);
 
   const drawdown = useAsync<DrawdownBody | undefined>(async () => {
     if (!run) return undefined;
     return api.runs.drawdown(run.id, {
-      strategies: ceiling === DEFAULT_CEILING ? undefined : requestChoices(ceiling),
+      strategies:
+        ceiling === DEFAULT_CEILING && conversion == null ? undefined : requestChoices(ceiling, conversion),
     });
-  }, [api, run?.id, ceiling, fundingKey]);
+    // conversion is carried by conversionAt.
+  }, [api, run?.id, ceiling, fundingKey, conversionAt]);
   const body = drawdown.data;
 
   // The comparison is slower than the chart, so it follows it and can be
   // abandoned when the question changes.
-  const compareKey = body && run ? `${run.id}:${ceiling}:${fundingKey}` : undefined;
+  const compareKey = body && run ? `${run.id}:${ceiling}:${fundingKey}:${conversionAt}` : undefined;
   const [compared, setCompared] = useState<{
     key: string;
     data?: DrawdownComparison;
@@ -105,7 +115,7 @@ export function DrawdownPanel({
     api.runs
       .drawdownCompare(
         run.id,
-        { request: { strategies: requestChoices(ceiling) } },
+        { request: { strategies: requestChoices(ceiling, conversion) } },
         abort.signal,
       )
       .then((data) => setCompared({ key: compareKey, data }))
@@ -114,7 +124,7 @@ export function DrawdownPanel({
         setCompared({ key: compareKey, error: e instanceof Error ? e.message : String(e) });
       });
     return () => abort.abort();
-    // run and ceiling are carried by compareKey.
+    // run, ceiling and conversion are carried by compareKey.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, compareKey]);
   const comparison = compared?.key === compareKey ? compared : undefined;
@@ -184,22 +194,42 @@ export function DrawdownPanel({
     nav.setYear(index == null ? undefined : view.years[index]);
   const key = choiceKey(choice.choice);
   const hint = retirementHint(body.retirement.source);
-  const canApply = choice.choice.kind === "Strategy";
+  const funding = policyFor(choice.choice, scenario.funding);
+  const canApply = funding != null || conversion != null;
 
+  // Funding first, then the conversion toggle, against the plan's events as
+  // they are now: the view ran on the run's snapshot.
   const apply = () => {
-    const funding = policyFor(choice.choice, scenario.funding);
-    if (!funding) return;
+    if (!canApply) return;
     submit.run(
-      () => api.scenarios.setFunding(scenario.id, { funding, align_sweeps: true }),
+      async () => {
+        if (funding) await api.scenarios.setFunding(scenario.id, { funding, align_sweeps: true });
+        if (conversion != null) {
+          const events = await api.events.list(scenario.id);
+          for (const write of conversionWrites(events, conversion, body.conversions.overlay)) {
+            if (write.kind === "create") await api.events.create(scenario.id, write.body);
+            else await api.events.replace(scenario.id, write.id, write.body);
+          }
+        }
+      },
       () => {
         setApplying(false);
-        setNotice(
-          `The plan now sells investments using ${choiceLabel(choice.choice)}. Run the plan again to see its effect.`,
-        );
+        const done = [
+          funding ? `sells investments using ${choiceLabel(choice.choice)}` : undefined,
+          conversion == null
+            ? undefined
+            : conversion.kind === "Off"
+              ? "makes no Roth conversions"
+              : `converts to a Roth up to the ${Math.round(conversion.ceiling_rate * 100)}% bracket`,
+        ].filter(Boolean);
+        setNotice(`The plan now ${done.join(" and ")}. Run the plan again to see its effect.`);
         onPlanChanged();
       },
     );
   };
+  const overlay = body.conversions.overlay;
+  const accountName = (id: number | null | undefined) =>
+    body.accounts.find((a) => a.id === id)?.name ?? "the account";
 
   const download = () => {
     const blob = new Blob([drawdownCsv(body, choice, basis)], { type: "text/csv" });
@@ -225,7 +255,7 @@ export function DrawdownPanel({
         <Button
           variant="primary"
           disabled={!canApply}
-          title={canApply ? undefined : "Pick a strategy to apply"}
+          title={canApply ? undefined : "Pick a strategy or a conversion setting to apply"}
           onClick={() => {
             submit.fail("");
             setApplying(true);
@@ -268,6 +298,33 @@ export function DrawdownPanel({
         </div>
       )}
 
+      {choice.conversion_overlay && overlay && (
+        <div
+          role="note"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            gap: 10,
+            padding: "10px 14px",
+            fontSize: 13,
+            border: "1px solid var(--color-divider)",
+            background: "color-mix(in srgb, var(--color-accent-2) 10%, transparent)",
+          }}
+        >
+          <span style={{ flex: "1 1 300px" }}>
+            Your plan has no Roth conversions. This view adds them: each Dec 30 from{" "}
+            {overlay.start_year} until age {overlay.until_age}, {accountName(overlay.from_account_id)} to{" "}
+            {accountName(overlay.to_account_id)}, the tax paid{" "}
+            {overlay.pay_tax_from_account_id == null
+              ? "out of the conversion"
+              : `from ${accountName(overlay.pay_tax_from_account_id)}`}
+            .
+          </span>
+          <Button onClick={() => { submit.fail(""); setApplying(true); }}>Add to plan</Button>
+        </div>
+      )}
+
       <StrategyChips
         choices={body.choices}
         selected={selected}
@@ -279,6 +336,7 @@ export function DrawdownPanel({
           nav.setSelection(`bracket-${Math.round(c * 100)}`);
         }}
       />
+      <ConversionToggle body={body} value={conversion} onChange={setConversion} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
         <section style={{ flex: "999 1 520px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -320,6 +378,7 @@ export function DrawdownPanel({
         selectedKey={key}
         onSelect={select}
         basis={basis}
+        conversion={conversion == null ? undefined : conversionLabel(conversion)}
       />
 
       {applying && (
@@ -332,12 +391,23 @@ export function DrawdownPanel({
           error={submit.error}
           width={480}
         >
-          <p style={{ margin: 0, fontSize: 13 }}>
-            This sets the plan&apos;s funding policy to <b>{choiceLabel(choice.choice)}</b>
-            {ceilingOf(choice.choice) != null ? ` (up to the ${Math.round(ceiling * 100)}% bracket)` : ""}:
-            when cash runs short, it sells investments in that order. Withdrawal rules that follow a
-            strategy are aligned to it too.
-          </p>
+          {funding && (
+            <p style={{ margin: 0, fontSize: 13 }}>
+              This sets the plan&apos;s funding policy to <b>{choiceLabel(choice.choice)}</b>
+              {ceilingOf(choice.choice) != null ? ` (up to the ${Math.round(ceiling * 100)}% bracket)` : ""}:
+              when cash runs short, it sells investments in that order. Withdrawal rules that follow a
+              strategy are aligned to it too.
+            </p>
+          )}
+          {conversion != null && (
+            <p style={{ margin: 0, fontSize: 13 }}>
+              {conversion.kind === "Off"
+                ? "Roth conversions: the plan's conversion events are switched off."
+                : body.conversions.events.length > 0 || !overlay
+                  ? `Roth conversions: the plan's conversion events fill to the top of the ${Math.round(conversion.ceiling_rate * 100)}% bracket each year.`
+                  : `Roth conversions: adds a yearly Dec 30 conversion from ${accountName(overlay.from_account_id)} to ${accountName(overlay.to_account_id)}, up to the top of the ${Math.round(conversion.ceiling_rate * 100)}% bracket, from ${overlay.start_year} until age ${overlay.until_age}.`}
+            </p>
+          )}
           <p style={{ margin: 0, fontSize: 13, color: MUTED }}>
             The plan needs a new run before its results reflect the change.
           </p>

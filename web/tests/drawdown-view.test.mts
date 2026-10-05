@@ -6,10 +6,15 @@ import {
   choiceKey,
   choiceOfKey,
   comparisonLines,
+  conversionKey,
+  conversionLabel,
+  conversionOfKey,
+  conversionOptions,
   drawdownCsv,
   drawdownView,
   isCurrentChoice,
   policyFor,
+  requestChoices,
   yearPanel,
 } from "../lib/view/drawdown.ts";
 
@@ -22,6 +27,8 @@ function year(y: number, over: Partial<DrawdownYear> = {}): DrawdownYear {
     withdrawals: [70, 0],
     rmd: [0, 0],
     withdrawal_taxes: 10,
+    conversion: 0,
+    conversion_tax: 0,
     cash: 0,
     surplus: 0,
     shortfall: 0,
@@ -34,6 +41,7 @@ function year(y: number, over: Partial<DrawdownYear> = {}): DrawdownYear {
 const choice = (years: DrawdownYear[]): DrawdownChoice => ({
   choice: { kind: "Strategy", strategy: "TaxEfficientEarly" },
   overlay: false,
+  conversion_overlay: false,
   summary: {
     lifetime_spending: 0,
     lifetime_tax: 0,
@@ -56,6 +64,7 @@ const body = (years: DrawdownYear[]): DrawdownBody => ({
   ],
   income_sources: [{ event_id: 7, name: "Social Security" }],
   fixed_sweeps: [],
+  conversions: { unavailable: null, events: [], overlay: null },
   choices: [choice(years)],
 });
 
@@ -156,6 +165,7 @@ test("the comparison picks the best of each column, unless all tie", () => {
   const row = (strategy: "ProRata" | "TaxFreeFirst", s: number, e: number, t: number) => ({
     choice: { kind: "Strategy" as const, strategy },
     overlay: false,
+    conversion_overlay: false,
     success_rate: s,
     median_final_net_worth: e,
     median_after_tax_ending_balance: e,
@@ -199,6 +209,7 @@ test("the comparison headlines the after-tax balance and keeps pre-tax for the h
   const row = (strategy: "TaxDeferredFirst" | "TaxFreeFirst", preTax: number, afterTax: number) => ({
     choice: { kind: "Strategy" as const, strategy },
     overlay: false,
+    conversion_overlay: false,
     success_rate: 0.9,
     median_final_net_worth: preTax,
     median_final_net_worth_real: preTax / 2,
@@ -225,4 +236,81 @@ test("the side panel's balance carries the after-tax figure in the chosen basis"
   const b = body([year(2041)]);
   assert.equal(drawdownView(b, b.choices[0], "usd", "nominal").endBalanceAfterTax, 900);
   assert.equal(drawdownView(b, b.choices[0], "usd", "real").endBalanceAfterTax, 720);
+});
+
+test("a conversion is marked above the axis and its tax hangs below the withdrawals' tax", () => {
+  // Spending 100 from 40 income and 70 of sales (10 withheld), plus a 50k
+  // conversion whose 11 of tax the bank paid (cash 11).
+  const years = [year(2041), year(2042, { conversion: 50, conversion_tax: 11, cash: 11 })];
+  const b = body(years);
+  const view = drawdownView(b, b.choices[0], "usd", "nominal");
+  const [plain, converting] = view.columns;
+  assert.equal(plain.conversion, undefined);
+  assert.equal(plain.conversionTax, undefined);
+  assert.equal(converting.conversion, 50);
+  // Sources still meet the line: the tax came out of the cash, not the bars.
+  assert.equal(converting.stack.at(-1)?.to, 100);
+  assert.equal(converting.top, 100);
+  assert.deepEqual([converting.taxes?.from, converting.taxes?.to], [0, -10]);
+  assert.deepEqual([converting.conversionTax?.from, converting.conversionTax?.to], [-10, -21]);
+  assert.equal(view.min, -21);
+  assert.equal(view.hasConversion, true);
+  assert.equal(view.lifetimeConversion, 50);
+  assert.equal(view.lifetimeConversionTax, 11);
+  // Not spending, not a source.
+  assert.ok(!view.series.some((s) => s.name.includes("onversion")));
+
+  // Paid by a sale: it comes off the sales, which still meet the line.
+  const sold = body([year(2041, { withdrawals: [81, 0], conversion: 50, conversion_tax: 11 })]);
+  const col = drawdownView(sold, sold.choices[0], "usd", "nominal").columns[0];
+  assert.equal(col.stack.at(-1)?.to, 100);
+
+  // Share mode leaves both out.
+  const share = drawdownView(b, b.choices[0], "share", "nominal").columns[1];
+  assert.equal(share.conversion, undefined);
+  assert.equal(share.conversionTax, undefined);
+});
+
+test("the panel shows the conversion, its tax and the Roth's balance; the csv has the columns", () => {
+  const years = [year(2041, { conversion: 50, conversion_tax: 11, cash: 11, inflation: 2 })];
+  const b = body(years);
+  const view = drawdownView(b, b.choices[0], "usd", "real");
+  const panel = yearPanel(b, b.choices[0], view, 0)!;
+  assert.deepEqual(panel.conversion, { amount: 25, tax: 5.5, roth: 250, accounts: ["Roth"] });
+  assert.equal(panel.fundedAmount, 50, "spending 100, in today's dollars");
+
+  const csv = drawdownCsv(b, b.choices[0], "nominal").trim().split("\n");
+  const head = csv[0].split(",");
+  const row = csv[1].split(",");
+  assert.equal(row[head.indexOf("Roth conversion")], "50");
+  assert.equal(row[head.indexOf("Tax on conversions")], "11");
+});
+
+test("the conversion toggle keys round-trip and go on every choice", () => {
+  for (const setting of [undefined, { kind: "Off" } as const, { kind: "UpTo", ceiling_rate: 0.22 } as const]) {
+    assert.deepEqual(conversionOfKey(conversionKey(setting)), setting);
+  }
+  assert.equal(conversionLabel(undefined), "As planned");
+  assert.equal(conversionLabel({ kind: "Off" }), "None");
+  assert.equal(conversionLabel({ kind: "UpTo", ceiling_rate: 0.24 }), "Up to 24%");
+
+  const plain = requestChoices(0.12);
+  assert.ok(plain.every((c) => c.conversion === undefined));
+  const converting = requestChoices(0.12, { kind: "UpTo", ceiling_rate: 0.22 });
+  assert.equal(converting.length, 7);
+  assert.ok(converting.every((c) => c.conversion?.kind === "UpTo"));
+  // The toggle is not part of a chip's key.
+  assert.deepEqual(converting.map(choiceKey), plain.map(choiceKey));
+});
+
+test("the toggle is disabled, with the reason, when the plan cannot convert", () => {
+  const b = body([year(2041)]);
+  const open = conversionOptions(b);
+  assert.deepEqual(open.map((o) => o.value), ["planned", "none", "12", "22", "24"]);
+  assert.ok(open.every((o) => !o.disabled));
+
+  const reason = "Roth conversions need a Roth (tax-free) account to convert into.";
+  const closed = conversionOptions({ ...b, conversions: { unavailable: reason, events: [], overlay: null } });
+  assert.equal(closed[0].disabled, undefined, "As planned stays on");
+  assert.ok(closed.slice(1).every((o) => o.disabled && o.title === reason));
 });

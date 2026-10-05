@@ -72,6 +72,7 @@ async fn a_run_projects_its_median_path_under_each_strategy() {
                 + y["shortfall"].as_f64().unwrap();
             let outflow = y["spending"].as_f64().unwrap()
                 + y["withdrawal_taxes"].as_f64().unwrap()
+                + y["conversion_tax"].as_f64().unwrap()
                 + y["surplus"].as_f64().unwrap();
             assert!((inflow - outflow).abs() <= 1.0, "{y}");
         }
@@ -89,6 +90,27 @@ async fn a_run_projects_its_median_path_under_each_strategy() {
     assert_eq!(status, StatusCode::OK, "{one}");
     assert_eq!(one["retirement"]["source"], "request");
     assert_eq!(one["choices"][0]["years"][0]["year"], 2060);
+
+    // The conversion toggle: the plan has none, so a rate adds the overlay.
+    assert_eq!(body["conversions"]["events"], json!([]));
+    assert!(body["conversions"]["overlay"].is_object());
+    let (status, converting) = app
+        .post(
+            &format!("/api/runs/{run_id}/drawdown"),
+            json!({"strategies": [{"kind": "AsPlanned",
+                                    "conversion": {"kind": "UpTo", "ceiling_rate": 0.22}}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{converting}");
+    let choice = &converting["choices"][0];
+    assert_eq!(choice["choice"]["conversion"]["kind"], "UpTo");
+    assert_eq!(choice["conversion_overlay"], true);
+    let years = choice["years"].as_array().unwrap();
+    assert!(
+        years
+            .iter()
+            .any(|y| y["conversion"].as_f64().unwrap() > 1.0)
+    );
 
     let (status, error) = app
         .post(
