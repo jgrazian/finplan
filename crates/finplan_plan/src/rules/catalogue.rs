@@ -234,6 +234,19 @@ const CATALOGUE: &[PlanCheck] = &[
          Reinvest cash event.",
     ),
     check(
+        "roth_conversion_opportunity",
+        Rule,
+        Plan,
+        Fix,
+        "Pre-tax money whose RMDs fall due inside the plan, after years with ordinary income \
+         below the top of the 22% bracket, where the RMDs outrun spending or are taxed at a \
+         higher marginal rate, and no Roth conversion yet.",
+        "Yearly Roth conversions (the Roth conversions template) up to the 12% or the 22% \
+         bracket until the year before RMDs, tax paid from the largest taxable account, \
+         opening a Roth first when there is none. Judged on after-tax ending balance and \
+         lifetime tax, not success rate.",
+    ),
+    check(
         "shortfall_account_concentration",
         Rule,
         Results,
@@ -266,6 +279,17 @@ const CATALOGUE: &[PlanCheck] = &[
         Check,
         "Retirement spending that never changes, with no health care or late-life costs.",
         "Spending events for what is missing, labelled as estimates.",
+    ),
+    check(
+        "early_withdrawal_penalties",
+        Reviewer,
+        Plan,
+        Fix,
+        "Early-withdrawal penalties on the shown path above about 1% of lifetime spending \
+         (the run's penalties line).",
+        "The Penalty-aware withdrawal order on the sweeps that pay for spending (the funding \
+         policy, a plan setting, when it is what sells), or a conversion ladder: Roth \
+         conversions started five years before the penalized withdrawals.",
     ),
     check(
         "early_retirement_stress",

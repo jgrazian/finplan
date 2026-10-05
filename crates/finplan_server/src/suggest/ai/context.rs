@@ -334,6 +334,70 @@ fn cash_flow_row(
     )
 }
 
+/// Most penalized years the tax line lists.
+const MAX_PENALTY_YEARS: usize = 10;
+
+/// The shown path's tax over the plan and its early-withdrawal penalties, by
+/// year, against lifetime spending: what `early_withdrawal_penalties` is
+/// judged on.
+fn tax_line(results: &Results, path: &str, age: &dyn Fn(i64) -> String) -> String {
+    let flows = &results.cash_flows;
+    let taxes: f64 = flows.iter().map(|c| c.taxes).sum();
+    let spending: f64 = flows.iter().map(|c| c.expenses).sum();
+    let penalties: f64 = flows.iter().map(|c| c.early_withdrawal_penalties).sum();
+    let share = |v: f64| {
+        if spending > 0.0 {
+            format!(" ({} of lifetime spending)", pct(v / spending))
+        } else {
+            String::new()
+        }
+    };
+    let mut line = format!(
+        "Lifetime tax on {path} (nominal, penalties included): {}{}.",
+        money(taxes),
+        share(taxes)
+    );
+    if penalties < 0.5 {
+        line.push_str(" Early-withdrawal penalties: none.");
+        return line;
+    }
+    let mut years: Vec<_> = flows
+        .iter()
+        .filter(|c| c.early_withdrawal_penalties >= 0.5)
+        .collect();
+    let count = years.len();
+    years.sort_by(|a, b| {
+        b.early_withdrawal_penalties
+            .total_cmp(&a.early_withdrawal_penalties)
+    });
+    years.truncate(MAX_PENALTY_YEARS);
+    years.sort_by_key(|c| c.year);
+    let listed: Vec<String> = years
+        .iter()
+        .map(|c| {
+            format!(
+                "{} (age {}) {}",
+                c.year,
+                age(c.year),
+                money(c.early_withdrawal_penalties)
+            )
+        })
+        .collect();
+    let _ = write!(
+        line,
+        " Early-withdrawal penalties: {}{} in {count} years: {}{}.",
+        money(penalties),
+        share(penalties),
+        listed.join(", "),
+        if count > years.len() {
+            ", the largest shown"
+        } else {
+            ""
+        }
+    );
+    line
+}
+
 /// A stored path of the run as text: the balance and cash flows year by year.
 /// `results` is the run read with the path's series; `asked` names the rank
 /// the model asked for, and `years` narrows the rows.
@@ -420,6 +484,8 @@ pub fn render_path(
             let _ = writeln!(out, "Warnings on this path: {}.", shown_warnings.join("; "));
         }
     }
+
+    let _ = writeln!(out, "{}", tax_line(results, "this path", &age));
 
     let flows: Vec<_> = results
         .cash_flows
@@ -789,6 +855,35 @@ pub(super) fn render_plan(out: &mut String, graph: &ScenarioGraph) {
     } else {
         let _ = writeln!(out, "Taxes: none configured.");
     }
+    match graph.funding() {
+        Some(policy) => {
+            let excluded: Vec<String> = policy
+                .exclude_accounts
+                .iter()
+                .map(|id| format!("#{id}"))
+                .collect();
+            let _ = writeln!(
+                out,
+                "Funding policy: {}{}{}: a bank that runs short is covered by selling investments in that order. It is a plan setting, not something a change can edit.",
+                policy.strategy.as_str(),
+                policy
+                    .bracket_ceiling
+                    .map(|c| format!(" up to the {} bracket", pct(c)))
+                    .unwrap_or_default(),
+                if excluded.is_empty() {
+                    String::new()
+                } else {
+                    format!(", never selling {}", excluded.join(", "))
+                }
+            );
+        }
+        None => {
+            let _ = writeln!(
+                out,
+                "Funding policy: none; only the plan's events (sweeps, transfers) move money to cover spending."
+            );
+        }
+    }
 
     let _ = writeln!(out, "\nReturn profiles in use:");
     let mut profiles: Vec<_> = graph.return_profiles.values().collect();
@@ -1098,6 +1193,8 @@ fn render_run(out: &mut String, graph: &ScenarioGraph, results: &Results) {
                 .join("; ")
         );
     }
+
+    let _ = writeln!(out, "{}", tax_line(results, &path, &age));
 
     let start = investable_at_start(graph, results);
     let _ = writeln!(

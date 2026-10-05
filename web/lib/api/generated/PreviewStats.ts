@@ -10,4 +10,15 @@ export type PreviewStats = {
    */
   real_final: RealFinal | null;
   funding: FundingDiagnostics | null;
+  /**
+   * The median after-tax ending balance over all iterations, nominal:
+   * tax-deferred balances count at one minus the plan's deferred tax rate.
+   * What a Roth conversion is judged on, where success rarely moves.
+   */
+  after_tax_final?: number;
+  /**
+   * Lifetime tax, early-withdrawal penalties included, on the median path,
+   * nominal.
+   */
+  lifetime_taxes?: number;
 };

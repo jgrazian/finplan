@@ -8,5 +8,17 @@ export type CashFlow = {
   withdrawals: number;
   appreciation: number;
   net_cash_flow: number;
+  /**
+   * Income tax and early-withdrawal penalties.
+   */
   taxes: number;
+  /**
+   * The ordinary income the year's income tax was figured on: taxable
+   * income, tax-deferred withdrawals and Roth conversions, gross.
+   */
+  ordinary_income: number;
+  /**
+   * Early-withdrawal penalties paid this year, part of `taxes`.
+   */
+  early_withdrawal_penalties: number;
 };

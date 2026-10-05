@@ -3427,6 +3427,15 @@ async fn a_preview_simulates_the_edit_against_its_run() {
     assert!(
         edited["real_final"]["p50"].as_f64().unwrap() > base["real_final"]["p50"].as_f64().unwrap()
     );
+    // What a tax change is judged on: the median after-tax ending balance
+    // and the median path's lifetime tax, on both sides.
+    assert!(
+        edited["after_tax_final"].as_f64().unwrap() > base["after_tax_final"].as_f64().unwrap(),
+        "{preview}"
+    );
+    for side in [base, edited] {
+        assert!(side["lifetime_taxes"].as_f64().unwrap() >= 0.0, "{side}");
+    }
 
     // Nothing was written: the plan still spends, and no run was added.
     let (_, event) = app
@@ -3560,6 +3569,9 @@ async fn an_unchanged_preview_reproduces_its_run() {
         assert_eq!(preview["paired"], true);
         assert_eq!(preview["diff"], json!([]));
         assert_eq!(preview["base"], preview["edited"], "{preview}");
+        // The stored run kept its after-tax median and lifetime tax.
+        assert!(preview["base"]["after_tax_final"].is_number(), "{preview}");
+        assert!(preview["base"]["lifetime_taxes"].is_number(), "{preview}");
     }
 
     // A different sample size simulates the base too, and still agrees.

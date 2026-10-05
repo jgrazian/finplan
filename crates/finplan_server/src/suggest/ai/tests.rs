@@ -101,6 +101,8 @@ fn results() -> Results {
                 appreciation: 0.0,
                 net_cash_flow: 0.0,
                 taxes: 0.0,
+                ordinary_income: 0.0,
+                early_withdrawal_penalties: 0.0,
             })
             .collect(),
         warnings: Vec::new(),
@@ -1402,6 +1404,25 @@ fn the_standard_checks_are_listed_with_what_each_rule_found() {
     assert!(checks.contains(
         "- rmd_missing (rule, fix / plan): ran, found nothing. Looks for: Tax-deferred money"
     ));
+    // Spec 21's conversion checks: the rule's state, and the reviewer's own.
+    assert!(checks.contains(
+        "- roth_conversion_opportunity (rule, fix / plan): ran, found nothing. Looks for: \
+         Pre-tax money whose RMDs fall due inside the plan"
+    ));
+    assert!(checks.contains(
+        "- early_withdrawal_penalties (reviewer, fix / plan): yours. Looks for: \
+         Early-withdrawal penalties"
+    ));
+    let conversion = Draft {
+        rule: "roth_conversion_opportunity",
+        kind: Kind::Fix,
+        section: Section::Plan,
+        ..note("401(k)'s RMDs from 2071 follow years that leave $2M unused")
+    };
+    let text = context(&[conversion]).text;
+    assert!(text.contains("- roth_conversion_opportunity (rule, fix / plan): ran, wrote 1 note."));
+    // Tax checks are judged on what previews report for them.
+    assert!(prompt::SYSTEM_PROMPT.contains("after_tax_final, lifetime_taxes"));
     // The model is told not to redo what ran.
     assert!(prompt::SYSTEM_PROMPT.contains("Do not redo a check marked ran"));
     assert!(!prompt::SYSTEM_PROMPT.contains("Do not repeat a note the rules already wrote"));
@@ -2472,7 +2493,7 @@ async fn a_marginal_optimization_is_sent_back_with_its_deltas() {
         "success +0.05 pts",
         "funding +0.05 pts",
         "real median +0.4%",
-        "at least +1 pts on success or funding success, +5% on the real median, or +10% on the real P10",
+        "at least +1 pts on success or funding success, +5% on the real median or the after-tax ending balance, 5% less lifetime tax, or +10% on the real P10",
         "correctness or realism",
     ] {
         assert!(
@@ -2612,6 +2633,35 @@ fn materiality_comes_from_config_and_measures_improvements_only() {
     );
     // Nothing comparable: not material.
     assert!(!Deltas::of(&json!({"problems": []})).clears(&floor));
+
+    // A Roth conversion: success and the real median stay put, while the
+    // after-tax ending balance rises and lifetime tax falls; either clears.
+    let stats = |after_tax: f64, tax: f64| {
+        json!({"success_rate": 0.95, "funding_success_rate": 0.95,
+               "real_final": {"p10": 1.0e6, "p50": 2.0e6},
+               "after_tax_final": after_tax, "lifetime_taxes": tax})
+    };
+    let converted = Deltas::of(&json!({
+        "base": stats(4.0e6, 1.0e6), "edited": stats(4.3e6, 1.0e6)
+    }));
+    assert!(converted.clears(&Materiality::default()));
+    assert!(
+        converted
+            .describe()
+            .contains("after-tax ending balance +7.5%"),
+        "{}",
+        converted.describe()
+    );
+    let saved = Deltas::of(&json!({
+        "base": stats(4.0e6, 1.0e6), "edited": stats(4.0e6, 0.8e6)
+    }));
+    assert!(saved.clears(&Materiality::default()));
+    assert!(saved.describe().contains("lifetime tax -20.0%"));
+    // More tax is never material.
+    let dearer = Deltas::of(&json!({
+        "base": stats(4.0e6, 1.0e6), "edited": stats(4.0e6, 1.3e6)
+    }));
+    assert!(!dearer.clears(&Materiality::default()));
 
     for bad in [
         AiConfig {
@@ -3324,6 +3374,57 @@ fn a_stored_path_renders_with_its_percentile_and_thins_long_runs() {
     assert_eq!(flow_rows(&narrow), 3);
     assert!(narrow.contains("2032-12-31,"));
     assert!(!narrow.contains("2040-12-31"));
+}
+
+#[test]
+fn the_run_and_a_stored_path_show_lifetime_tax_and_early_withdrawal_penalties() {
+    let g = graph();
+    let mut r = results();
+    // None on the hand-built path.
+    assert!(
+        context(&[])
+            .text
+            .contains("Early-withdrawal penalties: none.")
+    );
+    // $9k a year of tax; penalties in 2037-2039, at 41-43 (born 1996).
+    for c in &mut r.cash_flows {
+        c.taxes = 9_000.0;
+        if (2037..=2039).contains(&c.year) {
+            c.early_withdrawal_penalties = 3_000.0 * (c.year - 2036) as f64;
+        }
+    }
+    let run = ReviewContext::build(&g, &r, &[]).text;
+    assert!(
+        run.contains(
+            "Lifetime tax on the P50 path by final nominal net worth (nominal, penalties \
+             included): $630,000 (9.00% of lifetime spending). Early-withdrawal penalties: \
+             $18,000 (0.26% of lifetime spending) in 3 years: 2037 (age 41) $3,000, 2038 \
+             (age 42) $6,000, 2039 (age 43) $9,000."
+        ),
+        "{run}"
+    );
+    let path = render_path(&g, &r, "median", Some((2030, 2032)));
+    assert!(
+        path.contains("Lifetime tax on this path (nominal, penalties included): $630,000"),
+        "{path}"
+    );
+    assert!(path.contains("in 3 years: 2037 (age 41) $3,000"), "{path}");
+}
+
+#[test]
+fn the_plan_shows_its_funding_policy() {
+    let mut g = graph();
+    assert!(
+        ReviewContext::build(&g, &results(), &[])
+            .text
+            .contains("Funding policy: none;")
+    );
+    g.scenario.funding_strategy = Some("PenaltyAware".into());
+    assert!(
+        ReviewContext::build(&g, &results(), &[])
+            .text
+            .contains("Funding policy: PenaltyAware: a bank that runs short")
+    );
 }
 
 #[test]

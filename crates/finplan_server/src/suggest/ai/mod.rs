@@ -1483,14 +1483,19 @@ fn check_source_evidence(
 }
 
 /// What a preview moved, from its `base` and `edited` statistics: rates in
-/// percentage points, real final net worth in percent. `None` where the
-/// preview does not carry the figure.
+/// percentage points, real final net worth, the after-tax ending balance and
+/// lifetime tax in percent. `None` where the preview does not carry the
+/// figure.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Deltas {
     success_pts: Option<f64>,
     funding_pts: Option<f64>,
     median_pct: Option<f64>,
     p10_pct: Option<f64>,
+    /// The median after-tax ending balance, up.
+    after_tax_pct: Option<f64>,
+    /// Lifetime tax, down: positive is tax saved.
+    tax_cut_pct: Option<f64>,
 }
 
 impl Deltas {
@@ -1514,21 +1519,32 @@ impl Deltas {
                 None
             }
         };
+        let cut = |pointer: &str| {
+            let (base, edited) = (stat("base", pointer)?, stat("edited", pointer)?);
+            (base > 0.0).then(|| (base - edited) / base * 100.0)
+        };
         Self {
             success_pts: pts("/success_rate"),
             funding_pts: pts("/funding_success_rate"),
             median_pct: pct("/real_final/p50"),
             p10_pct: pct("/real_final/p10"),
+            after_tax_pct: pct("/after_tax_final"),
+            tax_cut_pct: cut("/lifetime_taxes"),
         }
     }
 
-    /// Whether any one improvement reaches its floor.
+    /// Whether any one improvement reaches its floor. The after-tax ending
+    /// balance and lifetime tax are held to the median's floor: a Roth
+    /// conversion often leaves success where it was and still saves a great
+    /// deal (spec 21).
     fn clears(&self, floor: &Materiality) -> bool {
         let at_least = |delta: Option<f64>, min: f64| delta.is_some_and(|d| d >= min);
         at_least(self.success_pts, floor.rate_pts)
             || at_least(self.funding_pts, floor.rate_pts)
             || at_least(self.median_pct, floor.median_pct)
             || at_least(self.p10_pct, floor.p10_pct)
+            || at_least(self.after_tax_pct, floor.median_pct)
+            || at_least(self.tax_cut_pct, floor.median_pct)
     }
 
     /// "success +0.05 pts, funding +0.05 pts, real median +0.4%, real P10 +0.1%"
@@ -1545,6 +1561,11 @@ impl Deltas {
             ("funding", self.funding_pts.map(|v| signed(v, 2, " pts"))),
             ("real median", self.median_pct.map(|v| signed(v, 1, "%"))),
             ("real P10", self.p10_pct.map(|v| signed(v, 1, "%"))),
+            (
+                "after-tax ending balance",
+                self.after_tax_pct.map(|v| signed(v, 1, "%")),
+            ),
+            ("lifetime tax", self.tax_cut_pct.map(|v| signed(-v, 1, "%"))),
         ]
         .into_iter()
         .filter_map(|(name, v)| v.map(|v| format!("{name} {v}")))
@@ -1560,8 +1581,9 @@ impl Deltas {
 impl Materiality {
     fn describe(&self) -> String {
         format!(
-            "at least +{} pts on success or funding success, +{}% on the real median, or +{}% on the real P10",
+            "at least +{} pts on success or funding success, +{}% on the real median or the after-tax ending balance, {}% less lifetime tax, or +{}% on the real P10",
             trim_float(self.rate_pts),
+            trim_float(self.median_pct),
             trim_float(self.median_pct),
             trim_float(self.p10_pct)
         )

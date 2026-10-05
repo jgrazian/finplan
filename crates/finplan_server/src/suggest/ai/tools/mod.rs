@@ -267,7 +267,7 @@ pub const EXPAND_TEMPLATE: &str = "expand_template";
 pub const SPECS: &[ToolSpec] = &[
     ToolSpec {
         name: PREVIEW,
-        description: "Simulate the plan with one path's steps applied in order, against the same run's random draws, and compare with the run. Returns the diff the user would see, any problems with the changes (stale expect, bad path, invalid body), and base vs edited statistics: success_rate, funding_success_rate, real (today's dollars) final net worth quantiles, and funding diagnostics. Nothing is saved. Preview every path of a note before submitting it, with exactly the steps you will submit; the number of previews per review is limited.",
+        description: "Simulate the plan with one path's steps applied in order, against the same run's random draws, and compare with the run. Returns the diff the user would see, any problems with the changes (stale expect, bad path, invalid body), and base vs edited statistics: success_rate, funding_success_rate, real (today's dollars) final net worth quantiles, funding diagnostics, after_tax_final (the median after-tax ending balance, nominal: tax-deferred balances net of the plan's deferred tax rate) and lifetime_taxes (on the median path, nominal, early-withdrawal penalties included). Judge a tax change, such as Roth conversions or a withdrawal order, on after_tax_final and lifetime_taxes: success rarely moves. Nothing is saved. Preview every path of a note before submitting it, with exactly the steps you will submit; the number of previews per review is limited.",
         schema: plan::preview_schema,
         group: Group::Plan,
         metric: AiTool::Preview,
