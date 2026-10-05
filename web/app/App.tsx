@@ -27,6 +27,7 @@ import { useAsync } from "@/lib/hooks/useAsync";
 import { usePlanList } from "@/lib/hooks/usePlanList";
 import { useReview } from "@/lib/hooks/useReview";
 import { useRun } from "@/lib/hooks/useRun";
+import { useRunEffort } from "@/lib/hooks/useRunEffort";
 import { type Session, useSession } from "@/lib/hooks/useSession";
 import { useWorkspace } from "@/lib/hooks/useWorkspace";
 import { useLocalMode } from "@/lib/local/useLocalMode";
@@ -200,11 +201,16 @@ function Workbench({
   }, [user.guest, nav.tab, setTab]);
 
   // How hard a run should work is a property of the question being asked, not
-  // of the plan, so it lives here for the session rather than on the scenario.
-  // The account preference seeds it; the Results slider moves it from there.
-  const [requestedEffort, setEffort] = useState<RunEffort>(() =>
-    nearestStop(user.default_iterations),
-  );
+  // of the plan, so it is this browser's rather than the scenario's: the
+  // Results slider's last stop, kept across reloads, else the account
+  // preference. Saving a new preference moves the slider to it.
+  const [requestedEffort, setEffort] = useRunEffort(user.default_iterations);
+  const savedDefault = useRef(user.default_iterations);
+  useEffect(() => {
+    if (savedDefault.current === user.default_iterations) return;
+    savedDefault.current = user.default_iterations;
+    setEffort(nearestStop(user.default_iterations));
+  }, [user.default_iterations, setEffort]);
 
   // Plans live in one of two homes (spec 19). The list is both, each asked
   // only when it can answer, and one failing leaves the other's plans listed.
@@ -451,11 +457,13 @@ function Workbench({
     [nav, scenarios, scenarioSlug],
   );
 
-  // What a run is asked for; the same on this device and on the server.
+  // What a run is asked for; the same on this device and on the server. The
+  // web UI only asks for fixed counts; the ± on the success rate says when a
+  // count is too small.
   const runSettings = useCallback(
     (asked: RunEffort) => ({
       iterations: asked.iterations,
-      converge: asked.converge,
+      converge: false,
       percentiles: STORED_PERCENTILES,
     }),
     [],

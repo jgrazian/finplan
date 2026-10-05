@@ -20,7 +20,8 @@ use crate::graph::ScenarioGraph;
 ///
 /// A converging run is asked for by someone who does not want to pick a count,
 /// so it needs an answer in the time a count would have taken. Ten thousand
-/// iterations is roughly twice the largest fixed size the UI offers.
+/// iterations is the largest fixed size the web UI offers (which no longer
+/// asks for converging runs; the API and the TUI still do).
 pub const CONVERGE_CEILING: i64 = 10_000;
 
 /// The most cost units one run may be, however much budget is left.

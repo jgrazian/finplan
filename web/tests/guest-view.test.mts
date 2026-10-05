@@ -1,34 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { clampEffort, effortStops } from "../lib/view/effort.ts";
-import {
-  guestNotice,
-  intervalLabel,
-  SIGN_UP_FOR_ITERATIONS,
-  successIntervalPoints,
-} from "../lib/view/guest.ts";
-
-test("the interval is 1.96·√(p(1−p)/n) in percentage points", () => {
-  const points = successIntervalPoints(0.8, 100);
-  assert.ok(points != null);
-  assert.ok(Math.abs(points - 7.84) < 1e-9);
-  assert.equal(intervalLabel(points), "8");
-});
-
-test("more iterations narrow the interval, and the extremes have none", () => {
-  const small = successIntervalPoints(0.8, 100)!;
-  const large = successIntervalPoints(0.8, 1_000)!;
-  assert.ok(large < small);
-  assert.equal(intervalLabel(large), "2");
-  assert.equal(successIntervalPoints(1, 100), 0);
-  assert.equal(successIntervalPoints(0, 100), 0);
-});
-
-test("a tight interval keeps a decimal and nothing is claimed without a sample", () => {
-  assert.equal(intervalLabel(0.62), "0.6");
-  assert.equal(successIntervalPoints(0.8, 0), undefined);
-  assert.equal(successIntervalPoints(Number.NaN, 100), undefined);
-});
+import { clampEffort, effortStops, parseStoredEffort } from "../lib/view/effort.ts";
+import { guestNotice, SIGN_UP_FOR_ITERATIONS } from "../lib/view/guest.ts";
 
 test("the guest banner names the retention window and the way out", () => {
   const notice = guestNotice(30);
@@ -41,38 +14,36 @@ test("the guest banner names the retention window and the way out", () => {
   assert.equal(SIGN_UP_FOR_ITERATIONS, "Sign up free for 1,000 iterations");
 });
 
-test("a guest's cap of 100 offers only 100 and hides converge", () => {
-  assert.deepEqual(effortStops(100), [{ iterations: 100, converge: false }]);
+test("a guest's cap of 100 offers only 100", () => {
+  assert.deepEqual(effortStops(100), [{ iterations: 100 }]);
 });
 
-test("stops above the cap are dropped and converge needs its floor of 500", () => {
+test("stops above the cap are dropped", () => {
   assert.deepEqual(
-    effortStops(1_000).map((s) => (s.converge ? "converge" : s.iterations)),
-    [100, 250, 1_000, "converge"],
+    effortStops(1_000).map((s) => s.iterations),
+    [100, 250, 1_000],
   );
   assert.deepEqual(
-    effortStops(499).map((s) => (s.converge ? "converge" : s.iterations)),
-    [100, 250],
+    effortStops(undefined).map((s) => s.iterations),
+    [100, 250, 1_000, 2_000, 5_000, 10_000],
   );
-  assert.equal(effortStops(undefined).length, 6);
   // A cap under the lowest stop is still a run the account can start.
-  assert.deepEqual(effortStops(50), [{ iterations: 50, converge: false }]);
+  assert.deepEqual(effortStops(50), [{ iterations: 50 }]);
 });
 
 test("an effort above the cap comes down to the highest stop allowed", () => {
-  assert.deepEqual(clampEffort({ iterations: 5_000, converge: false }, 1_000), {
-    iterations: 1_000,
-    converge: false,
-  });
-  assert.deepEqual(clampEffort({ iterations: 1_000, converge: false }, 100), {
-    iterations: 100,
-    converge: false,
-  });
-  assert.deepEqual(clampEffort({ iterations: 500, converge: true }, 100), {
-    iterations: 100,
-    converge: false,
-  });
-  const kept = { iterations: 250, converge: false };
+  assert.deepEqual(clampEffort({ iterations: 10_000 }, 5_000), { iterations: 5_000 });
+  assert.deepEqual(clampEffort({ iterations: 1_000 }, 100), { iterations: 100 });
+  const kept = { iterations: 250 };
   assert.equal(clampEffort(kept, 5_000), kept);
   assert.equal(clampEffort(kept), kept);
+});
+
+test("a stored stop is kept only while it is still a stop", () => {
+  assert.deepEqual(parseStoredEffort("10000"), { iterations: 10_000 });
+  assert.deepEqual(parseStoredEffort("250"), { iterations: 250 });
+  assert.equal(parseStoredEffort(null), undefined);
+  assert.equal(parseStoredEffort(""), undefined);
+  assert.equal(parseStoredEffort("500"), undefined);
+  assert.equal(parseStoredEffort("converge"), undefined);
 });

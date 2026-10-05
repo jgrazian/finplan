@@ -33,9 +33,7 @@ export function EffortPanel({
 }) {
   const listId = useId();
   const stops = effortStops(maxIterations);
-  const found = stops.findIndex(
-    (stop) => stop.converge === value.converge && stop.iterations === value.iterations,
-  );
+  const found = stops.findIndex((stop) => stop.iterations === value.iterations);
   const index = found === -1 ? 0 : found;
 
   return (
@@ -107,7 +105,7 @@ export function EffortMenu({
   return (
     <details className="effort-menu">
       <summary className="sbtn" aria-label="Monte Carlo iterations for the next run">
-        {value.converge ? effortLabel(value) : `${effortLabel(value)} runs`}{" "}
+        {effortLabel(value)} runs{" "}
         <span aria-hidden>▾</span>
       </summary>
       <div className="effort-menu-panel">

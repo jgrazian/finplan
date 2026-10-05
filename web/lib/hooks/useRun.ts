@@ -94,7 +94,7 @@ export function useRun(scenario: Scenario | undefined, planRef: string | undefin
   const start=useCallback(async(effort:RunEffort)=>{
     if(id == null || key == null) return;
     try {
-      const queued=await planApiFor(home).runs.create(id,{iterations:effort.iterations,converge:effort.converge,percentiles:STORED_PERCENTILES});
+      const queued=await planApiFor(home).runs.create(id,{iterations:effort.iterations,percentiles:STORED_PERCENTILES});
       update(key,v=>({...v,history:[queued,...v.history],selected:undefined,error:undefined,loading:false}));
       setRevision(v=>v+1);
     }catch(e){update(key,v=>({...v,error:e instanceof Error ? e.message : String(e),loading:false}));}

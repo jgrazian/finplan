@@ -17,6 +17,25 @@ export interface SuccessBand {
 }
 
 /**
+ * Half-width of the 95% interval on a success rate, in percentage points:
+ * `1.96·√(p(1−p)/n)`, with `p` a fraction and `n` the iterations that
+ * produced it. Undefined when there is nothing to measure.
+ */
+export function successIntervalPoints(rate: number, iterations: number): number | undefined {
+  if (!Number.isFinite(rate) || !Number.isFinite(iterations) || iterations <= 0) return undefined;
+  const p = Math.min(1, Math.max(0, rate));
+  return 1.96 * Math.sqrt((p * (1 - p)) / iterations) * 100;
+}
+
+/**
+ * The figure after "±": one decimal, like the rate it qualifies ("2.2" for
+ * 2.21 points), until a wide interval makes the decimal noise ("12").
+ */
+export function intervalLabel(points: number): string {
+  return points >= 10 ? String(Math.round(points)) : points.toFixed(1);
+}
+
+/**
  * The scale the success rate is read against. Planners disagree on the exact
  * cut points; these are the common rules of thumb, not a recommendation, and
  * the tooltip beside the scale says so.

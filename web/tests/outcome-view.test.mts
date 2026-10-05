@@ -4,8 +4,10 @@ import type { YearlyCashFlow } from "../lib/types.ts";
 import { effectFamily } from "../lib/view/effectFamily.ts";
 import {
   eventMarkers,
+  intervalLabel,
   stackLabels,
   successBand,
+  successIntervalPoints,
   successScalePosition,
 } from "../lib/view/outcome.ts";
 
@@ -71,4 +73,27 @@ test("an event's family follows its first effect, and none makes it a marker", (
   assert.equal(effectFamily("TriggerEvent"), "control");
   assert.equal(effectFamily("MarketShock"), "shock");
   assert.equal(effectFamily(undefined), "marker");
+});
+
+test("the interval is 1.96·√(p(1−p)/n) in percentage points", () => {
+  const points = successIntervalPoints(0.8, 100);
+  assert.ok(points != null);
+  assert.ok(Math.abs(points - 7.84) < 1e-9);
+  assert.equal(intervalLabel(points), "7.8");
+});
+
+test("more iterations narrow the interval, and the extremes have none", () => {
+  const small = successIntervalPoints(0.8, 100)!;
+  const large = successIntervalPoints(0.8, 1_000)!;
+  assert.ok(large < small);
+  assert.equal(intervalLabel(large), "2.5");
+  assert.equal(successIntervalPoints(1, 100), 0);
+  assert.equal(successIntervalPoints(0, 100), 0);
+});
+
+test("the label keeps one decimal until the interval is wide, and nothing is claimed without a sample", () => {
+  assert.equal(intervalLabel(12.4), "12");
+  assert.equal(intervalLabel(0.62), "0.6");
+  assert.equal(successIntervalPoints(0.8, 0), undefined);
+  assert.equal(successIntervalPoints(Number.NaN, 100), undefined);
 });

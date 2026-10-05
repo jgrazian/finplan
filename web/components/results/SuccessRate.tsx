@@ -3,12 +3,13 @@ import { IterationUpsell, useGuest } from "@/components/auth/GuestContext";
 import { StatLabel, Tooltip } from "@/components/ui";
 import { fmtInt } from "@/lib/format";
 import { useCountUp } from "@/lib/hooks/useCountUp";
-import { intervalLabel, successIntervalPoints } from "@/lib/view/guest";
 import {
+  intervalLabel,
   SUCCESS_BANDS,
   SUCCESS_SCALE_FLOOR,
   successBand,
   successScalePosition,
+  successIntervalPoints,
 } from "@/lib/view/outcome";
 
 /** Funding across the path and terminal wealth are different measurements. */
@@ -37,10 +38,10 @@ export function SuccessRate({
   const shownPct = useCountUp(pct);
   const shown = shownPct / 100;
   const band = successBand(shown);
-  // A guest's runs are small enough that the rate moves by several points
-  // from one run to the next, so the headline carries how far.
+  // The rate is a sample, so the headline carries how far it may move from
+  // one run to the next: the figure to read against the iteration dial.
   const { restricted } = useGuest();
-  const noise = restricted && measured ? successIntervalPoints(fraction, iterations) : undefined;
+  const noise = measured ? successIntervalPoints(fraction, iterations) : undefined;
 
   return (
     <section aria-label="Simulation outcome definitions" style={{ marginBottom: 20 }}>
