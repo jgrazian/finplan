@@ -293,7 +293,7 @@ fn percentile_seeds_reproduce_the_percentile_paths() {
 }
 
 #[test]
-fn rsu_sell_to_cover_tax_is_its_own_kind_but_still_an_expense() {
+fn rsu_sell_to_cover_tax_is_its_own_kind_and_counted_as_tax() {
     let (config, _) = SimulationBuilder::new()
         .start(2025, 1, 1)
         .years(1)
@@ -331,6 +331,10 @@ fn rsu_sell_to_cover_tax_is_its_own_kind_but_still_an_expense() {
             ..
         }
     )));
+    // Counted once, under taxes: the debit pays the tax the vest's income
+    // tax entry already records.
     let expenses: f64 = result.yearly_cash_flows.iter().map(|y| y.expenses).sum();
-    assert!((expenses - taxes).abs() < 1e-6, "{expenses} {taxes}");
+    let counted: f64 = result.yearly_cash_flows.iter().map(|y| y.taxes).sum();
+    assert!(expenses.abs() < 1e-6, "{expenses}");
+    assert!((counted - taxes).abs() < 1e-6, "{counted} {taxes}");
 }

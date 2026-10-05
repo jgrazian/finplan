@@ -208,8 +208,9 @@ fn a_plan_with_no_investment_cash_runs_as_before() {
         "zero cash draws nothing"
     );
     // Pinned from the engine before cash first: the same ledger, figure for
-    // figure.
-    assert_eq!(fingerprint(&result), 2_698_878_757_188_578_784);
+    // figure. (Re-pinned when income tax entries began saying what they were
+    // charged on; the figures did not move.)
+    assert_eq!(fingerprint(&result), 7_172_664_676_904_035_502);
 }
 
 /// A one-off sweep from `sources` into checking on 1 March 2030.
@@ -263,6 +264,7 @@ fn income_tax(result: &SimulationResult) -> (f64, f64, f64) {
                 gross_amount,
                 federal_tax,
                 state_tax,
+                ..
             } => (gross + gross_amount, tax + federal_tax + state_tax, penalty),
             StateEvent::EarlyWithdrawalPenalty { penalty_amount, .. } => {
                 (gross, tax, penalty + penalty_amount)

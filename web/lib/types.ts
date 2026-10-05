@@ -266,6 +266,8 @@ export interface ResultsData {
   bands: NetWorthBands;
   accountSeries: AccountSeries[];
   cashFlows: YearlyCashFlow[];
+  /** Net worth the plan starts with, which the first cash-flow row opens on. */
+  openingNetWorth: number;
   warnings: SimulationWarning[];
   /** End of the plan horizon, e.g. `age 81` or `2061` without a birth date. */
   horizonLabel: string;

@@ -291,6 +291,28 @@ pub struct Account {
 }
 
 impl Account {
+    /// What the account's holdings are worth on `current_date`: an investment
+    /// account's positions at that day's prices, or a property's value. Cash
+    /// and debt are not holdings — they change in place, never by repricing —
+    /// so a bank account or a loan holds nothing here.
+    #[must_use]
+    pub fn holdings_value(&self, market: &Market, start_date: Date, current_date: Date) -> f64 {
+        match &self.flavor {
+            AccountFlavor::Investment(inv) => inv
+                .positions
+                .iter()
+                .map(|p| {
+                    p.units
+                        * market
+                            .get_asset_value(start_date, current_date, p.asset_id)
+                            .unwrap_or(0.0)
+                })
+                .sum(),
+            AccountFlavor::Property(asset) => asset.current_value(market, start_date, current_date),
+            AccountFlavor::Bank(_) | AccountFlavor::Liability(_) => 0.0,
+        }
+    }
+
     #[must_use]
     pub fn total_value(&self, market: &Market, start_date: Date, current_date: Date) -> f64 {
         match &self.flavor {

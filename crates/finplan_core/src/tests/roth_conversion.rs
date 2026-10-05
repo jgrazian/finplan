@@ -454,10 +454,10 @@ fn a_dec_30_conversion_comes_out_of_next_years_rmd_base() {
     assert!((none - 100_000.0).abs() < 0.01);
     let dec_30 = rmd_base_after_converting_on(Some(30));
     assert!((dec_30 - 60_000.0).abs() < 0.01, "{dec_30}");
-    // Why the template fires on Dec 30: the year-end balance is taken as
-    // Dec 31 begins, so a Dec 31 conversion is still in the base.
+    // The year-end balance is taken once Dec 31's own events have run, so a
+    // Dec 31 conversion is out of the base too.
     let dec_31 = rmd_base_after_converting_on(Some(31));
-    assert!((dec_31 - 100_000.0).abs() < 0.01, "{dec_31}");
+    assert!((dec_31 - 60_000.0).abs() < 0.01, "{dec_31}");
 }
 
 #[test]

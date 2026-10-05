@@ -36,11 +36,30 @@ pub enum CashFlowKind {
     Contribution,
     /// Interest or appreciation on cash balances
     Appreciation,
+    /// A payment on a loan: money out of cash, but most of it pays down what
+    /// is owed rather than leaving the plan. Only the interest, accrued on
+    /// the loan as `LiabilityInterestAccrual`, is a cost.
+    DebtPayment,
     /// RMD withdrawal from tax-deferred account
     RmdWithdrawal,
     /// Unknown or legacy (for backward compatibility)
     #[default]
     Other,
+}
+
+/// What an `IncomeTax` was charged on, which decides whether the gross behind
+/// it is income: money arriving from outside the plan, or money the plan
+/// already held being taxed on its way out of a tax-deferred account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaxedIncome {
+    /// A distribution or conversion of money the plan already held.
+    #[default]
+    Holdings,
+    /// Pay credited net, the tax withheld from it.
+    Withheld,
+    /// Shares deposited at their full value, the tax paid separately.
+    Vest,
 }
 
 /// A ledger entry recording a state change with its context
@@ -125,6 +144,16 @@ pub enum StateEvent {
         days: i32,
     },
 
+    /// A change in what an account's holdings are worth — its positions'
+    /// prices, or the property's value — over `days` (zero for a sudden
+    /// move such as a `MarketShock`). Cash compounds as `CashAppreciation`.
+    AssetAppreciation {
+        account_id: AccountId,
+        previous_value: f64,
+        new_value: f64,
+        days: i32,
+    },
+
     /// Interest accrual on a liability (mortgage, loan, etc.)
     LiabilityInterestAccrual {
         account_id: AccountId,
@@ -195,6 +224,10 @@ pub enum StateEvent {
         gross_amount: f64,
         federal_tax: f64,
         state_tax: f64,
+        /// What the tax was charged on: money arriving from outside the plan
+        /// or money it already held.
+        #[serde(default)]
+        on: TaxedIncome,
     },
 
     /// Short-term capital gains tax incurred
@@ -260,6 +293,12 @@ pub enum StateEvent {
         previous_balance: f64,
         new_balance: f64,
         delta: f64,
+        /// `Transfer` when the other side of the change is elsewhere in the
+        /// plan (a loan drawn to buy a home, a payment against it); `Income`
+        /// or `Expense` when the change itself adds to or takes from net
+        /// worth.
+        #[serde(default)]
+        kind: CashFlowKind,
     },
 }
 
@@ -293,6 +332,7 @@ impl StateEvent {
             StateEvent::AssetPurchase { .. }
                 | StateEvent::AssetSale { .. }
                 | StateEvent::AssetLotMoved { .. }
+                | StateEvent::AssetAppreciation { .. }
         )
     }
 
@@ -329,6 +369,7 @@ impl StateEvent {
             StateEvent::CashCredit { to, .. } => Some(*to),
             StateEvent::CashDebit { from, .. } => Some(*from),
             StateEvent::CashAppreciation { account_id, .. } => Some(*account_id),
+            StateEvent::AssetAppreciation { account_id, .. } => Some(*account_id),
             StateEvent::LiabilityInterestAccrual { account_id, .. } => Some(*account_id),
             StateEvent::AssetPurchase { account_id, .. } => Some(*account_id),
             StateEvent::AssetSale { account_id, .. } => Some(*account_id),

@@ -127,3 +127,32 @@ test("runs stored before the quartiles fall back to their P5–P95 band and no i
   assert.deepEqual(data.bands.upperQuartile, []);
   assert.deepEqual(data.stats.percentileValues, [[0.05, 55], [0.5, 100], [0.95, 145]]);
 });
+
+test("each real-dollar year closes: last year's net worth plus net plus growth", () => {
+  // Nominally each year closes by construction; deflated at a factor per
+  // year, the opening balance's loss to inflation has to be part of growth.
+  const closing = ["2026-03-15", "2026-12-31", "2027-12-31", "2028-03-15"];
+  const nominal = [1000, 1100, 1300, 1350];
+  const factors = [1, 1, 1.03, 1.06];
+  const flow = (year: number, income: number, expenses: number, taxes: number, appreciation: number) => ({
+    year, income, expenses, taxes, appreciation, contributions: 0, withdrawals: 0,
+    net_cash_flow: income - expenses - taxes, ordinary_income: 0, early_withdrawal_penalties: 0,
+  });
+  const raw = fixture();
+  raw.bands = [{ path_id: "0.5", percentile: 0.5, seed: null, dates: closing, net_worth: nominal, inflation: factors }];
+  raw.real_net_worth = null;
+  raw.cash_flows = [flow(2026, 100, 50, 10, 60), flow(2027, 200, 80, 20, 100), flow(2028, 30, 20, 0, 40)];
+  raw.inflation = [{ year: 2026, factor: 1 }, { year: 2027, factor: 1.03 }, { year: 2028, factor: 1.06 }];
+  raw.ledger_years = [];
+
+  const data = toResultsData(raw, scenario, axis);
+  assert.equal(data.openingNetWorth, 1000);
+  let previous = data.openingNetWorth;
+  for (const row of data.cashFlows) {
+    assert.ok(Math.abs(row.netCashFlow - (row.income - row.expenses - row.taxes)) < 1e-9);
+    assert.ok(Math.abs(previous + row.netCashFlow + row.appreciation - row.netWorth) < 1e-9, `${row.year}`);
+    previous = row.netWorth;
+  }
+  // 2027 opened on 1100 of 2026's dollars, worth 1100 / 1.03 of 2027's.
+  assert.ok(Math.abs(data.cashFlows[1].appreciation - (100 / 1.03 - 1100 * (1 - 1 / 1.03))) < 1e-9);
+});

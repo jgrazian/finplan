@@ -90,7 +90,7 @@ fn loan_debits(result: &crate::model::SimulationResult) -> Vec<f64> {
             StateEvent::CashDebit {
                 from: CASH,
                 amount,
-                kind: CashFlowKind::Expense,
+                kind: CashFlowKind::DebtPayment,
             } if e.source_event.is_none() => Some(amount),
             _ => None,
         })

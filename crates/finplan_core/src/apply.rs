@@ -196,6 +196,7 @@ pub fn apply_eval_event_with_source(
             gross_income_amount,
             federal_tax,
             state_tax,
+            on,
         } => {
             state.taxes.ytd_tax.ordinary_income += gross_income_amount;
             state.taxes.ytd_tax.federal_tax += federal_tax;
@@ -206,6 +207,7 @@ pub fn apply_eval_event_with_source(
                 gross_amount: *gross_income_amount,
                 federal_tax: *federal_tax,
                 state_tax: *state_tax,
+                on: *on,
             };
             record_ledger_entry(state, current_date, source_event, ledger_event);
 
@@ -608,6 +610,9 @@ pub fn apply_eval_event_with_source(
 
         EvalEvent::MarketShock { drop, assets } => {
             let factor = 1.0 - drop;
+            // What the drop takes from each account's holdings is growth like
+            // any other price move, so the ledger carries it the same way.
+            let before = state.collect_ledger.then(|| holdings_values(state));
             let mut shocked = Vec::with_capacity(assets.len());
             for asset in assets {
                 if state.portfolio.market.scale_asset_price(*asset, factor) {
@@ -623,10 +628,34 @@ pub fn apply_eval_event_with_source(
                     assets: shocked,
                 },
             );
+            for (account_id, previous_value) in before.unwrap_or_default() {
+                let new_value = state.portfolio.accounts[&account_id].holdings_value(
+                    &state.portfolio.market,
+                    state.timeline.start_date,
+                    current_date,
+                );
+                if (new_value - previous_value).abs() > 0.001 {
+                    record_ledger_entry(
+                        state,
+                        current_date,
+                        source_event,
+                        StateEvent::AssetAppreciation {
+                            account_id,
+                            previous_value,
+                            new_value,
+                            days: 0,
+                        },
+                    );
+                }
+            }
             Ok(())
         }
 
-        EvalEvent::AdjustBalance { account, delta } => {
+        EvalEvent::AdjustBalance {
+            account,
+            delta,
+            kind,
+        } => {
             let (start, now) = (state.timeline.start_date, state.timeline.current_date);
             let property_growth = match state.portfolio.accounts.get(account).map(|a| &a.flavor) {
                 Some(AccountFlavor::Property(asset)) => state
@@ -658,6 +687,7 @@ pub fn apply_eval_event_with_source(
                         previous_balance: previous,
                         new_balance: loan.principal,
                         delta: *delta,
+                        kind: *kind,
                     };
                     record_ledger_entry(state, current_date, source_event, ledger_event);
 
@@ -672,6 +702,7 @@ pub fn apply_eval_event_with_source(
                         previous_balance: previous,
                         new_balance: cash.value,
                         delta: *delta,
+                        kind: *kind,
                     };
                     record_ledger_entry(state, current_date, source_event, ledger_event);
 
@@ -686,6 +717,7 @@ pub fn apply_eval_event_with_source(
                         previous_balance: previous,
                         new_balance: inv.cash.value,
                         delta: *delta,
+                        kind: *kind,
                     };
                     record_ledger_entry(state, current_date, source_event, ledger_event);
 
@@ -702,6 +734,7 @@ pub fn apply_eval_event_with_source(
                         previous_balance: previous,
                         new_balance: asset.value * property_growth,
                         delta: *delta,
+                        kind: *kind,
                     };
                     record_ledger_entry(state, current_date, source_event, ledger_event);
 
@@ -710,6 +743,27 @@ pub fn apply_eval_event_with_source(
             }
         }
     }
+}
+
+/// Every account's holdings value now, in account order.
+fn holdings_values(state: &SimulationState) -> Vec<(AccountId, f64)> {
+    let mut values: Vec<(AccountId, f64)> = state
+        .portfolio
+        .accounts
+        .iter()
+        .map(|(id, account)| {
+            (
+                *id,
+                account.holdings_value(
+                    &state.portfolio.market,
+                    state.timeline.start_date,
+                    state.timeline.current_date,
+                ),
+            )
+        })
+        .collect();
+    values.sort_by_key(|(id, _)| id.0);
+    values
 }
 
 /// Helper to record a ledger entry (skipped if `collect_ledger` is false)
@@ -1108,11 +1162,12 @@ pub fn pay_scheduled_loans(state: &mut SimulationState) {
                 EvalEvent::CashDebit {
                     from,
                     net_amount: payment,
-                    kind: CashFlowKind::Expense,
+                    kind: CashFlowKind::DebtPayment,
                 },
                 EvalEvent::AdjustBalance {
                     account: loan,
                     delta: -payment,
+                    kind: CashFlowKind::Transfer,
                 },
             ] {
                 if let Err(error) = apply_eval_event(state, &event) {

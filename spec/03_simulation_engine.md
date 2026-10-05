@@ -24,12 +24,14 @@ pub fn simulate(params: &SimulationConfig, seed: u64) -> Result<SimulationResult
       - Apply effects to state
       - Record changes to ledger
       - Repeat until no events trigger (max 1000 iterations for safety)
+      - On December 31, once its events have run: capture year-end
+        balances (RMD base) and the year's wealth snapshot
 
    b. Advance time:
       - Find next checkpoint (event date, quarter, year-end)
       - Apply interest/returns for elapsed days
-      - Record appreciation to ledger
-      - Capture year-end balances for RMD
+      - Record appreciation to ledger: cash interest, and (with the ledger
+        on) each account's holdings repriced
       - Reset contribution limits on boundaries
 
 4. Finalize last year's taxes

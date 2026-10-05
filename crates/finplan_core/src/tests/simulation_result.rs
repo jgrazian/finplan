@@ -1043,9 +1043,9 @@ fn test_monthly_cash_flows_match_yearly() {
         }
     }
 
-    // Verify net_cash_flow = income + withdrawals - expenses - contributions + appreciation
+    // Verify net_cash_flow = income - expenses - taxes
     for m in &monthly {
-        let expected_net = m.income + m.withdrawals - m.expenses - m.contributions + m.appreciation;
+        let expected_net = m.income - m.expenses - m.taxes;
         assert!(
             (m.net_cash_flow - expected_net).abs() < 0.01,
             "Month {}-{}: net_cash_flow {:.2} != expected {:.2}",

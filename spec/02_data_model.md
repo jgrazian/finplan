@@ -235,6 +235,35 @@ pub struct SimulationResult {
 }
 ```
 
+### Yearly cash flows close
+
+`YearlyCashFlowSummary` is built from the ledger so that a year's columns
+explain its change in net worth exactly:
+
+```
+net worth at year end = last year end (or the start)
+                        + income - expenses - taxes   (net_cash_flow)
+                        + appreciation                (growth)
+```
+
+- `income` is gross: pay credited net of withholding is grossed up by the tax
+  on it (`IncomeTax { on: Withheld }`), and a vest counts at its full value
+  (`on: Vest`). Tax on money the plan already held (`on: Holdings`) adds no
+  income. A user `AdjustBalance` that raises net worth is income.
+- `expenses` are `Expense` debits, interest accrued on loans, and an
+  `AdjustBalance` that lowers net worth. Not `Tax` debits (the tax entry
+  counts them) and not `DebtPayment` debits (cash into less debt).
+- `taxes` are income and capital-gains tax and early-withdrawal penalties:
+  the year's `TaxSummary`, each counted once.
+- `appreciation` is cash interest (`CashAppreciation`) plus holdings repriced
+  (`AssetAppreciation`, including a `MarketShock`).
+- `contributions` and `withdrawals` are moves between the plan's own
+  accounts, so they are shown but are not in the sum.
+
+The year-end snapshot is taken after December 31's events, so every entry
+dated in a year falls before its snapshot. `tests/reconciliation.rs` holds
+this on a plan that moves money every way the engine can.
+
 ### Monte Carlo Summary
 
 ```rust
@@ -294,6 +323,8 @@ pub enum StateEvent {
     CashCredit { account_id, amount, kind, source },
     CashDebit { account_id, amount, kind, destination },
     CashAppreciation { account_id, previous_value, new_value, return_rate, days },
+    // Holdings repriced: positions at the new prices, or a property's value
+    AssetAppreciation { account_id, previous_value, new_value, days },
 
     // Asset movements
     AssetPurchase { account_id, lot },

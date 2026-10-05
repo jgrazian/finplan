@@ -201,6 +201,7 @@ impl LedgerPanel {
                 let kind_str = match kind {
                     finplan_core::model::CashFlowKind::Expense => "Expense",
                     finplan_core::model::CashFlowKind::Tax => "Tax",
+                    finplan_core::model::CashFlowKind::DebtPayment => "Loan payment",
                     finplan_core::model::CashFlowKind::Contribution => "Contribution",
                     finplan_core::model::CashFlowKind::InvestmentPurchase => "Purchase",
                     finplan_core::model::CashFlowKind::Transfer => "Transfer",
@@ -225,6 +226,22 @@ impl LedgerPanel {
                     name,
                     format_currency(gain),
                     return_rate * 100.0
+                )
+            }
+            StateEvent::AssetAppreciation {
+                account_id,
+                previous_value,
+                new_value,
+                ..
+            } => {
+                let name = account_names
+                    .get(account_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or("Unknown");
+                format!(
+                    "{}: {} market growth",
+                    name,
+                    format_currency(new_value - previous_value)
                 )
             }
             StateEvent::LiabilityInterestAccrual {
@@ -343,6 +360,7 @@ impl LedgerPanel {
                 gross_amount,
                 federal_tax,
                 state_tax,
+                ..
             } => {
                 let total = federal_tax + state_tax;
                 format!(
@@ -444,6 +462,7 @@ impl LedgerPanel {
                 previous_balance,
                 new_balance,
                 delta,
+                ..
             } => {
                 let name = account_names
                     .get(account)

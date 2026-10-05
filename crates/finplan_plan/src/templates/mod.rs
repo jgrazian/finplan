@@ -458,11 +458,11 @@ pub struct RothConversionsParams {
 /// birth year ([`crate::rules::rmd_age`]: 75 from 1960).
 pub const RMD_AGE: u8 = 73;
 
-/// The month and day a conversion template fires. Not Dec 31: the engine
-/// captures year-end balances (next year's RMD base and the year-end
-/// snapshot) the moment the clock reaches Dec 31, before that day's events,
-/// so a Dec 31 conversion would stay in next year's RMD base and show in the
-/// balances a year late. `bracket_room` reads the same income on Dec 30.
+/// The month and day a conversion template fires. Chosen when the engine
+/// captured year-end balances before Dec 31's events, which left a Dec 31
+/// conversion in next year's RMD base; it now captures them after, so either
+/// day works, and Dec 30 stays so plans already written keep their dates.
+/// `bracket_room` reads the same income on Dec 30.
 pub const CONVERSION_DAY: (i8, i8) = (12, 30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

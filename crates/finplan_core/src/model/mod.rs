@@ -36,5 +36,5 @@ pub use results::{
     YearlyCashFlowSummary, after_tax_final_net_worth, final_net_worth,
 };
 pub use rmd::{RmdTable, RmdTableEntry};
-pub use state_event::{CashFlowKind, LedgerEntry, StateEvent};
+pub use state_event::{CashFlowKind, LedgerEntry, StateEvent, TaxedIncome};
 pub use tax_config::{TaxBracket, TaxConfig, TaxSummary};

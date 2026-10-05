@@ -59,17 +59,23 @@ pub struct WealthSnapshot {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct YearlyCashFlowSummary {
     pub year: i16,
-    /// True income (salary, dividends, rental income, etc.)
+    /// True income, gross of the tax withheld from it (salary, dividends,
+    /// rental income, vested shares, etc.)
     pub income: f64,
-    /// True expenses (bills, purchases, etc.)
+    /// True expenses (bills, purchases, interest accrued on debt, etc.)
     pub expenses: f64,
     /// Contributions to investment accounts (401k, IRA deposits)
     pub contributions: f64,
     /// Withdrawals from investments (Sweep, liquidations)
     pub withdrawals: f64,
-    /// Interest/appreciation on cash balances
+    /// Growth: interest on cash, the change in holdings' prices and
+    /// property values
     pub appreciation: f64,
-    /// Net cash flow (income - expenses + appreciation)
+    /// Income tax, capital gains tax and early-withdrawal penalties
+    #[serde(default)]
+    pub taxes: f64,
+    /// What the period added to net worth before growth: income less
+    /// expenses less taxes. Plus `appreciation`, the change in net worth.
     pub net_cash_flow: f64,
 }
 
@@ -81,17 +87,23 @@ pub struct YearlyCashFlowSummary {
 pub struct MonthlyCashFlowSummary {
     pub year: i16,
     pub month: u8,
-    /// True income (salary, dividends, rental income, etc.)
+    /// True income, gross of the tax withheld from it (salary, dividends,
+    /// rental income, vested shares, etc.)
     pub income: f64,
-    /// True expenses (bills, purchases, etc.)
+    /// True expenses (bills, purchases, interest accrued on debt, etc.)
     pub expenses: f64,
     /// Contributions to investment accounts (401k, IRA deposits)
     pub contributions: f64,
     /// Withdrawals from investments (Sweep, liquidations)
     pub withdrawals: f64,
-    /// Interest/appreciation on cash balances
+    /// Growth: interest on cash, the change in holdings' prices and
+    /// property values
     pub appreciation: f64,
-    /// Net cash flow (income - expenses + appreciation)
+    /// Income tax, capital gains tax and early-withdrawal penalties
+    #[serde(default)]
+    pub taxes: f64,
+    /// What the period added to net worth before growth: income less
+    /// expenses less taxes. Plus `appreciation`, the change in net worth.
     pub net_cash_flow: f64,
 }
 
@@ -606,6 +618,7 @@ struct CashFlowSums {
     contributions: f64,
     withdrawals: f64,
     appreciation: f64,
+    taxes: f64,
     net_cash_flow: f64,
 }
 
@@ -639,6 +652,7 @@ impl CashFlowMeanAccumulator {
                 sums.contributions += cf.contributions;
                 sums.withdrawals += cf.withdrawals;
                 sums.appreciation += cf.appreciation;
+                sums.taxes += cf.taxes;
                 sums.net_cash_flow += cf.net_cash_flow;
             }
         }
@@ -654,6 +668,7 @@ impl CashFlowMeanAccumulator {
                 sums.contributions += other_sums.contributions;
                 sums.withdrawals += other_sums.withdrawals;
                 sums.appreciation += other_sums.appreciation;
+                sums.taxes += other_sums.taxes;
                 sums.net_cash_flow += other_sums.net_cash_flow;
             }
         }
@@ -672,6 +687,7 @@ impl CashFlowMeanAccumulator {
                 contributions: sums.contributions / n,
                 withdrawals: sums.withdrawals / n,
                 appreciation: sums.appreciation / n,
+                taxes: sums.taxes / n,
                 net_cash_flow: sums.net_cash_flow / n,
             })
             .collect()

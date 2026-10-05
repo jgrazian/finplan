@@ -11,7 +11,7 @@ use crate::{
     evaluate::EvalEvent,
     model::{
         AccountId, AmountMode, AssetCoord, AssetId, AssetLot, CashFlowKind, ConversionTranche,
-        InvestmentContainer, LotMethod, Market, TaxConfig, TaxStatus,
+        InvestmentContainer, LotMethod, Market, TaxConfig, TaxStatus, TaxedIncome,
     },
     taxes::{calculate_federal_marginal_tax, calculate_gross_from_net},
 };
@@ -248,6 +248,7 @@ fn withhold_distribution_tax(
         gross_income_amount: gross_amount,
         federal_tax,
         state_tax,
+        on: TaxedIncome::Holdings,
     });
 
     // Apply early withdrawal penalty if applicable (before age 59.5)

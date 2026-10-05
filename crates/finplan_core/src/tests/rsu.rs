@@ -218,14 +218,15 @@ fn test_rsu_quarterly_vesting() {
 
     let result = simulate(&config, 42).unwrap();
     let brokerage_balance = account_balance(&result, &metadata, "Brokerage");
+    let tax: f64 = result.yearly_taxes.iter().map(|t| t.total_tax).sum();
 
-    // 4 vests × 25 shares × $100 = $10,000 in shares deposited
-    // With no sell-to-cover, all shares remain
-    // The balance should reflect the full $10,000 in stock value
+    // 4 vests × 25 shares × $100 = $10,000 in shares deposited. With no
+    // sell-to-cover all the shares remain, and the tax on them is paid from
+    // the account's cash.
+    assert!(tax > 0.0);
     assert!(
-        brokerage_balance > 9_000.0,
-        "Brokerage should have ~$10,000 in shares from 4 quarterly vests, got {}",
-        brokerage_balance
+        (brokerage_balance - (10_000.0 - tax)).abs() < 0.01,
+        "Brokerage should hold $10,000 in shares less ${tax:.2} of tax, got {brokerage_balance}"
     );
 }
 

@@ -93,7 +93,11 @@ export function toResultsData(
     upperQuartile: quartiles ? at("p75") : [],
     p50: at("p50"),
   };
-  const cashFlows = toCashFlows(results, axis, factorFor, pathValues, bands.years);
+  const opening = path && path.net_worth.length
+    ? { nominal: path.net_worth[0], factor: isReal ? path.inflation[0] : 1 }
+    : undefined;
+  const nominalEnds = new Map(keep.map((i) => [yearOf(path!.dates[i]), path!.net_worth[i]]));
+  const cashFlows = toCashFlows(results, axis, factorFor, pathValues, bands.years, opening, nominalEnds);
   const baseDate = real?.terminal.base_date ?? path?.dates[0] ?? scenario.start_date;
   const pathLabel = path == null ? "Path unavailable" : path.percentile == null
     ? "Synthetic nominal mean (not a path)"
@@ -108,6 +112,7 @@ export function toResultsData(
     bands,
     accountSeries: path ? toAccountSeries(results, keep, path, isReal) : [],
     cashFlows,
+    openingNetWorth: opening ? deflate(opening.nominal, opening.factor) : Number.NaN,
     warnings: toWarnings(results),
     horizonLabel: dates.length ? axis.label(bands.ages[bands.ages.length - 1]) : "—",
     baseYear: yearOf(baseDate),
@@ -254,6 +259,15 @@ export function accountBreakdown(
 
 const NO_LEDGER: LedgerSummary = { total: 0, cash: 0, asset: 0, tax: 0, event: 0, tags: [] };
 
+/**
+ * The year's rows, which close: last year's net worth, plus `netCashFlow`
+ * (income less spending less taxes), plus `appreciation`, is this year's.
+ *
+ * In real dollars that takes one more step. Each year is deflated at its own
+ * factor, so the net worth a year opens with is worth less in this year's
+ * real dollars than it was in last year's; that loss to inflation is part of
+ * the year's real growth, alongside the nominal growth deflated.
+ */
 function toCashFlows(
   results: Results,
   axis: PlanAxis,
@@ -261,23 +275,38 @@ function toCashFlows(
   /** Wealth along the same path the flows describe. */
   path: number[],
   years: number[],
+  /** Net worth when the plan starts, nominal, and its factor. */
+  opening: { nominal: number; factor: number } | undefined,
+  /** Nominal net worth at each year's end. */
+  nominalEnds: Map<number, number>,
 ): YearlyCashFlow[] {
   const ledgers = new Map(results.ledger_years.map((y) => [y.year, y]));
   const netWorth = new Map(years.map((year, i) => [year, path[i]]));
+  let before = opening;
 
   return results.cash_flows.map((flow) => {
     const factor = factorFor(flow.year);
     const ledger = ledgers.get(flow.year);
+    const income = deflate(flow.income, factor);
+    const expenses = deflate(flow.expenses, factor);
+    const taxes = deflate(flow.taxes, factor);
+    const drag = before && factor > 0 && before.factor > 0
+      ? before.nominal * (1 / before.factor - 1 / factor)
+      : 0;
+    const end = nominalEnds.get(flow.year);
+    before = end == null ? undefined : { nominal: end, factor };
     return {
       year: flow.year,
       age: axis.unit === "age" ? axis.at(`${flow.year}-12-31`) : null,
-      income: deflate(flow.income, factor),
-      expenses: deflate(flow.expenses, factor),
+      income,
+      expenses,
       contributions: deflate(flow.contributions, factor),
       withdrawals: deflate(flow.withdrawals, factor),
-      appreciation: deflate(flow.appreciation, factor),
-      netCashFlow: deflate(flow.net_cash_flow, factor),
-      taxes: deflate(flow.taxes, factor),
+      appreciation: deflate(flow.appreciation, factor) - drag,
+      // From the figures on the row, so the row adds up whatever a stored
+      // run's own net once meant.
+      netCashFlow: income - expenses - taxes,
+      taxes,
       netWorth: netWorth.get(flow.year) ?? 0,
       inflationFactor: factor,
       ledger: ledger

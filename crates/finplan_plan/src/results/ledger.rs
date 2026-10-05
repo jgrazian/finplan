@@ -140,6 +140,7 @@ fn debit_label(kind: CashFlowKind) -> &'static str {
     match kind {
         CashFlowKind::Expense => "Expense",
         CashFlowKind::Tax => "Tax",
+        CashFlowKind::DebtPayment => "Loan payment",
         CashFlowKind::Contribution => "Contribution",
         CashFlowKind::InvestmentPurchase => "Purchase",
         CashFlowKind::Transfer => "Transfer out",
@@ -210,6 +211,25 @@ pub fn flatten(entry: &LedgerEntry, names: &Names<'_>) -> Option<LedgerRow> {
             ),
             Some(new_value - previous_value),
             names.account_db_id(*account_id),
+        ),
+
+        // Repricing, not trading: the holdings are the same units, worth more
+        // or less than they were.
+        StateEvent::AssetAppreciation {
+            account_id,
+            previous_value,
+            new_value,
+            ..
+        } => with_basis(
+            row(
+                ASSET,
+                "Growth",
+                format!("holdings in {}", names.account(*account_id)),
+                Some(new_value - previous_value),
+                names.account_db_id(*account_id),
+            ),
+            *new_value,
+            "worth",
         ),
 
         StateEvent::LiabilityInterestAccrual {
@@ -330,6 +350,7 @@ pub fn flatten(entry: &LedgerEntry, names: &Names<'_>) -> Option<LedgerRow> {
             gross_amount,
             federal_tax,
             state_tax,
+            ..
         } => with_basis(
             row(
                 TAX,

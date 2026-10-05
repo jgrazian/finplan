@@ -46,35 +46,35 @@ const COLUMNS: readonly Column[] = [
   {
     key: "income",
     label: "Income",
-    note: "earned",
+    note: "earned, before tax",
     align: "right",
     render: (r) => fmtCurrency(r.income),
   },
   {
     key: "expenses",
     label: "Spending",
-    note: "paid out",
+    note: "paid out, and loan interest",
     align: "right",
     render: (r) => fmtCurrency(r.expenses),
   },
   {
     key: "contributions",
     label: "Contrib",
-    note: "into investments",
+    note: "moved into investments",
     align: "right",
     render: (r) => fmtCurrency(r.contributions),
   },
   {
     key: "withdrawals",
     label: "Withdraw",
-    note: "out of investments",
+    note: "moved out of investments",
     align: "right",
     render: (r) => fmtCurrency(r.withdrawals),
   },
   {
     key: "appreciation",
     label: "Growth",
-    note: "interest on cash",
+    note: "returns, interest, home value",
     align: "right",
     render: (r) => fmtCurrency(r.appreciation),
   },
@@ -88,7 +88,7 @@ const COLUMNS: readonly Column[] = [
   {
     key: "netCashFlow",
     label: "Net",
-    note: "in less out",
+    note: "income − spending − taxes",
     align: "right",
     render: (r) => fmtCurrency(r.netCashFlow),
   },
@@ -111,6 +111,7 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   "income",
   "expenses",
   "withdrawals",
+  "appreciation",
   "taxes",
   "netWorth",
 ];
@@ -159,6 +160,7 @@ export function CashFlowLedger({
   pathLabel,
   runId,
   dollarLabel,
+  openingNetWorth,
 }: {
   rows: YearlyCashFlow[];
   series: string;
@@ -167,6 +169,8 @@ export function CashFlowLedger({
   runId: number | undefined;
   /** Explicit real base date, or nominal units for historical data. */
   dollarLabel: string;
+  /** Where the first row's year opens, so it adds up like every other. */
+  openingNetWorth: number;
 }) {
   const [visible, setVisible] = useStoredColumns(COLUMN_STORE, COLUMNS, DEFAULT_COLUMNS);
   const [filter, setFilter] = useState<LedgerFilter>("all");
@@ -206,7 +210,10 @@ export function CashFlowLedger({
         >
           <h6 style={{ margin: 0 }}>Cash flow — {pathLabel}</h6>
           <span style={{ fontSize: 11, color: MUTED }}>
-            {rows.length} years · {dollarLabel} ·{" "}
+            {rows.length} years · {dollarLabel} · each year&rsquo;s net worth is the last one&rsquo;s plus
+            net and growth
+            {Number.isFinite(openingNetWorth) ? ` (opening at ${fmtCurrency(openingNetWorth)})` : ""}
+            {" · "}
             {hasLedger
               ? "expand a year to read the effects that produced its numbers"
               : "this scenario is not collecting a ledger, so there is nothing to expand"}

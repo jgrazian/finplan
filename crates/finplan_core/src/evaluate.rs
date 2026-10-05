@@ -12,8 +12,8 @@ use crate::liquidation::{
 };
 use crate::model::{
     Account, AccountFlavor, AccountId, AmountMode, AssetCoord, AssetId, CashFlowKind, EventEffect,
-    EventId, EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TransferAmount,
-    TransferEndpoint, WithdrawalOrder, WithdrawalSources,
+    EventId, EventTrigger, IncomeType, RmdTable, StateEvent, TaxStatus, TaxedIncome,
+    TransferAmount, TransferEndpoint, WithdrawalOrder, WithdrawalSources,
 };
 use crate::simulation_state::SimulationState;
 use crate::taxes::{calculate_federal_marginal_tax, calculate_gross_from_net};
@@ -276,6 +276,7 @@ pub enum EvalEvent {
         gross_income_amount: f64,
         federal_tax: f64,
         state_tax: f64,
+        on: TaxedIncome,
     },
 
     ShortTermCapitalGainsTax {
@@ -356,6 +357,9 @@ pub enum EvalEvent {
     AdjustBalance {
         account: AccountId,
         delta: f64, // Positive = increase, negative = decrease
+        /// `Transfer` when the change has its other side elsewhere in the
+        /// plan; `Income` or `Expense` when it adds to or takes from net worth.
+        kind: CashFlowKind,
     },
 
     /// Add to (or, negative, take from) a property's cost basis.
@@ -475,6 +479,7 @@ pub fn evaluate_effect_into(
                         gross_income_amount: allowed_amount,
                         federal_tax,
                         state_tax,
+                        on: TaxedIncome::Withheld,
                     });
                     Ok(())
                 }
@@ -500,6 +505,7 @@ pub fn evaluate_effect_into(
                         gross_income_amount: gross_amount,
                         federal_tax,
                         state_tax,
+                        on: TaxedIncome::Withheld,
                     });
                     Ok(())
                 }
@@ -1083,9 +1089,21 @@ pub fn evaluate_effect_into(
                 state,
             )?;
 
+            // Nothing on the other side: the change is new money in or out.
+            // More owed on a loan takes from net worth, as less held does.
+            let owed = matches!(
+                state.portfolio.accounts.get(account).map(|a| &a.flavor),
+                Some(AccountFlavor::Liability(_))
+            );
+            let kind = if (delta > 0.0) != owed {
+                CashFlowKind::Income
+            } else {
+                CashFlowKind::Expense
+            };
             out.push(EvalEvent::AdjustBalance {
                 account: *account,
                 delta,
+                kind,
             });
             Ok(())
         }
@@ -1130,6 +1148,7 @@ pub fn evaluate_effect_into(
                         out.push(EvalEvent::AdjustBalance {
                             account: financing.loan,
                             delta: borrowed,
+                            kind: CashFlowKind::Transfer,
                         });
                         out.push(EvalEvent::StartRepayment {
                             loan: financing.loan,
@@ -1150,6 +1169,7 @@ pub fn evaluate_effect_into(
             out.push(EvalEvent::AdjustBalance {
                 account: *property,
                 delta: price,
+                kind: CashFlowKind::Transfer,
             });
             out.push(EvalEvent::PropertyBasis {
                 account: *property,
@@ -1203,16 +1223,27 @@ pub fn evaluate_effect_into(
             out.push(EvalEvent::AdjustBalance {
                 account: *property,
                 delta: -value,
+                kind: CashFlowKind::Transfer,
             });
             out.push(EvalEvent::PropertyBasis {
                 account: *property,
                 delta: -basis,
             });
+            // The sale arrives at the home's value less the tax on it, and the
+            // selling costs leave as spending: they are the part of the
+            // home's worth the sale itself consumes.
             out.push(EvalEvent::CashCredit {
                 to: *to,
-                net_amount: proceeds - tax,
+                net_amount: value - tax,
                 kind: CashFlowKind::LiquidationProceeds,
             });
+            if value - proceeds > 0.005 {
+                out.push(EvalEvent::CashDebit {
+                    from: *to,
+                    net_amount: value - proceeds,
+                    kind: CashFlowKind::Expense,
+                });
+            }
 
             if let Some(loan) = payoff {
                 let owed = match state.portfolio.accounts.get(loan).map(|a| &a.flavor) {
@@ -1229,6 +1260,7 @@ pub fn evaluate_effect_into(
                     out.push(EvalEvent::AdjustBalance {
                         account: *loan,
                         delta: -owed,
+                        kind: CashFlowKind::Transfer,
                     });
                 }
             }
@@ -1274,11 +1306,12 @@ pub fn evaluate_effect_into(
                 out.push(EvalEvent::CashDebit {
                     from: *from,
                     net_amount: transfer_amount,
-                    kind: CashFlowKind::Expense,
+                    kind: CashFlowKind::DebtPayment,
                 });
                 out.push(EvalEvent::AdjustBalance {
                     account: *to,
                     delta: -transfer_amount, // Negative = reduce debt
+                    kind: CashFlowKind::Transfer,
                 });
                 Ok(())
             } else {
@@ -1363,6 +1396,7 @@ pub fn evaluate_effect_into(
                 gross_income_amount: gross_fmv,
                 federal_tax,
                 state_tax,
+                on: TaxedIncome::Vest,
             });
 
             // 7. If sell-to-cover, sell shares to cover the tax liability.
@@ -1396,6 +1430,14 @@ pub fn evaluate_effect_into(
                 out.push(EvalEvent::CashDebit {
                     from: *to,
                     net_amount: sell_proceeds,
+                    kind: CashFlowKind::Tax,
+                });
+            } else if total_tax > 0.0 {
+                // Kept whole, the shares still owe their tax: it comes out of
+                // the account's cash instead of out of the vest.
+                out.push(EvalEvent::CashDebit {
+                    from: *to,
+                    net_amount: total_tax,
                     kind: CashFlowKind::Tax,
                 });
             }

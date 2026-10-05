@@ -117,9 +117,11 @@ fn fold(compiled: &CompiledScenario, result: &SimulationResult, from_year: i64) 
             continue;
         };
         match &entry.event {
+            // Cash spent: a loan payment needs funding like any bill, though
+            // the cash-flow table counts only its interest as a cost.
             StateEvent::CashDebit {
                 amount,
-                kind: CashFlowKind::Expense,
+                kind: CashFlowKind::Expense | CashFlowKind::DebtPayment,
                 ..
             } => row.spending += amount,
             StateEvent::CashCredit {

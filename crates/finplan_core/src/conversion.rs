@@ -7,7 +7,7 @@ use crate::expression::EvaluationContext;
 use crate::liquidation::get_current_price;
 use crate::model::{
     AccountFlavor, AccountId, AmountMode, AssetCoord, AssetLot, CashFlowKind, EventEffect,
-    InvestmentContainer, LotMethod, TaxStatus, TransferAmount, TransferEndpoint,
+    InvestmentContainer, LotMethod, TaxStatus, TaxedIncome, TransferAmount, TransferEndpoint,
 };
 use crate::simulation_state::SimulationState;
 use crate::taxes::calculate_federal_marginal_tax;
@@ -220,6 +220,7 @@ pub(crate) fn evaluate_roth_conversion_into(
         gross_income_amount: gross,
         federal_tax,
         state_tax,
+        on: TaxedIncome::Holdings,
     });
     if penalized && withheld > 0.0 {
         out.push(EvalEvent::EarlyWithdrawalPenalty {

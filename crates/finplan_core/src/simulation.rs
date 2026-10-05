@@ -13,7 +13,7 @@ use crate::model::{
     EventEffect, EventTrigger, IncomeType, LedgerEntry, LoanDetail, LotMethod, MeanAccumulators,
     MonteCarloConfig, MonteCarloProgress, MonteCarloStats, MonteCarloSummary,
     MonthlyCashFlowSummary, SimulationResult, SimulationWarning, StateEvent, TaxStatus,
-    TransferAmount, WarningKind, WithdrawalSources, YearlyCashFlowSummary,
+    TaxedIncome, TransferAmount, WarningKind, WithdrawalSources, YearlyCashFlowSummary,
     after_tax_final_net_worth, final_net_worth,
 };
 use crate::simulation_state::SimulationState;
@@ -26,6 +26,123 @@ use serde::{Deserialize, Serialize};
 pub use crate::model::n_day_rate;
 
 // ── Single simulation ────────────────────────────────────────────────
+
+/// One ledger entry's share of a period's cash-flow columns.
+///
+/// The columns close: income less spending less taxes, plus growth, is the
+/// change in net worth. Every entry that moves net worth lands in exactly one
+/// of those four, and an entry that only moves money between the plan's own
+/// accounts lands in none (contributions and withdrawals are shown, but they
+/// are such moves). So taxes are never spending — a `Tax` debit pays a tax
+/// its tax entry already counts — and a loan payment is not spending either:
+/// it is cash turned into less debt, the cost being the interest accrued.
+#[derive(Debug, Default)]
+struct Flow {
+    income: f64,
+    expenses: f64,
+    contributions: f64,
+    withdrawals: f64,
+    appreciation: f64,
+    taxes: f64,
+}
+
+impl Flow {
+    fn of(event: &StateEvent) -> Self {
+        let mut flow = Self::default();
+        match event {
+            StateEvent::CashCredit { amount, kind, .. } => match kind {
+                CashFlowKind::Income => flow.income = *amount,
+                CashFlowKind::LiquidationProceeds | CashFlowKind::RmdWithdrawal => {
+                    flow.withdrawals = *amount;
+                }
+                CashFlowKind::Appreciation => flow.appreciation = *amount,
+                _ => {}
+            },
+            StateEvent::CashDebit { amount, kind, .. } => match kind {
+                CashFlowKind::Expense => flow.expenses = *amount,
+                CashFlowKind::Contribution => flow.contributions = *amount,
+                _ => {}
+            },
+            StateEvent::CashAppreciation {
+                previous_value,
+                new_value,
+                ..
+            }
+            | StateEvent::AssetAppreciation {
+                previous_value,
+                new_value,
+                ..
+            } => flow.appreciation = new_value - previous_value,
+            StateEvent::LiabilityInterestAccrual {
+                previous_principal,
+                new_principal,
+                ..
+            } => flow.expenses = new_principal - previous_principal,
+            StateEvent::BalanceAdjusted {
+                previous_balance,
+                new_balance,
+                kind,
+                ..
+            } => match kind {
+                CashFlowKind::Income => flow.income = (new_balance - previous_balance).abs(),
+                CashFlowKind::Expense => flow.expenses = (new_balance - previous_balance).abs(),
+                _ => {}
+            },
+            StateEvent::IncomeTax {
+                gross_amount,
+                federal_tax,
+                state_tax,
+                on,
+            } => {
+                flow.taxes = federal_tax + state_tax;
+                // Income is gross: pay was credited net of this tax, and a
+                // vest arrived as shares worth the whole amount.
+                flow.income = match on {
+                    TaxedIncome::Holdings => 0.0,
+                    TaxedIncome::Withheld => flow.taxes,
+                    TaxedIncome::Vest => *gross_amount,
+                };
+            }
+            StateEvent::ShortTermCapitalGainsTax {
+                federal_tax,
+                state_tax,
+                ..
+            }
+            | StateEvent::LongTermCapitalGainsTax {
+                federal_tax,
+                state_tax,
+                ..
+            } => flow.taxes = federal_tax + state_tax,
+            StateEvent::EarlyWithdrawalPenalty { penalty_amount, .. } => {
+                flow.taxes = *penalty_amount;
+            }
+            _ => {}
+        }
+        flow
+    }
+}
+
+impl YearlyCashFlowSummary {
+    fn absorb(&mut self, flow: Flow) {
+        self.income += flow.income;
+        self.expenses += flow.expenses;
+        self.contributions += flow.contributions;
+        self.withdrawals += flow.withdrawals;
+        self.appreciation += flow.appreciation;
+        self.taxes += flow.taxes;
+    }
+}
+
+impl MonthlyCashFlowSummary {
+    fn absorb(&mut self, flow: Flow) {
+        self.income += flow.income;
+        self.expenses += flow.expenses;
+        self.contributions += flow.contributions;
+        self.withdrawals += flow.withdrawals;
+        self.appreciation += flow.appreciation;
+        self.taxes += flow.taxes;
+    }
+}
 
 /// Build yearly cash flow summaries from ledger entries.
 /// Uses a Vec indexed by (year - min_year) for O(1) lookups instead of BTreeMap.
@@ -49,36 +166,11 @@ fn build_yearly_cash_flows(ledger: &[LedgerEntry]) -> Vec<YearlyCashFlowSummary>
 
     for entry in ledger {
         let year_idx = (entry.date.year() - min_year) as usize;
-        let summary = &mut yearly[year_idx];
-
-        match &entry.event {
-            StateEvent::CashCredit { amount, kind, .. } => match kind {
-                CashFlowKind::Income => summary.income += amount,
-                CashFlowKind::LiquidationProceeds | CashFlowKind::RmdWithdrawal => {
-                    summary.withdrawals += amount;
-                }
-                CashFlowKind::Appreciation => summary.appreciation += amount,
-                _ => {}
-            },
-            StateEvent::CashDebit { amount, kind, .. } => match kind {
-                CashFlowKind::Expense | CashFlowKind::Tax => summary.expenses += amount,
-                CashFlowKind::Contribution => summary.contributions += amount,
-                CashFlowKind::InvestmentPurchase => {}
-                _ => {}
-            },
-            StateEvent::CashAppreciation {
-                previous_value,
-                new_value,
-                ..
-            } => {
-                summary.appreciation += new_value - previous_value;
-            }
-            _ => {}
-        }
+        yearly[year_idx].absorb(Flow::of(&entry.event));
     }
 
     for summary in &mut yearly {
-        summary.net_cash_flow = summary.income - summary.expenses + summary.appreciation;
+        summary.net_cash_flow = summary.income - summary.expenses - summary.taxes;
     }
 
     yearly
@@ -115,38 +207,11 @@ pub fn build_monthly_cash_flows(ledger: &[LedgerEntry]) -> Vec<MonthlyCashFlowSu
         let year = entry.date.year();
         let month = entry.date.month() as u8;
         let idx = (year - min_year) as usize * 12 + (month as usize - 1);
-        let summary = &mut monthly[idx];
-
-        match &entry.event {
-            StateEvent::CashCredit { amount, kind, .. } => match kind {
-                CashFlowKind::Income => summary.income += amount,
-                CashFlowKind::LiquidationProceeds | CashFlowKind::RmdWithdrawal => {
-                    summary.withdrawals += amount;
-                }
-                CashFlowKind::Appreciation => summary.appreciation += amount,
-                _ => {}
-            },
-            StateEvent::CashDebit { amount, kind, .. } => match kind {
-                CashFlowKind::Expense | CashFlowKind::Tax => summary.expenses += amount,
-                CashFlowKind::Contribution => summary.contributions += amount,
-                CashFlowKind::InvestmentPurchase => {}
-                _ => {}
-            },
-            StateEvent::CashAppreciation {
-                previous_value,
-                new_value,
-                ..
-            } => {
-                summary.appreciation += new_value - previous_value;
-            }
-            _ => {}
-        }
+        monthly[idx].absorb(Flow::of(&entry.event));
     }
 
     for summary in &mut monthly {
-        summary.net_cash_flow =
-            summary.income + summary.withdrawals - summary.expenses - summary.contributions
-                + summary.appreciation;
+        summary.net_cash_flow = summary.income - summary.expenses - summary.taxes;
     }
 
     // Remove trailing empty months (those after the last ledger entry)
@@ -286,6 +351,12 @@ fn simulate_inner(
             &mut cash_shortfall_recorded,
             &mut last_shortfall_year,
         );
+        // The year closes once December 31st's own events have run, so the
+        // year-end balances hold everything the year's ledger does.
+        let today = state.timeline.current_date;
+        if today == jiff::civil::date(today.year(), 12, 31) {
+            capture_year_end_balances(&mut state);
+        }
         advance_time(&mut state);
     }
 
@@ -588,6 +659,7 @@ fn compound_accounts(
 ) {
     let year_index =
         (state.timeline.current_date.year() - state.timeline.start_date.year()) as usize;
+    let (start, now) = (state.timeline.start_date, state.timeline.current_date);
 
     // Split borrows: market (read) vs accounts (write) vs ledger (write)
     let market = &state.portfolio.market;
@@ -595,6 +667,23 @@ fn compound_accounts(
     let ledger = &mut state.history.ledger;
 
     for (&account_id, account) in &mut state.portfolio.accounts {
+        // Holdings reprice as the clock moves; nothing in the account changes,
+        // so it is only worth working out when the ledger will say so.
+        if collect_ledger {
+            let previous_value = account.holdings_value(market, start, now);
+            let new_value = account.holdings_value(market, start, next_checkpoint);
+            if (new_value - previous_value).abs() > 0.001 {
+                ledger.push(LedgerEntry::new(
+                    next_checkpoint,
+                    StateEvent::AssetAppreciation {
+                        account_id,
+                        previous_value,
+                        new_value,
+                        days: days_passed,
+                    },
+                ));
+            }
+        }
         match &mut account.flavor {
             AccountFlavor::Bank(cash) => {
                 compound_cash_balance(
@@ -660,8 +749,8 @@ fn compound_accounts(
 }
 
 /// Capture year-end balances for RMD calculations (December 31).
-fn capture_year_end_balances(state: &mut SimulationState, checkpoint: jiff::civil::Date) {
-    let year = checkpoint.year();
+fn capture_year_end_balances(state: &mut SimulationState) {
+    let year = state.timeline.current_date.year();
     let mut year_balances = FxHashMap::default();
 
     for (account_id, account) in &state.portfolio.accounts {
@@ -765,12 +854,6 @@ fn advance_time(state: &mut SimulationState) {
     // Open the new tax year before the checkpoint's events run, so their
     // income is taxed in, and summarized under, the year it happens in.
     state.maybe_rollover_year();
-
-    // Capture year-end balances for RMD calculations (December 31)
-    let dec_31 = jiff::civil::date(previous.year(), 12, 31);
-    if next_checkpoint == dec_31 {
-        capture_year_end_balances(state, next_checkpoint);
-    }
 
     // Reset monthly contributions on month boundary
     if previous.month() != next_checkpoint.month() || previous.year() != next_checkpoint.year() {

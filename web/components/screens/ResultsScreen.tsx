@@ -263,6 +263,7 @@ function ResultsContent({
                 pathLabel={results.pathLabel}
                 runId={results.runId}
                 dollarLabel={results.dollarLabel}
+                openingNetWorth={results.openingNetWorth}
               />
             </div>
           )}
