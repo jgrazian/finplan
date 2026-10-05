@@ -1,6 +1,8 @@
 # Cash in investment accounts and Roth conversions
 
-Status: proposed (2026-10-04). Follows [20](20_drawdown.md): the funding
+Status: implemented (2026-10-04, branch `spec-21-cash-conversions`); see
+"Implementation notes" at the end for where it departs from this text.
+Follows [20](20_drawdown.md): the funding
 policy, the Drawdown view and its comparison. Two engine changes, one metric
 and a catalogue of review checks, each worth having alone, that together let
 Drawdown and Review answer the question a large pre-tax balance raises: what
@@ -179,7 +181,8 @@ RothConversion {
 has landed, so a conversion belongs at year-end: the template schedules it
 yearly on Dec 30, and last in event order. (Not Dec 31: the engine captures
 year-end balances, the next RMD's base, as Dec 31 begins and before that
-day's events, so a Dec 31 conversion would stay in next year's RMD base.) A conversion scheduled mid-year
+day's events, so a Dec 31 conversion would stay in next year's RMD base.) A
+conversion scheduled mid-year
 still works; it just fills against the income so far. The event editor shows
 a hint when a `bracket_room` amount fires before December.
 
@@ -357,7 +360,7 @@ New, from this spec and spec 20:
   consecutive year-ends, *starting after the plan begins*: typically from the
   first RMD year, when distributions exceed spending. `idle_bank_cash` keeps the
   case where cash is idle from the start.
-- *Offers* the `ReinvestCash` template: a yearly Dec 31 event that moves cash
+- *Offers* the `ReinvestCash` template: a yearly Dec 30 event that moves cash
   above a buffer (two years of that year's spending, inflation-adjusted) from
   the account into the plan's largest taxable account and buys its holdings,
   one `AssetPurchase` per holding at its current weight. For uninvested cash
@@ -421,7 +424,7 @@ so a note's path is an `expand_template` step like the existing ones.
   a plan with no investment cash is unchanged.
 - `bracket_room`: equals the indexed ceiling less year-to-date ordinary income,
   floors at zero, includes the standard deduction band, and follows a parameter.
-- Conversion: a Dec 31 `bracket_room(0.22)` conversion lands the year's ordinary
+- Conversion: a Dec 30 `bracket_room(0.22)` conversion lands the year's ordinary
   income exactly at the ceiling; lots arrive with their units; tax paid from
   `pay_tax_from` leaves the conversion whole; withholding before 59½ pays the
   penalty; an RMD year skips until the RMD is taken; a tranche withdrawn inside
@@ -457,3 +460,68 @@ so a note's path is an `expand_template` step like the existing ones.
    `roth_conversion_opportunity` for a plan with no tax-deferred money), or is
    the reviewer trusted to skip what does not apply? Weighting saves tokens;
    start with the reviewer deciding.
+
+## Implementation notes
+
+Where the build departs from the text above, by part.
+
+**Year-end events fire Dec 30.** The engine captures year-end balances (the
+next RMD's base and the year-end snapshot) when the clock reaches Dec 31,
+before that day's events. Conversions, the Drawdown overlay and `ReinvestCash`
+therefore fire on Dec 30 (`templates::CONVERSION_DAY`); a test holds that a
+Dec 30 conversion lowers the next year's RMD and a Dec 31 one does not.
+
+**Part 1, cash first.**
+- A sweep whose source is also its destination skips the source's cash (it
+  would go round in a circle, and out of a 401(k) be taxed for nothing).
+- The funding policy runs as a sweep, so it takes cash first with no code of
+  its own.
+- A ProRata or bracket-filling sweep that visits an account twice tracks the
+  cash already drawn; its holdings sales still read the lots as they were
+  before the sweep (unchanged, and a known edge case).
+
+**Part 2, Roth conversions.**
+- Lots move with a new `StateEvent::AssetLotMoved` rather than a
+  subtract/add pair, since subtracting a lot records a sale.
+  `StateEvent::RothConversion` also carries `withheld`.
+- The template fixes its start to a date when expanded (an age, a parameter
+  or the default resolves against the plan); its default end is the RMD age by
+  birth year (`rules::rmd_age`: 73, or 75 from 1960).
+- The preflight note is `roth_conversion_candidate` (info).
+- Five-year rule: tranches are recorded, and only the tranche penalty is
+  enforced; earnings drawn before 59½ are neither taxed nor penalized.
+- The Plan tab builds the template's event in `web/lib/view/conversion.ts`
+  and saves it through the existing create-event route.
+
+**Part 3, after-tax ending balance and Drawdown.**
+- `deferred_tax_rate` is a field of `UpdateScenario` (`PATCH
+  /scenarios/{id}`), not its own edit. At the 0.24 default it is left out of
+  the snapshot, so existing plans keep their input hash.
+- The overlay pays tax from the largest bank when there is no taxable account,
+  and withholds only when there is neither. The toggle is also unavailable
+  without a tax-deferred account.
+- Drawdown's yearly identity gains `conversion_tax` on the uses side. A
+  withheld conversion's distribution stays in `withdrawals`, and its tax
+  (with any penalty) is counted once, as conversion tax.
+- Apply writes conversion changes as a series of event writes (not one atomic
+  edit). The toggle is not kept in the URL.
+
+**Part 4, standard plan checks.**
+- The catalogue also carries three Reviewer entries taken from the review
+  prompt's own examples: `missing_social_security`,
+  `retirement_spending_shape`, `early_retirement_stress`.
+- `rmd_missing` writes its event directly rather than through a template.
+- `cash_accumulates` counts a year only above 2.2 years of spending (an
+  inflation-grown buffer otherwise reads as a build-up). Its path's purchase
+  weights are the target's opening holdings. Investment-account cash per year
+  is stored with runs (migration 0026); older runs only show banks.
+- `roth_conversion_opportunity` is a rule that writes the note itself, with
+  the facts as evidence and 12% / 22% template paths, so a plan reviewed
+  without the AI still sees it. Previews report median after-tax ending balance
+  and lifetime tax (migration 0027 stores the former with run stats), and the
+  materiality floor counts either.
+- `early_withdrawal_penalties`: a change cannot set the funding policy, so the
+  penalty-aware path changes the strategy of the sweeps that pay for spending.
+- The reviewer's `expand_template` tool (plan group, expanded against the
+  plan) serves `reinvest_cash` and `roth_conversions`; the drafting agent's
+  serves every template.
