@@ -29,6 +29,8 @@ function year(y: number, over: Partial<DrawdownYear> = {}): DrawdownYear {
     withdrawal_taxes: 10,
     conversion: 0,
     conversion_tax: 0,
+    converted_from: [0, 0],
+    converted_to: [0, 0],
     cash: 0,
     surplus: 0,
     shortfall: 0,
@@ -272,11 +274,18 @@ test("a conversion is marked above the axis and its tax hangs below the withdraw
 });
 
 test("the panel shows the conversion, its tax and the Roth's balance; the csv has the columns", () => {
-  const years = [year(2041, { conversion: 50, conversion_tax: 11, cash: 11, inflation: 2 })];
+  // The view reads the per-account arrays as given: from the first account,
+  // 50 gross, into the Roth.
+  const years = [
+    year(2041, {
+      conversion: 50, conversion_tax: 11, cash: 11, inflation: 2,
+      converted_from: [50, 0], converted_to: [0, 50],
+    }),
+  ];
   const b = body(years);
   const view = drawdownView(b, b.choices[0], "usd", "real");
   const panel = yearPanel(b, b.choices[0], view, 0)!;
-  assert.deepEqual(panel.conversion, { amount: 25, tax: 5.5, roth: 250, accounts: ["Roth"] });
+  assert.deepEqual(panel.conversion, { amount: 25, tax: 5.5, from: ["Brokerage"], to: ["Roth"], roth: 250 });
   assert.equal(panel.fundedAmount, 50, "spending 100, in today's dollars");
 
   const csv = drawdownCsv(b, b.choices[0], "nominal").trim().split("\n");

@@ -67,12 +67,13 @@ export const SHORTFALL_COLOR = "var(--color-danger)";
 export const TAX_STRIPES =
   "repeating-linear-gradient(45deg, color-mix(in srgb, var(--color-danger) 60%, transparent) 0 2px, color-mix(in srgb, var(--color-danger) 12%, transparent) 2px 5px)";
 /**
- * Tax on Roth conversions: the same red in level bands, so it reads as tax
- * but apart from the tax on withdrawals beside it. The chart draws the same
- * bands as an SVG pattern.
+ * Tax on Roth conversions: grey stripes at the opposite slant to the tax on
+ * withdrawals, so it reads as tax but apart from it (a conversion moves money
+ * rather than paying for spending). The chart draws the same stripes as an
+ * SVG pattern.
  */
 export const CONVERSION_TAX_STRIPES =
-  "repeating-linear-gradient(0deg, color-mix(in srgb, var(--color-danger) 55%, transparent) 0 1.5px, color-mix(in srgb, var(--color-danger) 8%, transparent) 1.5px 4px)";
+  "repeating-linear-gradient(135deg, color-mix(in srgb, var(--color-text) 45%, transparent) 0 2px, color-mix(in srgb, var(--color-text) 8%, transparent) 2px 5px)";
 /** The conversion marker: the Roth's colour, hollow. */
 export const CONVERSION_COLOR = "var(--color-series-4)";
 
@@ -348,8 +349,11 @@ export interface YearPanel {
   taxes?: { amount: number; ofSpending: number; color: string };
   /** The year's required minimum distributions, gross and after tax, and the accounts they came from. */
   rmd?: { amount: number; afterTax: number; accounts: string[] };
-  /** The year's Roth conversions, gross; their tax; the Roth accounts' year-end balance. */
-  conversion?: { amount: number; tax: number; roth: number; accounts: string[] };
+  /**
+   * The year's Roth conversions, gross; their tax; the pre-tax accounts they
+   * came from and the Roths they went to; those Roths' year-end balance.
+   */
+  conversion?: { amount: number; tax: number; from: string[]; to: string[]; roth: number };
   note?: { tone: "bad" | "info"; text: string };
 }
 
@@ -683,9 +687,10 @@ export function yearPanel(
   });
 
   const rmdAccounts = body.accounts.filter((_, i) => (y.rmd[i] ?? 0) > 0.5).map((a) => a.name);
-  const roths = body.accounts
-    .map((a, i) => ({ a, i }))
-    .filter(({ a }) => a.tax_status === "TaxFree");
+  const converted = (per: number[] | undefined) =>
+    body.accounts.map((a, i) => ({ a, i })).filter(({ i }) => (per?.[i] ?? 0) > 0.5);
+  const sources = converted(y.converted_from);
+  const roths = converted(y.converted_to);
   const taxSeries = view.series.find((s) => s.kind === "taxes");
   let note: YearPanel["note"];
   if (parts.gap > 0.5 * f) {
@@ -716,8 +721,9 @@ export function yearPanel(
       ? {
           amount: parts.conversion,
           tax: parts.conversionTax,
+          from: sources.map(({ a }) => a.name),
+          to: roths.map(({ a }) => a.name),
           roth: roths.reduce((sum, { i }) => sum + (y.balances[i] ?? 0) * f, 0),
-          accounts: roths.map(({ a }) => a.name),
         }
       : undefined,
     taxes: taxSeries && parts.taxes > 0.5 * f

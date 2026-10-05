@@ -1,18 +1,13 @@
 /**
- * Analysis payloads → what the Sweep and Solve screens draw.
+ * Analysis payloads → what the Sweep screen draws.
  *
  * The server measures and sends nothing derived. How a sweep is laid out over
  * graphs lives in `./sweep.ts`; what is here is the vocabulary the whole tab
- * shares — how a parameter is named and how its values read — plus the two
- * analyses that have one shape each, the ranking and the goal seek.
+ * shares — how a parameter is named and how its values read — plus the
+ * sensitivity ranking, which has one shape.
  */
-import type {
-  AnalysisParameter,
-  SensitivityResults,
-  SolveOutcome,
-  SolveStep,
-} from "@/lib/api/types";
-import { fmtCompact, fmtCurrency, fmtPercent } from "../format.ts";
+import type { SensitivityResults } from "@/lib/api/types";
+import { fmtCompact, fmtCurrency } from "../format.ts";
 
 /** Stable named input, shared with the Plan parameters editor. */
 export function paramId(parameter: { name: string }): string {
@@ -130,99 +125,4 @@ export function sensitivityView(results: SensitivityResults, metric: "funding" |
 
   rows.sort((a, b) => b.span - a.span);
   return { rows, low, high };
-}
-
-// ───────────────────────────── solve ─────────────────────────────
-
-/** One line of the plan-versus-optimal comparison. */
-export interface SolveRow {
-  label: string;
-  mono?: boolean;
-  plan: string;
-  best: string;
-  delta: string;
-}
-
-/**
- * The comparison table: each varied parameter, then the outcome measures that
- * moved with it.
- */
-export function solveRows(outcome: SolveOutcome): SolveRow[] {
-  const best = outcome.best;
-  const rows: SolveRow[] = outcome.parameters.map((parameter, i) => {
-    const from = parameter.current;
-    const to = best?.values[i];
-    return {
-      label: paramId(parameter),
-      mono: true,
-      plan: paramValue(parameter.kind, from),
-      best: to == null ? "—" : paramValue(parameter.kind, to),
-      delta: to == null ? "—" : signed(parameter.kind, to - from),
-    };
-  });
-
-  for (const [key, label, constraint] of [
-    ["funding_success_rate", "Cash funding check", "funding-success-rate"],
-    ["success_rate", "Positive ending net worth", "success-rate"],
-  ] as const) {
-    const from = outcome.plan[key];
-    const to = best?.[key];
-    rows.push({ label, plan: from == null ? "Not measured — rerun" : fmtPercent(from),
-      best: !best ? "—" : to == null ? "Not measured — rerun" : fmtPercent(to),
-      delta: best && (outcome.constraint ?? "success-rate") === constraint ? "meets the constraint" : "—" });
-  }
-  rows.push({
-    label: "P50 terminal",
-    plan: fmtCompact(outcome.plan.p50),
-    best: best ? fmtCompact(best.p50) : "—",
-    delta: best ? deltaMoney(best.p50 - outcome.plan.p50) : "—",
-  });
-  rows.push({
-    label: "P5 terminal",
-    plan: fmtCompact(outcome.plan.p5),
-    best: best ? fmtCompact(best.p5) : "—",
-    delta: best ? deltaMoney(best.p5 - outcome.plan.p5) : "—",
-  });
-  const afterTax = outcome.plan.after_tax_p50;
-  if (afterTax != null) {
-    const to = best?.after_tax_p50;
-    rows.push({
-      label: "After-tax P50",
-      plan: fmtCompact(afterTax),
-      best: to == null ? "—" : fmtCompact(to),
-      delta: to == null ? "—" : deltaMoney(to - afterTax),
-    });
-  }
-  return rows;
-}
-
-function signed(kind: string, delta: number): string {
-  if (Math.abs(delta) < 1e-9) return "unchanged";
-  const sign = delta > 0 ? "+" : "−";
-  if (kind === "date") return `${sign}${Math.round(Math.abs(delta))} days`;
-  if (kind === "rate") return `${sign}${Number((Math.abs(delta) * 100).toFixed(6))} pp`;
-  return sign + paramValue(kind, Math.abs(delta));
-}
-
-function deltaMoney(delta: number): string {
-  if (Math.abs(delta) < 1) return "unchanged";
-  return (delta > 0 ? "+" : "−") + fmtCompact(Math.abs(delta)).replace("−", "");
-}
-
-/** The headline figure: the objective's value at the answer. */
-export function solveHeadline(outcome: SolveOutcome): string {
-  const best = outcome.best;
-  if (!best) return "no answer";
-  const parameter = outcome.parameters[0];
-  return parameter ? paramValue(parameter.kind, best.values[0]) : fmtPercent(best.success_rate);
-}
-
-/** Every probe, in the order taken, for the convergence plot. */
-export function convergenceSteps(outcome: SolveOutcome): SolveStep[] {
-  return outcome.steps;
-}
-
-/** The parameter a solve's answer is quoted in, when it has exactly one. */
-export function solvedParameter(outcome: SolveOutcome): AnalysisParameter | undefined {
-  return outcome.parameters.length === 1 ? outcome.parameters[0] : undefined;
 }

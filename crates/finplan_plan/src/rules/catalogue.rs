@@ -149,7 +149,7 @@ const CATALOGUE: &[PlanCheck] = &[
         Plan,
         Read,
         "Pre-tax money whose RMDs begin inside the plan, with a Roth account and no conversion yet.",
-        "none (points at Add Roth conversions on the Plan tab)",
+        "none (points at the conversion setting in Drawdown)",
     ),
     // ── rules ──
     check(

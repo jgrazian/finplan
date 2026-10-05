@@ -54,6 +54,16 @@ export type DrawdownYear = {
    */
   conversion_tax: number;
   /**
+   * Converted out of each account, gross, per `accounts`: `conversion`
+   * by the pre-tax account it came from.
+   */
+  converted_from: Array<number>;
+  /**
+   * What each Roth received from conversions, per `accounts`: the gross
+   * less any tax withheld from it.
+   */
+  converted_to: Array<number>;
+  /**
    * Drawn from bank balances: whatever else covered spending.
    */
   cash: number;

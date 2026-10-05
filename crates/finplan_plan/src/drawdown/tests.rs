@@ -712,6 +712,22 @@ fn a_conversion_is_not_a_withdrawal() {
     let (k401, roth) = (at(3), at(2));
     let years = &converting.choices[0].years;
     assert!(years.iter().all(|y| y.withdrawals[k401] == 0.0));
+    // Each year's conversion is credited to the account it left and the Roth
+    // it reached; the tax was paid from the bank, so the Roth got all of it.
+    assert!(years.iter().any(|y| y.conversion > 0.0));
+    for y in years {
+        assert!(
+            (y.converted_from[k401] - y.conversion).abs() < 0.01,
+            "{}",
+            y.year
+        );
+        assert!(
+            (y.converted_to[roth] - y.conversion).abs() < 0.01,
+            "{}",
+            y.year
+        );
+        assert!((y.converted_from.iter().sum::<f64>() - y.conversion).abs() < 0.01);
+    }
     let before = plain.choices[0].years.last().unwrap();
     let after = years.last().unwrap();
     assert!(after.balances[k401] < before.balances[k401]);

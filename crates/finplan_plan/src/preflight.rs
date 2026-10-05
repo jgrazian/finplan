@@ -171,7 +171,7 @@ pub fn preflight(g: &ScenarioGraph) -> PreflightReport {
             Code::RothConversionCandidate,
             "info",
             format!(
-                "{account} holds pre-tax money, and its required minimum distributions begin in {year}, inside the plan. Converting some of it to your Roth account in lower-income years before then can lower the tax on those distributions: Add Roth conversions on the Plan tab."
+                "{account} holds pre-tax money, and its required minimum distributions begin in {year}, inside the plan. Converting some of it to your Roth account in lower-income years before then can lower the tax on those distributions: try the conversion setting in Analysis, Drawdown."
             ),
             "plan",
             None,

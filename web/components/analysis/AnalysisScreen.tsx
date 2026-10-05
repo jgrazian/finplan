@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
 import { LockedFeature, useGuest } from "@/components/auth/GuestContext";
 import { usePlanCapabilities } from "@/lib/hooks/usePlanCapabilities";
 import { SubTabBar } from "@/components/layout";
@@ -9,33 +9,30 @@ import type { SegmentOption } from "@/components/ui";
 import type { Scenario } from "@/lib/api/types";
 import { useParameters } from "@/lib/hooks/useAnalysis";
 import { useNav } from "@/lib/nav";
-import { SolvePanel } from "./SolvePanel";
 import { SweepPanel } from "./SweepPanel";
 import { WhatIfPanel } from "./WhatIfPanel";
 import { DrawdownPanel } from "./DrawdownPanel";
 
-type Mode = "what-if" | "sweep" | "solve" | "drawdown";
+type Mode = "what-if" | "sweep" | "drawdown";
 
 /** Offer only implemented analysis workflows. */
 const MODES: ReadonlyArray<SegmentOption<Mode>> = [
   { value: "what-if", label: "What-if" },
   { value: "sweep", label: "Sweep" },
-  { value: "solve", label: "Solve" },
   { value: "drawdown", label: "Drawdown" },
 ];
 
 const CAPTIONS: Record<Mode, string> = {
   "what-if": "Stack overrides on a copy of the plan and see what each one costs or buys.",
   sweep: "Compare simulated outcomes across a range of plan inputs.",
-  solve: "Search for a value that meets your chosen outcome threshold.",
   drawdown: "Plan which accounts fund each year of retirement spending.",
 };
 
 function modeOf(section: string | undefined): Mode {
-  return section === "sweep" || section === "solve" || section === "drawdown" ? section : "what-if";
+  return section === "sweep" || section === "drawdown" ? section : "what-if";
 }
 
-/** Analysis tab: the what-if stack, the sweep grid, and the goal seek that reads exactly. */
+/** Analysis tab: the what-if stack, the sweep grid, and the drawdown of a run. */
 export function AnalysisScreen({
   scenario,
   onPlanChanged,
@@ -52,24 +49,13 @@ export function AnalysisScreen({
   const scenarioId = scenario.id;
   const { parameters, error, reload } = useParameters(scenarioId, scenario.updated_at);
 
-  // Sweep points at Solve: pinning a cell and then asking for the exact value
-  // is the move the grid exists to set up.
-  const [seed, setSeed] = useState<string>();
-  const solveFor = useCallback(
-    (parameterId: string) => {
-      setSeed(parameterId);
-      nav.setSection("solve");
-    },
-    [nav],
-  );
-
   const planChanged = useCallback(() => {
     reload();
     onPlanChanged();
   }, [reload, onPlanChanged]);
 
   // Analysis runs many simulations a request, which the guest limits switch
-  // off: the server refuses what-if, sweep and goal seek alike for a guest.
+  // off: the server refuses what-if and sweep alike for a guest.
   // The limits are the server's, so they do not follow a plan kept on this
   // device, which runs on the visitor's own CPU.
   const { restricted } = useGuest();
@@ -79,8 +65,8 @@ export function AnalysisScreen({
   if (restricted && home === "cloud") {
     body = (
       <LockedFeature title="Analysis needs an account">
-        What-if, Sweep and Solve each run many simulations of your plan. Create a free account
-        to use them; your guest plan comes with you.
+        What-if and Sweep each run many simulations of your plan. Create a free account to use
+        them; your guest plan comes with you.
       </LockedFeature>
     );
   } else if (mode === "drawdown") {
@@ -109,19 +95,7 @@ export function AnalysisScreen({
     body = (
       <EmptyState
         title="Nothing to analyse yet"
-        detail="Add named parameters on the Plan tab and reference them in amounts or schedules. Sweep and Solve vary these shared inputs across runs."
-      />
-    );
-  } else if (mode === "solve") {
-    body = (
-      // Keyed on the handed-over parameter: arriving from Sweep with a
-      // different one is a fresh question, and remounting is how it opens on
-      // that one without an effect overwriting an edit already made.
-      <SolvePanel
-        key={seed ?? "default"}
-        scenarioId={scenarioId}
-        parameters={parameters}
-        initialParameterId={seed}
+        detail="Add named parameters on the Plan tab and reference them in amounts or schedules. Sweep varies these shared inputs across runs."
       />
     );
   } else {
@@ -133,7 +107,6 @@ export function AnalysisScreen({
         key={scenarioId}
         scenarioId={scenarioId}
         parameters={parameters}
-        onSolveFor={solveFor}
       />
     );
   }

@@ -284,6 +284,12 @@ pub struct DrawdownYear {
     /// Income tax on the year's conversions, plus the early-withdrawal
     /// penalty on a part withheld before 59½.
     pub conversion_tax: f64,
+    /// Converted out of each account, gross, per `accounts`: `conversion`
+    /// by the pre-tax account it came from.
+    pub converted_from: Vec<f64>,
+    /// What each Roth received from conversions, per `accounts`: the gross
+    /// less any tax withheld from it.
+    pub converted_to: Vec<f64>,
     /// Drawn from bank balances: whatever else covered spending.
     pub cash: f64,
     /// Money taken out beyond need (RMDs); went to the bank balances.

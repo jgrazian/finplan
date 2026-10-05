@@ -1,12 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AnalysisParameter, SolveOutcome } from "../lib/api/types.ts";
+import type { AnalysisParameter } from "../lib/api/types.ts";
 import {
   paramId,
   paramValue,
   sensitivityView,
-  solveHeadline,
-  solveRows,
 } from "../lib/view/analysis.ts";
 
 test("parameters read as shared input names, and values in their own units", () => {
@@ -93,86 +91,6 @@ test("a ranking where nothing moves still draws readable bars", () => {
   assert.ok(high <= 1 && low >= 0);
   // Half a point of movement stays a tenth of the chart, not the whole of it.
   assert.ok(rows[0].barWidth < 0.2, `bar was ${rows[0].barWidth}`);
-});
-
-function solve(best: SolveOutcome["best"]): SolveOutcome {
-  const parameter: AnalysisParameter = {
-    id: "event:3:amount",
-    parameter_id: 3,
-    name: "Retirement spending",
-    kind: "amount",
-    current: 9_000,
-    min: 4_500,
-    max: 18_000,
-  };
-  return {
-    constraint: "success-rate",
-    method: "bisection",
-    parameters: [parameter],
-    plan: { success_rate: 0.87, funding_success_rate: null, p5: 100, p50: 1_000, p95: 5_000 },
-    steps: [],
-    best,
-    std_error: 0.014,
-    iterations: 250,
-  };
-}
-
-test("the solve comparison quotes the parameter, then what moved with it", () => {
-  const rows = solveRows(
-    solve({
-      values: [12_000],
-      feasible: true,
-      bracket_low: null,
-      bracket_high: null,
-      success_rate: 0.95,
-      funding_success_rate: null,
-      p5: 50,
-      p50: 900,
-      p95: 4_000,
-    }),
-  );
-  assert.deepEqual(rows[0], {
-    label: "Retirement spending",
-    mono: true,
-    plan: "$9,000",
-    best: "$12,000",
-    delta: "+$3,000",
-  });
-  assert.equal(rows[1].best, "Not measured — rerun");
-  assert.equal(rows[2].label, "Positive ending net worth");
-  assert.equal(rows[2].best, "95.0%");
-  // A worse terminal figure at the answer is still reported, not hidden.
-  assert.equal(rows[3].delta.startsWith("−"), true);
-});
-
-test("a solve that measured the after-tax median adds it to the comparison", () => {
-  const best = {
-    values: [12_000],
-    feasible: true,
-    bracket_low: null,
-    bracket_high: null,
-    success_rate: 0.95,
-    funding_success_rate: null,
-    p5: 50,
-    p50: 900,
-    p95: 4_000,
-    after_tax_p50: 700,
-  };
-  const outcome = solve(best);
-  outcome.plan = { ...outcome.plan, after_tax_p50: 800 };
-  const row = solveRows(outcome).at(-1)!;
-  assert.equal(row.label, "After-tax P50");
-  assert.equal(row.best, "$700");
-  assert.equal(row.delta.startsWith("−"), true);
-});
-
-test("no feasible answer reads as one, rather than as a zero", () => {
-  const outcome = solve(null);
-  assert.equal(solveHeadline(outcome), "no answer");
-  assert.deepEqual(
-    solveRows(outcome).map((r) => r.best),
-    ["—", "—", "—", "—", "—"],
-  );
 });
 
 test("funding ranking uses funding differences and omits unmeasured rows", () => {

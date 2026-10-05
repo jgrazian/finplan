@@ -490,8 +490,11 @@ Dec 30 conversion lowers the next year's RMD and a Dec 31 one does not.
 - The preflight note is `roth_conversion_candidate` (info).
 - Five-year rule: tranches are recorded, and only the tranche penalty is
   enforced; earnings drawn before 59½ are neither taxed nor penalized.
-- The Plan tab builds the template's event in `web/lib/view/conversion.ts`
-  and saves it through the existing create-event route.
+- The Plan tab has no "Add Roth conversions" button (removed after review);
+  a plan adds conversions through Drawdown's Apply, the event editor, or a
+  review note's path. Drawdown's Apply builds the template's event in
+  `web/lib/view/conversion.ts` and saves it through the existing
+  create-event route.
 
 **Part 3, after-tax ending balance and Drawdown.**
 - `deferred_tax_rate` is a field of `UpdateScenario` (`PATCH

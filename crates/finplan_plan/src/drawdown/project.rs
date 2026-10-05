@@ -40,6 +40,8 @@ struct Sparse {
     conversion: f64,
     conversion_tax: f64,
     withheld: f64,
+    converted_from: BTreeMap<i64, f64>,
+    converted_to: BTreeMap<i64, f64>,
     shortfall: f64,
     total_tax: f64,
 }
@@ -161,14 +163,21 @@ fn fold(compiled: &CompiledScenario, result: &SimulationResult, from_year: i64) 
             // penalty on it before 59½ it is `tax / (1 - rate)`, so the
             // larger of the two is the tax and penalty together.
             StateEvent::RothConversion {
+                from,
+                to,
                 amount,
                 tax,
                 withheld,
-                ..
             } => {
                 row.conversion += amount;
                 row.conversion_tax += tax.max(*withheld);
                 row.withheld += withheld;
+                if let Some(id) = account(*from) {
+                    *row.converted_from.entry(id).or_default() += amount;
+                }
+                if let Some(id) = account(*to) {
+                    *row.converted_to.entry(id).or_default() += amount - withheld;
+                }
             }
             StateEvent::RmdWithdrawal {
                 account_id,
@@ -283,6 +292,8 @@ fn densify(
                 withdrawal_taxes,
                 conversion: row.conversion,
                 conversion_tax: row.conversion_tax,
+                converted_from: by_account(&row.converted_from),
+                converted_to: by_account(&row.converted_to),
                 cash: need.max(0.0),
                 surplus: (-need).max(0.0),
                 shortfall: row.shortfall,

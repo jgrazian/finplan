@@ -58,12 +58,9 @@ const MAX_POINTS = 512;
 export function SweepPanel({
   scenarioId,
   parameters,
-  onSolveFor,
 }: {
   scenarioId: number;
   parameters: AnalysisParameter[];
-  /** Hand a parameter to Solve, which is where a sweep usually points next. */
-  onSolveFor: (parameterId: string) => void;
 }) {
   const sweep = useAnalysis(scenarioId, "sweep");
   const sensitivity = useAnalysis(scenarioId, "sensitivity");
@@ -410,7 +407,6 @@ export function SweepPanel({
                 setLayout(defaultGraphs(space.axes));
                 setSelected(undefined);
               }}
-              onSolveFor={onSolveFor}
             />
           ) : (
             <div style={{ padding: "14px 16px", fontSize: 12.5 }}>

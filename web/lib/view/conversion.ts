@@ -1,6 +1,6 @@
 /**
- * Roth conversions on the Plan tab: the accounts a conversion can name, the
- * defaults "Add Roth conversions" offers, the event it writes (the plan
+ * Roth conversions: the accounts a conversion can name, the
+ * defaults a conversion takes, the event it writes (the plan
  * crate's `RothConversions` template, built here against the plan the screen
  * already holds), the hint for a `bracket_room` amount that fires before
  * December, and what Drawdown's Apply writes for its conversion toggle.

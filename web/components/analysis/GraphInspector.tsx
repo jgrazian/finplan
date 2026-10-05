@@ -43,7 +43,6 @@ export function GraphInspector({
   onChange,
   onRemove,
   onReset,
-  onSolveFor,
 }: {
   space: SweepSpace;
   view: GraphView;
@@ -52,8 +51,6 @@ export function GraphInspector({
   onChange: (next: GraphSpec) => void;
   onRemove: () => void;
   onReset: () => void;
-  /** Hand a variable to Solve, which is where a steep graph usually points. */
-  onSolveFor: (parameterId: string) => void;
 }) {
   const spec = view.spec;
   const { title, sub } = graphTitle(view);
@@ -303,15 +300,6 @@ export function GraphInspector({
           {spec.wide ? "Full column → halve" : "Half column → widen"}
         </Button>
       </Field>
-
-      <Button
-        block
-        variant="secondary"
-        title={`Goal seek ${view.yAxis?.label ?? view.xAxis.label}`}
-        onClick={() => onSolveFor(view.yAxis?.parameter_id ?? view.xAxis.parameter_id)}
-      >
-        Solve {view.yName ?? view.xName} exactly
-      </Button>
 
       <p
         style={{

@@ -126,8 +126,10 @@ export function DrawdownSide({
               <span style={{ color: MUTED }}>
                 Roth conversion
                 <span style={{ display: "block", fontSize: 12, color: FAINT }}>
-                  Tax {fmtCurrency(panel.conversion.tax)} · {panel.conversion.accounts.join(", ")}{" "}
-                  {fmtCompact(panel.conversion.roth)} at year end
+                  {panel.conversion.from.join(", ")} → {panel.conversion.to.join(", ")}
+                </span>
+                <span style={{ display: "block", fontSize: 12, color: FAINT }}>
+                  Tax {fmtCurrency(panel.conversion.tax)} · Roth {fmtCompact(panel.conversion.roth)} at year end
                 </span>
               </span>
               <b style={{ fontVariantNumeric: "tabular-nums" }}>{fmtCurrency(panel.conversion.amount)}</b>

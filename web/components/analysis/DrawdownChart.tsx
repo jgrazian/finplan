@@ -18,7 +18,7 @@ const MUTED = "color-mix(in srgb, var(--color-text) 60%, transparent)";
  * The stacked bars of Drawdown: one column per year, sources bottom-up, a
  * hatched cap for any shortfall up to the target line, and any surplus
  * (outlined) above it. The tax withheld on the sales hangs below zero, and
- * under it the tax on Roth conversions, in level bands. A converting year
+ * under it the tax on Roth conversions, in grey stripes. A converting year
  * gets a hollow marker at the amount converted. Hover selects a year, click
  * pins it.
  */
@@ -100,10 +100,10 @@ export function DrawdownChart({
             <rect width={5} height={5} fill="var(--color-danger)" fillOpacity={0.12} />
             <line x1={0} y1={0} x2={0} y2={5} stroke="var(--color-danger)" strokeOpacity={0.6} strokeWidth={2} />
           </pattern>
-          {/* Level bands: tax all the same, but the conversion's, not the withdrawals'. */}
-          <pattern id={bands} width={4} height={4} patternUnits="userSpaceOnUse">
-            <rect width={4} height={4} fill="var(--color-danger)" fillOpacity={0.08} />
-            <line x1={0} y1={0.75} x2={4} y2={0.75} stroke="var(--color-danger)" strokeOpacity={0.55} strokeWidth={1.5} />
+          {/* Grey, at the opposite slant to the tax on withdrawals: tax all the same, but the conversion's. */}
+          <pattern id={bands} width={5} height={5} patternUnits="userSpaceOnUse" patternTransform="rotate(135)">
+            <rect width={5} height={5} fill="var(--color-text)" fillOpacity={0.06} />
+            <line x1={0} y1={0} x2={0} y2={5} stroke="var(--color-text)" strokeOpacity={0.45} strokeWidth={2} />
           </pattern>
         </defs>
         {active != null && (
@@ -159,10 +159,9 @@ export function DrawdownChart({
                 <rect
                   {...rect(c.conversionTax.from, c.conversionTax.to)}
                   fill={`url(#${bands})`}
-                  stroke="var(--color-danger)"
-                  strokeOpacity={0.7}
+                  stroke="var(--color-text)"
+                  strokeOpacity={0.5}
                   strokeWidth={1}
-                  strokeDasharray="1 1.5"
                 />
               )}
               {c.surplus && (
@@ -299,7 +298,7 @@ export function DrawdownLegend({ view }: { view: DrawdownView }) {
         <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {swatch({
             background: CONVERSION_TAX_STRIPES,
-            border: "1px dotted color-mix(in srgb, var(--color-danger) 70%, transparent)",
+            border: "1px solid color-mix(in srgb, var(--color-text) 50%, transparent)",
           })}
           Tax on conversions
         </span>
